@@ -410,17 +410,14 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
 #[inline]
 pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cpu: usize) {
     if let Some(pc) = sched.state.per_cpu.get_mut(cpu) {
-        let len: usize = pc.runq.iter().map(|q| q.len()).sum();
-        let len64 = len as u64;
+        let len64 = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
         pc.stats.runq_sample_count = pc.stats.runq_sample_count.saturating_add(1);
         pc.stats.runq_sample_total = pc.stats.runq_sample_total.saturating_add(len64);
-    }
-    #[cfg(feature = "sched_telemetry")]
-    if let Some(pc) = sched.state.per_cpu.get(cpu) {
-        let len: usize = pc.runq.iter().map(|q| q.len()).sum();
-        let len64 = len as u64;
-        PROF_RUNQ_LEN_LAST[cpu].store(len64, Ordering::Relaxed);
-        update_max_u64(&PROF_RUNQ_LEN_MAX[cpu], len64);
+        #[cfg(feature = "sched_telemetry")]
+        {
+            PROF_RUNQ_LEN_LAST[cpu].store(len64, Ordering::Relaxed);
+            update_max_u64(&PROF_RUNQ_LEN_MAX[cpu], len64);
+        }
     }
     #[cfg(not(feature = "sched_telemetry"))]
     let _ = (sched, cpu);
@@ -2677,8 +2674,7 @@ pub fn dump_stats<R: BootRuntime>() {
             pc.current,
             total,
             avg_runq,
-            pc.idle_task
-            ,
+            pc.idle_task,
             pc.stats.context_switches,
             pc.stats.idle_to_nonidle,
             pc.stats.timer_interrupts,
