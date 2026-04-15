@@ -75,6 +75,10 @@ pub struct ThreadSchedFields {
     pub affinity: Affinity,
     /// Cached copy of `Thread<R>::last_cpu`.
     pub last_cpu: Option<usize>,
+    /// Last CPU that enqueued this task via wakeup/unblock path.
+    pub wake_cpu: Option<usize>,
+    /// Last CPU that actually ran this task.
+    pub run_cpu: Option<usize>,
     /// Cached copy of `Thread<R>::timeslice_remaining`.
     pub timeslice_remaining: u32,
     /// Cached copy of `Thread<R>::enqueued_at_tick`.
@@ -102,6 +106,7 @@ pub struct PerCpu {
     pub current: Option<ThreadId>,
     pub last_switch: u64,
     pub need_resched: bool,
+    pub stats: PerCpuSchedStats,
 }
 
 impl PerCpu {
@@ -118,8 +123,25 @@ impl PerCpu {
             current: None,
             last_switch: 0,
             need_resched: false,
+            stats: PerCpuSchedStats::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PerCpuSchedStats {
+    pub context_switches: u64,
+    pub idle_to_nonidle: u64,
+    pub timer_interrupts: u64,
+    pub resched_ipi_received: u64,
+    pub runnable_enqueues: u64,
+    pub runnable_dequeues: u64,
+    pub wakeups: u64,
+    pub lock_trylock_misses: u64,
+    pub lock_trylock_misses_with_pending_resched: u64,
+    pub lock_blocked_dispatch: u64,
+    pub runq_sample_count: u64,
+    pub runq_sample_total: u64,
 }
 
 pub struct SchedState {
@@ -196,6 +218,7 @@ impl SchedState {
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
             pc.runq[prio].push_back(tid);
+            pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
         }
         if let Some(t) = self.get_thread_mut(tid) {
             t.runq_location = Some((cpu, prio));
@@ -205,6 +228,7 @@ impl SchedState {
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
             if let Some(tid) = pc.runq[prio].pop_front() {
+                pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
                 if let Some(t) = self.get_thread_mut(tid) {
                     t.runq_location = None;
                 }

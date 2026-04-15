@@ -75,6 +75,17 @@ pub static DIAG_IPI_SENT_WAKE_TASK: AtomicU64 = AtomicU64::new(0);
 pub static DIAG_IPI_SENT_WAKE_SLEEPERS: AtomicU64 = AtomicU64::new(0);
 pub static DIAG_IPI_SENT_SPAWN: AtomicU64 = AtomicU64::new(0);
 pub static DIAG_IPI_SENT_PREPARE_SCHEDULE: AtomicU64 = AtomicU64::new(0);
+static LAST_DEBUG_SUMMARY_MONO: AtomicU64 = AtomicU64::new(0);
+pub static PROF_TRYLOCK_MISS_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+pub static PROF_TRYLOCK_MISS_PENDING_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
 
 /// Count of reschedule requests that were coalesced (flag was already set).
 pub static PROF_RESCHED_COALESCED: AtomicU64 = AtomicU64::new(0);
@@ -397,7 +408,13 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
 /// This is a no-op when the `sched_telemetry` feature is disabled so that
 /// the per-schedule-point iteration incurs zero overhead in normal builds.
 #[inline]
-pub(crate) fn sample_runq_len(sched: &types::Scheduler<impl BootRuntime>, cpu: usize) {
+pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cpu: usize) {
+    if let Some(pc) = sched.state.per_cpu.get_mut(cpu) {
+        let len: usize = pc.runq.iter().map(|q| q.len()).sum();
+        let len64 = len as u64;
+        pc.stats.runq_sample_count = pc.stats.runq_sample_count.saturating_add(1);
+        pc.stats.runq_sample_total = pc.stats.runq_sample_total.saturating_add(len64);
+    }
     #[cfg(feature = "sched_telemetry")]
     if let Some(pc) = sched.state.per_cpu.get(cpu) {
         let len: usize = pc.runq.iter().map(|q| q.len()).sum();
@@ -487,6 +504,14 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
 /// Uses try_resched_if_needed to avoid deadlock when SCHEDULER is held by main code
 pub fn on_tick<R: BootRuntime>() {
     let cpu_idx = crate::runtime::<R>().current_cpu_id().0;
+    if let Some(lock) = SCHEDULER.try_lock() {
+        if let Some(ptr) = *lock {
+            let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+            if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
+                pc.stats.timer_interrupts = pc.stats.timer_interrupts.saturating_add(1);
+            }
+        }
+    }
     let ticks = if cpu_idx == 0 {
         TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1
     } else {
@@ -496,10 +521,68 @@ pub fn on_tick<R: BootRuntime>() {
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
 
     try_resched_if_needed::<R>();
+    maybe_emit_debug_summary::<R>(cpu_idx);
+}
+
+fn maybe_emit_debug_summary<R: BootRuntime>(cpu_idx: usize) {
+    if cpu_idx != 0 {
+        return;
+    }
+    let rt = crate::runtime::<R>();
+    let now = rt.mono_ticks();
+    let interval = rt.mono_freq_hz().max(1);
+    let last = LAST_DEBUG_SUMMARY_MONO.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < interval {
+        return;
+    }
+    if LAST_DEBUG_SUMMARY_MONO
+        .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+
+    let Some(lock) = SCHEDULER.try_lock() else {
+        return;
+    };
+    let Some(ptr) = *lock else {
+        return;
+    };
+    let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
+    crate::kdebug!("SCHED-DBG: cpus_online={}", sched.state.online_cpu_count);
+    for &i in &sched.state.online_cpus {
+        let pc = &sched.state.per_cpu[i];
+        let runq: usize = pc.runq.iter().map(|q| q.len()).sum();
+        crate::kdebug!(
+            "SCHED-DBG: cpu={} curr={:?} runq={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
+            i,
+            pc.current,
+            runq,
+            pc.stats.context_switches,
+            pc.stats.idle_to_nonidle,
+            pc.stats.timer_interrupts,
+            pc.stats.resched_ipi_received,
+            pc.stats.runnable_enqueues,
+            pc.stats.runnable_dequeues,
+            pc.stats.wakeups,
+            pc.stats.lock_trylock_misses,
+            pc.stats.lock_trylock_misses_with_pending_resched,
+            pc.stats.lock_blocked_dispatch
+        );
+    }
 }
 
 /// Called from IPI handler - triggers reschedule without advancing time
 pub fn on_resched_ipi<R: BootRuntime>() {
+    let cpu_idx = crate::runtime::<R>().current_cpu_id().0;
+    if let Some(lock) = SCHEDULER.try_lock() {
+        if let Some(ptr) = *lock {
+            let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+            if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
+                pc.stats.resched_ipi_received = pc.stats.resched_ipi_received.saturating_add(1);
+            }
+        }
+    }
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
     crate::kdebug!(
         "SCHED: Resched IPI received on CPU {}",
@@ -616,6 +699,26 @@ fn try_resched_if_needed<R: BootRuntime>() {
         }
     } else {
         PROF_RESCHED_TRYLOCK_MISS.fetch_add(1, Ordering::Relaxed);
+        PROF_TRYLOCK_MISS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+        if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
+            PROF_TRYLOCK_MISS_PENDING_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(lock) = SCHEDULER.try_lock() {
+            if let Some(ptr) = *lock {
+                let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+                if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
+                    pc.stats.lock_trylock_misses = pc.stats.lock_trylock_misses.saturating_add(1);
+                    if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
+                        pc.stats.lock_trylock_misses_with_pending_resched = pc
+                            .stats
+                            .lock_trylock_misses_with_pending_resched
+                            .saturating_add(1);
+                        pc.stats.lock_blocked_dispatch =
+                            pc.stats.lock_blocked_dispatch.saturating_add(1);
+                    }
+                }
+            }
+        }
         // Warn only when misses cross threshold in a 2-second per-CPU window.
         let now = rt.mono_ticks();
         let window_ticks = rt.mono_freq_hz().max(1).saturating_mul(2);
@@ -800,6 +903,8 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         priority: TaskPriority::Normal,
         affinity: crate::task::Affinity::Any,
         last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: Some(0),
         timeslice_remaining: types::DEFAULT_TIMESLICE,
         enqueued_at_tick: TICK_COUNT.load(Ordering::Relaxed),
         wake_pending: false,
@@ -1000,11 +1105,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
             if let Some(sf) = self.state.get_thread_mut(tid) {
                 sf.state = TaskState::Runnable;
                 sf.enqueued_at_tick = now;
+                sf.wake_cpu = Some(target_cpu);
             }
 
             let actual_cpu =
                 if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
             self.state.enqueue_task(actual_cpu, priority, tid);
+            if let Some(pc) = self.state.per_cpu.get_mut(actual_cpu) {
+                pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
+            }
 
             // Use cached priority for the current task to avoid a REGISTRY lock.
             let current_prio = self
@@ -1340,8 +1449,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // unchanged in the same-task (no-switch) case: the current task
             // simply continues running without re-enqueueing.
             self.state.threads[idx].state = TaskState::Running;
+            self.state.threads[idx].run_cpu = Some(cpu_idx);
             return None;
         }
+
+        let was_idle = Some(current_id) == self.state.per_cpu[cpu_idx].idle_task;
+        let next_is_nonidle = Some(next_id) != self.state.per_cpu[cpu_idx].idle_task;
+        if was_idle && next_is_nonidle {
+            self.state.per_cpu[cpu_idx].stats.idle_to_nonidle =
+                self.state.per_cpu[cpu_idx].stats.idle_to_nonidle.saturating_add(1);
+        }
+        self.state.per_cpu[cpu_idx].stats.context_switches =
+            self.state.per_cpu[cpu_idx].stats.context_switches.saturating_add(1);
 
         self.state.per_cpu[cpu_idx].current = Some(next_id);
 
@@ -1388,6 +1507,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         self.state.threads[old_idx].last_cpu = Some(cpu_idx);
         self.state.threads[new_idx].state = TaskState::Running;
         self.state.threads[new_idx].last_cpu = Some(cpu_idx);
+        self.state.threads[new_idx].run_cpu = Some(cpu_idx);
         // timeslice_remaining is managed exclusively via the hot-field cache:
         // schedule_point decrements it without touching REGISTRY. The REGISTRY
         // copy may therefore be stale between context switches; this is
@@ -2461,11 +2581,13 @@ pub fn dump_stats<R: BootRuntime>() {
         sched.total_cpu_count
     );
     crate::kprint!(
-        " {:>5}  {:>10}  {:>4}  {:>3}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
+        " {:>5}  {:>10}  {:>4}  {:>3}  {:>4}  {:>4}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
         "TID",
         "STATE",
         "PRI",
-        "CPU",
+        "LAST",
+        "WAKE",
+        "RUN",
         "USER",
         "SLICE",
         "KSTK",
@@ -2498,6 +2620,21 @@ pub fn dump_stats<R: BootRuntime>() {
             Some(c) => alloc::format!("{}", c),
             None => alloc::string::String::from("-"),
         };
+        let (wake_cpu_str, run_cpu_str) = sched
+            .state
+            .get_task(task.id)
+            .map(|sf| {
+                let wake = sf
+                    .wake_cpu
+                    .map(|c| alloc::format!("{}", c))
+                    .unwrap_or_else(|| alloc::string::String::from("-"));
+                let run = sf
+                    .run_cpu
+                    .map(|c| alloc::format!("{}", c))
+                    .unwrap_or_else(|| alloc::string::String::from("-"));
+                (wake, run)
+            })
+            .unwrap_or((alloc::string::String::from("-"), alloc::string::String::from("-")));
         let user_str = if task.is_user { "Y" } else { "N" };
         let aff_str: alloc::string::String = match task.affinity {
             crate::task::Affinity::Any => alloc::string::String::from("Any"),
@@ -2509,11 +2646,13 @@ pub fn dump_stats<R: BootRuntime>() {
             "-"
         };
         crate::kprint!(
-            " {:>5}  {:>10}  {:>4}  {:>3}  {:>4}  {:>3}/{:<3}  {:>5}K  {:>6}  {}\n",
+            " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>3}/{:<3}  {:>5}K  {:>6}  {}\n",
             task.id,
             state_str,
             pri_str,
             cpu_str,
+            wake_cpu_str,
+            run_cpu_str,
             user_str,
             task.timeslice_remaining,
             types::DEFAULT_TIMESLICE,
@@ -2527,12 +2666,29 @@ pub fn dump_stats<R: BootRuntime>() {
     for &i in &sched.state.online_cpus {
         let pc = &sched.state.per_cpu[i];
         let total: usize = pc.runq.iter().map(|q| q.len()).sum();
+        let avg_runq = if pc.stats.runq_sample_count == 0 {
+            0
+        } else {
+            pc.stats.runq_sample_total / pc.stats.runq_sample_count
+        };
         crate::kprint!(
-            "  CPU {}: current={:?} runq={} idle={:?}\n",
+            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",
             i,
             pc.current,
             total,
+            avg_runq,
             pc.idle_task
+            ,
+            pc.stats.context_switches,
+            pc.stats.idle_to_nonidle,
+            pc.stats.timer_interrupts,
+            pc.stats.resched_ipi_received,
+            pc.stats.runnable_enqueues,
+            pc.stats.runnable_dequeues,
+            pc.stats.wakeups,
+            PROF_TRYLOCK_MISS_PER_CPU[i].load(Ordering::Relaxed),
+            PROF_TRYLOCK_MISS_PENDING_PER_CPU[i].load(Ordering::Relaxed),
+            pc.stats.lock_blocked_dispatch
         );
     }
 
@@ -2820,6 +2976,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -2905,6 +3063,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 // Must match `task_normal.enqueued_at_tick` above (600) so the
                 // hot-field cache reflects the correct wait time for aging.
@@ -2920,6 +3080,8 @@ mod tests {
                 priority: TaskPriority::Low,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 // Must match `task_low.enqueued_at_tick` above (0) so the
                 // hot-field cache reflects the correct wait time for aging.
@@ -3034,6 +3196,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -3047,6 +3211,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 500,
                 wake_pending: false,
@@ -3156,6 +3322,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -3169,6 +3337,8 @@ mod tests {
                 priority: TaskPriority::Realtime,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -3239,6 +3409,8 @@ mod tests {
             priority: TaskPriority::Normal,
             affinity: Affinity::Pinned(0),
             last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
@@ -3255,6 +3427,8 @@ mod tests {
             priority: TaskPriority::Normal,
             affinity: Affinity::Pinned(1),
             last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
@@ -3533,6 +3707,8 @@ mod tests {
             priority: TaskPriority::Normal,
             affinity: Affinity::Any,
             last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
@@ -3544,6 +3720,8 @@ mod tests {
             priority: TaskPriority::Normal,
             affinity: Affinity::Any,
             last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
@@ -3875,6 +4053,8 @@ mod tests {
             priority: TaskPriority::Normal,
             affinity: Affinity::Any,
             last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
@@ -3947,6 +4127,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -3960,6 +4142,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -4017,6 +4201,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -4030,6 +4216,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 wake_pending: false,
@@ -4991,6 +5179,94 @@ mod tests {
         // IRQ depth must be back to 0 — irq_disable was paired with irq_restore.
         assert_eq!(mock_irq_depth(), 0, "sleep_ticks left IRQs disabled (depth != 0)");
 
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+    }
+
+    #[test]
+    fn test_wakeup_routes_to_last_cpu_for_any_affinity() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..3 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.mark_cpu_online(2);
+        sched.state.per_cpu[0].current = Some(0);
+
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(0, TaskState::Running, TaskPriority::Normal)));
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(9901, TaskState::Blocked, TaskPriority::Normal)));
+
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9901,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(2),
+            wake_cpu: None,
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        let (_ipi, _deferred) = crate::sched::blocking::wake_task_locked::<MockRuntime>(&mut sched, 9901);
+        assert!(
+            sched.state.per_cpu[2].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 9901),
+            "wakeup should enqueue Any-affinity blocked task onto last_cpu"
+        );
+        assert_eq!(sched.state.get_task(9901).and_then(|sf| sf.wake_cpu), Some(2));
+    }
+
+    #[test]
+    fn test_trylock_miss_records_pending_resched_pressure() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        let mut lock = SCHEDULER.lock();
+        *lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+
+        let before_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        let before_pending =
+            PROF_TRYLOCK_MISS_PENDING_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        GLOBAL_NEED_RESCHED[0].store(true, core::sync::atomic::Ordering::Release);
+
+        // Must run while SCHEDULER lock is held so try_lock path fails.
+        try_resched_if_needed::<MockRuntime>();
+
+        let after_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        let after_pending =
+            PROF_TRYLOCK_MISS_PENDING_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        assert!(after_miss > before_miss, "per-CPU trylock miss counter should increment");
+        assert!(
+            after_pending > before_pending,
+            "per-CPU pending-resched trylock miss counter should increment"
+        );
+
+        drop(lock);
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
     }

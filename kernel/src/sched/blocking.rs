@@ -231,8 +231,14 @@ pub fn wake_task_locked<R: BootRuntime>(
         if safe_cpu >= sched.state.per_cpu.len() {
             safe_cpu = 0;
         }
+        if let Some(sf) = sched.state.get_thread_mut(id) {
+            sf.wake_cpu = Some(safe_cpu);
+        }
 
         sched.state.enqueue_task(safe_cpu, task_priority, id);
+        if let Some(pc) = sched.state.per_cpu.get_mut(safe_cpu) {
+            pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
+        }
 
         // Use the cached priority of the current task to avoid a nested REGISTRY lock.
         let current_prio = sched.state.per_cpu[safe_cpu]
