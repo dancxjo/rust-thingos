@@ -418,11 +418,13 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
 /// This is a no-op when the `sched_telemetry` feature is disabled so that
 /// the per-schedule-point iteration incurs zero overhead in normal builds.
 #[inline]
-pub(crate) fn sample_runq_len(sched: &types::Scheduler<impl BootRuntime>, cpu: usize) {
-    if let Some(pc) = sched.state.per_cpu.get(cpu) {
+pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cpu: usize) {
+    if let Some(pc) = sched.state.per_cpu.get_mut(cpu) {
         let len64 = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
         PROF_RUNQ_SAMPLE_COUNT[cpu].fetch_add(1, Ordering::Relaxed);
         PROF_RUNQ_SAMPLE_TOTAL[cpu].fetch_add(len64, Ordering::Relaxed);
+        pc.stats.runq_sample_count = pc.stats.runq_sample_count.saturating_add(1);
+        pc.stats.runq_sample_total = pc.stats.runq_sample_total.saturating_add(len64);
         #[cfg(feature = "sched_telemetry")]
         {
             PROF_RUNQ_LEN_LAST[cpu].store(len64, Ordering::Relaxed);
@@ -562,11 +564,18 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
     for &i in &sched.state.online_cpus {
         let pc = &sched.state.per_cpu[i];
         let runq: usize = pc.runq.iter().map(|q| q.len()).sum();
+        let runq_avg = if pc.stats.runq_sample_count == 0 {
+            0
+        } else {
+            pc.stats.runq_sample_total / pc.stats.runq_sample_count
+        };
         crate::kdebug!(
-            "SCHED-DBG: cpu={} curr={:?} runq={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
+            "SCHED-DBG: cpu={} curr={:?} runq={} runq_avg={} runq_samples={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
             i,
             pc.current,
             runq,
+            runq_avg,
+            pc.stats.runq_sample_count,
             pc.stats.context_switches,
             pc.stats.idle_to_nonidle,
             pc.stats.timer_interrupts,
@@ -2675,8 +2684,8 @@ pub fn dump_stats<R: BootRuntime>() {
     for &i in &sched.state.online_cpus {
         let pc = &sched.state.per_cpu[i];
         let total: usize = pc.runq.iter().map(|q| q.len()).sum();
-        let sample_count = PROF_RUNQ_SAMPLE_COUNT[i].load(Ordering::Relaxed);
-        let sample_total = PROF_RUNQ_SAMPLE_TOTAL[i].load(Ordering::Relaxed);
+        let sample_count = pc.stats.runq_sample_count;
+        let sample_total = pc.stats.runq_sample_total;
         let avg_runq = if sample_count == 0 {
             0
         } else {
