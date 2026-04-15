@@ -121,6 +121,11 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             task.state = crate::task::TaskState::Blocked;
         }
 
+        // Keep the scheduler-side hot-field cache in sync.
+        if let Some(sf) = sched.state.get_task_mut(current_id) {
+            sf.state = crate::task::TaskState::Blocked;
+        }
+
         // Do NOT push current task to runq - it's now sleeping
         // Just call prepare_schedule to pick next task
         let switch = sched.prepare_schedule();
@@ -152,6 +157,20 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
     rt.irq_restore(_irq);
 }
 
+/// Sleep until an absolute deadline expressed in `rt.mono_ticks()` units.
+///
+/// Previously this function polled the SCHEDULER lock in a busy loop, which
+/// caused severe lock-convoy contention on SMP during boot and service launch
+/// (issue #131).  It now converts the remaining wall-clock time into 100 Hz
+/// scheduler ticks and delegates to `sleep_ticks`, which queues the task and
+/// blocks it properly.
+///
+/// # Accuracy
+/// Resolution is bounded by the 100 Hz timer tick (≈ 10 ms).  The function
+/// may sleep slightly longer than the requested deadline (up to one extra
+/// tick) because it rounds up the remaining-tick count to prevent
+/// undersleeping.  An inner loop re-checks the deadline on wakeup to handle
+/// early wakeups without re-acquiring the SCHEDULER lock in a spin.
 pub fn sleep_until<R: BootRuntime>(deadline_ticks: u64) {
     let rt = crate::runtime::<R>();
     loop {
@@ -160,33 +179,23 @@ pub fn sleep_until<R: BootRuntime>(deadline_ticks: u64) {
             break;
         }
 
-        let _irq = rt.irq_disable();
-        let switch_params = {
-            let lock = SCHEDULER.lock();
-            let ptr = lock.expect("Scheduler not initialized");
-            let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-            sched.schedule_point(ScheduleReason::SleepWait)
-        };
-        rt.irq_restore(_irq);
-
-        if let Some(switch) = switch_params {
-            unsafe {
-                let _irq = rt.irq_disable();
-                rt.tasking().activate_address_space(switch.to_aspace);
-
-                rt.tasking().switch_with_tls(
-                    &mut *switch.from_ctx,
-                    &*switch.to_ctx,
-                    switch.to_tid,
-                    switch.from_user_fs_base,
-                    switch.to_user_fs_base,
-                );
-                rt.irq_restore(_irq);
-            }
+        // Convert the remaining monotonic-clock ticks to 100 Hz scheduler
+        // ticks so we can delegate to sleep_ticks (queue-based, non-spinning).
+        let remaining_mono = deadline_ticks - now;
+        let freq = rt.mono_freq_hz().max(1);
+        // ticks_per_sched ≈ freq / 100 (i.e. mono ticks per scheduler tick)
+        let ticks_per_sched = freq / 100;
+        let sched_ticks = if ticks_per_sched > 0 {
+            // Round up to avoid undersleeping.
+            (remaining_mono + ticks_per_sched - 1) / ticks_per_sched
         } else {
-            // No switch occurred, spin briefly
-            core::hint::spin_loop();
+            1
         }
+        .max(1);
+
+        sleep_ticks::<R>(sched_ticks);
+        // After wakeup, re-check the deadline.  This also handles the case
+        // where sleep_ticks returned early (e.g. interrupted or rounded down).
     }
 }
 

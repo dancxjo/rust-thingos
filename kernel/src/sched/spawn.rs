@@ -234,6 +234,10 @@ impl<R: BootRuntime> Scheduler<R> {
         let sched_fields = crate::sched::state::TaskSchedFields {
             tid: task.id,
             runq_location: None,
+            state: crate::task::TaskState::Runnable,
+            priority,
+            affinity,
+            last_cpu: Some(safe_cpu),
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -249,10 +253,7 @@ impl<R: BootRuntime> Scheduler<R> {
         // handled post-lock by nudge_spawned_task to avoid sending IPIs while
         // holding the scheduler lock (which delays the target CPU's handler).
 
-        let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
-        // Link affinity and initial location
-        if let Affinity::Pinned(cpu) = affinity {}
-        // Initial location matches target runq
+        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
 
         id
     }
@@ -368,6 +369,10 @@ impl<R: BootRuntime> Scheduler<R> {
         let sched_fields = crate::sched::state::TaskSchedFields {
             tid: task.id,
             runq_location: None,
+            state: crate::task::TaskState::Runnable,
+            priority,
+            affinity,
+            last_cpu: Some(safe_cpu),
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -380,17 +385,14 @@ impl<R: BootRuntime> Scheduler<R> {
         // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
         // handled post-lock by nudge_spawned_task.
 
-        let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
-        // Link affinity and initial location
-        if let Affinity::Pinned(cpu) = affinity {}
-        // Initial location matches target runq
+        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
 
         id
     }
 
     pub fn spawn_user_task(
         &mut self,
-        entry: UserEntry,
+        entry: crate::UserEntry,
         aspace: <R::Tasking as BootTasking>::AddressSpace,
         stack_info: abi::types::StackInfo,
         regions: alloc::vec::Vec<abi::vm::VmRegionInfo>,
@@ -417,22 +419,17 @@ impl<R: BootRuntime> Scheduler<R> {
 
         let mapping_list = crate::memory::mappings::MappingList { regions };
         let ppid = current_parent_pid::<R>(self);
-        // Create the mappings Arc once — both the Process and the Thread hold a
-        // clone of the same Arc so the scheduler's per-CPU CURRENT_MAPPINGS cache
-        // works without locking the Process mutex on every context switch.
         let mappings_arc = alloc::sync::Arc::new(spin::Mutex::new(mapping_list));
-        // Derive the process-owned address-space token from the typed aspace handle.
         let aspace_raw = rt.tasking().aspace_to_raw(aspace);
-        let pinfo = default_process_info(id as u32, ppid, crate::task::ProcessAddressSpace::from_parts(mappings_arc.clone(), aspace_raw));
+        let pinfo = default_process_info(
+            id as u32,
+            ppid,
+            crate::task::ProcessAddressSpace::from_parts(mappings_arc.clone(), aspace_raw),
+        );
 
         let target_cpu = self.pick_cpu_and_bringup(affinity, true);
-        // Push to target CPU's run queue
         let cpu_count = self.state.per_cpu.len();
-        let safe_cpu = if target_cpu < cpu_count {
-            target_cpu
-        } else {
-            0
-        };
+        let safe_cpu = if target_cpu < cpu_count { target_cpu } else { 0 };
 
         let task: Task<R> = Task {
             id,
@@ -467,12 +464,15 @@ impl<R: BootRuntime> Scheduler<R> {
         let sched_fields = crate::sched::state::TaskSchedFields {
             tid: task.id,
             runq_location: None,
+            state: crate::task::TaskState::Runnable,
+            priority,
+            affinity,
+            last_cpu: Some(safe_cpu),
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
         self.state.enqueue_task(safe_cpu, priority as usize, id);
 
-        // Under the scheduler lock we only mark the target CPU dirty.
         if safe_cpu == super::current_cpu_index::<R>() {
             self.state.per_cpu[safe_cpu].need_resched = true;
         }
