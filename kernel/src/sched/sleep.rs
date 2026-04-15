@@ -13,16 +13,22 @@ use super::types::{ScheduleReason, Scheduler};
 /// in the queues (i.e. the CPU should stay awake). Returns `false` when all
 /// queues are empty and the caller may safely halt (HLT / WFI).
 pub fn yield_now<R: BootRuntime>() -> bool {
-    use core::sync::atomic::{AtomicU64, Ordering};
-
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
     let cpu_idx = super::current_cpu_index::<R>();
 
     let (switch_params, has_work) = {
-        let lock_start = rt.mono_ticks();
+        let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
+        super::record_sched_lock_wait::<R>(
+            &super::PROF_SCHED_WAIT_YIELD_NOW_CALLS,
+            &super::PROF_SCHED_WAIT_YIELD_NOW_US_TOTAL,
+            &super::PROF_SCHED_WAIT_YIELD_NOW_US_MAX,
+            &super::PROF_SCHED_WAIT_YIELD_NOW_HIST,
+            wait_start,
+        );
+        let lock_start = rt.mono_ticks();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
         let sp = sched.schedule_point(ScheduleReason::CooperativeYield);
@@ -31,6 +37,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             &super::PROF_SCHED_LOCK_YIELD_NOW_CALLS,
             &super::PROF_SCHED_LOCK_YIELD_NOW_US_TOTAL,
             &super::PROF_SCHED_LOCK_YIELD_NOW_US_MAX,
+            &super::PROF_SCHED_LOCK_YIELD_NOW_HOLD_HIST,
             lock_start,
         );
         (sp, work)
@@ -69,8 +76,16 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
     let _irq = rt.irq_disable();
 
     let switch_params = {
-        let lock_start = rt.mono_ticks();
+        let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
+        super::record_sched_lock_wait::<R>(
+            &super::PROF_SCHED_WAIT_SLEEP_TICKS_CALLS,
+            &super::PROF_SCHED_WAIT_SLEEP_TICKS_US_TOTAL,
+            &super::PROF_SCHED_WAIT_SLEEP_TICKS_US_MAX,
+            &super::PROF_SCHED_WAIT_SLEEP_TICKS_HIST,
+            wait_start,
+        );
+        let lock_start = rt.mono_ticks();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
 
@@ -113,6 +128,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_CALLS,
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_US_TOTAL,
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_US_MAX,
+            &super::PROF_SCHED_LOCK_SLEEP_TICKS_HOLD_HIST,
             lock_start,
         );
         switch

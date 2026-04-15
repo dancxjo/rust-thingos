@@ -245,8 +245,9 @@ impl<R: BootRuntime> Scheduler<R> {
         if safe_cpu == super::current_cpu_index::<R>() {
             self.state.per_cpu[safe_cpu].need_resched = true;
         } else {
-            super::GLOBAL_NEED_RESCHED[safe_cpu].store(true, core::sync::atomic::Ordering::Release);
+            super::set_global_need_resched(safe_cpu);
             super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             crate::kdebug!(
                 "SCHED: Deferred Resched IPI to CPU {} for task {}",
                 safe_cpu,
@@ -382,7 +383,9 @@ impl<R: BootRuntime> Scheduler<R> {
         if safe_cpu == super::current_cpu_index::<R>() {
             self.state.per_cpu[safe_cpu].need_resched = true;
         } else {
-            super::GLOBAL_NEED_RESCHED[safe_cpu].store(true, core::sync::atomic::Ordering::Release);
+            super::set_global_need_resched(safe_cpu);
+            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             crate::kdebug!(
                 "SCHED: Deferred Resched IPI to CPU {} for task {}",
                 safe_cpu,
@@ -486,7 +489,9 @@ impl<R: BootRuntime> Scheduler<R> {
         if safe_cpu == super::current_cpu_index::<R>() {
             self.state.per_cpu[safe_cpu].need_resched = true;
         } else {
-            super::GLOBAL_NEED_RESCHED[safe_cpu].store(true, core::sync::atomic::Ordering::Release);
+            super::set_global_need_resched(safe_cpu);
+            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             crate::kdebug!(
                 "SCHED: Deferred Resched IPI to CPU {} for task {}",
                 safe_cpu,

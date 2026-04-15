@@ -70,11 +70,67 @@ pub static DIAG_IPI_SENT: AtomicU64 = AtomicU64::new(0);
 pub static DIAG_IPI_HANDLER: AtomicU64 = AtomicU64::new(0);
 pub static DIAG_HLT_WAKE: AtomicU64 = AtomicU64::new(0);
 
+// Per-source IPI sent counters (remote reschedule interrupt counts by callsite)
+pub static DIAG_IPI_SENT_WAKE_TASK: AtomicU64 = AtomicU64::new(0);
+pub static DIAG_IPI_SENT_WAKE_SLEEPERS: AtomicU64 = AtomicU64::new(0);
+pub static DIAG_IPI_SENT_SPAWN: AtomicU64 = AtomicU64::new(0);
+pub static DIAG_IPI_SENT_PREPARE_SCHEDULE: AtomicU64 = AtomicU64::new(0);
+
+/// Count of reschedule requests that were coalesced (flag was already set).
+pub static PROF_RESCHED_COALESCED: AtomicU64 = AtomicU64::new(0);
+
+/// Count of `task_status` / poll calls (task-state poll count by caller).
+pub static PROF_TASK_STATUS_POLLS: AtomicU64 = AtomicU64::new(0);
+
+/// Count of task transitions into the Runnable state (runnable transitions).
+pub static PROF_RUNNABLE_TRANSITIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Per-CPU last-sampled run-queue length.
+pub static PROF_RUNQ_LEN_LAST: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+
+/// Per-CPU maximum observed run-queue length.
+pub static PROF_RUNQ_LEN_MAX: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+
+/// Number of histogram buckets used for hold/wait time distributions.
+/// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
+pub const SCHED_HIST_BUCKETS: usize = 5;
+
+/// Map a microsecond duration to a histogram bucket index.
+#[inline]
+pub fn hist_bucket(us: u64) -> usize {
+    match us {
+        0 => 0,
+        1..=9 => 1,
+        10..=99 => 2,
+        100..=999 => 3,
+        _ => 4,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SchedLockMetrics {
     pub hold_calls: u64,
     pub hold_us_total: u64,
     pub hold_us_max: u64,
+    /// Hold-time histogram buckets (µs): [<1, 1–10, 10–100, 100–1000, ≥1000]
+    #[cfg(feature = "sched_telemetry")]
+    pub hold_hist: [u64; SCHED_HIST_BUCKETS],
+    /// Number of lock-acquisition waits recorded (may differ from hold_calls if
+    /// the wait is measured separately by a callsite that tracks both).
+    pub wait_calls: u64,
+    pub wait_us_total: u64,
+    pub wait_us_max: u64,
+    /// Wait-time histogram buckets (µs): [<1, 1–10, 10–100, 100–1000, ≥1000]
+    #[cfg(feature = "sched_telemetry")]
+    pub wait_hist: [u64; SCHED_HIST_BUCKETS],
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -84,8 +140,25 @@ pub struct SchedLockSiteMetrics {
     pub yield_now: SchedLockMetrics,
     pub sleep_ticks: SchedLockMetrics,
     pub wake_sleepers: SchedLockMetrics,
+    /// Reschedule requests that were suppressed because the flag was already set.
+    pub resched_coalesced: u64,
+    /// Total IPI-sends broken down by originating callsite.
+    pub ipi_sent_wake_task: u64,
+    pub ipi_sent_wake_sleepers: u64,
+    pub ipi_sent_spawn: u64,
+    pub ipi_sent_prepare_schedule: u64,
+    /// Per-CPU last / max run-queue depths at the most recent sample point.
+    pub runq_len_last: [u64; types::MAX_CPUS],
+    pub runq_len_max: [u64; types::MAX_CPUS],
+    /// Number of `task_status` polls since the last snapshot.
+    pub task_status_polls: u64,
+    /// Number of Blocked → Runnable transitions since the last snapshot.
+    pub runnable_transitions: u64,
 }
 
+// ---------------------------------------------------------------------------
+// Per-callsite hold-time atomics
+// ---------------------------------------------------------------------------
 static PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS: AtomicU64 = AtomicU64::new(0);
 static PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX: AtomicU64 = AtomicU64::new(0);
@@ -101,6 +174,61 @@ static PROF_SCHED_LOCK_SLEEP_TICKS_US_MAX: AtomicU64 = AtomicU64::new(0);
 static PROF_SCHED_LOCK_WAKE_SLEEPERS_CALLS: AtomicU64 = AtomicU64::new(0);
 static PROF_SCHED_LOCK_WAKE_SLEEPERS_US_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX: AtomicU64 = AtomicU64::new(0);
+
+// ---------------------------------------------------------------------------
+// Per-callsite hold-time histogram atomics.
+// Statics are always defined (negligible memory); bucket increments are gated
+// on sched_telemetry inside record_sched_lock_hold / record_sched_lock_wait.
+// ---------------------------------------------------------------------------
+#[allow(clippy::declare_interior_mutable_const)]
+const HIST_ZERO: AtomicU64 = AtomicU64::new(0);
+
+static PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+static PROF_SCHED_LOCK_WAKE_TASK_HOLD_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+static PROF_SCHED_LOCK_YIELD_NOW_HOLD_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+static PROF_SCHED_LOCK_SLEEP_TICKS_HOLD_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+static PROF_SCHED_LOCK_WAKE_SLEEPERS_HOLD_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+
+// ---------------------------------------------------------------------------
+// Per-callsite acquisition wait-time atomics
+// ---------------------------------------------------------------------------
+static PROF_SCHED_WAIT_BLOCK_CURRENT_CALLS: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_BLOCK_CURRENT_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_BLOCK_CURRENT_US_MAX: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_WAKE_TASK_CALLS: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_WAKE_TASK_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_WAKE_TASK_US_MAX: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_YIELD_NOW_CALLS: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_YIELD_NOW_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_YIELD_NOW_US_MAX: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_SLEEP_TICKS_CALLS: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_SLEEP_TICKS_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_SLEEP_TICKS_US_MAX: AtomicU64 = AtomicU64::new(0);
+
+// ---------------------------------------------------------------------------
+// Per-callsite wait-time histogram atomics (same always-defined strategy)
+// ---------------------------------------------------------------------------
+static PROF_SCHED_WAIT_BLOCK_CURRENT_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+static PROF_SCHED_WAIT_WAKE_TASK_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+static PROF_SCHED_WAIT_YIELD_NOW_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+static PROF_SCHED_WAIT_SLEEP_TICKS_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
+
+// Dedicated zero-valued wait statics for wake_sleepers (called while lock is
+// already held, so there is no acquisition wait to track).
+static PROF_SCHED_WAIT_WAKE_SLEEPERS_CALLS: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_WAKE_SLEEPERS_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_WAKE_SLEEPERS_US_MAX: AtomicU64 = AtomicU64::new(0);
+static PROF_SCHED_WAIT_WAKE_SLEEPERS_HIST: [AtomicU64; SCHED_HIST_BUCKETS] =
+    [HIST_ZERO; SCHED_HIST_BUCKETS];
 
 /// Lock-skip self-healing: when try_resched_if_needed() fails to acquire
 /// the scheduler lock, set this flag so the next safe-point yields.
@@ -166,11 +294,39 @@ fn snapshot_sched_lock_metric(
     calls: &AtomicU64,
     total: &AtomicU64,
     max: &AtomicU64,
+    hold_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
+    wait_calls: &AtomicU64,
+    wait_total: &AtomicU64,
+    wait_max: &AtomicU64,
+    wait_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
 ) -> SchedLockMetrics {
+    #[cfg(feature = "sched_telemetry")]
+    let hold_hist_snapshot = {
+        let mut b = [0u64; SCHED_HIST_BUCKETS];
+        for (i, a) in hold_hist.iter().enumerate() {
+            b[i] = a.swap(0, Ordering::Relaxed);
+        }
+        b
+    };
+    #[cfg(feature = "sched_telemetry")]
+    let wait_hist_snapshot = {
+        let mut b = [0u64; SCHED_HIST_BUCKETS];
+        for (i, a) in wait_hist.iter().enumerate() {
+            b[i] = a.swap(0, Ordering::Relaxed);
+        }
+        b
+    };
     SchedLockMetrics {
         hold_calls: calls.swap(0, Ordering::Relaxed),
         hold_us_total: total.swap(0, Ordering::Relaxed),
         hold_us_max: max.swap(0, Ordering::Relaxed),
+        #[cfg(feature = "sched_telemetry")]
+        hold_hist: hold_hist_snapshot,
+        wait_calls: wait_calls.swap(0, Ordering::Relaxed),
+        wait_us_total: wait_total.swap(0, Ordering::Relaxed),
+        wait_us_max: wait_max.swap(0, Ordering::Relaxed),
+        #[cfg(feature = "sched_telemetry")]
+        wait_hist: wait_hist_snapshot,
     }
 }
 
@@ -178,41 +334,135 @@ pub(crate) fn record_sched_lock_hold<R: BootRuntime>(
     calls: &AtomicU64,
     total: &AtomicU64,
     max: &AtomicU64,
+    hold_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
     start_ticks: u64,
 ) {
     let elapsed_us = ticks_to_us::<R>(crate::runtime::<R>().mono_ticks().wrapping_sub(start_ticks));
     calls.fetch_add(1, Ordering::Relaxed);
     total.fetch_add(elapsed_us, Ordering::Relaxed);
     update_max_u64(max, elapsed_us);
+    // Histogram bucket increment is gated on sched_telemetry to bound overhead.
+    #[cfg(feature = "sched_telemetry")]
+    hold_hist[hist_bucket(elapsed_us)].fetch_add(1, Ordering::Relaxed);
+    // Suppress unused-variable warning when the feature is disabled.
+    #[cfg(not(feature = "sched_telemetry"))]
+    let _ = hold_hist;
+}
+
+/// Record a lock-acquisition wait (time from before calling `.lock()` to after
+/// the lock is held).  Separate from `record_sched_lock_hold` so callers that
+/// only enter through a single trylock path can skip this.
+pub(crate) fn record_sched_lock_wait<R: BootRuntime>(
+    calls: &AtomicU64,
+    total: &AtomicU64,
+    max: &AtomicU64,
+    wait_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
+    wait_start_ticks: u64,
+) {
+    let elapsed_us =
+        ticks_to_us::<R>(crate::runtime::<R>().mono_ticks().wrapping_sub(wait_start_ticks));
+    calls.fetch_add(1, Ordering::Relaxed);
+    total.fetch_add(elapsed_us, Ordering::Relaxed);
+    update_max_u64(max, elapsed_us);
+    #[cfg(feature = "sched_telemetry")]
+    wait_hist[hist_bucket(elapsed_us)].fetch_add(1, Ordering::Relaxed);
+    #[cfg(not(feature = "sched_telemetry"))]
+    let _ = wait_hist;
+}
+
+/// Increment the coalesced-reschedule counter if `GLOBAL_NEED_RESCHED[cpu]`
+/// was already set, then unconditionally set it.  Returns `true` if the flag
+/// was already set (i.e. the request was coalesced).
+#[inline]
+pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
+    let was_set = GLOBAL_NEED_RESCHED[cpu].swap(true, Ordering::Release);
+    if was_set {
+        PROF_RESCHED_COALESCED.fetch_add(1, Ordering::Relaxed);
+    }
+    was_set
+}
+
+/// Sample the run-queue depth for `cpu` and update the last/max statics.
+#[inline]
+pub(crate) fn sample_runq_len(sched: &types::Scheduler<impl BootRuntime>, cpu: usize) {
+    if let Some(pc) = sched.state.per_cpu.get(cpu) {
+        let len: usize = pc.runq.iter().map(|q| q.len()).sum();
+        let len64 = len as u64;
+        PROF_RUNQ_LEN_LAST[cpu].store(len64, Ordering::Relaxed);
+        update_max_u64(&PROF_RUNQ_LEN_MAX[cpu], len64);
+    }
 }
 
 pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
+    // Collect per-CPU run-queue snapshots (non-destructive read for last; swap max)
+    let mut runq_len_last = [0u64; types::MAX_CPUS];
+    let mut runq_len_max = [0u64; types::MAX_CPUS];
+    for i in 0..types::MAX_CPUS {
+        runq_len_last[i] = PROF_RUNQ_LEN_LAST[i].load(Ordering::Relaxed);
+        runq_len_max[i] = PROF_RUNQ_LEN_MAX[i].swap(0, Ordering::Relaxed);
+    }
     SchedLockSiteMetrics {
         block_current: snapshot_sched_lock_metric(
             &PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
             &PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
             &PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+            &PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
+            &PROF_SCHED_WAIT_BLOCK_CURRENT_CALLS,
+            &PROF_SCHED_WAIT_BLOCK_CURRENT_US_TOTAL,
+            &PROF_SCHED_WAIT_BLOCK_CURRENT_US_MAX,
+            &PROF_SCHED_WAIT_BLOCK_CURRENT_HIST,
         ),
         wake_task: snapshot_sched_lock_metric(
             &PROF_SCHED_LOCK_WAKE_TASK_CALLS,
             &PROF_SCHED_LOCK_WAKE_TASK_US_TOTAL,
             &PROF_SCHED_LOCK_WAKE_TASK_US_MAX,
+            &PROF_SCHED_LOCK_WAKE_TASK_HOLD_HIST,
+            &PROF_SCHED_WAIT_WAKE_TASK_CALLS,
+            &PROF_SCHED_WAIT_WAKE_TASK_US_TOTAL,
+            &PROF_SCHED_WAIT_WAKE_TASK_US_MAX,
+            &PROF_SCHED_WAIT_WAKE_TASK_HIST,
         ),
         yield_now: snapshot_sched_lock_metric(
             &PROF_SCHED_LOCK_YIELD_NOW_CALLS,
             &PROF_SCHED_LOCK_YIELD_NOW_US_TOTAL,
             &PROF_SCHED_LOCK_YIELD_NOW_US_MAX,
+            &PROF_SCHED_LOCK_YIELD_NOW_HOLD_HIST,
+            &PROF_SCHED_WAIT_YIELD_NOW_CALLS,
+            &PROF_SCHED_WAIT_YIELD_NOW_US_TOTAL,
+            &PROF_SCHED_WAIT_YIELD_NOW_US_MAX,
+            &PROF_SCHED_WAIT_YIELD_NOW_HIST,
         ),
         sleep_ticks: snapshot_sched_lock_metric(
             &PROF_SCHED_LOCK_SLEEP_TICKS_CALLS,
             &PROF_SCHED_LOCK_SLEEP_TICKS_US_TOTAL,
             &PROF_SCHED_LOCK_SLEEP_TICKS_US_MAX,
+            &PROF_SCHED_LOCK_SLEEP_TICKS_HOLD_HIST,
+            &PROF_SCHED_WAIT_SLEEP_TICKS_CALLS,
+            &PROF_SCHED_WAIT_SLEEP_TICKS_US_TOTAL,
+            &PROF_SCHED_WAIT_SLEEP_TICKS_US_MAX,
+            &PROF_SCHED_WAIT_SLEEP_TICKS_HIST,
         ),
         wake_sleepers: snapshot_sched_lock_metric(
             &PROF_SCHED_LOCK_WAKE_SLEEPERS_CALLS,
             &PROF_SCHED_LOCK_WAKE_SLEEPERS_US_TOTAL,
             &PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX,
+            &PROF_SCHED_LOCK_WAKE_SLEEPERS_HOLD_HIST,
+            // wake_sleepers is called while the lock is already held;
+            // no separate wait-time tracking needed for it.
+            &PROF_SCHED_WAIT_WAKE_SLEEPERS_CALLS,
+            &PROF_SCHED_WAIT_WAKE_SLEEPERS_US_TOTAL,
+            &PROF_SCHED_WAIT_WAKE_SLEEPERS_US_MAX,
+            &PROF_SCHED_WAIT_WAKE_SLEEPERS_HIST,
         ),
+        resched_coalesced: PROF_RESCHED_COALESCED.swap(0, Ordering::Relaxed),
+        ipi_sent_wake_task: DIAG_IPI_SENT_WAKE_TASK.swap(0, Ordering::Relaxed),
+        ipi_sent_wake_sleepers: DIAG_IPI_SENT_WAKE_SLEEPERS.swap(0, Ordering::Relaxed),
+        ipi_sent_spawn: DIAG_IPI_SENT_SPAWN.swap(0, Ordering::Relaxed),
+        ipi_sent_prepare_schedule: DIAG_IPI_SENT_PREPARE_SCHEDULE.swap(0, Ordering::Relaxed),
+        runq_len_last,
+        runq_len_max,
+        task_status_polls: PROF_TASK_STATUS_POLLS.swap(0, Ordering::Relaxed),
+        runnable_transitions: PROF_RUNNABLE_TRANSITIONS.swap(0, Ordering::Relaxed),
     }
 }
 
@@ -355,7 +605,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             }
         }
         // Self-healing: tell the next safe point to reschedule
-        GLOBAL_NEED_RESCHED[cpu_idx].store(true, Ordering::Release);
+        set_global_need_resched(cpu_idx);
     }
     // If try_lock failed, skip rescheduling this tick - not a problem, next tick will try again
 
@@ -643,6 +893,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
                         task.state = TaskState::Runnable;
                         task.enqueued_at_tick = TICK_COUNT.load(Ordering::Relaxed);
+                        PROF_RUNNABLE_TRANSITIONS.fetch_add(1, Ordering::Relaxed);
                         priority = task.priority as usize;
                         target_cpu = match task.affinity {
                             crate::task::Affinity::Pinned(cpu) => cpu,
@@ -680,6 +931,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             tid,
                             priority
                         );
+                        DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                        DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
+                        set_global_need_resched(actual_cpu);
                         crate::runtime::<R>().send_ipi(actual_cpu, 0x30);
                     }
                 }
@@ -692,6 +946,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             &PROF_SCHED_LOCK_WAKE_SLEEPERS_CALLS,
             &PROF_SCHED_LOCK_WAKE_SLEEPERS_US_TOTAL,
             &PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX,
+            &PROF_SCHED_LOCK_WAKE_SLEEPERS_HOLD_HIST,
             lock_start,
         );
     }
@@ -823,6 +1078,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         }
         let per_cpu_len = self.state.per_cpu.len();
 
+        // Sample run-queue depth for this CPU before we start dequeuing.
+        sample_runq_len(self, cpu_idx);
+
         // Collect tasks pinned to a different CPU so we can requeue them after scanning.
         const MAX_MISROUTED: usize = 32;
         let mut misrouted: [(usize, usize, TaskId); MAX_MISROUTED] = [(0, 0, 0); MAX_MISROUTED];
@@ -918,7 +1176,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     // so they wake from HLT and pick up the newly-queued work.
                     for &(prio, target_cpu, id) in &misrouted[..misrouted_count] {
                         self.state.enqueue_task(target_cpu, prio, id);
-                        GLOBAL_NEED_RESCHED[target_cpu].store(true, Ordering::Release);
+                        DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                        DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
+                        set_global_need_resched(target_cpu);
                         crate::runtime::<R>().send_ipi(target_cpu, 0x30);
                     }
                     return None;
@@ -929,7 +1189,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Flush misrouted tasks to their correct CPU queues and wake those CPUs.
         for &(prio, target_cpu, id) in &misrouted[..misrouted_count] {
             self.state.enqueue_task(target_cpu, prio, id);
-            GLOBAL_NEED_RESCHED[target_cpu].store(true, Ordering::Release);
+            DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
+            set_global_need_resched(target_cpu);
             crate::runtime::<R>().send_ipi(target_cpu, 0x30);
         }
 
@@ -1106,6 +1368,7 @@ pub fn task_status<R: BootRuntime>(id: TaskId) -> Option<(TaskState, Option<i32>
     // Task state and exit code live in the registry, not the scheduler.
     // Holding SCHEDULER here was unnecessary and caused timer-ISR try_lock
     // misses on all other CPUs (the supervisor polls every task every cycle).
+    PROF_TASK_STATUS_POLLS.fetch_add(1, Ordering::Relaxed);
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
     let res = crate::task::registry::get_task::<R>(id).map(|t| (t.state, t.exit_code));
