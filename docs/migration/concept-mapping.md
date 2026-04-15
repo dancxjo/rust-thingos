@@ -40,6 +40,51 @@ in `docs/architecture/unix-projection.md`.
 
 ---
 
+## Canonical vs Compatibility Concepts
+
+Treat this section as the constitutional split: canonical typed-world concepts
+define architectural truth; Unix terms are compatibility projections only.
+
+### Canonical typed-world concepts (architectural truth)
+
+| Concept | Classification | Notes |
+|--------|----------------|-------|
+| `Thing` | Canonical typed-world truth | Core identity object across kernel and userspace |
+| `Kind` | Canonical typed-world truth | Type/category semantics for `Thing` |
+| `Form` | Canonical typed-world truth | Representation shape and projection form |
+| `Place` | Canonical typed-world truth | World/context boundary (cwd/root/namespace projections) |
+| `Person` | Canonical typed-world truth | Actor identity in typed-world ontology |
+| `Presence` | Canonical typed-world truth (emerging) | Attachment/session/TTY-facing context (still being refined) |
+| `Authority` | Canonical typed-world truth | Permission and credential boundary |
+| `Task` | Canonical typed-world truth | Schedulable execution unit |
+| `Job` | Canonical typed-world truth | Lifecycle/accounting container |
+| `Space` | Canonical typed-world truth | Address-space and memory-mapping ownership |
+| `Group` | Canonical typed-world truth | Coordination/job-control domain |
+| `Message`/Event | Canonical typed-world truth (split in progress) | Typed notification model |
+
+### Compatibility-facing projections (bridge vocabulary)
+
+`process`, `thread`, `signal`, `file descriptor`, `session`, `process group`,
+`cwd`, `root`, `pathname`, and similar Unix terms are compatibility-facing
+projection forms. They MAY appear in bridge/adaptor/compatibility layers and in
+explicit legacy references, but they MUST NOT define new kernel architectural
+meaning.
+
+---
+
+## Projection Rules
+
+When translating Unix semantics, preserve the canonical object as source of
+truth and treat Unix terms as view/projection forms:
+
+- Unix path (`pathname`) projects a `Thing` relation resolved within a `Place`.
+- Unix FD projects a resource/`Thing` reference through the handle-table seam.
+- Unix process projects `Job + Space + Authority + Place + Task(s)`.
+- Unix signals project typed coordination/notification semantics split across
+  `Group`, `Authority`, and `Message`/Event boundaries.
+
+---
+
 ## 1. Canonical Mapping Table
 
 Read this table **left-to-right**: Unix terms are compatibility vocabulary; the
@@ -425,8 +470,9 @@ stable mapping. Additions or resolutions should update this document.
 | FD vs Handle vs Thing ref | What is the long-term resource reference model? Integer FD? Object handle? Thing reference? | Handle-table concept introduction |
 | Signal split boundary | Where exactly does job-control end and IPC notification begin? | IPC design (#44) |
 | Port vs Inbox semantics | Are ports and inboxes the same concept? | `docs/ipc/inbox_vs_port_semantics.md`, #46 |
-| Place vs namespace | Is `Place` purely about cwd+root, or does it also own namespace isolation? | Namespace work |
-| Presence | What is `Presence`? TTY attachment? Session context? Something broader? | Not yet introduced |
+| Place vs namespace/cwd/root | Is `Place` purely namespace ownership, or does it also define cwd/root/execution-world semantics? | Namespace work |
+| Presence vs session/controlling-tty | Is `Presence` the canonical owner for attachment semantics that Unix modeled as session + controlling TTY? | Presence model introduction |
+| Kind/Form projection boundary | How do `Kind`/`Form` map to ABI types, wire formats, filesystem representation, and debug views? | ABI + debug view alignment work |
 | Space sharing model | Can multiple Tasks share a `Space`? What is the ownership model? | Space extraction |
 | Authority granularity | Does every Task have its own `Authority`, or is it shared within a `Job`? | Authority extraction |
 
@@ -441,6 +487,14 @@ stable mapping. Additions or resolutions should update this document.
   checklist form of the rules for use during PR review.
 - When opening follow-on issues for unresolved mappings, reference this document
   in the issue body.
+
+### Subsystem audit baseline (completed)
+
+`kernel/src/task/` has been audited against this mapping:
+
+- Canonical `Task` type is exposed through `kernel::task::bridge`.
+- Transitional `Process` + `Thread<R>` internals are explicitly documented as seams.
+- Inline references point reviewers back to this mapping for decomposition rules.
 
 ---
 

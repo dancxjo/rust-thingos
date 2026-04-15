@@ -28,3 +28,6 @@ a specific user to review your work, you can assign it to them by using
 
 - **Are new names aligned with ontology and classification docs?**
   _Confirm naming aligns with `docs/architecture/ontology.md` and `docs/architecture/concept-classification.md`._
+
+- **Does this align with `docs/migration/concept-mapping.md`?**
+  _State the canonical concept mapping used by this PR and any explicit transitional assumptions._
