@@ -1925,24 +1925,27 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                 // TIDs that exited between the two passes are silently omitted;
                 // the bridge treats their absence as "no longer contributing to
                 // group liveness".
-                let thread_states: alloc::vec::Vec<TaskState> = pi
-                    .lifecycle
-                    .thread_ids
-                    .iter()
-                    .filter_map(|&tid| tid_state.get(&tid).copied())
-                    .collect();
+                let thread_states = pi.runtime_thread_states(&tid_state);
+                let unix_compat = pi.unix_compat_projection();
+                let space = pi.canonical_space();
+                let job = pi.canonical_job(&thread_states);
                 out.push(hooks::ProcessSnapshot {
-                    pid: pi.pid,
-                    ppid: pi.lifecycle.ppid,
+                    pid: pi.runtime_pid(),
+                    ppid: pi.runtime_parent_pid(),
                     tid: task.id,
                     name,
                     state: task.state,
-                    argv: pi.unix_compat.argv.clone(),
+                    argv: unix_compat.argv,
                     exec_path: pi.exec_path.clone(),
-                    exit_code: task.exit_code,
-                    pgid: pi.unix_compat.pgid,
-                    sid: pi.unix_compat.sid,
-                    session_leader: pi.unix_compat.session_leader,
+                    // Exit code only has meaning for exited jobs.
+                    exit_code: if job.state == thingos::job::JobState::Exited {
+                        task.exit_code
+                    } else {
+                        None
+                    },
+                    pgid: unix_compat.pgid,
+                    sid: unix_compat.sid,
+                    session_leader: unix_compat.session_leader,
                     // Place-context fields (Phase 8): extracted from Process into
                     // the snapshot so the place bridge can build a canonical Place
                     // without holding the Process lock.
@@ -1956,12 +1959,9 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     thread_states,
                     // Space-context fields (Space Phase 1): stable SpaceId plus
                     // best-effort mapping and sharing counts from the live Space object.
-                    space_id: pi.space.space_obj.id,
-                    space_mapping_count: pi.space.space_obj.mapping_count() as u32,
-                    // sharing_count = Arc strong_count − 1 (exclude this reference).
-                    space_sharing_count: (alloc::sync::Arc::strong_count(&pi.space.space_obj)
-                        as u32)
-                        .saturating_sub(1),
+                    space_id: space.id,
+                    space_mapping_count: space.mapping_count,
+                    space_sharing_count: space.sharing_count,
                 });
             }
         }
@@ -2049,15 +2049,15 @@ fn mark_task_exited<R: BootRuntime>(
             crate::task::registry::get_task::<R>(tid).and_then(|t| t.process_info.clone());
         if let Some(pinfo) = pinfo_opt {
             let mut pi = pinfo.lock();
-            pi.lifecycle.thread_ids.retain(|&t| t != tid);
+            pi.remove_thread_from_job(tid);
 
             // If the exiting thread is the thread-group leader (its TID == pid),
             // drain all remaining siblings and schedule them for termination.
-            if pi.pid as TaskId == tid {
-                notify_ppid = pi.lifecycle.ppid;
-                notify_pid = pi.pid;
-                exit_observer_inbox = pi.lifecycle.exit_observer_inbox;
-                core::mem::take(&mut pi.lifecycle.thread_ids)
+            if pi.is_job_leader_tid(tid) {
+                notify_ppid = pi.runtime_parent_pid();
+                notify_pid = pi.runtime_pid();
+                exit_observer_inbox = pi.job_exit_observer_inbox();
+                pi.take_job_thread_ids()
             } else {
                 alloc::vec::Vec::new()
             }
@@ -2251,10 +2251,10 @@ fn collect_child_tids<R: BootRuntime>(our_pid: u32, target_pid: i64) -> alloc::v
         .filter_map(|task| {
             task.process_info.as_ref().and_then(|pi| {
                 let pi = pi.lock();
-                if pi.lifecycle.ppid != our_pid {
+                if pi.runtime_parent_pid() != our_pid {
                     return None;
                 }
-                if target_pid > 0 && pi.pid != target_pid as u32 {
+                if target_pid > 0 && pi.runtime_pid() != target_pid as u32 {
                     return None;
                 }
                 Some(task.id)
@@ -2285,7 +2285,13 @@ fn reap_child_pid_if_dead<R: BootRuntime>(child_pid: u32, status: i32) {
     let child_tid = reg.threads.iter().find_map(|task| {
         task.process_info
             .as_ref()
-            .and_then(|pi| if pi.lock().pid == child_pid { Some(task.id) } else { None })
+            .and_then(|pi| {
+                if pi.lock().runtime_pid() == child_pid {
+                    Some(task.id)
+                } else {
+                    None
+                }
+            })
     });
     drop(reg);
 
@@ -2364,7 +2370,7 @@ fn waitpid_for_pid<R: BootRuntime>(
                     let child_pid = task
                         .process_info
                         .as_ref()
-                        .map(|pi| pi.lock().pid as u64)
+                        .map(|pi| pi.lock().runtime_pid() as u64)
                         .unwrap_or(child_tid);
                     Some((child_pid, code))
                 } else {
@@ -2397,7 +2403,7 @@ fn waitpid_for_pid<R: BootRuntime>(
                 Ok(Some(code)) => {
                     // Child died between our fast-path check and now.
                     let child_pid = crate::task::registry::get_task::<R>(child_tid)
-                        .and_then(|t| t.process_info.as_ref().map(|pi| pi.lock().pid as u64))
+                        .and_then(|t| t.process_info.as_ref().map(|pi| pi.lock().runtime_pid() as u64))
                         .unwrap_or(child_tid);
                     early_result = Some((child_pid, code));
                     early_reap_tid = Some(child_tid);
@@ -2477,7 +2483,10 @@ pub fn waitpid<R: BootRuntime>(pid: i64, flags: u32) -> Result<(u64, i32), abi::
     let our_pid = {
         let task =
             crate::task::registry::get_task::<R>(our_tid).ok_or(abi::errors::Errno::EINVAL)?;
-        task.process_info.as_ref().map(|pi| pi.lock().pid).ok_or(abi::errors::Errno::EINVAL)?
+        task.process_info
+            .as_ref()
+            .map(|pi| pi.lock().runtime_pid())
+            .ok_or(abi::errors::Errno::EINVAL)?
     };
 
     waitpid_for_pid::<R>(our_pid, pid, flags)
@@ -4432,6 +4441,23 @@ mod tests {
             detached: false,
             signals: crate::signal::ThreadSignals::new(),
         }
+    }
+
+    #[test]
+    fn test_list_processes_hides_exit_code_for_live_job() {
+        let _g = init_test_env();
+
+        // Stale/non-authoritative exit_code on a live task should not surface
+        // through ProcessSnapshot.
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_process_task(1200, TaskState::Running, 1200, 1, Some(77)),
+        ));
+
+        let snapshots = list_processes::<MockRuntime>();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].pid, 1200);
+        assert_eq!(snapshots[0].state, TaskState::Running);
+        assert_eq!(snapshots[0].exit_code, None);
     }
 
     #[test]
