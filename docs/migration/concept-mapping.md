@@ -54,13 +54,18 @@ define architectural truth; Unix terms are compatibility projections only.
 | `Form` | Canonical typed-world truth | Representation shape and projection form |
 | `Place` | Canonical typed-world truth | World/context boundary (cwd/root/namespace projections) |
 | `Person` | Canonical typed-world truth | Actor identity in typed-world ontology |
-| `Presence` | Canonical typed-world truth (emerging) | Attachment/session/TTY-facing context (still being refined) |
 | `Authority` | Canonical typed-world truth | Permission and credential boundary |
 | `Task` | Canonical typed-world truth | Schedulable execution unit |
 | `Job` | Canonical typed-world truth | Lifecycle/accounting container |
 | `Space` | Canonical typed-world truth | Address-space and memory-mapping ownership |
 | `Group` | Canonical typed-world truth | Coordination/job-control domain |
-| `Message`/Event | Canonical typed-world truth (split in progress) | Typed notification model |
+
+### Emerging canonical concepts (under active decomposition)
+
+| Concept | Classification | Notes |
+|--------|----------------|-------|
+| `Presence` | Transitional decomposition seam (canonical target) | Attachment/session/controlling TTY context is being extracted |
+| `Message` / Event | Transitional decomposition seam (canonical target) | Typed notification model is still being split and stabilized |
 
 ### Compatibility-facing projections (bridge vocabulary)
 
@@ -471,7 +476,7 @@ stable mapping. Additions or resolutions should update this document.
 | Signal split boundary | Where exactly does job-control end and IPC notification begin? | IPC design (#44) |
 | Port vs Inbox semantics | Are ports and inboxes the same concept? | `docs/ipc/inbox_vs_port_semantics.md`, #46 |
 | Place vs namespace/cwd/root | Is `Place` purely namespace ownership, or does it also define cwd/root/execution-world semantics? | Namespace work |
-| Presence vs session/controlling-tty | Is `Presence` the canonical owner for attachment semantics that Unix modeled as session + controlling TTY? | Presence model introduction |
+| Presence vs session/controlling TTY | Is `Presence` the canonical owner for attachment semantics that Unix modeled as session + controlling TTY, and if so does it own controlling TTY references directly or via a projection layer? | Presence model introduction |
 | Kind/Form projection boundary | How do `Kind`/`Form` map to ABI types, wire formats, filesystem representation, and debug views? | ABI + debug view alignment work |
 | Space sharing model | Can multiple Tasks share a `Space`? What is the ownership model? | Space extraction |
 | Authority granularity | Does every Task have its own `Authority`, or is it shared within a `Job`? | Authority extraction |
