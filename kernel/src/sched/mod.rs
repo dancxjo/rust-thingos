@@ -742,6 +742,10 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
     sched.total_cpu_count = cpu_total;
     sched.state.set_boot_cpu_online();
 
+    // Enter early-boot mode: defer remote placement and suppress IPI traffic
+    // until end_bringup() is called after all service spawning is complete.
+    sched.bringup_in_progress = true;
+
     crate::kdebug!("  Creating boot task...");
 
     let layout = alloc::alloc::Layout::from_size_align(16384, 8).unwrap();
@@ -1502,6 +1506,31 @@ impl<R: BootRuntime> types::Scheduler<R> {
             sf.affinity = crate::task::Affinity::Pinned(i);
         }
     }
+}
+
+/// Transition the scheduler out of early-boot mode.
+///
+/// During early boot (`bringup_in_progress == true`) the scheduler places all
+/// `Affinity::Any` tasks on the local (boot) CPU and suppresses remote-wakeup
+/// IPIs so that service bring-up incurs minimal cross-CPU coordination.
+///
+/// Call this function once all initial services have been spawned and the
+/// system is ready to enter steady-state scheduling.  After this point the
+/// normal round-robin CPU selection and IPI delivery resume.
+pub fn end_bringup<R: BootRuntime>() {
+    let rt = crate::runtime::<R>();
+    let _irq = rt.irq_disable();
+    let lock = SCHEDULER.lock();
+    if let Some(ptr) = *lock {
+        let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+        if sched.bringup_in_progress {
+            crate::kinfo!(
+                "SCHED: early-boot bringup complete; resuming steady-state SMP scheduling"
+            );
+            sched.bringup_in_progress = false;
+        }
+    }
+    rt.irq_restore(_irq);
 }
 
 pub fn set_priority<R: BootRuntime>(id: TaskId, priority: TaskPriority) {

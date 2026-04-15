@@ -1059,6 +1059,10 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         }
     }
 
+    // All initial services have been spawned.  Transition out of early-boot
+    // mode so the scheduler resumes normal SMP placement and IPI delivery.
+    crate::sched::end_bringup::<R>();
+
     contract!("Entering scheduler loop.");
     loop {
         if !crate::task::yield_now::<R>() {
