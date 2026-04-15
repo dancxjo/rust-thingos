@@ -113,8 +113,10 @@ impl VfsNode for PortNode {
         if self.mode != IpcThingMode::Write {
             return Err(abi::errors::Errno::EBADF);
         }
-        self.port.send_msg(data.to_vec(), fds);
-        Ok(())
+        self.port.send_msg(data.to_vec(), fds).map_err(|e| match e {
+            crate::ipc::msgqueue::MqSendError::Full { .. } => abi::errors::Errno::EAGAIN,
+            crate::ipc::msgqueue::MqSendError::Closed => abi::errors::Errno::EPIPE,
+        })
     }
 
     fn sock_recvmsg(
