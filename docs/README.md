@@ -114,6 +114,10 @@ Active IPC migration tracking and semantic analysis.
 - [`delivery-semantics-matrix.md`](ipc/delivery-semantics-matrix.md) — delivery semantics matrix
 - [`group-broadcast.md`](ipc/group-broadcast.md) — typed group-broadcast design
 
+### `audits/` — Focused Architecture Audits
+
+- [`ipc-typed-world-audit.md`](audits/ipc-typed-world-audit.md) — canonical vs compatibility IPC semantics through typed-world lens
+
 ### `kernel/` — Kernel Internals Reference
 
 Implementation details for kernel subsystems.
