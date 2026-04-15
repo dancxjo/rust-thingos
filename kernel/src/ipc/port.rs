@@ -14,6 +14,15 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
+use crate::ipc::msgqueue::{KernelMessageQueue, MqSendError};
+
+/// Default bounded capacity for the structured message queue inside a [`Port`].
+///
+/// A port can hold at most this many structured messages before
+/// [`Port::send_msg`] returns [`MqSendError::Full`], providing backpressure
+/// against unbounded kernel heap growth.
+const DEFAULT_MSG_CAPACITY: usize = 64;
+
 /// Unique identifier for a port in the global registry
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortId(pub u32);
@@ -45,7 +54,11 @@ pub struct Port {
     endpoints: Mutex<PortEndpoints>,
     /// Structured message queue (used by send_msg / recv_msg and the
     /// send_handle / recv_handle compatibility wrappers).
-    msgs: Mutex<alloc::collections::VecDeque<KernelMessage>>,
+    ///
+    /// Bounded to [`DEFAULT_MSG_CAPACITY`] entries; [`send_msg`](Self::send_msg)
+    /// returns [`MqSendError::Full`] when the queue is at capacity so that a
+    /// fast or misbehaving sender cannot cause unbounded kernel heap growth.
+    msgs: KernelMessageQueue<KernelMessage>,
 
     #[cfg(debug_assertions)]
     sender_tid: AtomicU64,
@@ -77,7 +90,7 @@ impl Port {
                 readers: 1,
                 writers: 1,
             }),
-            msgs: Mutex::new(alloc::collections::VecDeque::new()),
+            msgs: KernelMessageQueue::new(DEFAULT_MSG_CAPACITY),
             #[cfg(debug_assertions)]
             sender_tid: AtomicU64::new(0),
             #[cfg(debug_assertions)]
@@ -99,7 +112,7 @@ impl Port {
 
     /// Returns true if both the byte-stream buffer and the message queue are empty
     pub fn is_empty(&self) -> bool {
-        self.len() == 0 && self.msgs.lock().is_empty()
+        self.len() == 0 && self.msgs.is_empty()
     }
 
     /// Returns true if the byte-stream buffer is full
@@ -201,20 +214,28 @@ impl Port {
     /// those arcs is **moved** into the message queue; the sender is responsible
     /// for removing the corresponding FD/handle from its own table before calling
     /// this function if move semantics are desired.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MqSendError::Full`] when the structured message queue has
+    /// reached [`DEFAULT_MSG_CAPACITY`], providing backpressure against
+    /// unbounded kernel heap growth.  Returns [`MqSendError::Closed`] if the
+    /// queue has been closed.
     pub fn send_msg(
         &self,
         data: alloc::vec::Vec<u8>,
         caps: alloc::vec::Vec<Arc<dyn crate::vfs::VfsNode>>,
-    ) {
+    ) -> Result<(), MqSendError> {
         let tid = unsafe { crate::sched::current_tid_current() };
-        self.msgs.lock().push_back(KernelMessage { data, caps });
+        self.msgs.enqueue(KernelMessage { data, caps })?;
         self.waiters_read.wake_one();
         crate::ktrace!("PORT: Port message sent from TID {}", tid);
+        Ok(())
     }
 
     /// Dequeue the next structured message, if one is available.
     pub fn try_recv_msg(&self) -> Option<KernelMessage> {
-        self.msgs.lock().pop_front()
+        self.msgs.try_dequeue().ok().flatten()
     }
 
     // ── Legacy single-cap helpers (kept for internal use by compat wrappers) ──
@@ -222,15 +243,15 @@ impl Port {
     /// Send a single capability as a handle-only message (zero data bytes).
     ///
     /// Compatibility shim: callers should prefer `send_msg` for new code.
-    pub fn send_cap(&self, node: Arc<dyn crate::vfs::VfsNode>) {
-        self.send_msg(alloc::vec::Vec::new(), alloc::vec![node]);
+    pub fn send_cap(&self, node: Arc<dyn crate::vfs::VfsNode>) -> Result<(), MqSendError> {
+        self.send_msg(alloc::vec::Vec::new(), alloc::vec![node])
     }
 
     /// Receive a single capability from the message queue.
     ///
     /// Compatibility shim: callers should prefer `try_recv_msg` for new code.
     pub fn try_recv_cap(&self) -> Option<Arc<dyn crate::vfs::VfsNode>> {
-        let msg = self.msgs.lock().pop_front()?;
+        let msg = self.try_recv_msg()?;
         msg.caps.into_iter().next()
     }
 
@@ -578,7 +599,7 @@ mod tests {
     #[test]
     fn test_send_msg_data_only() {
         let port = Arc::new(Port::new(64));
-        port.send_msg(alloc::vec![1u8, 2, 3], alloc::vec![]);
+        port.send_msg(alloc::vec![1u8, 2, 3], alloc::vec![]).unwrap();
         let msg = port.try_recv_msg().expect("message should be present");
         assert_eq!(msg.data, &[1u8, 2, 3]);
         assert!(msg.caps.is_empty());
@@ -588,7 +609,7 @@ mod tests {
     fn test_send_msg_cap_only() {
         let port = Arc::new(Port::new(64));
         let cap: Arc<dyn crate::vfs::VfsNode> = Arc::new(DummyCap);
-        port.send_msg(alloc::vec![], alloc::vec![cap]);
+        port.send_msg(alloc::vec![], alloc::vec![cap]).unwrap();
         let msg = port.try_recv_msg().expect("message should be present");
         assert!(msg.data.is_empty());
         assert_eq!(msg.caps.len(), 1);
@@ -599,7 +620,7 @@ mod tests {
         let port = Arc::new(Port::new(64));
         let cap1: Arc<dyn crate::vfs::VfsNode> = Arc::new(DummyCap);
         let cap2: Arc<dyn crate::vfs::VfsNode> = Arc::new(DummyCap);
-        port.send_msg(alloc::vec![0xAB, 0xCD], alloc::vec![cap1, cap2]);
+        port.send_msg(alloc::vec![0xAB, 0xCD], alloc::vec![cap1, cap2]).unwrap();
         let msg = port.try_recv_msg().expect("message should be present");
         assert_eq!(msg.data, &[0xAB, 0xCDu8]);
         assert_eq!(msg.caps.len(), 2);
@@ -609,7 +630,7 @@ mod tests {
     fn test_send_cap_compat_wrapper() {
         let port = Arc::new(Port::new(64));
         let cap: Arc<dyn crate::vfs::VfsNode> = Arc::new(DummyCap);
-        port.send_cap(cap);
+        port.send_cap(cap).unwrap();
         let received = port.try_recv_cap().expect("cap should be present");
         // Just check it's not null (it's a valid Arc)
         let _ = received;
@@ -618,9 +639,9 @@ mod tests {
     #[test]
     fn test_multiple_messages_ordered() {
         let port = Arc::new(Port::new(64));
-        port.send_msg(alloc::vec![1], alloc::vec![]);
-        port.send_msg(alloc::vec![2], alloc::vec![]);
-        port.send_msg(alloc::vec![3], alloc::vec![]);
+        port.send_msg(alloc::vec![1], alloc::vec![]).unwrap();
+        port.send_msg(alloc::vec![2], alloc::vec![]).unwrap();
+        port.send_msg(alloc::vec![3], alloc::vec![]).unwrap();
 
         for expected in 1u8..=3 {
             let msg = port.try_recv_msg().expect("message should be present");
@@ -635,11 +656,38 @@ mod tests {
         // Both ring buffer and message queue empty
         assert!(port.is_empty());
         // Add a message — port should not be considered empty
-        port.send_msg(alloc::vec![], alloc::vec![]);
+        port.send_msg(alloc::vec![], alloc::vec![]).unwrap();
         assert!(!port.is_empty());
         // Drain the message
         port.try_recv_msg();
         assert!(port.is_empty());
+    }
+
+    /// [`Port::send_msg`] returns [`MqSendError::Full`] once the message queue
+    /// reaches its bounded capacity, providing backpressure instead of growing
+    /// the kernel heap unboundedly.
+    #[test]
+    fn test_send_msg_bounded_capacity() {
+        use crate::ipc::msgqueue::MqSendError;
+        let port = Arc::new(Port::new(64));
+        // Fill the message queue to its capacity.
+        for _ in 0..DEFAULT_MSG_CAPACITY {
+            port.send_msg(alloc::vec![0u8], alloc::vec![])
+                .expect("send should succeed while queue has capacity");
+        }
+        // The next send must be rejected.
+        let err = port
+            .send_msg(alloc::vec![0u8], alloc::vec![])
+            .expect_err("send must fail when queue is full");
+        assert!(
+            matches!(err, MqSendError::Full { capacity } if capacity == DEFAULT_MSG_CAPACITY),
+            "expected Full error, got {:?}",
+            err
+        );
+        // Draining one message frees space for the next send.
+        port.try_recv_msg().expect("queue should not be empty");
+        port.send_msg(alloc::vec![1u8], alloc::vec![])
+            .expect("send should succeed after draining one message");
     }
 
     // ── Peer-death semantics ──────────────────────────────────────────────────
@@ -694,7 +742,7 @@ mod tests {
     #[test]
     fn test_msg_queue_drains_after_writer_close() {
         let port = Arc::new(Port::new(64));
-        port.send_msg(alloc::vec![42u8], alloc::vec![]);
+        port.send_msg(alloc::vec![42u8], alloc::vec![]).unwrap();
         port.close_writer();
 
         let msg = port.try_recv_msg().expect("message must survive writer close");
@@ -807,14 +855,14 @@ mod tests {
 
         // Enqueue the cap; the port now holds the only strong reference besides
         // the local `cap` binding.
-        port.send_cap(cap);
+        port.send_cap(cap).unwrap();
 
         // Drop the local binding — port is the sole owner now.
         // (The strong count is 1, held by the message queue.)
         let strong_before = weak.strong_count();
         assert_eq!(strong_before, 1, "only the port queue holds the cap");
 
-        // Drop the port → the VecDeque<KernelMessage> is dropped → Arc is freed.
+        // Drop the port → the KernelMessageQueue<KernelMessage> is dropped → Arc is freed.
         drop(port);
         assert!(
             weak.upgrade().is_none(),
@@ -832,7 +880,7 @@ mod tests {
         let weak1 = Arc::downgrade(&cap1);
         let weak2 = Arc::downgrade(&cap2);
 
-        port.send_msg(alloc::vec![], alloc::vec![cap1, cap2]);
+        port.send_msg(alloc::vec![], alloc::vec![cap1, cap2]).unwrap();
 
         drop(port);
         assert!(weak1.upgrade().is_none(), "cap1 must be freed");
