@@ -27,7 +27,7 @@ const MOUSE_ENABLE: u8 = 0xF4;
 
 /// IRQ12 vector (mouse) - legacy IRQ12 maps to vector 0x2C after IOAPIC remap
 const MOUSE_VECTOR: u8 = 0x2C;
-const POLLING_INTERVAL_MS: u64 = 2;
+const POLLING_INTERVAL_MS: u64 = 8;
 
 fn wait_input_empty() {
     for _ in 0..10000 {
@@ -378,7 +378,7 @@ fn polling_loop(fd: u32) -> ! {
                 );
             } else {
                 // Leave keyboard bytes queued for ps2_kbd.
-                stem::sleep_ms(1);
+                stem::sleep_ms(POLLING_INTERVAL_MS);
             }
         } else {
             stem::sleep_ms(POLLING_INTERVAL_MS);

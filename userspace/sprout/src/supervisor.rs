@@ -31,6 +31,7 @@ use crate::pipelines::{
 use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
+const SUPERVISOR_MONITOR_EVERY_CYCLES: usize = 5;
 
 pub struct Supervisor {
     pub tasks: Arc<Mutex<Vec<ManagedTask>>>,
@@ -100,13 +101,17 @@ impl Supervisor {
         // Stage 4: Busy Stage - Wait for Display Driver to register its VFS provider
         // self.wait_for_display();
 
+        let mut monitor_cycle: usize = 0;
         loop {
             stem::trace!(
                 "SPROUT: --- Supervisor Loop Cycle Start (tasks={}) ---",
                 self.tasks.lock().len()
             );
             self.process_registrations();
-            self.monitor();
+            if monitor_cycle == 0 {
+                self.monitor();
+            }
+            monitor_cycle = (monitor_cycle + 1) % SUPERVISOR_MONITOR_EVERY_CYCLES;
             stem::trace!("SPROUT: --- Supervisor Loop Cycle End ---");
             stem::sleep_ms(100);
         }

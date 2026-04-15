@@ -4,13 +4,13 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use stem::syscall::{ioport_read, irq_subscribe};
 use stem::syscall::vfs::{vfs_thing_from_channel, vfs_write};
+use stem::syscall::{ioport_read, irq_subscribe};
 use stem::{error, info, warn};
 
 /// PS/2 controller status register
 const PS2_STATUS: usize = 0x64;
-/// PS/2 controller data register  
+/// PS/2 controller data register
 const PS2_DATA: usize = 0x60;
 
 /// Status: output buffer full
@@ -22,7 +22,7 @@ const STATUS_AUX_DATA: usize = 0x20;
 const KBD_VECTOR: u8 = 0x21;
 
 /// Polling interval in milliseconds for the cooperative service loop.
-const POLLING_INTERVAL_MS: u64 = 2;
+const POLLING_INTERVAL_MS: u64 = 8;
 
 /// Driver state node kind
 const KIND_DRV_PS2_KBD: &str = "drv.Ps2Keyboard";
@@ -52,10 +52,7 @@ fn main(raw_write_handle: usize) -> ! {
             polling_loop(fd);
         }
         Err(e) => {
-            info!(
-                "ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling",
-                e
-            );
+            info!("ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling", e);
             polling_loop(fd);
         }
     }
@@ -65,7 +62,7 @@ mod normalizer;
 mod thigmonasty;
 
 use abi::hid::{
-    BristleEventHeader, EventType, KeyEventPayload, BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION,
+    BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, BristleEventHeader, EventType, KeyEventPayload,
 };
 use thigmonasty::{KeyEdge, KeyboardState};
 
@@ -110,36 +107,25 @@ fn send_key_event(fd: u32, edge: KeyEdge, drop_counter: &mut u32) {
         payload_len: KeyEventPayload::SIZE as u32,
     };
 
-    let payload = KeyEventPayload {
-        key: key as u16,
-        mods: mods.0,
-        flags: if repeat { 1 } else { 0 },
-    };
+    let payload =
+        KeyEventPayload { key: key as u16, mods: mods.0, flags: if repeat { 1 } else { 0 } };
 
     buf[0..20].copy_from_slice(&header.to_bytes());
     buf[20..24].copy_from_slice(&payload.to_bytes());
 
     // Publish the event through the VFS-first message path.
-    let send_ok = vfs_write(fd, &buf[..24])
-        .map(|n| n == 24)
-        .unwrap_or(false);
+    let send_ok = vfs_write(fd, &buf[..24]).map(|n| n == 24).unwrap_or(false);
     if !send_ok {
         *drop_counter = drop_counter.wrapping_add(1);
         if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-            warn!(
-                "ps2_kbd: dropped {} key events (write fd={} failed)",
-                *drop_counter, fd
-            );
+            warn!("ps2_kbd: dropped {} key events (write fd={} failed)", *drop_counter, fd);
         }
     }
 }
 
 /// Fallback polling loop (if IRQ subscribe fails)
 fn polling_loop(fd: u32) -> ! {
-    stem::debug!(
-        "ps2_kbd: using cooperative polling loop ({}ms interval)",
-        POLLING_INTERVAL_MS
-    );
+    stem::debug!("ps2_kbd: using cooperative polling loop ({}ms interval)", POLLING_INTERVAL_MS);
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
     loop {
@@ -150,7 +136,7 @@ fn polling_loop(fd: u32) -> ! {
                 drain_keyboard_data(fd, &mut state, &mut drop_counter);
             } else {
                 // Leave mouse bytes queued for ps2_mouse.
-                stem::sleep_ms(1);
+                stem::sleep_ms(POLLING_INTERVAL_MS);
             }
         } else {
             // Rate limit the polling to avoid burning CPU
