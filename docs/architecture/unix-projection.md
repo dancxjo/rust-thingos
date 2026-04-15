@@ -8,6 +8,7 @@
 >
 > Companion documents:
 > - `docs/architecture/concept-classification.md` — canonical/compatibility/transitional taxonomy
+> - `docs/architecture/signals-vs-typed-events.md` — signal compatibility demotion and typed event/message direction
 > - `docs/migration/concept-mapping.md` — detailed Unix → ThingOS lexicon
 > - `docs/migration/bridge_architecture.md` — bridge layer conventions
 > - `docs/concepts/unix-compat.md` — Unix session/env quarantine boundary
@@ -362,6 +363,7 @@ be reworked at the typed-world level before any code is written.
 ## Related Documents
 
 - `docs/architecture/concept-classification.md` — canonical/compatibility/transitional taxonomy
+- `docs/architecture/signals-vs-typed-events.md` — signal compatibility demotion and typed event/message direction
 - `docs/architecture/vfs-as-place-projection.md` — VFS-specific projection model and review guidance
 - `docs/architecture/process-projection.md` — `Process` as compatibility projection (not ontology)
 - `docs/architecture/presence.md` — Presence design reference; session/tty/embodiment semantics
