@@ -1758,7 +1758,7 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(AlwaysReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollThing { fd: 3, events: poll_flags::POLLIN, revents: 0 }];
+        let mut fds = [PollThing { thing: 3, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 1, "one fd should be ready");
@@ -1771,7 +1771,7 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(NeverReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollThing { fd: 3, events: poll_flags::POLLIN, revents: 0 }];
+        let mut fds = [PollThing { thing: 3, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 0, "no fds ready in non-blocking mode");
@@ -1790,9 +1790,9 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollThing { fd: 3, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
-            PollThing { fd: 4, events: poll_flags::POLLIN, revents: 0 },
-            PollThing { fd: 5, events: poll_flags::POLLOUT, revents: 0 },
+            PollThing { thing: 3, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
+            PollThing { thing: 4, events: poll_flags::POLLIN, revents: 0 },
+            PollThing { thing: 5, events: poll_flags::POLLOUT, revents: 0 },
         ];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
@@ -1808,7 +1808,7 @@ mod tests {
         let pinfo = make_process_info_with_nodes(&[]);
 
         let mut fds = [PollThing {
-            fd: 99, // no such fd
+            thing: 99, // no such fd
             events: poll_flags::POLLIN,
             revents: 0,
         }];
@@ -1827,7 +1827,7 @@ mod tests {
     fn poll_negative_fd_is_skipped() {
         let pinfo = make_process_info_with_nodes(&[]);
 
-        let mut fds = [PollThing { fd: -1, events: poll_flags::POLLIN, revents: 0 }];
+        let mut fds = [PollThing { thing: -1, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 0, "negative fd is silently skipped");
@@ -1852,9 +1852,9 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollThing { fd: 3, events: poll_flags::POLLIN, revents: 0 },
-            PollThing { fd: 4, events: poll_flags::POLLIN, revents: 0 },
-            PollThing { fd: 5, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
+            PollThing { thing: 3, events: poll_flags::POLLIN, revents: 0 },
+            PollThing { thing: 4, events: poll_flags::POLLIN, revents: 0 },
+            PollThing { thing: 5, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
         ];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
