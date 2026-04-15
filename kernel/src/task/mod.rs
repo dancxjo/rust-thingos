@@ -612,7 +612,91 @@ pub struct Process {
 }
 
 /// Backward-compatible alias — prefer `Process` in new code.
+///
+/// `ProcessInfo` is a **compatibility/runtime adapter name**, not a canonical
+/// semantic owner.  Canonical ownership remains in generated kinds
+/// (`thingos::job`, `thingos::space`, `thingos::group`, `thingos::task`) and
+/// bridge modules convert between this transitional backing and those kinds.
 pub type ProcessInfo = Process;
+
+/// Snapshot of Unix compatibility fields exposed through the Process adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessUnixCompatProjection<'a> {
+    pub argv: &'a [Vec<u8>],
+    pub pgid: u32,
+    pub sid: u32,
+    pub session_leader: bool,
+}
+
+impl Process {
+    /// Transitional runtime identity for scheduler/plumbing code.
+    pub fn runtime_pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Transitional runtime parent linkage for scheduler/plumbing code.
+    pub fn runtime_parent_pid(&self) -> u32 {
+        self.lifecycle.ppid
+    }
+
+    /// Return `true` when `tid` is the thread-group leader TID for this job.
+    pub fn is_job_leader_tid(&self, tid: TaskId) -> bool {
+        self.pid as TaskId == tid
+    }
+
+    /// Remove one thread from this job's lifecycle membership list.
+    pub fn remove_thread_from_job(&mut self, tid: TaskId) {
+        self.lifecycle.thread_ids.retain(|&t| t != tid);
+    }
+
+    /// Drain all tracked thread IDs from this job lifecycle.
+    pub fn take_job_thread_ids(&mut self) -> Vec<TaskId> {
+        core::mem::take(&mut self.lifecycle.thread_ids)
+    }
+
+    /// Job-exit observer inbox attached to this lifecycle, if any.
+    pub fn job_exit_observer_inbox(&self) -> Option<crate::inbox::InboxId> {
+        self.lifecycle.exit_observer_inbox
+    }
+
+    /// Runtime helper: gather live thread states for this job from a TID map.
+    pub fn runtime_thread_states(
+        &self,
+        tid_state: &alloc::collections::BTreeMap<TaskId, TaskState>,
+    ) -> Vec<TaskState> {
+        self.lifecycle
+            .thread_ids
+            .iter()
+            .filter_map(|&tid| tid_state.get(&tid).copied())
+            .collect()
+    }
+
+    /// Compatibility projection wrapper for Unix-derived fields.
+    pub fn unix_compat_projection(&self) -> ProcessUnixCompatProjection<'_> {
+        ProcessUnixCompatProjection {
+            argv: self.unix_compat.argv.as_slice(),
+            pgid: self.unix_compat.pgid,
+            sid: self.unix_compat.sid,
+            session_leader: self.unix_compat.session_leader,
+        }
+    }
+
+    /// Canonical generated-kind projection for lifecycle/accounting state.
+    ///
+    /// `thingos::job::Job` currently carries only lifecycle state (schema v1/v2),
+    /// so this adapter intentionally populates just `state`.
+    pub fn canonical_job(&self, thread_states: &[TaskState]) -> thingos::job::Job {
+        thingos::job::Job {
+            state: crate::job::bridge::job_state_from_lifecycle(&self.lifecycle, thread_states),
+        }
+    }
+
+    /// Canonical generated-kind projection for this process's `Space`.
+    pub fn canonical_space(&self) -> thingos::space::Space {
+        crate::space::bridge::space_from_arc(&self.space.space_obj)
+    }
+
+}
 
 /// Kernel representation of a single thread of execution.
 ///
