@@ -267,28 +267,89 @@ on the first stalled RPC.
 
 ## 10. Using the `ipc_helpers` Provider Loop
 
-The `libs/ipc_helpers` crate provides `ProviderLoop` which handles all framing:
+The `libs/ipc_helpers` crate provides `ProviderLoop` which handles all framing.
+
+### Blocking provider (simple file service)
 
 ```rust
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
-use stem::syscall::channel_recv_all;
 
-let mut loop_ = ProviderLoop::new(vfs_read);
+let mut lp = ProviderLoop::new(vfs_read);
 loop {
-    let req = loop_.next_request()?;  // blocks until a request arrives
+    let req = lp.next_request()?;  // blocks until a request arrives
     let resp = match req.op {
         VfsRpcOp::Lookup => handle_lookup(&req.payload),
         VfsRpcOp::Read   => handle_read(&req.payload),
         // …
         _ => ProviderResponse::err(abi::errors::Errno::ENOSYS),
     };
-    loop_.send_response(req.resp_port, resp)?;
+    lp.send_response(req.resp_port, resp)?;
 }
 ```
 
+### Non-blocking provider (event-loop driver)
+
+Drivers that must interleave hardware polling with VFS RPC handling should
+use `try_next_request` instead.  It returns `Ok(None)` when the channel is
+empty and never blocks.
+
+```rust
+use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
+
+let mut lp = ProviderLoop::new(vfs_read);
+loop {
+    // 1. Poll hardware (non-blocking).
+    hardware_poll(&mut device);
+
+    // 2. Drain any pending VFS RPCs (non-blocking).
+    loop {
+        match lp.try_next_request() {
+            Ok(Some(req)) => {
+                let resp = dispatch(req.op, &req.payload);
+                lp.send_response(req.resp_port, resp).ok();
+            }
+            Ok(None) => break,         // channel empty; continue to step 3
+            Err(_) => return,          // channel closed; clean shutdown
+        }
+    }
+
+    // 3. Yield to avoid spinning.
+    stem::time::sleep_ms(1);
+}
+```
+
+See `drivers/virtio_netd/src/main.rs` and `drivers/virtio_sound/src/main.rs`
+for complete event-loop examples.
+
+### Available `ProviderResponse` constructors
+
+| Constructor | Wire format | Use for |
+|-------------|-------------|---------|
+| `ok_empty()` | `[0x00]` | Close, SubscribeReady, UnsubscribeReady |
+| `ok_u64(v)` | `[0x00][v: u64 LE]` | Lookup |
+| `ok_stat(mode, size, ino)` | `[0x00][mode: u32][size: u64][ino: u64]` | Stat |
+| `ok_read(data)` | `[0x00][len: u32][data...]` | Read, Readdir |
+| `ok_written(n)` | `[0x00][n: u32]` | Write |
+| `ok_poll(revents)` | `[0x00][revents: u32]` | Poll |
+| `ok_bytes(data)` | `[0x00][data...]` | DeviceCall, custom ops |
+| `err(Errno)` | `[errno_byte]` | Any error response |
+
+> **Warning**: Always send responses via `ProviderLoop::send_response` or
+> `channel_send_all` — never `channel_send`.  Partial writes corrupt the
+> response framing and leave the kernel waiting indefinitely.
+
 ---
 
-## 11. See Also
+## 11. IPC Transport Audit
+
+For a detailed audit of the current transport design, identified issues, and
+the full per-service migration roadmap see:
+
+`docs/ipc/vfs_rpc_ipc_audit.md`
+
+---
+
+## 12. See Also
 
 - `abi/src/vfs_rpc.rs` — wire types
 - `kernel/src/vfs/provider.rs` — kernel `ProviderFs`
@@ -297,3 +358,4 @@ loop {
 - `libs/ipc_helpers/src/provider.rs` — provider server-loop helper
 - `docs/concepts/supervisor_protocol.md` — registration handshake
 - `docs/concepts/ipc.md` — IPC overview
+- `docs/ipc/vfs_rpc_ipc_audit.md` — transport audit and migration guide

@@ -8502,6 +8502,7 @@ name = "virtio_netd"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ipc_helpers",
  "stem",
  "virtio",
 ]
@@ -8511,6 +8512,7 @@ name = "virtio_sound"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ipc_helpers",
  "stem",
  "virtio",
 ]
