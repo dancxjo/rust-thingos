@@ -18,9 +18,9 @@ mod driver;
 mod vfs_provider;
 
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
-use alloc::vec;
 use driver::VirtioNetDriver;
-use stem::syscall::{channel_create, channel_try_recv};
+use ipc_helpers::provider::ProviderLoop;
+use stem::syscall::channel_create;
 use stem::{error, warn};
 use vfs_provider::{handle_vfs_rpc, NetVfsState};
 
@@ -226,7 +226,7 @@ fn main(arg: usize) -> ! {
     let mut state = NetVfsState::new(mac, true, features);
 
     // Main loop: interleave hardware polling with VFS RPC handling.
-    let mut req_buf = vec![0u8; VFS_RPC_MAX_REQ];
+    let mut provider_loop = ProviderLoop::new(req_read);
     loop {
         // 1. Poll for link-state changes and queue events.
         if let Some(link_up) = driver.poll_link_change() {
@@ -243,14 +243,17 @@ fn main(arg: usize) -> ! {
         }
 
         // 3. Service any pending VFS RPC (non-blocking).
-        match channel_try_recv(req_read, &mut req_buf) {
-            Ok(n) if n > 0 => {
-                handle_vfs_rpc(&mut state, &mut driver, &req_buf[..n]);
+        match provider_loop.try_next_request() {
+            Ok(Some(req)) => {
+                let resp = handle_vfs_rpc(&mut state, &mut driver, &req);
+                if let Err(e) = provider_loop.send_response(req.resp_port, resp) {
+                    warn!("VIRTIO_NETD: send_response failed: {:?}", e);
+                }
             }
-            Err(e) if e != abi::errors::Errno::EAGAIN => {
-                warn!("VIRTIO_NETD: port_try_recv error: {:?}", e);
+            Ok(None) => {} // no request ready
+            Err(e) => {
+                warn!("VIRTIO_NETD: provider channel error: {:?}", e);
             }
-            _ => {}
         }
 
         stem::time::sleep_ms(1);

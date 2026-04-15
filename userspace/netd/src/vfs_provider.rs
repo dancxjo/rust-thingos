@@ -33,6 +33,18 @@
 //! └── dns/
 //!     └── lookup        ← write: hostname; read: dotted-decimal IPv4 address
 //! ```
+//!
+//! ## IPC substrate — migration note
+//!
+//! This module currently dispatches VFS RPC requests by parsing `VfsRpcReqHeader`
+//! manually in `drain_rpcs` / `handle_one`.  New provider code should use
+//! `ipc_helpers::provider::ProviderLoop::try_next_request` + `ProviderResponse`
+//! instead — see `drivers/virtio_netd/src/vfs_provider.rs` for the migrated
+//! reference implementation.
+//!
+//! FIXME: migrate to `ProviderLoop` (add `ipc_helpers` dep to `netd/Cargo.toml`,
+//! convert `drain_rpcs` to use `try_next_request`, return `ProviderResponse` from
+//! all `op_*` methods).  Tracked in the VFS RPC IPC migration audit.
 extern crate alloc;
 use alloc::string::ToString;
 

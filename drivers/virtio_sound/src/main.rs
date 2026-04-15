@@ -16,6 +16,13 @@
 //! The driver runs a single-threaded event loop that services VFS RPC requests
 //! from the kernel (via the provider channel) and feeds the virtio TX queue
 //! from the internal ring buffer.
+//!
+//! ## IPC substrate
+//!
+//! VFS RPC handling uses [`ipc_helpers::provider::ProviderLoop::try_next_request`]
+//! (non-blocking) so that hardware DMA feeding can interleave with RPC
+//! dispatch without deadlock.  Response building uses [`ProviderResponse`]
+//! helpers rather than hand-assembled byte vectors.
 #![no_std]
 #![no_main]
 use alloc::string::{String, ToString};
@@ -25,17 +32,18 @@ extern crate alloc;
 mod spec;
 
 use abi::device::DeviceKind;
+use abi::errors::Errno;
 use abi::sound::{
     AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo, AUDIO_DRAIN,
     AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START, AUDIO_STOP,
     format_bit,
 };
-use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader, VFS_RPC_MAX_REQ};
-use alloc::vec;
+use abi::vfs_rpc::{VfsRpcOp, VFS_RPC_MAX_REQ};
 use alloc::vec::Vec;
 use core::mem::size_of;
+use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use spec::*;
-use stem::syscall::channel::{channel_create, channel_send_all, channel_try_recv};
+use stem::syscall::channel::channel_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, info, warn};
 use virtio::device::VirtioDevice;
@@ -223,58 +231,6 @@ fn find_virtio_sound_device() -> Option<String> {
 
 // ── VFS RPC helpers ───────────────────────────────────────────────────────────
 
-fn resp_ok_u64(v: u64) -> Vec<u8> {
-    let mut b = vec![0u8; 9];
-    b[0] = 0; // status OK
-    b[1..9].copy_from_slice(&v.to_le_bytes());
-    b
-}
-
-fn resp_ok_stat(mode: u32, size: u64, ino: u64) -> Vec<u8> {
-    let mut b = vec![0u8; 1 + 4 + 8 + 8];
-    b[0] = 0;
-    b[1..5].copy_from_slice(&mode.to_le_bytes());
-    b[5..13].copy_from_slice(&size.to_le_bytes());
-    b[13..21].copy_from_slice(&ino.to_le_bytes());
-    b
-}
-
-fn resp_ok_read(data: &[u8]) -> Vec<u8> {
-    let mut b = vec![0u8; 1 + 4 + data.len()];
-    b[0] = 0;
-    b[1..5].copy_from_slice(&(data.len() as u32).to_le_bytes());
-    b[5..].copy_from_slice(data);
-    b
-}
-
-fn resp_ok_written(n: u32) -> Vec<u8> {
-    let mut b = vec![0u8; 5];
-    b[0] = 0;
-    b[1..5].copy_from_slice(&n.to_le_bytes());
-    b
-}
-
-fn resp_ok_poll(revents: u32) -> Vec<u8> {
-    let mut b = vec![0u8; 5];
-    b[0] = 0;
-    b[1..5].copy_from_slice(&revents.to_le_bytes());
-    b
-}
-
-/// Build a DeviceCall OK response: `[status=0][ret_val: u32][out_len: u32][out_data]`.
-fn resp_ok_device_call(ret_val: u32, out_data: &[u8]) -> Vec<u8> {
-    let mut b = vec![0u8; 1 + 4 + 4 + out_data.len()];
-    b[0] = 0;
-    b[1..5].copy_from_slice(&ret_val.to_le_bytes());
-    b[5..9].copy_from_slice(&(out_data.len() as u32).to_le_bytes());
-    b[9..].copy_from_slice(out_data);
-    b
-}
-
-fn resp_err(errno: u8) -> Vec<u8> {
-    vec![errno]
-}
-
 // ── VFS RPC readdir helper ────────────────────────────────────────────────────
 
 /// Encode `names` as packed DirentWire entries into a response payload.
@@ -302,11 +258,11 @@ fn dispatch_rpc(
     op: VfsRpcOp,
     payload: &[u8],
     card: &mut AudioCard,
-) -> (Vec<u8>, bool /* ring_changed */) {
+) -> (ProviderResponse, bool /* ring_changed */) {
     match op {
         VfsRpcOp::Lookup => {
             if payload.len() < 4 {
-                return (resp_err(22 /* EINVAL */), false);
+                return (ProviderResponse::err(Errno::EINVAL), false);
             }
             let path_len = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
             let path = if payload.len() >= 4 + path_len {
@@ -318,55 +274,54 @@ fn dispatch_rpc(
                 "" => HANDLE_ROOT,
                 "ctl" => HANDLE_CTL,
                 "out0" => HANDLE_OUT0,
-                _ => return (resp_err(2 /* ENOENT */), false),
+                _ => return (ProviderResponse::err(Errno::ENOENT), false),
             };
-            (resp_ok_u64(handle), false)
+            (ProviderResponse::ok_u64(handle), false)
         }
 
         VfsRpcOp::Stat => {
             if payload.len() < 8 {
-                return (resp_err(22), false);
+                return (ProviderResponse::err(Errno::EINVAL), false);
             }
             let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
             let resp = match handle {
-                HANDLE_ROOT => resp_ok_stat(S_IFDIR | 0o755, 0, 1),
-                HANDLE_CTL => resp_ok_stat(S_IFREG | 0o444, 0, 2),
-                HANDLE_OUT0 => resp_ok_stat(S_IFREG | 0o222, 0, 3),
-                _ => resp_err(2),
+                HANDLE_ROOT => ProviderResponse::ok_stat(S_IFDIR | 0o755, 0, 1),
+                HANDLE_CTL => ProviderResponse::ok_stat(S_IFREG | 0o444, 0, 2),
+                HANDLE_OUT0 => ProviderResponse::ok_stat(S_IFREG | 0o222, 0, 3),
+                _ => ProviderResponse::err(Errno::ENOENT),
             };
             (resp, false)
         }
 
         VfsRpcOp::Readdir => {
             if payload.len() < 20 {
-                return (resp_err(22), false);
+                return (ProviderResponse::err(Errno::EINVAL), false);
             }
             let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
             let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8]));
             if handle != HANDLE_ROOT {
-                return (resp_err(20 /* ENOTDIR */), false);
+                return (ProviderResponse::err(Errno::ENOTDIR), false);
             }
             let entries: &[(&str, u32, u64)] = &[
                 ("ctl", S_IFREG, 2),
                 ("out0", S_IFREG, 3),
             ];
             let dir_bytes = encode_readdir(entries, offset);
-            let resp = resp_ok_read(&dir_bytes);
-            (resp, false)
+            (ProviderResponse::ok_read(&dir_bytes), false)
         }
 
         VfsRpcOp::Read => {
             // ctl and out0 are not readable in v1
-            (resp_ok_read(&[]), false)
+            (ProviderResponse::ok_read(&[]), false)
         }
 
         VfsRpcOp::Write => {
             if payload.len() < 20 {
-                return (resp_err(22), false);
+                return (ProviderResponse::err(Errno::EINVAL), false);
             }
             let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
             if handle != HANDLE_OUT0 {
-                return (resp_err(30 /* EROFS */), false);
+                return (ProviderResponse::err(Errno::EROFS), false);
             }
             let data_len = u32::from_le_bytes(
                 payload[16..20].try_into().unwrap_or([0; 4])
@@ -380,24 +335,24 @@ fn dispatch_rpc(
             let bpf = card.bytes_per_frame().max(1);
             card.app_frame += (n / bpf) as u64;
             let changed = n > 0;
-            (resp_ok_written(n as u32), changed)
+            (ProviderResponse::ok_written(n as u32), changed)
         }
 
         VfsRpcOp::Poll => {
             if payload.len() < 8 {
-                return (resp_err(22), false);
+                return (ProviderResponse::err(Errno::EINVAL), false);
             }
             let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
             if handle != HANDLE_OUT0 {
                 // ctl: always return POLLOUT
-                return (resp_ok_poll(POLLOUT as u32), false);
+                return (ProviderResponse::ok_poll(POLLOUT as u32), false);
             }
             let revents: u32 = if card.ring.free_space() > 0 {
                 POLLOUT as u32
             } else {
                 0
             };
-            (resp_ok_poll(revents), false)
+            (ProviderResponse::ok_poll(revents), false)
         }
 
         VfsRpcOp::DeviceCall => {
@@ -411,7 +366,7 @@ fn dispatch_rpc(
                     card.out0_subscribed = true;
                 }
             }
-            (vec![0u8], false) // OK empty
+            (ProviderResponse::ok_empty(), false)
         }
 
         VfsRpcOp::UnsubscribeReady => {
@@ -421,23 +376,23 @@ fn dispatch_rpc(
                     card.out0_subscribed = false;
                 }
             }
-            (vec![0u8], false)
+            (ProviderResponse::ok_empty(), false)
         }
 
         VfsRpcOp::Close => {
-            (vec![0u8], false) // OK empty, no-op
+            (ProviderResponse::ok_empty(), false)
         }
 
         VfsRpcOp::Rename => {
-            (resp_err(30 /* EROFS */), false)
+            (ProviderResponse::err(Errno::EROFS), false)
         }
     }
 }
 
-fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (Vec<u8>, bool) {
+fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderResponse, bool) {
     let dc_size = size_of::<abi::device::DeviceCall>();
     if payload.len() < 8 + dc_size {
-        return (resp_err(22), false);
+        return (ProviderResponse::err(Errno::EINVAL), false);
     }
     // payload: [handle: u64][DeviceCall][in_data...]
     let _handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
@@ -445,7 +400,7 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (Vec<u8>, bool)
         core::ptr::read_unaligned(payload[8..].as_ptr() as *const abi::device::DeviceCall)
     };
     if dc.kind != DeviceKind::Audio {
-        return (resp_err(38 /* ENOSYS */), false);
+        return (ProviderResponse::err(Errno::ENOSYS), false);
     }
     let in_data = &payload[8 + dc_size..];
 
@@ -458,7 +413,7 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (Vec<u8>, bool)
                     size_of::<AudioStreamInfo>(),
                 )
             };
-            (resp_ok_device_call(0, bytes), false)
+            (ok_device_call(0, bytes), false)
         }
 
         AUDIO_SET_PARAMS => {
@@ -482,7 +437,7 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (Vec<u8>, bool)
                     size_of::<AudioParams>(),
                 )
             };
-            (resp_ok_device_call(0, bytes), false)
+            (ok_device_call(0, bytes), false)
         }
 
         AUDIO_GET_PARAMS => {
@@ -492,7 +447,7 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (Vec<u8>, bool)
                     size_of::<AudioParams>(),
                 )
             };
-            (resp_ok_device_call(0, bytes), false)
+            (ok_device_call(0, bytes), false)
         }
 
         AUDIO_GET_STATUS => {
@@ -503,27 +458,36 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (Vec<u8>, bool)
                     size_of::<AudioStatus>(),
                 )
             };
-            (resp_ok_device_call(0, bytes), false)
+            (ok_device_call(0, bytes), false)
         }
 
         AUDIO_START => {
             card.state = AudioState::Running as u32;
-            (resp_ok_device_call(0, &[]), false)
+            (ok_device_call(0, &[]), false)
         }
 
         AUDIO_STOP => {
             card.state = AudioState::Stopped as u32;
             card.ring = RingBuf::new(64 * 1024);
-            (resp_ok_device_call(0, &[]), false)
+            (ok_device_call(0, &[]), false)
         }
 
         AUDIO_DRAIN => {
             card.state = AudioState::Draining as u32;
-            (resp_ok_device_call(0, &[]), false)
+            (ok_device_call(0, &[]), false)
         }
 
-        _ => (resp_err(38 /* ENOSYS */), false),
+        _ => (ProviderResponse::err(Errno::ENOSYS), false),
     }
+}
+
+/// Build a DeviceCall OK response: `[ret_val: u32][out_len: u32][out_data]`.
+fn ok_device_call(ret_val: u32, out_data: &[u8]) -> ProviderResponse {
+    let mut payload = Vec::with_capacity(8 + out_data.len());
+    payload.extend_from_slice(&ret_val.to_le_bytes());
+    payload.extend_from_slice(&(out_data.len() as u32).to_le_bytes());
+    payload.extend_from_slice(out_data);
+    ProviderResponse::ok_bytes(&payload)
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -641,35 +605,22 @@ fn main(boot_fd: usize) -> ! {
     }
 
     // ── Main event loop ───────────────────────────────────────────────────────
-    let mut rpc_buf = vec![0u8; VFS_RPC_MAX_REQ];
     let dma_dev = driver.claim_handle();
     let mut card = AudioCard::new();
-
-    let hdr_size = size_of::<VfsRpcReqHeader>();
+    let mut provider_loop = ProviderLoop::new(req_read);
 
     loop {
         // 1. Process any pending VFS RPC requests (non-blocking).
         let mut had_rpc = false;
         loop {
-            match channel_try_recv(req_read, &mut rpc_buf) {
-                Ok(n) if n >= hdr_size => {
+            match provider_loop.try_next_request() {
+                Ok(Some(req)) => {
                     had_rpc = true;
-                    let hdr: VfsRpcReqHeader = unsafe {
-                        core::ptr::read_unaligned(
-                            rpc_buf.as_ptr() as *const VfsRpcReqHeader,
-                        )
-                    };
-                    let op = match VfsRpcOp::from_u8(hdr.op) {
-                        Some(o) => o,
-                        None => {
-                            let _ = channel_send_all(hdr.resp_port, &resp_err(22));
-                            continue;
-                        }
-                    };
-                    let payload = &rpc_buf[hdr_size..n];
                     let prev_free = card.ring.free_space();
-                    let (resp, ring_changed) = dispatch_rpc(op, payload, &mut card);
-                    let _ = channel_send_all(hdr.resp_port, &resp);
+                    let (resp, ring_changed) = dispatch_rpc(req.op, &req.payload, &mut card);
+                    if let Err(e) = provider_loop.send_response(req.resp_port, resp) {
+                        warn!("SND: send_response failed: {:?}", e);
+                    }
 
                     // Notify waiting writers on ring change (e.g. Write enqueued data,
                     // freeing up space for the next writer if partially consumed by HW).
@@ -683,7 +634,11 @@ fn main(boot_fd: usize) -> ! {
                         );
                     }
                 }
-                _ => break,
+                Ok(None) => break,
+                Err(e) => {
+                    warn!("SND: provider channel error: {:?}", e);
+                    break;
+                }
             }
         }
 

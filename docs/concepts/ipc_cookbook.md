@@ -265,7 +265,11 @@ See `userspace/ipc_provider_demo/` for the complete compilable example,
 `libs/ipc_helpers/src/provider.rs` for the `ProviderLoop` helper, and
 `userspace/iso9660d/` for a full-featured reference implementation.
 
-Minimal skeleton:
+For **event-loop drivers** that must interleave hardware polling with VFS RPC
+handling, use `ProviderLoop::try_next_request` (non-blocking) — see
+`drivers/virtio_netd/` and `drivers/virtio_sound/` for complete examples.
+
+Minimal skeleton (blocking provider):
 
 ```rust
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};

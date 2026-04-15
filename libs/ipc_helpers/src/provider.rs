@@ -36,7 +36,7 @@
 
 use abi::errors::Errno;
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader, VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP};
-use stem::syscall::channel::{channel_recv, channel_send_all};
+use stem::syscall::channel::{channel_recv, channel_send_all, channel_try_recv};
 
 /// A decoded VFS RPC request from the kernel.
 pub struct ProviderRequest {
@@ -109,6 +109,13 @@ impl ProviderResponse {
         Self { status: 0, payload }
     }
 
+    /// Successful `Poll` response carrying the ready event mask.
+    pub fn ok_poll(revents: u32) -> Self {
+        let mut payload = alloc::vec![0u8; 4];
+        payload[0..4].copy_from_slice(&revents.to_le_bytes());
+        Self { status: 0, payload }
+    }
+
     /// Error response carrying an errno.
     pub fn err(e: Errno) -> Self {
         Self {
@@ -134,6 +141,43 @@ impl ProviderLoop {
         Self {
             read_handle: vfs_read,
             buf: alloc::vec![0u8; VFS_RPC_MAX_REQ],
+        }
+    }
+
+    /// Try to receive the next request without blocking.
+    ///
+    /// Returns `Ok(None)` when no message is currently available (the channel
+    /// is empty).  Returns `Ok(Some(req))` when a request was decoded
+    /// successfully.  Returns `Err` on a fatal channel error (e.g. the kernel
+    /// closed the request port — the provider should exit cleanly).
+    ///
+    /// Use this variant in event-loop drivers that must interleave VFS RPC
+    /// handling with hardware polling (e.g. audio or network drivers).
+    /// Blocking providers should use [`next_request`] instead.
+    ///
+    /// [`next_request`]: Self::next_request
+    pub fn try_next_request(&mut self) -> Result<Option<ProviderRequest>, Errno> {
+        match channel_try_recv(self.read_handle, &mut self.buf) {
+            Ok(0) => Ok(None),
+            Ok(n) => {
+                let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
+                if n < hdr_size {
+                    return Err(Errno::EINVAL);
+                }
+                // SAFETY: we checked n >= hdr_size; the header struct is repr(C,packed).
+                let hdr: VfsRpcReqHeader = unsafe {
+                    core::ptr::read_unaligned(self.buf.as_ptr() as *const VfsRpcReqHeader)
+                };
+                let op = VfsRpcOp::from_u8(hdr.op).ok_or(Errno::EINVAL)?;
+                let payload = self.buf[hdr_size..n].to_vec();
+                Ok(Some(ProviderRequest {
+                    resp_port: hdr.resp_port,
+                    op,
+                    payload,
+                }))
+            }
+            Err(Errno::EAGAIN) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
