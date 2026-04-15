@@ -20,7 +20,7 @@ of a task context.
 - The scheduler (in `kernel/src/sched/`) owns the run-queues and is the only
   component that transitions tasks between `Runnable`, `Running`, and `Blocked`
   states.
-- Priority aging (see `docs/scheduler-anti-starvation.md`) prevents starvation
+- Priority aging (see `docs/kernel/scheduler-anti-starvation.md`) prevents starvation
   of low-priority tasks.
 - Timer interrupts drive preemption; no code path may hold a spinlock across a
   reschedule point unless it is prepared for the resulting priority inversion.
@@ -33,7 +33,7 @@ of a task context.
 
 ### Tests / Validation
 
-- `docs/scheduler-anti-starvation.md` describes the aging invariants.
+- `docs/kernel/scheduler-anti-starvation.md` describes the aging invariants.
 - Scheduler unit tests live in `kernel/src/sched/`.
 
 ---
@@ -192,11 +192,11 @@ If any answer is **yes**, the change needs justification or rework before merge.
 
 ## See Also
 
-- `docs/concepts/platform.md` — stem-as-std and no-`std` platform contract
+- `docs/platform.md` — stem-as-std and no-`std` platform contract
 - `docs/concepts/scheduling.md` — scheduler internals
 - `docs/concepts/userland.md` — userspace threading model
 - `docs/concepts/syscalls.md` — full syscall ABI reference
 - `docs/concepts/namespaces.md` — namespace semantics and isolation roadmap
-- `docs/scheduler-anti-starvation.md` — priority aging details
+- `docs/kernel/scheduler-anti-starvation.md` — priority aging details
 - `AGENTS.md` — quick orientation for automated agents
 - `.github/PULL_REQUEST_TEMPLATE.md` — machine-readable PR checklist

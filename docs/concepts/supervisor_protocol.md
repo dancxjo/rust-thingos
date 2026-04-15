@@ -217,4 +217,4 @@ Drivers with no recognised class bit receive `MSG_BIND_FAILED` with
 - `drivers/display_bootfb/src/main.rs` — reference driver using this protocol
 - `drivers/display_virtio_gpu/src/main.rs` — reference driver (GPU path)
 - `drivers/virtio_netd/src/main.rs` — reference driver (network path)
-- `docs/services-layout.md` — VFS namespace layout
+- `docs/kernel/services-layout.md` — VFS namespace layout

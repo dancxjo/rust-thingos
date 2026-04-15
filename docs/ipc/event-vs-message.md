@@ -368,13 +368,13 @@ The poll loop itself is neutral; the semantics are in the resource.
 
 ## 10. See Also
 
-- `docs/messaging/delivery-semantics-matrix.md` — dimension-by-dimension comparison and primitive mapping
+- `docs/ipc/delivery-semantics-matrix.md` — dimension-by-dimension comparison and primitive mapping
 - `docs/ipc/inbox_vs_port_semantics.md` — Inbox vs Port analysis (Issue 46)
-- `docs/messaging/group-broadcast.md` — Group broadcast as Message delivery strategy
+- `docs/ipc/group-broadcast.md` — Group broadcast as Message delivery strategy
 - `docs/concepts/ipc.md` — canonical IPC primitive overview
 - `docs/concepts/readiness.md` — poll/readiness flag semantics
-- `docs/wait_many.md` — `SYS_WAIT_MANY` design and readiness kinds
-- `docs/signals.md` — signal subsystem (edge event implementation)
+- `docs/kernel/wait_many.md` — `SYS_WAIT_MANY` design and readiness kinds
+- `docs/kernel/signals.md` — signal subsystem (edge event implementation)
 - `abi/src/syscall.rs` — syscall numbers and ABI surface
 - `kernel/src/inbox/mod.rs` — Inbox implementation
 - `kernel/src/ipc/port.rs` — Port/channel implementation
