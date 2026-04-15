@@ -1,9 +1,11 @@
 //! Port IPC syscalls
 
+use alloc::sync::Arc;
+
+use abi::errors::{Errno, SysResult};
+
 use super::{copyin, copyout};
 use crate::syscall::validate::validate_user_range;
-use abi::errors::{Errno, SysResult};
-use alloc::sync::Arc;
 
 // Lines 7-9 are duplicates of 3-5
 
@@ -12,12 +14,9 @@ pub fn sys_channel_create(capacity: usize) -> SysResult<usize> {
     let port_id = crate::ipc::create_port(capacity);
 
     let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    let write_handle = table
-        .alloc(port_id, crate::ipc::IpcThingMode::Write)
-        .ok_or(Errno::ENOMEM)?;
-    let read_handle = table
-        .alloc(port_id, crate::ipc::IpcThingMode::Read)
-        .ok_or(Errno::ENOMEM)?;
+    let write_handle =
+        table.alloc(port_id, crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?;
+    let read_handle = table.alloc(port_id, crate::ipc::IpcThingMode::Read).ok_or(Errno::ENOMEM)?;
 
     let packed = ((write_handle.0 as usize) << 16) | (read_handle.0 as usize);
     Ok(packed)
@@ -34,10 +33,7 @@ pub fn sys_channel_send(handle: usize, ptr: usize, len: usize) -> SysResult<usiz
     let handle = crate::ipc::IpcThing(handle as u32);
     let entry = {
         let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table
-            .get(handle, crate::ipc::IpcThingMode::Write)
-            .copied()
-            .ok_or(Errno::EBADF)?
+        table.get(handle, crate::ipc::IpcThingMode::Write).copied().ok_or(Errno::EBADF)?
     };
 
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
@@ -71,10 +67,7 @@ pub fn sys_channel_send_all(handle: usize, ptr: usize, len: usize) -> SysResult<
     let handle = crate::ipc::IpcThing(handle as u32);
     let entry = {
         let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table
-            .get(handle, crate::ipc::IpcThingMode::Write)
-            .copied()
-            .ok_or(Errno::EBADF)?
+        table.get(handle, crate::ipc::IpcThingMode::Write).copied().ok_or(Errno::EBADF)?
     };
 
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
@@ -89,20 +82,13 @@ pub fn sys_channel_send_all(handle: usize, ptr: usize, len: usize) -> SysResult<
     }
 
     if port.send_all(&buf[..len]) {
-        crate::ktrace!(
-            "sys_channel_send_all: wrote {} bytes to port {}",
-            len,
-            entry.port_id.0
-        );
+        crate::ktrace!("sys_channel_send_all: wrote {} bytes to port {}", len, entry.port_id.0);
         crate::ipc::diag::CHANNEL_SENDS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         crate::ipc::diag::CHANNEL_BYTES_SENT
             .fetch_add(len as u64, core::sync::atomic::Ordering::Relaxed);
         Ok(len)
     } else {
-        crate::ktrace!(
-            "sys_channel_send_all: port {} FULL, returning EAGAIN",
-            entry.port_id.0
-        );
+        crate::ktrace!("sys_channel_send_all: port {} FULL, returning EAGAIN", entry.port_id.0);
         crate::ipc::diag::CHANNEL_FULL_EVENTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         Err(Errno::EAGAIN)
     }
@@ -124,10 +110,7 @@ fn sys_channel_recv_impl(
     let handle = crate::ipc::IpcThing(handle as u32);
     let entry = {
         let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table
-            .get(handle, crate::ipc::IpcThingMode::Read)
-            .copied()
-            .ok_or(Errno::EBADF)?
+        table.get(handle, crate::ipc::IpcThingMode::Read).copied().ok_or(Errno::EBADF)?
     };
 
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
@@ -140,11 +123,7 @@ fn sys_channel_recv_impl(
             unsafe {
                 copyout(ptr, &buf[..read])?;
             }
-            crate::ktrace!(
-                "sys_channel_recv: read {} bytes from port {}",
-                read,
-                entry.port_id.0
-            );
+            crate::ktrace!("sys_channel_recv: read {} bytes from port {}", read, entry.port_id.0);
             crate::ipc::diag::CHANNEL_RECVS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             crate::ipc::diag::CHANNEL_BYTES_RECV
                 .fetch_add(read as u64, core::sync::atomic::Ordering::Relaxed);

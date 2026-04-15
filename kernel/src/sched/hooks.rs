@@ -1,15 +1,17 @@
 //! Static hook system for type-erased scheduler access.
 
-use super::types::StackFaultResult;
-use crate::sched::spawn::{SpawnExResult, StdioSpec};
-use crate::task::{ProcessInfo, TaskId, TaskState};
-use abi::errors::Errno;
-use abi::vm::{VmProt, VmRegionInfo};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+use abi::errors::Errno;
+use abi::vm::{VmProt, VmRegionInfo};
 use spin::Mutex;
+
+use super::types::StackFaultResult;
+use crate::sched::spawn::{SpawnExResult, StdioSpec};
+use crate::task::{ProcessInfo, TaskId, TaskState};
 
 // ── ProcessSnapshot ───────────────────────────────────────────────────────────
 
@@ -211,51 +213,27 @@ pub unsafe fn exit_current(code: i32) {
 }
 
 pub unsafe fn current_tid_current() -> u64 {
-    if let Some(hook) = unsafe { CURRENT_TID_HOOK } {
-        hook()
-    } else {
-        0
-    }
+    if let Some(hook) = unsafe { CURRENT_TID_HOOK } { hook() } else { 0 }
 }
 
 pub fn interrupt_task_current(id: TaskId) -> Result<(), Errno> {
-    if let Some(hook) = unsafe { INTERRUPT_TASK_HOOK } {
-        hook(id)
-    } else {
-        Err(Errno::ENOSYS)
-    }
+    if let Some(hook) = unsafe { INTERRUPT_TASK_HOOK } { hook(id) } else { Err(Errno::ENOSYS) }
 }
 
 pub fn take_pending_interrupt_current() -> bool {
-    if let Some(hook) = unsafe { TAKE_PENDING_INTERRUPT_HOOK } {
-        hook()
-    } else {
-        false
-    }
+    if let Some(hook) = unsafe { TAKE_PENDING_INTERRUPT_HOOK } { hook() } else { false }
 }
 
 pub unsafe fn task_status_current(id: TaskId) -> Option<(TaskState, Option<i32>)> {
-    if let Some(hook) = unsafe { TASK_STATUS_HOOK } {
-        hook(id)
-    } else {
-        None
-    }
+    if let Some(hook) = unsafe { TASK_STATUS_HOOK } { hook(id) } else { None }
 }
 
 pub unsafe fn task_wait_current(id: TaskId) -> Result<i32, Errno> {
-    if let Some(hook) = unsafe { TASK_WAIT_HOOK } {
-        hook(id)
-    } else {
-        Err(Errno::ENOSYS)
-    }
+    if let Some(hook) = unsafe { TASK_WAIT_HOOK } { hook(id) } else { Err(Errno::ENOSYS) }
 }
 
 pub unsafe fn poll_task_exit_current(id: TaskId) -> Result<Option<i32>, Errno> {
-    if let Some(hook) = unsafe { POLL_TASK_EXIT_HOOK } {
-        hook(id)
-    } else {
-        Err(Errno::ENOSYS)
-    }
+    if let Some(hook) = unsafe { POLL_TASK_EXIT_HOOK } { hook(id) } else { Err(Errno::ENOSYS) }
 }
 
 pub unsafe fn register_task_exit_waiter_current(
@@ -293,11 +271,7 @@ pub fn unregister_timeout_wake_current(tid: TaskId) {
 }
 
 pub unsafe fn kill_by_tid_current(tid: u64) -> bool {
-    if let Some(hook) = unsafe { KILL_BY_TID_HOOK } {
-        hook(tid)
-    } else {
-        false
-    }
+    if let Some(hook) = unsafe { KILL_BY_TID_HOOK } { hook(tid) } else { false }
 }
 
 pub fn dump_stats_current() {
@@ -307,11 +281,7 @@ pub fn dump_stats_current() {
 }
 
 pub unsafe fn get_user_mapping_at_current(addr: usize) -> Option<VmRegionInfo> {
-    if let Some(hook) = unsafe { GET_USER_MAPPING_AT_HOOK } {
-        hook(addr)
-    } else {
-        None
-    }
+    if let Some(hook) = unsafe { GET_USER_MAPPING_AT_HOOK } { hook(addr) } else { None }
 }
 
 pub fn protect_user_range_current(addr: u64, len: usize, prot: VmProt) -> Result<(), Errno> {
@@ -323,11 +293,7 @@ pub fn protect_user_range_current(addr: u64, len: usize, prot: VmProt) -> Result
 }
 
 pub unsafe fn spawn_process_current(name: &str, arg: crate::task::StartupArg) -> Option<TaskId> {
-    if let Some(hook) = unsafe { SPAWN_PROCESS_HOOK } {
-        unsafe { hook(name, arg) }
-    } else {
-        None
-    }
+    if let Some(hook) = unsafe { SPAWN_PROCESS_HOOK } { unsafe { hook(name, arg) } } else { None }
 }
 
 pub unsafe fn spawn_user_thread_current(
@@ -361,11 +327,7 @@ pub unsafe fn current_priority_current() -> crate::task::TaskPriority {
 }
 
 pub fn available_parallelism_current() -> usize {
-    if let Some(hook) = unsafe { AVAILABLE_PARALLELISM_HOOK } {
-        hook().max(1)
-    } else {
-        1
-    }
+    if let Some(hook) = unsafe { AVAILABLE_PARALLELISM_HOOK } { hook().max(1) } else { 1 }
 }
 
 pub unsafe fn handle_user_stack_fault_current(addr: u64) -> StackFaultResult {
@@ -418,27 +380,15 @@ pub unsafe fn check_user_mapping_current(addr: usize, len: usize, write: bool) -
 }
 
 pub fn process_info_current() -> Option<Arc<Mutex<ProcessInfo>>> {
-    if let Some(hook) = unsafe { PROCESS_INFO_HOOK } {
-        hook()
-    } else {
-        None
-    }
+    if let Some(hook) = unsafe { PROCESS_INFO_HOOK } { hook() } else { None }
 }
 
 pub fn process_info_for_tid_current(tid: u64) -> Option<Arc<Mutex<ProcessInfo>>> {
-    if let Some(hook) = unsafe { PROCESS_INFO_FOR_TID_HOOK } {
-        hook(tid)
-    } else {
-        None
-    }
+    if let Some(hook) = unsafe { PROCESS_INFO_FOR_TID_HOOK } { hook(tid) } else { None }
 }
 
 pub fn process_info_for_pid_current(pid: u32) -> Option<Arc<Mutex<ProcessInfo>>> {
-    if let Some(hook) = unsafe { PROCESS_INFO_FOR_PID_HOOK } {
-        hook(pid)
-    } else {
-        None
-    }
+    if let Some(hook) = unsafe { PROCESS_INFO_FOR_PID_HOOK } { hook(pid) } else { None }
 }
 
 /// Boot-only hook: spawn a process by looking up the name in the boot module table.
@@ -548,20 +498,12 @@ pub unsafe fn spawn_process_from_path_current(
 }
 
 pub unsafe fn current_task_resource_id() -> Option<u64> {
-    if let Some(hook) = unsafe { CURRENT_RESOURCE_HOOK } {
-        hook()
-    } else {
-        None
-    }
+    if let Some(hook) = unsafe { CURRENT_RESOURCE_HOOK } { hook() } else { None }
 }
 
 /// Return a snapshot of all live processes.
 pub fn list_processes_current() -> Vec<ProcessSnapshot> {
-    if let Some(hook) = unsafe { LIST_PROCESSES_HOOK } {
-        hook()
-    } else {
-        Vec::new()
-    }
+    if let Some(hook) = unsafe { LIST_PROCESSES_HOOK } { hook() } else { Vec::new() }
 }
 
 pub unsafe fn current_task_name_current() -> [u8; 32] {
@@ -612,11 +554,7 @@ pub unsafe fn set_current_task_name_current(name: &[u8]) {
 /// `flags & WNOHANG`: return `Ok((0, 0))` immediately if no child has exited.
 /// Returns `Err(ECHILD)` when no matching children exist at all.
 pub unsafe fn waitpid_current(pid: i64, flags: u32) -> Result<(u64, i32), Errno> {
-    if let Some(hook) = unsafe { WAITPID_HOOK } {
-        hook(pid, flags)
-    } else {
-        Err(Errno::ENOSYS)
-    }
+    if let Some(hook) = unsafe { WAITPID_HOOK } { hook(pid, flags) } else { Err(Errno::ENOSYS) }
 }
 
 // ── Signal hook accessors ─────────────────────────────────────────────────────

@@ -236,7 +236,7 @@ pub fn sys_sendmsg(
     fds_count: usize,
 ) -> SysResult<usize> {
     const MAX_MSG_DATA: usize = 4096;
-    const MAX_MSG_FDS:  usize = 64;
+    const MAX_MSG_FDS: usize = 64;
 
     if fds_count > MAX_MSG_FDS {
         return Err(Errno::EINVAL);
@@ -261,10 +261,7 @@ pub fn sys_sendmsg(
     if fds_count > 0 {
         unsafe {
             copyin(
-                core::slice::from_raw_parts_mut(
-                    fd_nums.as_mut_ptr() as *mut u8,
-                    fds_count * 4,
-                ),
+                core::slice::from_raw_parts_mut(fd_nums.as_mut_ptr() as *mut u8, fds_count * 4),
                 fds_ptr,
             )?;
         }
@@ -397,9 +394,5 @@ fn resolve_fd_or_handle(
         .or_else(|| table.get(h, crate::ipc::IpcThingMode::Read))
         .ok_or(Errno::EBADF)?;
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
-    Ok(alloc::sync::Arc::new(crate::vfs::port_node::PortNode::new(
-        port,
-        entry.mode,
-    )))
+    Ok(alloc::sync::Arc::new(crate::vfs::port_node::PortNode::new(port, entry.mode)))
 }
-

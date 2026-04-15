@@ -104,7 +104,7 @@ fn main(boot_fd: usize) -> ! {
     }
 
     if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {
-        stem::debug!("display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})", 
+        stem::debug!("display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
             drv_req_read, drv_resp_write, supervisor_port, bind_instance_id);
         loop {
             stem::yield_now();

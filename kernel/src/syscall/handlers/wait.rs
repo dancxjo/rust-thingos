@@ -1,9 +1,11 @@
-use super::root_call;
-use crate::syscall::validate::validate_user_range;
-use abi::errors::{Errno, SysResult};
-use abi::wait::{self, WaitKind, WaitResult, WaitSpec};
 use alloc::sync::Arc;
 use core::mem::size_of;
+
+use abi::errors::{Errno, SysResult};
+use abi::wait::{self, WaitKind, WaitResult, WaitSpec};
+
+use super::root_call;
+use crate::syscall::validate::validate_user_range;
 
 #[derive(Clone)]
 enum Registration {
@@ -234,10 +236,7 @@ fn poll_fd(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        let file = lock
-            .thing_table
-            .get(spec.object as u32)
-            .map_err(|_| Errno::EBADF)?;
+        let file = lock.thing_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
         file.node.clone()
     };
 
@@ -321,7 +320,8 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
                 let handle = crate::ipc::IpcThing(spec.object as u32);
                 let table = crate::ipc::GLOBAL_THING_TABLE.lock();
                 if (spec.flags & wait::interest::READABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Read).copied() {
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Read).copied()
+                    {
                         if let Some(port) = crate::ipc::get_port(entry.port_id) {
                             port.add_waiter_read(tid);
                             regs.push(Registration::PortRead(entry.port_id));
@@ -329,7 +329,8 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
                     }
                 }
                 if (spec.flags & wait::interest::WRITABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Write).copied() {
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Write).copied()
+                    {
                         if let Some(port) = crate::ipc::get_port(entry.port_id) {
                             port.add_waiter_write(tid);
                             regs.push(Registration::PortWrite(entry.port_id));
@@ -341,10 +342,7 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
                 let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
                 let node = {
                     let lock = pinfo_arc.lock();
-                    lock.thing_table
-                        .get(spec.object as u32)
-                        .ok()
-                        .map(|f| f.node.clone())
+                    lock.thing_table.get(spec.object as u32).ok().map(|f| f.node.clone())
                 };
 
                 if let Some(node) = node {
@@ -399,20 +397,18 @@ fn cleanup_all(regs: &[Registration], tid: u64, timeout_tick: Option<u64>) -> Sy
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::sync::Arc;
     use core::sync::atomic::Ordering;
+
     use spin::Mutex;
+
+    use super::*;
 
     fn alloc_port_pair(capacity: usize) -> (u32, u32) {
         let port_id = crate::ipc::create_port(capacity);
         let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        let write = table
-            .alloc(port_id, crate::ipc::IpcThingMode::Write)
-            .expect("write handle");
-        let read = table
-            .alloc(port_id, crate::ipc::IpcThingMode::Read)
-            .expect("read handle");
+        let write = table.alloc(port_id, crate::ipc::IpcThingMode::Write).expect("write handle");
+        let read = table.alloc(port_id, crate::ipc::IpcThingMode::Read).expect("read handle");
         (write.0, read.0)
     }
 
@@ -438,11 +434,10 @@ mod tests {
         fd: u32,
         node: Arc<dyn crate::vfs::VfsNode>,
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
-        use crate::vfs::{thing_table::ThingTable, OpenFlags};
+        use crate::vfs::OpenFlags;
+        use crate::vfs::thing_table::ThingTable;
         let mut table = ThingTable::new();
-        table
-            .insert_at(fd, node, OpenFlags::read_write(), "/test".into())
-            .expect("insert_at");
+        table.insert_at(fd, node, OpenFlags::read_write(), "/test".into()).expect("insert_at");
         Arc::new(Mutex::new(crate::task::ProcessInfo {
             pid: 1,
             lifecycle: crate::task::ProcessLifecycle::new(0, 1),
@@ -481,10 +476,7 @@ mod tests {
         let port = {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
-                .get(
-                    crate::ipc::IpcThing(write_handle),
-                    crate::ipc::IpcThingMode::Write,
-                )
+                .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
                 .copied()
                 .expect("entry");
             crate::ipc::get_port(entry.port_id).expect("port")
@@ -533,10 +525,7 @@ mod tests {
         let port = {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
-                .get(
-                    crate::ipc::IpcThing(write_handle),
-                    crate::ipc::IpcThingMode::Write,
-                )
+                .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
                 .copied()
                 .expect("entry");
             crate::ipc::get_port(entry.port_id).expect("port")
@@ -672,12 +661,7 @@ mod tests {
         // GraphOp is deprecated and returns ENOSYS.  This test verifies the
         // backward-compatibility shim remains in place so existing binaries that
         // pass WaitKind::GraphOp = 6 receive a clean error rather than EINVAL.
-        let spec = WaitSpec {
-            kind: WaitKind::GraphOp as u32,
-            flags: 0,
-            object: 1,
-            token: 41,
-        };
+        let spec = WaitSpec { kind: WaitKind::GraphOp as u32, flags: 0, object: 1, token: 41 };
         assert!(matches!(poll_spec(&spec), Err(Errno::ENOSYS)));
     }
 
@@ -690,10 +674,7 @@ mod tests {
         let port = {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
-                .get(
-                    crate::ipc::IpcThing(write_handle),
-                    crate::ipc::IpcThingMode::Write,
-                )
+                .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
                 .copied()
                 .expect("entry");
             crate::ipc::get_port(entry.port_id).expect("port")
@@ -782,9 +763,8 @@ mod tests {
             object: 5,
             token: 200,
         };
-        let result = poll_spec_with_pinfo(pinfo, &spec)
-            .expect("poll_spec ok")
-            .expect("fd should be ready");
+        let result =
+            poll_spec_with_pinfo(pinfo, &spec).expect("poll_spec ok").expect("fd should be ready");
         assert_ne!(
             result.flags & wait::ready::READABLE,
             0,
@@ -806,10 +786,7 @@ mod tests {
             token: 201,
         };
         let result = poll_spec_with_pinfo(pinfo, &spec).expect("poll_spec ok");
-        assert!(
-            result.is_none(),
-            "empty pipe with live writer must not be ready"
-        );
+        assert!(result.is_none(), "empty pipe with live writer must not be ready");
         let _ = write_node;
     }
 
@@ -873,9 +850,6 @@ mod tests {
             token: 204,
         };
         let result = poll_spec_with_pinfo(pinfo, &spec);
-        assert!(
-            matches!(result, Err(Errno::EBADF)),
-            "missing fd must return EBADF"
-        );
+        assert!(matches!(result, Err(Errno::EBADF)), "missing fd must return EBADF");
     }
 }

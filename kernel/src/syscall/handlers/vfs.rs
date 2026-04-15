@@ -40,12 +40,7 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     crate::ktrace!("VFS: sys_fs_open path='{}' tid={}", path, tid);
 
     if path == "/dev/fb0" {
-        crate::kdebug!(
-            "sys_fs_open: path='{}' len={} flags=0x{:x}",
-            path,
-            path_len,
-            flags
-        );
+        crate::kdebug!("sys_fs_open: path='{}' len={} flags=0x{:x}", path, path_len, flags);
     }
 
     let open_flags = OpenFlags::from_open_call(flags as u32);
@@ -127,11 +122,7 @@ pub fn sys_fs_close(fd: usize) -> SysResult<usize> {
     let maybe_lock_info: Option<(u64, u32)> = {
         let lock = pinfo_arc.lock();
         let pid = lock.pid;
-        lock.thing_table
-            .get(fd as u32)
-            .ok()
-            .and_then(|f| f.node.stat().ok())
-            .map(|s| (s.ino, pid))
+        lock.thing_table.get(fd as u32).ok().and_then(|f| f.node.stat().ok()).map(|s| (s.ino, pid))
     };
 
     pinfo_arc.lock().thing_table.close(fd as u32)?;
@@ -253,10 +244,7 @@ pub fn sys_fs_stat(fd: usize, stat_ptr: usize, _a2: usize, _a3: usize) -> SysRes
     let file_stat = stat.to_abi_stat();
     // SAFETY: `file_stat` is a plain repr(C) struct on the stack; we read it as bytes.
     let bytes = unsafe {
-        core::slice::from_raw_parts(
-            &file_stat as *const abi::fs::FileStat as *const u8,
-            stat_size,
-        )
+        core::slice::from_raw_parts(&file_stat as *const abi::fs::FileStat as *const u8, stat_size)
     };
     unsafe { copyout(stat_ptr, bytes)? };
 
@@ -376,9 +364,7 @@ pub fn sys_fs_readv(fd: usize, iovec_ptr: usize, iovec_count: usize) -> SysResul
         return Err(Errno::EINVAL);
     }
 
-    let iov_size = iovec_count
-        .checked_mul(core::mem::size_of::<IoVec>())
-        .ok_or(Errno::EINVAL)?;
+    let iov_size = iovec_count.checked_mul(core::mem::size_of::<IoVec>()).ok_or(Errno::EINVAL)?;
     validate_user_range(iovec_ptr, iov_size, false)?;
 
     // Copy the iovec array from userspace.
@@ -445,9 +431,7 @@ pub fn sys_fs_writev(fd: usize, iovec_ptr: usize, iovec_count: usize) -> SysResu
         return Err(Errno::EINVAL);
     }
 
-    let iov_size = iovec_count
-        .checked_mul(core::mem::size_of::<IoVec>())
-        .ok_or(Errno::EINVAL)?;
+    let iov_size = iovec_count.checked_mul(core::mem::size_of::<IoVec>()).ok_or(Errno::EINVAL)?;
     validate_user_range(iovec_ptr, iov_size, false)?;
 
     // Copy the iovec array from userspace.
@@ -521,7 +505,13 @@ pub fn sys_fs_unlink(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     vfs::mount::unlink(&abs_path)?;
 
     if let Some(parent) = parent_node {
-        crate::vfs::watch::emit_event(&*parent, abi::vfs_watch::mask::REMOVE, Some(name), 0, parent_mount_id);
+        crate::vfs::watch::emit_event(
+            &*parent,
+            abi::vfs_watch::mask::REMOVE,
+            Some(name),
+            0,
+            parent_mount_id,
+        );
     }
 
     Ok(0)
@@ -549,7 +539,13 @@ pub fn sys_fs_mkdir(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     vfs::mount::mkdir(&abs_path)?;
 
     if let Some(parent) = parent_node {
-        crate::vfs::watch::emit_event(&*parent, abi::vfs_watch::mask::CREATE, Some(name), 0, parent_mount_id);
+        crate::vfs::watch::emit_event(
+            &*parent,
+            abi::vfs_watch::mask::CREATE,
+            Some(name),
+            0,
+            parent_mount_id,
+        );
     }
 
     Ok(0)
@@ -574,10 +570,7 @@ pub fn SYS_FS_DUP(old_fd: usize) -> SysResult<usize> {
 /// this is a no-op.  Returns `new_fd` on success.
 pub fn SYS_FS_DUP2(old_fd: usize, new_fd: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
-    let result = pinfo_arc
-        .lock()
-        .thing_table
-        .dup2(old_fd as u32, new_fd as u32)?;
+    let result = pinfo_arc.lock().thing_table.dup2(old_fd as u32, new_fd as u32)?;
     Ok(result as usize)
 }
 
@@ -715,10 +708,7 @@ pub fn sys_fs_mount(
         let prov_handle = crate::ipc::IpcThing(provider_write_handle as u32);
         let prov_entry = {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            table
-                .get(prov_handle, crate::ipc::IpcThingMode::Write)
-                .copied()
-                .ok_or(Errno::EBADF)?
+            table.get(prov_handle, crate::ipc::IpcThingMode::Write).copied().ok_or(Errno::EBADF)?
         };
         crate::ipc::get_port(prov_entry.port_id).ok_or(Errno::EBADF)?
     };
@@ -733,9 +723,7 @@ pub fn sys_fs_mount(
     // so the provider process can call SYS_channel_send on it.
     let resp_write_handle = {
         let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table
-            .alloc(resp_port_id, crate::ipc::IpcThingMode::Write)
-            .ok_or(Errno::ENOMEM)?
+        table.alloc(resp_port_id, crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
     };
 
     let req_port_id = crate::ipc::find_port_id(&req_port).ok_or(Errno::EBADF)?;
@@ -836,22 +824,13 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
         node: Option<Arc<dyn vfs::VfsNode>>,
         events: u16,
     }
-    let mut entries = vec![
-        Entry {
-            node: None,
-            events: 0
-        };
-        nfds
-    ];
+    let mut entries = vec![Entry { node: None, events: 0 }; nfds];
     {
         let lock = pinfo_arc.lock();
         for (i, kfd) in kfds.iter().enumerate() {
             if kfd.thing >= 0 {
-                entries[i].node = lock
-                    .thing_table
-                    .get(kfd.thing as u32)
-                    .ok()
-                    .map(|f| f.node.clone());
+                entries[i].node =
+                    lock.thing_table.get(kfd.thing as u32).ok().map(|f| f.node.clone());
                 entries[i].events = kfd.events;
             }
         }
@@ -1017,9 +996,7 @@ pub fn sys_fs_seek(fd: usize, offset: usize, whence: usize) -> SysResult<usize> 
         }
         1 => {
             // SEEK_CUR – relative to current position.
-            let new = (current_offset as i64)
-                .checked_add(offset_signed)
-                .ok_or(Errno::EINVAL)?;
+            let new = (current_offset as i64).checked_add(offset_signed).ok_or(Errno::EINVAL)?;
             if new < 0 {
                 return Err(Errno::EINVAL);
             }
@@ -1027,9 +1004,7 @@ pub fn sys_fs_seek(fd: usize, offset: usize, whence: usize) -> SysResult<usize> 
         }
         2 => {
             // SEEK_END – relative to end of file.
-            let new = (size as i64)
-                .checked_add(offset_signed)
-                .ok_or(Errno::EINVAL)?;
+            let new = (size as i64).checked_add(offset_signed).ok_or(Errno::EINVAL)?;
             if new < 0 {
                 return Err(Errno::EINVAL);
             }
@@ -1354,10 +1329,7 @@ pub fn sys_fs_lstat(path_ptr: usize, path_len: usize, stat_ptr: usize) -> SysRes
     let file_stat = stat.to_abi_stat();
     // SAFETY: `file_stat` is a plain repr(C) struct on the stack; we read it as bytes.
     let bytes = unsafe {
-        core::slice::from_raw_parts(
-            &file_stat as *const abi::fs::FileStat as *const u8,
-            stat_size,
-        )
+        core::slice::from_raw_parts(&file_stat as *const abi::fs::FileStat as *const u8, stat_size)
     };
     unsafe { copyout(stat_ptr, bytes)? };
 
@@ -1535,16 +1507,13 @@ pub fn sys_fs_fchmod(fd: usize, mode: usize) -> SysResult<usize> {
 
 /// Copy a [`abi::fs::UtimesRequest`] from userspace and decode it into
 /// optional `(sec, nsec)` pairs.
-fn read_utimes_request(
-    times_ptr: usize,
-) -> SysResult<(Option<(u64, u32)>, Option<(u64, u32)>)> {
+fn read_utimes_request(times_ptr: usize) -> SysResult<(Option<(u64, u32)>, Option<(u64, u32)>)> {
     use abi::fs::UtimesRequest;
     let size = core::mem::size_of::<UtimesRequest>();
     validate_user_range(times_ptr, size, false)?;
     let mut req = UtimesRequest::default();
-    let buf = unsafe {
-        core::slice::from_raw_parts_mut(&mut req as *mut UtimesRequest as *mut u8, size)
-    };
+    let buf =
+        unsafe { core::slice::from_raw_parts_mut(&mut req as *mut UtimesRequest as *mut u8, size) };
     unsafe { copyin(buf, times_ptr)? };
     let atime = if req.atime_sec == UtimesRequest::OMIT {
         None
@@ -1593,11 +1562,7 @@ pub fn sys_fs_utimes(
 ///
 /// `times_ptr` points to an [`abi::fs::UtimesRequest`] struct.
 /// Returns `Ok(0)` on success, or an errno on failure.
-pub fn sys_fs_lutimes(
-    path_ptr: usize,
-    path_len: usize,
-    times_ptr: usize,
-) -> SysResult<usize> {
+pub fn sys_fs_lutimes(path_ptr: usize, path_len: usize, times_ptr: usize) -> SysResult<usize> {
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
         return Err(Errno::EINVAL);
@@ -1652,17 +1617,18 @@ pub fn sys_fs_flock(fd: usize, how: usize) -> SysResult<usize> {
     Ok(0)
 }
 
-
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Arc;
+
+    use abi::errors::SysResult;
+    use abi::syscall::{PollThing, poll_flags};
+    use spin::Mutex;
+
     use super::*;
     use crate::sched::hooks::CURRENT_TID_HOOK;
     use crate::vfs::thing_table::ThingTable;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
-    use abi::errors::SysResult;
-    use abi::syscall::{poll_flags, PollThing};
-    use alloc::sync::Arc;
-    use spin::Mutex;
 
     // ── Test nodes ────────────────────────────────────────────────────────────
 
@@ -1676,10 +1642,7 @@ mod tests {
             Ok(buf.len())
         }
         fn stat(&self) -> SysResult<VfsStat> {
-            Ok(VfsStat {
-                mode: VfsStat::S_IFCHR | 0o666,
-                ..Default::default()
-            })
+            Ok(VfsStat { mode: VfsStat::S_IFCHR | 0o666, ..Default::default() })
         }
         // poll() not overridden → returns POLLIN | POLLOUT (default)
     }
@@ -1694,10 +1657,7 @@ mod tests {
             Ok(buf.len())
         }
         fn stat(&self) -> SysResult<VfsStat> {
-            Ok(VfsStat {
-                mode: VfsStat::S_IFCHR | 0o666,
-                ..Default::default()
-            })
+            Ok(VfsStat { mode: VfsStat::S_IFCHR | 0o666, ..Default::default() })
         }
         fn poll(&self) -> u16 {
             0 // never ready
@@ -1714,9 +1674,8 @@ mod tests {
     static TEST_POLL_GUARD: spin::Mutex<()> = spin::Mutex::new(());
 
     // Holds the current test's ProcessInfo while inside the critical section.
-    static TEST_PROCESS_INFO: spin::Mutex<
-        Option<Arc<Mutex<crate::task::ProcessInfo>>>,
-    > = spin::Mutex::new(None);
+    static TEST_PROCESS_INFO: spin::Mutex<Option<Arc<Mutex<crate::task::ProcessInfo>>>> =
+        spin::Mutex::new(None);
 
     fn process_info_hook() -> Option<Arc<Mutex<crate::task::ProcessInfo>>> {
         TEST_PROCESS_INFO.lock().clone()
@@ -1799,19 +1758,11 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(AlwaysReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollThing {
-            fd: 3,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        }];
+        let mut fds = [PollThing { fd: 3, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 1, "one fd should be ready");
-        assert_ne!(
-            fds[0].revents & poll_flags::POLLIN,
-            0,
-            "POLLIN should be set"
-        );
+        assert_ne!(fds[0].revents & poll_flags::POLLIN, 0, "POLLIN should be set");
     }
 
     /// Non-blocking poll over a node with poll() == 0 must return 0 immediately.
@@ -1820,11 +1771,7 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(NeverReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollThing {
-            fd: 3,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        }];
+        let mut fds = [PollThing { fd: 3, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 0, "no fds ready in non-blocking mode");
@@ -1843,21 +1790,9 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollThing {
-                fd: 3,
-                events: poll_flags::POLLIN | poll_flags::POLLOUT,
-                revents: 0,
-            },
-            PollThing {
-                fd: 4,
-                events: poll_flags::POLLIN,
-                revents: 0,
-            },
-            PollThing {
-                fd: 5,
-                events: poll_flags::POLLOUT,
-                revents: 0,
-            },
+            PollThing { fd: 3, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
+            PollThing { fd: 4, events: poll_flags::POLLIN, revents: 0 },
+            PollThing { fd: 5, events: poll_flags::POLLOUT, revents: 0 },
         ];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
@@ -1892,11 +1827,7 @@ mod tests {
     fn poll_negative_fd_is_skipped() {
         let pinfo = make_process_info_with_nodes(&[]);
 
-        let mut fds = [PollThing {
-            fd: -1,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        }];
+        let mut fds = [PollThing { fd: -1, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 0, "negative fd is silently skipped");
@@ -1921,33 +1852,14 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollThing {
-                fd: 3,
-                events: poll_flags::POLLIN,
-                revents: 0,
-            },
-            PollThing {
-                fd: 4,
-                events: poll_flags::POLLIN,
-                revents: 0,
-            },
-            PollThing {
-                fd: 5,
-                events: poll_flags::POLLIN | poll_flags::POLLOUT,
-                revents: 0,
-            },
+            PollThing { fd: 3, events: poll_flags::POLLIN, revents: 0 },
+            PollThing { fd: 4, events: poll_flags::POLLIN, revents: 0 },
+            PollThing { fd: 5, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
         ];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
-        assert_eq!(
-            n, 2,
-            "pipe-read and always-ready should fire; never-ready should not"
-        );
-        assert_ne!(
-            fds[0].revents & poll_flags::POLLIN,
-            0,
-            "pipe read end has data → POLLIN"
-        );
+        assert_eq!(n, 2, "pipe-read and always-ready should fire; never-ready should not");
+        assert_ne!(fds[0].revents & poll_flags::POLLIN, 0, "pipe read end has data → POLLIN");
         assert_eq!(fds[1].revents, 0, "NeverReadyNode → no events");
         assert_ne!(
             fds[2].revents & (poll_flags::POLLIN | poll_flags::POLLOUT),
@@ -1985,11 +1897,7 @@ mod tests {
             Ok(buf.len())
         }
         fn stat(&self) -> SysResult<VfsStat> {
-            Ok(VfsStat {
-                mode: VfsStat::S_IFREG | 0o644,
-                size: self.0,
-                ..Default::default()
-            })
+            Ok(VfsStat { mode: VfsStat::S_IFREG | 0o644, size: self.0, ..Default::default() })
         }
     }
 
@@ -2131,9 +2039,7 @@ mod tests {
     // ── sys_fs_getcwd – CWD reading ───────────────────────────────────────────
 
     /// Helper: run `sys_fs_getcwd` with the given process info and a stack buffer.
-    fn getcwd_with_process_info(
-        pinfo: Arc<Mutex<crate::task::ProcessInfo>>,
-    ) -> SysResult<usize> {
+    fn getcwd_with_process_info(pinfo: Arc<Mutex<crate::task::ProcessInfo>>) -> SysResult<usize> {
         let _guard = TEST_POLL_GUARD.lock();
         unsafe {
             CURRENT_TID_HOOK = Some(test_current_tid);
@@ -2175,10 +2081,7 @@ mod tests {
     // ── resolve_path – relative path resolution ───────────────────────────────
 
     /// Helper: call `resolve_path` with the given process info's CWD set.
-    fn resolve_relative(
-        cwd: &str,
-        rel_path: &str,
-    ) -> SysResult<alloc::string::String> {
+    fn resolve_relative(cwd: &str, rel_path: &str) -> SysResult<alloc::string::String> {
         let _guard = TEST_POLL_GUARD.lock();
         unsafe {
             CURRENT_TID_HOOK = Some(test_current_tid);
@@ -2249,4 +2152,3 @@ mod tests {
         assert_eq!(result, Err(Errno::EINVAL));
     }
 }
-

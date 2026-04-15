@@ -9,16 +9,18 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use crate::driver::BootFbDriver;
+use alloc::vec::Vec;
+
 use abi::device::DeviceCall;
 use abi::display::{
-    BufferHandle, BufferId, CommitRequest, PlaneCommit, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
-    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER,
+    BufferHandle, BufferId, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
+    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, PlaneCommit,
 };
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
-use alloc::vec::Vec;
 use ipc_helpers::provider::{ProviderRequest, ProviderResponse};
+
+use crate::driver::BootFbDriver;
 
 // Handle IDs for this driver.
 pub const HANDLE_ROOT: u64 = 0;
@@ -93,7 +95,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
 
     let call: DeviceCall = unsafe {
         core::ptr::read_unaligned(
-            payload[8..8 + core::mem::size_of::<DeviceCall>()].as_ptr() as *const _,
+            payload[8..8 + core::mem::size_of::<DeviceCall>()].as_ptr() as *const _
         )
     };
 
@@ -137,7 +139,8 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
                 return ProviderResponse::err(Errno::EINVAL);
             }
 
-            let req: CommitRequest = unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+            let req: CommitRequest =
+                unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
 
             // For provider RPC calls, plane commits are serialized inline after
             // CommitRequest because raw pointers are not valid cross-process.
@@ -152,7 +155,9 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
                     for i in 0..count {
                         let off = i * plane_size;
                         let plane: PlaneCommit = unsafe {
-                            core::ptr::read_unaligned(base[off..off + plane_size].as_ptr() as *const _)
+                            core::ptr::read_unaligned(
+                                base[off..off + plane_size].as_ptr() as *const _
+                            )
                         };
                         inline_planes.push(plane);
                     }

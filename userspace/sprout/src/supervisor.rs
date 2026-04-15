@@ -275,9 +275,10 @@ impl Supervisor {
                 let mut stderr_mode = stem::abi::types::stdio_mode::INHERIT;
                 let mut console_fd_to_close: Option<u32> = None;
                 if task.name == "shell" {
-                    if let Ok(console_fd) =
-                        stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR)
-                    {
+                    if let Ok(console_fd) = stem::syscall::vfs::vfs_open(
+                        "/dev/console",
+                        abi::syscall::vfs_flags::O_RDWR,
+                    ) {
                         stdin_mode = stem::abi::types::stdio_mode::thing(console_fd);
                         stdout_mode = stem::abi::types::stdio_mode::thing(console_fd);
                         stderr_mode = stem::abi::types::stdio_mode::thing(console_fd);
@@ -327,8 +328,8 @@ impl Supervisor {
             let mut process_count = 0;
 
             // Convert the response channel handle to a VFS FD for recvmsg.
-            let resp_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_resp_read)
-                .unwrap_or(drv_resp_read);
+            let resp_fd =
+                stem::syscall::vfs::vfs_thing_from_channel(drv_resp_read).unwrap_or(drv_resp_read);
 
             while let Ok((n, n_fds)) =
                 stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds)

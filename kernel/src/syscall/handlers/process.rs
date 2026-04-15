@@ -1,13 +1,15 @@
 //! Process lifecycle and task management syscalls
 
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+
+use abi::errors::{Errno, SysResult};
+
 use super::copyin;
 use crate::sched as scheduler;
 use crate::sched::StdioSpec;
 use crate::syscall::validate::validate_user_range;
 use crate::task::StartupArg;
-use abi::errors::{Errno, SysResult};
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
 
 pub fn sys_exit(code: i32) -> SysResult<usize> {
     // crate::kprintln!("SYSCALL EXIT: TID={} code={}", unsafe { crate::sched::current_tid_current() }, code);
@@ -107,11 +109,7 @@ pub fn sys_spawn_thread(req_ptr: usize, _unused: usize) -> SysResult<usize> {
             detached,
         )
     };
-    if let Some(tid) = tid {
-        Ok(tid as usize)
-    } else {
-        Err(Errno::EAGAIN)
-    }
+    if let Some(tid) = tid { Ok(tid as usize) } else { Err(Errno::EAGAIN) }
 }
 
 /// Boot-only helper: spawn a process from a boot module by name.
@@ -131,11 +129,7 @@ pub fn sys_spawn_process(name_ptr: usize, name_len: usize, arg: usize) -> SysRes
     }
     let name = core::str::from_utf8(&buf[..name_len]).map_err(|_| Errno::EINVAL)?;
     let tid = unsafe { crate::sched::spawn_process_current(name, StartupArg::Raw(arg)) };
-    if let Some(tid) = tid {
-        Ok(tid as usize)
-    } else {
-        Err(Errno::ENOENT)
-    }
+    if let Some(tid) = tid { Ok(tid as usize) } else { Err(Errno::ENOENT) }
 }
 
 pub fn sys_task_poll(pid: usize) -> SysResult<usize> {
@@ -912,11 +906,7 @@ mod tests {
 
             let parsed = parse_blob(&buf);
             let found = parsed.iter().find(|&&(k, _)| k == AT_PAGESZ);
-            assert!(
-                found.is_some(),
-                "AT_PAGESZ must be present for pagesz={}",
-                pagesz
-            );
+            assert!(found.is_some(), "AT_PAGESZ must be present for pagesz={}", pagesz);
             assert_eq!(found.unwrap().1, pagesz);
         }
     }
@@ -944,10 +934,7 @@ mod tests {
         // Write only the count field (4 bytes).
         let mut small = alloc::vec![0u8; 4];
         let returned = serialize_auxv_to_buf(entries, &mut small);
-        assert_eq!(
-            returned, total,
-            "must return full size even for partial buffer"
-        );
+        assert_eq!(returned, total, "must return full size even for partial buffer");
 
         // The count field should still be written.
         let count = u32::from_le_bytes(small[0..4].try_into().unwrap());
