@@ -777,6 +777,7 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         last_cpu: Some(0),
         timeslice_remaining: types::DEFAULT_TIMESLICE,
         enqueued_at_tick: TICK_COUNT.load(Ordering::Relaxed),
+        wake_pending: false,
     };
     sched.state.insert_task(sched_fields);
     crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -914,89 +915,106 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // practice the number of CPUs is small so a fixed-size stack buffer is used.
         let mut pending_ipis: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
 
+        // Collect all (tid, priority, target_cpu) from the hot-field cache first.
+        // We then do a single REGISTRY lock acquisition for the batch of REGISTRY
+        // writes rather than one acquisition per task, reducing the number of
+        // nested SCHEDULER → REGISTRY lock cycles from N to 1.
+        let mut to_wake: alloc::vec::Vec<(u64, usize, usize)> = alloc::vec::Vec::new();
+
         while let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() {
             if wake_tick <= now {
                 let (_, tids) = self.state.sleep_queue.pop_first().unwrap();
 
                 for tid in tids {
-                    let priority: usize;
-                    let target_cpu: usize;
-
-                    // Read scheduling fields from the hot-field cache to avoid a
-                    // nested REGISTRY lock. Then write the new state to REGISTRY.
+                    // Read scheduling fields from the hot-field cache only.
+                    // REGISTRY is not accessed in this inner loop.
                     if let Some(sf) = self.state.get_thread(tid) {
-                        priority = sf.priority as usize;
-                        target_cpu = match sf.affinity {
+                        let priority = sf.priority as usize;
+                        let target_cpu = match sf.affinity {
                             crate::task::Affinity::Pinned(cpu) => cpu,
                             crate::task::Affinity::Any => {
                                 let idx = spawn::RR_IDX.fetch_add(1, Ordering::Relaxed);
                                 self.state.pick_online_cpu(idx)
                             }
                         };
-                    } else {
-                        continue;
+                        to_wake.push((tid, priority, target_cpu));
                     }
-
-                    // Write the new Runnable state to the canonical REGISTRY.
-                    // Both `state` and `enqueued_at_tick` are updated here; the
-                    // hot-field cache is then synced below so that subsequent
-                    // prepare_schedule aging calculations do not need to re-enter
-                    // REGISTRY.
-                    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
-                        task.state = TaskState::Runnable;
-                        task.enqueued_at_tick = now;
-                    } else {
-                        continue;
-                    } // REGISTRY lock dropped here!
-
-                    // Update the scheduler-side cache to match the REGISTRY write above.
-                    if let Some(sf) = self.state.get_thread_mut(tid) {
-                        sf.state = TaskState::Runnable;
-                        sf.enqueued_at_tick = now;
-                    }
-
-                    let actual_cpu =
-                        if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
-                    self.state.enqueue_task(actual_cpu, priority, tid);
-
-                    // Use cached priority for the current task to avoid a REGISTRY lock.
-                    let current_prio = self
-                        .state
-                        .per_cpu
-                        .get(actual_cpu)
-                        .and_then(|pc| pc.current)
-                        .and_then(|cid| self.state.get_thread(cid))
-                        .map(|sf| sf.priority as usize)
-                        .unwrap_or(0);
-                    if priority > current_prio {
-                        if actual_cpu == current_cpu_index::<R>() {
-                            self.state.per_cpu[current_cpu_index::<R>()].need_resched = true;
-                        }
-                    }
-
-                    if actual_cpu != current_cpu_index::<R>() {
-                        // Suppress duplicate IPI if the pending flag was already
-                        // set by a previous wakeup.  The in-flight IPI will pick
-                        // up this task when it is processed.
-                        let already_pending = set_global_need_resched(actual_cpu);
-                        if !already_pending {
-                            crate::kdebug!(
-                                "SCHED: Nudging CPU {} for task {} (prio {})",
-                                actual_cpu,
-                                tid,
-                                priority
-                            );
-                            // De-dup: only queue once per CPU during this pass.
-                            if !pending_ipis.contains(&actual_cpu) {
-                                pending_ipis.push(actual_cpu);
-                            }
-                        } else {
-                            PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
+                    // If not in hot-field cache, skip (task was already removed).
                 }
             } else {
                 break;
+            }
+        }
+
+        // Single REGISTRY lock acquisition for all waking tasks.
+        // This replaces the previous per-task `get_task_mut` calls, reducing
+        // SCHEDULER → REGISTRY nested-lock cycles from N to 1.
+        let confirmed: alloc::vec::Vec<(u64, usize, usize)> = if !to_wake.is_empty() {
+            let mut reg = crate::task::registry::get_registry::<R>();
+            to_wake
+                .iter()
+                .filter_map(|&(tid, priority, target_cpu)| {
+                    if let Some(task) = reg.get_mut(tid) {
+                        task.state = TaskState::Runnable;
+                        task.enqueued_at_tick = now;
+                        Some((tid, priority, target_cpu))
+                    } else {
+                        None // task removed from REGISTRY; skip enqueue
+                    }
+                })
+                .collect()
+            // REGISTRY lock released here (reg dropped).
+        } else {
+            alloc::vec::Vec::new()
+        };
+
+        // Now that the REGISTRY lock is released, update the hot-field cache and
+        // enqueue confirmed tasks into the run queues.
+        for (tid, priority, target_cpu) in confirmed {
+            // Update the scheduler-side cache to match the REGISTRY write above.
+            if let Some(sf) = self.state.get_thread_mut(tid) {
+                sf.state = TaskState::Runnable;
+                sf.enqueued_at_tick = now;
+            }
+
+            let actual_cpu =
+                if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
+            self.state.enqueue_task(actual_cpu, priority, tid);
+
+            // Use cached priority for the current task to avoid a REGISTRY lock.
+            let current_prio = self
+                .state
+                .per_cpu
+                .get(actual_cpu)
+                .and_then(|pc| pc.current)
+                .and_then(|cid| self.state.get_thread(cid))
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(0);
+            if priority > current_prio {
+                if actual_cpu == current_cpu_index::<R>() {
+                    self.state.per_cpu[current_cpu_index::<R>()].need_resched = true;
+                }
+            }
+
+            if actual_cpu != current_cpu_index::<R>() {
+                // Suppress duplicate IPI if the pending flag was already
+                // set by a previous wakeup.  The in-flight IPI will pick
+                // up this task when it is processed.
+                let already_pending = set_global_need_resched(actual_cpu);
+                if !already_pending {
+                    crate::kdebug!(
+                        "SCHED: Nudging CPU {} for task {} (prio {})",
+                        actual_cpu,
+                        tid,
+                        priority
+                    );
+                    // De-dup: only queue once per CPU during this pass.
+                    if !pending_ipis.contains(&actual_cpu) {
+                        pending_ipis.push(actual_cpu);
+                    }
+                } else {
+                    PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
 
@@ -2729,6 +2747,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
         let task_normal = crate::task::Task {
             id: 1001,
@@ -2815,6 +2834,7 @@ mod tests {
                 // Must match `task_normal.enqueued_at_tick` above (600) so the
                 // hot-field cache reflects the correct wait time for aging.
                 enqueued_at_tick: 600,
+                wake_pending: false,
             });
         sched
             .state
@@ -2829,6 +2849,7 @@ mod tests {
                 // Must match `task_low.enqueued_at_tick` above (0) so the
                 // hot-field cache reflects the correct wait time for aging.
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 1001);
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 1002);
@@ -2940,6 +2961,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
         sched
             .state
@@ -2952,6 +2974,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 500,
+                wake_pending: false,
             });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 2002);
 
@@ -3060,6 +3083,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
         sched
             .state
@@ -3072,6 +3096,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
 
         // Put RT task in sleep queue with wake_tick in the past
@@ -3340,6 +3365,32 @@ mod tests {
             .insert(alloc::boxed::Box::new(current_task));
         crate::task::registry::get_registry::<MockRuntime>()
             .insert(alloc::boxed::Box::new(sleeping_task));
+
+        // Both tasks must be in ThreadSchedFields so that wake_task_locked can
+        // find and properly wake the sleeping task via the hot-field cache.
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6000,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6001,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
         sched.state.sleep_queue.entry(10).or_default().push(6001);
 
         let mut sched_lock = SCHEDULER.lock();
@@ -3668,6 +3719,7 @@ mod tests {
             last_cpu: Some(0),
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            wake_pending: false,
         };
         sched.state.insert_task(target_fields);
 
@@ -3739,6 +3791,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
         sched
             .state
@@ -3751,6 +3804,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
 
         // Seed stale queue membership for the exiting task and ensure another
@@ -3807,6 +3861,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
         sched
             .state
@@ -3819,6 +3874,7 @@ mod tests {
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                wake_pending: false,
             });
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);

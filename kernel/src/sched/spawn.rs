@@ -241,6 +241,7 @@ impl<R: BootRuntime> Scheduler<R> {
             last_cpu: Some(safe_cpu),
             timeslice_remaining: DEFAULT_TIMESLICE,
             enqueued_at_tick,
+            wake_pending: false,
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -378,6 +379,7 @@ impl<R: BootRuntime> Scheduler<R> {
             last_cpu: Some(safe_cpu),
             timeslice_remaining: DEFAULT_TIMESLICE,
             enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
+            wake_pending: false,
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -475,6 +477,7 @@ impl<R: BootRuntime> Scheduler<R> {
             last_cpu: Some(safe_cpu),
             timeslice_remaining: DEFAULT_TIMESLICE,
             enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
+            wake_pending: false,
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));

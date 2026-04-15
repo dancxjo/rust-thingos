@@ -75,7 +75,10 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    let switch_params = {
+    // Both switch_params and the deferred REGISTRY state update are returned
+    // from the SCHEDULER lock scope so that REGISTRY is written outside the
+    // lock, avoiding the nested SCHEDULER → REGISTRY lock ordering.
+    let (switch_params, deferred_state) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::record_sched_lock_wait::<R>(
@@ -117,11 +120,9 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             .or_default()
             .push(current_id);
 
-        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(current_id) {
-            task.state = crate::task::TaskState::Blocked;
-        }
-
-        // Keep the scheduler-side hot-field cache in sync.
+        // Update the scheduler-side hot-field cache immediately; the canonical
+        // REGISTRY write is deferred to after the SCHEDULER lock is released to
+        // avoid the nested SCHEDULER → REGISTRY lock pattern.
         if let Some(sf) = sched.state.get_task_mut(current_id) {
             sf.state = crate::task::TaskState::Blocked;
         }
@@ -130,12 +131,13 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
         // Just call prepare_schedule to pick next task
         let switch = sched.prepare_schedule();
 
-        // If no context switch is available (e.g. no idle task during early
-        // boot, or the only runnable task is the current one), undo the sleep
-        // enrollment so the task does not stay Blocked while still running on
-        // the CPU.  The caller will wait for the next timer interrupt below
-        // instead of spinning on the SCHEDULER lock.
-        if switch.is_none() {
+        // Determine the final REGISTRY state to write after the lock is released.
+        let final_state = if switch.is_none() {
+            // If no context switch is available (e.g. no idle task during early
+            // boot, or the only runnable task is the current one), undo the sleep
+            // enrollment so the task does not stay Blocked while still running on
+            // the CPU.  The caller will wait for the next timer interrupt below
+            // instead of spinning on the SCHEDULER lock.
             let should_remove = sched
                 .state
                 .sleep_queue
@@ -148,13 +150,13 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             if should_remove {
                 sched.state.sleep_queue.remove(&wake_tick);
             }
-            if let Some(mut task) = crate::task::registry::get_task_mut::<R>(current_id) {
-                task.state = crate::task::TaskState::Running;
-            }
             if let Some(sf) = sched.state.get_task_mut(current_id) {
                 sf.state = crate::task::TaskState::Running;
             }
-        }
+            crate::task::TaskState::Running
+        } else {
+            crate::task::TaskState::Blocked
+        };
 
         super::record_sched_lock_hold::<R>(
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_CALLS,
@@ -163,8 +165,15 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_HOLD_HIST,
             lock_start,
         );
-        switch
+        (switch, (current_id, final_state))
     };
+    // SCHEDULER lock released here.
+
+    // Apply the deferred REGISTRY write outside the SCHEDULER lock.
+    let (deferred_tid, deferred_task_state) = deferred_state;
+    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(deferred_tid) {
+        task.state = deferred_task_state;
+    }
 
     if let Some(switch) = switch_params {
         rt.tasking().activate_address_space(switch.to_aspace);
