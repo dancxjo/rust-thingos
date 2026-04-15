@@ -27,8 +27,10 @@ Blocking semantics:
 - Close semantics are explicit: send fails after close; receivers are woken; queued messages can drain before final closed result.
 
 Readiness model:
-- Inbox has a wait queue but no first-class VFS FD surface today.
-- Not directly pollable by `SYS_FS_POLL` in current implementation.
+- Inbox has a wait queue and a first-class VFS FD surface via `InboxNode`
+  (`kernel/src/vfs/inbox_node.rs`).
+- Directly pollable by `SYS_FS_POLL` through `InboxNode` (Phase C step 1
+  complete; see `docs/ipc/convergence_strategy.md`).
 
 ### Port (user-facing channel backing)
 
@@ -70,7 +72,7 @@ Direct answers:
 | Primary concern | Ownership of arrival | Connection between endpoints |
 | Identity | Receiver-owned object (`InboxId`) | Explicit endpoint handle(s) |
 | Liveness model | Closed/open queue state | Peer endpoint liveness (reader/writer counts) |
-| Poll integration | Internal wait queue only (today) | First-class via `PortNode` + `SYS_FS_POLL` |
+| Poll integration | First-class via `InboxNode` VFS wrapper + `SYS_FS_POLL` | First-class via `PortNode` + `SYS_FS_POLL` |
 | Data contract | Message unit only | Stream bytes plus structured messages/caps |
 | Error surface | Full/closed queue semantics | EPIPE/EAGAIN/readable-writable-hup matrix |
 
@@ -80,7 +82,7 @@ Direct answers:
 |---|---|---|
 | Different verb sets (`send/recv` vs `enqueue/dequeue`) | Naming and layer history | Provide facade aliases by role |
 | Handle-table vs registry lookup | Exposure choice, not queue law | Add inbox handles or port-backed inbox view |
-| Poll only on port FDs | Missing wrapper, not impossible | Add `InboxNode` VFS wrapper for poll |
+| Poll only on port FDs | Missing wrapper, not impossible | ✅ `InboxNode` VFS wrapper now implemented |
 | Typed-message path split from channel path | Transitional layering | Shared kernel message record format |
 
 ## 4. Behavioral mapping (operations)
@@ -94,7 +96,7 @@ Direct answers:
 | close inbox | `channel_close(handle)` | Partial | Port close is endpoint-scoped, not single owner queue closure |
 
 Missing/mismatched capabilities:
-- Inbox lacks first-class FD/poll bridge today.
+- Inbox FD/poll bridge is now implemented (`InboxNode` in `kernel/src/vfs/inbox_node.rs`).
 - Port lacks ownership-first identity model; everything is endpoint connection-centric.
 - Port stream-mode behavior (partial write/read ring semantics) has no Inbox analog.
 
@@ -103,14 +105,16 @@ Missing/mismatched capabilities:
 Current state:
 - Port/channel is already unified with VFS readiness through `PortNode::poll` and `SYS_FS_POLL`.
 - Deprecated `SYS_CHANNEL_WAIT` confirms intended direction: convert handles to FDs, then use `SYS_FS_POLL`.
-- Inbox wait exists internally but is not yet represented as a pollable VFS node.
+- Inbox wait is now represented as a pollable VFS node via `InboxNode` (`kernel/src/vfs/inbox_node.rs`).
 
-Unified readiness proposal:
-1. Keep a single user-visible readiness API: `SYS_FS_POLL`.
-2. Introduce `InboxNode` (or equivalent) implementing `VfsNode`:
-- `poll`: readable when queue non-empty or closed, writable when not full (if exposing sender side), hup/err on closed policy.
-- `add_waiter/remove_waiter`: forward to inbox wait queue.
-3. Provide conversion syscall(s) or open path to obtain inbox-backed FD when needed.
+Unified readiness model (implemented):
+1. Single user-visible readiness API: `SYS_FS_POLL`.
+2. `InboxNode` implements `VfsNode`:
+- `poll`: readable when queue non-empty or closed (EOF readable).
+- `POLLHUP`: inbox is closed.
+- `POLLOUT`: inbox has capacity and is not closed (sender-side readiness).
+- `add_waiter/remove_waiter`: forwarded to inbox wait queue.
+3. Inbox FDs are obtained by wrapping an `Arc<Inbox>` in `InboxNode` and exposing it through the VFS thing table.
 
 Backpressure semantics:
 - Inbox should remain bounded and reject on full.

@@ -110,7 +110,7 @@ The codebase currently uses `SYS_CHANNEL_*` names for port/channel operations. `
 | `SYS_CHANNEL_RECV_MSG` | ✅ Compatible | Natural PortView structured-message operation |
 | `SYS_MSG_SEND` (typed inbox delivery path) | ⚠ Needs adapter | Route through shared queue core once introduced |
 | `SYS_MSG_BROADCAST` | ⚠ Needs adapter | Same as above; fanout stays higher-layer |
-| `SYS_FS_POLL` | ✅ Compatible | Canonical readiness API for both once InboxView gets FD bridge |
+| `SYS_FS_POLL` | ✅ Compatible | Canonical readiness API for both; InboxNode FD bridge is implemented |
 | `SYS_FD_FROM_HANDLE` | ✅ Compatible | Existing bridge for PortView poll integration |
 
 ### Userspace impact
@@ -184,7 +184,8 @@ Phase B: Shared core extraction
 3. Keep stream ring behavior in PortView-specific layer.
 
 Phase C: Readiness unification
-1. Add inbox VFS wrapper node (poll + waiter hooks).
+1. ✅ Add inbox VFS wrapper node (poll + waiter hooks) — implemented as `InboxNode`
+   in `kernel/src/vfs/inbox_node.rs`.
 2. Expose inbox FD acquisition path (syscall or path-open model).
 3. Add tests for mixed poll sets: files + channels + inbox FDs.
 
@@ -216,3 +217,11 @@ Mitigation: keep stream fast path separate initially; benchmark before merging p
 
 Risk: user confusion from mixed terminology.
 Mitigation: standardize docs and syscall comments around "channel" externally, "port" as kernel-private implementation term.
+
+## 9. Cross-references
+
+- Overall migration status and driver tracking: `docs/ipc/ipc_migration_status.md`
+- Semantic analysis: `docs/ipc/inbox_vs_port_semantics.md`
+- Unified readiness model: `docs/concepts/readiness.md`
+- Channel specification: `docs/concepts/channel_semantics.md`
+- IPC issue tracker: issue #46 (Inbox/Port convergence), issue #107 (docs audit)
