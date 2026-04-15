@@ -2,6 +2,52 @@
 // Pointer Events
 // ============================================================================
 
+/// Mouse button identifier.
+///
+/// Used in [`MouseMessage::Button`] to identify which physical button changed.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left = 0,
+    Right = 1,
+    Middle = 2,
+}
+
+impl MouseButton {
+    /// Convert a raw button index to a [`MouseButton`].
+    ///
+    /// Returns `None` for unknown indices.
+    pub fn from_raw(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(MouseButton::Left),
+            1 => Some(MouseButton::Right),
+            2 => Some(MouseButton::Middle),
+            _ => None,
+        }
+    }
+}
+
+/// Canonical typed mouse event.
+///
+/// This is the logical view of mouse input used throughout the new
+/// message-passing path.  The wire representation is the `BristleEventHeader`
+/// + one of the `Pointer*Payload` structs; this enum is the decoded,
+/// strongly-typed form that producers build and consumers pattern-match on.
+///
+/// # Variants
+/// * `Move`   — relative pointer motion in device units.
+/// * `Button` — button press or release.
+/// * `Scroll` — wheel or trackpad scroll in device units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseMessage {
+    /// Relative pointer movement.
+    Move { dx: i16, dy: i16 },
+    /// Button press (`pressed = true`) or release (`pressed = false`).
+    Button { button: MouseButton, pressed: bool },
+    /// Wheel / trackpad scroll.
+    Scroll { dx: i16, dy: i16 },
+}
+
 /// Pointer move payload (4 bytes)
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
