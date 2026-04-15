@@ -59,6 +59,11 @@ pub type TaskState = ThreadState;
 /// - `priority` — current scheduling priority; updated by `set_priority`.
 /// - `affinity` — CPU affinity; updated at spawn time and by `cpu_online`.
 /// - `last_cpu` — last CPU this thread ran on; updated by `prepare_schedule`.
+/// - `timeslice_remaining` — ticks remaining before preemption; decremented
+///   each timer tick in `schedule_point` without re-entering REGISTRY.
+/// - `enqueued_at_tick` — tick when this thread was last enqueued; used by
+///   the priority-aging fairness logic in `prepare_schedule` without
+///   re-entering REGISTRY.
 pub struct ThreadSchedFields {
     pub tid: ThreadId,
     pub runq_location: Option<(usize, usize)>,
@@ -70,6 +75,10 @@ pub struct ThreadSchedFields {
     pub affinity: Affinity,
     /// Cached copy of `Thread<R>::last_cpu`.
     pub last_cpu: Option<usize>,
+    /// Cached copy of `Thread<R>::timeslice_remaining`.
+    pub timeslice_remaining: u32,
+    /// Cached copy of `Thread<R>::enqueued_at_tick`.
+    pub enqueued_at_tick: u64,
 }
 /// Backward-compatible alias — prefer `ThreadSchedFields` in new code.
 pub type TaskSchedFields = ThreadSchedFields;

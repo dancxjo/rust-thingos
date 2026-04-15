@@ -775,6 +775,8 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         priority: TaskPriority::Normal,
         affinity: crate::task::Affinity::Any,
         last_cpu: Some(0),
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: TICK_COUNT.load(Ordering::Relaxed),
     };
     sched.state.insert_task(sched_fields);
     crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -848,18 +850,19 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let mut should_yield = global_requested || self.state.per_cpu[cpu_idx].need_resched;
                 self.state.per_cpu[cpu_idx].need_resched = false;
 
-                // Tick bookkeeping: only decrement if this was a timer tick
+                // Tick bookkeeping: decrement timeslice via the hot-field cache,
+                // avoiding a nested REGISTRY lock on every timer tick.
                 if let Some(current_id) = self.state.per_cpu[cpu_idx].current {
-                    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(current_id) {
-                        if task.timeslice_remaining > 0 {
-                            task.timeslice_remaining -= 1;
+                    if let Some(sf) = self.state.get_thread_mut(current_id) {
+                        if sf.timeslice_remaining > 0 {
+                            sf.timeslice_remaining -= 1;
                         }
-                        if task.timeslice_remaining == 0 {
+                        if sf.timeslice_remaining == 0 {
                             // Reset for next run
-                            task.timeslice_remaining = types::DEFAULT_TIMESLICE;
+                            sf.timeslice_remaining = types::DEFAULT_TIMESLICE;
                             should_yield = true;
                         }
-                    } // REGISTRY lock dropped here!
+                    }
                 }
 
                 if should_yield {
@@ -945,6 +948,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     // Update the scheduler-side cache.
                     if let Some(sf) = self.state.get_thread_mut(tid) {
                         sf.state = TaskState::Runnable;
+                        sf.enqueued_at_tick = now;
                     }
 
                     let actual_cpu =
@@ -1158,9 +1162,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     let mut eff = p; // Start with base priority (queue index)
                     if p < 4 {
                         // aging only applies up to High
-                        if let Some(task) = crate::task::registry::get_task::<R>(id) {
+                        // Use the hot-field cache to avoid a nested REGISTRY lock.
+                        if let Some(sf) = self.state.get_thread(id) {
                             let now = TICK_COUNT.load(Ordering::Relaxed);
-                            let wait_ticks = now.saturating_sub(task.enqueued_at_tick);
+                            let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
                             let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
                             let boost = boost.min(types::MAX_PRIORITY_BOOST);
                             eff = (p + boost).min(4);
@@ -1182,18 +1187,22 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let id = self.state.dequeue_task_front(cpu_idx, p).unwrap();
                 self.metrics.pops += 1;
 
-                let task_ref = crate::task::registry::get_task::<R>(id);
-                if task_ref.as_deref().map_or(true, |t| t.state == TaskState::Dead) {
-                    continue;
-                }
-                let task = task_ref.unwrap();
-                if let crate::task::Affinity::Pinned(target) = task.affinity {
-                    if target != cpu_idx && target < per_cpu_len {
-                        if misrouted_count < MAX_MISROUTED {
-                            misrouted[misrouted_count] = (task.base_priority as usize, target, id);
-                            misrouted_count += 1;
+                // Use the hot-field cache for dead/affinity checks to avoid a
+                // nested REGISTRY lock on every task dequeue.
+                match self.state.get_thread(id) {
+                    None => continue, // stale runq entry — skip
+                    Some(sf) if sf.state == TaskState::Dead => continue,
+                    Some(sf) => {
+                        if let crate::task::Affinity::Pinned(target) = sf.affinity {
+                            if target != cpu_idx && target < per_cpu_len {
+                                if misrouted_count < MAX_MISROUTED {
+                                    misrouted[misrouted_count] =
+                                        (sf.priority as usize, target, id);
+                                    misrouted_count += 1;
+                                }
+                                continue;
+                            }
                         }
-                        continue;
                     }
                 }
                 next_id = Some(id);
@@ -1210,18 +1219,21 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let mut found_idle_q = None;
                 while let Some(id) = self.state.dequeue_task_front(cpu_idx, 0) {
                     self.metrics.pops += 1;
-                    let task_ref = crate::task::registry::get_task::<R>(id);
-                    if task_ref.as_deref().map_or(true, |t| t.state == TaskState::Dead) {
-                        continue;
-                    }
-                    let task = task_ref.unwrap();
-                    if let crate::task::Affinity::Pinned(target) = task.affinity {
-                        if target != cpu_idx && target < per_cpu_len {
-                            if misrouted_count < MAX_MISROUTED {
-                                misrouted[misrouted_count] = (task.priority as usize, target, id);
-                                misrouted_count += 1;
+                    // Use the hot-field cache for dead/affinity checks.
+                    match self.state.get_thread(id) {
+                        None => continue, // stale runq entry — skip
+                        Some(sf) if sf.state == TaskState::Dead => continue,
+                        Some(sf) => {
+                            if let crate::task::Affinity::Pinned(target) = sf.affinity {
+                                if target != cpu_idx && target < per_cpu_len {
+                                    if misrouted_count < MAX_MISROUTED {
+                                        misrouted[misrouted_count] =
+                                            (sf.priority as usize, target, id);
+                                        misrouted_count += 1;
+                                    }
+                                    continue;
+                                }
                             }
-                            continue;
                         }
                     }
                     found_idle_q = Some(id);
@@ -1276,8 +1288,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 );
                 panic!("failed to find current_id {} in get_task_index", current_id)
             });
-            let mut reg = crate::task::registry::get_registry::<R>();
-            reg.threads[idx].state = TaskState::Running;
+            {
+                let mut reg = crate::task::registry::get_registry::<R>();
+                reg.threads[idx].state = TaskState::Running;
+            }
+            // Keep the scheduler-side cache in sync.
+            self.state.threads[idx].state = TaskState::Running;
             return None;
         }
 
@@ -1318,6 +1334,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // state transitions that just happened above.
         if self.state.threads[old_idx].state == TaskState::Running {
             self.state.threads[old_idx].state = TaskState::Runnable;
+            self.state.threads[old_idx].enqueued_at_tick = old_task.enqueued_at_tick;
         }
         self.state.threads[old_idx].last_cpu = Some(cpu_idx);
         self.state.threads[new_idx].state = TaskState::Running;
@@ -2697,9 +2714,9 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
-
-        // Create a normal-priority task enqueued recently
         let task_normal = crate::task::Task {
             id: 1001,
             state: TaskState::Runnable,
@@ -2781,6 +2798,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 600, // matches the registry entry — required for aging test
             });
         sched
             .state
@@ -2791,6 +2810,8 @@ mod tests {
                 priority: TaskPriority::Low,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0, // matches the registry entry — required for aging test
             });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 1001);
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 1002);
@@ -2900,6 +2921,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
         sched
             .state
@@ -2910,6 +2933,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 500,
             });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 2002);
 
@@ -3016,6 +3041,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
         sched
             .state
@@ -3026,6 +3053,8 @@ mod tests {
                 priority: TaskPriority::Realtime,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
 
         // Put RT task in sleep queue with wake_tick in the past
@@ -3620,6 +3649,8 @@ mod tests {
             priority: TaskPriority::Normal,
             affinity: Affinity::Any,
             last_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
         };
         sched.state.insert_task(target_fields);
 
@@ -3689,6 +3720,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
         sched
             .state
@@ -3699,6 +3732,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
 
         // Seed stale queue membership for the exiting task and ensure another
@@ -3753,6 +3788,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
         sched
             .state
@@ -3763,6 +3800,8 @@ mod tests {
                 priority: TaskPriority::Normal,
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
             });
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);

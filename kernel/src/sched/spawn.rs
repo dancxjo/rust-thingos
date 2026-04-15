@@ -231,6 +231,7 @@ impl<R: BootRuntime> Scheduler<R> {
             signals: crate::signal::ThreadSignals::new(),
         };
 
+        let enqueued_at_tick = super::TICK_COUNT.load(Ordering::Relaxed);
         let sched_fields = crate::sched::state::TaskSchedFields {
             tid: task.id,
             runq_location: None,
@@ -238,6 +239,8 @@ impl<R: BootRuntime> Scheduler<R> {
             priority,
             affinity,
             last_cpu: Some(safe_cpu),
+            timeslice_remaining: DEFAULT_TIMESLICE,
+            enqueued_at_tick,
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -373,6 +376,8 @@ impl<R: BootRuntime> Scheduler<R> {
             priority,
             affinity,
             last_cpu: Some(safe_cpu),
+            timeslice_remaining: DEFAULT_TIMESLICE,
+            enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -468,6 +473,8 @@ impl<R: BootRuntime> Scheduler<R> {
             priority,
             affinity,
             last_cpu: Some(safe_cpu),
+            timeslice_remaining: DEFAULT_TIMESLICE,
+            enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
         };
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
