@@ -4,7 +4,7 @@
 
 ## Readiness semantics
 
-- Ports are level-triggered. A read wait stays ready while unread bytes remain. A write wait stays ready while buffer space remains.
+- Ports are level-triggered. A read wait stays ready while unread bytes remain. A write wait stays ready while buffer space remains. **`WaitKind::Port` (= 1) is deprecated; use `SYS_FD_FROM_HANDLE` to bridge a channel to an FD and wait via `WaitKind::Fd` instead.**
 - Root watches are level-triggered. A watch is ready when it has unread stream data to drain or when it needs to report overflow. **`WaitKind::RootWatch` (= 2) is deprecated and returns `ENOSYS`; use `WaitKind::Fd` with a VFS-backed watch FD instead.**
 - Graph operation handles are one-shot. An op becomes ready when its completion status is known. **`WaitKind::GraphOp` (= 6) is deprecated and returns `ENOSYS`.**
 - Task exit is level-triggered. Once a task is dead, its exit status remains observable.

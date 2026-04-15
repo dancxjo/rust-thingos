@@ -195,6 +195,7 @@ When writing a new service or driver:
 | `SYS_CHANNEL_WAIT` | ⛔ Deprecated | `SYS_FD_FROM_HANDLE` + `SYS_FS_POLL` |
 | `SYS_CHANNEL_SEND_HANDLE` | ⛔ Deprecated | `SYS_CHANNEL_SEND_MSG` (atomic) |
 | `SYS_CHANNEL_RECV_HANDLE` | ⛔ Deprecated | `SYS_CHANNEL_RECV_MSG` (atomic) |
+| `WaitKind::Port` (= 1) | ⛔ Deprecated (handler kept for compat) | `SYS_FD_FROM_HANDLE` + `WaitKind::Fd` |
 | `stem::syscall::channel_wait` | ✅ Migrated | `fd_from_handle` + `WaitSet::add_fd_readable` — all drivers updated |
 
 Deprecated syscalls remain in the ABI for compatibility but will not receive
@@ -223,10 +224,12 @@ API is deprecated; use the msg variants instead.
 |-----|--------|---------------|
 | `SYS_CHANNEL_WAIT` | **Deprecated** | Bridge with `SYS_FD_FROM_HANDLE`, then use `SYS_FS_POLL` |
 | `SYS_CHANNEL_SEND_HANDLE` | **Deprecated** | Use `SYS_CHANNEL_SEND_MSG` with handles array |
+| `WaitKind::Port` (= 1) | **Deprecated**, handler kept for compat | Use `SYS_FD_FROM_HANDLE` + `WaitKind::Fd` |
 | `WaitKind::GraphOp` (= 6) | **Deprecated**, returns `ENOSYS` | No replacement; graph-op watches are removed |
 | `WaitKind::RootWatch` (= 2) | **Deprecated**, returns `ENOSYS` | Use `WaitKind::Fd` with a VFS-backed watch node |
 | Raw port handles in driver boot args | **Legacy pattern** | Use `channel_create` + `SYS_FD_FROM_HANDLE`; prefer `spawn_process_ex` FD inheritance |
 | `add_port_readable` in `WaitSet` | **Deprecated** | Use `add_fd_readable` with a bridged FD |
+| `add_port_writable` in `WaitSet` | **Deprecated** | Use `add_fd_writable` with a bridged FD |
 
 ---
 

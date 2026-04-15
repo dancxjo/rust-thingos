@@ -6,7 +6,13 @@ pub const WAIT_MANY_MAX_ITEMS: usize = 32;
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitKind {
-    /// Wait for a message-passing port to become readable or writable.
+    /// Legacy port-handle wait kind. Still functional; use `WaitKind::Fd` for new code.
+    ///
+    /// Bridge a channel to a VFS file descriptor with `SYS_FD_FROM_HANDLE` and then
+    /// use `WaitKind::Fd` (stem: `WaitSet::add_fd_readable` / `add_fd_writable`).
+    #[deprecated(
+        note = "Port handles are superseded by FD-based readiness; use SYS_FD_FROM_HANDLE then WaitKind::Fd"
+    )]
     Port = 1,
     /// Legacy graph-watch kind. Returns `ENOSYS`; use `WaitKind::Fd` instead.
     #[deprecated(note = "Graph watches are removed; open an FD and use WaitKind::Fd")]
@@ -31,6 +37,7 @@ pub enum WaitKind {
 impl WaitKind {
     pub fn from_u32(v: u32) -> Option<Self> {
         match v {
+            #[allow(deprecated)]
             1 => Some(Self::Port),
             #[allow(deprecated)]
             2 => Some(Self::RootWatch),

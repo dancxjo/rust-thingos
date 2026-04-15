@@ -18,14 +18,14 @@
 //! use core::time::Duration;
 //!
 //! let mut set = WaitSet::new();
-//! let rx_port = 1u64;
+//! let rx_fd = 1u32;    // channel end bridged via vfs_fd_from_handle
 //! let pipe_read_fd = 3u32;
-//! let tok_rx   = set.add_port_readable(rx_port).unwrap();
+//! let tok_rx   = set.add_fd_readable(rx_fd).unwrap();
 //! let tok_pipe = set.add_fd_readable(pipe_read_fd).unwrap();
 //!
 //! for event in set.wait(Some(Duration::from_secs(5))).unwrap() {
 //!     if event.token() == tok_rx && event.is_readable() {
-//!         // port has data — call channel_recv
+//!         // channel FD has data — call vfs_read
 //!     } else if event.token() == tok_pipe && event.is_readable() {
 //!         // pipe has data — call vfs_read
 //!     }
@@ -238,14 +238,34 @@ impl WaitSet {
     ///
     /// `handle` is the **read** end of the port (as returned by the low
     /// half of `channel_create`).
+    ///
+    /// # Deprecated
+    ///
+    /// Port-handle waits are superseded by FD-based readiness.  Bridge the
+    /// channel to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
+    /// `vfs_fd_from_handle`) and then use [`add_fd_readable`][Self::add_fd_readable].
+    #[deprecated(
+        note = "Use vfs_fd_from_handle to bridge the channel then add_fd_readable instead"
+    )]
     pub fn add_port_readable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
+        #[allow(deprecated)]
         self.push_spec(WaitKind::Port, interest::READABLE, handle)
     }
 
     /// Watch a port for write space.
     ///
     /// `handle` is the **write** end of the port.
+    ///
+    /// # Deprecated
+    ///
+    /// Port-handle waits are superseded by FD-based readiness.  Bridge the
+    /// channel to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
+    /// `vfs_fd_from_handle`) and then use [`add_fd_writable`][Self::add_fd_writable].
+    #[deprecated(
+        note = "Use vfs_fd_from_handle to bridge the channel then add_fd_writable instead"
+    )]
     pub fn add_port_writable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
+        #[allow(deprecated)]
         self.push_spec(WaitKind::Port, interest::WRITABLE, handle)
     }
 
@@ -381,6 +401,7 @@ impl Default for WaitSet {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(deprecated)] // add_port_readable / add_port_writable / WaitKind::Port deprecated; tests exercise backward compat
 mod tests {
     use super::*;
     use abi::wait::WaitKind;

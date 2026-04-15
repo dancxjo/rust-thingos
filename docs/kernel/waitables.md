@@ -86,6 +86,10 @@ APIs that reference graph watches, graph ops, or graph-era naming.
 
 ### Deprecated `WaitKind` values
 
+`WaitKind::Port` (= 1) is **deprecated**.  Its kernel handler remains functional
+for backward compatibility, but new code must use `SYS_FD_FROM_HANDLE` to bridge
+the channel to a VFS file descriptor and then use `WaitKind::Fd`.
+
 `WaitKind::GraphOp` and `WaitKind::RootWatch` are **deprecated** and return
 `ENOSYS`.  The stem `WaitSet::add_graph_op` method is deprecated accordingly.
 Use `add_fd_readable` / `add_fd_writable` for all FD-based readiness.

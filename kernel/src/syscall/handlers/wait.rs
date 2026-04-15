@@ -396,6 +396,7 @@ fn cleanup_all(regs: &[Registration], tid: u64, timeout_tick: Option<u64>) -> Sy
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // WaitKind::Port is deprecated but its handler is kept for backward compat
 mod tests {
     use alloc::sync::Arc;
     use core::sync::atomic::Ordering;
