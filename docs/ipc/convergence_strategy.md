@@ -110,7 +110,7 @@ The codebase currently uses `SYS_CHANNEL_*` names for port/channel operations. `
 | `SYS_CHANNEL_RECV_MSG` | ✅ Compatible | Natural PortView structured-message operation |
 | `SYS_MSG_SEND` (typed inbox delivery path) | ⚠ Needs adapter | Route through shared queue core once introduced |
 | `SYS_MSG_BROADCAST` | ⚠ Needs adapter | Same as above; fanout stays higher-layer |
-| `SYS_FS_POLL` | ✅ Compatible | Canonical readiness API for both once InboxView gets FD bridge |
+| `SYS_FS_POLL` | ✅ Compatible | Canonical readiness API for both; InboxNode FD bridge is implemented |
 | `SYS_FD_FROM_HANDLE` | ✅ Compatible | Existing bridge for PortView poll integration |
 
 ### Userspace impact
@@ -189,6 +189,11 @@ Phase C: Readiness unification — Partially done
    in `kernel/src/vfs/inbox_node.rs`.
 2. ⬜ Expose inbox FD acquisition path (syscall or path-open model).
 3. ⬜ Add tests for mixed poll sets: files + channels + inbox FDs.
+Phase C: Readiness unification
+1. ✅ Add inbox VFS wrapper node (poll + waiter hooks) — implemented as `InboxNode`
+   in `kernel/src/vfs/inbox_node.rs`.
+2. Expose inbox FD acquisition path (syscall or path-open model).
+3. Add tests for mixed poll sets: files + channels + inbox FDs.
 
 Phase D: Adapter and deprecation cleanup — Partially done
 1. ✅ Document migration off deprecated `SYS_CHANNEL_WAIT`

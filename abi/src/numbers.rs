@@ -198,6 +198,23 @@ pub const SYS_MSG_SEND: u32 = 0x3030;
 /// - `EINVAL` — pgid == 0 or invalid pointer arguments
 pub const SYS_MSG_BROADCAST: u32 = 0x3031;
 
+/// Dequeue one typed message from the calling process's inbox.
+///
+/// Args layout:
+///   arg0 – kind_id_ptr: *mut u8  (16-byte buffer, receives the KindId)
+///   arg1 – payload_ptr: *mut u8  (caller-allocated buffer for payload bytes)
+///   arg2 – payload_buf_len: usize (size of the payload buffer)
+///
+/// Returns:
+/// - The actual payload length (which may be larger than `payload_buf_len` if
+///   the message was truncated to fit; callers that need full messages should
+///   use a buffer of at least `MAX_MSG_PAYLOAD_LEN` bytes).
+/// - `-EAGAIN` — inbox is currently empty (non-blocking; use `SYS_FS_POLL`
+///   or a wait loop to block until a message arrives).
+/// - `-EINVAL` — null or invalid pointer arguments.
+/// - `-EFAULT` — user pointer is not accessible.
+pub const SYS_MSG_RECV: u32 = 0x3032;
+
 // ============================================================================
 // Virtual File System (VFS) (0x4000)
 // ============================================================================

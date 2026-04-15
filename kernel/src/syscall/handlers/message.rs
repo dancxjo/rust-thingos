@@ -34,7 +34,7 @@ use crate::message::delivery::{
     DeliveryFailureReason, GroupBroadcastError, deliver_typed_to_process,
     broadcast_typed_to_group_snapshot,
 };
-use crate::syscall::validate::validate_user_range;
+use crate::syscall::validate::{validate_user_range, copyout};
 use abi::errors::{Errno, SysResult};
 use alloc::vec;
 
@@ -142,4 +142,59 @@ pub fn sys_msg_broadcast(
     let successes = report.succeeded.min(0xFFFF) as usize;
     let failures = report.failed.min(0xFFFF) as usize;
     Ok((failures << 16) | successes)
+}
+
+/// `sys_msg_recv(kind_id_ptr, payload_ptr, payload_buf_len)`
+///
+/// Dequeue one typed message from the calling process's inbox.
+///
+/// Copies the message KindId (16 bytes) into `kind_id_ptr` and the payload
+/// bytes (up to `payload_buf_len`) into `payload_ptr`.
+///
+/// Returns:
+/// - The **actual** payload length on success.  If the message payload is
+///   longer than `payload_buf_len` the excess bytes are silently discarded
+///   and the actual length (larger than `payload_buf_len`) is returned so
+///   that callers can detect truncation.
+/// - `-EAGAIN` if the inbox is empty.
+/// - `-EINVAL` if any pointer argument is null.
+/// - `-EFAULT` if a user pointer is not accessible.
+pub fn sys_msg_recv(
+    kind_id_ptr: usize,
+    payload_ptr: usize,
+    payload_buf_len: usize,
+) -> SysResult<usize> {
+    if kind_id_ptr == 0 {
+        return Err(Errno::EINVAL);
+    }
+
+    // Dequeue the next message from the current process's inbox.
+    let msg = {
+        let Some(pinfo) = crate::sched::process_info_current() else {
+            return Err(Errno::ESRCH);
+        };
+        let mut process = pinfo.lock();
+        process.unix_compat.dequeue_message()
+    };
+
+    let process_msg = match msg {
+        Some(m) => m,
+        None => return Err(Errno::EAGAIN),
+    };
+
+    // Write KindId bytes to userspace.
+    validate_user_range(kind_id_ptr, KIND_ID_LEN, true)?;
+    let kind_bytes: [u8; KIND_ID_LEN] = process_msg.message.kind.0;
+    unsafe { copyout(kind_id_ptr, &kind_bytes)? };
+
+    // Write payload bytes to userspace (truncated to buffer length).
+    let payload = &process_msg.message.payload;
+    let actual_len = payload.len();
+    if payload_buf_len > 0 && payload_ptr != 0 {
+        let copy_len = actual_len.min(payload_buf_len);
+        validate_user_range(payload_ptr, copy_len, true)?;
+        unsafe { copyout(payload_ptr, &payload[..copy_len])? };
+    }
+
+    Ok(actual_len)
 }

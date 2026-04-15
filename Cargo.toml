@@ -103,6 +103,7 @@ members = [
   "userspace/hello_stdio",
   "userspace/hello_std",
   "userspace/input_echo",
+  "userspace/ipc_inbox_demo",
   "userspace/ipc_memfd_demo",
   "userspace/ipc_pipe_demo",
   "userspace/ipc_provider_demo",

@@ -1,4 +1,10 @@
-## Port wait semantics
+> **⚠ Legacy reference document**: This document describes historical port/channel
+> wait semantics from before the VFS-first readiness model was completed.  New
+> code must use `SYS_FD_FROM_HANDLE` + `SYS_FS_POLL` instead of raw port waits.
+> See `docs/concepts/readiness.md` for the canonical model and
+> `docs/concepts/channel_semantics.md` for the full channel specification.
+
+## Port wait semantics (legacy)
 
 Ports now expose two receive modes:
 
@@ -20,4 +26,6 @@ Close behavior:
 - A send on a port with no remaining readers returns `EPIPE`.
 - When both sides are closed, the port is removed from the global registry.
 
-This keeps raw ports as the waitable substrate for later `wait_many` style composition without embedding retry loops in userspace clients.
+This documents the historical raw port substrate.  For current development, use
+`SYS_FD_FROM_HANDLE` to bridge channel handles to VFS things, then use
+`SYS_FS_POLL` or `SYS_WAIT_MANY` with `WaitKind::Fd` for all readiness needs.
