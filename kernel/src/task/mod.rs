@@ -1,3 +1,15 @@
+//! Kernel task management: `Process`, `Thread<R>`, and transitional bridges.
+//!
+//! # Ontology note
+//!
+//! The `Process` struct in this module is a **compatibility projection** —
+//! it bundles `Job`, `Space`, `Authority`, `Place`, and `Task` concerns that
+//! are canonical in the ThingOS typed-world ontology.  New system semantics
+//! must not be added to `Process` directly; they belong to one of the five
+//! canonical owners.
+//!
+//! See `docs/architecture/ontology.md` for the full typed-world definitions
+//! and `docs/architecture/unix-projection.md` for the projection rules.
 pub mod bridge;
 pub mod exec;
 pub mod loader;

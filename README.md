@@ -38,6 +38,10 @@ A Person operates concretely:
 
 These are not metaphors. They are first-class, typed objects.
 
+The canonical definitions, ownership rules, and worked examples for all seven
+core concepts are in
+[`docs/architecture/ontology.md`](docs/architecture/ontology.md).
+
 ---
 
 # Execution
