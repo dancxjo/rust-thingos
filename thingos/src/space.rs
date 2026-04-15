@@ -11,10 +11,10 @@
 //! # Schema (v1)
 //!
 //! ```text
-//! kind thingos.space.id = u64
+//! kind thingos.space_id = u64
 //!
 //! kind thingos.space = struct {
-//!   id:            thingos.space.id,
+//!   id:            thingos.space_id,
 //!   mapping_count: u32,
 //!   sharing_count: u32,
 //! }
@@ -68,8 +68,8 @@ extern crate alloc;
 /// to distinguish a `Space`-shaped message payload can compare against this
 /// constant.
 pub const KIND_ID_THINGOS_SPACE: [u8; 16] = [
-    0x81, 0x8f, 0x08, 0x63, 0xa5, 0x62, 0x6a, 0x37,
-    0x23, 0x1f, 0x0b, 0x30, 0xdf, 0xef, 0x86, 0xc0,
+    0x75, 0xe1, 0xf6, 0x50, 0x3f, 0x95, 0xec, 0xf8,
+    0x5b, 0x91, 0xa7, 0x10, 0x69, 0xbf, 0x3d, 0x4d,
 ];
 
 /// Opaque identifier for a `Space` kernel object.

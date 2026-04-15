@@ -6,7 +6,6 @@ kind thingos.kind = struct {
 }
 
 /// Canonical first-class object in the typed world.
-///
 /// Every Thing has exactly one Kind; identity is carried separately as ThingId.
 kind thingos.thing = struct {
   kind: ref<thingos.kind>,
