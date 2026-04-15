@@ -1935,7 +1935,7 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     tid: task.id,
                     name,
                     state: task.state,
-                    argv: unix_compat.argv,
+                    argv: unix_compat.argv.to_vec(),
                     exec_path: pi.exec_path.clone(),
                     // Exit code only has meaning for exited jobs.
                     exit_code: if job.state == thingos::job::JobState::Exited {
@@ -2285,13 +2285,8 @@ fn reap_child_pid_if_dead<R: BootRuntime>(child_pid: u32, status: i32) {
     let child_tid = reg.threads.iter().find_map(|task| {
         task.process_info
             .as_ref()
-            .and_then(|pi| {
-                if pi.lock().runtime_pid() == child_pid {
-                    Some(task.id)
-                } else {
-                    None
-                }
-            })
+            .filter(|pi| pi.lock().runtime_pid() == child_pid)
+            .map(|_| task.id)
     });
     drop(reg);
 

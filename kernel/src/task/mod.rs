@@ -621,8 +621,8 @@ pub type ProcessInfo = Process;
 
 /// Snapshot of Unix compatibility fields exposed through the Process adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProcessUnixCompatProjection {
-    pub argv: Vec<Vec<u8>>,
+pub struct ProcessUnixCompatProjection<'a> {
+    pub argv: &'a [Vec<u8>],
     pub pgid: u32,
     pub sid: u32,
     pub session_leader: bool,
@@ -672,9 +672,9 @@ impl Process {
     }
 
     /// Compatibility projection wrapper for Unix-derived fields.
-    pub fn unix_compat_projection(&self) -> ProcessUnixCompatProjection {
+    pub fn unix_compat_projection(&self) -> ProcessUnixCompatProjection<'_> {
         ProcessUnixCompatProjection {
-            argv: self.unix_compat.argv.clone(),
+            argv: self.unix_compat.argv.as_slice(),
             pgid: self.unix_compat.pgid,
             sid: self.unix_compat.sid,
             session_leader: self.unix_compat.session_leader,
@@ -682,14 +682,20 @@ impl Process {
     }
 
     /// Canonical generated-kind projection for lifecycle/accounting state.
+    ///
+    /// `thingos::job::Job` currently carries only lifecycle state (schema v1/v2),
+    /// so this adapter intentionally populates just `state`.
     pub fn canonical_job(&self, thread_states: &[TaskState]) -> thingos::job::Job {
-        crate::job::bridge::job_from_thread_states(thread_states)
+        thingos::job::Job {
+            state: crate::job::bridge::job_state_from_lifecycle(&self.lifecycle, thread_states),
+        }
     }
 
     /// Canonical generated-kind projection for this process's `Space`.
     pub fn canonical_space(&self) -> thingos::space::Space {
         crate::space::bridge::space_from_arc(&self.space.space_obj)
     }
+
 }
 
 /// Kernel representation of a single thread of execution.
