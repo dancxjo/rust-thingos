@@ -24,7 +24,7 @@ a specific user to review your work, you can assign it to them by using
   _State whether this change adds canonical typed-world truth or a compatibility surface._
 
 - **If compatibility, what is the canonical typed-world concept underneath it?**
-  _Describe the underlying canonical concept and why compatibility form is still needed._
+  _Describe the underlying canonical concept and why the compatibility form is still needed._
 
 - **Are new names aligned with ontology and classification docs?**
   _Confirm naming aligns with `docs/architecture/ontology.md` and `docs/architecture/concept-classification.md`._
