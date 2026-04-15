@@ -4,7 +4,7 @@
 //!
 //! `Space` is the ThingOS replacement for the implicit address-space ownership
 //! that currently lives inside the Unix `Process` concept.
-//! See `docs/architecture/space-object.md` for the full design document and
+//! See `docs/architecture/space.md` for the canonical design document and
 //! `docs/migration/concept-mapping.md` §2 (Address Space → Space) for the
 //! canonical legacy→ThingOS mapping.
 //!
