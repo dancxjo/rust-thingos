@@ -245,6 +245,8 @@ impl<R: BootRuntime> Scheduler<R> {
             priority,
             affinity,
             last_cpu: Some(safe_cpu),
+            wake_cpu: Some(super::current_cpu_index::<R>()),
+            run_cpu: None,
             timeslice_remaining: DEFAULT_TIMESLICE,
             enqueued_at_tick,
             wake_pending: false,
@@ -383,6 +385,8 @@ impl<R: BootRuntime> Scheduler<R> {
             priority,
             affinity,
             last_cpu: Some(safe_cpu),
+            wake_cpu: Some(super::current_cpu_index::<R>()),
+            run_cpu: None,
             timeslice_remaining: DEFAULT_TIMESLICE,
             enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
             wake_pending: false,
@@ -481,6 +485,8 @@ impl<R: BootRuntime> Scheduler<R> {
             priority,
             affinity,
             last_cpu: Some(safe_cpu),
+            wake_cpu: Some(super::current_cpu_index::<R>()),
+            run_cpu: None,
             timeslice_remaining: DEFAULT_TIMESLICE,
             enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
             wake_pending: false,
@@ -1895,5 +1901,76 @@ mod tests {
         // global which is intentionally absent in unit tests).
         sched.bringup_in_progress = false;
         assert!(!sched.bringup_in_progress, "bringup_in_progress should be false after end");
+    }
+
+    #[test]
+    fn test_spawn_any_affinity_fanout_after_bringup() {
+        let _g = init_test_env();
+        const TEST_CPU_COUNT: usize = 6;
+        const TEST_TASK_COUNT: usize = TEST_CPU_COUNT * 2;
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        for _ in 0..TEST_CPU_COUNT {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        for cpu in 0..TEST_CPU_COUNT {
+            sched.state.mark_cpu_online(cpu);
+        }
+        sched.state.per_cpu[0].current = Some(0);
+        sched.bringup_in_progress = false;
+
+        for _ in 0..TEST_TASK_COUNT {
+            let _ = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
+        }
+
+        let non_empty = (0..TEST_CPU_COUNT)
+            .filter(|&cpu| {
+                !sched.state.per_cpu[cpu].runq[crate::task::TaskPriority::Normal as usize].is_empty()
+            })
+            .count();
+        assert!(
+            non_empty >= 3,
+            "post-bringup Any-affinity spawn should fan out across CPUs; got {} non-empty CPUs",
+            non_empty
+        );
+    }
+
+    #[test]
+    fn test_spawn_user_thread_any_prefers_current_cpu() {
+        let _g = init_test_env();
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        for _ in 0..4 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        for cpu in 0..4 {
+            sched.state.mark_cpu_online(cpu);
+        }
+        // In MockRuntime current_cpu_index() is CPU 0, so Any user-thread spawn
+        // should stay local to that spawning CPU.
+        sched.state.per_cpu[0].current = Some(0);
+
+        let id = sched.spawn_user_thread(
+            0x1000,
+            0x2000,
+            StartupArg::Raw(7),
+            abi::types::StackInfo {
+                guard_start: 0x1000,
+                guard_end: 0x2000,
+                reserve_start: 0x2000,
+                reserve_end: 0x3000,
+                committed_start: 0x2800,
+                grow_chunk_bytes: 0x1000,
+            },
+            crate::task::TaskPriority::Normal,
+            Affinity::Any,
+            0,
+            false,
+        );
+
+        let t = crate::task::registry::get_task::<MockRuntime>(id).expect("spawned task missing");
+        assert_eq!(t.last_cpu, Some(0), "Any-affinity user thread should default to spawning CPU");
+        let sf = sched.state.get_task(id).expect("spawned task sched fields missing");
+        assert_eq!(sf.wake_cpu, Some(0), "wake_cpu should track spawning CPU for initial enqueue");
     }
 }
