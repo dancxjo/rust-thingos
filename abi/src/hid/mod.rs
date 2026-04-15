@@ -51,7 +51,7 @@ pub use event::{EventType, HidParseError};
 pub use input::{InputDeviceKind, Ps2KeyPayload, RawInputEnvelope};
 pub use key::Key;
 pub use modifiers::{Locks, Mods};
-pub use pointer::{PointerButtonPayload, PointerMovePayload, ScrollPayload};
+pub use pointer::{MouseButton, MouseMessage, PointerButtonPayload, PointerMovePayload, ScrollPayload};
 
 mod bristle;
 mod event;

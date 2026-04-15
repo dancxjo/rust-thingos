@@ -8,8 +8,9 @@ use core::default::Default;
 extern crate alloc;
 
 
-use stem::syscall::{ChannelHandle, channel_send_all, ioport_read, ioport_write, irq_subscribe};
-use stem::{debug, info};
+use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
+use stem::syscall::vfs::{vfs_fd_from_handle, vfs_write};
+use stem::{debug, error, info};
 
 const PS2_DATA: usize = 0x60;
 const PS2_STATUS: usize = 0x64;
@@ -197,9 +198,21 @@ fn init_mouse() {
 
 #[stem::main]
 fn main(raw_write_handle: usize) -> ! {
-    let handle = raw_write_handle as ChannelHandle;
+    let handle = raw_write_handle as u32;
 
     stem::debug!("ps2_mouse: online (handle={})", handle);
+
+    // Bridge the write channel handle to a VFS file descriptor so all I/O
+    // flows through the VFS-first message path rather than the legacy port API.
+    let fd = match vfs_fd_from_handle(handle) {
+        Ok(f) => f,
+        Err(e) => {
+            stem::error!("ps2_mouse: fd bridge failed ({:?}), aborting", e);
+            loop {
+                stem::sleep_ms(1000);
+            }
+        }
+    };
 
     init_mouse();
 
@@ -214,12 +227,12 @@ fn main(raw_write_handle: usize) -> ! {
                 "ps2_mouse: IRQ subscribe failed ({:?}), falling back to polling",
                 e
             );
-            polling_loop(handle);
+            polling_loop(fd);
         }
     }
     // Keep servicing the controller via polling even when IRQ12 subscription succeeds.
     // This avoids a dead cursor on platforms where legacy PS/2 interrupts never wake userspace.
-    polling_loop(handle);
+    polling_loop(fd);
 }
 
 mod mouse;
@@ -231,7 +244,7 @@ use abi::hid::{
 use mouse::{MouseState, PointerEvent};
 
 fn send_mouse_events(
-    handle: ChannelHandle,
+    fd: u32,
     state: &mut MouseState,
     packet: &[u8; 3],
     drop_counter: &mut u32,
@@ -284,12 +297,16 @@ fn send_mouse_events(
                     len = 22;
                 }
             }
-            if len > 0 && channel_send_all(handle, &buf[..len]).is_err() {
+            // Publish the event through the VFS-first message path.
+            let send_ok = len > 0 && vfs_write(fd, &buf[..len])
+                .map(|n| n == len)
+                .unwrap_or(false);
+            if !send_ok && len > 0 {
                 *drop_counter = drop_counter.wrapping_add(1);
                 if *drop_counter <= 4 || *drop_counter % 100 == 0 {
                     info!(
-                        "ps2_mouse: dropped {} mouse events because raw input port {} is full",
-                        *drop_counter, handle
+                        "ps2_mouse: dropped {} mouse events (write fd={} failed)",
+                        *drop_counter, fd
                     );
                 }
             }
@@ -299,7 +316,7 @@ fn send_mouse_events(
 
 /// Drain all pending mouse data and assemble packets
 fn drain_mouse_data(
-    handle: ChannelHandle,
+    fd: u32,
     state: &mut MouseState,
     packet: &mut [u8; 3],
     idx: &mut usize,
@@ -324,7 +341,7 @@ fn drain_mouse_data(
             *idx += 1;
 
             if *idx == 3 {
-                send_mouse_events(handle, state, packet, drop_counter);
+                send_mouse_events(fd, state, packet, drop_counter);
                 *idx = 0;
             }
         } else {
@@ -336,7 +353,7 @@ fn drain_mouse_data(
 }
 
 /// Fallback polling loop
-fn polling_loop(handle: ChannelHandle) -> ! {
+fn polling_loop(fd: u32) -> ! {
     stem::debug!(
         "ps2_mouse: using cooperative polling loop ({}ms interval)",
         POLLING_INTERVAL_MS
@@ -353,7 +370,7 @@ fn polling_loop(handle: ChannelHandle) -> ! {
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA != 0 {
                 drain_mouse_data(
-                    handle,
+                    fd,
                     &mut mouse_state,
                     &mut packet,
                     &mut idx,
