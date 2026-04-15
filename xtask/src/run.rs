@@ -1,9 +1,11 @@
 //! QEMU run tasks.
 
-use crate::common::{Result, image_name};
 use std::net::TcpListener;
 use std::path::Path;
+
 use xshell::Shell;
+
+use crate::common::{Result, image_name};
 
 fn user_netdev_arg() -> String {
     if let Ok(v) = std::env::var("THINGOS_HOSTFWD") {
@@ -40,10 +42,7 @@ fn x86_qemu_trace_enabled() -> bool {
         if v.is_empty() {
             return false;
         }
-        !matches!(
-            v.to_ascii_lowercase().as_str(),
-            "0" | "off" | "false" | "no"
-        )
+        !matches!(v.to_ascii_lowercase().as_str(), "0" | "off" | "false" | "no")
     } else {
         false
     }
@@ -209,15 +208,7 @@ pub fn run(
             let pflash0 = format!("if=pflash,unit=0,format=raw,file={ovmf_code},readonly=on");
             let pflash1 = format!("if=pflash,unit=1,format=raw,file={ovmf_vars}");
             let mut args = vec![
-                "-M",
-                "virt",
-                "-cpu",
-                "la464",
-                "-drive",
-                &pflash0,
-                "-drive",
-                &pflash1,
-                "-cdrom",
+                "-M", "virt", "-cpu", "la464", "-drive", &pflash0, "-drive", &pflash1, "-cdrom",
                 iso,
             ];
             if interactive {
@@ -277,12 +268,7 @@ pub fn run_bios(
     ];
 
     if interactive {
-        args.extend_from_slice(&[
-            "-device",
-            "virtio-vga",
-            "-M",
-            "q35,usb=off,vmport=off,i8042=on",
-        ]);
+        args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,usb=off,vmport=off,i8042=on"]);
     }
 
     args.extend(&final_args);
@@ -419,16 +405,7 @@ pub fn run_hdd(
             let pflash0 = format!("if=pflash,unit=0,format=raw,file={ovmf_code},readonly=on");
             let pflash1 = format!("if=pflash,unit=1,format=raw,file={ovmf_vars}");
             let mut args = vec![
-                "-M",
-                "virt",
-                "-cpu",
-                "la464",
-                "-drive",
-                &pflash0,
-                "-drive",
-                &pflash1,
-                "-hda",
-                hdd,
+                "-M", "virt", "-cpu", "la464", "-drive", &pflash0, "-drive", &pflash1, "-hda", hdd,
             ];
             if interactive {
                 args.extend_from_slice(&[
@@ -457,6 +434,11 @@ fn run_qemu(_sh: &Shell, program: &str, base_args: &[&str], extra_args: &[&str])
     cmd.stderr(std::process::Stdio::inherit());
     cmd.stdin(std::process::Stdio::inherit());
 
+    // VS Code Snap can inject GTK variables that point into /snap and crash
+    // system QEMU with mixed libc symbols during GTK frontend startup.
+    cmd.env_remove("GTK_PATH");
+    cmd.env_remove("GTK_MODULES");
+
     for arg in base_args {
         cmd.arg(arg);
     }
@@ -467,15 +449,10 @@ fn run_qemu(_sh: &Shell, program: &str, base_args: &[&str], extra_args: &[&str])
     println!(
         "$ {} {}",
         program,
-        cmd.get_args()
-            .map(|a| a.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join(" ")
+        cmd.get_args().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" ")
     );
 
-    let status = cmd
-        .status()
-        .map_err(|e| anyhow::anyhow!("failed to run qemu: {e}"))?;
+    let status = cmd.status().map_err(|e| anyhow::anyhow!("failed to run qemu: {e}"))?;
     if !status.success() {
         return Err(anyhow::anyhow!("qemu exited with non-zero code: {status}"));
     }
