@@ -1,0 +1,29 @@
+/// Stable lifecycle identity for a job.
+kind thingos.job_id = u64
+
+/// Lifecycle state of a job (creation, running, or fully exited).
+kind thingos.job.state = enum {
+  New,
+  Running,
+  Exited,
+}
+
+/// Canonical semantic record for a job.
+kind thingos.job = struct {
+  id: thingos.job_id,
+  state: thingos.job.state,
+}
+
+/// Canonical exit snapshot for a job.
+kind thingos.job.exit = struct {
+  state: thingos.job.state,
+  code: option<i32>,
+}
+
+/// Result of waiting on (or polling) a job.
+kind thingos.job.wait.result = enum {
+  Running,
+  Exited {
+    code: option<i32>,
+  },
+}

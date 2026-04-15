@@ -74,64 +74,75 @@ pub enum NodeKind {
     Device,
 }
 
-/// A hierarchical grouping of jobs
-pub const KIND_ID_THINGOS_GROUP: [u8; 16] = [0x2e, 0xc7, 0xf2, 0xca, 0x9d, 0x59, 0xe8, 0x5e, 0x7f, 0x92, 0x7d, 0xd5, 0xd1, 0x5e, 0x01, 0x98];
+/// Canonical semantic record for a coordination group.
+pub const KIND_ID_THINGOS_GROUP: [u8; 16] = [0xc4, 0x0f, 0x62, 0x93, 0x69, 0x19, 0x33, 0x0b, 0x2e, 0xba, 0x45, 0x9b, 0xbc, 0xf3, 0xaf, 0x6e];
 
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
-    pub members: Vec<ThingId>,
-    pub name: String,
+    pub id: GroupId,
+    pub kind: GroupKind,
 }
 
-/// A collection of related tasks
-pub const KIND_ID_THINGOS_JOB: [u8; 16] = [0x31, 0xb2, 0x29, 0x72, 0x08, 0xbd, 0x27, 0x39, 0xde, 0x66, 0x1c, 0x69, 0x2d, 0x4c, 0x0f, 0x99];
+/// Coordination role for process-group and control semantics.
+pub const KIND_ID_THINGOS_GROUP_KIND: [u8; 16] = [0xd0, 0xcc, 0xcd, 0x49, 0x5b, 0x15, 0xa0, 0x92, 0x65, 0x3a, 0x08, 0xbb, 0x52, 0xc0, 0x0f, 0x81];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupKind {
+    Foreground,
+    Coordination,
+}
+
+/// Stable coordination identity for a group.
+pub const KIND_ID_THINGOS_GROUP_ID: [u8; 16] = [0xad, 0x12, 0xbb, 0x29, 0x90, 0x49, 0x35, 0x69, 0x69, 0xc6, 0xde, 0x5c, 0x19, 0x89, 0x0d, 0x88];
+
+pub type GroupId = u64;
+
+/// Canonical semantic record for a job.
+pub const KIND_ID_THINGOS_JOB: [u8; 16] = [0x64, 0x54, 0xcb, 0x77, 0x25, 0xb9, 0xf6, 0x04, 0x88, 0x46, 0xff, 0x01, 0x3d, 0x5d, 0x66, 0x78];
 
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Job {
-    pub tasks: Vec<ThingId>,
-    pub name: String,
+    pub id: JobId,
+    pub state: JobState,
 }
 
-/// Canonical exit snapshot for a job
+/// Canonical exit snapshot for a job.
 pub const KIND_ID_THINGOS_JOB_EXIT: [u8; 16] = [0xc2, 0x60, 0x8e, 0x30, 0xff, 0xa2, 0xa2, 0xda, 0x8b, 0x96, 0x22, 0x8d, 0x3e, 0xd0, 0x11, 0x74];
 
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobExit {
-    /// Lifecycle state at the time of the snapshot.
     pub state: JobState,
-    /// Exit code, present only when state == Exited.
     pub code: Option<i32>,
 }
 
-/// Lifecycle state of a job (creation, running, or fully exited)
+/// Lifecycle state of a job (creation, running, or fully exited).
 pub const KIND_ID_THINGOS_JOB_STATE: [u8; 16] = [0x13, 0x8d, 0xf8, 0x73, 0x03, 0xbc, 0x87, 0xb8, 0xdf, 0x0a, 0x02, 0x78, 0x55, 0x3a, 0x92, 0x50];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobState {
-    /// The job has been created but no threads are yet running.
     New,
-    /// At least one thread in the job is alive.
     Running,
-    /// All threads in the job have exited.
     Exited,
 }
 
-/// Result of waiting on (or polling) a job
+/// Result of waiting on (or polling) a job.
 pub const KIND_ID_THINGOS_JOB_WAIT_RESULT: [u8; 16] = [0x60, 0x9d, 0x28, 0x53, 0xea, 0xaf, 0x37, 0x97, 0x2d, 0xef, 0x65, 0x61, 0x84, 0xbe, 0xd2, 0xe9];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitResult {
-    /// The job is still running; no exit code is available yet.
     Running,
-    /// The job has exited.
     Exited {
-        /// The exit code reported by the job.
         code: Option<i32>,
     },
 }
+
+/// Stable lifecycle identity for a job.
+pub const KIND_ID_THINGOS_JOB_ID: [u8; 16] = [0x9b, 0xac, 0xf6, 0x12, 0xb0, 0xae, 0xde, 0xc1, 0x80, 0xde, 0x45, 0x57, 0x4b, 0xe4, 0xa1, 0xa8];
+
+pub type JobId = u64;
 
 /// Metadata about a Kind itself
 pub const KIND_ID_THINGOS_KIND: [u8; 16] = [0xbf, 0xaa, 0x45, 0xe3, 0x51, 0xbe, 0x90, 0xb4, 0x22, 0x7c, 0x11, 0x3a, 0x91, 0x7b, 0x11, 0x7b];
@@ -281,17 +292,16 @@ pub enum Mode {
 }
 
 /// Canonical virtual-memory identity domain.
-pub const KIND_ID_THINGOS_SPACE: [u8; 16] = [0x75, 0xe1, 0xf6, 0x50, 0x3f, 0x95, 0xec, 0xf8, 0x5b, 0x91, 0xa7, 0x10, 0x69, 0xbf, 0x3d, 0x4d];
+pub const KIND_ID_THINGOS_SPACE: [u8; 16] = [0x5d, 0x71, 0xd3, 0x24, 0xbd, 0x89, 0x73, 0x48, 0x67, 0xbf, 0x7c, 0x96, 0x78, 0x7a, 0x1b, 0xe4];
 
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Space {
     pub id: SpaceId,
-    pub mapping_count: u32,
-    pub sharing_count: u32,
+    pub owner_job: Option<ThingId>,
 }
 
-/// Opaque identifier for a Space object.
+/// Stable ownership identity for an address space.
 pub const KIND_ID_THINGOS_SPACE_ID: [u8; 16] = [0x88, 0xb7, 0x9f, 0x5c, 0x87, 0x06, 0x77, 0xfd, 0xbd, 0xd5, 0x7b, 0x39, 0x99, 0x6d, 0x5b, 0x0c];
 
 pub type SpaceId = u64;
@@ -310,15 +320,22 @@ pub const KIND_ID_THINGOS_SYS_TASK_CREATE_RESULT: [u8; 16] = [0x1d, 0xbb, 0x26, 
 
 pub type TaskCreateResult = Result<ThingId, i32>;
 
-/// A kernel-scheduled unit of execution
-pub const KIND_ID_THINGOS_TASK: [u8; 16] = [0xab, 0x4b, 0x17, 0xc4, 0x4a, 0x93, 0x83, 0xbb, 0xaa, 0x96, 0x6a, 0xa0, 0xd3, 0x7c, 0x36, 0xf9];
+/// A kernel-scheduled unit of execution.
+/// 
+/// This schema is canonical semantic truth only; runtime scheduling caches stay
+/// in kernel runtime structures.
+pub const KIND_ID_THINGOS_TASK: [u8; 16] = [0x14, 0xfb, 0x7f, 0x65, 0x97, 0x8c, 0x4f, 0xd7, 0x8c, 0xf2, 0x1f, 0x2c, 0x43, 0xc2, 0xe9, 0xc3];
 
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Task {
+    pub id: TaskId,
     pub state: TaskState,
     pub job: Option<ThingId>,
-    pub name: Option<String>,
+    pub group: Option<ThingId>,
+    pub authority: Option<ThingId>,
+    pub place: Option<ThingId>,
+    pub space: Option<ThingId>,
 }
 
 /// Scheduler states for a task
@@ -332,6 +349,11 @@ pub enum TaskState {
     Blocked,
     Exited,
 }
+
+/// Stable scheduler identity for a task.
+pub const KIND_ID_THINGOS_TASK_ID: [u8; 16] = [0x7d, 0x39, 0x42, 0xd1, 0xbb, 0x65, 0x07, 0x31, 0x39, 0x90, 0x88, 0xd2, 0xab, 0x27, 0xeb, 0xe0];
+
+pub type TaskId = u64;
 
 /// Canonical first-class object in the typed world.
 /// Every Thing has exactly one Kind; identity is carried separately as ThingId.

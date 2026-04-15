@@ -1,3 +1,6 @@
+/// Stable scheduler identity for a task.
+kind thingos.task_id = u64
+
 /// Scheduler states for a task
 kind thingos.task.state = enum {
   New,
@@ -7,50 +10,16 @@ kind thingos.task.state = enum {
   Exited,
 }
 
-/// A kernel-scheduled unit of execution
+/// A kernel-scheduled unit of execution.
+///
+/// This schema is canonical semantic truth only; runtime scheduling caches stay
+/// in kernel runtime structures.
 kind thingos.task = struct {
+  id: thingos.task_id,
   state: thingos.task.state,
   job: option<ref<thingos.job>>,
-  name: option<string>,
-}
-
-/// Lifecycle state of a job (creation, running, or fully exited)
-kind thingos.job.state = enum {
-  /// The job has been created but no threads are yet running.
-  New,
-  /// At least one thread in the job is alive.
-  Running,
-  /// All threads in the job have exited.
-  Exited,
-}
-
-/// Canonical exit snapshot for a job
-kind thingos.job.exit = struct {
-  /// Lifecycle state at the time of the snapshot.
-  state: thingos.job.state,
-  /// Exit code, present only when state == Exited.
-  code: option<i32>,
-}
-
-/// Result of waiting on (or polling) a job
-kind thingos.job.wait.result = enum {
-  /// The job is still running; no exit code is available yet.
-  Running,
-  /// The job has exited.
-  Exited {
-    /// The exit code reported by the job.
-    code: option<i32>,
-  },
-}
-
-/// A collection of related tasks
-kind thingos.job = struct {
-  tasks: list<ref<thingos.task>>,
-  name: string,
-}
-
-/// A hierarchical grouping of jobs
-kind thingos.group = struct {
-  members: list<ref<thingos.job>>,
-  name: string,
+  group: option<ref<thingos.group>>,
+  authority: option<ref<thingos.authority>>,
+  place: option<ref<thingos.place>>,
+  space: option<ref<thingos.space>>,
 }
