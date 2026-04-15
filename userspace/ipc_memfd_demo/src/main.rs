@@ -68,7 +68,7 @@ fn main(_arg: usize) -> ! {
         len: BUF_SIZE,
         prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
         flags: VmMapFlags::SHARED,
-        backing: VmBacking::File { fd, offset: 0 },
+        backing: VmBacking::File { thing: fd, offset: 0 },
     };
     let mapped_rw = match vm_map(&req) {
         Ok(resp) => {
@@ -117,7 +117,7 @@ fn main(_arg: usize) -> ! {
         len: BUF_SIZE,
         prot: VmProt::READ | VmProt::USER,
         flags: VmMapFlags::SHARED,
-        backing: VmBacking::File { fd, offset: 0 },
+        backing: VmBacking::File { thing: fd, offset: 0 },
     };
     let mapped_ro = match vm_map(&req_ro) {
         Ok(resp) => {

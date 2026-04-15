@@ -7,7 +7,10 @@ use super::PortId;
 
 /// A handle is an index into the process handle table
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Handle(pub u32);
+pub struct IpcThing(pub u32);
+
+/// Backward-compatible alias while code migrates from handle terminology.
+pub type Handle = IpcThing;
 
 /// Access mode for a handle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,11 +45,11 @@ impl IpcThingTable {
 
     /// Allocate a new handle for the given port and mode.
     /// Handle 0 is reserved as "invalid" for userspace conventions.
-    pub fn alloc(&mut self, port_id: PortId, mode: IpcThingMode) -> Option<Handle> {
+    pub fn alloc(&mut self, port_id: PortId, mode: IpcThingMode) -> Option<IpcThing> {
         for (i, slot) in self.entries.iter_mut().enumerate().skip(1) {
             if slot.is_none() {
                 *slot = Some(IpcThingEntry { port_id, mode });
-                return Some(Handle(i as u32));
+                return Some(IpcThing(i as u32));
             }
         }
         None // No free slots
@@ -64,7 +67,7 @@ impl IpcThingTable {
     }
 
     /// Get the entry for a handle without mode validation
-    pub fn get_any(&self, handle: Handle) -> Option<&IpcThingEntry> {
+    pub fn get_any(&self, handle: IpcThing) -> Option<&IpcThingEntry> {
         let idx = handle.0 as usize;
         if idx >= MAX_IPC_THINGS {
             return None;
@@ -73,7 +76,7 @@ impl IpcThingTable {
     }
 
     /// Close a handle, freeing the slot
-    pub fn close(&mut self, handle: Handle) -> Option<IpcThingEntry> {
+    pub fn close(&mut self, handle: IpcThing) -> Option<IpcThingEntry> {
         let idx = handle.0 as usize;
         if idx >= MAX_IPC_THINGS {
             return None;

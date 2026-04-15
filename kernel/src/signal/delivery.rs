@@ -207,13 +207,13 @@ pub mod x86_64 {
                 DefaultAction::Terminate | DefaultAction::CoreDump => {
                     // Encode termination-by-signal exit status.
                     let status = abi::signal::w_term_sig(sig);
-                    // Notify parent before exiting.
+                    // Queue lifecycle status before exiting.
                     {
                         let p = pinfo_arc.lock();
                         let ppid = p.lifecycle.ppid;
                         let pid = p.pid;
                         drop(p);
-                        crate::signal::notify_parent_sigchld(ppid, pid, status);
+                        crate::signal::notify_parent_child_event(ppid, pid, status);
                     }
                     unsafe { crate::sched::exit_current(status) };
                     return;
@@ -253,7 +253,7 @@ pub mod x86_64 {
                 let ppid = p.lifecycle.ppid;
                 let pid = p.pid;
                 drop(p);
-                crate::signal::notify_parent_sigchld(ppid, pid, status);
+                crate::signal::notify_parent_child_event(ppid, pid, status);
             }
             unsafe { crate::sched::exit_current(status) };
             return;
@@ -351,7 +351,7 @@ pub mod x86_64 {
             let ppid = p.lifecycle.ppid;
             let pid = p.pid;
             drop(p);
-            crate::signal::notify_parent_sigchld(ppid, pid, abi::signal::w_stop_sig(sig));
+            crate::signal::notify_parent_child_event(ppid, pid, abi::signal::w_stop_sig(sig));
         }
         // Block the current thread until SIGCONT is delivered.
         unsafe { crate::sched::block_current_erased() };
@@ -370,7 +370,7 @@ pub mod x86_64 {
         for tid in tids {
             unsafe { crate::sched::wake_task_erased(tid as u64) };
         }
-        crate::signal::notify_parent_sigchld(ppid, pid, abi::signal::w_continued());
+        crate::signal::notify_parent_child_event(ppid, pid, abi::signal::w_continued());
     }
 
     /// Restore user context from the signal frame on the user stack.

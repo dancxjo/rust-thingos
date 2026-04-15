@@ -11,12 +11,12 @@ pub fn sys_channel_create(capacity: usize) -> SysResult<usize> {
     let capacity = capacity.min(65536).max(64);
     let port_id = crate::ipc::create_port(capacity);
 
-    let mut table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+    let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
     let write_handle = table
-        .alloc(port_id, crate::ipc::HandleMode::Write)
+        .alloc(port_id, crate::ipc::IpcThingMode::Write)
         .ok_or(Errno::ENOMEM)?;
     let read_handle = table
-        .alloc(port_id, crate::ipc::HandleMode::Read)
+        .alloc(port_id, crate::ipc::IpcThingMode::Read)
         .ok_or(Errno::ENOMEM)?;
 
     let packed = ((write_handle.0 as usize) << 16) | (read_handle.0 as usize);
@@ -31,11 +31,11 @@ pub fn sys_channel_send(handle: usize, ptr: usize, len: usize) -> SysResult<usiz
 
     validate_user_range(ptr, len, false)?;
 
-    let handle = crate::ipc::Handle(handle as u32);
+    let handle = crate::ipc::IpcThing(handle as u32);
     let entry = {
-        let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
         table
-            .get(handle, crate::ipc::HandleMode::Write)
+            .get(handle, crate::ipc::IpcThingMode::Write)
             .copied()
             .ok_or(Errno::EBADF)?
     };
@@ -68,11 +68,11 @@ pub fn sys_channel_send_all(handle: usize, ptr: usize, len: usize) -> SysResult<
 
     validate_user_range(ptr, len, false)?;
 
-    let handle = crate::ipc::Handle(handle as u32);
+    let handle = crate::ipc::IpcThing(handle as u32);
     let entry = {
-        let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
         table
-            .get(handle, crate::ipc::HandleMode::Write)
+            .get(handle, crate::ipc::IpcThingMode::Write)
             .copied()
             .ok_or(Errno::EBADF)?
     };
@@ -121,11 +121,11 @@ fn sys_channel_recv_impl(
 
     validate_user_range(ptr, len, true)?;
 
-    let handle = crate::ipc::Handle(handle as u32);
+    let handle = crate::ipc::IpcThing(handle as u32);
     let entry = {
-        let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
         table
-            .get(handle, crate::ipc::HandleMode::Read)
+            .get(handle, crate::ipc::IpcThingMode::Read)
             .copied()
             .ok_or(Errno::EBADF)?
     };
@@ -202,15 +202,15 @@ pub fn sys_channel_try_recv(handle: usize, ptr: usize, len: usize) -> SysResult<
 }
 
 pub fn sys_channel_close(handle: usize) -> SysResult<usize> {
-    let handle = crate::ipc::Handle(handle as u32);
-    let mut table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+    let handle = crate::ipc::IpcThing(handle as u32);
+    let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
     if let Some(entry) = table.close(handle) {
         drop(table);
 
         let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
         let destroy = match entry.mode {
-            crate::ipc::HandleMode::Read => port.close_reader(),
-            crate::ipc::HandleMode::Write => port.close_writer(),
+            crate::ipc::IpcThingMode::Read => port.close_reader(),
+            crate::ipc::IpcThingMode::Write => port.close_writer(),
         };
         if destroy {
             crate::ipc::close_port(entry.port_id);
@@ -222,11 +222,11 @@ pub fn sys_channel_close(handle: usize) -> SysResult<usize> {
 }
 
 pub fn sys_channel_info(handle: usize) -> SysResult<usize> {
-    let handle = crate::ipc::Handle(handle as u32);
-    let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+    let handle = crate::ipc::IpcThing(handle as u32);
+    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
     let entry = table
-        .get(handle, crate::ipc::HandleMode::Read)
-        .or_else(|| table.get(handle, crate::ipc::HandleMode::Write))
+        .get(handle, crate::ipc::IpcThingMode::Read)
+        .or_else(|| table.get(handle, crate::ipc::IpcThingMode::Write))
         .ok_or(Errno::EBADF)?;
 
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;

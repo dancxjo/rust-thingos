@@ -92,7 +92,7 @@ fn main(arg: usize) -> ! {
 
     let mut buf = [0u8; 256];
     loop {
-        let mut pollfds = [PollThing { fd: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
+        let mut pollfds = [PollThing { thing: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
         match vfs_poll(&mut pollfds, u64::MAX) {
             Ok(_) => match channel_recv(handle, &mut buf) {
                 Ok(n) if n > 0 => log_event(&buf[..n]),

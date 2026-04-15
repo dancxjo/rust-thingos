@@ -19,6 +19,8 @@ use petals::Texture;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open, vfs_read, vfs_write};
 use stem::{error, info};
 
+const USE_DISPLAY_CARD_FIRST_PAINT: bool = false;
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     stem::debug!("Bloom: VFS-native compositor starting...");
@@ -61,9 +63,12 @@ fn main(_arg: usize) -> ! {
 
     // 3. Prefer the display service path. It can use the real display backend
     // (for example virtio-gpu) instead of forcing first paint through /dev/fb0.
-    if present_via_display_card(&mut wallpaper) {
+    if USE_DISPLAY_CARD_FIRST_PAINT && present_via_display_card(&mut wallpaper, 50, 100) {
         info!("Bloom: First paint committed via /dev/display/card0");
     } else {
+        if !USE_DISPLAY_CARD_FIRST_PAINT {
+            info!("Bloom: display/card0 first paint disabled; using /dev/fb0 fallback");
+        }
         // Fallback: compose a framebuffer-sized image and write it directly to /dev/fb0.
         let frame = compose_wallpaper_frame(&mut wallpaper, &fb_info);
         let frame_bytes = unsafe {
@@ -172,11 +177,32 @@ fn get_wallpaper_path() -> String {
     String::from("/share/wallpapers/flower.bmp")
 }
 
-fn present_via_display_card(wallpaper: &mut petals::Texture) -> bool {
-    let fd = match vfs_open("/dev/display/card0", abi::syscall::vfs_flags::O_RDWR) {
-        Ok(fd) => fd,
-        Err(e) => {
-            stem::debug!("Bloom: /dev/display/card0 unavailable: {:?}", e);
+fn present_via_display_card(
+    wallpaper: &mut petals::Texture,
+    retries: usize,
+    retry_delay_ms: u64,
+) -> bool {
+    let mut last_err = None;
+    let mut fd = None;
+    for _ in 0..retries {
+        match vfs_open("/dev/display/card0", abi::syscall::vfs_flags::O_RDWR) {
+            Ok(open_fd) => {
+                fd = Some(open_fd);
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+                stem::sleep_ms(retry_delay_ms);
+            }
+        }
+    }
+    let fd = match fd {
+        Some(fd) => fd,
+        None => {
+            stem::debug!(
+                "Bloom: /dev/display/card0 unavailable after retries: {:?}",
+                last_err
+            );
             return false;
         }
     };
@@ -216,7 +242,7 @@ fn present_via_display_card(wallpaper: &mut petals::Texture) -> bool {
     );
 
     let handle = BufferHandle {
-        fd: frame.fd,
+        thing: frame.fd,
         offset: 0,
         width,
         height,
@@ -252,16 +278,49 @@ fn present_via_display_card(wallpaper: &mut petals::Texture) -> bool {
         alpha: 255,
         _reserved: [0; 7],
     };
-    let req = CommitRequest {
-        commit_count: 1,
-        flags: CommitFlags::empty(),
-        commits_ptr: &plane as *const PlaneCommit as u64,
-    };
-
-    let ok = device_call::<CommitRequest, ()>(fd, DISPLAY_OP_COMMIT, &req, None).is_some();
-    let _ = device_call::<u32, ()>(fd, DISPLAY_OP_RELEASE_BUFFER, &buffer_id, None);
+    let ok = commit_display_planes(fd, &[plane], CommitFlags::empty());
+    // Keep the imported first-paint buffer alive. Releasing immediately allows
+    // backends that present asynchronously to lose the source buffer too early.
+    if ok {
+        core::mem::forget(frame);
+    } else {
+        let _ = device_call::<u32, ()>(fd, DISPLAY_OP_RELEASE_BUFFER, &buffer_id, None);
+    }
     let _ = vfs_close(fd);
     ok
+}
+
+fn commit_display_planes(fd: u32, planes: &[PlaneCommit], flags: CommitFlags) -> bool {
+    let req = CommitRequest {
+        commit_count: planes.len() as u32,
+        flags,
+        commits_ptr: 0,
+    };
+
+    let req_size = core::mem::size_of::<CommitRequest>();
+    let planes_size = core::mem::size_of_val(planes);
+    let mut payload = Vec::with_capacity(req_size + planes_size);
+
+    let req_bytes = unsafe { core::slice::from_raw_parts(&req as *const _ as *const u8, req_size) };
+    payload.extend_from_slice(req_bytes);
+
+    if !planes.is_empty() {
+        let planes_bytes = unsafe {
+            core::slice::from_raw_parts(planes.as_ptr() as *const u8, planes_size)
+        };
+        payload.extend_from_slice(planes_bytes);
+    }
+
+    let call = DeviceCall {
+        kind: DeviceKind::Display,
+        op: DISPLAY_OP_COMMIT,
+        in_ptr: payload.as_ptr() as u64,
+        in_len: payload.len() as u32,
+        out_ptr: 0,
+        out_len: 0,
+    };
+
+    vfs_device_call_raw(fd, &call).is_ok()
 }
 
 fn get_display_info(fd: u32) -> Option<DisplayInfo> {

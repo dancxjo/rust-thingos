@@ -766,14 +766,14 @@ pub fn spawn_process_ex_cwd(
         stderr_mode,
         _reserved: 0,
         boot_arg,
-        handles_to_inherit: h_to_inherit,
-        num_inherited_handles: num_inherited as u32,
+        things_to_inherit: h_to_inherit,
+        num_inherited_things: num_inherited as u32,
         _pad3: 0,
         cwd_ptr: cwd.map_or(0, |s| s.as_ptr() as u64),
         cwd_len: cwd.map_or(0, |s| s.len() as u32),
         _pad4: 0,
-        fd_remap_ptr: 0,
-        fd_remap_len: 0,
+        thing_remap_ptr: 0,
+        thing_remap_len: 0,
         _pad5: 0,
     };
     // SAFETY: `req`, `argv_blob`, `env_blob`, and `cwd` all live on the stack
@@ -1103,7 +1103,7 @@ pub fn memfd_create(name: &str, size: usize) -> Result<u32, Errno> {
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
-pub fn shared_memory_phys(fd: u32) -> Result<u64, Errno> {
+pub fn shared_memory_phys(thing: u32) -> Result<u64, Errno> {
     let ret = unsafe {
         match raw_syscall6(SYS_SHARED_MEMORY_PHYS, thing as usize, 0, 0, 0, 0, 0) {
             r if r < 0 => return Err(core::mem::transmute(-(r as i32))),

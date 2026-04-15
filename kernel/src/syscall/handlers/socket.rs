@@ -343,7 +343,7 @@ pub fn sys_recvmsg(
                 crate::vfs::OpenFlags::read_write(),
                 "recvmsg".into(),
             )?;
-            out_fds[i] = new_fd;
+            out_fds[i] = new_thing;
         }
     }
 
@@ -390,11 +390,11 @@ fn resolve_fd_or_handle(
         }
     }
     // Fall back to IPC handle table.
-    let h = crate::ipc::Handle(raw);
-    let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+    let h = crate::ipc::IpcThing(raw);
+    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
     let entry = table
-        .get(h, crate::ipc::HandleMode::Write)
-        .or_else(|| table.get(h, crate::ipc::HandleMode::Read))
+        .get(h, crate::ipc::IpcThingMode::Write)
+        .or_else(|| table.get(h, crate::ipc::IpcThingMode::Read))
         .ok_or(Errno::EBADF)?;
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
     Ok(alloc::sync::Arc::new(crate::vfs::port_node::PortNode::new(

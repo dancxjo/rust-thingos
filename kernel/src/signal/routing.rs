@@ -16,8 +16,8 @@
 //! - [`SignalTargetKind::Thread`] — signal a single thread by TID.
 //! - [`SignalTargetKind::ProcessGroup`] — signal all processes in a PGID.
 //!
-//! These are the only target kinds exercised by the existing `sys_kill`,
-//! `sys_raise`, and `notify_parent_sigchld` code paths.  Broadcast to "all
+//! These are the only target kinds exercised by the existing `sys_kill`
+//! and `sys_raise` code paths. Broadcast to "all
 //! processes" (`kill(-1, sig)`) and session-wide signaling remain on legacy
 //! paths; they are explicitly flagged as transitional.
 //!

@@ -18,7 +18,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 
 use abi::errors::{Errno, SysResult};
-use abi::syscall::{PollThing, fcntl_cmd, fd_flags, poll_flags, vfs_flags};
+use abi::syscall::{PollThing, fcntl_cmd, poll_flags, thing_flags, vfs_flags};
 
 use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
@@ -181,10 +181,10 @@ pub fn sys_fs_fcntl(fd: usize, cmd: usize, arg: usize) -> SysResult<usize> {
     let mut lock = pinfo_arc.lock();
 
     match cmd as u32 {
-        fcntl_cmd::F_GETFD => Ok(lock.thing_table.get_fd_flags(fd as u32)? as usize),
+        fcntl_cmd::F_GETFD => Ok(lock.thing_table.get_thing_flags(fd as u32)? as usize),
         fcntl_cmd::F_SETFD => {
             lock.thing_table
-                .set_fd_flags(fd as u32, (arg as u32) & fd_flags::THING_CLOEXEC)?;
+                .set_thing_flags(fd as u32, (arg as u32) & thing_flags::THING_CLOEXEC)?;
             Ok(0)
         }
         fcntl_cmd::F_GETFL => {
@@ -629,12 +629,12 @@ pub fn sys_pipe(pipefd_ptr: usize) -> SysResult<usize> {
 ///
 /// This allows standard `poll()` to be used across both files and channels.
 pub fn sys_fd_from_handle(handle_val: usize) -> SysResult<usize> {
-    let handle = crate::ipc::Handle(handle_val as u32);
+    let handle = crate::ipc::IpcThing(handle_val as u32);
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
 
     // Resolve handle through current process's handle table
     let entry = {
-        let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
         table.get_any(handle).copied().ok_or(Errno::EBADF)?
     };
 
@@ -649,8 +649,8 @@ pub fn sys_fd_from_handle(handle_val: usize) -> SysResult<usize> {
         lock.thing_table.open(
             node,
             match entry.mode {
-                crate::ipc::HandleMode::Read => crate::vfs::OpenFlags::read_only(),
-                crate::ipc::HandleMode::Write => crate::vfs::OpenFlags::write_only(),
+                crate::ipc::IpcThingMode::Read => crate::vfs::OpenFlags::read_only(),
+                crate::ipc::IpcThingMode::Write => crate::vfs::OpenFlags::write_only(),
             },
             alloc::format!("handle:{}", handle_val),
         )?
@@ -712,11 +712,11 @@ pub fn sys_fs_mount(
         p
     } else {
         // Attempt 2: IPC handle table
-        let prov_handle = crate::ipc::Handle(provider_write_handle as u32);
+        let prov_handle = crate::ipc::IpcThing(provider_write_handle as u32);
         let prov_entry = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             table
-                .get(prov_handle, crate::ipc::HandleMode::Write)
+                .get(prov_handle, crate::ipc::IpcThingMode::Write)
                 .copied()
                 .ok_or(Errno::EBADF)?
         };
@@ -732,9 +732,9 @@ pub fn sys_fs_mount(
     // Register the write end of the response port in the global handle table
     // so the provider process can call SYS_channel_send on it.
     let resp_write_handle = {
-        let mut table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+        let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
         table
-            .alloc(resp_port_id, crate::ipc::HandleMode::Write)
+            .alloc(resp_port_id, crate::ipc::IpcThingMode::Write)
             .ok_or(Errno::ENOMEM)?
     };
 
@@ -772,9 +772,9 @@ pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
 ///
 /// `req_handle` is the handle to the request port of the provider.
 pub fn sys_fs_notify(req_handle: usize, node_handle: usize, revents: usize) -> SysResult<usize> {
-    let handle = crate::ipc::Handle(req_handle as u32);
+    let handle = crate::ipc::IpcThing(req_handle as u32);
     let entry = {
-        let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
         table.get_any(handle).copied().ok_or(Errno::EBADF)?
     };
 

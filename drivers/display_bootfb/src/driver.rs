@@ -69,7 +69,7 @@ impl BootFbDriver {
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::PRIVATE,
             backing: VmBacking::File {
-                fd: handle.fd,
+                thing: handle.thing,
                 offset: handle.offset,
             },
         };
@@ -216,7 +216,7 @@ fn find_framebuffer() -> Option<Framebuffer> {
         len: byte_len,
         prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
         flags: VmMapFlags::empty(),
-        backing: VmBacking::File { fd, offset: 0 },
+        backing: VmBacking::File { thing: fd, offset: 0 },
     };
 
     let resp = match vm_map(&req) {

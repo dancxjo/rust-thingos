@@ -158,6 +158,9 @@ pub(crate) static mut PROCESS_INFO_HOOK: Option<fn() -> Option<Arc<Mutex<Process
 pub(crate) static mut PROCESS_INFO_FOR_TID_HOOK: Option<
     fn(u64) -> Option<Arc<Mutex<ProcessInfo>>>,
 > = None;
+pub(crate) static mut PROCESS_INFO_FOR_PID_HOOK: Option<
+    fn(u32) -> Option<Arc<Mutex<ProcessInfo>>>,
+> = None;
 pub(crate) static mut CURRENT_RESOURCE_HOOK: Option<fn() -> Option<u64>> = None;
 pub(crate) static mut POLL_TASK_EXIT_HOOK: Option<fn(TaskId) -> Result<Option<i32>, Errno>> = None;
 pub(crate) static mut REGISTER_TASK_EXIT_WAITER_HOOK: Option<
@@ -425,6 +428,14 @@ pub fn process_info_current() -> Option<Arc<Mutex<ProcessInfo>>> {
 pub fn process_info_for_tid_current(tid: u64) -> Option<Arc<Mutex<ProcessInfo>>> {
     if let Some(hook) = unsafe { PROCESS_INFO_FOR_TID_HOOK } {
         hook(tid)
+    } else {
+        None
+    }
+}
+
+pub fn process_info_for_pid_current(pid: u32) -> Option<Arc<Mutex<ProcessInfo>>> {
+    if let Some(hook) = unsafe { PROCESS_INFO_FOR_PID_HOOK } {
+        hook(pid)
     } else {
         None
     }

@@ -272,18 +272,59 @@ pub fn send_signal_to_thread(tid: u64, sig: u8) {
     routing::route_signal(route);
 }
 
-/// Deliver SIGCHLD to the parent of the process with PID `child_pid`.
+/// Queue one child lifecycle status for the parent and return target parent TIDs.
 ///
-/// Called from the scheduler exit path when a child process exits or stops.
-pub fn notify_parent_sigchld(ppid: u32, _child_pid: u32, _status: i32) {
+/// This allows callers that already hold scheduler-internal locks to defer
+/// wakeups until after those locks are released.
+pub fn queue_parent_child_event(ppid: u32, child_pid: u32, status: i32) -> alloc::vec::Vec<u64> {
     if ppid == 0 {
-        return;
+        return alloc::vec::Vec::new();
     }
-    send_signal_to_process(ppid, SIGCHLD);
+
+    let Some(parent_arc) = process_info_for_pid(ppid) else {
+        crate::ktrace!(
+            "signal: child event dropped (parent missing): ppid={} child_pid={} status=0x{:x}",
+            ppid,
+            child_pid,
+            status as u32
+        );
+        return alloc::vec::Vec::new();
+    };
+
+    let (tids, queue_len) = {
+        let mut parent = parent_arc.lock();
+        parent.lifecycle.children_done.push_back((child_pid, status));
+        let queue_len = parent.lifecycle.children_done.len();
+        (parent.lifecycle.thread_ids.clone(), queue_len)
+    };
+
+    crate::ktrace!(
+        "signal: queued child event ppid={} child_pid={} status=0x{:x} wake_tids={} queue_len={}",
+        ppid,
+        child_pid,
+        status as u32,
+        tids.len(),
+        queue_len
+    );
+
+    tids
+}
+
+/// Queue one child lifecycle status for the parent and wake parent threads.
+///
+/// This is the canonical lifecycle notification path for `waitpid`-style
+/// observers. The parent consumes queued `(child_pid, status)` pairs from
+/// `ProcessLifecycle.children_done`; no `SIGCHLD` side channel is required.
+pub fn notify_parent_child_event(ppid: u32, child_pid: u32, status: i32) {
+    let tids = queue_parent_child_event(ppid, child_pid, status);
+
+    for tid in tids {
+        unsafe { crate::sched::wake_task_erased(tid as u64) };
+    }
 }
 
 fn process_info_for_pid(pid: u32) -> Option<alloc::sync::Arc<spin::Mutex<crate::task::Process>>> {
-    crate::sched::process_info_for_tid_current(pid as u64)
+    crate::sched::process_info_for_pid_current(pid)
 }
 
 fn list_unique_processes() -> alloc::vec::Vec<alloc::sync::Arc<spin::Mutex<crate::task::Process>>> {

@@ -43,8 +43,7 @@ fn main(boot_fd: usize) -> ! {
             len: 4096,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File {
-                fd: boot_fd as u32,
+            backing: VmBacking::File { thing: boot_fd as u32,
                 offset: 0,
             },
         };
@@ -76,8 +75,7 @@ fn main(boot_fd: usize) -> ! {
             len: 4096,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File {
-                fd: boot_fd as u32,
+            backing: VmBacking::File { thing: boot_fd as u32,
                 offset: 0,
             },
         };

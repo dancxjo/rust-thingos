@@ -2,18 +2,19 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use crate::task::{ManagedTask, TaskKind};
-use abi::display_driver_protocol::{FbInfoPayload, FB_INFO_PAYLOAD_SIZE};
-
-use abi::schema::{keys, kinds};
-use abi::syscall::vfs_flags::O_RDONLY;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+use abi::display_driver_protocol::{FB_INFO_PAYLOAD_SIZE, FbInfoPayload};
+use abi::schema::{keys, kinds};
+use abi::syscall::vfs_flags::O_RDONLY;
 use spin::Mutex;
 use stem::abi::driver_ctx::DriverCtx;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{channel_create, ChannelThing};
+use stem::syscall::{ChannelThing, channel_create};
 use stem::{debug, info, warn};
+
+use crate::task::{ManagedTask, TaskKind};
 
 fn file_exists(path: &str) -> bool {
     match vfs_open(path, O_RDONLY) {
@@ -35,11 +36,7 @@ fn read_trimmed_text(path: &str) -> Option<alloc::string::String> {
     }
 
     let s = core::str::from_utf8(&buf[..n]).ok()?.trim();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s.to_string())
-    }
+    if s.is_empty() { None } else { Some(s.to_string()) }
 }
 
 pub fn select_serial_shell() -> alloc::string::String {
@@ -49,10 +46,7 @@ pub fn select_serial_shell() -> alloc::string::String {
             if file_exists(&candidate) {
                 return candidate;
             }
-            warn!(
-                "SPROUT: Ignoring shell override '{}' from {} (missing binary)",
-                candidate, cfg
-            );
+            warn!("SPROUT: Ignoring shell override '{}' from {} (missing binary)", candidate, cfg);
         }
     }
 
@@ -126,11 +120,7 @@ fn find_sys_device(class_prefix: &str) -> Option<alloc::string::String> {
                     let mut class_buf = [0u8; 16];
                     if let Ok(cn) = vfs_read(class_fd, &mut class_buf) {
                         let class_str = core::str::from_utf8(&class_buf[..cn]).unwrap_or("");
-                        debug!(
-                            "SPROUT: Checked device {} class='{}'",
-                            name,
-                            class_str.trim()
-                        );
+                        debug!("SPROUT: Checked device {} class='{}'", name, class_str.trim());
                         if class_str.trim().starts_with(class_prefix) {
                             let _ = vfs_close(class_fd);
                             return Some(alloc::format!("/sys/devices/{}", name));
@@ -272,12 +262,7 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
         );
         return None;
     }
-    Some((
-        payload.width,
-        payload.height,
-        payload.stride,
-        payload.format,
-    ))
+    Some((payload.width, payload.height, payload.stride, payload.format))
 }
 
 // Storage, Network, and Audio are now handled by devd
@@ -287,10 +272,7 @@ pub fn setup_display_pipeline(
     supervisor_port: stem::syscall::ChannelThing,
     bind_instance_id: u64,
 ) -> Option<DisplayHandles> {
-    debug!(
-        "SPROUT: setup_display_pipeline start (bind_id={})",
-        bind_instance_id
-    );
+    debug!("SPROUT: setup_display_pipeline start (bind_id={})", bind_instance_id);
 
     let mut display_width = 0u32;
     let mut display_height = 0u32;
@@ -305,10 +287,7 @@ pub fn setup_display_pipeline(
         display_format = 1;
         driver_name = Some("/bin/display_virtio_gpu");
         backend_name = "VirtIO-GPU";
-        debug!(
-            "SPROUT: Using VirtIO GPU at {}x{}",
-            display_width, display_height
-        );
+        debug!("SPROUT: Using VirtIO GPU at {}x{}", display_width, display_height);
     }
     // Fall back to the boot framebuffer only when no real display backend was found.
     else if let Some((w, h, stride, format)) = probe_bootfb_vfs() {
@@ -389,10 +368,7 @@ pub fn setup_display_pipeline(
                 len: boot_size,
                 prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
                 flags: VmMapFlags::empty(),
-                backing: VmBacking::File {
-                    fd: boot_fd,
-                    offset: 0,
-                },
+                backing: VmBacking::File { thing: boot_fd, offset: 0 },
             };
             if let Ok(resp) = stem::syscall::vm_map(&req) {
                 let ptr = resp.addr;
@@ -401,27 +377,21 @@ pub fn setup_display_pipeline(
 
                 slice[0] = drv_req.1 as u32; // Read end of req channel
                 slice[1] = drv_resp.0 as u32; // Write end of resp channel
-                slice[2] = if supervisor_port != 0 {
-                    supervisor_port
-                } else {
-                    drv_resp.0 as u32
-                };
+                slice[2] = if supervisor_port != 0 { supervisor_port } else { drv_resp.0 as u32 };
 
                 let id_low = (bind_instance_id & 0xFFFF_FFFF) as u32;
                 let id_high = (bind_instance_id >> 32) as u32;
                 slice[3] = id_low;
                 slice[4] = id_high;
 
-                debug!("SPROUT: Bootstrapping driver {} via memfd {}: req_r={}, resp_w={}, svc={}, id={}", 
-                    driver_name, boot_fd, slice[0], slice[1], slice[2], bind_instance_id);
+                debug!(
+                    "SPROUT: Bootstrapping driver {} via memfd {}: req_r={}, resp_w={}, svc={}, id={}",
+                    driver_name, boot_fd, slice[0], slice[1], slice[2], bind_instance_id
+                );
             }
         }
 
-        let argv_str = if boot_fd > 0 {
-            alloc::format!("{}", boot_fd)
-        } else {
-            "none".to_string()
-        };
+        let argv_str = if boot_fd > 0 { alloc::format!("{}", boot_fd) } else { "none".to_string() };
 
         let spawn_res = stem::syscall::spawn_process_ex(
             driver_name,
@@ -436,10 +406,7 @@ pub fn setup_display_pipeline(
 
         if let Ok(resp) = spawn_res {
             let pid = resp.child_tid;
-            debug!(
-                "SPROUT: Spawned display driver '{}' (PID={})",
-                driver_name, pid
-            );
+            debug!("SPROUT: Spawned display driver '{}' (PID={})", driver_name, pid);
             let _ = stem::thread::set_priority(pid, 3);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
@@ -449,7 +416,7 @@ pub fn setup_display_pipeline(
                 pid: Some(pid),
                 restarts: 0,
                 spawn_arg: boot_fd as usize,
-                bind_instance_id: bind_instance_id,
+                bind_instance_id,
                 drv_req_write: drv_req.0,
                 drv_resp_read: drv_resp.1,
                 boot_req_read: drv_req.1,
@@ -495,10 +462,7 @@ pub fn setup_terminal(
             len: boot_size,
             prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File {
-                fd: boot_fd,
-                offset: 0,
-            },
+            backing: VmBacking::File { thing: boot_fd, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
             let ptr = resp.addr;
@@ -558,28 +522,19 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
         }
         Err(e) => {
             stem::error!("SPROUT: Failed to create kbd_raw port: {:?}", e);
-            return InputHandles {
-                bloom_evt_read: 0,
-                evt_input_echo_read: 0,
-            };
+            return InputHandles { bloom_evt_read: 0, evt_input_echo_read: 0 };
         }
     };
 
     // Create mouse_raw port (ps2_mouse -> bristle)
     let mouse_raw = match stem::syscall::channel_create(4096) {
         Ok((write_h, read_h)) => {
-            debug!(
-                "SPROUT: Created mouse_raw port (w={}, r={})",
-                write_h, read_h
-            );
+            debug!("SPROUT: Created mouse_raw port (w={}, r={})", write_h, read_h);
             (write_h, read_h)
         }
         Err(e) => {
             stem::error!("SPROUT: Failed to create mouse_raw port: {:?}", e);
-            return InputHandles {
-                bloom_evt_read: 0,
-                evt_input_echo_read: 0,
-            };
+            return InputHandles { bloom_evt_read: 0, evt_input_echo_read: 0 };
         }
     };
 
@@ -588,10 +543,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
         Ok(h) => h,
         Err(e) => {
             stem::error!("SPROUT: Failed to create bloom_evt: {:?}", e);
-            return InputHandles {
-                bloom_evt_read: 0,
-                evt_input_echo_read: 0,
-            };
+            return InputHandles { bloom_evt_read: 0, evt_input_echo_read: 0 };
         }
     };
 
@@ -599,10 +551,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
         Ok(h) => h,
         Err(e) => {
             stem::error!("SPROUT: Failed to create evt_input_echo: {:?}", e);
-            return InputHandles {
-                bloom_evt_read: 0,
-                evt_input_echo_read: 0,
-            };
+            return InputHandles { bloom_evt_read: 0, evt_input_echo_read: 0 };
         }
     };
 
@@ -688,10 +637,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
 
     debug!("SPROUT: Input broker ready (keyboard + mouse)");
     stem::sleep_ms(100);
-    InputHandles {
-        bloom_evt_read: bloom_evt.1,
-        evt_input_echo_read: evt_input_echo.1,
-    }
+    InputHandles { bloom_evt_read: bloom_evt.1, evt_input_echo_read: evt_input_echo.1 }
 }
 
 /// Set up network pipeline - spawn virtio_netd (driver) then netd (stack)
@@ -851,17 +797,17 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     debug!("SPROUT: setup_audio_stack: probing for audio hardware...");
 
     // Pick the driver binary that matches the detected hardware.
-    let driver: Option<&'static str> =
-        if find_sys_device_with_vendor("0x0401", "0x1af4").is_some() {
-            info!("SPROUT: Found VirtIO sound device");
-            Some("/bin/virtio_sound")
-        } else if find_sys_device("0x0403").is_some() {
-            info!("SPROUT: Found HDA controller (class 0x0403)");
-            Some("/bin/hdaudio")
-        } else {
-            info!("SPROUT: No audio hardware detected; skipping audio stack");
-            None
-        };
+    let driver: Option<&'static str> = if find_sys_device_with_vendor("0x0401", "0x1af4").is_some()
+    {
+        info!("SPROUT: Found VirtIO sound device");
+        Some("/bin/virtio_sound")
+    } else if find_sys_device("0x0403").is_some() {
+        info!("SPROUT: Found HDA controller (class 0x0403)");
+        Some("/bin/hdaudio")
+    } else {
+        info!("SPROUT: No audio hardware detected; skipping audio stack");
+        None
+    };
 
     let driver_path = match driver {
         Some(p) => p,
@@ -906,7 +852,9 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
             }
             Err(_) => {
                 if stem::monotonic_ns() >= deadline_ns {
-                    warn!("SPROUT: Timeout waiting for /dev/audio/card0/out0; beeper will not start");
+                    warn!(
+                        "SPROUT: Timeout waiting for /dev/audio/card0/out0; beeper will not start"
+                    );
                     return;
                 }
                 stem::time::sleep_ms(AUDIO_POLL_INTERVAL_MS);
@@ -1025,17 +973,15 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         &shell_path,
         &[shell_path.as_bytes()],
         &alloc::collections::BTreeMap::new(),
-        abi::types::stdio_mode::INHERIT, // stdin
-        abi::types::stdio_mode::INHERIT, // stdout
-        abi::types::stdio_mode::INHERIT, // stderr
+        abi::types::stdio_mode::thing(console_fd), // stdin
+        abi::types::stdio_mode::thing(console_fd), // stdout
+        abi::types::stdio_mode::thing(console_fd), // stderr
         0,
         &[],
     ) {
         Ok(resp) => {
-            debug!(
-                "SPROUT: Spawned serial shell '{}' (PID={})",
-                shell_path, resp.child_tid
-            );
+            debug!("SPROUT: Spawned serial shell '{}' (PID={})", shell_path, resp.child_tid);
+            let _ = vfs_close(console_fd);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
                 name: "shell".to_string(),

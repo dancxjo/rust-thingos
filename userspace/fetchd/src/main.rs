@@ -4,10 +4,10 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
+use core::time::Duration;
 
 use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY};
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-use core::time::Duration;
 use stem::info;
 use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_stat, vfs_write};
 use stem::syscall::{memfd_create, vm_map};
@@ -92,10 +92,7 @@ fn ensure_session_objects() {
     write_text(&alloc::format!("{}/shell/current/fullscreen", window_root), "0\n");
     write_text(&alloc::format!("{}/shell/current/resizing", window_root), "0\n");
     write_text(&alloc::format!("{}/shell/requested/maximize", window_root), "0\n");
-    write_text(
-        &alloc::format!("{}/shell/requested/fullscreen", window_root),
-        "0\n",
-    );
+    write_text(&alloc::format!("{}/shell/requested/fullscreen", window_root), "0\n");
     write_text(&alloc::format!("{}/shell/requested/minimize", window_root), "0\n");
     write_text(
         &alloc::format!("{}/bind/surface", window_root),
@@ -104,10 +101,7 @@ fn ensure_session_objects() {
     write_text(&alloc::format!("{}/events", window_root), "");
     write_text(&alloc::format!("{}/status/mapped", window_root), "0\n");
     write_text(&alloc::format!("{}/status/focused", window_root), "0\n");
-    write_text(
-        &alloc::format!("{}/status/last_configure_serial", window_root),
-        "0\n",
-    );
+    write_text(&alloc::format!("{}/status/last_configure_serial", window_root), "0\n");
     write_text(&alloc::format!("{}/status/client_pid", window_root), "0\n");
     write_text(&alloc::format!("{}/status/closing", window_root), "0\n");
 
@@ -119,49 +113,40 @@ fn ensure_session_objects() {
     write_text(&alloc::format!("{}/status/mapped", surface_root), "0\n");
     write_text(&alloc::format!("{}/status/last_commit", surface_root), "0\n");
     write_text(&alloc::format!("{}/status/configured_serial", surface_root), "0\n");
-    write_text(
-        &alloc::format!("{}/status/width", surface_root),
-        &alloc::format!("{}\n", WIDTH),
-    );
-    write_text(
-        &alloc::format!("{}/status/height", surface_root),
-        &alloc::format!("{}\n", HEIGHT),
-    );
+    write_text(&alloc::format!("{}/status/width", surface_root), &alloc::format!("{}\n", WIDTH));
+    write_text(&alloc::format!("{}/status/height", surface_root), &alloc::format!("{}\n", HEIGHT));
     write_text(&alloc::format!("{}/status/buffer_attached", surface_root), "0\n");
 }
 
 fn create_buffer() -> BufferState {
     let size = STRIDE as usize * HEIGHT as usize;
-    let fd = memfd_create("fetchd.surface", size).expect("memfd");
+    let thing = memfd_create("fetchd.surface", size).expect("memfd");
     let req = VmMapReq {
         addr_hint: 0,
         len: size,
         prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
         flags: VmMapFlags::empty(),
-        backing: VmBacking::File { fd, offset: 0 },
+        backing: VmBacking::File { thing, offset: 0 },
     };
     let resp = vm_map(&req).expect("vm_map");
-    BufferState {
-        fd,
-        ptr: resp.addr as *mut u32,
-    }
+    BufferState { fd: thing, ptr: resp.addr as *mut u32 }
 }
 
 fn publish_surface(buffer: &BufferState, commit: u64) {
     let surface_root = alloc::format!("{}/{}", SURFACES_ROOT, SURFACE_ID);
     let attach = alloc::format!(
         "fd={}\nwidth={}\nheight={}\nstride={}\nformat=1\n",
-        buffer.fd, WIDTH, HEIGHT, STRIDE
+        buffer.fd,
+        WIDTH,
+        HEIGHT,
+        STRIDE
     );
     write_text(&alloc::format!("{}/attach", surface_root), &attach);
     write_text(
         &alloc::format!("{}/damage", surface_root),
         &alloc::format!("0 0 {} {}\n", WIDTH, HEIGHT),
     );
-    write_text(
-        &alloc::format!("{}/commit", surface_root),
-        &alloc::format!("{}\n", commit),
-    );
+    write_text(&alloc::format!("{}/commit", surface_root), &alloc::format!("{}\n", commit));
 }
 
 fn sync_configure_status() {
@@ -282,15 +267,7 @@ fn render_window(buffer: &BufferState, ip_text: &str, connected: bool) {
     };
     fill(pixels, 0xFF10151C);
     fill_rect(pixels, WIDTH as usize, 0, 0, WIDTH as i32, 28, 0xFF243445);
-    fill_rect(
-        pixels,
-        WIDTH as usize,
-        14,
-        42,
-        WIDTH as i32 - 28,
-        HEIGHT as i32 - 56,
-        0xFF16202A,
-    );
+    fill_rect(pixels, WIDTH as usize, 14, 42, WIDTH as i32 - 28, HEIGHT as i32 - 56, 0xFF16202A);
     fill_rect(
         pixels,
         WIDTH as usize,

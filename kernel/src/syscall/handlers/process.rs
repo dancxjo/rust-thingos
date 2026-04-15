@@ -576,10 +576,10 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
 
     let boot_arg = req.boot_arg;
 
-    let mut inherited_handles = Vec::with_capacity(req.num_inherited_handles as usize);
-    for i in 0..req.num_inherited_handles as usize {
+    let mut inherited_handles = Vec::with_capacity(req.num_inherited_things as usize);
+    for i in 0..req.num_inherited_things as usize {
         if i < 8 {
-            inherited_handles.push(req.handles_to_inherit[i]);
+            inherited_handles.push(req.things_to_inherit[i]);
         }
     }
 
@@ -600,18 +600,18 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
     };
 
     // Copy in the thing remap table
-    let fd_remap = if req.fd_remap_len > 0 && req.fd_remap_ptr != 0 {
-        let count = req.fd_remap_len as usize;
+    let fd_remap = if req.thing_remap_len > 0 && req.thing_remap_ptr != 0 {
+        let count = req.thing_remap_len as usize;
         if count > 64 {
             return Err(Errno::EINVAL);
         }
         let remap_size = count * core::mem::size_of::<abi::types::ThingRemap>();
-        validate_user_range(req.fd_remap_ptr as usize, remap_size, false)?;
+        validate_user_range(req.thing_remap_ptr as usize, remap_size, false)?;
         let mut remaps = alloc::vec![abi::types::ThingRemap::default(); count];
         unsafe {
             copyin(
                 core::slice::from_raw_parts_mut(remaps.as_mut_ptr() as *mut u8, remap_size),
-                req.fd_remap_ptr as usize,
+                req.thing_remap_ptr as usize,
             )?;
         }
         remaps
@@ -660,8 +660,8 @@ fn mode_to_spec(mode: u32) -> Result<StdioSpec, Errno> {
         stdio_mode::INHERIT => Ok(StdioSpec::Inherit),
         stdio_mode::NULL => Ok(StdioSpec::Null),
         stdio_mode::PIPE => Ok(StdioSpec::Pipe),
-        _ => match stdio_mode::explicit_fd(mode) {
-            Some(thing) => Ok(StdioSpec::Thing(thing)),
+        _ => match stdio_mode::explicit_thing(mode) {
+            Some(thing) => Ok(StdioSpec::Fd(thing)),
             None => Err(Errno::EINVAL),
         },
     }

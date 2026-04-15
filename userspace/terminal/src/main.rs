@@ -340,8 +340,7 @@ fn main(arg: usize) -> ! {
             len: 4096,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File {
-                fd: boot_fd,
+            backing: VmBacking::File { thing: boot_fd,
                 offset: 0,
             },
         };
@@ -415,8 +414,7 @@ fn main(arg: usize) -> ! {
             len: (fb_info.stride as usize) * (fb_info.height as usize),
             prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File {
-                fd: fb_id,
+            backing: VmBacking::File { thing: fb_id,
                 offset: 0,
             },
         };
@@ -504,8 +502,7 @@ fn main(arg: usize) -> ! {
 
         // Check for focus change
         if focus_watch != 0 {
-            let mut fds = [abi::syscall::PollThing {
-                fd: focus_watch as i32,
+            let mut fds = [abi::syscall::PollThing { thing: focus_watch as i32,
                 events: abi::syscall::poll_flags::POLLIN as u16,
                 revents: 0,
             }];

@@ -9,16 +9,14 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
+
+use abi::errors::{Errno, SysResult};
+use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
 use spin::Mutex;
 
+use super::{VfsDriver, VfsNode, VfsStat};
 use crate::sched::wait_queue::WaitQueue;
 use crate::syscall::validate::{copyin, copyout};
-use abi::{
-    errors::{Errno, SysResult},
-    vfs_rpc::{VFS_RPC_MAX_DATA, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader},
-};
-
-use super::{VfsDriver, VfsNode, VfsStat};
 
 // ── ProviderChannel ──────────────────────────────────────────────────────────
 
@@ -38,11 +36,7 @@ struct ProviderChannel {
 impl ProviderChannel {
     /// Perform a blocking round-trip RPC with the provider.
     fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
-        let hdr = VfsRpcReqHeader {
-            resp_port: self.resp_write_handle,
-            op: op as u8,
-            _pad: [0, 0],
-        };
+        let hdr = VfsRpcReqHeader { resp_port: self.resp_write_handle, op: op as u8, _pad: [0, 0] };
         let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
         let mut msg = vec![0u8; hdr_size + payload.len()];
         unsafe {
@@ -97,10 +91,7 @@ impl ProviderChannel {
     }
 
     fn get_wait_queue(&mut self, handle: u64) -> Arc<WaitQueue> {
-        self.waiters
-            .entry(handle)
-            .or_insert_with(|| Arc::new(WaitQueue::new()))
-            .clone()
+        self.waiters.entry(handle).or_insert_with(|| Arc::new(WaitQueue::new())).clone()
     }
 }
 
@@ -128,9 +119,7 @@ impl ProviderFs {
                 waiters: BTreeMap::new(),
             }),
         });
-        PROVIDER_MAP
-            .lock()
-            .insert(req_port_id, Arc::downgrade(&this));
+        PROVIDER_MAP.lock().insert(req_port_id, Arc::downgrade(&this));
         this
     }
 
@@ -197,9 +186,7 @@ fn parse_response_handle(resp: &[u8]) -> SysResult<u64> {
     if resp.len() < 9 {
         return Err(Errno::EIO);
     }
-    Ok(u64::from_le_bytes([
-        resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7], resp[8],
-    ]))
+    Ok(u64::from_le_bytes([resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7], resp[8]]))
 }
 
 // ── ProviderChannelRef ────────────────────────────────────────────────────────
@@ -212,11 +199,7 @@ struct ProviderChannelRef {
 
 impl ProviderChannelRef {
     fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
-        let hdr = VfsRpcReqHeader {
-            resp_port: self.resp_write_handle,
-            op: op as u8,
-            _pad: [0, 0],
-        };
+        let hdr = VfsRpcReqHeader { resp_port: self.resp_write_handle, op: op as u8, _pad: [0, 0] };
         let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
         let mut msg = vec![0u8; hdr_size + payload.len()];
         unsafe {
@@ -394,20 +377,13 @@ impl VfsNode for ProviderNode {
         self.wait_queue.remove(tid);
         if self.wait_queue.is_empty() {
             let payload = self.handle.to_le_bytes();
-            let _ = self
-                .channel
-                .lock()
-                .rpc(VfsRpcOp::UnsubscribeReady, &payload);
+            let _ = self.channel.lock().rpc(VfsRpcOp::UnsubscribeReady, &payload);
         }
     }
 }
 
 pub fn notify_by_port(port_id: u32, handle: u64, revents: u16) -> SysResult<()> {
-    let weak = PROVIDER_MAP
-        .lock()
-        .get(&port_id)
-        .cloned()
-        .ok_or(Errno::ENOENT)?;
+    let weak = PROVIDER_MAP.lock().get(&port_id).cloned().ok_or(Errno::ENOENT)?;
     if let Some(fs) = weak.upgrade() {
         fs.notify(handle, revents);
         Ok(())
@@ -463,12 +439,7 @@ fn parse_response_stat(resp: &[u8]) -> SysResult<VfsStat> {
     let ino = u64::from_le_bytes([
         resp[13], resp[14], resp[15], resp[16], resp[17], resp[18], resp[19], resp[20],
     ]);
-    Ok(VfsStat {
-        mode,
-        size,
-        ino,
-        ..Default::default()
-    })
+    Ok(VfsStat { mode, size, ino, ..Default::default() })
 }
 
 fn errno_from_u8(v: u8) -> Errno {
@@ -495,9 +466,10 @@ fn errno_from_u8(v: u8) -> Errno {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::sync::Arc;
     use alloc::vec;
+
+    use super::*;
 
     fn make_port(cap: usize) -> Arc<crate::ipc::Port> {
         Arc::new(crate::ipc::Port::new(cap))
@@ -662,11 +634,7 @@ mod tests {
         let fill = vec![0xABu8; req_port.capacity()];
         req_port.send(&fill);
 
-        let ch = ProviderChannelRef {
-            req: req_port,
-            resp: resp_port,
-            resp_write_handle: 99,
-        };
+        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 99 };
 
         // A Stat request payload is 8 bytes (handle: u64); combined with the
         // 7-byte header the message is 15 bytes and won't fit the full ring.
@@ -694,11 +662,7 @@ mod tests {
         // when the process exits the handle table drops all handles.)
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef {
-            req: req_port,
-            resp: resp_port,
-            resp_write_handle: 99,
-        };
+        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 99 };
 
         // Send succeeds (data lands in the ring), but response never arrives.
         let payload = b"\x05\x00\x00\x00hello"; // Lookup "hello"
@@ -723,19 +687,12 @@ mod tests {
         let resp_port = make_port(256);
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef {
-            req: req_port,
-            resp: resp_port,
-            resp_write_handle: 0,
-        };
+        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 0 };
         // Ignore the result; we only care about the counter.
         let _ = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]);
 
         let after = crate::ipc::diag::VFS_RPC_DEAD_PROVIDER.load(Ordering::Relaxed);
-        assert!(
-            after > before,
-            "VFS_RPC_DEAD_PROVIDER should have been incremented"
-        );
+        assert!(after > before, "VFS_RPC_DEAD_PROVIDER should have been incremented");
     }
 
     /// Every dead-provider event must also increment the generic
@@ -750,11 +707,7 @@ mod tests {
         let resp_port = make_port(256);
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef {
-            req: req_port,
-            resp: resp_port,
-            resp_write_handle: 0,
-        };
+        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 0 };
         let _ = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]);
 
         let after = crate::ipc::diag::VFS_RPC_ERRORS.load(Ordering::Relaxed);
@@ -779,11 +732,7 @@ mod tests {
         preloaded[13..21].copy_from_slice(&1u64.to_le_bytes()); // ino: 1
         resp_port.send(&preloaded);
 
-        let ch = ProviderChannelRef {
-            req: req_port,
-            resp: resp_port,
-            resp_write_handle: 0,
-        };
+        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 0 };
 
         // The Stat RPC should complete without blocking.
         let raw = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]).unwrap();

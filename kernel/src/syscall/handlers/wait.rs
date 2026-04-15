@@ -175,13 +175,13 @@ fn error_result(spec: &WaitSpec, errno: Errno) -> WaitResult {
 }
 
 fn poll_port(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
-    let handle = crate::ipc::Handle(spec.object as u32);
-    let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+    let handle = crate::ipc::IpcThing(spec.object as u32);
+    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
     let mut ready_flags = 0u32;
     let mut value = 0i64;
 
     if (spec.flags & wait::interest::READABLE) != 0 {
-        match table.get(handle, crate::ipc::HandleMode::Read).copied() {
+        match table.get(handle, crate::ipc::IpcThingMode::Read).copied() {
             Some(entry) => {
                 if let Some(port) = crate::ipc::get_port(entry.port_id) {
                     if !port.is_empty() {
@@ -199,7 +199,7 @@ fn poll_port(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     }
 
     if (spec.flags & wait::interest::WRITABLE) != 0 {
-        match table.get(handle, crate::ipc::HandleMode::Write).copied() {
+        match table.get(handle, crate::ipc::IpcThingMode::Write).copied() {
             Some(entry) => {
                 if let Some(port) = crate::ipc::get_port(entry.port_id) {
                     if !port.is_full() {
@@ -318,10 +318,10 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
     for spec in specs {
         match WaitKind::from_u32(spec.kind).ok_or(Errno::EINVAL)? {
             WaitKind::Port => {
-                let handle = crate::ipc::Handle(spec.object as u32);
-                let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+                let handle = crate::ipc::IpcThing(spec.object as u32);
+                let table = crate::ipc::GLOBAL_THING_TABLE.lock();
                 if (spec.flags & wait::interest::READABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::HandleMode::Read).copied() {
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Read).copied() {
                         if let Some(port) = crate::ipc::get_port(entry.port_id) {
                             port.add_waiter_read(tid);
                             regs.push(Registration::PortRead(entry.port_id));
@@ -329,7 +329,7 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
                     }
                 }
                 if (spec.flags & wait::interest::WRITABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::HandleMode::Write).copied() {
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Write).copied() {
                         if let Some(port) = crate::ipc::get_port(entry.port_id) {
                             port.add_waiter_write(tid);
                             regs.push(Registration::PortWrite(entry.port_id));
@@ -406,12 +406,12 @@ mod tests {
 
     fn alloc_port_pair(capacity: usize) -> (u32, u32) {
         let port_id = crate::ipc::create_port(capacity);
-        let mut table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+        let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
         let write = table
-            .alloc(port_id, crate::ipc::HandleMode::Write)
+            .alloc(port_id, crate::ipc::IpcThingMode::Write)
             .expect("write handle");
         let read = table
-            .alloc(port_id, crate::ipc::HandleMode::Read)
+            .alloc(port_id, crate::ipc::IpcThingMode::Read)
             .expect("read handle");
         (write.0, read.0)
     }
@@ -479,11 +479,11 @@ mod tests {
     fn poll_port_reports_readable_and_hangup() {
         let (write_handle, read_handle) = alloc_port_pair(64);
         let port = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(
-                    crate::ipc::Handle(write_handle),
-                    crate::ipc::HandleMode::Write,
+                    crate::ipc::IpcThing(write_handle),
+                    crate::ipc::IpcThingMode::Write,
                 )
                 .copied()
                 .expect("entry");
@@ -531,11 +531,11 @@ mod tests {
     fn poll_port_reports_writable_capacity_and_write_hangup() {
         let (write_handle, _read_handle) = alloc_port_pair(4);
         let port = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(
-                    crate::ipc::Handle(write_handle),
-                    crate::ipc::HandleMode::Write,
+                    crate::ipc::IpcThing(write_handle),
+                    crate::ipc::IpcThingMode::Write,
                 )
                 .copied()
                 .expect("entry");
@@ -581,17 +581,17 @@ mod tests {
         let (write_b, read_b) = alloc_port_pair(64);
 
         let port_a = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
-                .get(crate::ipc::Handle(write_a), crate::ipc::HandleMode::Write)
+                .get(crate::ipc::IpcThing(write_a), crate::ipc::IpcThingMode::Write)
                 .copied()
                 .expect("entry a");
             crate::ipc::get_port(entry.port_id).expect("port a")
         };
         let port_b = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
-                .get(crate::ipc::Handle(write_b), crate::ipc::HandleMode::Write)
+                .get(crate::ipc::IpcThing(write_b), crate::ipc::IpcThingMode::Write)
                 .copied()
                 .expect("entry b");
             crate::ipc::get_port(entry.port_id).expect("port b")
@@ -627,17 +627,17 @@ mod tests {
         let (write_b, read_b) = alloc_port_pair(64);
 
         let port_a = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
-                .get(crate::ipc::Handle(write_a), crate::ipc::HandleMode::Write)
+                .get(crate::ipc::IpcThing(write_a), crate::ipc::IpcThingMode::Write)
                 .copied()
                 .expect("entry a");
             crate::ipc::get_port(entry.port_id).expect("port a")
         };
         let port_b = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
-                .get(crate::ipc::Handle(write_b), crate::ipc::HandleMode::Write)
+                .get(crate::ipc::IpcThing(write_b), crate::ipc::IpcThingMode::Write)
                 .copied()
                 .expect("entry b");
             crate::ipc::get_port(entry.port_id).expect("port b")
@@ -688,11 +688,11 @@ mod tests {
         // to a pipe read-end with data available.
         let (write_handle, read_handle) = alloc_port_pair(64);
         let port = {
-            let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(
-                    crate::ipc::Handle(write_handle),
-                    crate::ipc::HandleMode::Write,
+                    crate::ipc::IpcThing(write_handle),
+                    crate::ipc::IpcThingMode::Write,
                 )
                 .copied()
                 .expect("entry");

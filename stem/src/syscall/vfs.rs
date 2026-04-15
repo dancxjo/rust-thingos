@@ -164,7 +164,7 @@ pub fn vfs_seek(thing: u32, offset: i64, whence: u32) -> SysResult<u64> {
 /// (`uid`/`gid`), link count (`nlink`), device number (`rdev`), block
 /// accounting (`blksize`/`blocks`), and the three standard timestamps
 /// (`atime`, `mtime`, `ctime`).
-pub fn vfs_stat(fd: u32) -> SysResult<abi::fs::FileStat> {
+pub fn vfs_stat(thing: u32) -> SysResult<abi::fs::FileStat> {
     let mut stat = abi::fs::FileStat::default();
     let ret = unsafe {
         raw_syscall6(
@@ -205,7 +205,7 @@ pub fn vfs_lstat(path: &str) -> SysResult<abi::fs::FileStat> {
 }
 
 /// Check if an open thing refers to a terminal/TTY device.
-pub fn vfs_isatty(fd: u32) -> SysResult<bool> {
+pub fn vfs_isatty(thing: u32) -> SysResult<bool> {
     let ret = unsafe { raw_syscall6(SYS_FS_ISATTY, thing as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v != 0)
 }
@@ -284,10 +284,10 @@ pub fn dup(old_thing: u32) -> SysResult<u32> {
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
-/// Duplicate `old_thing` to `new_fd`, closing `new_fd` first if it is open.
+/// Duplicate `old_thing` to `new_thing`, closing `new_thing` first if it is open.
 ///
-/// Returns `new_fd` on success.
-pub fn dup2(old_thing: u32, new_fd: u32) -> SysResult<u32> {
+/// Returns `new_thing` on success.
+pub fn dup2(old_thing: u32, new_thing: u32) -> SysResult<u32> {
     let ret = unsafe { raw_syscall6(SYS_FS_DUP2, old_thing as usize, new_thing as usize, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
@@ -295,7 +295,7 @@ pub fn dup2(old_thing: u32, new_fd: u32) -> SysResult<u32> {
 /// File-descriptor control.
 ///
 /// Supports `F_GETFL`, `F_SETFL`, `F_GETFD`, and `F_SETFD`.
-pub fn vfs_fcntl(fd: u32, cmd: u32, arg: u32) -> SysResult<u32> {
+pub fn vfs_fcntl(thing: u32, cmd: u32, arg: u32) -> SysResult<u32> {
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_FCNTL,
@@ -329,7 +329,7 @@ pub fn pipe(pipefd: &mut [u32; 2]) -> SysResult<()> {
 /// ```no_run
 /// use abi::syscall::{PollThing, poll_flags};
 /// use stem::syscall::vfs_poll;
-/// let mut fds = [PollThing { fd: 0, events: poll_flags::POLLIN, revents: 0 }];
+/// let mut fds = [PollThing { thing: 0, events: poll_flags::POLLIN, revents: 0 }];
 /// let n = vfs_poll(&mut fds, u64::MAX).unwrap();
 /// if n > 0 { /* fd 0 is readable */ }
 /// ```
@@ -356,7 +356,7 @@ pub fn vfs_poll(pollfds: &mut [PollThing], timeout_ms: u64) -> SysResult<usize> 
 /// `mask` is a bitmask of [`abi::vfs_watch::mask`] events.
 /// `flags` is a bitmask of [`abi::vfs_watch::flags`].
 /// Returns a new watch thing.
-pub fn vfs_watch_fd(fd: u32, mask: u32, flags: u32) -> SysResult<u32> {
+pub fn vfs_watch_fd(thing: u32, mask: u32, flags: u32) -> SysResult<u32> {
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_WATCH_THING,
@@ -410,7 +410,7 @@ pub fn vfs_rename(old_path: &str, new_path: &str) -> SysResult<()> {
 /// Issue a device-specific call (ioctl) to a VFS thing.
 /// Issue a device-specific call (ioctl) to a VFS thing.
 pub fn vfs_device_call(
-    fd: u32,
+    thing: u32,
     kind: abi::device::DeviceKind,
     op: u32,
     arg: u64,
@@ -423,11 +423,11 @@ pub fn vfs_device_call(
         out_ptr: 0,
         out_len: 0,
     };
-    vfs_device_call_raw(fd, &call)
+    vfs_device_call_raw(thing, &call)
 }
 
 /// Issue a raw device-specific call using a pre-filled DeviceCall struct.
-pub fn vfs_device_call_raw(fd: u32, call: &abi::device::DeviceCall) -> SysResult<u64> {
+pub fn vfs_device_call_raw(thing: u32, call: &abi::device::DeviceCall) -> SysResult<u64> {
     let ret = unsafe {
         super::arch::raw_syscall6(
             SYS_FS_DEVICE_CALL,
@@ -520,7 +520,7 @@ pub fn vfs_realpath(path: &str, buf: &mut [u8]) -> SysResult<usize> {
 ///
 /// For RAM-backed filesystems this is a no-op that always succeeds.
 /// Returns `Ok(())` on success, or an [`Errno`] on failure.
-pub fn vfs_fsync(fd: u32) -> SysResult<()> {
+pub fn vfs_fsync(thing: u32) -> SysResult<()> {
     let ret = unsafe { raw_syscall6(SYS_FS_SYNC, thing as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
@@ -531,7 +531,7 @@ pub fn vfs_fsync(fd: u32) -> SysResult<()> {
 /// zero bytes.  If `size` is smaller, the excess data is discarded.
 ///
 /// Returns `Ok(())` on success, or an [`Errno`] on failure.
-pub fn vfs_ftruncate(fd: u32, size: u64) -> SysResult<()> {
+pub fn vfs_ftruncate(thing: u32, size: u64) -> SysResult<()> {
     let ret = unsafe { raw_syscall6(SYS_FS_FTRUNCATE, thing as usize, size as usize, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
@@ -612,8 +612,8 @@ pub fn vfs_link(src: &str, dst: &str) -> SysResult<()> {
 /// and `Ok(())` is returned.  If `fd` is not a terminal device the kernel
 /// returns [`abi::errors::Errno::ENOSYS`].
 ///
-/// Equivalent to POSIX `tcgetattr(fd, termios)`.
-pub fn tcgetattr(fd: u32, termios: &mut abi::termios::Termios) -> SysResult<()> {
+/// Equivalent to POSIX `tcgetattr(thing, termios)`.
+pub fn tcgetattr(thing: u32, termios: &mut abi::termios::Termios) -> SysResult<()> {
     let size = core::mem::size_of::<abi::termios::Termios>();
     let call = abi::device::DeviceCall {
         kind: abi::device::DeviceKind::Terminal,
@@ -623,7 +623,7 @@ pub fn tcgetattr(fd: u32, termios: &mut abi::termios::Termios) -> SysResult<()> 
         out_ptr: termios as *mut abi::termios::Termios as u64,
         out_len: size as u32,
     };
-    vfs_device_call_raw(fd, &call).map(|_| ())
+    vfs_device_call_raw(thing, &call).map(|_| ())
 }
 
 /// Set the termios settings for the terminal device on `fd`.
@@ -632,8 +632,8 @@ pub fn tcgetattr(fd: u32, termios: &mut abi::termios::Termios) -> SysResult<()> 
 /// Returns `Ok(())` on success; [`abi::errors::Errno::ENOSYS`] if `fd` is not
 /// a terminal device.
 ///
-/// Equivalent to POSIX `tcsetattr(fd, TCSANOW, termios)`.
-pub fn tcsetattr(fd: u32, termios: &abi::termios::Termios) -> SysResult<()> {
+/// Equivalent to POSIX `tcsetattr(thing, TCSANOW, termios)`.
+pub fn tcsetattr(thing: u32, termios: &abi::termios::Termios) -> SysResult<()> {
     let size = core::mem::size_of::<abi::termios::Termios>();
     let call = abi::device::DeviceCall {
         kind: abi::device::DeviceKind::Terminal,
@@ -643,13 +643,13 @@ pub fn tcsetattr(fd: u32, termios: &abi::termios::Termios) -> SysResult<()> {
         out_ptr: 0,
         out_len: 0,
     };
-    vfs_device_call_raw(fd, &call).map(|_| ())
+    vfs_device_call_raw(thing, &call).map(|_| ())
 }
 
 /// Query the foreground process group ID for the controlling terminal on `fd`.
 ///
-/// Equivalent to POSIX `tcgetpgrp(fd)`.
-pub fn tcgetpgrp(fd: u32) -> SysResult<u32> {
+/// Equivalent to POSIX `tcgetpgrp(thing)`.
+pub fn tcgetpgrp(thing: u32) -> SysResult<u32> {
     let mut pgid: u32 = 0;
     let size = core::mem::size_of::<u32>();
     let call = abi::device::DeviceCall {
@@ -660,13 +660,13 @@ pub fn tcgetpgrp(fd: u32) -> SysResult<u32> {
         out_ptr: &mut pgid as *mut u32 as u64,
         out_len: size as u32,
     };
-    vfs_device_call_raw(fd, &call).map(|_| pgid)
+    vfs_device_call_raw(thing, &call).map(|_| pgid)
 }
 
 /// Set the foreground process group ID for the controlling terminal on `fd`.
 ///
-/// Equivalent to POSIX `tcsetpgrp(fd, pgrp)`.
-pub fn tcsetpgrp(fd: u32, pgrp: u32) -> SysResult<()> {
+/// Equivalent to POSIX `tcsetpgrp(thing, pgrp)`.
+pub fn tcsetpgrp(thing: u32, pgrp: u32) -> SysResult<()> {
     let size = core::mem::size_of::<u32>();
     let call = abi::device::DeviceCall {
         kind: abi::device::DeviceKind::Terminal,
@@ -676,7 +676,7 @@ pub fn tcsetpgrp(fd: u32, pgrp: u32) -> SysResult<()> {
         out_ptr: 0,
         out_len: 0,
     };
-    vfs_device_call_raw(fd, &call).map(|_| ())
+    vfs_device_call_raw(thing, &call).map(|_| ())
 }
 
 // ── chmod / fchmod ────────────────────────────────────────────────────────────
@@ -709,7 +709,7 @@ pub fn vfs_chmod(path: &str, mode: u32) -> SysResult<()> {
 ///
 /// Returns `Ok(())` on success, [`Errno::ENOTSUP`] if the filesystem does
 /// not support permission mutation, or another errno on failure.
-pub fn vfs_fchmod(fd: u32, mode: u32) -> SysResult<()> {
+pub fn vfs_fchmod(thing: u32, mode: u32) -> SysResult<()> {
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_FCHMOD,
@@ -766,7 +766,7 @@ pub fn vfs_utimes(
 /// Returns `Ok(())` on success, [`Errno::ENOTSUP`] if the filesystem does
 /// not support timestamp mutation, or another errno on failure.
 pub fn vfs_futimes(
-    fd: u32,
+    thing: u32,
     atime: Option<abi::fs::Timespec>,
     mtime: Option<abi::fs::Timespec>,
 ) -> SysResult<()> {
@@ -804,7 +804,7 @@ pub fn vfs_futimes(
 ///
 /// Returns `Ok(())` on success, [`abi::errors::Errno::EWOULDBLOCK`] if the
 /// lock is held and `LOCK_NB` was specified, or another errno on failure.
-pub fn vfs_flock(fd: u32, how: u32) -> SysResult<()> {
+pub fn vfs_flock(thing: u32, how: u32) -> SysResult<()> {
     let ret = unsafe { raw_syscall6(SYS_FS_FLOCK, thing as usize, how as usize, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }

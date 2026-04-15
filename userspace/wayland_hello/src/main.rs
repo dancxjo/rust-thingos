@@ -4,7 +4,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use abi::ids::ThingId;
 use abi::syscall::vfs_flags::O_RDWR;
 use alloc::vec::Vec;
 use stem::info;
@@ -240,8 +239,7 @@ fn ensure_buffer(
         len: size as usize,
         prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
         flags: abi::vm::VmMapFlags::empty(),
-        backing: VmBacking::File {
-            fd: fd_buf,
+        backing: VmBacking::File { thing: fd_buf,
             offset: 0,
         },
     };

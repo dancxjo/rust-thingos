@@ -10,9 +10,10 @@ pub mod geometry;
 pub mod raster;
 pub mod tessellate;
 
+use alloc::vec::Vec;
+
 use abi::pixel::PixelFormat;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-use alloc::vec::Vec;
 use stem::syscall::{memfd_create, vm_map, vm_unmap};
 
 pub struct Texture {
@@ -36,20 +37,12 @@ impl Texture {
             len: size,
             prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
             flags: VmMapFlags::SHARED,
-            backing: VmBacking::File { fd, offset: 0 },
+            backing: VmBacking::File { thing: fd, offset: 0 },
         };
 
         let resp = vm_map(&req).ok()?;
 
-        Some(Self {
-            fd,
-            ptr: resp.addr as *mut u8,
-            width,
-            height,
-            stride,
-            bpp,
-            size,
-        })
+        Some(Self { fd, ptr: resp.addr as *mut u8, width, height, stride, bpp, size })
     }
 
     pub fn as_slice_mut(&mut self) -> &mut [u32] {
@@ -81,24 +74,14 @@ pub struct Canvas<'a> {
 
 impl<'a> Canvas<'a> {
     pub fn new(buffer: &'a mut [u32], width: u32, height: u32, stride_pixels: u32) -> Self {
-        Self {
-            buffer,
-            width,
-            height,
-            stride_pixels,
-        }
+        Self { buffer, width, height, stride_pixels }
     }
 
     pub fn from_texture(texture: &'a mut Texture) -> Self {
         let width = texture.width;
         let height = texture.height;
         let stride_pixels = texture.stride / 4;
-        Self {
-            buffer: texture.as_slice_mut(),
-            width,
-            height,
-            stride_pixels,
-        }
+        Self { buffer: texture.as_slice_mut(), width, height, stride_pixels }
     }
 
     pub fn clear(&mut self, color: u32) {
@@ -187,13 +170,7 @@ impl Atlas {
     pub fn new(name: &str, w: u32, h: u32, bpp: u8) -> Option<Self> {
         let mut texture = Texture::new(name, w, h, bpp)?;
         texture.as_bytes_mut().fill(0);
-        Some(Self {
-            texture,
-            next_x: 0,
-            next_y: 0,
-            row_h: 0,
-            padding: 1,
-        })
+        Some(Self { texture, next_x: 0, next_y: 0, row_h: 0, padding: 1 })
     }
 
     pub fn pack(&mut self, w: u32, h: u32, pixels: &[u8]) -> Option<(u32, u32)> {

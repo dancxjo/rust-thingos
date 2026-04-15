@@ -12,8 +12,6 @@
 extern crate alloc;
 use alloc::string::{String, ToString};
 
-
-
 mod driver;
 mod vfs_provider;
 
@@ -22,7 +20,7 @@ use driver::VirtioNetDriver;
 use ipc_helpers::provider::ProviderLoop;
 use stem::syscall::channel_create;
 use stem::{error, warn};
-use vfs_provider::{handle_vfs_rpc, NetVfsState};
+use vfs_provider::{NetVfsState, handle_vfs_rpc};
 
 #[stem::main]
 fn main(arg: usize) -> ! {
@@ -42,10 +40,7 @@ fn main(arg: usize) -> ! {
             len: 4096,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File {
-                fd: arg as u32,
-                offset: 0,
-            },
+            backing: VmBacking::File { thing: arg as u32, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
             let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
@@ -62,12 +57,15 @@ fn main(arg: usize) -> ! {
             let path_bytes =
                 unsafe { core::slice::from_raw_parts((resp.addr + 512) as *const u8, 128) };
             let path_len = path_bytes.iter().position(|&b| b == 0).unwrap_or(128);
-            claimed_path = core::str::from_utf8(&path_bytes[..path_len])
-                .unwrap_or("")
-                .to_string();
+            claimed_path = core::str::from_utf8(&path_bytes[..path_len]).unwrap_or("").to_string();
 
-            stem::debug!("VIRTIO_NETD: Bootstrap handles: req_read={}, resp_write={}, id={}, path={}", 
-                drv_req_read, drv_resp_write, bind_instance_id, claimed_path);
+            stem::debug!(
+                "VIRTIO_NETD: Bootstrap handles: req_read={}, resp_write={}, id={}, path={}",
+                drv_req_read,
+                drv_resp_write,
+                bind_instance_id,
+                claimed_path
+            );
         } else {
             warn!("VIRTIO_NETD: Failed to map bootstrap memfd!");
         }
@@ -154,11 +152,8 @@ fn main(arg: usize) -> ! {
             &ready_bytes[..len],
         ) {
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let _ = stem::syscall::socket::sendmsg(
-                drv_resp_write_fd,
-                &buf[..total_len],
-                &[req_write],
-            );
+            let _ =
+                stem::syscall::socket::sendmsg(drv_resp_write_fd, &buf[..total_len], &[req_write]);
             stem::debug!("VIRTIO_NETD: Sent MSG_BIND_READY, waiting for MSG_BIND_ASSIGNED...");
         }
     }
@@ -171,11 +166,8 @@ fn main(arg: usize) -> ! {
             {
                 if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
                     if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
-                        let path_len = assigned
-                            .primary_path
-                            .iter()
-                            .position(|&b| b == 0)
-                            .unwrap_or(64);
+                        let path_len =
+                            assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
                         let path =
                             core::str::from_utf8(&assigned.primary_path[..path_len]).unwrap_or("?");
                         stem::debug!(
@@ -189,7 +181,11 @@ fn main(arg: usize) -> ! {
                         let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
                         let reason =
                             core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
-                        stem::warn!("VIRTIO_NETD: Registration REJECTED by supervisor (code={}, reason={}). Halting.", failed.error_code, reason);
+                        stem::warn!(
+                            "VIRTIO_NETD: Registration REJECTED by supervisor (code={}, reason={}). Halting.",
+                            failed.error_code,
+                            reason
+                        );
                         loop {
                             stem::syscall::yield_now();
                         }
@@ -216,11 +212,8 @@ fn main(arg: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ = stem::syscall::socket::sendmsg(
-                    drv_resp_write_fd,
-                    &svc_buf[..total_len],
-                    &[],
-                );
+                let _ =
+                    stem::syscall::socket::sendmsg(drv_resp_write_fd, &svc_buf[..total_len], &[]);
                 stem::debug!("VIRTIO_NETD: Sent MSG_SERVICE_READY.");
             }
         }

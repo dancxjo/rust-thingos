@@ -117,7 +117,7 @@ fn wait_fd(fd: Fd, events: u16, deadline_ns: u64) -> SysResult<()> {
         };
 
         let mut pollfd = [PollThing {
-            fd: fd as i32,
+            thing: fd as i32,
             events,
             revents: 0,
         }];

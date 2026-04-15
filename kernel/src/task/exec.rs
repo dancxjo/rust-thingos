@@ -727,7 +727,7 @@ mod tests {
             pi.thing_table
                 .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec".into())
                 .unwrap();
-            pi.thing_table.set_fd_flags(1, THING_CLOEXEC).unwrap();
+            pi.thing_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
         }
 
         // Simulate exec commit phase.
@@ -906,7 +906,7 @@ mod tests {
         thing_table
             .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec_fd".into())
             .unwrap();
-        thing_table.set_fd_flags(1, THING_CLOEXEC).unwrap();
+        thing_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
 
         Arc::new(Mutex::new(ProcessInfo {
             pid,

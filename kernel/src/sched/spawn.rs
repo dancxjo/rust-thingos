@@ -20,14 +20,23 @@ fn boot_module_matches(name: &str, module_name: &str) -> bool {
 }
 
 fn current_parent_pid<R: BootRuntime>(sched: &Scheduler<R>) -> u32 {
-    let cpu_idx = super::current_cpu_index::<R>();
-    sched
-        .state
-        .per_cpu
-        .get(cpu_idx)
-        .and_then(|pc| pc.current)
-        .and_then(|ctid| crate::task::registry::get_task::<R>(ctid))
+    // Prefer runtime current TID; this remains authoritative in syscall/trap
+    // context even when scheduler per-CPU `current` can be transiently stale.
+    let rt = crate::runtime::<R>();
+    let runtime_tid = rt.current_tid();
+
+    crate::task::registry::get_task::<R>(runtime_tid)
         .and_then(|t| t.process_info.clone())
+        .or_else(|| {
+            let cpu_idx = super::current_cpu_index::<R>();
+            sched
+                .state
+                .per_cpu
+                .get(cpu_idx)
+                .and_then(|pc| pc.current)
+                .and_then(|ctid| crate::task::registry::get_task::<R>(ctid))
+                .and_then(|t| t.process_info.clone())
+        })
         .map(|pi| pi.lock().pid)
         .unwrap_or(0)
 }
@@ -983,11 +992,11 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     // Step 6b: Apply explicit FD remappings.
     // These take precedence over stdio/inherited defaults for the same slots.
     for remap in fd_remap {
-        if let Err(e) = thing_table.dup2(remap.src_fd, remap.dst_fd) {
+        if let Err(e) = thing_table.dup2(remap.src_thing, remap.dst_thing) {
             crate::kprintln!(
                 "SPAWN: FD remap failed: {} -> {} (errno {:?})",
-                remap.src_fd,
-                remap.dst_fd,
+                remap.src_thing,
+                remap.dst_thing,
                 e
             );
         }
@@ -1236,11 +1245,11 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
 
     // Step 6b: Apply explicit FD remappings.
     for remap in fd_remap {
-        if let Err(e) = thing_table.dup2(remap.src_fd, remap.dst_fd) {
+        if let Err(e) = thing_table.dup2(remap.src_thing, remap.dst_thing) {
             crate::kprintln!(
                 "SPAWN: FD remap failed: {} -> {} (errno {:?})",
-                remap.src_fd,
-                remap.dst_fd,
+                remap.src_thing,
+                remap.dst_thing,
                 e
             );
         }

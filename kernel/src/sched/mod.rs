@@ -33,7 +33,8 @@ pub use hooks::{
     exit_current, get_signal_mask_current, get_thread_pending_current, get_user_mapping_at_current,
     handle_user_stack_fault_current, interrupt_task_current, kill_by_tid_current,
     list_processes_current, poll_task_exit_current, process_info_current,
-    process_info_for_tid_current, register_task_exit_waiter_current, register_timeout_wake_current,
+    process_info_for_pid_current, process_info_for_tid_current,
+    register_task_exit_waiter_current, register_timeout_wake_current,
     remove_user_mappings_current, set_current_task_name_current, set_current_user_fs_base_current,
     set_priority_current, set_signal_mask_current, set_thread_pending_current, sleep_ticks_current,
     spawn_process_current, spawn_process_ex_current, spawn_process_from_path_current,
@@ -409,6 +410,7 @@ pub fn init<R: BootRuntime>() {
             hooks::PROTECT_USER_RANGE_HOOK = Some(vm::protect_user_range::<R>);
             hooks::PROCESS_INFO_HOOK = Some(process_info::<R>);
             hooks::PROCESS_INFO_FOR_TID_HOOK = Some(process_info_for_tid::<R>);
+            hooks::PROCESS_INFO_FOR_PID_HOOK = Some(process_info_for_pid::<R>);
             hooks::SPAWN_PROCESS_EX_HOOK = Some(spawn::boot_spawn_process_ex::<R>);
             hooks::SPAWN_PROCESS_FROM_PATH_HOOK = Some(spawn::spawn_process_from_path::<R>);
             hooks::CURRENT_RESOURCE_HOOK = Some(current_task_resource_id_impl::<R>);
@@ -1282,6 +1284,37 @@ pub fn process_info_for_tid<R: BootRuntime>(
     result
 }
 
+pub fn process_info_for_pid<R: BootRuntime>(
+    pid: u32,
+) -> Option<alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>>> {
+    let rt = crate::runtime::<R>();
+    let _irq = rt.irq_disable();
+    let reg = crate::task::registry::get_registry::<R>();
+
+    let mut candidate: Option<alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>>> = None;
+    for task in reg.threads.iter() {
+        let Some(pi_arc) = &task.process_info else {
+            continue;
+        };
+        if pi_arc.lock().pid != pid {
+            continue;
+        }
+
+        if task.id == pid as u64 {
+            candidate = Some(pi_arc.clone());
+            break;
+        }
+
+        if candidate.is_none() {
+            candidate = Some(pi_arc.clone());
+        }
+    }
+
+    drop(reg);
+    rt.irq_restore(_irq);
+    candidate
+}
+
 /// Return a snapshot of all live processes (those with a ProcessInfo).
 ///
 /// Called from the `LIST_PROCESSES_HOOK` slot so that procfs can render
@@ -1424,7 +1457,7 @@ fn mark_task_exited<R: BootRuntime>(
     // Remove this TID from the process's thread group list.
     // If this is the thread-group leader, drain the remaining siblings in one
     // step to avoid a separate clone + clear pass.
-    // Also capture ppid/pid for SIGCHLD notification.
+    // Also capture ppid/pid for lifecycle status queueing.
     let mut notify_ppid: u32 = 0;
     let mut notify_pid: u32 = 0;
     // Capture the exit observer inbox ID (if set) for canonical JobExit delivery.
@@ -1452,52 +1485,26 @@ fn mark_task_exited<R: BootRuntime>(
         }
     };
 
-    // If the thread-group leader exited, notify the parent process.
+    // If the thread-group leader exited, queue the lifecycle status for the
+    // parent and wake any parent threads blocked in `waitpid`.
     if notify_ppid != 0 {
         let encoded_status = if code < 0 {
             abi::signal::w_term_sig((-code) as u8)
         } else {
             abi::signal::w_exit_status(code as u8)
         };
-        // Find the parent's ProcessInfo Arc without holding the registry lock
-        // across the ProcessInfo lock.
-        let parent_arc: Option<alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>>> = {
-            let reg = crate::task::registry::get_registry::<R>();
-            reg.threads.iter().find_map(|task| {
-                task.process_info.as_ref().and_then(|pi_arc| {
-                    // Avoid locking here; check PID via a try-approach.
-                    // We can peek at the pid without locking if it's stable.
-                    // ProcessInfo.pid is set at creation and never changes.
-                    // However spinning on the Mutex here under the registry
-                    // guard risks subtle ordering issues; clone the Arc
-                    // and lock it after releasing the registry guard.
-                    let guard = pi_arc.lock();
-                    if guard.pid == notify_ppid {
-                        drop(guard);
-                        Some(pi_arc.clone())
-                    } else {
-                        None
-                    }
-                })
-            })
-        }; // registry guard released here
-
-        if let Some(pi_arc) = parent_arc {
-            let mut pp = pi_arc.lock();
-            pp.lifecycle.children_done.push_back((notify_pid, encoded_status));
-            pp.unix_compat.signals.post(abi::signal::SIGCHLD);
-            let tids = pp.lifecycle.thread_ids.clone();
-            drop(pp);
-            // Wake parent threads via the waiters list (after the scheduler lock
-            // is released by the caller).
-            waiters.extend(tids.iter().map(|&t| t as u64));
-        }
+        let parent_waiters = crate::signal::queue_parent_child_event(
+            notify_ppid,
+            notify_pid,
+            encoded_status,
+        );
+        waiters.extend(parent_waiters);
     }
 
     // Emit canonical JobExit notification via Message/Inbox path.
     //
-    // Called after the SIGCHLD/children_done legacy path so that lifecycle
-    // state is already committed before the notification is sent.  Delivery
+    // Called after the `children_done` lifecycle queue has been updated so
+    // state is already committed before the notification is sent. Delivery
     // failure is logged inside emit_job_exit and does not corrupt state.
     if notify_pid != 0 {
         if let Some(inbox_id) = exit_observer_inbox {
@@ -1752,6 +1759,15 @@ fn waitpid_for_pid<R: BootRuntime>(
 
     loop {
         if let Some(result) = take_queued_child_status::<R>(our_pid, pid, flags) {
+            crate::ktrace!(
+                "waitpid: queued status delivered parent_pid={} parent_tid={} target_pid={} child_pid={} status=0x{:x} flags=0x{:x}",
+                our_pid,
+                our_tid,
+                pid,
+                result.0,
+                result.1 as u32,
+                flags
+            );
             return Ok(result);
         }
 
@@ -1830,13 +1846,37 @@ fn waitpid_for_pid<R: BootRuntime>(
 
         if registered.is_empty() {
             // All children died in the window between collection and registration.
+            crate::ktrace!(
+                "waitpid: no registrations parent_pid={} parent_tid={} target_pid={} flags=0x{:x}; retrying",
+                our_pid,
+                our_tid,
+                pid,
+                flags
+            );
             continue;
         }
+
+        crate::ktrace!(
+            "waitpid: blocking parent_pid={} parent_tid={} target_pid={} flags=0x{:x} registered_children={}",
+            our_pid,
+            our_tid,
+            pid,
+            flags,
+            registered.len()
+        );
 
         // Block until any registered child exits.
         unsafe {
             block_current_erased();
         }
+
+        crate::ktrace!(
+            "waitpid: woke parent_pid={} parent_tid={} target_pid={} flags=0x{:x}",
+            our_pid,
+            our_tid,
+            pid,
+            flags
+        );
 
         // After waking, unregister from children that haven't yet exited.
         for &child_tid in &registered {

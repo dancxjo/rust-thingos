@@ -118,8 +118,8 @@ crate::signal::send_signal_to_process(pid: u32, sig: u8) -> bool
 // Send to a specific thread.
 crate::signal::send_signal_to_thread(tid: u64, sig: u8)
 
-// Notify parent on child exit/stop/continue.
-crate::signal::notify_parent_sigchld(ppid: u32, child_pid: u32, status: i32)
+// Queue one child lifecycle status for the parent and wake waiters.
+crate::signal::notify_parent_child_event(ppid: u32, child_pid: u32, status: i32)
 ```
 
 ### Alarm Tick Processing

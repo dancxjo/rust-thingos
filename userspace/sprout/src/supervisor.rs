@@ -30,6 +30,8 @@ use crate::pipelines::{
 };
 use crate::task::{ManagedTask, TaskKind};
 
+const RUN_POLL_MUX_SELF_TEST: bool = false;
+
 pub struct Supervisor {
     pub tasks: Arc<Mutex<Vec<ManagedTask>>>,
     pub ledger: Arc<Mutex<DeviceLedger>>,
@@ -85,9 +87,15 @@ impl Supervisor {
             setup_audio_stack(tasks_for_audio);
         });
 
-        // Stage 8: Run Readiness Model Verification Test
-        info!("SPROUT: Spawning poll_mux verification test...");
-        let _ = stem::syscall::spawn_process("/bin/poll_mux", 0);
+        // Stage 8: Optional readiness model verification test.
+        // Keep this opt-in so early-boot diagnosis is not perturbed by extra
+        // child process lifecycle traffic.
+        if RUN_POLL_MUX_SELF_TEST {
+            info!("SPROUT: Spawning poll_mux verification test...");
+            let _ = stem::syscall::spawn_process("/bin/poll_mux", 0);
+        } else {
+            info!("SPROUT: poll_mux verification test disabled");
+        }
 
         // Stage 4: Busy Stage - Wait for Display Driver to register its VFS provider
         // self.wait_for_display();
@@ -261,16 +269,36 @@ impl Supervisor {
                 } else {
                     task.module_path.as_str()
                 };
+
+                let mut stdin_mode = stem::abi::types::stdio_mode::INHERIT;
+                let mut stdout_mode = stem::abi::types::stdio_mode::INHERIT;
+                let mut stderr_mode = stem::abi::types::stdio_mode::INHERIT;
+                let mut console_fd_to_close: Option<u32> = None;
+                if task.name == "shell" {
+                    if let Ok(console_fd) =
+                        stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR)
+                    {
+                        stdin_mode = stem::abi::types::stdio_mode::thing(console_fd);
+                        stdout_mode = stem::abi::types::stdio_mode::thing(console_fd);
+                        stderr_mode = stem::abi::types::stdio_mode::thing(console_fd);
+                        console_fd_to_close = Some(console_fd);
+                    }
+                }
+
                 let spawn_res = stem::syscall::spawn_process_ex(
                     spawn_path,
                     &[spawn_path.as_bytes(), arg_str.as_bytes()],
                     &alloc::collections::BTreeMap::new(),
-                    stem::abi::types::stdio_mode::INHERIT,
-                    stem::abi::types::stdio_mode::INHERIT,
-                    stem::abi::types::stdio_mode::INHERIT,
+                    stdin_mode,
+                    stdout_mode,
+                    stderr_mode,
                     task.spawn_arg as u64,
                     &handles_owned,
                 );
+
+                if let Some(fd) = console_fd_to_close {
+                    let _ = stem::syscall::vfs::vfs_close(fd);
+                }
 
                 if let Ok(resp) = spawn_res {
                     task.pid = Some(resp.child_tid);

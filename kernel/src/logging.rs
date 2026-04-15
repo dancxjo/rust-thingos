@@ -3,14 +3,15 @@
 //! Human-readable format: [TIME] [LEVEL] [SOURCE] Message
 //! With optional span correlation for multi-line output.
 
-use crate::BootRuntimeBase;
 use alloc::format;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use spin::Mutex;
 
 // Re-export for macros
 pub use abi::logging::Level;
+use spin::Mutex;
+
+use crate::BootRuntimeBase;
 pub type LogLevel = Level;
 
 static GLOBAL_LOGGER: Mutex<Option<Logger>> = Mutex::new(None);
@@ -28,8 +29,8 @@ static IN_GRAPH_LOG: AtomicBool = AtomicBool::new(false);
 static MUTE_SERIAL: AtomicBool = AtomicBool::new(false);
 
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Contract-only)
-/// Default is 0 (contract-only) for performance. Set to 3 for Info+ during debugging.
-static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(3);
+/// Default is 5 (trace) while debugging bring-up regressions.
+static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(5);
 
 /// Set the minimum log level for output (0=Contract-only, 1=Error+, 2=Warn+, etc.)
 pub fn set_log_level(level: u8) {
@@ -168,12 +169,8 @@ pub unsafe fn force_unlock() {
 pub fn copy_log_buffer(buf: &mut [u8]) -> usize {
     let state = LOG_STATE.lock();
     let n = state.len.min(buf.len());
-    
-    let mut read_idx = if state.len < MAX_LOG_BUFFER_SIZE {
-        0
-    } else {
-        state.head
-    };
+
+    let mut read_idx = if state.len < MAX_LOG_BUFFER_SIZE { 0 } else { state.head };
 
     for i in 0..n {
         unsafe {
@@ -181,7 +178,7 @@ pub fn copy_log_buffer(buf: &mut [u8]) -> usize {
         }
         read_idx = (read_idx + 1) % MAX_LOG_BUFFER_SIZE;
     }
-    
+
     n
 }
 
@@ -281,14 +278,7 @@ pub fn _log_event(
         } else {
             (0, 0)
         };
-        let _ = write!(
-            writer,
-            "[{}] [{}] [{}] [CPU{}] ",
-            ts,
-            meta.level.as_str(),
-            event_str,
-            cpu
-        );
+        let _ = write!(writer, "[{}] [{}] [{}] [CPU{}] ", ts, meta.level.as_str(), event_str, cpu);
         let _ = writer.write_fmt(msg_fmt);
         if !fields.is_empty() {
             for (k, v) in fields {
@@ -335,13 +325,7 @@ pub fn _log_contract(source: &'static str, args: fmt::Arguments) {
         } else {
             (0, 0)
         };
-        let _ = write!(
-            writer,
-            "[{}] [-----] [{}] [CPU{}] ",
-            ts,
-            source,
-            cpu
-        );
+        let _ = write!(writer, "[{}] [-----] [{}] [CPU{}] ", ts, source, cpu);
         let _ = writer.write_fmt(args);
         let _ = writer.write_str("\n");
     }

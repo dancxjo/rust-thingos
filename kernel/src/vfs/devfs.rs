@@ -826,7 +826,7 @@ impl VfsNode for FbNode {
         use abi::display_driver_protocol::{FB_INFO_PAYLOAD_SIZE, FbInfoPayload};
 
         let payload = FbInfoPayload {
-            device_handle: self.resource_id,
+            device_thing: self.resource_id,
             width: self.fb.width,
             height: self.fb.height,
             stride: self.fb.pitch,

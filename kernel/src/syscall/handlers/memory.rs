@@ -80,11 +80,11 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
         // Resolve file backing metadata once to avoid re-locking thing_table on
         // every page and to enforce access checks up front.
         let file_backing = match req.backing {
-            VmBacking::File { fd, offset } => {
+            VmBacking::File { thing, offset } => {
                 let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
                 let (node, status_flags) = {
                     let lock = pinfo_arc.lock();
-                    let file = lock.thing_table.get(fd)?;
+                    let file = lock.thing_table.get(thing)?;
                     (file.node.clone(), *file.status_flags.lock())
                 };
 
@@ -106,7 +106,7 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                     None
                 };
 
-                Some((fd, offset, node, shared_region))
+                Some((thing, offset, node, shared_region))
             }
             VmBacking::Anonymous { .. } => {
                 if effective_shared {

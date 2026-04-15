@@ -4,18 +4,18 @@
 //! passed across channels using the standard handle-passing mechanism.
 
 use super::{VfsNode, VfsStat};
-use crate::ipc::{HandleMode, Port};
+use crate::ipc::{IpcThingMode, Port};
 use abi::errors::SysResult;
 use alloc::sync::Arc;
 
 /// A VFS node that wraps an IPC port.
 pub struct PortNode {
     port: Arc<Port>,
-    mode: HandleMode,
+    mode: IpcThingMode,
 }
 
 impl PortNode {
-    pub fn new(port: Arc<Port>, mode: HandleMode) -> Self {
+    pub fn new(port: Arc<Port>, mode: IpcThingMode) -> Self {
         Self { port, mode }
     }
 
@@ -26,21 +26,21 @@ impl PortNode {
 
 impl VfsNode for PortNode {
     fn read(&self, _offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        if self.mode != HandleMode::Read {
+        if self.mode != IpcThingMode::Read {
             return Err(abi::errors::Errno::EBADF);
         }
         Ok(self.port.try_recv(buf))
     }
 
     fn write(&self, _offset: u64, buf: &[u8]) -> SysResult<usize> {
-        if self.mode != HandleMode::Write {
+        if self.mode != IpcThingMode::Write {
             return Err(abi::errors::Errno::EBADF);
         }
         Ok(self.port.send(buf))
     }
 
     fn stat(&self) -> SysResult<VfsStat> {
-        let (r, w) = if self.mode == HandleMode::Read {
+        let (r, w) = if self.mode == IpcThingMode::Read {
             (0o400, 0)
         } else {
             (0, 0o200)
@@ -57,7 +57,7 @@ impl VfsNode for PortNode {
         use abi::syscall::poll_flags::{POLLERR, POLLHUP, POLLIN, POLLOUT};
         let mut revents = 0;
         match self.mode {
-            HandleMode::Read => {
+            IpcThingMode::Read => {
                 if !self.port.is_empty() || !self.port.has_writers() {
                     revents |= POLLIN;
                 }
@@ -65,7 +65,7 @@ impl VfsNode for PortNode {
                     revents |= POLLHUP;
                 }
             }
-            HandleMode::Write => {
+            IpcThingMode::Write => {
                 if !self.port.has_readers() {
                     revents |= POLLHUP | POLLERR;
                 } else if !self.port.is_full() {
@@ -78,10 +78,10 @@ impl VfsNode for PortNode {
 
     fn close(&self) {
         match self.mode {
-            HandleMode::Read => {
+            IpcThingMode::Read => {
                 self.port.close_reader();
             }
-            HandleMode::Write => {
+            IpcThingMode::Write => {
                 self.port.close_writer();
             }
         }
@@ -89,15 +89,15 @@ impl VfsNode for PortNode {
 
     fn add_waiter(&self, tid: u64) {
         match self.mode {
-            HandleMode::Read => self.port.add_waiter_read(tid),
-            HandleMode::Write => self.port.add_waiter_write(tid),
+            IpcThingMode::Read => self.port.add_waiter_read(tid),
+            IpcThingMode::Write => self.port.add_waiter_write(tid),
         }
     }
 
     fn remove_waiter(&self, tid: u64) {
         match self.mode {
-            HandleMode::Read => self.port.remove_waiter_read(tid),
-            HandleMode::Write => self.port.remove_waiter_write(tid),
+            IpcThingMode::Read => self.port.remove_waiter_read(tid),
+            IpcThingMode::Write => self.port.remove_waiter_write(tid),
         }
     }
 
@@ -110,7 +110,7 @@ impl VfsNode for PortNode {
         data: &[u8],
         fds: alloc::vec::Vec<Arc<dyn VfsNode>>,
     ) -> abi::errors::SysResult<()> {
-        if self.mode != HandleMode::Write {
+        if self.mode != IpcThingMode::Write {
             return Err(abi::errors::Errno::EBADF);
         }
         self.port.send_msg(data.to_vec(), fds);
@@ -121,7 +121,7 @@ impl VfsNode for PortNode {
         &self,
     ) -> abi::errors::SysResult<Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<Arc<dyn VfsNode>>)>>
     {
-        if self.mode != HandleMode::Read {
+        if self.mode != IpcThingMode::Read {
             return Err(abi::errors::Errno::EBADF);
         }
         match self.port.try_recv_msg() {
@@ -138,8 +138,8 @@ mod tests {
 
     fn make_channel(capacity: usize) -> (Arc<PortNode>, Arc<PortNode>) {
         let port = Arc::new(Port::new(capacity));
-        let read_node = Arc::new(PortNode::new(Arc::clone(&port), HandleMode::Read));
-        let write_node = Arc::new(PortNode::new(Arc::clone(&port), HandleMode::Write));
+        let read_node = Arc::new(PortNode::new(Arc::clone(&port), IpcThingMode::Read));
+        let write_node = Arc::new(PortNode::new(Arc::clone(&port), IpcThingMode::Write));
         (read_node, write_node)
     }
 

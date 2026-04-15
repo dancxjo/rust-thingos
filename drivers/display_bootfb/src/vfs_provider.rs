@@ -12,7 +12,7 @@ extern crate alloc;
 use crate::driver::BootFbDriver;
 use abi::device::DeviceCall;
 use abi::display::{
-    BufferHandle, BufferId, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
+    BufferHandle, BufferId, CommitRequest, PlaneCommit, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
     DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER,
 };
 use abi::errors::Errno;
@@ -132,11 +132,46 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             }
         }
         DISPLAY_OP_COMMIT => {
-            if call_payload.is_empty() {
+            let header_size = core::mem::size_of::<CommitRequest>();
+            if call_payload.len() < header_size {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let req = unsafe { &*(call_payload.as_ptr() as *const CommitRequest) };
-            match driver.commit(req) {
+
+            let req: CommitRequest = unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+
+            // For provider RPC calls, plane commits are serialized inline after
+            // CommitRequest because raw pointers are not valid cross-process.
+            let mut inline_planes = Vec::new();
+            if req.commit_count > 0 {
+                let plane_size = core::mem::size_of::<PlaneCommit>();
+                let count = req.commit_count as usize;
+                let needed = header_size.saturating_add(count.saturating_mul(plane_size));
+                if call_payload.len() >= needed {
+                    let base = &call_payload[header_size..needed];
+                    inline_planes.reserve(count);
+                    for i in 0..count {
+                        let off = i * plane_size;
+                        let plane: PlaneCommit = unsafe {
+                            core::ptr::read_unaligned(base[off..off + plane_size].as_ptr() as *const _)
+                        };
+                        inline_planes.push(plane);
+                    }
+                }
+            }
+
+            let req_owned;
+            let req_ref = if !inline_planes.is_empty() {
+                req_owned = CommitRequest {
+                    commit_count: inline_planes.len() as u32,
+                    flags: req.flags,
+                    commits_ptr: inline_planes.as_ptr() as u64,
+                };
+                &req_owned
+            } else {
+                &req
+            };
+
+            match driver.commit(req_ref) {
                 Ok(()) => ok_device_call(0, &[]),
                 Err(e) => ProviderResponse::err(e),
             }
