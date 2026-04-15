@@ -33,7 +33,7 @@ pub fn block_current<R: BootRuntime>() {
             }
         };
 
-        // Move current from Running to Blocked
+        // Move current from Running to Blocked in the canonical REGISTRY.
         if let Some(mut task) = crate::task::registry::get_task_mut::<R>(current_id) {
             if task.wake_pending {
                 task.wake_pending = false;
@@ -42,6 +42,11 @@ pub fn block_current<R: BootRuntime>() {
             }
             task.state = TaskState::Blocked;
             blocked_id = Some(current_id);
+        }
+
+        // Keep the scheduler-side hot-field cache in sync.
+        if let Some(sf) = sched.state.get_task_mut(current_id) {
+            sf.state = TaskState::Blocked;
         }
 
         // Add to wait queue
@@ -58,7 +63,7 @@ pub fn block_current<R: BootRuntime>() {
         switch
     };
 
-    if let Some(id) = blocked_id {
+    if let Some(_id) = blocked_id {
         // when push_task_state wakes the drain task.
     }
 
@@ -79,26 +84,45 @@ pub fn block_current<R: BootRuntime>() {
     rt.irq_restore(_irq);
 }
 
-pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> bool {
-    let mut needs_ipi = false;
-    let mut ipi_cpu = 0;
+/// Wake a blocked task.  Returns the CPU to which a reschedule IPI should be
+/// sent, or `None` if no cross-CPU IPI is needed.
+///
+/// **The caller must drop the `SCHEDULER` lock before sending any IPI** to
+/// avoid holding the lock during IPI delivery (reduces lock-convoy churn on
+/// SMP during boot and service launch — issue #130).
+pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> Option<usize> {
     let mut wake_info: Option<(usize, usize)> = None;
 
-    // 1. Lock REGISTRY to update task state and extract requirements
-    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(id) {
-        if task.state == TaskState::Blocked {
-            task.state = TaskState::Runnable;
-            task.enqueued_at_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
-            let task_priority = task.priority as usize;
-
-            let target_cpu = match task.affinity {
+    // 1. Read scheduling fields from the hot-field cache — no REGISTRY lock
+    //    needed for the read path.  Write the new state to REGISTRY.
+    if let Some(sf) = sched.state.get_thread(id) {
+        if sf.state == TaskState::Blocked {
+            let task_priority = sf.priority as usize;
+            let target_cpu = match sf.affinity {
                 crate::task::Affinity::Pinned(cpu) => cpu,
-                crate::task::Affinity::Any => task
+                crate::task::Affinity::Any => sf
                     .last_cpu
                     .unwrap_or_else(|| super::current_cpu_index::<R>()),
             };
             wake_info = Some((target_cpu, task_priority));
-        } else {
+        }
+    }
+
+    if wake_info.is_some() {
+        // Update the canonical REGISTRY state.
+        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(id) {
+            task.state = TaskState::Runnable;
+            task.enqueued_at_tick =
+                super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        }
+        // Keep the scheduler-side cache in sync.
+        if let Some(sf) = sched.state.get_thread_mut(id) {
+            sf.state = TaskState::Runnable;
+        }
+    } else {
+        // Task is not blocked — set wake_pending so the next block_current
+        // returns immediately without actually blocking.
+        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(id) {
             task.wake_pending = true;
         }
     }
@@ -120,10 +144,11 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> bo
 
         sched.state.enqueue_task(safe_cpu, task_priority, id);
 
+        // Use the cached priority of the current task to avoid a nested REGISTRY lock.
         let current_prio = sched.state.per_cpu[safe_cpu]
             .current
-            .and_then(|cid| crate::task::registry::get_task::<R>(cid))
-            .map(|t| t.priority as usize)
+            .and_then(|cid| sched.state.get_thread(cid))
+            .map(|sf| sf.priority as usize)
             .unwrap_or(0);
 
         // Nudge logic:
@@ -138,17 +163,14 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> bo
             } else {
                 super::GLOBAL_NEED_RESCHED[safe_cpu]
                     .store(true, core::sync::atomic::Ordering::Release);
-                needs_ipi = true;
-                ipi_cpu = safe_cpu;
+                // Return the IPI target CPU so the caller can send it after
+                // dropping the SCHEDULER lock (issue #130).
+                return Some(safe_cpu);
             }
         }
     }
 
-    if needs_ipi {
-        crate::runtime::<R>().send_ipi(ipi_cpu, 0x30); // Use IRQ_RESCHED_VECTOR
-    }
-
-    needs_ipi
+    None
 }
 
 pub fn wake_task<R: BootRuntime>(id: u64) {
@@ -156,18 +178,33 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     let _irq = rt.irq_disable();
 
     let lock_start = rt.mono_ticks();
-    let lock_sched = SCHEDULER.lock();
-    if let Some(ptr) = *lock_sched {
-        let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-        wake_task_locked::<R>(sched, id);
-    }
+    // Collect any pending IPI target inside the lock, then send it after
+    // the lock is dropped to prevent holding SCHEDULER during IPI delivery.
+    let ipi_cpu = {
+        let lock_sched = SCHEDULER.lock();
+        let ipi = if let Some(ptr) = *lock_sched {
+            let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
+            wake_task_locked::<R>(sched, id)
+        } else {
+            None
+        };
 
-    super::record_sched_lock_hold::<R>(
-        &super::PROF_SCHED_LOCK_WAKE_TASK_CALLS,
-        &super::PROF_SCHED_LOCK_WAKE_TASK_US_TOTAL,
-        &super::PROF_SCHED_LOCK_WAKE_TASK_US_MAX,
-        lock_start,
-    );
+        super::record_sched_lock_hold::<R>(
+            &super::PROF_SCHED_LOCK_WAKE_TASK_CALLS,
+            &super::PROF_SCHED_LOCK_WAKE_TASK_US_TOTAL,
+            &super::PROF_SCHED_LOCK_WAKE_TASK_US_MAX,
+            lock_start,
+        );
+        ipi
+        // SCHEDULER lock dropped here.
+    };
+
+    // Send the reschedule IPI *after* the SCHEDULER lock is released so the
+    // target CPU's IPI handler can acquire the lock immediately without
+    // spinning (issue #130).
+    if let Some(cpu) = ipi_cpu {
+        rt.send_ipi(cpu, 0x30);
+    }
 
     rt.irq_restore(_irq);
 }

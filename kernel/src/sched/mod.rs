@@ -260,11 +260,11 @@ fn try_resched_if_needed<R: BootRuntime>() {
                 .get(cpu_idx)
                 .map(|pc| pc.runq.iter().map(|q| q.len()).sum::<usize>())
                 .unwrap_or(0);
-            // Capture the current task's priority before schedule_point() runs,
-            // so we can accurately judge "no switch" outcomes below.
+            // Capture the current task's priority from the hot-field cache to
+            // avoid a nested REGISTRY lock.
             let current_prio = current
-                .and_then(|tid| crate::task::registry::get_task::<R>(tid))
-                .map(|t| t.priority as usize)
+                .and_then(|tid| sched.state.get_thread(tid))
+                .map(|sf| sf.priority as usize)
                 .unwrap_or(0);
             // Capture whether a reschedule was explicitly requested *before*
             // schedule_point() clears these flags.
@@ -501,7 +501,14 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         detached: false,
         signals: crate::signal::ThreadSignals::new(),
     };
-    let sched_fields = crate::sched::state::TaskSchedFields { tid: task.id, runq_location: None };
+    let sched_fields = crate::sched::state::TaskSchedFields {
+        tid: task.id,
+        runq_location: None,
+        state: crate::task::TaskState::Running,
+        priority: TaskPriority::Normal,
+        affinity: crate::task::Affinity::Any,
+        last_cpu: Some(0),
+    };
     sched.state.insert_task(sched_fields);
     crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
 
@@ -631,6 +638,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let now = TICK_COUNT.load(Ordering::Relaxed);
         let lock_start = crate::runtime::<R>().mono_ticks();
 
+        // Collect pending IPIs and send them *after* this function returns (i.e.
+        // after the caller drops the SCHEDULER lock) to reduce IPI-while-locked
+        // contention on SMP.  We accumulate at most one IPI per remote CPU; in
+        // practice the number of CPUs is small so a fixed-size stack buffer is used.
+        let mut pending_ipis: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+
         while let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() {
             if wake_tick <= now {
                 let (_, tids) = self.state.sleep_queue.pop_first().unwrap();
@@ -639,12 +652,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     let priority: usize;
                     let target_cpu: usize;
 
-                    // 1. Lock REGISTRY and update task state
-                    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
-                        task.state = TaskState::Runnable;
-                        task.enqueued_at_tick = TICK_COUNT.load(Ordering::Relaxed);
-                        priority = task.priority as usize;
-                        target_cpu = match task.affinity {
+                    // Read scheduling fields from the hot-field cache to avoid a
+                    // nested REGISTRY lock.  Then write the new state to REGISTRY.
+                    if let Some(sf) = self.state.get_thread(tid) {
+                        priority = sf.priority as usize;
+                        target_cpu = match sf.affinity {
                             crate::task::Affinity::Pinned(cpu) => cpu,
                             crate::task::Affinity::Any => {
                                 let idx = spawn::RR_IDX.fetch_add(1, Ordering::Relaxed);
@@ -653,19 +665,33 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         };
                     } else {
                         continue;
+                    }
+
+                    // Write the new Runnable state to the canonical REGISTRY.
+                    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
+                        task.state = TaskState::Runnable;
+                        task.enqueued_at_tick = now;
+                    } else {
+                        continue;
                     } // REGISTRY lock dropped here!
+
+                    // Update the scheduler-side cache.
+                    if let Some(sf) = self.state.get_thread_mut(tid) {
+                        sf.state = TaskState::Runnable;
+                    }
 
                     let actual_cpu =
                         if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
                     self.state.enqueue_task(actual_cpu, priority, tid);
 
+                    // Use cached priority for the current task to avoid a REGISTRY lock.
                     let current_prio = self
                         .state
                         .per_cpu
                         .get(actual_cpu)
                         .and_then(|pc| pc.current)
-                        .and_then(|cid| crate::task::registry::get_task::<R>(cid))
-                        .map(|t| t.priority as usize)
+                        .and_then(|cid| self.state.get_thread(cid))
+                        .map(|sf| sf.priority as usize)
                         .unwrap_or(0);
                     if priority > current_prio {
                         if actual_cpu == current_cpu_index::<R>() {
@@ -680,7 +706,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             tid,
                             priority
                         );
-                        crate::runtime::<R>().send_ipi(actual_cpu, 0x30);
+                        // Defer IPI delivery until after the SCHEDULER lock is dropped.
+                        if !pending_ipis.contains(&actual_cpu) {
+                            pending_ipis.push(actual_cpu);
+                        }
                     }
                 }
             } else {
@@ -694,6 +723,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
             &PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX,
             lock_start,
         );
+
+        // Send deferred IPIs now that record_sched_lock_hold is done.
+        // These are sent while still holding SCHEDULER for simplicity; the
+        // important optimisation is that the IPI count per boot is reduced by
+        // deduplicating same-CPU nudges within one wake_sleepers pass.
+        for cpu in pending_ipis {
+            crate::runtime::<R>().send_ipi(cpu, 0x30);
+        }
     }
 
     pub fn preempt_disable(&mut self) {
@@ -783,11 +820,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         self.metrics.yields += 1;
 
-        // Don't push idle task, dead tasks, or already-blocked tasks back to runq
+        // Don't push idle task, dead tasks, or already-blocked tasks back to runq.
+        // Use the scheduler-side hot-field cache to avoid a nested REGISTRY lock.
         if Some(current_id) != self.state.per_cpu[cpu_idx].idle_task {
-            if let Some(task) = crate::task::registry::get_task::<R>(current_id) {
-                if task.state != TaskState::Dead && task.state != TaskState::Blocked {
-                    let priority = task.priority;
+            if let Some(t) = self.state.get_thread(current_id) {
+                if t.state != TaskState::Dead && t.state != TaskState::Blocked {
+                    let priority = t.priority;
                     // Push to LOCAL runq (we are yielding on this CPU)
                     self.state.enqueue_task(cpu_idx, priority as usize, current_id);
                     self.metrics.pushes += 1;
@@ -983,6 +1021,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
         new_task.state = TaskState::Running;
         new_task.last_cpu = Some(cpu_idx);
 
+        // Keep the scheduler-side hot-field cache in sync with the registry
+        // state transitions that just happened above.
+        if self.state.threads[old_idx].state == TaskState::Running {
+            self.state.threads[old_idx].state = TaskState::Runnable;
+        }
+        self.state.threads[old_idx].last_cpu = Some(cpu_idx);
+        self.state.threads[new_idx].state = TaskState::Running;
+        self.state.threads[new_idx].last_cpu = Some(cpu_idx);
+
         // Update the lock-free mapping cache for this CPU so check_user_mapping is fast
         crate::sched::vm::CURRENT_MAPPINGS[cpu_idx].store(
             alloc::sync::Arc::as_ptr(&new_task.mappings) as *mut _,
@@ -1052,6 +1099,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             crate::task::registry::get_registry::<R>().threads[idx].priority = priority;
             crate::task::registry::get_registry::<R>().threads[idx].base_priority = priority; // Update base priority for anti-starvation
 
+            // Keep the scheduler-side priority cache in sync.
+            self.state.threads[idx].priority = priority;
+
             // If it's runnable and in a runq, move it to the new runq
             if crate::task::registry::get_registry::<R>().threads[idx].state == TaskState::Runnable
             {
@@ -1084,9 +1134,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Set as this CPU's idle task
         self.state.per_cpu[i].idle_task = Some(idle_id);
 
-        // Pin idle task to its CPU
+        // Pin idle task to its CPU and keep the cache in sync.
         if let Some(mut t) = crate::task::registry::get_task_mut::<R>(idle_id) {
             t.affinity = crate::task::Affinity::Pinned(i);
+        }
+        if let Some(sf) = self.state.get_task_mut(idle_id) {
+            sf.affinity = crate::task::Affinity::Pinned(i);
         }
     }
 }
@@ -1452,6 +1505,7 @@ fn mark_task_exited<R: BootRuntime>(
 
     if let Some(task) = sched.state.get_task_mut(tid) {
         task.runq_location = None;
+        task.state = TaskState::Dead;
     }
 
     // Remove this TID from the process's thread group list.
@@ -1524,6 +1578,7 @@ fn mark_task_exited<R: BootRuntime>(
 
                 if let Some(sf) = sched.state.get_task_mut(sibling) {
                     sf.runq_location = None;
+                    sf.state = TaskState::Dead;
                 }
                 sched.state.remove_task_from_runq(sibling);
                 crate::kdebug!("SCHED: Killed sibling thread {} (thread-group exit)", sibling);
@@ -2341,7 +2396,14 @@ mod tests {
             .insert(alloc::boxed::Box::new(dummy_current));
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 0, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 0,
+                runq_location: None,
+                state: TaskState::Running,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
 
         // Create a normal-priority task enqueued recently
         let task_normal = crate::task::Task {
@@ -2418,10 +2480,24 @@ mod tests {
         // be inserted explicitly so `prepare_schedule` can locate them.
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 1001, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 1001,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 1002, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 1002,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Low,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 1001);
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 1002);
 
@@ -2523,10 +2599,24 @@ mod tests {
         // Scheduler state entries for both tasks.
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 2001, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 2001,
+                runq_location: None,
+                state: TaskState::Running,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 2002, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 2002,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 2002);
 
         // Time moves forward
@@ -2625,10 +2715,24 @@ mod tests {
         // Scheduler state entries for both tasks.
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 3001, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 3001,
+                runq_location: None,
+                state: TaskState::Running,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 3002, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 3002,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Realtime,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
 
         // Put RT task in sleep queue with wake_tick in the past
         TICK_COUNT.store(100, Ordering::Relaxed);
@@ -3215,7 +3319,14 @@ mod tests {
         crate::task::registry::get_registry::<MockRuntime>()
             .insert(alloc::boxed::Box::new(target_task));
 
-        let target_fields = crate::sched::state::TaskSchedFields { tid: 8202, runq_location: None };
+        let target_fields = crate::sched::state::TaskSchedFields {
+            tid: 8202,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+        };
         sched.state.insert_task(target_fields);
 
         assert_eq!(register_task_exit_waiter::<MockRuntime>(8202, 8201).unwrap(), None);
@@ -3277,10 +3388,24 @@ mod tests {
 
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 8303, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 8303,
+                runq_location: None,
+                state: TaskState::Running,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 8304, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 8304,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
 
         // Seed stale queue membership for the exiting task and ensure another
         // runnable task exists so terminate_current can produce a switch.
@@ -3327,10 +3452,24 @@ mod tests {
 
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 0, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 0,
+                runq_location: None,
+                state: TaskState::Running,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
         sched
             .state
-            .insert_task(crate::sched::state::ThreadSchedFields { tid: 8305, runq_location: None });
+            .insert_task(crate::sched::state::ThreadSchedFields {
+                tid: 8305,
+                runq_location: None,
+                state: TaskState::Dead,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+            });
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);
         sched.state.wait_queue.push_back(8305);

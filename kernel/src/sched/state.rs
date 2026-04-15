@@ -37,21 +37,39 @@ pub type TaskState = ThreadState;
 
 /// Scheduler-side metadata for a single kernel thread.
 ///
-/// This is the **single source of truth** for scheduler-internal queue
-/// tracking.  All other scheduling fields (`state`, `priority`,
-/// `base_priority`, `timeslice_remaining`, `affinity`, `enqueued_at_tick`,
-/// `last_cpu`) live exclusively in `Thread<R>` (the registry entry).
+/// This struct carries scheduler-internal queue tracking state plus a
+/// **hot-field cache** of frequently read values from `Thread<R>` in the
+/// global registry.  The cache avoids taking the REGISTRY lock inside
+/// the SCHEDULER hot path (nested locking was the primary source of lock
+/// convoy behaviour under SMP).
 ///
-/// `ThreadSchedFields` only carries the two fields that have no equivalent
-/// in `Thread<R>`:
+/// # Canonical fields (no equivalent in `Thread<R>`)
 /// - `tid` — needed to keep the scheduler's sorted `Vec` indexed in the same
 ///   order as `ThreadRegistry::threads` so that a single binary-search index
 ///   addresses both collections.
 /// - `runq_location` — tracks which `(cpu, priority)` run-queue slot currently
 ///   holds this thread; there is no corresponding field in `Thread<R>`.
+///
+/// # Cached hot fields (mirrors of `Thread<R>` fields)
+/// These must be kept in sync with the registry whenever the corresponding
+/// field changes.  They are updated by the scheduler paths that mutate the
+/// underlying registry entry; no other code should modify them directly.
+/// - `state` — lifecycle state; updated by `wake_task_locked`, `wake_sleepers`,
+///   `block_current`, `sleep_ticks`, `prepare_schedule`, and `mark_task_exited`.
+/// - `priority` — current scheduling priority; updated by `set_priority`.
+/// - `affinity` — CPU affinity; updated at spawn time and by `cpu_online`.
+/// - `last_cpu` — last CPU this thread ran on; updated by `prepare_schedule`.
 pub struct ThreadSchedFields {
     pub tid: ThreadId,
     pub runq_location: Option<(usize, usize)>,
+    /// Cached copy of `Thread<R>::state`.
+    pub state: TaskState,
+    /// Cached copy of `Thread<R>::priority`.
+    pub priority: TaskPriority,
+    /// Cached copy of `Thread<R>::affinity`.
+    pub affinity: Affinity,
+    /// Cached copy of `Thread<R>::last_cpu`.
+    pub last_cpu: Option<usize>,
 }
 /// Backward-compatible alias — prefer `ThreadSchedFields` in new code.
 pub type TaskSchedFields = ThreadSchedFields;
