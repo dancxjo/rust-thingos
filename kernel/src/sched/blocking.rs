@@ -75,13 +75,13 @@ pub fn block_current<R: BootRuntime>() {
         // This avoids a nested REGISTRY lock on the check-and-early-return path
         // (the primary source of SCHEDULER↔REGISTRY lock contention under SMP).
         if let Some(sf) = sched.state.get_task_mut(current_id) {
+            // Record tid for deferred REGISTRY write regardless of which path is taken.
+            deferred_tid = Some(current_id);
             if sf.wake_pending {
                 sf.wake_pending = false;
                 was_wake_pending = true;
-                deferred_tid = Some(current_id);
             } else {
                 sf.state = TaskState::Blocked;
-                deferred_tid = Some(current_id);
             }
         }
 
@@ -180,6 +180,11 @@ pub fn wake_task_locked<R: BootRuntime>(
 
     let deferred = if wake_info.is_some() {
         let tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        // Increment the profiling counter before updating the hot-field cache.
+        // The counter tracks Runnable transitions regardless of whether the
+        // cache update succeeds, so ordering relative to the cache write does
+        // not affect correctness.  The tick snapshot and the cache write use
+        // the same `tick` value to keep both consistent.
         super::PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
         // Keep the scheduler-side cache in sync without touching REGISTRY.
