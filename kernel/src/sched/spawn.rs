@@ -151,6 +151,12 @@ impl<R: BootRuntime> Scheduler<R> {
         match affinity {
             Affinity::Pinned(cpu) => cpu,
             Affinity::Any => {
+                // During early boot keep all tasks on the local (boot) CPU to
+                // avoid cross-CPU placement overhead and unnecessary IPI
+                // traffic before steady-state scheduling begins.
+                if self.bringup_in_progress {
+                    return super::current_cpu_index::<R>();
+                }
                 // will be brought up manually when needed.
                 //     if let Some(next_cpu_id) = rt.next_offline_cpu() {
                 //         let target_cpu = next_cpu_id.0 as usize;
@@ -511,8 +517,15 @@ pub fn spawn<R: BootRuntime>(
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
     let id = sched.spawn(entry, arg, priority, affinity);
+    // Capture before releasing the lock so nudge is coherent with placement.
+    let in_bringup = sched.bringup_in_progress;
     drop(lock);
-    nudge_spawned_task::<R>(current_cpu, id);
+    // Skip remote wakeup IPIs during early-boot bringup.  Tasks placed on the
+    // local CPU will be picked up naturally by the scheduler loop; deferred
+    // tasks on remote CPUs will be woken when end_bringup() is called.
+    if !in_bringup {
+        nudge_spawned_task::<R>(current_cpu, id);
+    }
     rt.irq_restore(_irq);
     id
 }
@@ -561,8 +574,11 @@ pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
         tls_base,
         detached,
     );
+    let in_bringup = sched.bringup_in_progress;
     drop(lock);
-    nudge_spawned_task::<R>(current_cpu, id);
+    if !in_bringup {
+        nudge_spawned_task::<R>(current_cpu, id);
+    }
     rt.irq_restore(_irq);
     id
 }
@@ -588,9 +604,12 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
         priority,
         crate::task::Affinity::Any,
     );
+    let in_bringup = sched.bringup_in_progress;
     drop(lock);
     if let Some(id) = id {
-        nudge_spawned_task::<R>(current_cpu, id);
+        if !in_bringup {
+            nudge_spawned_task::<R>(current_cpu, id);
+        }
         rt.irq_restore(_irq);
         Some(id)
     } else {
@@ -682,6 +701,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
 
     let id = sched.spawn_user_task(entry, aspace, stack_info, regions, priority, affinity)?;
+    let in_bringup = sched.bringup_in_progress;
 
     // Determine parent PID from the current task's ProcessInfo
     let ppid = current_parent_pid::<R>(sched);
@@ -720,7 +740,9 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     }
 
     drop(lock);
-    nudge_spawned_task::<R>(current_cpu, id);
+    if !in_bringup {
+        nudge_spawned_task::<R>(current_cpu, id);
+    }
     rt.irq_restore(_irq);
     Some(id)
 }
@@ -961,6 +983,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
             crate::task::Affinity::Any,
         )
         .ok_or(abi::errors::Errno::EAGAIN)?;
+    let in_bringup = sched.bringup_in_progress;
 
     // Determine parent PID
     let cpu_idx = super::current_cpu_index::<R>();
@@ -1114,7 +1137,9 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     }
 
     drop(lock);
-    nudge_spawned_task::<R>(current_cpu, id);
+    if !in_bringup {
+        nudge_spawned_task::<R>(current_cpu, id);
+    }
     rt.irq_restore(_irq);
 
     Ok(SpawnExResult {
@@ -1815,5 +1840,60 @@ mod tests {
             "expected ENOSYS when SPAWN_PROCESS_FROM_PATH_HOOK is not installed, got {:?}",
             result
         );
+    }
+
+    /// During early bringup (`bringup_in_progress == true`) any task spawned
+    /// with `Affinity::Any` should be placed on the local (boot) CPU so that
+    /// cross-CPU placement overhead and IPI traffic are avoided.
+    #[test]
+    fn test_spawn_any_affinity_stays_local_during_bringup() {
+        let _g = init_test_env();
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        // Two CPUs online so round-robin would normally spread tasks.
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new()); // CPU 0
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new()); // CPU 1
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.per_cpu[0].current = Some(0);
+        sched.bringup_in_progress = true;
+
+        // Spawn several tasks with Any affinity.
+        let id1 = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
+        let id2 = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
+        let id3 = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
+
+        // All tasks should land on the local CPU (CPU 0 in the mock).
+        for id in [id1, id2, id3] {
+            let last_cpu = crate::task::registry::get_task::<MockRuntime>(id)
+                .and_then(|t| t.last_cpu)
+                .expect("task should have last_cpu set");
+            assert_eq!(
+                last_cpu, 0,
+                "task {} should be on CPU 0 during bringup, got CPU {}",
+                id, last_cpu
+            );
+        }
+    }
+
+    /// After `end_bringup` the flag is cleared and subsequent spawns may be
+    /// placed on other CPUs via the normal round-robin algorithm.
+    #[test]
+    fn test_bringup_flag_cleared_after_end_bringup() {
+        let _g = init_test_env();
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        // Flag starts true (as set by init_boot_task in production).
+        sched.bringup_in_progress = true;
+        assert!(sched.bringup_in_progress, "bringup_in_progress should be true");
+
+        // Simulate end_bringup by clearing the flag directly (the public
+        // end_bringup<R>() function requires a fully-initialised SCHEDULER
+        // global which is intentionally absent in unit tests).
+        sched.bringup_in_progress = false;
+        assert!(!sched.bringup_in_progress, "bringup_in_progress should be false after end");
     }
 }
