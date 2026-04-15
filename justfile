@@ -14,6 +14,11 @@ qemuflags := env_var_or_default("QEMUFLAGS", "-m 2G -smp 6")
 # Rust profile (dev/release).
 rust_profile := env_var_or_default("RUST_PROFILE", "dev")
 
+# Enable scheduler contention telemetry (lock histograms, wait-time tracking,
+# per-source IPI counters, run-queue length samples, etc.).
+# Usage: SCHED_TELEMETRY=1 just run
+sched_telemetry := env_var_or_default("SCHED_TELEMETRY", "")
+
 # Explicit xtask entry point. Avoid relying on a local `cargo xtask` alias.
 xtask := "cargo run -p xtask --"
 

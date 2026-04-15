@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 sched_debug = []
 diagnostic-apps = []
+sched_telemetry = []
 
 [dependencies]
 linked_list_allocator = "0.10"

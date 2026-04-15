@@ -19,8 +19,16 @@ pub fn block_current<R: BootRuntime>() {
 
     let mut blocked_id = None;
     let switch_params = {
-        let lock_start = rt.mono_ticks();
+        let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
+        super::record_sched_lock_wait::<R>(
+            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_CALLS,
+            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_US_TOTAL,
+            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_US_MAX,
+            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_HIST,
+            wait_start,
+        );
+        let lock_start = rt.mono_ticks();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
 
@@ -53,6 +61,7 @@ pub fn block_current<R: BootRuntime>() {
             &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
             &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
             &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+            &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
             lock_start,
         );
         switch
@@ -89,6 +98,7 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> bo
         if task.state == TaskState::Blocked {
             task.state = TaskState::Runnable;
             task.enqueued_at_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+            super::PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             let task_priority = task.priority as usize;
 
             let target_cpu = match task.affinity {
@@ -136,8 +146,7 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> bo
             if safe_cpu == super::current_cpu_index::<R>() {
                 sched.state.per_cpu[safe_cpu].need_resched = true;
             } else {
-                super::GLOBAL_NEED_RESCHED[safe_cpu]
-                    .store(true, core::sync::atomic::Ordering::Release);
+                super::set_global_need_resched(safe_cpu);
                 needs_ipi = true;
                 ipi_cpu = safe_cpu;
             }
@@ -145,6 +154,8 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> bo
     }
 
     if needs_ipi {
+        super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         crate::runtime::<R>().send_ipi(ipi_cpu, 0x30); // Use IRQ_RESCHED_VECTOR
     }
 
@@ -155,8 +166,16 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    let lock_start = rt.mono_ticks();
+    let wait_start = rt.mono_ticks();
     let lock_sched = SCHEDULER.lock();
+    super::record_sched_lock_wait::<R>(
+        &super::PROF_SCHED_WAIT_WAKE_TASK_CALLS,
+        &super::PROF_SCHED_WAIT_WAKE_TASK_US_TOTAL,
+        &super::PROF_SCHED_WAIT_WAKE_TASK_US_MAX,
+        &super::PROF_SCHED_WAIT_WAKE_TASK_HIST,
+        wait_start,
+    );
+    let lock_start = rt.mono_ticks();
     if let Some(ptr) = *lock_sched {
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
         wake_task_locked::<R>(sched, id);
@@ -166,6 +185,7 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         &super::PROF_SCHED_LOCK_WAKE_TASK_CALLS,
         &super::PROF_SCHED_LOCK_WAKE_TASK_US_TOTAL,
         &super::PROF_SCHED_LOCK_WAKE_TASK_US_MAX,
+        &super::PROF_SCHED_LOCK_WAKE_TASK_HOLD_HIST,
         lock_start,
     );
 

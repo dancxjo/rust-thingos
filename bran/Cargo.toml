@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 boot-terminal = []  # Full scrolling terminal console
 diagnostic-apps = ["kernel/diagnostic-apps"]
+sched-telemetry = ["kernel/sched_telemetry"]
 
 [dependencies]
 limine = "0.5"
