@@ -10,3 +10,10 @@ a specific user to review your work, you can assign it to them by using
     r? <reviewer name>
 -->
 <!-- homu-ignore:end -->
+
+<!-- Typed-first, Unix-second check (required for changes touching kernel/, abi/, bran/, stem/, or userspace/).
+     See docs/architecture/unix-projection.md §4 Step 4 for guidance. -->
+
+**Canonical concept**: _What typed-world object (`Thing`, `Place`, `Job`, `Space`, `Authority`, `Group`, `Task`, `Message`, `Presence`) does this change primarily affect?_
+
+**Unix projection**: _What Unix surface is exposed, and why is this surface a projection rather than canonical truth?_

@@ -25,5 +25,5 @@ and **Group**.  Before writing or reviewing code that touches `kernel/`, `abi/`,
   including naming rules and migration guidance.
 - [`docs/migration/review-guidelines.md`](docs/migration/review-guidelines.md) —
   PR review checklist derived from the concept mapping.
-- [Define Unix Projection Model over Typed-World Ontology](https://github.com/dancxjo/thingos/issues/138) —
-  the open specification task defining how Unix semantics are projected as bridge forms over typed-world concepts.
+- [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md) —
+  authoritative projection model defining how Unix semantics are implemented as bridge forms over typed-world concepts; includes the per-PR review checklist.
