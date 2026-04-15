@@ -101,8 +101,10 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
                     id
                 }
                 None => {
-                    // No current task (shouldn't happen)
-                    // crate::kerror!("SCHED: CPU {} sleeping without current task!", cpu);
+                    // No current task (shouldn't happen). Restore interrupts
+                    // before returning so we do not leave the CPU with IRQs
+                    // permanently disabled on this early-exit path.
+                    rt.irq_restore(_irq);
                     return;
                 }
             }

@@ -2528,6 +2528,26 @@ mod tests {
 
     pub(crate) static MOCK_RUNTIME: MockRuntime = MockRuntime;
     pub(crate) struct MockRuntime;
+
+    // Per-thread IRQ depth counter used by MockRuntime to detect imbalanced
+    // irq_disable / irq_restore pairs. irq_disable increments the depth and
+    // returns the old value; irq_restore restores the depth to the saved value.
+    std::thread_local! {
+        static IRQ_DEPTH: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    /// Returns the current mock IRQ depth for the calling test thread.
+    /// A value of 0 means interrupts are conceptually enabled (balanced state).
+    pub(crate) fn mock_irq_depth() -> usize {
+        IRQ_DEPTH.with(|c| c.get())
+    }
+
+    /// Resets the mock IRQ depth to 0 (call at the start of each test that
+    /// checks IRQ balance to ensure a clean baseline).
+    pub(crate) fn reset_mock_irq_depth() {
+        IRQ_DEPTH.with(|c| c.set(0));
+    }
+
     impl BootRuntimeBase for MockRuntime {
         fn putchar(&self, _c: u8) {}
         fn mono_ticks(&self) -> u64 {
@@ -2550,9 +2570,16 @@ mod tests {
             loop {}
         }
         fn irq_disable(&self) -> crate::IrqState {
-            crate::IrqState(0)
+            let prev = IRQ_DEPTH.with(|c| {
+                let d = c.get();
+                c.set(d + 1);
+                d
+            });
+            crate::IrqState(prev)
         }
-        fn irq_restore(&self, _state: crate::IrqState) {}
+        fn irq_restore(&self, state: crate::IrqState) {
+            IRQ_DEPTH.with(|c| c.set(state.0));
+        }
         fn phys_memory_map(&self) -> &'static [crate::PhysRange] {
             &[]
         }
@@ -4723,5 +4750,61 @@ mod tests {
             None,
             "joining a live joinable thread must return None"
         );
+    }
+
+    // ── IRQ balance regression tests ──────────────────────────────────────────
+
+    /// `block_current` must restore IRQ state on the early-return path that
+    /// triggers when there is no current task on the calling CPU (`current_id
+    /// == None`).  Previously this path returned without calling `irq_restore`,
+    /// leaving the CPU with interrupts permanently disabled.
+    #[test]
+    fn test_block_current_restores_irq_when_no_current_task() {
+        let _g = init_test_env();
+        reset_mock_irq_depth();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        // CPU 0 with no current task.
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = None;
+
+        let mut lock = SCHEDULER.lock();
+        *lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+        drop(lock);
+
+        block_current::<MockRuntime>();
+
+        // IRQ depth must be back to 0 — irq_disable was paired with irq_restore.
+        assert_eq!(mock_irq_depth(), 0, "block_current left IRQs disabled (depth != 0)");
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+    }
+
+    /// `sleep_ticks` must restore IRQ state on the early-return path that
+    /// triggers when there is no current task on the calling CPU (`current_id
+    /// == None`).  Without the fix the `None` arm returned without calling
+    /// `irq_restore`, leaving interrupts disabled.
+    #[test]
+    fn test_sleep_ticks_restores_irq_when_no_current_task() {
+        let _g = init_test_env();
+        reset_mock_irq_depth();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        // CPU 0 with no current task.
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = None;
+
+        let mut lock = SCHEDULER.lock();
+        *lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+        drop(lock);
+
+        sleep_ticks::<MockRuntime>(5);
+
+        // IRQ depth must be back to 0 — irq_disable was paired with irq_restore.
+        assert_eq!(mock_irq_depth(), 0, "sleep_ticks left IRQs disabled (depth != 0)");
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
     }
 }
