@@ -116,7 +116,33 @@ closed (EOF).  A `vfs_read` that returns 0 signals EOF.
 
 `POLLIN` on a listening socket means `accept()` will not block.
 
-### 2.4 VFS-Backed Files
+### 2.4 Inbox Nodes (`InboxNode`)
+
+`InboxNode` wraps an `Arc<Inbox>` as a VFS node, enabling inbox-backed delivery
+queues to participate in `SYS_FS_POLL` alongside channels and pipes.  It is
+used internally for typed process-delivery queues and job-exit observers.
+
+**InboxNode (read direction):**
+
+| Condition | POLLIN | POLLHUP |
+|-----------|--------|---------|
+| Queue has at least one message | ✓ | — |
+| Queue empty, inbox open | — | — |
+| Queue has messages, inbox closed | ✓ | ✓ |
+| Queue empty, inbox closed (EOF) | ✓ | ✓ |
+
+**InboxNode (write direction):**
+
+| Condition | POLLOUT | POLLHUP |
+|-----------|---------|---------|
+| Queue has free capacity, inbox open | ✓ | — |
+| Queue full, inbox open | — | — |
+| Inbox closed | — | ✓ |
+
+See `docs/ipc/inbox_vs_port_semantics.md` §5 and `kernel/src/vfs/inbox_node.rs`
+for implementation details.
+
+### 2.5 VFS-Backed Files
 
 Regular things and device nodes opened via `SYS_FS_OPEN` implement
 `VfsNode::poll`.  The default implementation returns `POLLIN | POLLOUT`
@@ -262,3 +288,13 @@ these kind values will receive a clean `ENOSYS` error.
 The same `VfsNode::poll` / `add_waiter` / `remove_waiter` contract is the
 extension point for timer FDs, process-exit notification FDs, IRQ FDs, and
 any other kernel waitable that needs to participate in `SYS_FS_POLL`.
+
+---
+
+## 8. See Also
+
+- `docs/concepts/ipc.md` — IPC primitive overview and decision matrix
+- `docs/concepts/channel_semantics.md` — channel capacity, atomicity, and poll bridging
+- `docs/ipc/inbox_vs_port_semantics.md` — Inbox vs Port semantics and readiness convergence
+- `docs/ipc/convergence_strategy.md` — layered convergence roadmap and migration status
+- `docs/wait_many.md` — heterogeneous wait (`SYS_WAIT_MANY`) design

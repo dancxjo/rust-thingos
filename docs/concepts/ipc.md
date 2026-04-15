@@ -409,8 +409,11 @@ loop_.run(|op| match op {
 - `docs/concepts/channels_vs_pipes.md` — when to use which
 - `docs/concepts/vfs_rpc_provider.md` — provider lifecycle
 - `docs/concepts/memfd.md` — bulk-data path
-- `docs/concepts/readiness.md` — poll/wait model (covers pipes, channels, and sockets)
+- `docs/concepts/readiness.md` — poll/wait model (covers pipes, channels, sockets, and inbox nodes)
 - `docs/concepts/supervisor_protocol.md` — service registration over channels
 - `docs/concepts/ipc_cookbook.md` — practical recipes
+- `docs/ipc/ipc_migration_status.md` — deprecation table, driver migration status, convergence roadmap
+- `docs/ipc/inbox_vs_port_semantics.md` — Inbox vs Port/Channel semantic analysis
+- `docs/ipc/convergence_strategy.md` — layered convergence architecture
 - `abi/src/rpc.rs` — structured request/reply header types
 - `libs/ipc_helpers/` — userspace helper library
