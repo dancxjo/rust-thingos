@@ -11,6 +11,7 @@
 > Companion documents:
 > - `docs/architecture/concept-classification.md` — canonical/compatibility/transitional taxonomy
 > - `docs/architecture/unix-projection.md` — how Unix concepts project from this ontology
+> - `docs/architecture/thing-references.md` — canonical Thing reference semantics and reference Forms
 > - `docs/architecture/signals-vs-typed-events.md` — signal compatibility demotion and typed event/message direction
 > - `docs/migration/concept-mapping.md` — detailed Unix → ThingOS lexicon
 > - `docs/migration/review-guidelines.md` — PR review checklist
@@ -517,6 +518,7 @@ record once Presence runtime integration is introduced.
 
 - `docs/architecture/concept-classification.md` — canonical/compatibility/transitional taxonomy table
 - `docs/architecture/unix-projection.md` — full Unix → typed-world projection model
+- `docs/architecture/thing-references.md` — Thing reference semantics and fd/handle projection rules
 - `docs/architecture/signals-vs-typed-events.md` — signal compatibility demotion and typed event/message direction
 - `docs/architecture/vfs-as-place-projection.md` — VFS as Place projection and Thing access form
 - `docs/migration/concept-mapping.md` — detailed Unix → ThingOS lexicon
