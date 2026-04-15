@@ -2576,6 +2576,29 @@ pub fn remove_task_completely<R: BootRuntime>(tid: TaskId) {
     rt.irq_restore(_irq);
 }
 
+fn format_cpu_trace(cpu: Option<usize>) -> alloc::string::String {
+    cpu.map(|c| alloc::format!("{}", c))
+        .unwrap_or_else(|| alloc::string::String::from("-"))
+}
+
+fn task_cpu_trace_strings(
+    task_last_cpu: Option<usize>,
+    sched_fields: Option<&crate::sched::state::ThreadSchedFields>,
+) -> (
+    alloc::string::String,
+    alloc::string::String,
+    alloc::string::String,
+) {
+    let last_cpu = sched_fields.and_then(|sf| sf.last_cpu).or(task_last_cpu);
+    let wake_cpu = sched_fields.and_then(|sf| sf.wake_cpu);
+    let run_cpu = sched_fields.and_then(|sf| sf.run_cpu);
+    (
+        format_cpu_trace(last_cpu),
+        format_cpu_trace(wake_cpu),
+        format_cpu_trace(run_cpu),
+    )
+}
+
 pub fn dump_stats<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
@@ -2590,7 +2613,7 @@ pub fn dump_stats<R: BootRuntime>() {
         sched.total_cpu_count
     );
     crate::kprint!(
-        " {:>5}  {:>10}  {:>4}  {:>3}  {:>4}  {:>4}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
+        " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
         "TID",
         "STATE",
         "PRI",
@@ -2625,25 +2648,8 @@ pub fn dump_stats<R: BootRuntime>() {
             crate::task::TaskPriority::High => "High",
             crate::task::TaskPriority::Realtime => "RT",
         };
-        let cpu_str: alloc::string::String = match task.last_cpu {
-            Some(c) => alloc::format!("{}", c),
-            None => alloc::string::String::from("-"),
-        };
-        let (wake_cpu_str, run_cpu_str) = sched
-            .state
-            .get_task(task.id)
-            .map(|sf| {
-                let wake = sf
-                    .wake_cpu
-                    .map(|c| alloc::format!("{}", c))
-                    .unwrap_or_else(|| alloc::string::String::from("-"));
-                let run = sf
-                    .run_cpu
-                    .map(|c| alloc::format!("{}", c))
-                    .unwrap_or_else(|| alloc::string::String::from("-"));
-                (wake, run)
-            })
-            .unwrap_or((alloc::string::String::from("-"), alloc::string::String::from("-")));
+        let (cpu_str, wake_cpu_str, run_cpu_str) =
+            task_cpu_trace_strings(task.last_cpu, sched.state.get_task(task.id));
         let user_str = if task.is_user { "Y" } else { "N" };
         let aff_str: alloc::string::String = match task.affinity {
             crate::task::Affinity::Any => alloc::string::String::from("Any"),
@@ -5232,6 +5238,50 @@ mod tests {
             "wakeup should enqueue Any-affinity blocked task onto last_cpu"
         );
         assert_eq!(sched.state.get_task(9901).and_then(|sf| sf.wake_cpu), Some(2));
+    }
+
+    #[test]
+    fn test_task_cpu_trace_strings_prefers_scheduler_trace_fields() {
+        let sf = crate::sched::state::ThreadSchedFields {
+            tid: 1,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(3),
+            wake_cpu: Some(2),
+            run_cpu: Some(1),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        };
+
+        let (last, wake, run) = task_cpu_trace_strings(Some(9), Some(&sf));
+        assert_eq!(last, "3");
+        assert_eq!(wake, "2");
+        assert_eq!(run, "1");
+    }
+
+    #[test]
+    fn test_task_cpu_trace_strings_falls_back_to_task_last_cpu() {
+        let sf = crate::sched::state::ThreadSchedFields {
+            tid: 2,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: None,
+            wake_cpu: None,
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        };
+
+        let (last, wake, run) = task_cpu_trace_strings(Some(4), Some(&sf));
+        assert_eq!(last, "4");
+        assert_eq!(wake, "-");
+        assert_eq!(run, "-");
     }
 
     #[test]
