@@ -11,13 +11,20 @@ a specific user to review your work, you can assign it to them by using
 -->
 <!-- homu-ignore:end -->
 
-<!-- Typed-first, Unix-second check (required for changes touching kernel/, abi/, bran/, stem/, or userspace/).
-     See docs/migration/review-guidelines.md and docs/architecture/unix-projection.md §4 Step 4 for guidance. -->
+<!-- Typed-first, Unix-second check (required for substantial changes, especially touching kernel/, abi/, bran/, stem/, or userspace/).
+     See docs/migration/review-guidelines.md and:
+     - docs/architecture/ontology.md
+     - docs/architecture/concept-classification.md
+     - docs/architecture/unix-projection.md -->
 
-**Canonical concept**: _What typed-world object (`Thing`, `Place`, `Job`, `Space`, `Authority`, `Group`, `Task`, `Message`, `Presence`) does this change primarily affect?_
+- **What canonical concept owns this meaning?**
+  _Which typed-world object (`Thing`, `Place`, `Job`, `Space`, `Authority`, `Group`, `Task`, `Message`, `Presence`) primarily owns this change?_
 
-**Unix projection**: _What Unix surface is exposed, and why is this surface a projection rather than canonical truth?_
+- **Is this introducing truth or compatibility?**
+  _State whether this change adds canonical typed-world truth or a compatibility surface._
 
-**Typed-world naming check**: _Could this meaning be named in a canonical typed-world way instead? If not, why?_
+- **If compatibility, what is the canonical typed-world concept underneath it?**
+  _Describe the underlying canonical concept and why compatibility form is still needed._
 
-**Unix term justification**: _Is each Unix term used because compatibility requires it, or because it is familiar?_ 
+- **Are new names aligned with ontology and classification docs?**
+  _Confirm naming aligns with `docs/architecture/ontology.md` and `docs/architecture/concept-classification.md`._
