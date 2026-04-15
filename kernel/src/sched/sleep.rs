@@ -129,6 +129,33 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
         // Do NOT push current task to runq - it's now sleeping
         // Just call prepare_schedule to pick next task
         let switch = sched.prepare_schedule();
+
+        // If no context switch is available (e.g. no idle task during early
+        // boot, or the only runnable task is the current one), undo the sleep
+        // enrollment so the task does not stay Blocked while still running on
+        // the CPU.  The caller will wait for the next timer interrupt below
+        // instead of spinning on the SCHEDULER lock.
+        if switch.is_none() {
+            let should_remove = sched
+                .state
+                .sleep_queue
+                .get_mut(&wake_tick)
+                .map(|q| {
+                    q.retain(|&id| id != current_id);
+                    q.is_empty()
+                })
+                .unwrap_or(false);
+            if should_remove {
+                sched.state.sleep_queue.remove(&wake_tick);
+            }
+            if let Some(mut task) = crate::task::registry::get_task_mut::<R>(current_id) {
+                task.state = crate::task::TaskState::Running;
+            }
+            if let Some(sf) = sched.state.get_task_mut(current_id) {
+                sf.state = crate::task::TaskState::Running;
+            }
+        }
+
         super::record_sched_lock_hold::<R>(
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_CALLS,
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_US_TOTAL,
@@ -152,25 +179,31 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             );
         }
         // crate::ktrace!("SCHED: task woke up on CPU");
+        rt.irq_restore(_irq);
+    } else {
+        // No context switch was possible.  Restore interrupts and halt until
+        // the next timer interrupt fires.  This prevents the outer loop in
+        // sleep_until (and other callers) from busy-spinning on the SCHEDULER
+        // lock when no other task is available to run.
+        rt.irq_restore(_irq);
+        rt.wait_for_interrupt();
     }
-
-    rt.irq_restore(_irq);
 }
 
 /// Sleep until an absolute deadline expressed in `rt.mono_ticks()` units.
 ///
-/// Previously this function polled the SCHEDULER lock in a busy loop, which
-/// caused severe lock-convoy contention on SMP during boot and service launch
-/// (issue #131).  It now converts the remaining wall-clock time into 100 Hz
-/// scheduler ticks and delegates to `sleep_ticks`, which queues the task and
-/// blocks it properly.
+/// Delegates to `sleep_ticks`, which enqueues the task in the timer-backed
+/// sleep queue and blocks it with a proper context switch (or halts the CPU
+/// via `wait_for_interrupt` when no other task is runnable).  This avoids
+/// the lock-acquire storm that a busy-spin loop would cause under SMP.
 ///
 /// # Accuracy
 /// Resolution is bounded by the 100 Hz timer tick (≈ 10 ms).  The function
 /// may sleep slightly longer than the requested deadline (up to one extra
 /// tick) because it rounds up the remaining-tick count to prevent
-/// undersleeping.  An inner loop re-checks the deadline on wakeup to handle
-/// early wakeups without re-acquiring the SCHEDULER lock in a spin.
+/// undersleeping.  The outer loop re-checks the deadline on wakeup to handle
+/// early wakeups (e.g. due to `wait_for_interrupt` returning early on a
+/// non-timer interrupt) without re-acquiring the SCHEDULER lock in a tight spin.
 pub fn sleep_until<R: BootRuntime>(deadline_ticks: u64) {
     let rt = crate::runtime::<R>();
     loop {
