@@ -10,6 +10,7 @@
 //! - `events`: Lock-free scheduler event types
 
 pub(crate) mod blocking;
+pub mod bridge;
 pub mod hooks;
 pub use hooks::protect_user_range_current;
 mod sleep;
