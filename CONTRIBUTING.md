@@ -25,5 +25,12 @@ and **Group**.  Before writing or reviewing code that touches `kernel/`, `abi/`,
   including naming rules and migration guidance.
 - [`docs/migration/review-guidelines.md`](docs/migration/review-guidelines.md) —
   PR review checklist derived from the concept mapping.
+- [`docs/architecture/ontology.md`](docs/architecture/ontology.md) —
+  canonical typed-world ontology and review prompts for ownership/truth.
+- [`docs/architecture/concept-classification.md`](docs/architecture/concept-classification.md) —
+  canonical vs transitional classification used during review.
 - [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md) —
   authoritative projection model defining how Unix semantics are implemented as bridge forms over typed-world concepts; includes the per-PR review checklist.
+
+For substantial changes, answer the typed-world questions in
+`.github/pull_request_template.md` before requesting review.
