@@ -881,23 +881,73 @@ impl VfsNode for FbNode {
         // Full-frame writes are staged first, then published in one pass so
         // the boot framebuffer does not expose the wallpaper as it streams in.
         if off == 0 && n as u64 == self.fb.byte_len {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    shadow.bytes.as_ptr(),
-                    self.fb.addr as *mut u8,
-                    n,
-                );
+            let row_bytes = self.fb.pitch as usize;
+            let bytes_per_pixel = ((self.fb.bpp as usize) + 7) / 8;
+            let payload_bytes = (self.fb.width as usize).saturating_mul(bytes_per_pixel).min(row_bytes);
+
+            // Fast blitting: cast pointers to u64/u32 to force wide MMIO transactions.
+            // Generic [u8] copies often fall back to 1-byte writes on uncacheable memory, 
+            // bypassing PCIe Write Combining and causing multi-second screen freezes.
+            if bytes_per_pixel == 4 && row_bytes % 8 == 0 && (self.fb.addr as usize) % 8 == 0 && n % 8 == 0 {
+                let dst_u64 = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u64, n / 8) };
+                let src_u64 = unsafe { core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u64, n / 8) };
+                
+                if row_bytes == payload_bytes {
+                    dst_u64.copy_from_slice(src_u64);
+                } else {
+                    let row_u64 = row_bytes / 8;
+                    let payload_u64 = payload_bytes / 8;
+                    for y in 0..(self.fb.height as usize) {
+                        let start = y * row_u64;
+                        if start + payload_u64 > n / 8 {
+                            break;
+                        }
+                        dst_u64[start..start + payload_u64]
+                            .copy_from_slice(&src_u64[start..start + payload_u64]);
+                    }
+                }
+                return Ok(n);
+            } else if bytes_per_pixel == 4 && row_bytes % 4 == 0 && (self.fb.addr as usize) % 4 == 0 && n % 4 == 0 {
+                let dst_u32 = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u32, n / 4) };
+                let src_u32 = unsafe { core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u32, n / 4) };
+                
+                if row_bytes == payload_bytes {
+                    dst_u32.copy_from_slice(src_u32);
+                } else {
+                    let row_u32 = row_bytes / 4;
+                    let payload_u32 = payload_bytes / 4;
+                    for y in 0..(self.fb.height as usize) {
+                        let start = y * row_u32;
+                        if start + payload_u32 > n / 4 {
+                            break;
+                        }
+                        dst_u32[start..start + payload_u32]
+                            .copy_from_slice(&src_u32[start..start + payload_u32]);
+                    }
+                }
+                return Ok(n);
+            }
+
+            // Fallback for non-32bpp or unaligned framebuffers
+            let dst_slice = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u8, n) };
+
+            if row_bytes == payload_bytes {
+                dst_slice.copy_from_slice(&shadow.bytes[..n]);
+            } else {
+                for y in 0..(self.fb.height as usize) {
+                    let start = y * row_bytes;
+                    if start + payload_bytes > n {
+                        break;
+                    }
+                    dst_slice[start..start + payload_bytes]
+                        .copy_from_slice(&shadow.bytes[start..start + payload_bytes]);
+                }
             }
             return Ok(n);
         }
 
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                shadow.bytes.as_ptr().add(off),
-                (self.fb.addr as usize + off) as *mut u8,
-                n,
-            );
-        }
+        let dst_slice = unsafe { core::slice::from_raw_parts_mut((self.fb.addr as usize + off) as *mut u8, n) };
+        dst_slice.copy_from_slice(&shadow.bytes[off..off + n]);
         Ok(n)
     }
 
