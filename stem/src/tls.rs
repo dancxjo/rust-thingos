@@ -41,13 +41,13 @@ use crate::errors::Errno;
 #[derive(Debug, Clone, Copy)]
 pub struct TlsInfo {
     /// Biased virtual address of the TLS initialization template in the loaded
-    /// image (AT_JANIX_TLS_TEMPLATE_VA).
+    /// image (AT_THINGOS_TLS_TEMPLATE_VA).
     pub template_va: usize,
-    /// Initialized bytes in the TLS template (AT_JANIX_TLS_FILESZ).
+    /// Initialized bytes in the TLS template (AT_THINGOS_TLS_FILESZ).
     pub filesz: usize,
-    /// Total per-thread TLS block size (AT_JANIX_TLS_MEMSZ).
+    /// Total per-thread TLS block size (AT_THINGOS_TLS_MEMSZ).
     pub memsz: usize,
-    /// Required alignment for the TLS data block (AT_JANIX_TLS_ALIGN, ≥ 1).
+    /// Required alignment for the TLS data block (AT_THINGOS_TLS_ALIGN, ≥ 1).
     pub align: usize,
 }
 
@@ -57,7 +57,7 @@ pub struct TlsInfo {
 ///
 /// Returns `None` when the process has no PT_TLS segment (i.e. it was loaded
 /// from an ELF binary without thread-local storage, or the kernel did not emit
-/// the Janix TLS auxiliary entries).
+/// the ThingOS TLS auxiliary entries).
 pub fn read_tls_info() -> Option<TlsInfo> {
     // First call: discover required buffer size.
     let needed = crate::syscall::auxv_get(&mut []).ok()?;
@@ -87,10 +87,10 @@ pub fn read_tls_info() -> Option<TlsInfo> {
         let val = u64::from_le_bytes(buf[off + 8..off + 16].try_into().ok()?);
         match typ {
             auxv::AT_NULL => break,
-            auxv::AT_JANIX_TLS_TEMPLATE_VA => template_va = val as usize,
-            auxv::AT_JANIX_TLS_FILESZ => filesz = val as usize,
-            auxv::AT_JANIX_TLS_MEMSZ => memsz = val as usize,
-            auxv::AT_JANIX_TLS_ALIGN => align = val as usize,
+            auxv::AT_THINGOS_TLS_TEMPLATE_VA => template_va = val as usize,
+            auxv::AT_THINGOS_TLS_FILESZ => filesz = val as usize,
+            auxv::AT_THINGOS_TLS_MEMSZ => memsz = val as usize,
+            auxv::AT_THINGOS_TLS_ALIGN => align = val as usize,
             _ => {}
         }
     }
