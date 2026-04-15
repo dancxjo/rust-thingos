@@ -1,4 +1,4 @@
-# thingos Service Namespace Convention
+# ThingOS Service Namespace Convention
 
 > *"Services do not register themselves with a central authority. They mount
 > themselves into the namespace."* — Plan 9 inspiration

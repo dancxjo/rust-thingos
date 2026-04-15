@@ -320,7 +320,7 @@ const AT_PHENT: u64 = abi::auxv::AT_PHENT;
 const AT_PHNUM: u64 = abi::auxv::AT_PHNUM;
 const AT_ENTRY: u64 = abi::auxv::AT_ENTRY;
 
-// Thing-OS-specific AT_* entries for ELF TLS — shared constants from abi::auxv.
+// ThingOS-specific AT_* entries for ELF TLS — shared constants from abi::auxv.
 const AT_THINGOS_TLS_TEMPLATE_VA: u64 = abi::auxv::AT_THINGOS_TLS_TEMPLATE_VA;
 const AT_THINGOS_TLS_FILESZ: u64 = abi::auxv::AT_THINGOS_TLS_FILESZ;
 const AT_THINGOS_TLS_MEMSZ: u64 = abi::auxv::AT_THINGOS_TLS_MEMSZ;

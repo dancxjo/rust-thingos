@@ -1,4 +1,4 @@
-# Concept Mapping: Legacy Unix → ThingOS/ThingOS
+# Concept Mapping: Legacy Unix → ThingOS
 
 > **Status**: Living reference — Phase 9 baseline.
 > This is the canonical lexicon for the Thing-OS conceptual migration.
@@ -15,7 +15,7 @@
 ## Purpose
 
 This document is the **single source of truth** for conceptual translation between
-the legacy Unix/Linux model and the emerging ThingOS/ThingOS model.
+the legacy Unix/Linux model and the emerging ThingOS model.
 
 It exists to:
 
