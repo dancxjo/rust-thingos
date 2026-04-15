@@ -280,6 +280,22 @@ pub enum Mode {
     Unavailable,
 }
 
+/// Canonical virtual-memory identity domain.
+pub const KIND_ID_THINGOS_SPACE: [u8; 16] = [0x75, 0xe1, 0xf6, 0x50, 0x3f, 0x95, 0xec, 0xf8, 0x5b, 0x91, 0xa7, 0x10, 0x69, 0xbf, 0x3d, 0x4d];
+
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Space {
+    pub id: SpaceId,
+    pub mapping_count: u32,
+    pub sharing_count: u32,
+}
+
+/// Opaque identifier for a Space object.
+pub const KIND_ID_THINGOS_SPACE_ID: [u8; 16] = [0x88, 0xb7, 0x9f, 0x5c, 0x87, 0x06, 0x77, 0xfd, 0xbd, 0xd5, 0x7b, 0x39, 0x99, 0x6d, 0x5b, 0x0c];
+
+pub type SpaceId = u64;
+
 /// Arguments for the task_create syscall
 pub const KIND_ID_THINGOS_SYS_TASK_CREATE_ARGS: [u8; 16] = [0xb8, 0x24, 0xa5, 0x89, 0xee, 0x48, 0x93, 0xc5, 0xb8, 0xe1, 0x81, 0x4e, 0x36, 0x69, 0x69, 0xc2];
 
@@ -315,5 +331,15 @@ pub enum TaskState {
     Running,
     Blocked,
     Exited,
+}
+
+/// Canonical first-class object in the typed world.
+/// Every Thing has exactly one Kind; identity is carried separately as ThingId.
+pub const KIND_ID_THINGOS_THING: [u8; 16] = [0x23, 0xc5, 0x8e, 0x51, 0xfd, 0xc2, 0xe2, 0xbf, 0xf3, 0x9c, 0xc4, 0xc4, 0x3f, 0x39, 0x81, 0x1b];
+
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Thing {
+    pub kind: ThingId,
 }
 

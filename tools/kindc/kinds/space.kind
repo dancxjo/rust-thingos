@@ -1,0 +1,9 @@
+/// Opaque identifier for a Space object.
+kind thingos.space_id = u64
+
+/// Canonical virtual-memory identity domain.
+kind thingos.space = struct {
+  id: thingos.space_id,
+  mapping_count: u32,
+  sharing_count: u32,
+}
