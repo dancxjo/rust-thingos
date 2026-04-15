@@ -1503,7 +1503,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             (&mut right[0], &mut left[new_idx])
         };
 
-        if old_task.state == TaskState::Running {
+        // Drive transition decisions from the scheduler hot-cache instead of
+        // reading lifecycle state back from the large runtime Thread record.
+        if self.state.threads[old_idx].state == TaskState::Running {
             old_task.state = TaskState::Runnable;
             old_task.enqueued_at_tick = TICK_COUNT.load(Ordering::Relaxed);
         }
@@ -1602,8 +1604,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             self.state.threads[idx].priority = priority;
 
             // If it's runnable and in a runq, move it to the new runq
-            if crate::task::registry::get_registry::<R>().threads[idx].state == TaskState::Runnable
-            {
+            if self.state.threads[idx].state == TaskState::Runnable {
                 let loc = self.state.get_task(id).and_then(|t| t.runq_location);
                 if let Some((cpu, _)) = loc {
                     self.state.remove_task_from_runq(id);
@@ -2973,6 +2974,48 @@ mod tests {
             detached: false,
             signals: crate::signal::ThreadSignals::new(),
         }
+    }
+
+    #[test]
+    fn set_priority_uses_hot_cache_runnable_state_for_runq_move() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        // Registry carries stale state (Blocked), while scheduler cache has the
+        // hot-path truth (Runnable + currently enqueued).
+        let task = make_task(42, TaskState::Blocked, TaskPriority::Low);
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 42,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Low,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Low as usize, 42);
+
+        sched.set_priority(42, TaskPriority::High);
+
+        assert_eq!(sched.state.get_task(42).unwrap().priority, TaskPriority::High);
+        assert_eq!(
+            crate::task::registry::get_registry::<MockRuntime>().threads[0].priority,
+            TaskPriority::High
+        );
+        assert!(sched.state.per_cpu[0].runq[TaskPriority::Low as usize].is_empty());
+        assert_eq!(
+            sched.state.per_cpu[0].runq[TaskPriority::High as usize]
+                .front()
+                .copied(),
+            Some(42)
+        );
     }
 
     #[test]
