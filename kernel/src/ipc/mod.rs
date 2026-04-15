@@ -20,6 +20,17 @@
 //! "handle".  Internally the ring-buffer backing a channel is implemented as
 //! a `Port`; that is an implementation detail.  User-facing syscalls and
 //! documentation always say **channel** and **thing**.
+//!
+//! # Ontology note
+//!
+//! In the ThingOS typed-world ontology a channel or pipe is a **Thing** whose
+//! **Kind** determines its message semantics.  An `IpcThing` is the current
+//! compatibility reference Form for a Thing — the planned replacement is a
+//! typed `Handle` that carries Kind information.  **Message** (see
+//! `thingos::message`) is the canonical typed envelope for channel payloads.
+//!
+//! See `docs/architecture/ontology.md` §1.1 (Thing), §1.2 (Kind), and §1.3
+//! (Form) for the full definitions.
 
 pub mod diag;
 mod handles;
