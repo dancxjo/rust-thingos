@@ -79,6 +79,13 @@ pub struct ThreadSchedFields {
     pub timeslice_remaining: u32,
     /// Cached copy of `Thread<R>::enqueued_at_tick`.
     pub enqueued_at_tick: u64,
+    /// Cached copy of `Thread<R>::wake_pending`.
+    ///
+    /// Set by `wake_task_locked` when the target task is not already blocked
+    /// (preemptive wake signal).  Checked and cleared by `block_current` so
+    /// that the hot `wake_pending` check no longer re-enters the REGISTRY lock
+    /// while the SCHEDULER lock is held.
+    pub wake_pending: bool,
 }
 /// Backward-compatible alias — prefer `ThreadSchedFields` in new code.
 pub type TaskSchedFields = ThreadSchedFields;

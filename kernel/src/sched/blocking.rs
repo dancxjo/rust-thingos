@@ -13,11 +13,34 @@ pub(crate) static BLOCK_CURRENT_HOOK: core::sync::atomic::AtomicPtr<()> =
 pub(crate) static WAKE_TASK_HOOK: core::sync::atomic::AtomicPtr<()> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
+/// Deferred writes to the canonical REGISTRY that must be applied **after**
+/// releasing the SCHEDULER lock.
+///
+/// `wake_task_locked` populates this struct instead of calling `get_task_mut`
+/// directly.  The caller (`wake_task`) applies the writes once the SCHEDULER
+/// lock is no longer held, breaking the nested-lock pattern that was the
+/// primary source of lock-convoy under SMP.
+pub(crate) struct DeferredWakeUpdate {
+    pub tid: u64,
+    /// If `Some`, write this state to `Thread::state` in REGISTRY.
+    pub new_state: Option<TaskState>,
+    /// If `Some`, write this tick to `Thread::enqueued_at_tick` in REGISTRY.
+    pub new_enqueued_at_tick: Option<u64>,
+    /// If `true`, set `Thread::wake_pending = true` in REGISTRY.
+    pub set_wake_pending: bool,
+}
+
 pub fn block_current<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    let mut blocked_id = None;
+    // Outcome of the scheduler decision made under the SCHEDULER lock.
+    // Applied to the canonical REGISTRY *after* the lock is released.
+    let mut deferred_tid: Option<u64> = None;
+    // true  → had wake_pending; just clear it in REGISTRY and return.
+    // false → task is blocking; write Blocked state to REGISTRY.
+    let mut was_wake_pending = false;
+
     let switch_params = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
@@ -36,44 +59,73 @@ pub fn block_current<R: BootRuntime>() {
         let current_id = match sched.state.per_cpu.get(cpu).and_then(|pc| pc.current) {
             Some(id) => id,
             None => {
+                super::record_sched_lock_hold::<R>(
+                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
+                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
+                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
+                    lock_start,
+                );
                 rt.irq_restore(_irq);
                 return;
             }
         };
 
-        // Move current from Running to Blocked in the canonical REGISTRY.
-        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(current_id) {
-            if task.wake_pending {
-                task.wake_pending = false;
-                rt.irq_restore(_irq);
-                return;
-            }
-            task.state = TaskState::Blocked;
-            blocked_id = Some(current_id);
-        }
-
-        // Keep the scheduler-side hot-field cache in sync.
+        // Check and update wake_pending from the hot-field cache.
+        // This avoids a nested REGISTRY lock on the check-and-early-return path
+        // (the primary source of SCHEDULER↔REGISTRY lock contention under SMP).
         if let Some(sf) = sched.state.get_task_mut(current_id) {
-            sf.state = TaskState::Blocked;
+            // Record tid for deferred REGISTRY write regardless of which path is taken.
+            deferred_tid = Some(current_id);
+            if sf.wake_pending {
+                sf.wake_pending = false;
+                was_wake_pending = true;
+            } else {
+                sf.state = TaskState::Blocked;
+            }
         }
 
-        // Add to wait queue
-        sched.state.wait_queue.push_back(current_id);
-
-        // Schedule next
-        let switch = sched.prepare_schedule();
-        super::record_sched_lock_hold::<R>(
-            &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
-            &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
-            &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
-            &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
-            lock_start,
-        );
-        switch
+        if was_wake_pending {
+            super::record_sched_lock_hold::<R>(
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
+                lock_start,
+            );
+            // Return None (no context switch); deferred REGISTRY clear handled below.
+            None
+        } else {
+            // Add to wait queue and pick next task to run.
+            sched.state.wait_queue.push_back(current_id);
+            let switch = sched.prepare_schedule();
+            super::record_sched_lock_hold::<R>(
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
+                lock_start,
+            );
+            switch
+        }
     };
+    // SCHEDULER lock is released here.
 
-    if let Some(_id) = blocked_id {
-        // when push_task_state wakes the drain task.
+    // Apply deferred REGISTRY write outside SCHEDULER lock to avoid nesting.
+    if let Some(tid) = deferred_tid {
+        if was_wake_pending {
+            // Wake was pending: task should not block.  Clear the flag in REGISTRY.
+            if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
+                task.wake_pending = false;
+            }
+            rt.irq_restore(_irq);
+            return;
+        } else {
+            // Task is genuinely blocking.  Persist Blocked state to REGISTRY.
+            if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
+                task.state = TaskState::Blocked;
+            }
+        }
     }
 
     if let Some(switch) = switch_params {
@@ -98,12 +150,20 @@ pub fn block_current<R: BootRuntime>() {
 ///
 /// **The caller must drop the `SCHEDULER` lock before sending any IPI** to
 /// avoid holding the lock during IPI delivery.
-pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> Option<usize> {
+///
+/// Also returns a [`DeferredWakeUpdate`] that the caller **must** apply to
+/// the canonical REGISTRY after releasing the SCHEDULER lock.  This breaks
+/// the nested SCHEDULER → REGISTRY lock ordering that was the primary source
+/// of lock-convoy behaviour under SMP.
+pub fn wake_task_locked<R: BootRuntime>(
+    sched: &mut Scheduler<R>,
+    id: u64,
+) -> (Option<usize>, Option<DeferredWakeUpdate>) {
     let mut wake_info: Option<(usize, usize)> = None;
 
     // Read scheduling fields from the scheduler-side hot-field cache. If the
     // task is currently blocked, compute the target CPU/priority from the cache
-    // and update REGISTRY afterwards.
+    // and update REGISTRY afterwards (via DeferredWakeUpdate).
     if let Some(sf) = sched.state.get_thread(id) {
         if sf.state == TaskState::Blocked {
             let task_priority = sf.priority as usize;
@@ -118,26 +178,43 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> Op
         }
     }
 
-    if wake_info.is_some() {
-        // Update the canonical REGISTRY state and profiling counter.
-        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(id) {
-            task.state = TaskState::Runnable;
-            task.enqueued_at_tick =
-                super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
-        }
+    let deferred = if wake_info.is_some() {
+        let tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        // Increment the profiling counter before updating the hot-field cache.
+        // The counter tracks Runnable transitions regardless of whether the
+        // cache update succeeds, so ordering relative to the cache write does
+        // not affect correctness.  The tick snapshot and the cache write use
+        // the same `tick` value to keep both consistent.
         super::PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
-        // Keep the scheduler-side cache in sync.
+        // Keep the scheduler-side cache in sync without touching REGISTRY.
         if let Some(sf) = sched.state.get_thread_mut(id) {
             sf.state = TaskState::Runnable;
+            sf.enqueued_at_tick = tick;
         }
+
+        // Defer the canonical REGISTRY writes to the caller (outside SCHEDULER lock).
+        Some(DeferredWakeUpdate {
+            tid: id,
+            new_state: Some(TaskState::Runnable),
+            new_enqueued_at_tick: Some(tick),
+            set_wake_pending: false,
+        })
     } else {
-        // Task is not blocked. Set wake_pending so the next block_current
-        // returns immediately without actually blocking.
-        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(id) {
-            task.wake_pending = true;
+        // Task is not blocked. Set wake_pending in the hot-field cache so the
+        // next block_current returns immediately without actually blocking.
+        if let Some(sf) = sched.state.get_thread_mut(id) {
+            sf.wake_pending = true;
         }
-    }
+
+        // Defer the canonical REGISTRY wake_pending write to the caller.
+        Some(DeferredWakeUpdate {
+            tid: id,
+            new_state: None,
+            new_enqueued_at_tick: None,
+            set_wake_pending: true,
+        })
+    };
 
     if let Some((target_cpu, task_priority)) = wake_info {
         let mut safe_cpu = target_cpu;
@@ -179,7 +256,7 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> Op
                 // A set flag means a previous IPI is already in flight.
                 let already_pending = super::set_global_need_resched(safe_cpu);
                 if !already_pending {
-                    return Some(safe_cpu);
+                    return (Some(safe_cpu), deferred);
                 } else {
                     super::PROF_IPI_SUPPRESSED
                         .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -188,7 +265,7 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> Op
         }
     }
 
-    None
+    (None, deferred)
 }
 
 pub fn wake_task<R: BootRuntime>(id: u64) {
@@ -197,9 +274,10 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
 
     let wait_start = rt.mono_ticks();
 
-    // Collect any pending IPI target inside the lock, then send it after the
-    // lock is dropped to avoid holding SCHEDULER during IPI delivery.
-    let ipi_cpu = {
+    // Collect any pending IPI target and deferred REGISTRY update inside the
+    // lock, then apply both *after* the lock is dropped to avoid holding
+    // SCHEDULER during IPI delivery and to eliminate the nested REGISTRY lock.
+    let (ipi_cpu, deferred) = {
         let lock_sched = SCHEDULER.lock();
         super::record_sched_lock_wait::<R>(
             &super::PROF_SCHED_WAIT_WAKE_TASK_CALLS,
@@ -210,11 +288,11 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         );
         let lock_start = rt.mono_ticks();
 
-        let ipi = if let Some(ptr) = *lock_sched {
+        let result = if let Some(ptr) = *lock_sched {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             wake_task_locked::<R>(sched, id)
         } else {
-            None
+            (None, None)
         };
 
         super::record_sched_lock_hold::<R>(
@@ -225,8 +303,25 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
             lock_start,
         );
 
-        ipi
+        result
     };
+    // SCHEDULER lock released here.
+
+    // Apply the deferred REGISTRY update outside the SCHEDULER lock to avoid
+    // the nested SCHEDULER → REGISTRY lock ordering that caused contention.
+    if let Some(update) = deferred {
+        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(update.tid) {
+            if let Some(state) = update.new_state {
+                task.state = state;
+            }
+            if let Some(tick) = update.new_enqueued_at_tick {
+                task.enqueued_at_tick = tick;
+            }
+            if update.set_wake_pending {
+                task.wake_pending = true;
+            }
+        }
+    }
 
     if let Some(cpu) = ipi_cpu {
         super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
