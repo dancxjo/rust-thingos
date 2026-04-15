@@ -4,9 +4,9 @@
 
 Audited scheduler-facing data in:
 
-- `/home/runner/work/thingos/thingos/kernel/src/sched/**`
-- `/home/runner/work/thingos/thingos/kernel/src/task/mod.rs` (`Task`/`Thread`, `ProcessInfo`)
-- `/home/runner/work/thingos/thingos/kernel/src/sched/hooks.rs` (`ProcessSnapshot`)
+- `kernel/src/sched/**`
+- `kernel/src/task/mod.rs` (`Task`/`Thread`, `ProcessInfo`)
+- `kernel/src/sched/hooks.rs` (`ProcessSnapshot`)
 
 Classification labels used in tables:
 
@@ -50,7 +50,7 @@ Classification labels used in tables:
 
 ## 2) Scheduler hot/cache inventory (`ThreadSchedFields` / `TaskSchedFields`)
 
-Source: `/home/runner/work/thingos/thingos/kernel/src/sched/state.rs`
+Source: `kernel/src/sched/state.rs`
 
 | Field | Class | Notes / target owner |
 |---|---|---|
@@ -70,7 +70,7 @@ Source: `/home/runner/work/thingos/thingos/kernel/src/sched/state.rs`
 
 ## 3) `ProcessInfo` inventory (`Process`, alias `ProcessInfo`)
 
-Source: `/home/runner/work/thingos/thingos/kernel/src/task/mod.rs`
+Source: `kernel/src/task/mod.rs`
 
 ### Top-level `Process`
 
@@ -116,7 +116,7 @@ Source: `/home/runner/work/thingos/thingos/kernel/src/task/mod.rs`
 
 ## 4) Scheduler-facing snapshot inventory (`ProcessSnapshot`)
 
-Source: `/home/runner/work/thingos/thingos/kernel/src/sched/hooks.rs`
+Source: `kernel/src/sched/hooks.rs`
 
 | Field | Class | Notes / target owner |
 |---|---|---|
