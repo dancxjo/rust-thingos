@@ -1292,10 +1292,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 );
                 panic!("failed to find current_id {} in get_task_index", current_id)
             });
-            {
-                let mut reg = crate::task::registry::get_registry::<R>();
-                reg.threads[idx].state = TaskState::Running;
-            }
+            let mut reg = crate::task::registry::get_registry::<R>();
+            reg.threads[idx].state = TaskState::Running;
             // Keep the scheduler-side cache in sync.  Only `state` is updated
             // here because `enqueued_at_tick` and `timeslice_remaining` are
             // unchanged in the same-task (no-switch) case: the current task
@@ -1341,7 +1339,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // state transitions that just happened above.
         if self.state.threads[old_idx].state == TaskState::Running {
             self.state.threads[old_idx].state = TaskState::Runnable;
-            // Sync enqueued_at_tick from the REGISTRY value we just wrote so
+            // Copy enqueued_at_tick from old_task, which was just set to
+            // TICK_COUNT in the REGISTRY update at line 1335 above, so that
             // future aging calculations in prepare_schedule use the correct tick.
             self.state.threads[old_idx].enqueued_at_tick = old_task.enqueued_at_tick;
         }
@@ -2813,7 +2812,9 @@ mod tests {
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 600, // matches the registry entry — required for aging test
+                // Must match `task_normal.enqueued_at_tick` above (600) so the
+                // hot-field cache reflects the correct wait time for aging.
+                enqueued_at_tick: 600,
             });
         sched
             .state
@@ -2825,7 +2826,9 @@ mod tests {
                 affinity: Affinity::Any,
                 last_cpu: Some(0),
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0, // matches the registry entry — required for aging test
+                // Must match `task_low.enqueued_at_tick` above (0) so the
+                // hot-field cache reflects the correct wait time for aging.
+                enqueued_at_tick: 0,
             });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 1001);
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 1002);
