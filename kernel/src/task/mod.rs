@@ -10,6 +10,8 @@
 //!
 //! See `docs/architecture/ontology.md` for the full typed-world definitions
 //! and `docs/architecture/unix-projection.md` for the projection rules.
+//! See `docs/architecture/process-projection.md` for the enforced rule that
+//! `Process` is projection/backing only, not architectural truth.
 pub mod bridge;
 pub mod exec;
 pub mod loader;
@@ -526,6 +528,8 @@ impl ProcessUnixCompat {
 /// See `docs/concepts/process-object.md` for the full design document.
 /// See `docs/migration/concept-mapping.md` §2 (Process → Job + Space + Authority + Place + Task(s))
 /// for the canonical legacy→ThingOS mapping and naming rules.
+/// See `docs/architecture/process-projection.md` for review-blocking rules that
+/// prevent re-centering architecture on `Process`.
 pub struct Process {
     /// Thread Group ID — the PID of the thread-group leader.
     ///
