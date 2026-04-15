@@ -277,6 +277,11 @@ separate `wait_many` call.
 
 ### Deprecated Kinds
 
+`WaitKind::Port` (= 1) is **deprecated**.  Its kernel handler remains functional
+for backward compatibility so existing binaries continue to work, but new code
+must bridge the channel to a VFS file descriptor via `SYS_FD_FROM_HANDLE` and
+use `WaitKind::Fd` instead.
+
 `WaitKind::GraphOp` (= 6) and `WaitKind::RootWatch` (= 2) are **deprecated**
 and return `ENOSYS`.  New code must not use them.  Existing binaries that pass
 these kind values will receive a clean `ENOSYS` error.
