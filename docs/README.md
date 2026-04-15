@@ -36,6 +36,7 @@ Low-level contracts between kernel and userspace.
 - [`bootstrapping.md`](build/bootstrapping.md) — Rust cross-compiler bootstrap (`just fetch-rust`, `cargo xtask rustc-thingos`)
 - [`kind-schema-workflow.md`](build/kind-schema-workflow.md) — `kindc` schema compiler workflow and drift detection
 - [`status/rustc_build.md`](build/status/rustc_build.md) — current rustc bootstrap build status
+- [`status/semantic_self_hosting.md`](build/status/semantic_self_hosting.md) — milestone audit for semantic self-hosting (current gaps and in-place capabilities)
 
 ### `components/` — Per-Component Guides
 
