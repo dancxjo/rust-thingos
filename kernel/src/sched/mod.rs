@@ -104,6 +104,10 @@ pub static PROF_RUNQ_LEN_MAX: [AtomicU64; types::MAX_CPUS] = {
 pub const SCHED_HIST_BUCKETS: usize = 5;
 
 /// Map a microsecond duration to a histogram bucket index.
+///
+/// Bucket 0 covers 0µs, which typically means the measurement rounded down to
+/// zero due to clock granularity (i.e. sub-microsecond hold/wait times).
+/// Bucket indices: 0 = <1µs, 1 = 1–9µs, 2 = 10–99µs, 3 = 100–999µs, 4 = ≥1ms.
 #[inline]
 pub fn hist_bucket(us: u64) -> usize {
     match us {
@@ -383,14 +387,19 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
 }
 
 /// Sample the run-queue depth for `cpu` and update the last/max statics.
+/// This is a no-op when the `sched_telemetry` feature is disabled so that
+/// the per-schedule-point iteration incurs zero overhead in normal builds.
 #[inline]
 pub(crate) fn sample_runq_len(sched: &types::Scheduler<impl BootRuntime>, cpu: usize) {
+    #[cfg(feature = "sched_telemetry")]
     if let Some(pc) = sched.state.per_cpu.get(cpu) {
         let len: usize = pc.runq.iter().map(|q| q.len()).sum();
         let len64 = len as u64;
         PROF_RUNQ_LEN_LAST[cpu].store(len64, Ordering::Relaxed);
         update_max_u64(&PROF_RUNQ_LEN_MAX[cpu], len64);
     }
+    #[cfg(not(feature = "sched_telemetry"))]
+    let _ = (sched, cpu);
 }
 
 pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
