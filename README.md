@@ -1,134 +1,87 @@
 # ThingOS
 
-ThingOS treats **types as the system itself**.
+ThingOS is a typed-world operating system project.
 
-Every meaningful element - objects, messages, files, interfaces, events - is defined by a single canonical schema called a **Kind**. That definition is used everywhere: to generate code, to validate data at runtime, to describe APIs, and to ensure that what the system *means* is consistent across all layers.
+Its architecture is organized in two layers:
 
-There is no split between "types in code," "formats on the wire," and "data on disk."
-There is only the **Kind**, expressed in different **Forms**.
+1. **Typed-world ontology (truth layer)** — canonical system meaning
+2. **Unix compatibility (projection layer)** — adaptation for existing software and conventions
 
----
-
-# The Model
-
-Everything in ThingOS is a **Thing**, and every Thing has a **Kind**.
-
-Kinds define:
-
-* structure
-* meaning
-* valid operations
-* compatibility over time
-
-From this, the rest of the system emerges.
+Unix is a projection surface in ThingOS, **not** the ontology.
 
 ---
 
-# People, Places, Things
+## 1) Typed-world ontology
 
-The system is organized around three primary concepts:
+In ThingOS, first-class system meaning is defined in typed concepts.
 
-* **Thing** - any object in the system
-* **Place** - a context in which Things exist and interact
-* **Person** - an actor that can act upon Things
+Core concepts include:
 
-A Person operates concretely:
+- **Thing**
+- **Kind**
+- **Form**
+- **Place**
+- **Person**
+- **Authority**
+- **Presence**
+- **Task**
+- **Job**
+- **Group**
+- **Space**
+- **Message**
 
-> A **Person** acts through an **Authority**, inhabits a **Place** via a **Presence**, and manipulates **Things**.
+These concepts are canonical: design and review decisions are anchored to them first.
 
-These are not metaphors. They are first-class, typed objects.
-
-The canonical definitions, ownership rules, and worked examples for all seven
-core concepts are in
-[`docs/architecture/ontology.md`](docs/architecture/ontology.md).
-
----
-
-# Execution
-
-Computation is expressed through simple, orthogonal Things:
-
-* **Task** - something that runs
-* **Job** - something that lives and dies
-* **Group** - something that coordinates
-
-Each has a single responsibility. No hidden coupling. No overloaded abstractions.
+Reference: [`docs/architecture/ontology.md`](docs/architecture/ontology.md)
 
 ---
 
-# Kinds
+## 2) Canonical concepts in practice
 
-A **Kind** is the authoritative definition of structure and meaning.
+At a high level:
 
-Kinds are:
+- A **Thing** is a first-class object.
+- A **Kind** defines structure and meaning.
+- A **Form** is how a Kind is represented.
+- A **Person** acts through **Authority**, inhabits a **Place** via **Presence**, and manipulates **Things**.
+- Execution decomposes into **Task** (runs), **Job** (lifecycle), and **Group** (coordination).
 
-* written once
-* compiled into Rust types and interfaces
-* enforced by the kernel
-* available at runtime for introspection
-
-They define:
-
-* object layouts
-* message schemas
-* syscall arguments and results
-* event payloads
-* service contracts
-
-Everything that crosses a boundary declares its Kind.
+The goal is typed-first ownership of meaning, not ad-hoc Unix-shaped state.
 
 ---
 
-# Forms
+## 3) Unix projection model
 
-A **Form** is a representation of a Kind.
+ThingOS still exposes Unix-visible surfaces (pathnames, file descriptors, processes, signals, sessions, etc.) for compatibility.
 
-Kinds answer *what something is*.
-Forms answer *how it is expressed*.
+Those surfaces are treated as **projections** derived from canonical typed-world concepts. They are implementation bridges, not architectural truth.
 
-A Kind may have multiple Forms:
-
-* a canonical binary form for IPC and storage
-* a debug text form for inspection
-* bridge forms (such as JSON) for interoperability
-
-Meaning stays fixed. Representation can vary.
+Reference: [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md)
 
 ---
 
-# Toolchain
+## 4) Current implementation status (honest snapshot)
 
-ThingOS uses a forked Rust toolchain with a custom target. The standard library is rebuilt for the system, and core types are generated from Kind definitions.
+Current kernel/userspace code still contains substantial Unix-shaped compatibility structures and naming (for example, process/fd/path/session surfaces).
 
-Rust provides the implementation surface.
-Kinds provide the definition of truth.
+That does **not** mean Unix is the model; it means the project is in an active transition where compatibility bridges exist while canonical typed ownership is being tightened.
 
----
+The architecture docs are the source of truth for intended direction and review standards:
 
-# Direction
-
-The system moves toward:
-
-* eliminating duplicated type systems across layers
-* generating interfaces instead of hand-writing them
-* enforcing structure at system boundaries
-* making the running system introspectable in its own terms
-
-The end state is a system where the definitions used to build it are the same definitions it uses to understand itself.
-
-For the explicit model of how Unix-visible concepts are projected from typed-world concepts, see [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md).
+- [`docs/architecture/ontology.md`](docs/architecture/ontology.md)
+- [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md)
+- [`docs/architecture/concept-classification.md`](docs/architecture/concept-classification.md)
+- [`docs/concepts/thingos-guardrails.md`](docs/concepts/thingos-guardrails.md)
 
 ---
 
-# Summary
+## 5) Near-term direction
 
-ThingOS is a **typed world** where:
+Near-term work continues to:
 
-* every Thing has a Kind
-* every boundary is validated
-* every interface is derived
-* and meaning is consistent from compiler to kernel to runtime
+- keep new capability design typed-first
+- confine Unix semantics to explicit projection/compatibility layers
+- reduce compatibility-bridge surface area as canonical concepts mature
+- make subsystem ownership clearer against canonical concepts
 
-The system is not just implemented in a language.
-
-It *is* a language.
+In short: **typed-world ontology remains canonical; Unix remains projection.**
