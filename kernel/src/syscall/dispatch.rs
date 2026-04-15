@@ -170,6 +170,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         // ── Typed message delivery ────────────────────────────────────────
         SYS_MSG_SEND => handlers::sys_msg_send(args[0], args[1], args[2], args[3]),
         SYS_MSG_BROADCAST => handlers::sys_msg_broadcast(args[0], args[1], args[2], args[3]),
+        SYS_MSG_RECV => handlers::sys_msg_recv(args[0], args[1], args[2]),
 
         _ => Err(abi::errors::Errno::ENOSYS),
     };
