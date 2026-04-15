@@ -40,6 +40,10 @@ functions, syscall handlers, procfs paths, IPC code, or documentation.
 
 ### 1. Naming audit
 
+- [ ] If the PR introduces new kernel meaning, is that meaning expressed first in
+      canonical typed-world vocabulary (not Unix vocabulary)?
+- [ ] Are Unix terms introduced only in bridge/adaptor/compatibility layers or
+      explicit legacy references (`// LEGACY COMPAT`)?
 - [ ] Does any new **public** type or function name contain `Thread` where `Task`
       is correct? (Allowed only inside `kernel/src/task/` internals and
       compatibility layers.)
