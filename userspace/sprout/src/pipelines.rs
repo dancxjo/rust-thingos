@@ -299,8 +299,19 @@ pub fn setup_display_pipeline(
     let mut driver_name: Option<&'static str> = None;
     let mut backend_name: &'static str = "unknown";
 
-    // ThingOS-style BootFB probe: if /dev/fb0 exists, trust that as the canonical display.
-    if let Some((w, h, stride, format)) = probe_bootfb_vfs() {
+    // virtio-gpu: class 0x030000, vendor 0x1af4
+    if has_sys_device("0x0300") {
+        display_stride = display_width * 4;
+        display_format = 1;
+        driver_name = Some("/bin/display_virtio_gpu");
+        backend_name = "VirtIO-GPU";
+        debug!(
+            "SPROUT: Using VirtIO GPU at {}x{}",
+            display_width, display_height
+        );
+    }
+    // Fall back to the boot framebuffer only when no real display backend was found.
+    else if let Some((w, h, stride, format)) = probe_bootfb_vfs() {
         display_width = w;
         display_height = h;
         display_stride = stride;
@@ -310,17 +321,6 @@ pub fn setup_display_pipeline(
         debug!(
             "SPROUT: Using /dev/fb0 boot framebuffer ({}x{} stride={})",
             display_width, display_height, display_stride
-        );
-    }
-    // virtio-gpu: class 0x030000, vendor 0x1af4
-    if driver_name.is_none() && has_sys_device("0x0300") {
-        display_stride = display_width * 4;
-        display_format = 1;
-        driver_name = Some("/bin/display_virtio_gpu");
-        backend_name = "VirtIO-GPU";
-        debug!(
-            "SPROUT: Using VirtIO GPU at {}x{}",
-            display_width, display_height
         );
     }
 
