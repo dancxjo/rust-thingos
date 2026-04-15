@@ -31,7 +31,6 @@ use crate::pipelines::{
 use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
-const SUPERVISOR_MONITOR_EVERY_CYCLES: usize = 5;
 
 pub struct Supervisor {
     pub tasks: Arc<Mutex<Vec<ManagedTask>>>,
@@ -101,17 +100,13 @@ impl Supervisor {
         // Stage 4: Busy Stage - Wait for Display Driver to register its VFS provider
         // self.wait_for_display();
 
-        let mut monitor_cycle: usize = 0;
         loop {
             stem::trace!(
                 "SPROUT: --- Supervisor Loop Cycle Start (tasks={}) ---",
                 self.tasks.lock().len()
             );
             self.process_registrations();
-            if monitor_cycle == 0 {
-                self.monitor();
-            }
-            monitor_cycle = (monitor_cycle + 1) % SUPERVISOR_MONITOR_EVERY_CYCLES;
+            self.monitor();
             stem::trace!("SPROUT: --- Supervisor Loop Cycle End ---");
             stem::sleep_ms(100);
         }
@@ -192,46 +187,44 @@ impl Supervisor {
     }
 
     pub fn monitor(&mut self) {
-        // Collect PIDs to check without holding the lock for the whole operation
-        let pids: Vec<(u64, alloc::string::String)> = {
-            let tasks = self.tasks.lock();
-            tasks.iter().filter_map(|t| t.pid.map(|p| (p as u64, t.name.clone()))).collect()
-        };
-
-        if pids.is_empty() {
-            return;
-        }
-
-        for (pid, name) in pids {
-            match stem::syscall::task_poll(pid) {
-                Ok((status, code)) => {
-                    stem::debug!(
-                        "SPROUT: Polling task '{}' (PID {}): status={:?}, code={}",
-                        name,
-                        pid,
-                        status,
-                        code
-                    );
-                    if status == stem::abi::types::TaskStatus::Dead {
-                        info!("SPROUT: Task '{}' (PID {}) is Dead (code {})", name, pid, code);
-
-                        // Re-lock to update task state
-                        let mut tasks = self.tasks.lock();
-                        if let Some(task) = tasks.iter_mut().find(|t| t.pid == Some(pid)) {
-                            info!(
-                                "SPROUT: Task '{}' (PID {}) died with code {}. Restarting...",
-                                task.name, pid, code
-                            );
-                            task.pid = None;
-                            task.restarts += 1;
-                        }
+        // Drain all pending child exits using a single non-blocking
+        // waitpid(-1, WNOHANG) loop.  This replaces the old per-task
+        // task_poll scan and eliminates the O(N) scheduler-lock pressure it
+        // introduced: instead of one kernel call per supervised task, we make
+        // at most one call per exited child plus one final call that returns 0
+        // (no more exited children).
+        loop {
+            match stem::syscall::waitpid(-1, abi::types::waitpid_flags::WNOHANG) {
+                Ok((0, _)) => break, // No more exited children right now.
+                Ok((child_pid, wait_status)) => {
+                    // Decode exit code: normal exits carry the code in bits [15:8];
+                    // signal-terminated exits carry the raw wait_status (negative by
+                    // convention so callers can distinguish them from clean exits).
+                    let exit_code: i32 = if abi::signal::wifexited(wait_status) {
+                        abi::signal::wexitstatus(wait_status) as i32
+                    } else {
+                        wait_status
+                    };
+                    let child_pid = child_pid as u64;
+                    let mut tasks = self.tasks.lock();
+                    if let Some(task) = tasks.iter_mut().find(|t| t.pid == Some(child_pid)) {
+                        info!(
+                            "SPROUT: Task '{}' (PID {}) died with code {}. Restarting...",
+                            task.name, child_pid, exit_code
+                        );
+                        task.pid = None;
+                        task.restarts += 1;
+                    } else {
+                        info!(
+                            "SPROUT: Unknown child PID {} exited (code {})",
+                            child_pid, exit_code
+                        );
                     }
                 }
-                Err(_) => {
-                    let mut tasks = self.tasks.lock();
-                    if let Some(task) = tasks.iter_mut().find(|t| t.pid == Some(pid)) {
-                        task.pid = None;
-                    }
+                Err(abi::errors::Errno::ECHILD) => break, // No children remain; expected.
+                Err(e) => {
+                    warn!("SPROUT: waitpid(-1, WNOHANG) returned unexpected error: {:?}", e);
+                    break;
                 }
             }
         }
