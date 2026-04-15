@@ -23,6 +23,7 @@
 
 pub mod diag;
 mod handles;
+pub mod msgqueue;
 pub mod pipe;
 pub mod unix_socket;
 mod port;
