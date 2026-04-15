@@ -26,6 +26,7 @@ Low-level contracts between kernel and userspace.
 
 ### `architecture/` — VM and Address Space
 
+- [`job.md`](architecture/job.md) — Job as canonical lifecycle object for creation/exit/wait/reap
 - [`process-projection.md`](architecture/process-projection.md) — Process as compatibility projection (not root ontology)
 - [`space-object.md`](architecture/space-object.md) — Space as a first-class address-space object
 - [`space-audit.md`](architecture/space-audit.md) — inventory of VM coupling in kernel code
