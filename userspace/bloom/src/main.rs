@@ -162,15 +162,79 @@ fn compose_wallpaper_into(
     let offset_x = (dst_w.saturating_sub(scaled_w)) / 2;
     let offset_y = (dst_h.saturating_sub(scaled_h)) / 2;
 
+    // Fast path: exact-size blit can be copied as whole rows.
+    if scaled_w == src_w && scaled_h == src_h {
+        for y in 0..src_h {
+            let dst_row = (offset_y + y) * dst_stride_pixels + offset_x;
+            let src_row = y * src_stride_pixels;
+            let dst_span = &mut frame[dst_row..dst_row + src_w];
+            let src_span = &src[src_row..src_row + src_w];
+            copy_row_u32_fast(dst_span, src_span);
+        }
+        return;
+    }
+
+    // Precompute source coordinate mappings once; this removes costly divides
+    // from the nearest-neighbor scaling loops.
+    let mut sx_lut = alloc::vec![0usize; scaled_w];
+    for (dx, sx) in sx_lut.iter_mut().enumerate() {
+        *sx = ((dx as u64 * src_w as u64) / scaled_w as u64) as usize;
+    }
+    let mut sy_lut = alloc::vec![0usize; scaled_h];
+    for (dy, sy) in sy_lut.iter_mut().enumerate() {
+        *sy = ((dy as u64 * src_h as u64) / scaled_h as u64) as usize;
+    }
+
     for dy in 0..scaled_h {
-        let sy = ((dy as u64 * src_h as u64) / scaled_h as u64) as usize;
+        let sy = sy_lut[dy];
         let dst_row = (offset_y + dy) * dst_stride_pixels;
         let src_row = sy * src_stride_pixels;
         for dx in 0..scaled_w {
-            let sx = ((dx as u64 * src_w as u64) / scaled_w as u64) as usize;
-            frame[dst_row + offset_x + dx] = src[src_row + sx];
+            frame[dst_row + offset_x + dx] = src[src_row + sx_lut[dx]];
         }
     }
+}
+
+#[inline(always)]
+fn copy_row_u32_fast(dst: &mut [u32], src: &[u32]) {
+    debug_assert_eq!(dst.len(), src.len());
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    unsafe {
+        use core::arch::x86_64::{__m128i, _mm_loadu_si128, _mm_storeu_si128};
+
+        let len = dst.len();
+        let mut i = 0usize;
+        while i + 4 <= len {
+            let s = _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i);
+            _mm_storeu_si128(dst.as_mut_ptr().add(i) as *mut __m128i, s);
+            i += 4;
+        }
+        if i < len {
+            dst[i..].copy_from_slice(&src[i..]);
+        }
+        return;
+    }
+
+    #[cfg(all(target_arch = "x86", target_feature = "sse2"))]
+    unsafe {
+        use core::arch::x86::{__m128i, _mm_loadu_si128, _mm_storeu_si128};
+
+        let len = dst.len();
+        let mut i = 0usize;
+        while i + 4 <= len {
+            let s = _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i);
+            _mm_storeu_si128(dst.as_mut_ptr().add(i) as *mut __m128i, s);
+            i += 4;
+        }
+        if i < len {
+            dst[i..].copy_from_slice(&src[i..]);
+        }
+        return;
+    }
+
+    #[allow(unreachable_code)]
+    dst.copy_from_slice(src);
 }
 
 fn get_wallpaper_path() -> String {
