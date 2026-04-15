@@ -4,6 +4,10 @@
 **Phase:** Deferred (schema-first definition)  
 **Related:** [`thingos.presence`](../../thingos/src/presence.rs), [`thingos.place`](../place.rs), [`thingos.group`](../group.rs)
 
+> For the full architectural design of Presence including Unix session, tty,
+> and embodiment mappings, see
+> [`docs/architecture/presence.md`](../architecture/presence.md).
+
 ---
 
 ## What Presence Is
