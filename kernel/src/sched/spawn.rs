@@ -479,6 +479,11 @@ impl<R: BootRuntime> Scheduler<R> {
         // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
         // handled post-lock by nudge_spawned_task.
 
+        let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
+        // Link affinity and initial location
+        if let Affinity::Pinned(cpu) = affinity {}
+        // Initial location matches target runq
+
         Some(id)
     }
 }

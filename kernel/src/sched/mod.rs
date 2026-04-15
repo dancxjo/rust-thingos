@@ -920,7 +920,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     let target_cpu: usize;
 
                     // Read scheduling fields from the hot-field cache to avoid a
-                    // nested REGISTRY lock.  Then write the new state to REGISTRY.
+                    // nested REGISTRY lock. Then write the new state to REGISTRY.
                     if let Some(sf) = self.state.get_thread(tid) {
                         priority = sf.priority as usize;
                         target_cpu = match sf.affinity {
@@ -978,8 +978,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                                 tid,
                                 priority
                             );
-                            // Defer IPI delivery until after the SCHEDULER lock is
-                            // dropped (issue #130).  De-dup: only queue once per CPU.
+                            // De-dup: only queue once per CPU during this pass.
                             if !pending_ipis.contains(&actual_cpu) {
                                 pending_ipis.push(actual_cpu);
                             }
