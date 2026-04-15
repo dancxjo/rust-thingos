@@ -22,7 +22,8 @@
 //! compatibility handle (fd / `IpcThing`) that references that Form.
 //! Operations on the handle are mediated by the caller's **Authority**.
 //!
-//! See `docs/architecture/ontology.md` §3.1 for the full mapping.
+//! See `docs/architecture/ontology.md` §3.1 and
+//! `docs/architecture/vfs-as-place-projection.md` for the full mapping.
 
 pub mod bootfs;
 pub mod devfs;
