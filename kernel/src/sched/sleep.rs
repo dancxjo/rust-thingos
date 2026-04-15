@@ -136,13 +136,15 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
         // the CPU.  The caller will wait for the next timer interrupt below
         // instead of spinning on the SCHEDULER lock.
         if switch.is_none() {
-            let should_remove =
-                if let Some(q) = sched.state.sleep_queue.get_mut(&wake_tick) {
+            let should_remove = sched
+                .state
+                .sleep_queue
+                .get_mut(&wake_tick)
+                .map(|q| {
                     q.retain(|&id| id != current_id);
                     q.is_empty()
-                } else {
-                    false
-                };
+                })
+                .unwrap_or(false);
             if should_remove {
                 sched.state.sleep_queue.remove(&wake_tick);
             }
