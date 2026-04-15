@@ -17,6 +17,12 @@ pub fn build(sh: &Shell, arch: &str, profile: &str) -> Result<()> {
     if cfg!(feature = "diagnostic-apps") {
         cmd = cmd.arg("--features").arg("diagnostic-apps");
     }
+    // Enable scheduler contention telemetry (histograms, per-source IPI counters,
+    // wait-time tracking) when SCHED_TELEMETRY=1 is set in the environment.
+    if std::env::var("SCHED_TELEMETRY").map_or(false, |v| v == "1" || v == "true" || v == "yes") {
+        println!("sched-telemetry: enabled (histogram buckets active)");
+        cmd = cmd.arg("--features").arg("sched-telemetry");
+    }
     cmd.env(
         "RUSTFLAGS",
         "-Awarnings -C relocation-model=static -C panic=abort",
