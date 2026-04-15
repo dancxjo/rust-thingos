@@ -311,6 +311,6 @@ a common readiness model.  They are not collapsed into one — see
 - `docs/ipc/inbox_vs_port_semantics.md` — semantic analysis of Inbox vs Port
 - `docs/ipc/convergence_strategy.md` — layered convergence architecture and roadmap
 - `docs/concepts/ipc_cookbook.md` — practical recipes for driver and service authors
-- `docs/mouse-migration.md` — mouse input path migration example
-- `docs/keyboard-migration.md` — keyboard input path migration example
+- `docs/archive/mouse-migration.md` — mouse input path migration example
+- `docs/archive/keyboard-migration.md` — keyboard input path migration example
 - `kernel/src/vfs/inbox_node.rs` — InboxNode implementation

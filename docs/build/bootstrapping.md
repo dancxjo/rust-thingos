@@ -140,7 +140,7 @@ As revalidated on April 12, 2026:
 - the remaining work is about packaging/layout and the eventual switch to a
   ThingOS-hosted compiler
 
-See [docs/status/rustc_build.md](./status/rustc_build.md) for the current
+See [docs/build/status/rustc_build.md](./status/rustc_build.md) for the current
 status summary.
 
 ## Checkout Mode

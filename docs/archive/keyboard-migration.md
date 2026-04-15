@@ -5,7 +5,7 @@
 This document describes the migration of the PS/2 keyboard input path from
 legacy port/channel mechanics to the canonical VFS-first message-passing
 system.  It follows the same pattern established by the mouse migration
-(`docs/mouse-migration.md`).
+(`docs/archive/mouse-migration.md`).
 
 ---
 

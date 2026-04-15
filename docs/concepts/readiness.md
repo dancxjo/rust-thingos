@@ -249,7 +249,7 @@ Hangup behaviour is uniform across all object classes:
 
 `SYS_FS_POLL` is the preferred single-call interface for multiplexing many FDs.
 For use cases that mix FDs with non-FD readiness sources (ports, task exit, IRQs),
-the higher-level `SYS_WAIT_MANY` syscall (see `docs/wait_many.md`) accepts typed
+the higher-level `SYS_WAIT_MANY` syscall (see `docs/kernel/wait_many.md`) accepts typed
 `WaitSpec` entries.
 
 The `WaitKind::Fd` variant routes through the same `VfsNode::poll` / waiter API:
@@ -297,4 +297,4 @@ any other kernel waitable that needs to participate in `SYS_FS_POLL`.
 - `docs/concepts/channel_semantics.md` — channel capacity, atomicity, and poll bridging
 - `docs/ipc/inbox_vs_port_semantics.md` — Inbox vs Port semantics and readiness convergence
 - `docs/ipc/convergence_strategy.md` — layered convergence roadmap and migration status
-- `docs/wait_many.md` — heterogeneous wait (`SYS_WAIT_MANY`) design
+- `docs/kernel/wait_many.md` — heterogeneous wait (`SYS_WAIT_MANY`) design

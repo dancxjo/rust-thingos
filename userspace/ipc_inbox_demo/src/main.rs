@@ -40,7 +40,7 @@
 //!
 //! - `stem::syscall::message` — raw syscall wrappers
 //! - `ipc_helpers::inbox` — `InboxReceiver` and convenience send functions
-//! - `docs/messaging/event-vs-message.md` — design rationale
+//! - `docs/ipc/event-vs-message.md` — design rationale
 //! - `docs/ipc/convergence_strategy.md` — migration roadmap
 #![no_std]
 #![no_main]

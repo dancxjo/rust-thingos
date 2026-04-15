@@ -3,7 +3,7 @@
 **Status:** Architectural Reference  
 **Scope:** Event vs Message delivery dimensions in the current Thing-OS tree  
 **Issue:** #44  
-**See also:** `docs/messaging/event-vs-message.md`
+**See also:** `docs/ipc/event-vs-message.md`
 
 ---
 
@@ -187,10 +187,10 @@ Legend:
 
 ## 10. See Also
 
-- `docs/messaging/event-vs-message.md` — canonical definitions, interoperability rules, and implementation recommendations
+- `docs/ipc/event-vs-message.md` — canonical definitions, interoperability rules, and implementation recommendations
 - `docs/ipc/inbox_vs_port_semantics.md` — Inbox vs Port classification
-- `docs/messaging/group-broadcast.md` — Group broadcast as Message delivery strategy
+- `docs/ipc/group-broadcast.md` — Group broadcast as Message delivery strategy
 - `docs/concepts/ipc.md` — canonical IPC primitive overview and decision matrix
 - `docs/concepts/readiness.md` — poll flag semantics per object class
-- `docs/wait_many.md` — `SYS_WAIT_MANY` readiness kinds
-- `docs/signals.md` — signal subsystem (Edge Event implementation)
+- `docs/kernel/wait_many.md` — `SYS_WAIT_MANY` readiness kinds
+- `docs/kernel/signals.md` — signal subsystem (Edge Event implementation)

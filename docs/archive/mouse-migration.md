@@ -84,7 +84,7 @@ port/channel mechanics to the canonical VFS-first message-passing system.
 The following items were intentionally **not** changed in this task:
 
 - **Bristle keyboard path**: keyboard migration to FD-based reads was completed
-  separately (see `docs/keyboard-migration.md`).
+  separately (see `docs/archive/keyboard-migration.md`).
 - **Bristle output path**: events are still forwarded to `bloom_evt_write` and
   `evt_input_echo_write` via `channel_send_all`. This is shared with the
   keyboard path and should be migrated as a separate task.
@@ -120,7 +120,7 @@ is the decoded form that consumers should pattern-match on.
 
 ## Follow-Up Tasks
 
-- ~~Migrate **keyboard** input path using the same FD bridge pattern.~~ Done — see `docs/keyboard-migration.md`.
+- ~~Migrate **keyboard** input path using the same FD bridge pattern.~~ Done — see `docs/archive/keyboard-migration.md`.
 - Migrate **bristle output** path (bloom_evt_write, evt_input_echo_write) to
   FD-based writes once downstream consumers are updated.
 - Consider migrating **sprout channel setup** to `channel_create_fds` +

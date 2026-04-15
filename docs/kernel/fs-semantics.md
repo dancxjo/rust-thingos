@@ -4,7 +4,7 @@ This document describes the current state of POSIX-like filesystem semantics in
 Thing-OS, enumerates known gaps, and records the acceptance criteria required to
 call each area "done".
 
-> **Related**: `docs/posix-checklist.toml` is the machine-readable tracker for
+> **Related**: `docs/kernel/posix-checklist.toml` is the machine-readable tracker for
 > individual POSIX features.  This document provides the narrative rationale and
 > per-operation detail.
 
