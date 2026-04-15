@@ -1,5 +1,5 @@
 /// Stable scheduler identity for a task.
-kind thingos.task.id = u64
+kind thingos.task_id = u64
 
 /// Scheduler states for a task
 kind thingos.task.state = enum {
@@ -15,7 +15,7 @@ kind thingos.task.state = enum {
 /// This schema is canonical semantic truth only; runtime scheduling caches stay
 /// in kernel runtime structures.
 kind thingos.task = struct {
-  id: thingos.task.id,
+  id: thingos.task_id,
   state: thingos.task.state,
   job: option<ref<thingos.job>>,
   group: option<ref<thingos.group>>,

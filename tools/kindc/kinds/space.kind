@@ -1,8 +1,8 @@
 /// Stable ownership identity for an address space.
-kind thingos.space.id = u64
+kind thingos.space_id = u64
 
 /// Canonical virtual-memory identity domain.
 kind thingos.space = struct {
-  id: thingos.space.id,
+  id: thingos.space_id,
   owner_job: option<ref<thingos.job>>,
 }

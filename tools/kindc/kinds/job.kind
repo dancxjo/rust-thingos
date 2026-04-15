@@ -1,5 +1,5 @@
 /// Stable lifecycle identity for a job.
-kind thingos.job.id = u64
+kind thingos.job_id = u64
 
 /// Lifecycle state of a job (creation, running, or fully exited).
 kind thingos.job.state = enum {
@@ -10,7 +10,7 @@ kind thingos.job.state = enum {
 
 /// Canonical semantic record for a job.
 kind thingos.job = struct {
-  id: thingos.job.id,
+  id: thingos.job_id,
   state: thingos.job.state,
 }
 
