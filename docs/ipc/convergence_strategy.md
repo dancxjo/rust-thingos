@@ -1,6 +1,6 @@
 # Inbox/Port Convergence Strategy (Issue 46)
 
-Status: Proposed
+Status: Active
 Decision type: Architecture direction + migration plan
 
 ## 1. Executive decision
@@ -174,25 +174,32 @@ Cons:
 
 ## 6. Actionable implementation roadmap
 
-Phase A: Spec lock
-1. Land semantics doc and this strategy doc.
-2. Add an explicit glossary note: Port is connection-first, Inbox is ownership-first.
+Phase A: Spec lock ✅ Done
+1. ✅ Land semantics doc and this strategy doc.
+2. ✅ Add an explicit glossary note: Port is connection-first, Inbox is ownership-first.
 
-Phase B: Shared core extraction
-1. Introduce internal queue trait/object used by both inbox and port message path.
-2. Move shared backpressure, wakeup, queue metrics into the core.
-3. Keep stream ring behavior in PortView-specific layer.
+Phase B: Shared core extraction — Prototype done
+1. ✅ Introduce internal queue trait/object used by both inbox and port message path
+   (`kernel/src/ipc/msgqueue.rs` — `KernelMessageQueue<M>` prototype).
+2. ⬜ Move shared backpressure, wakeup, queue metrics into the core.
+3. ⬜ Keep stream ring behavior in PortView-specific layer.
 
+Phase C: Readiness unification — Partially done
+1. ✅ Add inbox VFS wrapper node (poll + waiter hooks) — implemented as `InboxNode`
+   in `kernel/src/vfs/inbox_node.rs`.
+2. ⬜ Expose inbox FD acquisition path (syscall or path-open model).
+3. ⬜ Add tests for mixed poll sets: files + channels + inbox FDs.
 Phase C: Readiness unification
 1. ✅ Add inbox VFS wrapper node (poll + waiter hooks) — implemented as `InboxNode`
    in `kernel/src/vfs/inbox_node.rs`.
 2. Expose inbox FD acquisition path (syscall or path-open model).
 3. Add tests for mixed poll sets: files + channels + inbox FDs.
 
-Phase D: Adapter and deprecation cleanup
-1. Document migration off deprecated `SYS_CHANNEL_WAIT`.
-2. Keep stable channel syscalls; no forced user rewrite.
-3. Optional: add explicit conversion helper APIs in userspace libraries.
+Phase D: Adapter and deprecation cleanup — Partially done
+1. ✅ Document migration off deprecated `SYS_CHANNEL_WAIT`
+   (see `docs/ipc/ipc_migration_status.md` §4 and `channel_semantics.md`).
+2. ✅ Keep stable channel syscalls; no forced user rewrite.
+3. ⬜ Migrate userspace `channel_wait` callers → `fd_from_handle + fs_poll`.
 
 ## 7. Optional prototype scope (Phase 5)
 
@@ -224,4 +231,7 @@ Mitigation: standardize docs and syscall comments around "channel" externally, "
 - Semantic analysis: `docs/ipc/inbox_vs_port_semantics.md`
 - Unified readiness model: `docs/concepts/readiness.md`
 - Channel specification: `docs/concepts/channel_semantics.md`
+- Primitive overview and transport selection: `docs/concepts/ipc.md`
+- Shared queue prototype: `kernel/src/ipc/msgqueue.rs`
+- Inbox VFS node implementation: `kernel/src/vfs/inbox_node.rs`
 - IPC issue tracker: issue #46 (Inbox/Port convergence), issue #107 (docs audit)

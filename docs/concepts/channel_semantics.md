@@ -88,11 +88,11 @@ data arrives or the write end is closed.
 
 `SYS_CHANNEL_TRY_RECV` never blocks.
 
-### `SYS_CHANNEL_WAIT` (deprecated)
+### `SYS_CHANNEL_WAIT` *(deprecated)*
 
-> **⚠ Deprecated**: Use `SYS_FD_FROM_HANDLE` to bridge a channel thing to a VFS
-> thing, then use `SYS_FS_POLL` for readiness multiplexing.  See
-> `docs/concepts/readiness.md` §2.2 and §3 for the canonical pattern.
+> **Deprecated** — convert channel handles to VFS things with
+> `SYS_FD_FROM_HANDLE` and use `SYS_FS_POLL` instead.  See
+> `docs/concepts/readiness.md` and `docs/ipc/ipc_migration_status.md` §4.
 
 Wait on one or more things simultaneously.  The caller supplies an array of
 thing values and a flags word (`READABLE | WRITABLE`).  Returns the first
