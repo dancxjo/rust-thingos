@@ -538,9 +538,20 @@ fn try_resched_if_needed<R: BootRuntime>() {
             let resched_requested =
                 sched.state.per_cpu.get(cpu_idx).map_or(false, |pc| pc.need_resched)
                     || GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire);
-            if let Some(switch) = sched.schedule_point(ScheduleReason::PreemptTick) {
+            let switch = sched.schedule_point(ScheduleReason::PreemptTick);
+            // Drain IPIs deferred by wake_sleepers while the SCHEDULER lock is
+            // still held, so we can send them after releasing the lock.
+            let deferred_ipis = core::mem::take(&mut sched.pending_wake_ipis);
+            if let Some(switch) = switch {
                 // Must drop lock before context switch!
                 drop(lock);
+
+                // Send deferred wake-sleeper IPIs now that the lock is released.
+                for cpu in deferred_ipis {
+                    DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                    DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
+                    rt.send_ipi(cpu, 0x30);
+                }
 
                 rt.tasking().activate_address_space(switch.to_aspace);
 
@@ -553,43 +564,53 @@ fn try_resched_if_needed<R: BootRuntime>() {
                         switch.to_user_fs_base,
                     );
                 }
-            } else if resched_requested {
-                // A resched was explicitly requested but no context switch happened.
-                // This is only a genuine anomaly when there are tasks at STRICTLY
-                // higher priority than the current task that should have preempted it.
-                // When the scheduler correctly re-selects the current task (it is the
-                // highest-priority runnable task), runq[(current_prio+1)..] will be
-                // empty and we stay silent.  Emitting a warning for that normal case
-                // produced misleading "handled resched but made no switch" floods
-                // under SMP when a Normal-priority task is the only high-priority
-                // runnable task while several lower-priority tasks wait in the queue.
-                //
-                // Additionally, suppress the warning when preemption was disabled at
-                // the time schedule_point ran.  In that case schedule_point sets
-                // per_cpu.need_resched = true so the reschedule is correctly deferred
-                // to the next safe preemption point; the queued higher-priority task
-                // will run as soon as the critical section exits.
-                let deferred_by_preempt =
-                    sched.state.per_cpu.get(cpu_idx).map_or(false, |pc| pc.need_resched);
-                if !deferred_by_preempt {
-                    let has_strictly_higher = sched
-                        .state
-                        .per_cpu
-                        .get(cpu_idx)
-                        .map(|pc| {
-                            let start = (current_prio + 1).min(pc.runq.len());
-                            pc.runq[start..].iter().any(|q| !q.is_empty())
-                        })
-                        .unwrap_or(false);
-                    if has_strictly_higher {
-                        crate::kdebug!(
-                            "SCHED: CPU {} handled resched but made no switch: current={:?} idle={:?} runq_total={}",
-                            cpu_idx,
-                            current,
-                            idle,
-                            runq_total
-                        );
+            } else {
+                if resched_requested {
+                    // A resched was explicitly requested but no context switch happened.
+                    // This is only a genuine anomaly when there are tasks at STRICTLY
+                    // higher priority than the current task that should have preempted it.
+                    // When the scheduler correctly re-selects the current task (it is the
+                    // highest-priority runnable task), runq[(current_prio+1)..] will be
+                    // empty and we stay silent.  Emitting a warning for that normal case
+                    // produced misleading "handled resched but made no switch" floods
+                    // under SMP when a Normal-priority task is the only high-priority
+                    // runnable task while several lower-priority tasks wait in the queue.
+                    //
+                    // Additionally, suppress the warning when preemption was disabled at
+                    // the time schedule_point ran.  In that case schedule_point sets
+                    // per_cpu.need_resched = true so the reschedule is correctly deferred
+                    // to the next safe preemption point; the queued higher-priority task
+                    // will run as soon as the critical section exits.
+                    let deferred_by_preempt =
+                        sched.state.per_cpu.get(cpu_idx).map_or(false, |pc| pc.need_resched);
+                    if !deferred_by_preempt {
+                        let has_strictly_higher = sched
+                            .state
+                            .per_cpu
+                            .get(cpu_idx)
+                            .map(|pc| {
+                                let start = (current_prio + 1).min(pc.runq.len());
+                                pc.runq[start..].iter().any(|q| !q.is_empty())
+                            })
+                            .unwrap_or(false);
+                        if has_strictly_higher {
+                            crate::kdebug!(
+                                "SCHED: CPU {} handled resched but made no switch: current={:?} idle={:?} runq_total={}",
+                                cpu_idx,
+                                current,
+                                idle,
+                                runq_total
+                            );
+                        }
                     }
+                }
+                // Release the lock before sending any deferred IPIs.
+                drop(lock);
+                // Send deferred wake-sleeper IPIs after the SCHEDULER lock is released.
+                for cpu in deferred_ipis {
+                    DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                    DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
+                    rt.send_ipi(cpu, 0x30);
                 }
             }
         }
@@ -1026,14 +1047,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
             lock_start,
         );
 
-        // Send deferred IPIs now that record_sched_lock_hold is done.
-        // These are sent while still holding SCHEDULER for simplicity; the
-        // important optimisation is that the IPI count per boot is reduced by
-        // deduplicating same-CPU nudges within one wake_sleepers pass.
+        // Defer IPI sends until after the SCHEDULER lock is released.
+        // The caller (try_resched_if_needed) drains `self.pending_wake_ipis`
+        // and sends them after dropping the lock, so that `send_ipi` is never
+        // called while SCHEDULER is held.
         for cpu in pending_ipis {
-            DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-            DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
-            crate::runtime::<R>().send_ipi(cpu, 0x30);
+            self.pending_wake_ipis.push(cpu);
         }
     }
 
@@ -3157,6 +3176,89 @@ mod tests {
         let switch = switch.unwrap();
         assert_eq!(switch.to_tid, 3002, "Scheduler should switch to the RT task");
         assert_eq!(switch.from_tid, 3001, "Scheduler should switch away from the Normal task");
+    }
+
+    /// Verify that `wake_sleepers` defers cross-CPU IPIs to `pending_wake_ipis`
+    /// instead of calling `send_ipi` while the SCHEDULER lock is held.
+    ///
+    /// The fix for issue #131 changed `wake_sleepers` to push target CPUs onto
+    /// `self.pending_wake_ipis` rather than invoking `send_ipi` directly. This
+    /// test checks that, after a cross-CPU sleeper is woken:
+    ///   1. The IPI target is present in `pending_wake_ipis`.
+    ///   2. `pending_wake_ipis` is empty once the caller drains it.
+    #[test]
+    fn test_wake_sleepers_defers_ipi_to_pending_wake_ipis() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        // Add two CPUs: CPU 0 (running this test) and CPU 1 (the IPI target).
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        // Mark CPU 1 as online so it appears in the online_cpus list.
+        sched.state.mark_cpu_online(1);
+
+        // Task running on CPU 0 (the "current" task for MockRuntime).
+        let current_task = make_task(9001, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current_task));
+        sched.state.per_cpu[0].current = Some(9001);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9001,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        // Sleeping task pinned to CPU 1 (a different CPU from current_cpu_index == 0).
+        let sleeping_task = make_task(9002, TaskState::Blocked, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(sleeping_task));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9002,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(1),
+            last_cpu: Some(1),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        // Put the sleeping task in the sleep queue with a wake_tick in the past.
+        TICK_COUNT.store(100, Ordering::Relaxed);
+        sched.state.sleep_queue.entry(50).or_default().push(9002);
+
+        // `pending_wake_ipis` should be empty before wake_sleepers runs.
+        assert!(
+            sched.pending_wake_ipis.is_empty(),
+            "pending_wake_ipis should be empty before wake_sleepers"
+        );
+
+        sched.wake_sleepers();
+
+        // After wake_sleepers, the IPI for CPU 1 must be in pending_wake_ipis,
+        // not already sent (send_ipi is a no-op in MockRuntime).
+        assert_eq!(
+            sched.pending_wake_ipis,
+            alloc::vec![1usize],
+            "wake_sleepers should defer cross-CPU IPI to pending_wake_ipis (got {:?})",
+            sched.pending_wake_ipis
+        );
+
+        // Simulate the caller draining pending_wake_ipis after releasing the lock.
+        let drained = core::mem::take(&mut sched.pending_wake_ipis);
+        assert_eq!(drained, alloc::vec![1usize]);
+        assert!(
+            sched.pending_wake_ipis.is_empty(),
+            "pending_wake_ipis should be empty after drain"
+        );
     }
 
     #[test]

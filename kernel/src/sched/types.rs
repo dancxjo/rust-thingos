@@ -82,6 +82,10 @@ pub struct Scheduler<R: BootRuntime> {
     pub(crate) total_cpu_count: usize,
     pub(crate) bringup_in_progress: bool,
     pub(crate) metrics: SchedulerMetrics,
+    /// IPIs deferred by `wake_sleepers`.  Populated under the SCHEDULER lock and
+    /// drained by the caller of `schedule_point` *after* the lock is released,
+    /// so that `send_ipi` is never called while SCHEDULER is held.
+    pub(crate) pending_wake_ipis: alloc::vec::Vec<usize>,
     _phantom: core::marker::PhantomData<R>,
 }
 
@@ -108,6 +112,7 @@ impl<R: BootRuntime> Scheduler<R> {
             total_cpu_count: 1,
             bringup_in_progress: false,
             metrics: SchedulerMetrics::new(),
+            pending_wake_ipis: alloc::vec::Vec::new(),
             _phantom: PhantomData,
         }
     }
