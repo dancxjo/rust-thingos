@@ -5,6 +5,7 @@
 > All naming decisions in new code, docs, and reviews should be grounded here.
 >
 > Companion documents:
+> - `docs/architecture/concept-classification.md` — master classification table (Canonical / Compatibility / Transitional / Deprecated)
 > - `docs/migration/review-guidelines.md` — PR review rules derived from this mapping
 > - `docs/migration/process_responsibility_map.md` — field-level decomposition of `Process`
 > - `docs/migration/bridge_architecture.md` — bridge layer design and conventions
@@ -431,6 +432,7 @@ stable mapping. Additions or resolutions should update this document.
 
 ## Related Documents
 
+- `docs/architecture/concept-classification.md` — master classification table (Canonical / Compatibility / Transitional / Deprecated)
 - `docs/migration/review-guidelines.md` — actionable PR review checklist derived from this mapping
 - `docs/migration/process_responsibility_map.md` — field-level decomposition and extraction sequencing
 - `docs/migration/bridge_architecture.md` — bridge layer design and conventions
