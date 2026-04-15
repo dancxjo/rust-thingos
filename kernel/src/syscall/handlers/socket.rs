@@ -211,3 +211,195 @@ pub fn sys_socketpair(
     Ok(0)
 }
 
+// ---------------------------------------------------------------------------
+// sys_sendmsg
+// ---------------------------------------------------------------------------
+
+/// Send data + zero or more FDs atomically over a socket or channel FD.
+///
+/// Syscall args:
+///   0: fd (socket or PortNode FD — must be writable)
+///   1: data pointer (may be null when data_len == 0)
+///   2: data length (capped at 4096)
+///   3: fds pointer — array of `u32` fd/handle numbers (may be null when count == 0)
+///   4: fds count (capped at 64)
+///   5: (reserved, must be 0)
+///
+/// The fd/handle numbers in the `fds` array are resolved from the caller's
+/// FD table first, then from the global IPC handle table.  Transfer
+/// semantics are **duplicate**: the caller retains its own fd/handle.
+pub fn sys_sendmsg(
+    fd: usize,
+    data_ptr: usize,
+    data_len: usize,
+    fds_ptr: usize,
+    fds_count: usize,
+) -> SysResult<usize> {
+    const MAX_MSG_DATA: usize = 4096;
+    const MAX_MSG_FDS:  usize = 64;
+
+    if fds_count > MAX_MSG_FDS {
+        return Err(Errno::EINVAL);
+    }
+    let data_len = data_len.min(MAX_MSG_DATA);
+
+    if data_len > 0 {
+        validate_user_range(data_ptr, data_len, false)?;
+    }
+    if fds_count > 0 {
+        validate_user_range(fds_ptr, fds_count * 4, false)?;
+    }
+
+    // Read payload bytes.
+    let mut data_buf = alloc::vec![0u8; data_len];
+    if data_len > 0 {
+        unsafe { copyin(&mut data_buf, data_ptr)? };
+    }
+
+    // Read fd/handle numbers and resolve each to a VfsNode.
+    let mut fd_nums = alloc::vec![0u32; fds_count];
+    if fds_count > 0 {
+        unsafe {
+            copyin(
+                core::slice::from_raw_parts_mut(
+                    fd_nums.as_mut_ptr() as *mut u8,
+                    fds_count * 4,
+                ),
+                fds_ptr,
+            )?;
+        }
+    }
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+    let mut caps = alloc::vec::Vec::with_capacity(fds_count);
+    for &raw in &fd_nums {
+        let node = resolve_fd_or_handle(&pinfo_arc, raw)?;
+        caps.push(node);
+    }
+
+    // Look up the destination FD and call sock_sendmsg.
+    let node = {
+        let lock = pinfo_arc.lock();
+        lock.fd_table.get(fd as u32)?.node.clone()
+    };
+    node.sock_sendmsg(&data_buf, caps)?;
+    Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// sys_recvmsg
+// ---------------------------------------------------------------------------
+
+/// Receive one message (data bytes + FDs) from a socket or channel FD.
+///
+/// Syscall args:
+///   0: fd (socket or PortNode FD — must be readable)
+///   1: data buffer pointer
+///   2: data buffer capacity
+///   3: fds buffer pointer — array of `u32` (output FD numbers written here)
+///   4: fds buffer capacity (max FDs to install)
+///   5: out_lens pointer — points to `[usize; 2]` filled with
+///        `[actual_data_len, actual_fds_count]`
+///
+/// Returns `EAGAIN` when no message is available.
+pub fn sys_recvmsg(
+    fd: usize,
+    data_ptr: usize,
+    data_cap: usize,
+    fds_ptr: usize,
+    fds_cap: usize,
+    out_lens_ptr: usize,
+) -> SysResult<usize> {
+    validate_user_range(out_lens_ptr, core::mem::size_of::<usize>() * 2, true)?;
+    if data_cap > 0 {
+        validate_user_range(data_ptr, data_cap, true)?;
+    }
+    if fds_cap > 0 {
+        validate_user_range(fds_ptr, fds_cap * 4, true)?;
+    }
+
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+    let node = {
+        let lock = pinfo_arc.lock();
+        lock.fd_table.get(fd as u32)?.node.clone()
+    };
+
+    let msg = node.sock_recvmsg()?.ok_or(Errno::EAGAIN)?;
+    let (data, fds) = msg;
+
+    // Copy data bytes to userspace (truncate if necessary).
+    let copy_len = data.len().min(data_cap);
+    if copy_len > 0 {
+        unsafe { copyout(data_ptr, &data[..copy_len])? };
+    }
+
+    // Install attached capabilities as FDs in the receiving process.
+    let install_count = fds.len().min(fds_cap);
+    let mut out_fds = alloc::vec![0u32; install_count];
+    {
+        let mut pinfo = pinfo_arc.lock();
+        for (i, cap) in fds.into_iter().take(install_count).enumerate() {
+            let new_fd = pinfo.fd_table.open(
+                cap,
+                crate::vfs::OpenFlags::read_write(),
+                "recvmsg".into(),
+            )?;
+            out_fds[i] = new_fd;
+        }
+    }
+
+    // Write installed FD numbers to userspace.
+    if install_count > 0 {
+        unsafe {
+            copyout(
+                fds_ptr,
+                core::slice::from_raw_parts(out_fds.as_ptr() as *const u8, install_count * 4),
+            )?;
+        }
+    }
+
+    // Write [actual_data_len, actual_fds_count] to out_lens_ptr.
+    let out_lens: [usize; 2] = [copy_len, install_count];
+    unsafe {
+        copyout(
+            out_lens_ptr,
+            core::slice::from_raw_parts(
+                out_lens.as_ptr() as *const u8,
+                core::mem::size_of::<usize>() * 2,
+            ),
+        )?;
+    }
+
+    Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// Private helper
+// ---------------------------------------------------------------------------
+
+/// Resolve a raw `u32` to a `VfsNode` by checking the calling process's FD
+/// table first, then the global IPC handle table.
+fn resolve_fd_or_handle(
+    pinfo_arc: &alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>>,
+    raw: u32,
+) -> SysResult<alloc::sync::Arc<dyn crate::vfs::VfsNode>> {
+    // Try VFS FD table.
+    {
+        let lock = pinfo_arc.lock();
+        if let Ok(file) = lock.fd_table.get(raw) {
+            return Ok(file.node.clone());
+        }
+    }
+    // Fall back to IPC handle table.
+    let h = crate::ipc::Handle(raw);
+    let table = crate::ipc::GLOBAL_HANDLE_TABLE.lock();
+    let entry = table
+        .get(h, crate::ipc::HandleMode::Write)
+        .or_else(|| table.get(h, crate::ipc::HandleMode::Read))
+        .ok_or(Errno::EBADF)?;
+    let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
+    Ok(alloc::sync::Arc::new(crate::vfs::port_node::PortNode::new(
+        port,
+        entry.mode,
+    )))
+}
+

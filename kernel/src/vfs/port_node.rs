@@ -104,6 +104,31 @@ impl VfsNode for PortNode {
     fn as_port(&self) -> Option<Arc<Port>> {
         Some(self.port.clone())
     }
+
+    fn sock_sendmsg(
+        &self,
+        data: &[u8],
+        fds: alloc::vec::Vec<Arc<dyn VfsNode>>,
+    ) -> abi::errors::SysResult<()> {
+        if self.mode != HandleMode::Write {
+            return Err(abi::errors::Errno::EBADF);
+        }
+        self.port.send_msg(data.to_vec(), fds);
+        Ok(())
+    }
+
+    fn sock_recvmsg(
+        &self,
+    ) -> abi::errors::SysResult<Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<Arc<dyn VfsNode>>)>>
+    {
+        if self.mode != HandleMode::Read {
+            return Err(abi::errors::Errno::EBADF);
+        }
+        match self.port.try_recv_msg() {
+            Some(msg) => Ok(Some((msg.data, msg.caps))),
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]

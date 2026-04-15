@@ -132,6 +132,10 @@ fn main(arg: usize) -> ! {
         }
     };
 
+    // Bridge the response-channel handle to a VFS FD for sendmsg.
+    let drv_resp_write_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_resp_write)
+        .expect("virtio_netd: vfs_fd_from_handle(drv_resp_write)");
+
     // Sovereign Handshake
     use abi::display_driver_protocol;
     use abi::supervisor_protocol::{self, classes}; // Still used for common header
@@ -150,8 +154,8 @@ fn main(arg: usize) -> ! {
             &ready_bytes[..len],
         ) {
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let _ = stem::syscall::channel::channel_send_msg(
-                drv_resp_write,
+            let _ = stem::syscall::socket::sendmsg(
+                drv_resp_write_fd,
                 &buf[..total_len],
                 &[req_write],
             );
@@ -212,8 +216,8 @@ fn main(arg: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ = stem::syscall::channel::channel_send_msg(
-                    drv_resp_write,
+                let _ = stem::syscall::socket::sendmsg(
+                    drv_resp_write_fd,
                     &svc_buf[..total_len],
                     &[],
                 );

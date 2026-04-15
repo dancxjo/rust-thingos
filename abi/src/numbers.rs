@@ -132,21 +132,8 @@ pub const SYS_CHANNEL_SEND: u32 = 0x3001;
 pub const SYS_CHANNEL_RECV: u32 = 0x3002;
 pub const SYS_CHANNEL_TRY_RECV: u32 = 0x3003;
 pub const SYS_CHANNEL_SEND_ALL: u32 = 0x3004;
-/// **Deprecated** — prefer `SYS_CHANNEL_SEND_MSG` which bundles data and FDs atomically.
-pub const SYS_CHANNEL_SEND_HANDLE: u32 = 0x3005;
-/// **Deprecated** — prefer `SYS_CHANNEL_RECV_MSG` which receives data and FDs atomically.
-pub const SYS_CHANNEL_RECV_HANDLE: u32 = 0x3006;
 pub const SYS_CHANNEL_INFO: u32 = 0x3007;
 pub const SYS_CHANNEL_CLOSE: u32 = 0x3008;
-/// **Deprecated** — convert handles to FDs with `SYS_FD_FROM_HANDLE` and use `SYS_FS_POLL`.
-pub const SYS_CHANNEL_WAIT: u32 = 0x3009;
-/// Send a message with zero or more attached handles over a channel.
-/// Args: (channel, data_ptr, data_len, handles_ptr, handles_count, 0)
-pub const SYS_CHANNEL_SEND_MSG: u32 = 0x300A;
-/// Receive a message with zero or more attached handles from a channel.
-/// Args: (channel, data_ptr, data_cap, handles_ptr, handles_cap, out_lens_ptr)
-/// out_lens_ptr → [usize; 2] = [actual_data_len, actual_handles_count]
-pub const SYS_CHANNEL_RECV_MSG: u32 = 0x300B;
 pub const SYS_PIPE: u32 = 0x3015;
 
 // ── Unix Domain Sockets (0x3020) ─────────────────────────────────────────────
@@ -164,6 +151,14 @@ pub const SYS_CONNECT: u32 = 0x3024;
 pub const SYS_SHUTDOWN: u32 = 0x3025;
 /// Create a connected socket pair. Args: (domain, type, protocol, fds_ptr) → 0
 pub const SYS_SOCKETPAIR: u32 = 0x3026;
+/// Send data + zero or more FDs over a socket or channel FD.
+/// Args: (fd, data_ptr, data_len, fds_ptr, fds_count, 0) → 0
+pub const SYS_SENDMSG: u32 = 0x3027;
+/// Receive data + zero or more FDs from a socket or channel FD.
+/// Args: (fd, data_ptr, data_cap, fds_ptr, fds_cap, out_lens_ptr) → 0
+/// out_lens_ptr → `[usize; 2]` = `[actual_data_len, actual_fds_count]`
+/// Returns `EAGAIN` if no message is available.
+pub const SYS_RECVMSG: u32 = 0x3028;
 
 // ── Typed Message Delivery (0x3030) ──────────────────────────────────────────
 //
@@ -322,11 +317,6 @@ pub mod reboot_cmd {
 // ============================================================================
 // ABI Flags & Constants
 // ============================================================================
-
-pub mod channel_wait {
-    pub const READABLE: u32 = 1 << 0;
-    pub const WRITABLE: u32 = 1 << 1;
-}
 
 /// Socket address family constants (analogous to POSIX AF_* values).
 pub mod socket_domain {

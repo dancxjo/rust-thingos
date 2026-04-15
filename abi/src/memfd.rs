@@ -12,7 +12,7 @@
 //! - **Bulk plane** – large, throughput-sensitive data shared via memory-mapped
 //!   things (`memfd`). The sender creates a `memfd`, writes data into
 //!   it (or keeps it as a persistent shared ring), and passes the thing
-//!   to the receiver via `channel_send_msg`. The receiver calls
+//!   to the receiver via `sendmsg`. The receiver calls
 //!   `vm_map` to obtain a writable or read-only view without copying.
 //!
 //! # Memfd lifecycle
@@ -23,13 +23,13 @@
 //! memfd_create("name", size) -> thing
 //! vm_map(thing, READ|WRITE)  -> ptr   (optional, if creator also writes)
 //! [fill data at ptr]
-//! channel_send_msg(ch, b"", &[thing]) ---->  channel_recv_msg(ch) -> new_thing
-//!                                             vm_map(new_thing, READ) -> ptr
-//!                                             [read data at ptr]
-//!                                             vm_unmap(ptr, size)
-//!                                             vfs_close(new_thing)
+//! sendmsg(fd, b"", &[thing]) -------->  recvmsg(fd) -> (b"", [new_thing])
+//!                                        vm_map(new_thing, READ) -> ptr
+//!                                        [read data at ptr]
+//!                                        vm_unmap(ptr, size)
+//!                                        vfs_close(new_thing)
 //! vm_unmap(ptr, size)
-//! vfs_close(thing)                        (thing dropped → physical memory freed)
+//! vfs_close(thing)                    (thing dropped → physical memory freed)
 //! ```
 //!
 //! The physical memory is reference-counted by the kernel: it is released only
@@ -54,7 +54,7 @@
 //! offset  size  field
 //!      0     4  fd       – thing number (sender-local when embedded in a
 //!                          message; the receiver obtains its own thing via
-//!                          channel_recv_msg before mapping)
+//!                          recvmsg before mapping)
 //!      4     4  _pad     – reserved, must be zero
 //!      8     8  length   – byte length of the valid data window
 //! ```
@@ -69,7 +69,7 @@
 ///
 /// Embed this in any control-plane message that accompanies a memfd transfer.
 /// The `fd` field is the sender's local thing number; the physical backing is
-/// transferred by passing the thing over the channel with `channel_send_msg`.
+/// transferred by passing the thing over the channel with `sendmsg`.
 ///
 /// Wire size: [`MEMFD_REF_WIRE_SIZE`] bytes (little-endian).
 #[repr(C)]

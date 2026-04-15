@@ -27,9 +27,9 @@ pub static CHANNEL_RECVS: AtomicU64 = AtomicU64::new(0);
 pub static CHANNEL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
 /// Cumulative bytes read via `channel_recv`.
 pub static CHANNEL_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
-/// Total capability handles enqueued via `channel_send_handle`.
+/// Total capability handles enqueued via `sendmsg`.
 pub static CHANNEL_HANDLES_SENT: AtomicU64 = AtomicU64::new(0);
-/// Total capability handles dequeued via `channel_recv_handle`.
+/// Total capability handles dequeued via `recvmsg`.
 pub static CHANNEL_HANDLES_RECV: AtomicU64 = AtomicU64::new(0);
 /// Times `channel_send_all` returned `EAGAIN` because the ring was full.
 pub static CHANNEL_FULL_EVENTS: AtomicU64 = AtomicU64::new(0);

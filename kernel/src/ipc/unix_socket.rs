@@ -96,6 +96,13 @@ impl RingBuf {
 /// Default socket buffer capacity in bytes.
 const DEFAULT_SOCK_CAPACITY: usize = 4096;
 
+/// A datagram-like message carrying data bytes and zero or more capability
+/// handles (VFS nodes).  Used by the `sendmsg`/`recvmsg` path.
+struct SockMsg {
+    data: Vec<u8>,
+    fds:  Vec<Arc<dyn VfsNode>>,
+}
+
 /// State shared between the two ends of a connected socket pair.
 ///
 /// Side A (the connecting/client side) writes to `a_to_b` and reads from
@@ -105,6 +112,10 @@ pub struct SocketPeer {
     a_to_b: RingBuf,
     /// Data written by B, readable by A.
     b_to_a: RingBuf,
+    /// Messages (data + FDs) sent by A, readable by B.
+    msgs_a_to_b: VecDeque<SockMsg>,
+    /// Messages (data + FDs) sent by B, readable by A.
+    msgs_b_to_a: VecDeque<SockMsg>,
     /// Is A still alive (not shut down for writing)?
     a_alive: bool,
     /// Is B still alive (not shut down for writing)?
@@ -124,6 +135,8 @@ impl SocketPeer {
         Self {
             a_to_b:        RingBuf::new(DEFAULT_SOCK_CAPACITY),
             b_to_a:        RingBuf::new(DEFAULT_SOCK_CAPACITY),
+            msgs_a_to_b:   VecDeque::new(),
+            msgs_b_to_a:   VecDeque::new(),
             a_alive:       true,
             b_alive:       true,
             a_read_waitq:  WaitQueue::new(),
@@ -619,6 +632,65 @@ impl VfsNode for UnixSocketNode {
 
     fn sock_shutdown(&self, how: u32) -> abi::errors::SysResult<()> {
         self.shutdown(how)
+    }
+
+    fn sock_sendmsg(
+        &self,
+        data: &[u8],
+        fds: alloc::vec::Vec<Arc<dyn VfsNode>>,
+    ) -> abi::errors::SysResult<()> {
+        let state = self.state.lock();
+        match &*state {
+            SocketState::Connected { side, peer, shutdown_wr, .. } => {
+                if *shutdown_wr {
+                    return Err(abi::errors::Errno::EPIPE);
+                }
+                let mut p = peer.lock();
+                if !match side { Side::A => p.b_alive, Side::B => p.a_alive } {
+                    return Err(abi::errors::Errno::EPIPE);
+                }
+                let msg = SockMsg { data: data.to_vec(), fds };
+                match side {
+                    Side::A => {
+                        p.msgs_a_to_b.push_back(msg);
+                        p.b_read_waitq.wake_one();
+                    }
+                    Side::B => {
+                        p.msgs_b_to_a.push_back(msg);
+                        p.a_read_waitq.wake_one();
+                    }
+                }
+                Ok(())
+            }
+            SocketState::Closed => Err(abi::errors::Errno::EBADF),
+            _ => Err(abi::errors::Errno::ENOTCONN),
+        }
+    }
+
+    fn sock_recvmsg(
+        &self,
+    ) -> abi::errors::SysResult<
+        Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<Arc<dyn VfsNode>>)>,
+    > {
+        let state = self.state.lock();
+        match &*state {
+            SocketState::Connected { side, peer, shutdown_rd, .. } => {
+                if *shutdown_rd {
+                    return Ok(None);
+                }
+                let mut p = peer.lock();
+                let msg = match side {
+                    Side::A => p.msgs_b_to_a.pop_front(),
+                    Side::B => p.msgs_a_to_b.pop_front(),
+                };
+                match msg {
+                    Some(m) => Ok(Some((m.data, m.fds))),
+                    None => Ok(None), // EAGAIN — no message queued
+                }
+            }
+            SocketState::Closed => Err(abi::errors::Errno::EBADF),
+            _ => Err(abi::errors::Errno::ENOTCONN),
+        }
     }
 }
 

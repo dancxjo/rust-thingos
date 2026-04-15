@@ -321,6 +321,33 @@ pub trait VfsNode: Send + Sync {
         Err(abi::errors::Errno::ENOTSOCK)
     }
 
+    /// Send data and zero or more capability FDs atomically over this socket
+    /// or channel FD.
+    ///
+    /// `fds` is a list of `Arc<dyn VfsNode>` capabilities to attach.  The
+    /// receiver will have each one installed into its own FD table.
+    ///
+    /// Returns `ENOSYS` on nodes that do not support message-with-FDs.
+    fn sock_sendmsg(
+        &self,
+        _data: &[u8],
+        _fds: alloc::vec::Vec<Arc<dyn VfsNode>>,
+    ) -> SysResult<()> {
+        Err(abi::errors::Errno::ENOSYS)
+    }
+
+    /// Receive one message (data bytes + capability FDs) from this socket or
+    /// channel FD.
+    ///
+    /// Returns `Ok(Some((data, fds)))` when a message is available,
+    /// `Ok(None)` when the queue is empty (non-blocking / EAGAIN), or
+    /// `Err(e)` on a fatal error.
+    fn sock_recvmsg(
+        &self,
+    ) -> SysResult<Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<Arc<dyn VfsNode>>)>> {
+        Err(abi::errors::Errno::ENOSYS)
+    }
+
     /// Device-specific control call (ioctl).
     fn device_call(&self, _call: &abi::device::DeviceCall) -> SysResult<usize> {
         Err(abi::errors::Errno::ENOSYS)

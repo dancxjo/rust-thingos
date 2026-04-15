@@ -456,6 +456,10 @@ fn main(boot_fd: usize) -> ! {
     let (vfs_write, vfs_read) =
         channel_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
 
+    // Bridge the supervisor channel handle to a VFS FD for sendmsg.
+    let supervisor_port_fd = stem::syscall::vfs::vfs_fd_from_handle(supervisor_port)
+        .expect("display_virtio_gpu: vfs_fd_from_handle(supervisor_port)");
+
     // Send MSG_BIND_READY to supervisor instead of legacy MSG_REGISTER
     let ready = supervisor_protocol::BindReadyPayload {
         bind_instance_id,
@@ -472,8 +476,8 @@ fn main(boot_fd: usize) -> ! {
             &ready_bytes[..len],
         ) {
             // Bundle the VFS provider handle and BIND_READY notification atomically.
-            let _ = stem::syscall::channel::channel_send_msg(
-                supervisor_port,
+            let _ = stem::syscall::socket::sendmsg(
+                supervisor_port_fd,
                 &buf[..total_len],
                 &[vfs_write],
             );
@@ -558,8 +562,8 @@ fn main(boot_fd: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ = stem::syscall::channel::channel_send_msg(
-                    supervisor_port,
+                let _ = stem::syscall::socket::sendmsg(
+                    supervisor_port_fd,
                     &svc_buf[..total_len],
                     &[],
                 );
@@ -570,6 +574,8 @@ fn main(boot_fd: usize) -> ! {
 
     let drv_req_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_req_read)
         .expect("display_virtio_gpu: fd_from_handle(drv_req_read)");
+    let drv_resp_write_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_resp_write)
+        .expect("display_virtio_gpu: fd_from_handle(drv_resp_write)");
     let vfs_read_fd = stem::syscall::vfs::vfs_fd_from_handle(vfs_read)
         .expect("display_virtio_gpu: fd_from_handle(vfs_read)");
     let mut ws = stem::wait_set::WaitSet::new();
@@ -807,8 +813,8 @@ fn main(boot_fd: usize) -> ! {
                             &acq_bytes[..len],
                         ) {
                             // Send MSG_ACQUIRED data and the frame buffer FD atomically.
-                            let _ = stem::syscall::channel::channel_send_msg(
-                                drv_resp_write,
+                            let _ = stem::syscall::socket::sendmsg(
+                                drv_resp_write_fd,
                                 &framed[..framed_len],
                                 &[frame_pool_buffers[idx].fd],
                             );
@@ -819,8 +825,8 @@ fn main(boot_fd: usize) -> ! {
                     if let Some(bind) = drvproto::decode_bind_payload_le(payload) {
                         // Receive the framebuffer FD from the message queue (FD-first).
                         let mut fds = [0u32; 1];
-                        let fd = match stem::syscall::channel::channel_recv_msg(
-                            drv_req_read,
+                        let fd = match stem::syscall::socket::recvmsg(
+                            drv_req_fd,
                             &mut [],
                             &mut fds,
                         ) {
