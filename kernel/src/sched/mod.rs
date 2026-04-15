@@ -79,6 +79,10 @@ pub static DIAG_IPI_SENT_PREPARE_SCHEDULE: AtomicU64 = AtomicU64::new(0);
 /// Count of reschedule requests that were coalesced (flag was already set).
 pub static PROF_RESCHED_COALESCED: AtomicU64 = AtomicU64::new(0);
 
+/// Count of remote IPI sends that were suppressed because the per-CPU pending
+/// flag was already set (i.e. a previous IPI is already in flight or pending).
+pub static PROF_IPI_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+
 /// Count of `task_status` / poll calls (task-state poll count by caller).
 pub static PROF_TASK_STATUS_POLLS: AtomicU64 = AtomicU64::new(0);
 
@@ -146,6 +150,9 @@ pub struct SchedLockSiteMetrics {
     pub wake_sleepers: SchedLockMetrics,
     /// Reschedule requests that were suppressed because the flag was already set.
     pub resched_coalesced: u64,
+    /// Remote IPI sends that were suppressed because the pending flag was already
+    /// set (a previous IPI is already in flight for that CPU).
+    pub ipi_suppressed: u64,
     /// Total IPI-sends broken down by originating callsite.
     pub ipi_sent_wake_task: u64,
     pub ipi_sent_wake_sleepers: u64,
@@ -464,6 +471,7 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
             &PROF_SCHED_WAIT_WAKE_SLEEPERS_HIST,
         ),
         resched_coalesced: PROF_RESCHED_COALESCED.swap(0, Ordering::Relaxed),
+        ipi_suppressed: PROF_IPI_SUPPRESSED.swap(0, Ordering::Relaxed),
         ipi_sent_wake_task: DIAG_IPI_SENT_WAKE_TASK.swap(0, Ordering::Relaxed),
         ipi_sent_wake_sleepers: DIAG_IPI_SENT_WAKE_SLEEPERS.swap(0, Ordering::Relaxed),
         ipi_sent_spawn: DIAG_IPI_SENT_SPAWN.swap(0, Ordering::Relaxed),
@@ -934,16 +942,23 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     }
 
                     if actual_cpu != current_cpu_index::<R>() {
-                        crate::kdebug!(
-                            "SCHED: Nudging CPU {} for task {} (prio {})",
-                            actual_cpu,
-                            tid,
-                            priority
-                        );
-                        DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-                        DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
-                        set_global_need_resched(actual_cpu);
-                        crate::runtime::<R>().send_ipi(actual_cpu, 0x30);
+                        // Suppress duplicate IPI if the pending flag was already
+                        // set by a previous wakeup.  The in-flight IPI will pick
+                        // up this task when it is processed.
+                        let already_pending = set_global_need_resched(actual_cpu);
+                        if !already_pending {
+                            crate::kdebug!(
+                                "SCHED: Nudging CPU {} for task {} (prio {})",
+                                actual_cpu,
+                                tid,
+                                priority
+                            );
+                            DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                            DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
+                            crate::runtime::<R>().send_ipi(actual_cpu, 0x30);
+                        } else {
+                            PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             } else {
@@ -1185,10 +1200,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     // so they wake from HLT and pick up the newly-queued work.
                     for &(prio, target_cpu, id) in &misrouted[..misrouted_count] {
                         self.state.enqueue_task(target_cpu, prio, id);
-                        DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-                        DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
-                        set_global_need_resched(target_cpu);
-                        crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+                        let already_pending = set_global_need_resched(target_cpu);
+                        if !already_pending {
+                            DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                            DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
+                            crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+                        } else {
+                            PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                     return None;
                 }
@@ -1198,10 +1217,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Flush misrouted tasks to their correct CPU queues and wake those CPUs.
         for &(prio, target_cpu, id) in &misrouted[..misrouted_count] {
             self.state.enqueue_task(target_cpu, prio, id);
-            DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-            DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
-            set_global_need_resched(target_cpu);
-            crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+            let already_pending = set_global_need_resched(target_cpu);
+            if !already_pending {
+                DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
+                crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+            } else {
+                PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+            }
         }
 
         let current_id = self.state.per_cpu[cpu_idx]

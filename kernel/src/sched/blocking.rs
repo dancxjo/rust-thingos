@@ -146,9 +146,16 @@ pub fn wake_task_locked<R: BootRuntime>(sched: &mut Scheduler<R>, id: u64) -> bo
             if safe_cpu == super::current_cpu_index::<R>() {
                 sched.state.per_cpu[safe_cpu].need_resched = true;
             } else {
-                super::set_global_need_resched(safe_cpu);
-                needs_ipi = true;
-                ipi_cpu = safe_cpu;
+                // Only request a remote IPI if the pending flag was not already
+                // set.  A set flag means a previous IPI is in flight; that CPU
+                // will process our newly-queued task when it wakes.
+                let already_pending = super::set_global_need_resched(safe_cpu);
+                if !already_pending {
+                    needs_ipi = true;
+                    ipi_cpu = safe_cpu;
+                } else {
+                    super::PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                }
             }
         }
     }

@@ -244,16 +244,10 @@ impl<R: BootRuntime> Scheduler<R> {
         // resched handler can take the lock immediately.
         if safe_cpu == super::current_cpu_index::<R>() {
             self.state.per_cpu[safe_cpu].need_resched = true;
-        } else {
-            super::set_global_need_resched(safe_cpu);
-            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            crate::kdebug!(
-                "SCHED: Deferred Resched IPI to CPU {} for task {}",
-                safe_cpu,
-                id
-            );
         }
+        // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
+        // handled post-lock by nudge_spawned_task to avoid sending IPIs while
+        // holding the scheduler lock (which delays the target CPU's handler).
 
         let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
         // Link affinity and initial location
@@ -382,16 +376,9 @@ impl<R: BootRuntime> Scheduler<R> {
         // Under the scheduler lock we only mark the target CPU dirty.
         if safe_cpu == super::current_cpu_index::<R>() {
             self.state.per_cpu[safe_cpu].need_resched = true;
-        } else {
-            super::set_global_need_resched(safe_cpu);
-            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            crate::kdebug!(
-                "SCHED: Deferred Resched IPI to CPU {} for task {}",
-                safe_cpu,
-                id
-            );
         }
+        // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
+        // handled post-lock by nudge_spawned_task.
 
         let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
         // Link affinity and initial location
@@ -488,16 +475,9 @@ impl<R: BootRuntime> Scheduler<R> {
         // Under the scheduler lock we only mark the target CPU dirty.
         if safe_cpu == super::current_cpu_index::<R>() {
             self.state.per_cpu[safe_cpu].need_resched = true;
-        } else {
-            super::set_global_need_resched(safe_cpu);
-            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            crate::kdebug!(
-                "SCHED: Deferred Resched IPI to CPU {} for task {}",
-                safe_cpu,
-                id
-            );
         }
+        // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
+        // handled post-lock by nudge_spawned_task.
 
         let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
         // Link affinity and initial location
@@ -616,12 +596,23 @@ fn nudge_spawned_task<R: BootRuntime>(current_cpu: usize, id: TaskId) {
     };
 
     if target_cpu != current_cpu {
-        crate::kdebug!(
-            "SCHED: Sending post-unlock Resched IPI to CPU {} for task {}",
-            target_cpu,
-            id
-        );
-        crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+        // Set the per-CPU pending flag.  If it was already set a previous IPI
+        // is in flight (or another spawn just set it for the same CPU); in that
+        // case the target will process this task when it handles that IPI, so
+        // we suppress the duplicate send.
+        let already_pending = super::set_global_need_resched(target_cpu);
+        if !already_pending {
+            crate::kdebug!(
+                "SCHED: Sending post-unlock Resched IPI to CPU {} for task {}",
+                target_cpu,
+                id
+            );
+            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+        } else {
+            super::PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
