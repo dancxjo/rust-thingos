@@ -26,6 +26,7 @@ Low-level contracts between kernel and userspace.
 
 ### `architecture/` — VM and Address Space
 
+- [`how-to-think-in-thingos.md`](architecture/how-to-think-in-thingos.md) — contributor/agent mental model (typed truth vs Unix projection)
 - [`job.md`](architecture/job.md) — Job as canonical lifecycle object for creation/exit/wait/reap
 - [`process-projection.md`](architecture/process-projection.md) — Process as compatibility projection (not root ontology)
 - [`space.md`](architecture/space.md) — Space as the canonical address-space object
