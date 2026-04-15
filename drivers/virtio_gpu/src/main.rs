@@ -142,6 +142,10 @@ fn main(boot_fd: usize) -> ! {
     let (vfs_write, vfs_read) =
         stem::syscall::channel_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS channel");
 
+    // Bridge the response-channel handle to a VFS FD for sendmsg.
+    let drv_resp_write_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_resp_write)
+        .expect("virtio_gpu: vfs_fd_from_handle(drv_resp_write)");
+
     use abi::display_driver_protocol;
     use abi::supervisor_protocol::{self, classes};
     let ready = supervisor_protocol::BindReadyPayload {
@@ -162,8 +166,8 @@ fn main(boot_fd: usize) -> ! {
                 bind_instance_id
             );
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let _ = stem::syscall::channel::channel_send_msg(
-                drv_resp_write,
+            let _ = stem::syscall::socket::sendmsg(
+                drv_resp_write_fd,
                 &buf[..total_len],
                 &[vfs_write],
             );

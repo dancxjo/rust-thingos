@@ -298,8 +298,12 @@ impl Supervisor {
             let mut msg_fds = [0u32; 1];
             let mut process_count = 0;
 
+            // Convert the response channel handle to a VFS FD for recvmsg.
+            let resp_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_resp_read)
+                .unwrap_or(drv_resp_read);
+
             while let Ok((n, n_fds)) =
-                stem::syscall::channel::channel_recv_msg(drv_resp_read, &mut msg_data, &mut msg_fds)
+                stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds)
             {
                 if n == 0 && n_fds == 0 {
                     break;

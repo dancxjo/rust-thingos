@@ -88,11 +88,9 @@ pub fn write(fd: usize, buf: &[u8]) -> Result<usize, Errno> {
     abi::errors::errno(ret)
 }
 
-#[allow(deprecated)]
 pub use channel::{
     channel_capacity, channel_close, channel_create, channel_create_fds, channel_len, channel_recv,
-    channel_recv_handle, channel_recv_msg, channel_send, channel_send_all, channel_send_handle,
-    channel_send_msg, channel_try_recv, channel_wait, ChannelHandle,
+    channel_send, channel_send_all, channel_try_recv, ChannelHandle,
 };
 pub use vfs::{
     dup, dup2, pipe, tcgetattr, tcsetattr, vfs_chdir, vfs_chmod, vfs_close, vfs_fchmod, vfs_fcntl,

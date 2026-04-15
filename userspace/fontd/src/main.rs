@@ -15,7 +15,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use ipc_helpers::rpc::RpcServer;
 use petals::font::TextRenderer;
-use stem::syscall::channel::channel_send_msg;
+use stem::syscall::socket::sendmsg;
+use stem::syscall::vfs::vfs_fd_from_handle;
 use stem::{error, info};
 
 use petals::Atlas;
@@ -216,7 +217,8 @@ fn handle_ensure_glyphs(
     let mut resp_buf = vec![0u8; 4096 * 4];
     if let Some(len) = resp.encode(&mut resp_buf) {
         // Send atlas fd alongside the encoded response framed with RpcHeader.
-        let _ = channel_send_msg(write_h, &[], &[atlas.texture.fd]);
+        let write_h_fd = vfs_fd_from_handle(write_h).unwrap_or(write_h);
+        let _ = sendmsg(write_h_fd, &[], &[atlas.texture.fd]);
         let _ = server.reply(request_id, write_h, &resp_buf[..len]);
     }
 }
