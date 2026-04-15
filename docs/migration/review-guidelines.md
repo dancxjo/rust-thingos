@@ -59,6 +59,8 @@ functions, syscall handlers, procfs paths, IPC code, or documentation.
 - [ ] Does new execution or scheduling code use `Task` as the canonical unit?
 - [ ] If `Process` is touched, does the change keep `Process` as a compatibility
       projection only (not as root ontology)?
+- [ ] Does lifecycle work treat `Job` as canonical truth for creation, parent/child
+      linkage, exit semantics, wait/reap, and thread-group lifecycle continuity?
 - [ ] Does new VM / memory code route through `ProcessAddressSpace` (the `Space`
        extraction seam) rather than directly accessing `Process.mappings`?
 - [ ] Does new lifecycle / accounting code route through `ProcessLifecycle` (the
@@ -156,6 +158,7 @@ concepts are considered stable vs. transitional.
 
 - `docs/migration/concept-mapping.md` — the canonical lexicon this checklist is derived from
 - `docs/migration/process_responsibility_map.md` — field-level decomposition and extraction sequencing
+- `docs/architecture/job.md` — lifecycle ownership rule: `Job` is canonical truth
 - `docs/architecture/process-projection.md` — explicit rule: `Process` is projection, not ontology
 - `docs/migration/bridge_architecture.md` — bridge layer design, conventions, and guardrails
 - `docs/concepts/thingos-guardrails.md` — architecture guardrails (spawn+exec, VFS-first, etc.)
