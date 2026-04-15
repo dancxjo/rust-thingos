@@ -15,7 +15,8 @@ use alloc::vec::Vec;
 use core::time::Duration;
 use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
-use stem::syscall::{channel_create, channel_recv, channel_send, channel_wait, ChannelHandle};
+use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelHandle};
+use stem::syscall::vfs::vfs_fd_from_handle;
 use stem::syscall::{ioport_read, ioport_write};
 use stem::{error, info};
 
@@ -574,20 +575,32 @@ fn main(_arg: usize) -> ! {
 
     info!("ATA_DISK: Entering RPC service loop");
 
-    // Collect all port handles for waiting on requests
-    let mut handles: Vec<ChannelHandle> = Vec::new();
+    // Build a WaitSet over the FD-bridged read ends of each device's channel.
+    // We keep a parallel token→handle mapping so that when an event fires we
+    // know which channel handle to drain.
+    let mut ws = stem::wait_set::WaitSet::new();
+    let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, ChannelHandle)> = Vec::new();
+
     for disk in &disks {
         if let Some(h) = disk.read_port_handle {
-            handles.push(h);
+            if let Ok(fd) = vfs_fd_from_handle(h) {
+                if let Ok(tok) = ws.add_fd_readable(fd) {
+                    tok_to_handle.push((tok, h));
+                }
+            }
         }
     }
     for dev in &atapi_devs {
         if let Some(h) = dev.read_port_handle {
-            handles.push(h);
+            if let Ok(fd) = vfs_fd_from_handle(h) {
+                if let Ok(tok) = ws.add_fd_readable(fd) {
+                    tok_to_handle.push((tok, h));
+                }
+            }
         }
     }
 
-    if handles.is_empty() {
+    if tok_to_handle.is_empty() {
         info!("ATA_DISK: No active devices to service");
         loop {
             stem::syscall::sleep_ms(60_000);
@@ -596,49 +609,59 @@ fn main(_arg: usize) -> ! {
 
     // Main service loop
     loop {
-        // Wait for a request on any port (blocking)
-        let ready_handle = match channel_wait(&handles, abi::syscall::channel_wait::READABLE) {
-            Ok(h) => h,
+        // Block until any registered channel becomes readable.
+        let events = match ws.wait(None::<stem::time::Duration>) {
+            Ok(ev) => ev,
             Err(e) => {
-                error!("ATA_DISK: channel_wait failed: {:?}", e);
+                error!("ATA_DISK: WaitSet failed: {:?}", e);
                 stem::sleep(Duration::from_millis(100));
                 continue;
             }
         };
 
-        // Find the device that has data
-        let mut found = false;
-        for disk in &disks {
-            if disk.read_port_handle == Some(ready_handle) {
-                let mut buf = [0u8; 4096];
-                match channel_recv(ready_handle, &mut buf) {
-                    Ok(len) if len > 0 => {
-                        handle_ata_request(disk, &buf[..len], ready_handle);
-                    }
-                    Ok(_) => {} // No data
-                    Err(e) => {
-                        error!("ATA_DISK: channel_recv failed: {:?}", e);
-                    }
-                }
-                found = true;
-                break;
+        for ev in events {
+            if !ev.is_readable() {
+                continue;
             }
-        }
+            let ready_handle = match tok_to_handle.iter().find(|(t, _)| *t == ev.token()) {
+                Some((_, h)) => *h,
+                None => continue,
+            };
 
-        if !found {
-            for dev in &atapi_devs {
-                if dev.read_port_handle == Some(ready_handle) {
+            // Find the device that has data and handle the request.
+            let mut found = false;
+            for disk in &disks {
+                if disk.read_port_handle == Some(ready_handle) {
                     let mut buf = [0u8; 4096];
-                    match channel_recv(ready_handle, &mut buf) {
+                    match channel_try_recv(ready_handle, &mut buf) {
                         Ok(len) if len > 0 => {
-                            handle_atapi_request(dev, &buf[..len], ready_handle);
+                            handle_ata_request(disk, &buf[..len], ready_handle);
                         }
-                        Ok(_) => {} // No data
+                        Ok(_) => {} // No data yet
                         Err(e) => {
-                            error!("ATA_DISK: channel_recv failed: {:?}", e);
+                            error!("ATA_DISK: channel_try_recv failed: {:?}", e);
                         }
                     }
+                    found = true;
                     break;
+                }
+            }
+
+            if !found {
+                for dev in &atapi_devs {
+                    if dev.read_port_handle == Some(ready_handle) {
+                        let mut buf = [0u8; 4096];
+                        match channel_try_recv(ready_handle, &mut buf) {
+                            Ok(len) if len > 0 => {
+                                handle_atapi_request(dev, &buf[..len], ready_handle);
+                            }
+                            Ok(_) => {} // No data yet
+                            Err(e) => {
+                                error!("ATA_DISK: channel_try_recv failed: {:?}", e);
+                            }
+                        }
+                        break;
+                    }
                 }
             }
         }

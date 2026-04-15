@@ -22,7 +22,8 @@ use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
-use stem::syscall::{channel_create, channel_recv, channel_send, channel_wait, ChannelHandle};
+use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelHandle};
+use stem::syscall::vfs::vfs_fd_from_handle;
 use stem::{debug, error, info};
 
 #[unsafe(link_section = ".thing_manifest")]
@@ -683,10 +684,23 @@ fn main(boot_fd: usize) -> ! {
 
     debug!("AHCI: Entering RPC service loop");
 
-    // Collect all port handles for waiting on requests
-    let handles: Vec<ChannelHandle> = ports.iter().filter_map(|p| p.read_port_handle).collect();
+    // Build a WaitSet over the FD-bridged read ends of each port's channel.
+    // We keep a parallel token→handle mapping so that when an event fires we
+    // know which channel handle to drain.
+    let mut ws = stem::wait_set::WaitSet::new();
+    let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, ChannelHandle)> = Vec::new();
 
-    if handles.is_empty() {
+    for port in ports.iter() {
+        if let Some(h) = port.read_port_handle {
+            if let Ok(fd) = vfs_fd_from_handle(h) {
+                if let Ok(tok) = ws.add_fd_readable(fd) {
+                    tok_to_handle.push((tok, h));
+                }
+            }
+        }
+    }
+
+    if tok_to_handle.is_empty() {
         info!("AHCI: No active ports to service");
         loop {
             stem::sleep(Duration::from_secs(60));
@@ -695,31 +709,41 @@ fn main(boot_fd: usize) -> ! {
 
     // Main service loop
     loop {
-        // Wait for a request on any port (blocking)
-        let ready_handle = match channel_wait(&handles, abi::syscall::channel_wait::READABLE) {
-            Ok(h) => h,
+        // Block until any registered channel becomes readable.
+        let events = match ws.wait(None::<stem::time::Duration>) {
+            Ok(ev) => ev,
             Err(e) => {
-                error!("AHCI: channel_wait failed: {:?}", e);
+                error!("AHCI: WaitSet failed: {:?}", e);
                 stem::sleep(Duration::from_millis(100));
                 continue;
             }
         };
 
-        // Find the port that has data
-        for port in &mut ports {
-            if port.read_port_handle == Some(ready_handle) {
-                let mut buf = [0u8; 4096];
+        for ev in events {
+            if !ev.is_readable() {
+                continue;
+            }
+            let ready_handle = match tok_to_handle.iter().find(|(t, _)| *t == ev.token()) {
+                Some((_, h)) => *h,
+                None => continue,
+            };
 
-                match channel_recv(ready_handle, &mut buf) {
-                    Ok(len) if len > 0 => {
-                        handle_block_device_request(port, &buf[..len], ready_handle);
+            // Find the port that has data
+            for port in &mut ports {
+                if port.read_port_handle == Some(ready_handle) {
+                    let mut buf = [0u8; 4096];
+
+                    match channel_try_recv(ready_handle, &mut buf) {
+                        Ok(len) if len > 0 => {
+                            handle_block_device_request(port, &buf[..len], ready_handle);
+                        }
+                        Ok(_) => {} // No data yet
+                        Err(e) => {
+                            error!("AHCI: channel_try_recv failed: {:?}", e);
+                        }
                     }
-                    Ok(_) => {} // No data
-                    Err(e) => {
-                        error!("AHCI: channel_recv failed: {:?}", e);
-                    }
+                    break;
                 }
-                break;
             }
         }
     }

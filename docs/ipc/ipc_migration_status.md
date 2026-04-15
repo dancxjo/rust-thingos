@@ -67,14 +67,16 @@ Thing-OS IPC is built on a **plural substrate**:
 | Driver | IPC model used | Migration status |
 |--------|---------------|-----------------|
 | `virtio_netd` | Channel-heavy (VFS RPC over channels) | ⬜ Pending — VFS RPC is acceptable; poll path via `SYS_FD_FROM_HANDLE` |
-| `ata_disk` | Channel-based (uses `SYS_CHANNEL_WAIT`) | ⬜ Pending — migrate `channel_wait` → `fd_from_handle + fs_poll` |
-| `ahci_disk` | Channel-based (uses `SYS_CHANNEL_WAIT`) | ⬜ Pending — same as ata_disk |
-| `display_fake` | Channel-based | ⬜ Pending — VFS/FD migration deferred |
+| `ata_disk` | Channel-based (uses `WaitSet` + `fd_from_handle`) | ✅ Done — migrated `channel_wait` → `fd_from_handle` + `WaitSet::add_fd_readable` |
+| `ahci_disk` | Channel-based (uses `WaitSet` + `fd_from_handle`) | ✅ Done — same as ata_disk |
+| `display_fake` | Channel-based (uses `WaitSet` + `fd_from_handle`) | ✅ Done — migrated `channel_wait` → `fd_from_handle` + `WaitSet::add_fd_readable` |
+| `display_virtio_gpu` | Channel-based (uses `WaitSet` + `fd_from_handle`) | ✅ Done — migrated `add_port_readable` → `fd_from_handle` + `add_fd_readable` |
 | Other drivers | Mix of channels and VFS | ⬜ Assess per driver |
 
 > Note: VFS RPC over channels (`SYS_FS_MOUNT` provider protocol) is a canonical
-> use case and will remain channel-based.  The pending work is replacing
-> `SYS_CHANNEL_WAIT` with `SYS_FS_POLL` in the blocking loops.
+> use case and will remain channel-based.  The completed work replaces all
+> `SYS_CHANNEL_WAIT` / `add_port_readable` usage with `SYS_FS_POLL` via
+> `vfs_fd_from_handle` + `WaitSet::add_fd_readable`.
 
 ### 2.3 Userspace Libraries
 
@@ -84,7 +86,7 @@ Thing-OS IPC is built on a **plural substrate**:
 | `stem::syscall::vfs::vfs_poll` | ✅ Stable | Unified readiness API |
 | `stem::syscall::vfs::pipe` | ✅ Stable | Pipe creation |
 | `ipc_helpers` (RPC helpers) | ✅ Stable | Request/reply abstractions over channels |
-| Userspace `channel_wait` wrappers | ⬜ Pending | Migrate callers to `fd_from_handle + vfs_poll` |
+| Userspace `channel_wait` wrappers | ✅ Done | All driver callers migrated to `fd_from_handle + add_fd_readable` |
 
 ### 2.4 Documentation
 
@@ -193,7 +195,7 @@ When writing a new service or driver:
 | `SYS_CHANNEL_WAIT` | ⛔ Deprecated | `SYS_FD_FROM_HANDLE` + `SYS_FS_POLL` |
 | `SYS_CHANNEL_SEND_HANDLE` | ⛔ Deprecated | `SYS_CHANNEL_SEND_MSG` (atomic) |
 | `SYS_CHANNEL_RECV_HANDLE` | ⛔ Deprecated | `SYS_CHANNEL_RECV_MSG` (atomic) |
-| `stem::syscall::channel_wait` | ⬜ Migration pending | `fd_from_handle` + `vfs_poll` |
+| `stem::syscall::channel_wait` | ✅ Migrated | `fd_from_handle` + `WaitSet::add_fd_readable` — all drivers updated |
 
 Deprecated syscalls remain in the ABI for compatibility but will not receive
 new features.  New code must not use them.
@@ -260,7 +262,7 @@ a common readiness model.  They are not collapsed into one — see
 | C — Readiness | Expose inbox FD acquisition path to userspace | ⬜ Pending |
 | C — Readiness | Tests: mixed poll sets (file + channel + inbox FDs) | ⬜ Pending |
 | D — Deprecation | Document migration off `SYS_CHANNEL_WAIT` | ✅ Done (this document + `channel_semantics.md`) |
-| D — Deprecation | Userspace `channel_wait` → `fd_from_handle + fs_poll` | ⬜ Pending |
+| D — Deprecation | Userspace `channel_wait` → `fd_from_handle + fs_poll` | ✅ Done — ata_disk, ahci_disk, display_fake, display_virtio_gpu migrated |
 
 ---
 
@@ -269,7 +271,6 @@ a common readiness model.  They are not collapsed into one — see
 | Blocker | Affects | Notes |
 |---------|---------|-------|
 | Inbox FD acquisition path not yet syscall-exposed | C — Readiness step 2 | `InboxNode` exists in kernel; needs syscall to open it from userspace |
-| Driver `SYS_CHANNEL_WAIT` usage | Driver migration | ata_disk, ahci_disk, display_fake; low urgency |
 | No mixed-poll-set tests | C — Readiness step 3 | Add to `userspace/poll_mux` or a dedicated test |
 | Full Inbox + Port convergence onto `KernelMessageQueue` | B — Shared core | Low urgency; prototype validates feasibility |
 
@@ -295,6 +296,10 @@ a common readiness model.  They are not collapsed into one — see
 | `bristle` (kbd input) | `add_port_readable` + `channel_recv` | ✅ Migrated to `add_fd_readable` + `vfs_read` |
 | `bristle` (output path) | `channel_send_all` to bloom/echo | ⬜ Pending |
 | `sprout` channel setup | Integer boot args for raw handles | ⬜ Pending (use `channel_create_fds` + FD inheritance) |
+| `ata_disk` | `channel_wait` in service loop | ✅ Migrated to `vfs_fd_from_handle` + `WaitSet::add_fd_readable` |
+| `ahci_disk` | `channel_wait` in service loop | ✅ Migrated to `vfs_fd_from_handle` + `WaitSet::add_fd_readable` |
+| `display_fake` | `channel_wait` in service loop | ✅ Migrated to `vfs_fd_from_handle` + `WaitSet::add_fd_readable` |
+| `display_virtio_gpu` | `WaitSet::add_port_readable` | ✅ Migrated to `vfs_fd_from_handle` + `WaitSet::add_fd_readable` |
 
 ---
 
