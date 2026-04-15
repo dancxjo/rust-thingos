@@ -237,7 +237,7 @@ of Presence into Unix TTY semantics.
 **What it owns**
 
 - A stable identity (ThingId, 128-bit).
-- A kind (Human, Agent, or Service — from `tools/kindc/fixtures/generated`).
+- A kind (Human, Agent, or Service — from `thingos/src/kinds/generated`).
 
 **Relationships**
 
@@ -248,7 +248,7 @@ of Presence into Unix TTY semantics.
 | identified as | `Kind` (`thingos.person`) | Person identity is a typed object, not a raw integer |
 
 **Code status**: Canonical in definition.  `PersonKind` (Human, Agent,
-Service) in `tools/kindc/fixtures/generated/mod.rs`.  Not yet a first-class
+Service) in `thingos/src/kinds/generated/mod.rs`.  Not yet a first-class
 kernel object; Person identity is currently transitionally carried as a name
 string inside `Authority`.  Full extraction (uid/gid → typed PersonId,
 service-account binding) is deferred to Phase 9+.

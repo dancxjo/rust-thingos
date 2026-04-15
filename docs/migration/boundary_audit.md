@@ -54,8 +54,8 @@ that enforce the above:
    function signatures via let bindings.  Changing a bridge return type away
    from the canonical type becomes a compile error.
 
-2. **`kind_ids_match_kindc_generated_constants`** — parses the kindc fixture
-   file (`tools/kindc/fixtures/generated/mod.rs`) at test time and asserts that
+2. **`kind_ids_match_kindc_generated_constants`** — imports the generated
+   `thingos::kinds` module (`thingos/src/kinds/generated/mod.rs`) and asserts that
    every `KIND_ID_THINGOS_*` constant in the `thingos` crate matches the value
    produced by the schema compiler.  Schema drift between kindc output and the
    hand-maintained constants becomes a test failure.
@@ -143,7 +143,7 @@ pointers into a canonical `thingos::message::Message`.
 ## 6. Structural Divergence Notes
 
 Several `thingos` crate types intentionally diverge from the kindc-generated
-versions in `tools/kindc/fixtures/generated/mod.rs`.  This is expected during
+versions in `thingos/src/kinds/generated/mod.rs`.  This is expected during
 the transitional migration period.
 
 | Type | thingos crate shape | Generated shape | Reason for divergence |
@@ -155,7 +155,7 @@ the transitional migration period.
 These divergences are tracked here so they remain visible rather than mythical.
 The **KindId constants** remain aligned between the two, anchoring the semantic
 versioning even while structural details evolve.  A future `just kindc-gen` pass
-should regenerate the fixture file from the current schemas and re-sync the
+should regenerate the generated module from the current schemas and re-sync the
 generated types.
 
 ---
@@ -167,7 +167,7 @@ generated types.
 | VFS RPC protocol (`abi::vfs_rpc`) | No kindc schema defined; C-packed layout | Define VFS RPC kinds in kindc, regenerate |
 | Syscall raw ABI structs (`abi::types`) | C-ABI layout guarantees; no kindc C-layout support | Add `#[repr(C)]` generation to kindc or keep as `abi` crate |
 | `Task::job` type (`Option<u32>`) | No first-class `ThingId` for jobs yet | Replace when Job becomes a first-class kernel object |
-| `Place` / `Group` structural shape | Schema evolved past kindc snapshot | Re-run `just kindc-gen` to sync fixture |
+| `Place` / `Group` structural shape | Schema evolved past kindc snapshot | Re-run `just kindc-gen` to sync generated module |
 
 ---
 
