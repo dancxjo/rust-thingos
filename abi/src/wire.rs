@@ -96,7 +96,7 @@ impl SymbolId {
     /// Convert a BlobId to a SymbolId.
     ///
     /// In this implementation, we simply hash the BlobId to get a SymbolId,
-    /// or treating it as distinct type-safe handle.
+    /// or treating it as distinct type-safe thing.
     /// For now, since they are both 16 bytes, we can map 1:1 if we want,
     /// but let's do a quick mix to ensure they are distinct spaces if needed.
     /// Actually, the prompt suggests "stable hash of the BlobId bytes" or simple mapping.

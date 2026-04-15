@@ -14,7 +14,7 @@ use super::arch::raw_syscall6;
 
 /// Create a new Unix domain stream socket.
 ///
-/// Returns the file descriptor on success.
+/// Returns the thing on success.
 ///
 /// # Example
 /// ```no_run
@@ -38,14 +38,14 @@ pub fn socket(domain: u32, type_: u32, protocol: u32) -> SysResult<u32> {
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
-/// Bind a socket fd to a filesystem path.
+/// Bind a socket thing to a filesystem path.
 ///
 /// The path should be absolute (e.g. `/run/my.sock`).
-pub fn bind(fd: u32, path: &str) -> SysResult<()> {
+pub fn bind(thing: u32, path: &str) -> SysResult<()> {
     let ret = unsafe {
         raw_syscall6(
             SYS_BIND,
-            fd as usize,
+            thing as usize,
             path.as_ptr() as usize,
             path.len(),
             0,
@@ -60,9 +60,9 @@ pub fn bind(fd: u32, path: &str) -> SysResult<()> {
 ///
 /// `backlog` is the maximum number of queued connections; 0 uses the
 /// kernel default (currently clamped to 1..128).
-pub fn listen(fd: u32, backlog: usize) -> SysResult<()> {
+pub fn listen(thing: u32, backlog: usize) -> SysResult<()> {
     let ret = unsafe {
-        raw_syscall6(SYS_LISTEN, fd as usize, backlog, 0, 0, 0, 0)
+        raw_syscall6(SYS_LISTEN, thing as usize, backlog, 0, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|_| ())
 }
@@ -70,20 +70,20 @@ pub fn listen(fd: u32, backlog: usize) -> SysResult<()> {
 /// Accept one incoming connection on a listening socket.
 ///
 /// Blocks until a connection is available.
-/// Returns the new file descriptor for the accepted connection.
-pub fn accept(fd: u32) -> SysResult<u32> {
-    let ret = unsafe { raw_syscall6(SYS_ACCEPT, fd as usize, 0, 0, 0, 0, 0) };
+/// Returns the new thing for the accepted connection.
+pub fn accept(thing: u32) -> SysResult<u32> {
+    let ret = unsafe { raw_syscall6(SYS_ACCEPT, thing as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
 /// Connect a socket to a listening socket at `path`.
 ///
 /// Blocks until the connection is established.
-pub fn connect(fd: u32, path: &str) -> SysResult<()> {
+pub fn connect(thing: u32, path: &str) -> SysResult<()> {
     let ret = unsafe {
         raw_syscall6(
             SYS_CONNECT,
-            fd as usize,
+            thing as usize,
             path.as_ptr() as usize,
             path.len(),
             0,
@@ -100,8 +100,8 @@ pub fn connect(fd: u32, path: &str) -> SysResult<()> {
 /// - `0` (`SHUT_RD`)   — stop receiving
 /// - `1` (`SHUT_WR`)   — stop sending (sends EOF to the peer)
 /// - `2` (`SHUT_RDWR`) — both directions
-pub fn shutdown(fd: u32, how: u32) -> SysResult<()> {
-    let ret = unsafe { raw_syscall6(SYS_SHUTDOWN, fd as usize, how as usize, 0, 0, 0, 0) };
+pub fn shutdown(thing: u32, how: u32) -> SysResult<()> {
+    let ret = unsafe { raw_syscall6(SYS_SHUTDOWN, thing as usize, how as usize, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
 
@@ -148,7 +148,7 @@ pub fn socketpair(domain: u32, type_: u32, protocol: u32) -> SysResult<(u32, u32
 
 /// Send data and zero or more FDs atomically over a socket or channel FD.
 ///
-/// `fds` is a slice of `u32` fd/handle numbers to attach.  The kernel
+/// `fds` is a slice of `u32` thing numbers to attach.  The kernel
 /// resolves each number from the caller's FD table (then falls back to the
 /// global IPC handle table), duplicates the capability, and delivers it to
 /// the receiver when they call `recvmsg`.
@@ -168,11 +168,11 @@ pub fn socketpair(domain: u32, type_: u32, protocol: u32) -> SysResult<(u32, u32
 /// let (n, _) = recvmsg(b, &mut buf, &mut fds_out).unwrap();
 /// assert_eq!(&buf[..n], b"hello");
 /// ```
-pub fn sendmsg(fd: u32, data: &[u8], fds: &[u32]) -> SysResult<()> {
+pub fn sendmsg(thing: u32, data: &[u8], fds: &[u32]) -> SysResult<()> {
     let ret = unsafe {
         raw_syscall6(
             SYS_SENDMSG,
-            fd as usize,
+            thing as usize,
             data.as_ptr() as usize,
             data.len(),
             fds.as_ptr() as usize,
@@ -185,17 +185,17 @@ pub fn sendmsg(fd: u32, data: &[u8], fds: &[u32]) -> SysResult<()> {
 
 /// Receive one message (data bytes + FDs) from a socket or channel FD.
 ///
-/// On success returns `(actual_data_len, actual_fds_count)`.
+/// On success returns `(actual_data_len, actual_things_count)`.
 /// Returns `Err(Errno::EAGAIN)` when no message is available (non-blocking).
 ///
 /// Installed FD numbers are written into the `fds_buf` slice (truncated if
 /// the buffer is too small).  Data is truncated to `data_buf.len()` bytes.
-pub fn recvmsg(fd: u32, data_buf: &mut [u8], fds_buf: &mut [u32]) -> SysResult<(usize, usize)> {
+pub fn recvmsg(thing: u32, data_buf: &mut [u8], fds_buf: &mut [u32]) -> SysResult<(usize, usize)> {
     let mut out_lens = [0usize; 2];
     let ret = unsafe {
         raw_syscall6(
             SYS_RECVMSG,
-            fd as usize,
+            thing as usize,
             data_buf.as_mut_ptr() as usize,
             data_buf.len(),
             fds_buf.as_mut_ptr() as usize,

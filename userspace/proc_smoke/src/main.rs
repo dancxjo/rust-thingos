@@ -273,7 +273,7 @@ fn test_proc_pipeline(exe: &str) -> Result<(), String> {
 
     // child 2: cat (echoes stdin)
     // Here we pass ChildStdout (ChildPipe) directly to stdin.
-    // This relies on the new FdRemap logic in Command::spawn.
+    // This relies on the new ThingRemap logic in Command::spawn.
     let output2 = Command::new(exe)
         .arg("--child-stdin")
         .stdin(stdout1)

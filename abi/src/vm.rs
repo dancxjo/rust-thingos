@@ -78,7 +78,7 @@ impl core::ops::BitOrAssign for VmMapFlags {
 #[derive(Debug, Clone, Copy)]
 pub enum VmBacking {
     Anonymous { zeroed: bool },
-    File { fd: u32, offset: u64 },
+    File { thing: u32, offset: u64 },
 }
 
 #[repr(C)]

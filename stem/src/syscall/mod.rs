@@ -78,23 +78,23 @@ pub fn log_set_level(level: u8) -> Result<(), Errno> {
     abi::errors::errno(ret).map(|_| ())
 }
 
-pub fn read(fd: usize, buf: &mut [u8]) -> Result<usize, Errno> {
-    let ret = unsafe { raw_syscall6(SYS_READ, fd, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0) };
+pub fn read(thing: usize, buf: &mut [u8]) -> Result<usize, Errno> {
+    let ret = unsafe { raw_syscall6(SYS_READ, thing, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
-pub fn write(fd: usize, buf: &[u8]) -> Result<usize, Errno> {
-    let ret = unsafe { raw_syscall6(SYS_WRITE, fd, buf.as_ptr() as usize, buf.len(), 0, 0, 0) };
+pub fn write(thing: usize, buf: &[u8]) -> Result<usize, Errno> {
+    let ret = unsafe { raw_syscall6(SYS_WRITE, thing, buf.as_ptr() as usize, buf.len(), 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
 pub use channel::{
     channel_capacity, channel_close, channel_create, channel_create_fds, channel_len, channel_recv,
-    channel_send, channel_send_all, channel_try_recv, ChannelHandle,
+    channel_send, channel_send_all, channel_try_recv, ChannelThing,
 };
 pub use vfs::{
     dup, dup2, pipe, tcgetattr, tcsetattr, vfs_chdir, vfs_chmod, vfs_close, vfs_fchmod, vfs_fcntl,
-    vfs_fd_from_handle, vfs_fsync, vfs_futimes, vfs_getcwd, vfs_isatty, vfs_mkdir, vfs_mount,
+    vfs_thing_from_channel, vfs_fsync, vfs_futimes, vfs_getcwd, vfs_isatty, vfs_mkdir, vfs_mount,
     vfs_open, vfs_poll, vfs_read, vfs_readdir, vfs_readv, vfs_realpath, vfs_rename, vfs_seek,
     vfs_stat, vfs_umount, vfs_unlink, vfs_utimes, vfs_watch_fd, vfs_watch_path, vfs_write,
     vfs_writev,
@@ -334,15 +334,15 @@ pub fn spawn_process(name: &str, arg: usize) -> Result<u64, abi::errors::Errno> 
 }
 
 /// Replace the current process image with a new executable from the given FD.
-/// PID and file descriptors are preserved.
-pub fn task_exec(fd: u32, argv: &[&[u8]], env: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<(), Errno> {
+/// PID and things are preserved.
+pub fn task_exec(thing: u32, argv: &[&[u8]], env: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<(), Errno> {
     let argv_blob = serialize_argv(argv);
     let env_blob = serialize_env(env);
 
     let ret = unsafe {
         raw_syscall6(
             SYS_TASK_EXEC,
-            fd as usize,
+            thing as usize,
             argv_blob.as_ptr() as usize,
             argv_blob.len(),
             env_blob.as_ptr() as usize,
@@ -424,24 +424,24 @@ pub fn parse_shebang(header: &[u8]) -> Option<(&str, Option<&str>)> {
 ///      and [`task_exec`] is called with the interpreter's FD.
 ///    - Any other file causes the FD to be closed and [`Errno::ENOEXEC`] to be
 ///      returned.
-/// 3. On failure the file descriptor is closed before returning the error.
+/// 3. On failure the thing is closed before returning the error.
 pub fn execve(path: &str, argv: &[&[u8]], env: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<(), Errno> {
-    let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY)?;
+    let thing = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY)?;
 
     // Read enough bytes to detect the magic number and, for shebang scripts,
     // parse the interpreter line.  POSIX shebang lines are at most 255 bytes
     // after `#!`; reading 256 bytes total covers the common maximum.
     let mut header_buf = [0u8; 256];
-    let n = match vfs_read(fd, &mut header_buf) {
+    let n = match vfs_read(thing, &mut header_buf) {
         Ok(n) => n,
         Err(e) => {
-            let _ = vfs_close(fd);
+            let _ = vfs_close(thing);
             return Err(e);
         }
     };
 
     if n < 2 {
-        let _ = vfs_close(fd);
+        let _ = vfs_close(thing);
         return Err(Errno::ENOEXEC);
     }
 
@@ -450,9 +450,9 @@ pub fn execve(path: &str, argv: &[&[u8]], env: &BTreeMap<Vec<u8>, Vec<u8>>) -> R
     if is_elf_magic(header) {
         // ELF binary: the kernel reads the full file from the VFS node, so
         // the file-offset position does not matter here.
-        let res = task_exec(fd, argv, env);
+        let res = task_exec(thing, argv, env);
         if res.is_err() {
-            let _ = vfs_close(fd);
+            let _ = vfs_close(thing);
         }
         return res;
     }
@@ -460,7 +460,7 @@ pub fn execve(path: &str, argv: &[&[u8]], env: &BTreeMap<Vec<u8>, Vec<u8>>) -> R
     if header[0] == b'#' && header[1] == b'!' {
         // Shebang script: the script fd is no longer needed once we have the
         // interpreter path.
-        let _ = vfs_close(fd);
+        let _ = vfs_close(thing);
 
         let (interp_path, interp_arg) = match parse_shebang(header) {
             Some(v) => v,
@@ -508,7 +508,7 @@ pub fn execve(path: &str, argv: &[&[u8]], env: &BTreeMap<Vec<u8>, Vec<u8>>) -> R
     }
 
     // Not an ELF and not a shebang script.
-    let _ = vfs_close(fd);
+    let _ = vfs_close(thing);
     Err(Errno::ENOEXEC)
 }
 
@@ -1002,15 +1002,15 @@ pub fn device_claim(path: &str) -> Result<usize, Errno> {
 
 /// Map a device MMIO BAR into memory
 /// Returns the virtual address where the BAR is mapped
-pub fn device_map_mmio(claim_handle: usize, bar_index: usize) -> Result<u64, Errno> {
-    let ret = unsafe { raw_syscall6(SYS_DEVICE_MAP_MMIO, claim_handle, bar_index, 0, 0, 0, 0) };
+pub fn device_map_mmio(claim_thing: usize, bar_index: usize) -> Result<u64, Errno> {
+    let ret = unsafe { raw_syscall6(SYS_DEVICE_MAP_MMIO, claim_thing, bar_index, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u64)
 }
 
 /// Allocate DMA-safe memory for a device
 /// Returns the virtual address of the allocated buffer
-pub fn device_alloc_dma(claim_handle: usize, page_count: usize) -> Result<u64, Errno> {
-    let ret = unsafe { raw_syscall6(SYS_DEVICE_ALLOC_DMA, claim_handle, page_count, 0, 0, 0, 0) };
+pub fn device_alloc_dma(claim_thing: usize, page_count: usize) -> Result<u64, Errno> {
+    let ret = unsafe { raw_syscall6(SYS_DEVICE_ALLOC_DMA, claim_thing, page_count, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u64)
 }
 
@@ -1041,11 +1041,11 @@ pub fn irq_subscribe(vector: u8) -> Result<(), Errno> {
     abi::errors::errno(ret).map(|_| ())
 }
 
-pub fn device_irq_subscribe(claim_handle: usize, irq_index: u8) -> Result<(), Errno> {
+pub fn device_irq_subscribe(claim_thing: usize, irq_index: u8) -> Result<(), Errno> {
     let ret = unsafe {
         raw_syscall6(
             SYS_DEVICE_IRQ_SUBSCRIBE,
-            claim_handle,
+            claim_thing,
             irq_index as usize,
             DEVICE_IRQ_SUBSCRIBE_DEVICE as usize,
             0,
@@ -1073,11 +1073,11 @@ pub fn irq_wait(vector: u8) -> Result<u32, Errno> {
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
-pub fn device_irq_wait(claim_handle: usize, irq_index: u8) -> Result<u32, Errno> {
+pub fn device_irq_wait(claim_thing: usize, irq_index: u8) -> Result<u32, Errno> {
     let ret = unsafe {
         raw_syscall6(
             SYS_DEVICE_IRQ_WAIT,
-            claim_handle,
+            claim_thing,
             irq_index as usize,
             DEVICE_IRQ_SUBSCRIBE_DEVICE as usize,
             0,
@@ -1091,7 +1091,7 @@ pub fn device_irq_wait(claim_handle: usize, irq_index: u8) -> Result<u32, Errno>
 pub fn memfd_create(name: &str, size: usize) -> Result<u32, Errno> {
     let ret = unsafe {
         raw_syscall6(
-            SYS_MEMFD_CREATE,
+            SYS_SHARED_MEMORY_CREATE,
             name.as_ptr() as usize,
             name.len(),
             size,
@@ -1103,9 +1103,9 @@ pub fn memfd_create(name: &str, size: usize) -> Result<u32, Errno> {
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
-pub fn memfd_phys(fd: u32) -> Result<u64, Errno> {
+pub fn shared_memory_phys(fd: u32) -> Result<u64, Errno> {
     let ret = unsafe {
-        match raw_syscall6(SYS_MEMFD_PHYS, fd as usize, 0, 0, 0, 0, 0) {
+        match raw_syscall6(SYS_SHARED_MEMORY_PHYS, thing as usize, 0, 0, 0, 0, 0) {
             r if r < 0 => return Err(core::mem::transmute(-(r as i32))),
             r => r as u64,
         }

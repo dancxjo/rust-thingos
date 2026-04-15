@@ -120,8 +120,8 @@ pub const SYS_VM_UNMAP: u32 = 0x2002;
 pub const SYS_VM_PROTECT: u32 = 0x2003;
 pub const SYS_VM_ADVISE: u32 = 0x2004;
 pub const SYS_VM_QUERY: u32 = 0x2005;
-pub const SYS_MEMFD_CREATE: u32 = 0x2006;
-pub const SYS_MEMFD_PHYS: u32 = 0x2007;
+pub const SYS_SHARED_MEMORY_CREATE: u32 = 0x2006;
+pub const SYS_SHARED_MEMORY_PHYS: u32 = 0x2007;
 
 // ============================================================================
 // IPC (0x3000)
@@ -137,26 +137,26 @@ pub const SYS_CHANNEL_CLOSE: u32 = 0x3008;
 pub const SYS_PIPE: u32 = 0x3015;
 
 // ── Unix Domain Sockets (0x3020) ─────────────────────────────────────────────
-/// Create a Unix domain socket. Args: (domain, type, protocol) → fd
+/// Create a Unix domain socket. Args: (domain, type, protocol) → thing
 pub const SYS_SOCKET: u32 = 0x3020;
-/// Bind a socket to a filesystem path. Args: (fd, path_ptr, path_len)
+/// Bind a socket to a filesystem path. Args: (thing, path_ptr, path_len)
 pub const SYS_BIND: u32 = 0x3021;
-/// Mark a socket as listening for connections. Args: (fd, backlog)
+/// Mark a socket as listening for connections. Args: (thing, backlog)
 pub const SYS_LISTEN: u32 = 0x3022;
-/// Accept an incoming connection. Args: (fd) → new_fd
+/// Accept an incoming connection. Args: (thing) → new_thing
 pub const SYS_ACCEPT: u32 = 0x3023;
-/// Connect to a listening socket. Args: (fd, path_ptr, path_len)
+/// Connect to a listening socket. Args: (thing, path_ptr, path_len)
 pub const SYS_CONNECT: u32 = 0x3024;
-/// Shut down part or all of a socket connection. Args: (fd, how)
+/// Shut down part or all of a socket connection. Args: (thing, how)
 pub const SYS_SHUTDOWN: u32 = 0x3025;
-/// Create a connected socket pair. Args: (domain, type, protocol, fds_ptr) → 0
+/// Create a connected socket pair. Args: (domain, type, protocol, things_ptr) → 0
 pub const SYS_SOCKETPAIR: u32 = 0x3026;
-/// Send data + zero or more FDs over a socket or channel FD.
-/// Args: (fd, data_ptr, data_len, fds_ptr, fds_count, 0) → 0
+/// Send data + zero or more things over a socket or channel.
+/// Args: (thing, data_ptr, data_len, things_ptr, things_count, 0) → 0
 pub const SYS_SENDMSG: u32 = 0x3027;
-/// Receive data + zero or more FDs from a socket or channel FD.
-/// Args: (fd, data_ptr, data_cap, fds_ptr, fds_cap, out_lens_ptr) → 0
-/// out_lens_ptr → `[usize; 2]` = `[actual_data_len, actual_fds_count]`
+/// Receive data + zero or more things from a socket or channel.
+/// Args: (thing, data_ptr, data_cap, things_ptr, things_cap, out_lens_ptr) → 0
+/// out_lens_ptr → `[usize; 2]` = `[actual_data_len, actual_things_count]`
 /// Returns `EAGAIN` if no message is available.
 pub const SYS_RECVMSG: u32 = 0x3028;
 
@@ -227,13 +227,13 @@ pub const SYS_FS_UMOUNT: u32 = 0x400A;
 pub const SYS_FS_POLL: u32 = 0x400B;
 pub const SYS_FS_DUP: u32 = 0x400C;
 pub const SYS_FS_DUP2: u32 = 0x400D;
-pub const SYS_FS_WATCH_FD: u32 = 0x400E;
+pub const SYS_FS_WATCH_THING: u32 = 0x400E;
 pub const SYS_FS_WATCH_PATH: u32 = 0x400F;
 pub const SYS_FS_RENAME: u32 = 0x4010;
 pub const SYS_FS_DEVICE_CALL: u32 = 0x4011;
 pub const SYS_FS_CHDIR: u32 = 0x4012;
 pub const SYS_FS_GETCWD: u32 = 0x4013;
-pub const SYS_FD_FROM_HANDLE: u32 = 0x4014;
+pub const SYS_THING_FROM_CHANNEL: u32 = 0x4014;
 pub const SYS_FS_NOTIFY: u32 = 0x4015;
 pub const SYS_FS_ISATTY: u32 = 0x4020;
 pub const SYS_FS_REALPATH: u32 = 0x4016;
@@ -245,26 +245,26 @@ pub const SYS_FS_READLINK: u32 = 0x401A;
 pub const SYS_FS_FTRUNCATE: u32 = 0x401B;
 /// Change file permission bits by path (chmod).
 pub const SYS_FS_CHMOD: u32 = 0x401C;
-/// Change file permission bits by open file descriptor (fchmod).
+/// Change file permission bits by open thing (fchmod).
 pub const SYS_FS_FCHMOD: u32 = 0x401D;
 /// Set access and modification timestamps by path (utimes).
 pub const SYS_FS_UTIMES: u32 = 0x401E;
-/// Set access and modification timestamps by open file descriptor (futimes).
+/// Set access and modification timestamps by open thing (futimes).
 pub const SYS_FS_FUTIMES: u32 = 0x401F;
 /// Stat a path without following the final symlink (lstat semantics).
 /// Args: (path_ptr, path_len, stat_ptr) → 0
 pub const SYS_FS_LSTAT: u32 = 0x4020;
-/// Scatter-gather read from an open file descriptor.
-/// Args: (fd, iovec_ptr, iovec_count) → total_bytes_read
+/// Scatter-gather read from an open thing.
+/// Args: (thing, iovec_ptr, iovec_count) → total_bytes_read
 pub const SYS_FS_READV: u32 = 0x4021;
-/// Scatter-gather write to an open file descriptor.
-/// Args: (fd, iovec_ptr, iovec_count) → total_bytes_written
+/// Scatter-gather write to an open thing.
+/// Args: (thing, iovec_ptr, iovec_count) → total_bytes_written
 pub const SYS_FS_WRITEV: u32 = 0x4022;
 /// Create a hard link at `dst` pointing to the same inode as `src`.
 /// Args: (src_ptr, src_len, dst_ptr, dst_len) → 0
 pub const SYS_FS_LINK: u32 = 0x4023;
 /// Advisory file lock / unlock (flock semantics).
-/// Args: (fd, how) where `how` is a combination of [`flock_flags`] constants.
+/// Args: (thing, how) where `how` is a combination of [`flock_flags`] constants.
 /// Returns 0 on success; EWOULDBLOCK if the lock is held and LOCK_NB was set.
 pub const SYS_FS_FLOCK: u32 = 0x4024;
 /// Set access and modification timestamps for a path without following symlinks (lutimes).
@@ -366,8 +366,8 @@ pub mod fcntl_cmd {
     pub const F_SETFL: u32 = 4;
 }
 
-pub mod fd_flags {
-    pub const FD_CLOEXEC: u32 = 0x1;
+pub mod thing_flags {
+    pub const THING_CLOEXEC: u32 = 0x1;
 }
 
 pub mod poll_flags {

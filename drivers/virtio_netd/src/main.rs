@@ -133,8 +133,8 @@ fn main(arg: usize) -> ! {
     };
 
     // Bridge the response-channel handle to a VFS FD for sendmsg.
-    let drv_resp_write_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_resp_write)
-        .expect("virtio_netd: vfs_fd_from_handle(drv_resp_write)");
+    let drv_resp_write_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_resp_write)
+        .expect("virtio_netd: vfs_thing_from_channel(drv_resp_write)");
 
     // Sovereign Handshake
     use abi::display_driver_protocol;

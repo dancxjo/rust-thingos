@@ -54,7 +54,7 @@ use alloc::{vec, vec::Vec};
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
-use stem::syscall::channel::{channel_create, channel_send, channel_try_recv, ChannelHandle};
+use stem::syscall::channel::{channel_create, channel_send, channel_try_recv, ChannelThing};
 use stem::syscall::vfs::vfs_mount;
 use stem::{info, warn};
 
@@ -132,7 +132,7 @@ pub struct IpConfig {
 /// Userland VFS provider that serves the `/net/` namespace.
 pub struct NetVfsProvider {
     /// Read-end of the VFS RPC port (provider reads requests from here).
-    req_read: ChannelHandle,
+    req_read: ChannelThing,
     /// MAC address of the first interface (eth0).
     pub mac: [u8; 6],
     /// MTU of eth0.
@@ -197,7 +197,7 @@ impl NetVfsProvider {
     }
 
     /// The port handle the RPC loop reads from (pass to `port_wait` / `port_len`).
-    pub fn req_read_port(&self) -> ChannelHandle {
+    pub fn req_read_port(&self) -> ChannelThing {
         self.req_read
     }
 
@@ -283,7 +283,7 @@ impl NetVfsProvider {
             return;
         }
 
-        let resp_port = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as ChannelHandle;
+        let resp_port = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as ChannelThing;
         let op_byte = buf[4];
         let payload = &buf[hdr_sz..];
 
@@ -314,7 +314,7 @@ impl NetVfsProvider {
 
     // ── Lookup ────────────────────────────────────────────────────────────────
 
-    fn op_lookup(&self, resp_port: ChannelHandle, payload: &[u8]) {
+    fn op_lookup(&self, resp_port: ChannelThing, payload: &[u8]) {
         if payload.len() < 4 {
             send_err(resp_port, E_INVAL);
             return;
@@ -343,7 +343,7 @@ impl NetVfsProvider {
 
     fn op_read(
         &mut self,
-        resp_port: ChannelHandle,
+        resp_port: ChannelThing,
         payload: &[u8],
         socket_set: &mut SocketSet,
         socket_api: &mut SocketApi,
@@ -370,7 +370,7 @@ impl NetVfsProvider {
 
     fn op_write<D: smoltcp::phy::Device>(
         &mut self,
-        resp_port: ChannelHandle,
+        resp_port: ChannelThing,
         payload: &[u8],
         iface: &mut Interface,
         device: &mut D,
@@ -401,7 +401,7 @@ impl NetVfsProvider {
 
     // ── Readdir ───────────────────────────────────────────────────────────────
 
-    fn op_readdir(&self, resp_port: ChannelHandle, payload: &[u8], socket_api: &SocketApi) {
+    fn op_readdir(&self, resp_port: ChannelThing, payload: &[u8], socket_api: &SocketApi) {
         if payload.len() < 20 {
             send_err(resp_port, E_INVAL);
             return;
@@ -435,7 +435,7 @@ impl NetVfsProvider {
 
     // ── Stat ─────────────────────────────────────────────────────────────────
 
-    fn op_stat(&self, resp_port: ChannelHandle, payload: &[u8], socket_api: &SocketApi) {
+    fn op_stat(&self, resp_port: ChannelThing, payload: &[u8], socket_api: &SocketApi) {
         if payload.len() < 8 {
             send_err(resp_port, E_INVAL);
             return;
@@ -460,7 +460,7 @@ impl NetVfsProvider {
 
     fn op_close(
         &self,
-        resp_port: ChannelHandle,
+        resp_port: ChannelThing,
         payload: &[u8],
         socket_set: &mut SocketSet,
         socket_api: &mut SocketApi,
@@ -493,7 +493,7 @@ impl NetVfsProvider {
 
     fn op_poll(
         &self,
-        resp_port: ChannelHandle,
+        resp_port: ChannelThing,
         payload: &[u8],
         socket_set: &mut SocketSet,
         socket_api: &SocketApi,
@@ -1326,22 +1326,22 @@ enum WriteResult {
 
 // ── Wire helpers ─────────────────────────────────────────────────────────────
 
-fn send_resp(port: ChannelHandle, data: &[u8]) {
+fn send_resp(port: ChannelThing, data: &[u8]) {
     let _ = channel_send(port, data);
 }
 
-fn send_err(port: ChannelHandle, errno: u8) {
+fn send_err(port: ChannelThing, errno: u8) {
     let _ = channel_send(port, &[errno]);
 }
 
-fn send_handle(port: ChannelHandle, handle: u64) {
+fn send_handle(port: ChannelThing, handle: u64) {
     let mut resp = [0u8; 9];
     resp[0] = E_OK;
     resp[1..9].copy_from_slice(&handle.to_le_bytes());
     let _ = channel_send(port, &resp);
 }
 
-fn send_data(port: ChannelHandle, data: &[u8]) {
+fn send_data(port: ChannelThing, data: &[u8]) {
     let mut resp = Vec::with_capacity(5 + data.len());
     resp.push(E_OK);
     resp.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -1349,7 +1349,7 @@ fn send_data(port: ChannelHandle, data: &[u8]) {
     let _ = channel_send(port, &resp);
 }
 
-fn send_write_ok(port: ChannelHandle, bytes_written: u32) {
+fn send_write_ok(port: ChannelThing, bytes_written: u32) {
     let mut resp = [0u8; 5];
     resp[0] = E_OK;
     resp[1..5].copy_from_slice(&bytes_written.to_le_bytes());

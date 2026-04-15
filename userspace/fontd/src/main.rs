@@ -9,14 +9,14 @@ use abi::font_protocol::{
     decode_request_tag, EnsureGlyphs, EnsureGlyphsResp, FaceMetrics,
     FontRequestTag, FontResponseTag, GetFaceMetrics, GlyphPlacement,
 };
-use abi::ids::HandleId;
+use abi::ids::ThingId;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use ipc_helpers::rpc::RpcServer;
 use petals::font::TextRenderer;
 use stem::syscall::socket::sendmsg;
-use stem::syscall::vfs::vfs_fd_from_handle;
+use stem::syscall::vfs::vfs_thing_from_channel;
 use stem::{error, info};
 
 use petals::Atlas;
@@ -217,7 +217,7 @@ fn handle_ensure_glyphs(
     let mut resp_buf = vec![0u8; 4096 * 4];
     if let Some(len) = resp.encode(&mut resp_buf) {
         // Send atlas fd alongside the encoded response framed with RpcHeader.
-        let write_h_fd = vfs_fd_from_handle(write_h).unwrap_or(write_h);
+        let write_h_fd = vfs_thing_from_channel(write_h).unwrap_or(write_h);
         let _ = sendmsg(write_h_fd, &[], &[atlas.texture.fd]);
         let _ = server.reply(request_id, write_h, &resp_buf[..len]);
     }

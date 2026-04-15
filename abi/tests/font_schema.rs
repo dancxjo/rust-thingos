@@ -92,7 +92,6 @@ fn font_kinds_no_collision() {
 #[test]
 fn font_protocol_encode_decode_roundtrip() {
     use abi::font_protocol::*;
-    use abi::ids::HandleId;
     use abi::wire::ThingId;
 
     // Test GetFaceMetrics

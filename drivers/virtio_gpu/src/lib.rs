@@ -29,7 +29,7 @@ pub struct Rect {
 
 /// Virtio GPU driver state
 pub struct VirtioGpu {
-    claim_handle: usize,
+    claim_thing: usize,
 
     // MMIO regions
     common_cfg: u64,
@@ -69,7 +69,7 @@ impl VirtioGpu {
         use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
 
         // Claim the device using its sysfs path as the primary key.
-        let claim_handle = device_claim(sysfs_path)?;
+        let claim_thing = device_claim(sysfs_path)?;
 
         // Read VirtIO capability offsets from sysfs
         let common_bar =
@@ -93,23 +93,23 @@ impl VirtioGpu {
         );
 
         // Map the BAR containing common config
-        let common_bar_base = device_map_mmio(claim_handle, common_bar)?;
+        let common_bar_base = device_map_mmio(claim_thing, common_bar)?;
         let common_cfg = common_bar_base + common_offset;
 
         // Map notify BAR (may be same as common BAR)
         let notify_cfg = if notify_bar == common_bar {
             common_bar_base + notify_offset
         } else {
-            let notify_bar_base = device_map_mmio(claim_handle, notify_bar)?;
+            let notify_bar_base = device_map_mmio(claim_thing, notify_bar)?;
             notify_bar_base + notify_offset
         };
 
         // Allocate command buffer (1 page for commands + responses)
-        let cmd_buf = device_alloc_dma(claim_handle, 1).map_err(|_| Errno::ENOMEM)?;
+        let cmd_buf = device_alloc_dma(claim_thing, 1).map_err(|_| Errno::ENOMEM)?;
         let cmd_buf_phys = device_dma_phys(cmd_buf).map_err(|_| Errno::EFAULT)?;
 
         Ok(Self {
-            claim_handle,
+            claim_thing,
             common_cfg,
             notify_cfg,
             notify_off_multiplier: notify_multiplier,
@@ -756,7 +756,7 @@ impl VirtioGpu {
         use stem::syscall::{device_alloc_dma, device_dma_phys};
 
         let vq_virt =
-            device_alloc_dma(self.claim_handle, 4).map_err(|_| "Failed to alloc virtqueue")?;
+            device_alloc_dma(self.claim_thing, 4).map_err(|_| "Failed to alloc virtqueue")?;
         let vq_phys = device_dma_phys(vq_virt).map_err(|_| "Failed to get vq phys")?;
 
         let vq = Virtqueue::new(vq_virt, vq_phys, 128);
@@ -884,8 +884,8 @@ impl VirtioGpu {
     }
 
     /// Get claim handle for device operations
-    pub fn claim_handle(&self) -> usize {
-        self.claim_handle
+    pub fn claim_thing(&self) -> usize {
+        self.claim_thing
     }
 }
 

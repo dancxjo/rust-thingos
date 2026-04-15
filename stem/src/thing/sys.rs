@@ -6,4 +6,4 @@ pub use crate::syscall::vfs::{
     vfs_write as write,
 };
 
-pub use crate::syscall::{memfd_create, memfd_phys, vm_map};
+pub use crate::syscall::{memfd_create, shared_memory_phys, vm_map};

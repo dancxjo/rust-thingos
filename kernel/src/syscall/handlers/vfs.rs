@@ -18,7 +18,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 
 use abi::errors::{Errno, SysResult};
-use abi::syscall::{PollFd, fcntl_cmd, fd_flags, poll_flags, vfs_flags};
+use abi::syscall::{PollThing, fcntl_cmd, fd_flags, poll_flags, vfs_flags};
 
 use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
@@ -108,10 +108,10 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     if path == "/dev/fb0" {
         crate::kdebug!("sys_fs_open: process info present for /dev/fb0");
     }
-    let fd = pinfo_arc.lock().fd_table.open(node, open_flags, abs_path)?;
+    let fd = pinfo_arc.lock().thing_table.open(node, open_flags, abs_path)?;
 
     if path == "/dev/fb0" {
-        crate::kdebug!("sys_fs_open: fd_table.open('/dev/fb0') -> {}", fd);
+        crate::kdebug!("sys_fs_open: thing_table.open('/dev/fb0') -> {}", fd);
     }
 
     Ok(fd as usize)
@@ -127,14 +127,14 @@ pub fn sys_fs_close(fd: usize) -> SysResult<usize> {
     let maybe_lock_info: Option<(u64, u32)> = {
         let lock = pinfo_arc.lock();
         let pid = lock.pid;
-        lock.fd_table
+        lock.thing_table
             .get(fd as u32)
             .ok()
             .and_then(|f| f.node.stat().ok())
             .map(|s| (s.ino, pid))
     };
 
-    pinfo_arc.lock().fd_table.close(fd as u32)?;
+    pinfo_arc.lock().thing_table.close(fd as u32)?;
 
     // Release any advisory lock the process held on this inode.
     if let Some((ino, pid)) = maybe_lock_info {
@@ -154,7 +154,7 @@ pub fn sys_fs_sync(fd: usize) -> SysResult<usize> {
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(fd as u32)?.node.clone()
     };
     node.sync()?;
     Ok(0)
@@ -169,7 +169,7 @@ pub fn sys_fs_ftruncate(fd: usize, size: usize) -> SysResult<usize> {
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(fd as u32)?.node.clone()
     };
     node.truncate(size as u64)?;
     Ok(0)
@@ -181,18 +181,18 @@ pub fn sys_fs_fcntl(fd: usize, cmd: usize, arg: usize) -> SysResult<usize> {
     let mut lock = pinfo_arc.lock();
 
     match cmd as u32 {
-        fcntl_cmd::F_GETFD => Ok(lock.fd_table.get_fd_flags(fd as u32)? as usize),
+        fcntl_cmd::F_GETFD => Ok(lock.thing_table.get_fd_flags(fd as u32)? as usize),
         fcntl_cmd::F_SETFD => {
-            lock.fd_table
-                .set_fd_flags(fd as u32, (arg as u32) & fd_flags::FD_CLOEXEC)?;
+            lock.thing_table
+                .set_fd_flags(fd as u32, (arg as u32) & fd_flags::THING_CLOEXEC)?;
             Ok(0)
         }
         fcntl_cmd::F_GETFL => {
-            let file = lock.fd_table.get(fd as u32)?;
+            let file = lock.thing_table.get(fd as u32)?;
             Ok(file.status_flags.lock().0 as usize)
         }
         fcntl_cmd::F_SETFL => {
-            let file = lock.fd_table.get(fd as u32)?;
+            let file = lock.thing_table.get(fd as u32)?;
             let mut status_flags = file.status_flags.lock();
             *status_flags = status_flags.with_mutable_status(arg as u32);
             Ok(0)
@@ -214,7 +214,7 @@ pub fn sys_fs_read(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize
     let (node, offset_cell, status_flags) = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_readable() {
             return Err(Errno::EBADF);
@@ -245,7 +245,7 @@ pub fn sys_fs_stat(fd: usize, stat_ptr: usize, _a2: usize, _a3: usize) -> SysRes
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         file.node.clone()
     };
 
@@ -267,7 +267,7 @@ pub fn sys_fs_isatty(fd: usize) -> SysResult<usize> {
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         file.node.clone()
     };
     Ok(if node.is_tty() { 1 } else { 0 })
@@ -282,7 +282,7 @@ pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<us
     let (node, offset_cell, path) = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         (file.node.clone(), file.offset.clone(), file.path.clone())
     };
 
@@ -334,7 +334,7 @@ pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usiz
     let (node, offset_cell, status_flags, mount_id) = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_writable() {
             return Err(Errno::EBADF);
@@ -393,7 +393,7 @@ pub fn sys_fs_readv(fd: usize, iovec_ptr: usize, iovec_count: usize) -> SysResul
     let (node, offset_cell, status_flags) = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_readable() {
             return Err(Errno::EBADF);
@@ -462,7 +462,7 @@ pub fn sys_fs_writev(fd: usize, iovec_ptr: usize, iovec_count: usize) -> SysResu
     let (node, offset_cell, status_flags, mount_id) = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_writable() {
             return Err(Errno::EBADF);
@@ -562,7 +562,7 @@ pub fn sys_fs_mkdir(path_ptr: usize, path_len: usize) -> SysResult<usize> {
 /// Returns the new file descriptor, or an error if `old_fd` is not open.
 pub fn SYS_FS_DUP(old_fd: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
-    let new_fd = pinfo_arc.lock().fd_table.dup(old_fd as u32)?;
+    let new_fd = pinfo_arc.lock().thing_table.dup(old_fd as u32)?;
     Ok(new_fd as usize)
 }
 
@@ -576,7 +576,7 @@ pub fn SYS_FS_DUP2(old_fd: usize, new_fd: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let result = pinfo_arc
         .lock()
-        .fd_table
+        .thing_table
         .dup2(old_fd as u32, new_fd as u32)?;
     Ok(result as usize)
 }
@@ -596,19 +596,19 @@ pub fn sys_pipe(pipefd_ptr: usize) -> SysResult<usize> {
     let (pipe_id, read_node, write_node) = crate::ipc::pipe::create_fd_pair_with_id(4096, false);
     let (read_fd, write_fd) = {
         let mut lock = pinfo_arc.lock();
-        let read_fd = lock.fd_table.open(
+        let read_fd = lock.thing_table.open(
             read_node,
             crate::vfs::OpenFlags::read_only(),
             alloc::format!("pipe:{}", pipe_id),
         )?;
-        match lock.fd_table.open(
+        match lock.thing_table.open(
             write_node,
             crate::vfs::OpenFlags::write_only(),
             alloc::format!("pipe:{}", pipe_id),
         ) {
             Ok(wfd) => (read_fd, wfd),
             Err(e) => {
-                let _ = lock.fd_table.close(read_fd);
+                let _ = lock.thing_table.close(read_fd);
                 return Err(e);
             }
         }
@@ -646,7 +646,7 @@ pub fn sys_fd_from_handle(handle_val: usize) -> SysResult<usize> {
     // Insert into FD table
     let fd = {
         let mut lock = pinfo_arc.lock();
-        lock.fd_table.open(
+        lock.thing_table.open(
             node,
             match entry.mode {
                 crate::ipc::HandleMode::Read => crate::vfs::OpenFlags::read_only(),
@@ -692,7 +692,7 @@ pub fn sys_fs_mount(
     // Attempt 1: Check if it's a VFS FD pointing to a PortNode
     let req_port = {
         let lock = pinfo_arc.lock();
-        if let Ok(file) = lock.fd_table.get(provider_write_handle as u32) {
+        if let Ok(file) = lock.thing_table.get(provider_write_handle as u32) {
             // Try to downcast or check if it's a PortNode
             // Since we don't have easy downcasting for traits in no_std without more machinery,
             // we'll use a hack or update the trait.
@@ -798,7 +798,7 @@ pub fn sys_fs_notify(req_handle: usize, node_handle: usize, revents: usize) -> S
 ///    a node wakes it or the timeout expires.
 ///
 /// # Arguments
-/// - `pollfds_ptr` — pointer to a `[PollFd; nfds]` in user memory (read/write)
+/// - `pollfds_ptr` — pointer to a `[PollThing; nfds]` in user memory (read/write)
 /// - `nfds`         — number of entries in the array (max 256)
 /// - `timeout_ms`   — `0` = non-blocking; `usize::MAX` = block indefinitely;
 ///                    any other value = maximum wait in milliseconds
@@ -815,11 +815,11 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
         return Err(Errno::EINVAL);
     }
 
-    let byte_len = nfds * core::mem::size_of::<PollFd>();
+    let byte_len = nfds * core::mem::size_of::<PollThing>();
     validate_user_range(pollfds_ptr, byte_len, true)?;
 
-    // Copy all PollFd entries from userspace.
-    let mut kfds = vec![PollFd::default(); nfds];
+    // Copy all PollThing entries from userspace.
+    let mut kfds = vec![PollThing::default(); nfds];
     unsafe {
         copyin(
             core::slice::from_raw_parts_mut(kfds.as_mut_ptr() as *mut u8, byte_len),
@@ -846,10 +846,10 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
     {
         let lock = pinfo_arc.lock();
         for (i, kfd) in kfds.iter().enumerate() {
-            if kfd.fd >= 0 {
+            if kfd.thing >= 0 {
                 entries[i].node = lock
-                    .fd_table
-                    .get(kfd.fd as u32)
+                    .thing_table
+                    .get(kfd.thing as u32)
                     .ok()
                     .map(|f| f.node.clone());
                 entries[i].events = kfd.events;
@@ -880,7 +880,7 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
         for (i, entry) in entries.iter().enumerate() {
             let revents = if let Some(ref node) = entry.node {
                 node.poll() & (entry.events | poll_flags::POLLERR | poll_flags::POLLHUP)
-            } else if kfds[i].fd >= 0 {
+            } else if kfds[i].thing >= 0 {
                 poll_flags::POLLNVAL
             } else {
                 0
@@ -932,7 +932,7 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
         for (i, entry) in entries.iter().enumerate() {
             let revents = if let Some(ref node) = entry.node {
                 node.poll() & (entry.events | poll_flags::POLLERR | poll_flags::POLLHUP)
-            } else if kfds[i].fd >= 0 {
+            } else if kfds[i].thing >= 0 {
                 poll_flags::POLLNVAL
             } else {
                 0
@@ -989,7 +989,7 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
 pub fn sys_fs_seek(fd: usize, offset: usize, whence: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let mut lock = pinfo_arc.lock();
-    let file = lock.fd_table.get_mut(fd as u32)?;
+    let file = lock.thing_table.get_mut(fd as u32)?;
 
     let node = file.node.clone();
     let stat = node.stat()?;
@@ -1049,7 +1049,7 @@ pub fn sys_watch_fd(fd: usize, mask: usize, flags: usize) -> SysResult<usize> {
 
     let (node, mount_id) = {
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         let mid = vfs::mount::mount_id_for_path(&file.path);
         (file.node.clone(), mid)
     };
@@ -1058,7 +1058,7 @@ pub fn sys_watch_fd(fd: usize, mask: usize, flags: usize) -> SysResult<usize> {
     crate::vfs::watch::register_watch(&node, watch.clone(), mount_id)?;
 
     // Return the watch as a new file descriptor
-    let watch_fd = pinfo_arc.lock().fd_table.open(
+    let watch_fd = pinfo_arc.lock().thing_table.open(
         watch,
         crate::vfs::OpenFlags::read_only(),
         "watch:fd".into(),
@@ -1085,7 +1085,7 @@ pub fn sys_watch_path(
     crate::vfs::watch::register_watch(&node, watch.clone(), mount_id)?;
 
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
-    let watch_fd = pinfo_arc.lock().fd_table.open(
+    let watch_fd = pinfo_arc.lock().thing_table.open(
         watch,
         crate::vfs::OpenFlags::read_only(),
         alloc::format!("watch:{}", abs_path),
@@ -1147,7 +1147,7 @@ pub fn sys_fs_device_call(fd: usize, call_ptr: usize) -> SysResult<usize> {
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(fd as u32)?;
         file.node.clone()
     };
 
@@ -1525,7 +1525,7 @@ pub fn sys_fs_fchmod(fd: usize, mode: usize) -> SysResult<usize> {
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(fd as u32)?.node.clone()
     };
     node.chmod((mode as u32) & 0o7777)?;
     Ok(0)
@@ -1623,7 +1623,7 @@ pub fn sys_fs_futimes(fd: usize, times_ptr: usize) -> SysResult<usize> {
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(fd as u32)?.node.clone()
     };
     node.utimes(atime, mtime)?;
     Ok(0)
@@ -1643,7 +1643,7 @@ pub fn sys_fs_flock(fd: usize, how: usize) -> SysResult<usize> {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
         let pid = lock.pid;
-        let node = lock.fd_table.get(fd as u32)?.node.clone();
+        let node = lock.thing_table.get(fd as u32)?.node.clone();
         // Release the process lock before calling stat() to avoid deadlocks.
         drop(lock);
         (node.stat()?.ino, pid)
@@ -1657,10 +1657,10 @@ pub fn sys_fs_flock(fd: usize, how: usize) -> SysResult<usize> {
 mod tests {
     use super::*;
     use crate::sched::hooks::CURRENT_TID_HOOK;
-    use crate::vfs::fd_table::FdTable;
+    use crate::vfs::thing_table::ThingTable;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
     use abi::errors::SysResult;
-    use abi::syscall::{poll_flags, PollFd};
+    use abi::syscall::{poll_flags, PollThing};
     use alloc::sync::Arc;
     use spin::Mutex;
 
@@ -1731,9 +1731,9 @@ mod tests {
     fn make_process_info_with_nodes(
         nodes: &[(u32, Arc<dyn VfsNode>)],
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
-        let mut fd_table = FdTable::new();
+        let mut thing_table = ThingTable::new();
         for (fd, node) in nodes {
-            fd_table
+            thing_table
                 .insert_at(*fd, node.clone(), OpenFlags::read_write(), "/test".into())
                 .expect("insert_at");
         }
@@ -1741,7 +1741,7 @@ mod tests {
             pid: 1,
             lifecycle: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
-            fd_table,
+            thing_table,
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
@@ -1755,7 +1755,7 @@ mod tests {
     /// the global `PROCESS_INFO_HOOK` and `CURRENT_TID_HOOK`.
     fn poll_nonblocking(
         pinfo: Arc<Mutex<crate::task::ProcessInfo>>,
-        fds: &mut [PollFd],
+        fds: &mut [PollThing],
     ) -> SysResult<usize> {
         let _guard = TEST_POLL_GUARD.lock();
 
@@ -1799,7 +1799,7 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(AlwaysReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollFd {
+        let mut fds = [PollThing {
             fd: 3,
             events: poll_flags::POLLIN,
             revents: 0,
@@ -1820,7 +1820,7 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(NeverReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollFd {
+        let mut fds = [PollThing {
             fd: 3,
             events: poll_flags::POLLIN,
             revents: 0,
@@ -1843,17 +1843,17 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollFd {
+            PollThing {
                 fd: 3,
                 events: poll_flags::POLLIN | poll_flags::POLLOUT,
                 revents: 0,
             },
-            PollFd {
+            PollThing {
                 fd: 4,
                 events: poll_flags::POLLIN,
                 revents: 0,
             },
-            PollFd {
+            PollThing {
                 fd: 5,
                 events: poll_flags::POLLOUT,
                 revents: 0,
@@ -1872,7 +1872,7 @@ mod tests {
     fn poll_invalid_fd_reports_pollnval() {
         let pinfo = make_process_info_with_nodes(&[]);
 
-        let mut fds = [PollFd {
+        let mut fds = [PollThing {
             fd: 99, // no such fd
             events: poll_flags::POLLIN,
             revents: 0,
@@ -1892,7 +1892,7 @@ mod tests {
     fn poll_negative_fd_is_skipped() {
         let pinfo = make_process_info_with_nodes(&[]);
 
-        let mut fds = [PollFd {
+        let mut fds = [PollThing {
             fd: -1,
             events: poll_flags::POLLIN,
             revents: 0,
@@ -1921,17 +1921,17 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollFd {
+            PollThing {
                 fd: 3,
                 events: poll_flags::POLLIN,
                 revents: 0,
             },
-            PollFd {
+            PollThing {
                 fd: 4,
                 events: poll_flags::POLLIN,
                 revents: 0,
             },
-            PollFd {
+            PollThing {
                 fd: 5,
                 events: poll_flags::POLLIN | poll_flags::POLLOUT,
                 revents: 0,

@@ -446,7 +446,7 @@ pub(crate) static mut SPAWN_PROCESS_EX_HOOK: Option<
         u64,
         Vec<u64>,
         Option<alloc::string::String>,
-        Vec<abi::types::FdRemap>,
+        Vec<abi::types::ThingRemap>,
     ) -> Result<SpawnExResult, abi::errors::Errno>,
 > = None;
 
@@ -466,7 +466,7 @@ pub(crate) static mut SPAWN_PROCESS_FROM_PATH_HOOK: Option<
         u64,
         Vec<u64>,
         Option<alloc::string::String>,
-        Vec<abi::types::FdRemap>,
+        Vec<abi::types::ThingRemap>,
     ) -> Result<SpawnExResult, abi::errors::Errno>,
 > = None;
 
@@ -482,7 +482,7 @@ pub unsafe fn spawn_process_ex_current(
     boot_arg: u64,
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
-    fd_remap: Vec<abi::types::FdRemap>,
+    fd_remap: Vec<abi::types::ThingRemap>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
     if let Some(hook) = SPAWN_PROCESS_EX_HOOK {
         hook(
@@ -516,7 +516,7 @@ pub unsafe fn spawn_process_from_path_current(
     boot_arg: u64,
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
-    fd_remap: Vec<abi::types::FdRemap>,
+    fd_remap: Vec<abi::types::ThingRemap>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
     if let Some(hook) = SPAWN_PROCESS_FROM_PATH_HOOK {
         hook(

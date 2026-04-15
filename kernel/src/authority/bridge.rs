@@ -24,7 +24,7 @@
 //! | `session_leader`                     | TTY foreground ownership         | `Group::kind` (Phase 4)               | Provisional  |
 //! | *(no uid/gid field yet)*             | POSIX user/group identity        | Future `Authority` fields             | Not yet added|
 //! | *(no capability mask yet)*           | Fine-grained privilege           | `Authority::capabilities`             | Not yet added|
-//! | `fd_table` (open files)              | Resource access rights           | Out of `Authority` scope (Phase 8+)   | Provisional  |
+//! | `thing_table` (open files)              | Resource access rights           | Out of `Authority` scope (Phase 8+)   | Provisional  |
 //! | `namespace`                          | VFS visibility                   | Future `Place` context (Phase 8)      | Provisional  |
 //! | `signals` (signal dispositions)      | Signal delivery permissions      | Future authority concern (Phase 9+)   | Provisional  |
 //!

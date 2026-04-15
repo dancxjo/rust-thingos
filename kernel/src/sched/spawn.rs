@@ -39,20 +39,20 @@ fn default_process_info(
 ) -> alloc::sync::Arc<spin::Mutex<ProcessInfo>> {
     let console_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> =
         alloc::sync::Arc::new(crate::vfs::devfs::ConsoleNode);
-    let mut fd_table = crate::vfs::fd_table::FdTable::new();
-    let _ = fd_table.insert_at(
+    let mut thing_table = crate::vfs::thing_table::ThingTable::new();
+    let _ = thing_table.insert_at(
         0,
         console_node.clone(),
         crate::vfs::OpenFlags::read_only(),
         "/dev/console".into(),
     );
-    let _ = fd_table.insert_at(
+    let _ = thing_table.insert_at(
         1,
         console_node.clone(),
         crate::vfs::OpenFlags::write_only(),
         "/dev/console".into(),
     );
-    let _ = fd_table.insert_at(
+    let _ = thing_table.insert_at(
         2,
         console_node,
         crate::vfs::OpenFlags::write_only(),
@@ -63,7 +63,7 @@ fn default_process_info(
         pid,
         lifecycle: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
         unix_compat: crate::task::ProcessUnixCompat::isolated(pid, is_session_leader),
-        fd_table,
+        thing_table,
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: alloc::string::String::from("/"),
         exec_path: alloc::string::String::new(),
@@ -87,7 +87,7 @@ fn inherit_process_info<R: BootRuntime>(
             pid,
             lifecycle: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
             unix_compat: crate::task::ProcessUnixCompat::inherit(&parent.unix_compat),
-            fd_table: parent.fd_table.clone(),
+            thing_table: parent.thing_table.clone(),
             namespace: parent.namespace.clone(),
             cwd: parent.cwd.clone(),
             exec_path: alloc::string::String::new(),
@@ -723,13 +723,13 @@ pub enum StdioSpec {
     Fd(u32),
 }
 
-/// Populate the fd_table slots 0, 1, 2 in `fd_table` based on the given specs.
+/// Populate the thing_table slots 0, 1, 2 in `thing_table` based on the given specs.
 ///
 /// Returns the pipe IDs allocated for piped stdin/stdout/stderr (0 when not piped).
 /// The parent uses these pipe IDs with the legacy `SYS_PIPE_*` syscalls; the child
-/// reads/writes through the fd_table nodes which share the same underlying pipe.
+/// reads/writes through the thing_table nodes which share the same underlying pipe.
 fn setup_stdio_fds<R: BootRuntime>(
-    fd_table: &mut crate::vfs::fd_table::FdTable,
+    thing_table: &mut crate::vfs::thing_table::ThingTable,
     stdin_spec: StdioSpec,
     stdout_spec: StdioSpec,
     stderr_spec: StdioSpec,
@@ -747,7 +747,7 @@ fn setup_stdio_fds<R: BootRuntime>(
             .and_then(|task| task.process_info.clone())
             .and_then(|pi| {
                 let lock = pi.lock();
-                lock.fd_table
+                lock.thing_table
                     .get(fd)
                     .ok()
                     .map(|f| (f.node.clone(), *f.status_flags.lock()))
@@ -762,9 +762,9 @@ fn setup_stdio_fds<R: BootRuntime>(
     match stdin_spec {
         StdioSpec::Inherit => {
             if let Some((node, flags)) = inherited_node(0) {
-                let _ = fd_table.insert_at(0, node, flags, "/dev/console".into());
+                let _ = thing_table.insert_at(0, node, flags, "/dev/console".into());
             } else {
-                let _ = fd_table.insert_at(
+                let _ = thing_table.insert_at(
                     0,
                     console.clone(),
                     OpenFlags::read_only(),
@@ -773,14 +773,14 @@ fn setup_stdio_fds<R: BootRuntime>(
             }
         }
         StdioSpec::Null => {
-            let _ = fd_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
+            let _ = thing_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
         }
         StdioSpec::Pipe => {
             // Create the raw pipe (readers=1, writers=1).  The child's fd 0 is
             // the read end; the parent retains the write end via stdin_pipe.
             let id = crate::ipc::pipe::create(4096, 0);
             if let Some(read_node) = crate::ipc::pipe::read_node_for_id(id) {
-                let _ = fd_table.insert_at(
+                let _ = thing_table.insert_at(
                     0,
                     read_node,
                     OpenFlags::read_only(),
@@ -792,10 +792,10 @@ fn setup_stdio_fds<R: BootRuntime>(
         StdioSpec::Fd(fd) => {
             if let Some((node, flags)) = inherited_node(fd) {
                 let path = alloc::format!("fd:{}", fd);
-                let _ = fd_table.insert_at(0, node, flags, path);
+                let _ = thing_table.insert_at(0, node, flags, path);
             } else {
                 let _ =
-                    fd_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
+                    thing_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
             }
         }
     }
@@ -804,9 +804,9 @@ fn setup_stdio_fds<R: BootRuntime>(
     match stdout_spec {
         StdioSpec::Inherit => {
             if let Some((node, flags)) = inherited_node(1) {
-                let _ = fd_table.insert_at(1, node, flags, "/dev/console".into());
+                let _ = thing_table.insert_at(1, node, flags, "/dev/console".into());
             } else {
-                let _ = fd_table.insert_at(
+                let _ = thing_table.insert_at(
                     1,
                     console.clone(),
                     OpenFlags::write_only(),
@@ -816,12 +816,12 @@ fn setup_stdio_fds<R: BootRuntime>(
         }
         StdioSpec::Null => {
             let _ =
-                fd_table.insert_at(1, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+                thing_table.insert_at(1, null.clone(), OpenFlags::write_only(), "/dev/null".into());
         }
         StdioSpec::Pipe => {
             let id = crate::ipc::pipe::create(4096, 0);
             if let Some(write_node) = crate::ipc::pipe::write_node_for_id(id) {
-                let _ = fd_table.insert_at(
+                let _ = thing_table.insert_at(
                     1,
                     write_node,
                     OpenFlags::write_only(),
@@ -833,9 +833,9 @@ fn setup_stdio_fds<R: BootRuntime>(
         StdioSpec::Fd(fd) => {
             if let Some((node, flags)) = inherited_node(fd) {
                 let path = alloc::format!("fd:{}", fd);
-                let _ = fd_table.insert_at(1, node, flags, path);
+                let _ = thing_table.insert_at(1, node, flags, path);
             } else {
-                let _ = fd_table.insert_at(
+                let _ = thing_table.insert_at(
                     1,
                     null.clone(),
                     OpenFlags::write_only(),
@@ -849,19 +849,19 @@ fn setup_stdio_fds<R: BootRuntime>(
     match stderr_spec {
         StdioSpec::Inherit => {
             if let Some((node, flags)) = inherited_node(2) {
-                let _ = fd_table.insert_at(2, node, flags, "/dev/console".into());
+                let _ = thing_table.insert_at(2, node, flags, "/dev/console".into());
             } else {
                 let _ =
-                    fd_table.insert_at(2, console, OpenFlags::write_only(), "/dev/console".into());
+                    thing_table.insert_at(2, console, OpenFlags::write_only(), "/dev/console".into());
             }
         }
         StdioSpec::Null => {
-            let _ = fd_table.insert_at(2, null, OpenFlags::write_only(), "/dev/null".into());
+            let _ = thing_table.insert_at(2, null, OpenFlags::write_only(), "/dev/null".into());
         }
         StdioSpec::Pipe => {
             let id = crate::ipc::pipe::create(4096, 0);
             if let Some(write_node) = crate::ipc::pipe::write_node_for_id(id) {
-                let _ = fd_table.insert_at(
+                let _ = thing_table.insert_at(
                     2,
                     write_node,
                     OpenFlags::write_only(),
@@ -873,9 +873,9 @@ fn setup_stdio_fds<R: BootRuntime>(
         StdioSpec::Fd(fd) => {
             if let Some((node, flags)) = inherited_node(fd) {
                 let path = alloc::format!("fd:{}", fd);
-                let _ = fd_table.insert_at(2, node, flags, path);
+                let _ = thing_table.insert_at(2, node, flags, path);
             } else {
-                let _ = fd_table.insert_at(2, null, OpenFlags::write_only(), "/dev/null".into());
+                let _ = thing_table.insert_at(2, null, OpenFlags::write_only(), "/dev/null".into());
             }
         }
     }
@@ -914,7 +914,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     boot_arg: u64,
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
-    fd_remap: Vec<abi::types::FdRemap>,
+    fd_remap: Vec<abi::types::ThingRemap>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
@@ -966,24 +966,24 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         argv
     };
 
-    // Populate stdio fds in the child's fd_table.
+    // Populate stdio fds in the child's thing_table.
     let tid = crate::runtime::<R>().current_tid();
     let parent_pinfo =
         crate::task::registry::get_task::<R>(tid).and_then(|t| t.process_info.clone());
 
-    let mut fd_table = if let Some(parent_pi) = &parent_pinfo {
-        parent_pi.lock().fd_table.clone()
+    let mut thing_table = if let Some(parent_pi) = &parent_pinfo {
+        parent_pi.lock().thing_table.clone()
     } else {
-        crate::vfs::fd_table::FdTable::new()
+        crate::vfs::thing_table::ThingTable::new()
     };
 
     let (stdin_pipe_id, stdout_pipe_id, stderr_pipe_id) =
-        setup_stdio_fds::<R>(&mut fd_table, stdin_spec, stdout_spec, stderr_spec);
+        setup_stdio_fds::<R>(&mut thing_table, stdin_spec, stdout_spec, stderr_spec);
 
     // Step 6b: Apply explicit FD remappings.
     // These take precedence over stdio/inherited defaults for the same slots.
     for remap in fd_remap {
-        if let Err(e) = fd_table.dup2(remap.src_fd, remap.dst_fd) {
+        if let Err(e) = thing_table.dup2(remap.src_fd, remap.dst_fd) {
             crate::kprintln!(
                 "SPAWN: FD remap failed: {} -> {} (errno {:?})",
                 remap.src_fd,
@@ -1010,7 +1010,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         let mut plk = parent_pi.lock();
         if stdin_pipe_id != 0 {
             if let Some(write_node) = crate::ipc::pipe::write_node_for_id(stdin_pipe_id) {
-                if let Ok(fd) = plk.fd_table.open(
+                if let Ok(fd) = plk.thing_table.open(
                     write_node,
                     crate::vfs::OpenFlags::write_only(),
                     alloc::format!("pipe:{}", stdin_pipe_id),
@@ -1021,7 +1021,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         }
         if stdout_pipe_id != 0 {
             if let Some(read_node) = crate::ipc::pipe::read_node_for_id(stdout_pipe_id) {
-                if let Ok(fd) = plk.fd_table.open(
+                if let Ok(fd) = plk.thing_table.open(
                     read_node,
                     crate::vfs::OpenFlags::read_only(),
                     alloc::format!("pipe:{}", stdout_pipe_id),
@@ -1032,7 +1032,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         }
         if stderr_pipe_id != 0 {
             if let Some(read_node) = crate::ipc::pipe::read_node_for_id(stderr_pipe_id) {
-                if let Ok(fd) = plk.fd_table.open(
+                if let Ok(fd) = plk.thing_table.open(
                     read_node,
                     crate::vfs::OpenFlags::read_only(),
                     alloc::format!("pipe:{}", stderr_pipe_id),
@@ -1074,7 +1074,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         pid: id as u32,
         lifecycle: crate::task::ProcessLifecycle::new(ppid, id),
         unix_compat,
-        fd_table,
+        thing_table,
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: if let Some(explicit_cwd) = cwd {
             explicit_cwd
@@ -1138,7 +1138,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     _boot_arg: u64,
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
-    fd_remap: Vec<abi::types::FdRemap>,
+    fd_remap: Vec<abi::types::ThingRemap>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
     // Step 1: Open the executable from the VFS.
     let node = crate::vfs::mount::lookup(path).map_err(|_| abi::errors::Errno::ENOENT)?;
@@ -1220,23 +1220,23 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         argv
     };
 
-    // Step 6: Inherit and set up stdio fds in the child's fd_table.
+    // Step 6: Inherit and set up stdio fds in the child's thing_table.
     let parent_tid = rt.current_tid();
     let parent_pinfo =
         crate::task::registry::get_task::<R>(parent_tid).and_then(|t| t.process_info.clone());
 
-    let mut fd_table = if let Some(parent_pi) = &parent_pinfo {
-        parent_pi.lock().fd_table.clone()
+    let mut thing_table = if let Some(parent_pi) = &parent_pinfo {
+        parent_pi.lock().thing_table.clone()
     } else {
-        crate::vfs::fd_table::FdTable::new()
+        crate::vfs::thing_table::ThingTable::new()
     };
 
     let (stdin_pipe_id, stdout_pipe_id, stderr_pipe_id) =
-        setup_stdio_fds::<R>(&mut fd_table, stdin_spec, stdout_spec, stderr_spec);
+        setup_stdio_fds::<R>(&mut thing_table, stdin_spec, stdout_spec, stderr_spec);
 
     // Step 6b: Apply explicit FD remappings.
     for remap in fd_remap {
-        if let Err(e) = fd_table.dup2(remap.src_fd, remap.dst_fd) {
+        if let Err(e) = thing_table.dup2(remap.src_fd, remap.dst_fd) {
             crate::kprintln!(
                 "SPAWN: FD remap failed: {} -> {} (errno {:?})",
                 remap.src_fd,
@@ -1246,7 +1246,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         }
     }
 
-    // Open the parent-side pipe ends in the parent's fd_table.
+    // Open the parent-side pipe ends in the parent's thing_table.
     let mut parent_stdin_fd: u64 = 0;
     let mut parent_stdout_fd: u64 = 0;
     let mut parent_stderr_fd: u64 = 0;
@@ -1254,7 +1254,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         let mut plk = parent_pi.lock();
         if stdin_pipe_id != 0 {
             if let Some(write_node) = crate::ipc::pipe::write_node_for_id(stdin_pipe_id) {
-                if let Ok(fd) = plk.fd_table.open(
+                if let Ok(fd) = plk.thing_table.open(
                     write_node,
                     crate::vfs::OpenFlags::write_only(),
                     alloc::format!("pipe:{}", stdin_pipe_id),
@@ -1265,7 +1265,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         }
         if stdout_pipe_id != 0 {
             if let Some(read_node) = crate::ipc::pipe::read_node_for_id(stdout_pipe_id) {
-                if let Ok(fd) = plk.fd_table.open(
+                if let Ok(fd) = plk.thing_table.open(
                     read_node,
                     crate::vfs::OpenFlags::read_only(),
                     alloc::format!("pipe:{}", stdout_pipe_id),
@@ -1276,7 +1276,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         }
         if stderr_pipe_id != 0 {
             if let Some(read_node) = crate::ipc::pipe::read_node_for_id(stderr_pipe_id) {
-                if let Ok(fd) = plk.fd_table.open(
+                if let Ok(fd) = plk.thing_table.open(
                     read_node,
                     crate::vfs::OpenFlags::read_only(),
                     alloc::format!("pipe:{}", stderr_pipe_id),
@@ -1316,7 +1316,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         pid: id as u32,
         lifecycle: crate::task::ProcessLifecycle::new(ppid, id),
         unix_compat,
-        fd_table,
+        thing_table,
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: if let Some(explicit_cwd) = cwd {
             explicit_cwd
@@ -1481,7 +1481,7 @@ mod tests {
             pid: leader as u32,
             lifecycle: crate::task::ProcessLifecycle::new(1, leader),
             unix_compat: crate::task::ProcessUnixCompat::isolated(leader as u32, false),
-            fd_table: crate::vfs::fd_table::FdTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),

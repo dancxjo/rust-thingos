@@ -511,7 +511,7 @@ pub fn write_node_for_id(pipe_id: u64) -> Option<alloc::sync::Arc<dyn crate::vfs
 /// Create an anonymous pipe and return a `(pipe_id, read_node, write_node)` triple.
 ///
 /// The pipe ID remains an internal kernel identifier. The read/write nodes can
-/// be inserted into a child process fd table via [`crate::vfs::fd_table::FdTable::insert_at`].
+/// be inserted into a child process fd table via [`crate::vfs::thing_table::ThingTable::insert_at`].
 pub fn create_fd_pair_with_id(
     capacity: u32,
     nonblock: bool,
@@ -547,7 +547,7 @@ pub fn create_fd_pair_with_id(
 /// Create an anonymous pipe and return a `(read_node, write_node)` pair.
 ///
 /// Both nodes are `Arc<dyn VfsNode>` and can be inserted directly into a
-/// process fd table via `FdTable::insert_at`.
+/// process fd table via `ThingTable::insert_at`.
 pub fn create_fd_pair(
     capacity: u32,
     nonblock: bool,

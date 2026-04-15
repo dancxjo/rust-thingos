@@ -16,7 +16,7 @@ pub mod errors;
 pub mod fs;
 pub mod geometry;
 pub mod ids;
-pub mod memfd;
+pub mod shared_memory;
 pub mod module;
 pub mod module_manifest;
 pub mod schema;

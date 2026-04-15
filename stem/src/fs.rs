@@ -7,14 +7,14 @@ use alloc::vec;
 
 /// A file system event watcher.
 pub struct Watcher {
-    fd: u32,
+    thing: u32,
 }
 
 impl Watcher {
     /// Create a new watcher for the given path.
     pub fn from_path(path: &str, mask: u32, flags: u32) -> SysResult<Self> {
-        let fd = vfs_watch_path(path, mask, flags)?;
-        Ok(Self { fd })
+        let thing = vfs_watch_path(path, mask, flags)?;
+        Ok(Self { thing })
     }
 
     /// Read the next event from the watch stream.
@@ -23,7 +23,7 @@ impl Watcher {
     /// this will block until an event occurs.
     pub fn read_event(&self) -> SysResult<Option<(WatchEvent, alloc::string::String)>> {
         let mut buf = [0u8; 512];
-        let n = match vfs_read(self.fd, &mut buf) {
+        let n = match vfs_read(self.thing, &mut buf) {
             Ok(n) if n >= core::mem::size_of::<WatchEvent>() => n,
             Ok(_) => return Ok(None),
             Err(Errno::EAGAIN) => return Ok(None),
@@ -43,15 +43,15 @@ impl Watcher {
         Ok(Some((event, name)))
     }
 
-    /// Returns the raw file descriptor.
-    pub fn fd(&self) -> u32 {
-        self.fd
+    /// Returns the raw thing number.
+    pub fn thing(&self) -> u32 {
+        self.thing
     }
 }
 
 impl Drop for Watcher {
     fn drop(&mut self) {
-        let _ = vfs_close(self.fd);
+        let _ = vfs_close(self.thing);
     }
 }
 

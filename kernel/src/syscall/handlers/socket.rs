@@ -50,12 +50,12 @@ pub fn sys_socket(domain: usize, type_: usize, _protocol: usize) -> SysResult<us
 
     let node = crate::ipc::unix_socket::UnixSocketNode::new();
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
-    let fd = pinfo_arc.lock().fd_table.open(
+    let thing = pinfo_arc.lock().thing_table.open(
         node as Arc<dyn crate::vfs::VfsNode>,
         OpenFlags::read_write(),
         alloc::string::String::from("socket:[unix]"),
     )?;
-    Ok(fd as usize)
+    Ok(thing as usize)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,13 +65,13 @@ pub fn sys_socket(domain: usize, type_: usize, _protocol: usize) -> SysResult<us
 /// Bind a socket fd to a filesystem path.
 ///
 /// Args: `(fd, path_ptr, path_len)`
-pub fn sys_bind(fd: usize, path_ptr: usize, path_len: usize) -> SysResult<usize> {
+pub fn sys_bind(thing: usize, path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let path = copy_path(path_ptr, path_len)?;
 
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(thing as u32)?.node.clone()
     };
     node.sock_bind(&path)?;
     Ok(0)
@@ -84,11 +84,11 @@ pub fn sys_bind(fd: usize, path_ptr: usize, path_len: usize) -> SysResult<usize>
 /// Mark a socket as listening.
 ///
 /// Args: `(fd, backlog)`
-pub fn sys_listen(fd: usize, backlog: usize) -> SysResult<usize> {
+pub fn sys_listen(thing: usize, backlog: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(thing as u32)?.node.clone()
     };
     node.sock_listen(backlog)?;
     Ok(0)
@@ -102,19 +102,19 @@ pub fn sys_listen(fd: usize, backlog: usize) -> SysResult<usize> {
 ///
 /// Args: `(fd)`
 /// Returns the new file descriptor for the accepted connection.
-pub fn sys_accept(fd: usize) -> SysResult<usize> {
+pub fn sys_accept(thing: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(thing as u32)?.node.clone()
     };
     let accepted = node.sock_accept()?;
-    let new_fd = pinfo_arc.lock().fd_table.open(
+    let new_thing = pinfo_arc.lock().thing_table.open(
         accepted,
         OpenFlags::read_write(),
         alloc::string::String::from("socket:[unix/accepted]"),
     )?;
-    Ok(new_fd as usize)
+    Ok(new_thing as usize)
 }
 
 // ---------------------------------------------------------------------------
@@ -124,13 +124,13 @@ pub fn sys_accept(fd: usize) -> SysResult<usize> {
 /// Connect a socket to a listening socket at the given path.
 ///
 /// Args: `(fd, path_ptr, path_len)`
-pub fn sys_connect(fd: usize, path_ptr: usize, path_len: usize) -> SysResult<usize> {
+pub fn sys_connect(thing: usize, path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let path = copy_path(path_ptr, path_len)?;
 
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(thing as u32)?.node.clone()
     };
     node.sock_connect(&path)?;
     Ok(0)
@@ -143,14 +143,14 @@ pub fn sys_connect(fd: usize, path_ptr: usize, path_len: usize) -> SysResult<usi
 /// Shut down part or all of a socket connection.
 ///
 /// Args: `(fd, how)` — how: 0=SHUT_RD, 1=SHUT_WR, 2=SHUT_RDWR
-pub fn sys_shutdown(fd: usize, how: usize) -> SysResult<usize> {
+pub fn sys_shutdown(thing: usize, how: usize) -> SysResult<usize> {
     if how > 2 {
         return Err(Errno::EINVAL);
     }
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(thing as u32)?.node.clone()
     };
     node.sock_shutdown(how as u32)?;
     Ok(0)
@@ -184,19 +184,19 @@ pub fn sys_socketpair(
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let (fd_a, fd_b) = {
         let mut lock = pinfo_arc.lock();
-        let fa = lock.fd_table.open(
+        let fa = lock.thing_table.open(
             a as Arc<dyn crate::vfs::VfsNode>,
             OpenFlags::read_write(),
             alloc::string::String::from("socketpair:[unix/a]"),
         )?;
-        match lock.fd_table.open(
+        match lock.thing_table.open(
             b as Arc<dyn crate::vfs::VfsNode>,
             OpenFlags::read_write(),
             alloc::string::String::from("socketpair:[unix/b]"),
         ) {
             Ok(fb) => (fa, fb),
             Err(e) => {
-                let _ = lock.fd_table.close(fa);
+                let _ = lock.thing_table.close(fa);
                 return Err(e);
             }
         }
@@ -229,7 +229,7 @@ pub fn sys_socketpair(
 /// FD table first, then from the global IPC handle table.  Transfer
 /// semantics are **duplicate**: the caller retains its own fd/handle.
 pub fn sys_sendmsg(
-    fd: usize,
+    thing: usize,
     data_ptr: usize,
     data_len: usize,
     fds_ptr: usize,
@@ -279,7 +279,7 @@ pub fn sys_sendmsg(
     // Look up the destination FD and call sock_sendmsg.
     let node = {
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(thing as u32)?.node.clone()
     };
     node.sock_sendmsg(&data_buf, caps)?;
     Ok(0)
@@ -302,7 +302,7 @@ pub fn sys_sendmsg(
 ///
 /// Returns `EAGAIN` when no message is available.
 pub fn sys_recvmsg(
-    fd: usize,
+    thing: usize,
     data_ptr: usize,
     data_cap: usize,
     fds_ptr: usize,
@@ -320,7 +320,7 @@ pub fn sys_recvmsg(
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.fd_table.get(fd as u32)?.node.clone()
+        lock.thing_table.get(thing as u32)?.node.clone()
     };
 
     let msg = node.sock_recvmsg()?.ok_or(Errno::EAGAIN)?;
@@ -338,7 +338,7 @@ pub fn sys_recvmsg(
     {
         let mut pinfo = pinfo_arc.lock();
         for (i, cap) in fds.into_iter().take(install_count).enumerate() {
-            let new_fd = pinfo.fd_table.open(
+            let new_thing = pinfo.thing_table.open(
                 cap,
                 crate::vfs::OpenFlags::read_write(),
                 "recvmsg".into(),
@@ -385,7 +385,7 @@ fn resolve_fd_or_handle(
     // Try VFS FD table.
     {
         let lock = pinfo_arc.lock();
-        if let Ok(file) = lock.fd_table.get(raw) {
+        if let Ok(file) = lock.thing_table.get(raw) {
             return Ok(file.node.clone());
         }
     }

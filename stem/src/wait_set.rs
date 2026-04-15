@@ -1,7 +1,7 @@
 //! High-level `WaitSet` primitive — FD-centric readiness substrate.
 //!
 //! `WaitSet` lets a task block until *any* of a collection of event sources
-//! becomes ready: file descriptors, ports, timers, task-exit signals, and IRQs.
+//! becomes ready: things, ports, timers, task-exit signals, and IRQs.
 //! Internally it builds a `WaitSpec` array and calls the `SYS_WAIT_MANY`
 //! syscall, which parks the calling task in the kernel until at least one
 //! source fires.
@@ -249,9 +249,9 @@ impl WaitSet {
         self.push_spec(WaitKind::Port, interest::WRITABLE, handle)
     }
 
-    /// Watch a VFS file descriptor for readability.
+    /// Watch a VFS thing for readability.
     ///
-    /// `fd` is any open file descriptor: a pipe read-end, a socket, a channel
+    /// `fd` is any open thing: a pipe read-end, a socket, a channel
     /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLIN`.
     ///
@@ -261,16 +261,16 @@ impl WaitSet {
         self.push_spec(WaitKind::Fd, interest::READABLE, fd as u64)
     }
 
-    /// Watch a VFS file descriptor for writability.
+    /// Watch a VFS thing for writability.
     ///
-    /// `fd` is any open file descriptor: a pipe write-end, a socket, a channel
+    /// `fd` is any open thing: a pipe write-end, a socket, a channel
     /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLOUT`.
     pub fn add_fd_writable(&mut self, fd: u32) -> Result<WaitToken, Errno> {
         self.push_spec(WaitKind::Fd, interest::WRITABLE, fd as u64)
     }
 
-    /// Watch a VFS file descriptor for readability.
+    /// Watch a VFS thing for readability.
     ///
     /// # Deprecated
     ///

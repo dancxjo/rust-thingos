@@ -455,7 +455,7 @@ fn main(arg: usize) -> ! {
         ) {
             let _ = stem::syscall::channel_send_all(display_req_write, &header_buf[..total]);
             // Transfer the framebuffer FD via sendmsg.
-            let req_fd = stem::syscall::vfs::vfs_fd_from_handle(display_req_write)
+            let req_fd = stem::syscall::vfs::vfs_thing_from_channel(display_req_write)
                 .unwrap_or(display_req_write);
             let _ = stem::syscall::socket::sendmsg(req_fd, &[], &[bind_payload.fb_fd]);
         }
@@ -504,7 +504,7 @@ fn main(arg: usize) -> ! {
 
         // Check for focus change
         if focus_watch != 0 {
-            let mut fds = [abi::syscall::PollFd {
+            let mut fds = [abi::syscall::PollThing {
                 fd: focus_watch as i32,
                 events: abi::syscall::poll_flags::POLLIN as u16,
                 revents: 0,
@@ -559,7 +559,7 @@ fn main(arg: usize) -> ! {
 fn read_fb_info() -> Option<FbInfoPayload> {
     let fd = vfs_open("/dev/fb0", O_RDONLY).ok()?;
     let mut payload = FbInfoPayload {
-        device_handle: 0,
+        device_thing: 0,
         width: 0,
         height: 0,
         stride: 0,

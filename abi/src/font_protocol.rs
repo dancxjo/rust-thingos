@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-use crate::ids::HandleId;
+
 use crate::wire::ThingId;
 use alloc::vec::Vec;
 

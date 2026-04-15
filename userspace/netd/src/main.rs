@@ -89,7 +89,7 @@ fn main(_arg: usize) -> ! {
     let mut last_link_state = device.link_up();
 
     // Bridge the request-read port to an FD for FD-first polling.
-    let req_fd = stem::syscall::vfs::vfs_fd_from_handle(net_provider.req_read_port())
+    let req_fd = stem::syscall::vfs::vfs_thing_from_channel(net_provider.req_read_port())
         .unwrap_or(0);
 
     loop {
@@ -125,7 +125,7 @@ fn main(_arg: usize) -> ! {
         socket_api.gc_closed_sockets(&mut socket_set);
 
         if !did_work {
-            let mut pollfds = [abi::syscall::PollFd {
+            let mut pollfds = [abi::syscall::PollThing {
                 fd: req_fd as i32,
                 events: abi::syscall::poll_flags::POLLIN,
                 revents: 0,

@@ -5,7 +5,7 @@ use core::default::Default;
 extern crate alloc;
 
 use stem::syscall::{ioport_read, irq_subscribe};
-use stem::syscall::vfs::{vfs_fd_from_handle, vfs_write};
+use stem::syscall::vfs::{vfs_thing_from_channel, vfs_write};
 use stem::{error, info, warn};
 
 /// PS/2 controller status register
@@ -35,7 +35,7 @@ fn main(raw_write_handle: usize) -> ! {
 
     // Bridge the write channel handle to a VFS file descriptor so all I/O
     // flows through the VFS-first message path rather than the legacy port API.
-    let fd = match vfs_fd_from_handle(handle) {
+    let fd = match vfs_thing_from_channel(handle) {
         Ok(f) => f,
         Err(e) => {
             stem::error!("ps2_kbd: fd bridge failed ({:?}), aborting", e);

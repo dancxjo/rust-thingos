@@ -7,8 +7,6 @@ pub use system::*;
 
 // Re-export Wire IDs
 pub use crate::wire::{BlobId, KindId, PredicateId, SymbolId, ThingId};
-// Re-export Adapter
-pub use crate::ids::HandleId;
 
 // Graph atoms removed
 

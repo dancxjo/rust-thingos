@@ -2,7 +2,7 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use abi::ids::HandleId;
+
 use abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC, SECTION_NAME};
 use abi::schema::kinds;
 use alloc::collections::BTreeMap;

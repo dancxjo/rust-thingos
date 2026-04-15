@@ -78,7 +78,7 @@ pub struct RootRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct RootResponse {
-    /// Root node ID (opaque handle within provider)
+    /// Root node ID (opaque thing within provider)
     pub node_id: u64,
 }
 

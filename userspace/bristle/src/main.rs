@@ -14,8 +14,8 @@ use abi::hid::{
     KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
-use stem::syscall::vfs::{vfs_close, vfs_fd_from_handle, vfs_mkdir, vfs_open, vfs_read, vfs_write};
-use stem::syscall::{ChannelHandle, channel_send_all};
+use stem::syscall::vfs::{vfs_close, vfs_thing_from_channel, vfs_mkdir, vfs_open, vfs_read, vfs_write};
+use stem::syscall::{ChannelThing, channel_send_all};
 use stem::{debug, info};
 
 fn ensure_session_roots() {
@@ -56,10 +56,10 @@ fn get_active_ui() -> alloc::string::String {
 #[stem::main]
 fn main(packed_handles: usize) -> ! {
     let packed = packed_handles as u64;
-    let kbd_read = ((packed >> 48) & 0xFFFF) as ChannelHandle;
-    let mouse_read = ((packed >> 32) & 0xFFFF) as ChannelHandle;
-    let bloom_evt_write = ((packed >> 16) & 0xFFFF) as ChannelHandle;
-    let evt_input_echo_write = (packed & 0xFFFF) as ChannelHandle;
+    let kbd_read = ((packed >> 48) & 0xFFFF) as ChannelThing;
+    let mouse_read = ((packed >> 32) & 0xFFFF) as ChannelThing;
+    let bloom_evt_write = ((packed >> 16) & 0xFFFF) as ChannelThing;
+    let evt_input_echo_write = (packed & 0xFFFF) as ChannelThing;
 
     stem::debug!(
         "bristle: online (kbd={}, mouse={}, bloom_evt={}, input_echo={})",
@@ -85,7 +85,7 @@ fn main(packed_handles: usize) -> ! {
     // side uses the VFS-first message path (add_fd_readable + vfs_read) instead
     // of the legacy port-based wait (add_port_readable + channel_recv).
     let kbd_fd: Option<u32> = if kbd_read != 0 {
-        match vfs_fd_from_handle(kbd_read) {
+        match vfs_thing_from_channel(kbd_read) {
             Ok(fd) => {
                 // Re-register with the FD-based token, replacing the port token.
                 kbd_tok = ws.add_fd_readable(fd).ok();
@@ -103,7 +103,7 @@ fn main(packed_handles: usize) -> ! {
     // uses the VFS-first message path (add_fd_readable + vfs_read) instead of
     // the legacy port-based wait (add_port_readable + channel_recv).
     let mouse_fd: Option<u32> = if mouse_read != 0 {
-        match vfs_fd_from_handle(mouse_read) {
+        match vfs_thing_from_channel(mouse_read) {
             Ok(fd) => {
                 mouse_tok = ws.add_fd_readable(fd).ok();
                 Some(fd)

@@ -2,7 +2,7 @@
 #![no_main]
 extern crate alloc;
 
-use abi::syscall::{poll_flags, PollFd};
+use abi::syscall::{poll_flags, PollThing};
 use stem::syscall::vfs::*;
 
 #[stem::main]
@@ -17,7 +17,7 @@ fn main(_arg: usize) -> ! {
 
     // 2. Create a channel and bridge it to a VFS fd
     let (c_write, c_read) = stem::syscall::channel_create(1024).expect("channel create failed");
-    let c_read_fd = vfs_fd_from_handle(c_read).expect("vfs_fd_from_handle failed");
+    let c_read_fd = vfs_thing_from_channel(c_read).expect("vfs_thing_from_channel failed");
     stem::println!(
         "Channel created: write={}, read={}, bridged_fd={}",
         c_write,
@@ -34,12 +34,12 @@ fn main(_arg: usize) -> ! {
 
     // 4. Test timeout — pipe and channel are both empty so poll should expire.
     let mut fds = [
-        PollFd {
+        PollThing {
             fd: pr as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
-        PollFd {
+        PollThing {
             fd: c_read_fd as i32,
             events: poll_flags::POLLIN,
             revents: 0,
@@ -57,7 +57,7 @@ fn main(_arg: usize) -> ! {
     assert!(n == 0, "Expected timeout, got {}", n);
 
     // 5. VFS regular files are always POLLIN-ready.
-    let mut vfs_fds = [PollFd {
+    let mut vfs_fds = [PollThing {
         fd: dev_null_fd as i32,
         events: poll_flags::POLLIN | poll_flags::POLLOUT,
         revents: 0,
@@ -110,17 +110,17 @@ fn main(_arg: usize) -> ! {
     //    VFS file (index 2) is always ready.  All three should fire.
     stem::println!("Mixed poll: pipe + channel + VFS file...");
     let mut mixed = [
-        PollFd {
+        PollThing {
             fd: pr as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
-        PollFd {
+        PollThing {
             fd: c_read_fd as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
-        PollFd {
+        PollThing {
             fd: dev_null_fd as i32,
             events: poll_flags::POLLIN | poll_flags::POLLOUT,
             revents: 0,

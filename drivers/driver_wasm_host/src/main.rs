@@ -52,7 +52,7 @@ fn main() -> Result<()> {
         }
     };
 
-    let device_handle = handle_arg.and_then(|h| h.parse::<u32>().ok()).unwrap_or(0);
+    let device_thing = handle_arg.and_then(|h| h.parse::<u32>().ok()).unwrap_or(0);
 
     // Initialize Trace Mode
     let mut trace_mode = crate::trace::TraceMode::None;
@@ -84,7 +84,7 @@ fn main() -> Result<()> {
         .memory_size(10 * 1024 * 1024) // 10MB limit example
         .build();
 
-    let mut host_state = device::HostState::new(device_handle);
+    let mut host_state = device::HostState::new(device_thing);
     host_state.limits = limits;
     host_state.trace = trace_mode;
 
@@ -96,7 +96,7 @@ fn main() -> Result<()> {
 
     // Call init
     let init_func = instance.get_typed_func::<i32, i32>(&store, "init")?;
-    let res = init_func.call(&mut store, device_handle as i32)?;
+    let res = init_func.call(&mut store, device_thing as i32)?;
 
     println!("Driver init returned: {}", res);
 

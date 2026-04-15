@@ -15,8 +15,8 @@ use alloc::vec::Vec;
 use core::time::Duration;
 use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
-use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelHandle};
-use stem::syscall::vfs::vfs_fd_from_handle;
+use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelThing};
+use stem::syscall::vfs::vfs_thing_from_channel;
 use stem::syscall::{ioport_read, ioport_write};
 use stem::{error, info};
 
@@ -74,7 +74,7 @@ struct AtaDisk {
     supports_lba48: bool,
     model: [u8; 40],
     serial: [u8; 20],
-    read_port_handle: Option<ChannelHandle>,
+    read_port_handle: Option<ChannelThing>,
 }
 
 /// ATAPI (CD-ROM) device
@@ -86,7 +86,7 @@ struct AtapiDevice {
     sector_count: u64,
     model: [u8; 40],
     serial: [u8; 20],
-    read_port_handle: Option<ChannelHandle>,
+    read_port_handle: Option<ChannelThing>,
 }
 
 fn ata_inb(port: u16) -> u8 {
@@ -579,11 +579,11 @@ fn main(_arg: usize) -> ! {
     // We keep a parallel token→handle mapping so that when an event fires we
     // know which channel handle to drain.
     let mut ws = stem::wait_set::WaitSet::new();
-    let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, ChannelHandle)> = Vec::new();
+    let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, ChannelThing)> = Vec::new();
 
     for disk in &disks {
         if let Some(h) = disk.read_port_handle {
-            if let Ok(fd) = vfs_fd_from_handle(h) {
+            if let Ok(fd) = vfs_thing_from_channel(h) {
                 if let Ok(tok) = ws.add_fd_readable(fd) {
                     tok_to_handle.push((tok, h));
                 }
@@ -592,7 +592,7 @@ fn main(_arg: usize) -> ! {
     }
     for dev in &atapi_devs {
         if let Some(h) = dev.read_port_handle {
-            if let Ok(fd) = vfs_fd_from_handle(h) {
+            if let Ok(fd) = vfs_thing_from_channel(h) {
                 if let Ok(tok) = ws.add_fd_readable(fd) {
                     tok_to_handle.push((tok, h));
                 }
@@ -669,7 +669,7 @@ fn main(_arg: usize) -> ! {
 }
 
 /// Handle a block device RPC request for ATA disk
-fn handle_ata_request(disk: &AtaDisk, request_data: &[u8], port_handle: ChannelHandle) {
+fn handle_ata_request(disk: &AtaDisk, request_data: &[u8], port_handle: ChannelThing) {
     if request_data.is_empty() {
         send_error_response(port_handle, BlockDeviceError::InvalidParam);
         return;
@@ -687,7 +687,7 @@ fn handle_ata_request(disk: &AtaDisk, request_data: &[u8], port_handle: ChannelH
 }
 
 /// Handle Identify request for ATA disk
-fn handle_ata_identify(disk: &AtaDisk, port_handle: ChannelHandle) {
+fn handle_ata_identify(disk: &AtaDisk, port_handle: ChannelThing) {
     let response = IdentifyResponse {
         sector_size: disk.sector_size,
         sector_count: disk.sector_count,
@@ -717,7 +717,7 @@ fn handle_ata_identify(disk: &AtaDisk, port_handle: ChannelHandle) {
 }
 
 /// Handle Read request for ATA disk
-fn handle_ata_read(disk: &AtaDisk, request_data: &[u8], port_handle: ChannelHandle) {
+fn handle_ata_read(disk: &AtaDisk, request_data: &[u8], port_handle: ChannelThing) {
     if request_data.len() < core::mem::size_of::<ReadRequest>() {
         send_error_response(port_handle, BlockDeviceError::InvalidParam);
         return;
@@ -749,7 +749,7 @@ fn handle_ata_read(disk: &AtaDisk, request_data: &[u8], port_handle: ChannelHand
 }
 
 /// Handle a block device RPC request for ATAPI device
-fn handle_atapi_request(dev: &AtapiDevice, request_data: &[u8], port_handle: ChannelHandle) {
+fn handle_atapi_request(dev: &AtapiDevice, request_data: &[u8], port_handle: ChannelThing) {
     if request_data.is_empty() {
         send_error_response(port_handle, BlockDeviceError::InvalidParam);
         return;
@@ -767,7 +767,7 @@ fn handle_atapi_request(dev: &AtapiDevice, request_data: &[u8], port_handle: Cha
 }
 
 /// Handle Identify request for ATAPI device
-fn handle_atapi_identify(dev: &AtapiDevice, port_handle: ChannelHandle) {
+fn handle_atapi_identify(dev: &AtapiDevice, port_handle: ChannelThing) {
     let response = IdentifyResponse {
         sector_size: dev.sector_size,
         sector_count: dev.sector_count,
@@ -793,7 +793,7 @@ fn handle_atapi_identify(dev: &AtapiDevice, port_handle: ChannelHandle) {
 }
 
 /// Handle Read request for ATAPI device
-fn handle_atapi_read(dev: &AtapiDevice, request_data: &[u8], port_handle: ChannelHandle) {
+fn handle_atapi_read(dev: &AtapiDevice, request_data: &[u8], port_handle: ChannelThing) {
     if request_data.len() < core::mem::size_of::<ReadRequest>() {
         send_error_response(port_handle, BlockDeviceError::InvalidParam);
         return;
@@ -824,7 +824,7 @@ fn handle_atapi_read(dev: &AtapiDevice, request_data: &[u8], port_handle: Channe
 }
 
 /// Send a Read success response
-fn send_read_response(port_handle: ChannelHandle, data: &[u8]) {
+fn send_read_response(port_handle: ChannelThing, data: &[u8]) {
     let header = ReadResponse {
         data_len: data.len() as u32,
     };
@@ -849,7 +849,7 @@ fn send_read_response(port_handle: ChannelHandle, data: &[u8]) {
 }
 
 /// Send an error response
-fn send_error_response(port_handle: ChannelHandle, error_code: BlockDeviceError) {
+fn send_error_response(port_handle: ChannelThing, error_code: BlockDeviceError) {
     let error_resp = ErrorResponse {
         error_code: error_code as u8,
         _reserved: [0; 3],

@@ -1,6 +1,6 @@
 //! VFS RPC wire format — shared between kernel and userland providers.
 //!
-//! When a userland process calls `SYS_FS_MOUNT(port_write_handle, path)`, the
+//! When a userland process calls `SYS_FS_MOUNT(port_write_thing, path)`, the
 //! kernel registers a [`ProviderFs`][kernel-side] at the given path.  From that
 //! point on, every VFS operation that touches a path under that mount point is
 //! serialised into one of the messages below and sent to the provider's port.
@@ -25,17 +25,17 @@
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VfsRpcOp {
-    /// Look up a path relative to the mount point and return an opaque handle.
+    /// Look up a path relative to the mount point and return an opaque thing.
     ///
     /// Payload: `[path_len: u32][path bytes (UTF-8)]`
     /// Response payload (on OK): `[handle: u64]`
     Lookup = 1,
-    /// Read bytes from an open handle.
+    /// Read bytes from an open thing.
     ///
     /// Payload: `[handle: u64][offset: u64][len: u32]`
     /// Response payload (on OK): `[bytes_read: u32][data bytes...]`
     Read = 2,
-    /// Write bytes to an open handle.
+    /// Write bytes to an open thing.
     ///
     /// Payload: `[handle: u64][offset: u64][data_len: u32][data bytes...]`
     /// Response payload (on OK): `[bytes_written: u32]`
@@ -47,17 +47,17 @@ pub enum VfsRpcOp {
     /// Payload: `[handle: u64][offset: u64][len: u32]`
     /// Response payload (on OK): `[bytes_read: u32][dirent data...]`
     Readdir = 4,
-    /// Stat an open handle.
+    /// Stat an open thing.
     ///
     /// Payload: `[handle: u64]`
     /// Response payload (on OK): `[mode: u32][size: u64][ino: u64]`
     Stat = 5,
-    /// Close an open handle, allowing the provider to free resources.
+    /// Close an open thing, allowing the provider to free resources.
     ///
     /// Payload: `[handle: u64]`
     /// Response payload (on OK): (empty)
     Close = 6,
-    /// Poll readiness bits for an open handle (non-blocking check).
+    /// Poll readiness bits for an open thing (non-blocking check).
     ///
     /// Payload: `[handle: u64][events: u32]`
     /// Response payload (on OK): `[revents: u32]`
@@ -67,12 +67,12 @@ pub enum VfsRpcOp {
     /// Payload: `[handle: u64][DeviceCall struct]`
     /// Response payload (on OK): `[u32 return value]`
     DeviceCall = 8,
-    /// Subscribe to readiness notifications for an open handle.
+    /// Subscribe to readiness notifications for an open thing.
     ///
     /// Payload: `[handle: u64][events: u32]`
     /// Response payload (on OK): (empty)
     SubscribeReady = 9,
-    /// Unsubscribe from readiness notifications for an open handle.
+    /// Unsubscribe from readiness notifications for an open thing.
     ///
     /// Payload: `[handle: u64]`
     /// Response payload (on OK): (empty)
@@ -110,13 +110,13 @@ impl VfsRpcOp {
 /// ```text
 /// [resp_port: u32 LE][op: u8][_pad: u8][_pad: u8]
 /// ```
-/// The `resp_port` is the write-handle of the kernel's private response port.
+/// The `resp_port` is the write thing of the kernel's private response port.
 /// After processing the request, the provider **must** send its response to
 /// that handle using `SYS_channel_send`.
 #[derive(Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct VfsRpcReqHeader {
-    /// Port write-handle the provider should send the response back to.
+    /// Port write thing the provider should send the response back to.
     pub resp_port: u32,
     /// Operation code (one of [`VfsRpcOp`]).
     pub op: u8,

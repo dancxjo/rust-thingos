@@ -133,8 +133,8 @@ pub mod keys {
     pub const ATA_DRIVE: &str = "ata_drive";
     pub const MODEL: &str = "model";
     pub const SERIAL: &str = "serial";
-    pub const READ_PORT_HANDLE: &str = "read_port_handle";
-    pub const WRITE_PORT_HANDLE: &str = "write_port_handle";
+    pub const READ_PORT_THING: &str = "read_port_thing";
+    pub const WRITE_PORT_THING: &str = "write_port_thing";
 
     // Network
     pub const MAC_ADDRESS: &str = "mac_address";
@@ -165,7 +165,7 @@ pub mod keys {
     pub const NET_SOCK_KEY: &str = "net.sock.key";
     pub const NET_SOCK_PROTO: &str = "net.sock.proto";
     pub const NET_SOCK_STATE: &str = "net.sock.state";
-    pub const NET_SOCK_FD: &str = "net.sock.fd";
+    pub const NET_SOCK: &str = "net.sock";
     pub const NET_SOCK_PID: &str = "net.sock.pid";
     pub const NET_SOCK_CREATED_AT: &str = "net.sock.created_at";
     pub const NET_SOCK_CLOSED_AT: &str = "net.sock.closed_at";
@@ -603,7 +603,7 @@ pub mod kinds {
     pub const FW_TABLE_DTB: &str = "fw.table.Dtb";
     pub const MEM_RANGE: &str = "mem.Range";
     pub const DEV_RTC_CMOS: &str = "dev.rtc.Cmos";
-    pub const MEMFD: &str = "MemFd";
+    pub const SHARED_MEMORY: &str = "SharedMemory";
     pub const BYTESPACE: &str = "Bytespace"; // Legacy alias
     pub const RES_IO_PORT_RANGE: &str = "res.io.PortRange";
     pub const DEV_DISPLAY_FRAMEBUFFER: &str = "dev.display.Framebuffer";

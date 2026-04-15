@@ -120,7 +120,7 @@ fn main(_arg: usize) -> ! {
             match vfs_write(out_fd, &buf[sent..]) {
                 Ok(0) | Err(_) => {
                     // No space — wait for POLLOUT.
-                    let mut pollfds = [abi::syscall::PollFd {
+                    let mut pollfds = [abi::syscall::PollThing {
                         fd: out_fd as i32,
                         events: abi::syscall::poll_flags::POLLOUT,
                         revents: 0,

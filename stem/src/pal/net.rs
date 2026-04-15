@@ -58,7 +58,7 @@
 //!
 //! ### Nonblocking mode
 //!
-//! All data file descriptors are opened with `O_NONBLOCK`.  The caller decides
+//! All data things are opened with `O_NONBLOCK`.  The caller decides
 //! whether to spin-wait, sleep-poll, or use `sys_fs_poll` for readiness.
 //! Blocking wrappers (`tcp_connect`, `TcpListenerHandle::accept`) perform
 //! their own timed polling loop and return `ETIMEDOUT` on expiry.
@@ -74,10 +74,10 @@ use super::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR, O_WRONLY};
 use crate::syscall;
 use crate::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 use abi::errors::{Errno, SysResult};
-use abi::syscall::{poll_flags, PollFd};
+use abi::syscall::{poll_flags, PollThing};
 use spin::Mutex;
 
-/// A VFS file descriptor returned by [`vfs_open`].
+/// A VFS thing returned by [`vfs_open`].
 pub type Fd = u32;
 
 // poll intervals
@@ -116,7 +116,7 @@ fn wait_fd(fd: Fd, events: u16, deadline_ns: u64) -> SysResult<()> {
             ns_to_timeout_ms(deadline_ns.saturating_sub(now))
         };
 
-        let mut pollfd = [PollFd {
+        let mut pollfd = [PollThing {
             fd: fd as i32,
             events,
             revents: 0,
@@ -229,7 +229,7 @@ impl TcpHandle {
         vfs_write(self.ctl_fd, cmd)
     }
 
-    /// Returns `true` if this handle is in nonblocking mode.
+    /// Returns `true` if this thing is in nonblocking mode.
     pub fn is_nonblocking(&self) -> bool {
         self.nonblocking
     }
@@ -242,7 +242,7 @@ impl TcpHandle {
         self.nonblocking = nonblocking;
     }
 
-    /// Close the connection and release VFS file descriptors.
+    /// Close the connection and release VFS things.
     pub fn close(self) {
         let _ = vfs_write(self.ctl_fd, b"close");
         let _ = vfs_close(self.data_fd);
@@ -347,7 +347,7 @@ impl TcpListenerHandle {
         self.nonblocking
     }
 
-    /// Stop accepting connections and release VFS file descriptors.
+    /// Stop accepting connections and release VFS things.
     pub fn close(self) {
         let _ = vfs_write(self.ctl_fd, b"close");
         let _ = vfs_close(self.accept_fd);
@@ -478,7 +478,7 @@ impl UdpHandle {
         self.nonblocking
     }
 
-    /// Close the UDP socket and release VFS file descriptors.
+    /// Close the UDP socket and release VFS things.
     pub fn close(self) {
         let _ = vfs_write(self.ctl_fd, b"close");
         let _ = vfs_close(self.data_fd);

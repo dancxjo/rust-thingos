@@ -7,11 +7,10 @@ extern crate alloc;
 
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
-use abi::ids::HandleId;
 use abi::schema::{keys, kinds};
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader, VFS_RPC_MAX_REQ};
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
-use stem::syscall::{channel_create, channel_recv, channel_send, vfs_mount, ChannelHandle};
+use stem::syscall::{channel_create, channel_recv, channel_send, vfs_mount, ChannelThing};
 use stem::{info, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 
@@ -137,18 +136,18 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
     _reserved: 0,
 };
 
-fn unpack_handle(arg: usize, index: u32) -> ChannelHandle {
-    ((arg >> (index * 16)) & 0xFFFF) as ChannelHandle
+fn unpack_handle(arg: usize, index: u32) -> ChannelThing {
+    ((arg >> (index * 16)) & 0xFFFF) as ChannelThing
 }
 
-fn send_msg(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
+fn send_msg(handle: ChannelThing, msg_type: u16, payload: &[u8]) {
     let mut buf = [0u8; 256];
     if let Some(len) = drvproto::encode_message(&mut buf, msg_type, payload) {
         let mut status = stem::syscall::channel_send_all(handle, &buf[..len]);
         if let Err(abi::errors::Errno::EAGAIN) = status {
             // Bridge the handle to a VFS FD for FD-first write-readiness polling.
-            if let Ok(fd) = stem::syscall::vfs::vfs_fd_from_handle(handle) {
-                let mut pollfds = [abi::syscall::PollFd {
+            if let Ok(fd) = stem::syscall::vfs::vfs_thing_from_channel(handle) {
+                let mut pollfds = [abi::syscall::PollThing {
                     fd: fd as i32,
                     events: abi::syscall::poll_flags::POLLOUT,
                     revents: 0,
@@ -392,10 +391,10 @@ fn main(boot_fd: usize) -> ! {
             }
         };
 
-        let phys = match stem::syscall::memfd_phys(fd) {
+        let phys = match stem::syscall::shared_memory_phys(fd) {
             Ok(phys) => phys,
             Err(e) => {
-                info!("display_virtio_gpu: memfd_phys failed: {:?}", e);
+                info!("display_virtio_gpu: shared_memory_phys failed: {:?}", e);
                 loop {
                     stem::time::sleep_ms(1);
                 }
@@ -457,8 +456,8 @@ fn main(boot_fd: usize) -> ! {
         channel_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
 
     // Bridge the supervisor channel handle to a VFS FD for sendmsg.
-    let supervisor_port_fd = stem::syscall::vfs::vfs_fd_from_handle(supervisor_port)
-        .expect("display_virtio_gpu: vfs_fd_from_handle(supervisor_port)");
+    let supervisor_port_fd = stem::syscall::vfs::vfs_thing_from_channel(supervisor_port)
+        .expect("display_virtio_gpu: vfs_thing_from_channel(supervisor_port)");
 
     // Send MSG_BIND_READY to supervisor instead of legacy MSG_REGISTER
     let ready = supervisor_protocol::BindReadyPayload {
@@ -572,11 +571,11 @@ fn main(boot_fd: usize) -> ! {
         }
     }
 
-    let drv_req_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_req_read)
+    let drv_req_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_req_read)
         .expect("display_virtio_gpu: fd_from_handle(drv_req_read)");
-    let drv_resp_write_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_resp_write)
+    let drv_resp_write_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_resp_write)
         .expect("display_virtio_gpu: fd_from_handle(drv_resp_write)");
-    let vfs_read_fd = stem::syscall::vfs::vfs_fd_from_handle(vfs_read)
+    let vfs_read_fd = stem::syscall::vfs::vfs_thing_from_channel(vfs_read)
         .expect("display_virtio_gpu: fd_from_handle(vfs_read)");
     let mut ws = stem::wait_set::WaitSet::new();
     let drv_req_read_tok = ws.add_fd_readable(drv_req_fd).unwrap();
@@ -603,7 +602,7 @@ fn main(boot_fd: usize) -> ! {
                         if n >= 5 {
                             let resp_port = u32::from_le_bytes([
                                 vfs_buf[0], vfs_buf[1], vfs_buf[2], vfs_buf[3],
-                            ]) as ChannelHandle;
+                            ]) as ChannelThing;
                             let op = VfsRpcOp::from_u8(vfs_buf[4]);
                             match op {
                                 Some(VfsRpcOp::Lookup) => {
@@ -1092,7 +1091,7 @@ fn main(boot_fd: usize) -> ! {
                                             }
 
                                             // Get physical address for attach_backing_3d
-                                            match stem::syscall::memfd_phys(fd) {
+                                            match stem::syscall::shared_memory_phys(fd) {
                                                 Ok(phys_addr) => {
                                                     // Attach backing and transfer
                                                     if gpu

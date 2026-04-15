@@ -605,7 +605,7 @@ fn main(boot_fd: usize) -> ! {
     }
 
     // ── Main event loop ───────────────────────────────────────────────────────
-    let dma_dev = driver.claim_handle();
+    let dma_dev = driver.claim_thing();
     let mut card = AudioCard::new();
     let mut provider_loop = ProviderLoop::new(req_read);
 
@@ -723,7 +723,7 @@ fn process_tx_queue(driver: &mut VirtioDevice) {
 }
 
 fn populate_event_queue(driver: &mut VirtioDevice) {
-    let dma_dev = driver.claim_handle();
+    let dma_dev = driver.claim_thing();
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_EVENT).unwrap();
         for _ in 0..8 {
@@ -737,7 +737,7 @@ fn populate_event_queue(driver: &mut VirtioDevice) {
 }
 
 fn process_event_queue(driver: &mut VirtioDevice) -> bool {
-    let dma_dev = driver.claim_handle();
+    let dma_dev = driver.claim_thing();
     let mut needs_notify = false;
     let mut xrun_seen = false;
     {
@@ -756,9 +756,9 @@ fn process_event_queue(driver: &mut VirtioDevice) -> bool {
 }
 
 fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
-    let dma_req = stem::syscall::device_alloc_dma(driver.claim_handle(), 1).unwrap();
+    let dma_req = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
     let phys_req = stem::syscall::device_dma_phys(dma_req).unwrap();
-    let dma_resp = stem::syscall::device_alloc_dma(driver.claim_handle(), 1).unwrap();
+    let dma_resp = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
     let phys_resp = stem::syscall::device_dma_phys(dma_resp).unwrap();
     unsafe {
         *(dma_req as *mut VirtioSndPcmHdr) = VirtioSndPcmHdr {
@@ -781,9 +781,9 @@ fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
 }
 
 fn configure_stream(driver: &mut VirtioDevice, stream_id: u32) {
-    let dma_req = stem::syscall::device_alloc_dma(driver.claim_handle(), 1).unwrap();
+    let dma_req = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
     let phys_req = stem::syscall::device_dma_phys(dma_req).unwrap();
-    let dma_resp = stem::syscall::device_alloc_dma(driver.claim_handle(), 1).unwrap();
+    let dma_resp = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
     let phys_resp = stem::syscall::device_dma_phys(dma_resp).unwrap();
     unsafe {
         *(dma_req as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {

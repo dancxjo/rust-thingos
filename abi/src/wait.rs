@@ -23,7 +23,7 @@ pub enum WaitKind {
     /// Wait for a VFS file descriptor to become readable or writable.
     ///
     /// This is the primary readiness kind for all VFS-backed resources:
-    /// pipes, sockets, channels bridged via `SYS_FS_FD_FROM_HANDLE`, and
+    /// pipes, sockets, channels bridged via `SYS_THING_FROM_CHANNEL`, and
     /// device nodes.
     Fd = 7,
 }

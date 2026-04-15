@@ -12,7 +12,7 @@ use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::BootFbDriver;
 use ipc_helpers::provider::ProviderLoop;
 use stem::syscall::{channel_create, channel_recv};
-use stem::syscall::vfs::vfs_fd_from_handle;
+use stem::syscall::vfs::vfs_thing_from_channel;
 use stem::{debug, info, warn};
 use vfs_provider::dispatch_vfs_rpc;
 
@@ -147,8 +147,8 @@ fn main(boot_fd: usize) -> ! {
 
     // Bridge the response-channel handle to a VFS FD once so we can use
     // sendmsg (FD-based) for capability transfer.
-    let drv_resp_write_fd = vfs_fd_from_handle(drv_resp_write)
-        .expect("display_bootfb: vfs_fd_from_handle(drv_resp_write)");
+    let drv_resp_write_fd = vfs_thing_from_channel(drv_resp_write)
+        .expect("display_bootfb: vfs_thing_from_channel(drv_resp_write)");
 
     // Sovereign Handshake
     use abi::display_driver_protocol;

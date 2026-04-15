@@ -28,7 +28,7 @@ pub mod pipe;
 pub mod unix_socket;
 mod port;
 
-pub use handles::{Handle, HandleEntry, HandleMode, HandleTable, MAX_HANDLES};
+pub use handles::{IpcThing, IpcThingEntry, IpcThingMode, IpcThingTable, MAX_IPC_THINGS};
 pub use port::{Port, PortId, Receiver, Sender};
 
 use alloc::sync::Arc;
@@ -39,7 +39,7 @@ use spin::Mutex;
 static PORTS: Mutex<Vec<Option<Arc<Port>>>> = Mutex::new(Vec::new());
 
 /// Global Handle Table (Single Process Model for v0)
-pub static GLOBAL_HANDLE_TABLE: Mutex<HandleTable> = Mutex::new(HandleTable::new());
+pub static GLOBAL_THING_TABLE: Mutex<IpcThingTable> = Mutex::new(IpcThingTable::new());
 
 /// Create a new port and return its ID
 pub fn create_port(capacity: usize) -> PortId {

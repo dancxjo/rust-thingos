@@ -131,7 +131,7 @@ pub struct WatchSpec {
 pub struct WatchEvent {
     pub kind: u32, // 1=Found, 2=Lost
     pub node_id: u64,
-    pub handle: u64,
+    pub thing: u64,
     pub size: u64,
 }
 
@@ -228,36 +228,36 @@ impl Default for BulkPropsResponse {
 // Enhanced Process Spawn (SYS_SPAWN_PROCESS_EX)
 // ============================================================================
 
-/// Mapping from a parent file descriptor to a destination file descriptor in the child.
+/// Mapping from a parent thing to a destination thing in the child.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FdRemap {
-    pub src_fd: u32,
-    pub dst_fd: u32,
+pub struct ThingRemap {
+    pub src_thing: u32,
+    pub dst_thing: u32,
 }
 
 /// Stdio mode for child streams in SpawnProcessExReq.
 pub mod stdio_mode {
-    /// Inherit the parent's handle for this stream.
+    /// Inherit the parent's thing for this stream.
     pub const INHERIT: u32 = 0;
     /// Attach to a null sink/source (discard output, empty input).
     pub const NULL: u32 = 1;
     /// Create a kernel pipe; parent gets the opposite end.
     pub const PIPE: u32 = 2;
 
-    const FD_BIT: u32 = 1 << 31;
+    const THING_BIT: u32 = 1 << 31;
 
-    /// Use an explicitly inherited parent file descriptor for this stream.
+    /// Use an explicitly inherited parent thing for this stream.
     #[inline]
-    pub const fn fd(fd: u32) -> u32 {
-        FD_BIT | fd
+    pub const fn thing(thing: u32) -> u32 {
+        THING_BIT | thing
     }
 
-    /// Decode an explicit parent file descriptor, if `mode` encodes one.
+    /// Decode an explicit parent thing, if `mode` encodes one.
     #[inline]
-    pub const fn explicit_fd(mode: u32) -> Option<u32> {
-        if (mode & FD_BIT) != 0 {
-            Some(mode & !FD_BIT)
+    pub const fn explicit_thing(mode: u32) -> Option<u32> {
+        if (mode & THING_BIT) != 0 {
+            Some(mode & !THING_BIT)
         } else {
             None
         }
@@ -294,21 +294,21 @@ pub struct SpawnProcessExReq {
     pub stderr_mode: u32,
     pub _reserved: u32,
     pub boot_arg: u64,
-    /// Explicit handles to inherit from parent.
-    /// The kernel will clone these into the child's handle table.
-    pub handles_to_inherit: [u64; 8],
-    /// Number of handles in the array to inherit.
-    pub num_inherited_handles: u32,
+    /// Explicit things to inherit from parent.
+    /// The kernel will clone these into the child's thing table.
+    pub things_to_inherit: [u64; 8],
+    /// Number of things in the array to inherit.
+    pub num_inherited_things: u32,
     pub _pad3: u32,
     /// Pointer to the desired working directory bytes (NOT null-terminated).
     /// Set to 0 to inherit the parent's cwd.
     pub cwd_ptr: u64,
     pub cwd_len: u32,
     pub _pad4: u32,
-    /// Pointer to an array of [`FdRemap`] entries.
-    pub fd_remap_ptr: u64,
-    /// Number of entries in the `fd_remap_ptr` array.
-    pub fd_remap_len: u32,
+    /// Pointer to an array of [`ThingRemap`] entries.
+    pub thing_remap_ptr: u64,
+    /// Number of entries in the `thing_remap_ptr` array.
+    pub thing_remap_len: u32,
     pub _pad5: u32,
 }
 
@@ -323,10 +323,10 @@ pub struct SpawnProcessExResp {
     /// Child process ID (for waitpid).
     pub child_pid: u32,
     pub _pad: u32,
-    /// Parent's fd for piped stdin (parent writes to this fd); 0 = not piped.
+    /// Parent's thing for piped stdin (parent writes to this thing); 0 = not piped.
     pub stdin_pipe: u64,
-    /// Parent's fd for piped stdout (parent reads from this fd); 0 = not piped.
+    /// Parent's thing for piped stdout (parent reads from this thing); 0 = not piped.
     pub stdout_pipe: u64,
-    /// Parent's fd for piped stderr (parent reads from this fd); 0 = not piped.
+    /// Parent's thing for piped stderr (parent reads from this thing); 0 = not piped.
     pub stderr_pipe: u64,
 }

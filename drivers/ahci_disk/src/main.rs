@@ -22,8 +22,8 @@ use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
-use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelHandle};
-use stem::syscall::vfs::vfs_fd_from_handle;
+use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelThing};
+use stem::syscall::vfs::vfs_thing_from_channel;
 use stem::{debug, error, info};
 
 #[unsafe(link_section = ".thing_manifest")]
@@ -102,7 +102,7 @@ struct AhciPort {
     supports_lba48: bool,
     model: [u8; 40],
     serial: [u8; 20],
-    read_port_handle: Option<ChannelHandle>,
+    read_port_handle: Option<ChannelThing>,
     mmio_base: u64,
     dma_virt: u64,
     dma_phys: u64,
@@ -508,7 +508,7 @@ fn main(boot_fd: usize) -> ! {
         }
     };
 
-    let claim_handle = match stem::syscall::device_claim(&dev_path) {
+    let claim_thing = match stem::syscall::device_claim(&dev_path) {
         Ok(h) => {
             debug!("AHCI: Claimed PCI device '{}' handle={}", dev_path, h);
             h
@@ -521,7 +521,7 @@ fn main(boot_fd: usize) -> ! {
         }
     };
 
-    let mapped_base = match stem::syscall::device_map_mmio(claim_handle, 5) {
+    let mapped_base = match stem::syscall::device_map_mmio(claim_thing, 5) {
         Ok(addr) => {
             debug!("AHCI: Mapped ABAR at 0x{:x}", addr);
             addr
@@ -688,11 +688,11 @@ fn main(boot_fd: usize) -> ! {
     // We keep a parallel token→handle mapping so that when an event fires we
     // know which channel handle to drain.
     let mut ws = stem::wait_set::WaitSet::new();
-    let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, ChannelHandle)> = Vec::new();
+    let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, ChannelThing)> = Vec::new();
 
     for port in ports.iter() {
         if let Some(h) = port.read_port_handle {
-            if let Ok(fd) = vfs_fd_from_handle(h) {
+            if let Ok(fd) = vfs_thing_from_channel(h) {
                 if let Ok(tok) = ws.add_fd_readable(fd) {
                     tok_to_handle.push((tok, h));
                 }
@@ -750,7 +750,7 @@ fn main(boot_fd: usize) -> ! {
 }
 
 /// Handle a block device RPC request
-fn handle_block_device_request(port: &AhciPort, request_data: &[u8], _service_port: ChannelHandle) {
+fn handle_block_device_request(port: &AhciPort, request_data: &[u8], _service_port: ChannelThing) {
     if request_data.len() < 5 {
         error!(
             "AHCI: Request too short from client (len={})",
@@ -765,7 +765,7 @@ fn handle_block_device_request(port: &AhciPort, request_data: &[u8], _service_po
         request_data[1],
         request_data[2],
         request_data[3],
-    ]) as ChannelHandle;
+    ]) as ChannelThing;
 
     let request_type = request_data[4];
 
@@ -779,7 +779,7 @@ fn handle_block_device_request(port: &AhciPort, request_data: &[u8], _service_po
 }
 
 /// Handle Identify request
-fn handle_identify(port: &AhciPort, port_handle: ChannelHandle) {
+fn handle_identify(port: &AhciPort, port_handle: ChannelThing) {
     let response = IdentifyResponse {
         sector_size: port.sector_size,
         sector_count: port.sector_count,
@@ -809,7 +809,7 @@ fn handle_identify(port: &AhciPort, port_handle: ChannelHandle) {
 }
 
 /// Handle Read request
-fn handle_read(port: &AhciPort, request_data: &[u8], port_handle: ChannelHandle) {
+fn handle_read(port: &AhciPort, request_data: &[u8], port_handle: ChannelThing) {
     if request_data.len() < core::mem::size_of::<ReadRequest>() {
         send_error_response(port_handle, BlockDeviceError::InvalidParam);
         return;
@@ -863,7 +863,7 @@ fn handle_read(port: &AhciPort, request_data: &[u8], port_handle: ChannelHandle)
 }
 
 /// Send a Read success response
-fn send_read_response(port_handle: ChannelHandle, data: &[u8]) {
+fn send_read_response(port_handle: ChannelThing, data: &[u8]) {
     let header = ReadResponse {
         data_len: data.len() as u32,
     };
@@ -888,7 +888,7 @@ fn send_read_response(port_handle: ChannelHandle, data: &[u8]) {
 }
 
 /// Send an error response
-fn send_error_response(port_handle: ChannelHandle, error_code: BlockDeviceError) {
+fn send_error_response(port_handle: ChannelThing, error_code: BlockDeviceError) {
     let error_resp = ErrorResponse {
         error_code: error_code as u8,
         _reserved: [0; 3],

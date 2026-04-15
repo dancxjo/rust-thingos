@@ -7,7 +7,7 @@ pub mod loongarch64;
 pub mod riscv64;
 pub mod x86_64;
 
-use abi::ids::HandleId;
+
 use abi::schema::{confidence, keys, source};
 use alloc::vec;
 use stem::{debug, info};

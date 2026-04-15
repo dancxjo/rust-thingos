@@ -8,7 +8,7 @@
 //! - [`VfsStat`]: file metadata
 //! - [`OpenFlags`]: open(2) flags
 //! - Global mount table (see [`mount`])
-//! - Per-process file descriptor table (see [`fd_table`])
+//! - Per-process thing table (see [`thing_table`])
 //! - Built-in devfs backend (see [`devfs`])
 //!
 //! # North Star
@@ -17,7 +17,7 @@
 
 pub mod bootfs;
 pub mod devfs;
-pub mod fd_table;
+pub mod thing_table;
 pub mod flock;
 pub mod inbox_node;
 pub mod memfd;

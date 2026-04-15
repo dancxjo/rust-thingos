@@ -4,7 +4,7 @@ use core::default::Default;
 extern crate alloc;
 use crate::task::{ManagedTask, TaskKind};
 use abi::display_driver_protocol::{FbInfoPayload, FB_INFO_PAYLOAD_SIZE};
-use abi::ids::HandleId;
+
 use abi::schema::{keys, kinds};
 use abi::syscall::vfs_flags::O_RDONLY;
 use alloc::sync::Arc;
@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use spin::Mutex;
 use stem::abi::driver_ctx::DriverCtx;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{channel_create, ChannelHandle};
+use stem::syscall::{channel_create, ChannelThing};
 use stem::{debug, info, warn};
 
 fn file_exists(path: &str) -> bool {
@@ -76,8 +76,8 @@ fn ensure_session_roots() {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayHandles {
-    pub drv_req_write: ChannelHandle,
-    pub drv_resp_read: ChannelHandle,
+    pub drv_req_write: ChannelThing,
+    pub drv_resp_read: ChannelThing,
     pub bs_id: u32,
     /// Which display backend was selected
     pub backend_name: &'static str,
@@ -244,7 +244,7 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
         }
     };
     let mut payload = FbInfoPayload {
-        device_handle: 0,
+        device_thing: 0,
         width: 0,
         height: 0,
         stride: 0,
@@ -284,7 +284,7 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
 
 pub fn setup_display_pipeline(
     shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
-    supervisor_port: stem::syscall::ChannelHandle,
+    supervisor_port: stem::syscall::ChannelThing,
     bind_instance_id: u64,
 ) -> Option<DisplayHandles> {
     debug!(
@@ -543,8 +543,8 @@ pub fn setup_terminal(
 
 #[derive(Clone, Copy, Debug)]
 pub struct InputHandles {
-    pub bloom_evt_read: ChannelHandle,
-    pub evt_input_echo_read: ChannelHandle,
+    pub bloom_evt_read: ChannelThing,
+    pub evt_input_echo_read: ChannelThing,
 }
 
 pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHandles {

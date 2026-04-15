@@ -4,7 +4,7 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use abi::ids::HandleId;
+use abi::ids::ThingId;
 use abi::syscall::vfs_flags::O_RDWR;
 use alloc::vec::Vec;
 use stem::info;

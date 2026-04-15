@@ -1,2 +1,2 @@
-pub use abi::ids::HandleId;
+pub 
 pub use abi::ThingId;

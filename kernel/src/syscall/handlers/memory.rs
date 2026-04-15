@@ -77,14 +77,14 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
         let hhdm = crate::boot_info::get().map(|i| i.hhdm_offset).unwrap_or(0);
         let mut virt = addr as u64;
         let end = virt + len as u64;
-        // Resolve file backing metadata once to avoid re-locking fd_table on
+        // Resolve file backing metadata once to avoid re-locking thing_table on
         // every page and to enforce access checks up front.
         let file_backing = match req.backing {
             VmBacking::File { fd, offset } => {
                 let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
                 let (node, status_flags) = {
                     let lock = pinfo_arc.lock();
-                    let file = lock.fd_table.get(fd)?;
+                    let file = lock.thing_table.get(fd)?;
                     (file.node.clone(), *file.status_flags.lock())
                 };
 
@@ -293,7 +293,7 @@ pub fn sys_vm_query(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
     Err(Errno::ENOSYS)
 }
 
-pub fn sys_memfd_create(name_ptr: usize, name_len: usize, size: usize) -> SysResult<usize> {
+pub fn sys_shared_memory_create(name_ptr: usize, name_len: usize, size: usize) -> SysResult<usize> {
     use crate::syscall::validate::{copyin, validate_user_range};
 
     // Validate name
@@ -315,19 +315,19 @@ pub fn sys_memfd_create(name_ptr: usize, name_len: usize, size: usize) -> SysRes
     // Install in FD table
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let mut pinfo = pinfo_arc.lock();
-    let fd = pinfo.fd_table.open(
+    let thing = pinfo.thing_table.open(
         node_arc,
         crate::vfs::OpenFlags::read_write(),
         "memfd".into(),
     )?;
-    Ok(fd as usize)
+    Ok(thing as usize)
 }
 
-pub fn sys_memfd_phys(fd: usize) -> SysResult<usize> {
+pub fn sys_shared_memory_phys(thing: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        let file = lock.fd_table.get(fd as u32)?;
+        let file = lock.thing_table.get(thing as u32)?;
         file.node.clone()
     };
 

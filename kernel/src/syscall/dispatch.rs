@@ -92,8 +92,8 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_DEVICE_DMA_PHYS => handlers::sys_device_dma_phys(args[0]),
         SYS_DEVICE_IRQ_WAIT => handlers::sys_device_irq_wait(args[0], args[1], args[2]),
 
-        SYS_MEMFD_CREATE => handlers::sys_memfd_create(args[0], args[1], args[2]),
-        SYS_MEMFD_PHYS => handlers::sys_memfd_phys(args[0]),
+        SYS_SHARED_MEMORY_CREATE => handlers::sys_shared_memory_create(args[0], args[1], args[2]),
+        SYS_SHARED_MEMORY_PHYS => handlers::sys_shared_memory_phys(args[0]),
 
         SYS_GETRANDOM => handlers::sys_getrandom(args[0], args[1]),
         SYS_ENTROPY_SEED => handlers::sys_entropy_seed(args[0], args[1]),
@@ -123,10 +123,10 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_FS_READDIR => handlers::vfs::sys_fs_readdir(args[0], args[1], args[2]),
         SYS_FS_POLL => handlers::vfs::sys_fs_poll(args[0], args[1], args[2]),
         SYS_FS_SEEK => handlers::vfs::sys_fs_seek(args[0], args[1], args[2]),
-        SYS_FS_WATCH_FD => handlers::vfs::sys_watch_fd(args[0], args[1], args[2]),
+        SYS_FS_WATCH_THING => handlers::vfs::sys_watch_fd(args[0], args[1], args[2]),
         SYS_FS_DEVICE_CALL => handlers::vfs::sys_fs_device_call(args[0], args[1]),
         SYS_FS_WATCH_PATH => handlers::vfs::sys_watch_path(args[0], args[1], args[2], args[3]),
-        SYS_FD_FROM_HANDLE => handlers::vfs::sys_fd_from_handle(args[0]),
+        SYS_THING_FROM_CHANNEL => handlers::vfs::sys_fd_from_handle(args[0]),
         SYS_FS_NOTIFY => handlers::vfs::sys_fs_notify(args[0], args[1], args[2]),
         SYS_FS_ISATTY => handlers::vfs::sys_fs_isatty(args[0]),
         SYS_FS_REALPATH => handlers::vfs::sys_fs_realpath(args[0], args[1], args[2], args[3]),

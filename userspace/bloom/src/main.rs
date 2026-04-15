@@ -98,7 +98,7 @@ fn main(_arg: usize) -> ! {
 fn read_bootfb_info() -> Option<FbInfoPayload> {
     let fd = vfs_open("/dev/fb0", O_RDONLY).ok()?;
     let mut payload = FbInfoPayload {
-        device_handle: 0,
+        device_thing: 0,
         width: 0,
         height: 0,
         stride: 0,

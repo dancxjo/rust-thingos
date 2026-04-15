@@ -11,41 +11,41 @@ pub struct Handle(pub u32);
 
 /// Access mode for a handle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HandleMode {
+pub enum IpcThingMode {
     Read,
     Write,
 }
 
 /// Entry in the handle table
 #[derive(Debug, Clone, Copy)]
-pub struct HandleEntry {
+pub struct IpcThingEntry {
     pub port_id: PortId,
-    pub mode: HandleMode,
+    pub mode: IpcThingMode,
 }
 
 /// Maximum handles per process (v0 limit)
-pub const MAX_HANDLES: usize = 1024;
+pub const MAX_IPC_THINGS: usize = 1024;
 
 /// Per-process handle table
 #[derive(Debug)]
-pub struct HandleTable {
-    entries: [Option<HandleEntry>; MAX_HANDLES],
+pub struct IpcThingTable {
+    entries: [Option<IpcThingEntry>; MAX_IPC_THINGS],
 }
 
-impl HandleTable {
+impl IpcThingTable {
     /// Create a new empty handle table
     pub const fn new() -> Self {
         Self {
-            entries: [None; MAX_HANDLES],
+            entries: [None; MAX_IPC_THINGS],
         }
     }
 
     /// Allocate a new handle for the given port and mode.
     /// Handle 0 is reserved as "invalid" for userspace conventions.
-    pub fn alloc(&mut self, port_id: PortId, mode: HandleMode) -> Option<Handle> {
+    pub fn alloc(&mut self, port_id: PortId, mode: IpcThingMode) -> Option<Handle> {
         for (i, slot) in self.entries.iter_mut().enumerate().skip(1) {
             if slot.is_none() {
-                *slot = Some(HandleEntry { port_id, mode });
+                *slot = Some(IpcThingEntry { port_id, mode });
                 return Some(Handle(i as u32));
             }
         }
@@ -53,9 +53,9 @@ impl HandleTable {
     }
 
     /// Get the entry for a handle, validating mode
-    pub fn get(&self, handle: Handle, required_mode: HandleMode) -> Option<&HandleEntry> {
+    pub fn get(&self, handle: IpcThing, required_mode: IpcThingMode) -> Option<&IpcThingEntry> {
         let idx = handle.0 as usize;
-        if idx >= MAX_HANDLES {
+        if idx >= MAX_IPC_THINGS {
             return None;
         }
         self.entries[idx]
@@ -64,25 +64,25 @@ impl HandleTable {
     }
 
     /// Get the entry for a handle without mode validation
-    pub fn get_any(&self, handle: Handle) -> Option<&HandleEntry> {
+    pub fn get_any(&self, handle: Handle) -> Option<&IpcThingEntry> {
         let idx = handle.0 as usize;
-        if idx >= MAX_HANDLES {
+        if idx >= MAX_IPC_THINGS {
             return None;
         }
         self.entries[idx].as_ref()
     }
 
     /// Close a handle, freeing the slot
-    pub fn close(&mut self, handle: Handle) -> Option<HandleEntry> {
+    pub fn close(&mut self, handle: Handle) -> Option<IpcThingEntry> {
         let idx = handle.0 as usize;
-        if idx >= MAX_HANDLES {
+        if idx >= MAX_IPC_THINGS {
             return None;
         }
         self.entries[idx].take()
     }
 }
 
-impl Default for HandleTable {
+impl Default for IpcThingTable {
     fn default() -> Self {
         Self::new()
     }

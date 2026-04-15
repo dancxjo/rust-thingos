@@ -6,11 +6,10 @@ extern crate alloc;
 
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
-use abi::ids::HandleId;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::info;
-use stem::syscall::vfs::vfs_fd_from_handle;
-use stem::syscall::{channel_recv, channel_send, ChannelHandle};
+use stem::syscall::vfs::vfs_thing_from_channel;
+use stem::syscall::{channel_recv, channel_send, ChannelThing};
 use stem::wait_set::WaitSet;
 use stem::thing::ThingId;
 
@@ -33,8 +32,8 @@ struct FakeConfig {
     burst: bool,
 }
 
-fn unpack_handle(arg: usize, index: u32) -> ChannelHandle {
-    ((arg >> (index * 16)) & 0xFFFF) as ChannelHandle
+fn unpack_handle(arg: usize, index: u32) -> ChannelThing {
+    ((arg >> (index * 16)) & 0xFFFF) as ChannelThing
 }
 
 fn parse_config(arg: usize) -> FakeConfig {
@@ -68,14 +67,14 @@ fn parse_config(arg: usize) -> FakeConfig {
     }
 }
 
-fn send_msg(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
+fn send_msg(handle: ChannelThing, msg_type: u16, payload: &[u8]) {
     let mut buf = [0u8; 256];
     if let Some(len) = drvproto::encode_message(&mut buf, msg_type, payload) {
         let _ = channel_send(handle, &buf[..len]);
     }
 }
 
-fn send_msg_split(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
+fn send_msg_split(handle: ChannelThing, msg_type: u16, payload: &[u8]) {
     let mut buf = [0u8; 256];
     if let Some(len) = drvproto::encode_message(&mut buf, msg_type, payload) {
         if len < 3 {
@@ -96,7 +95,7 @@ fn send_msg_split(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
     }
 }
 
-fn send_ack(handle: ChannelHandle, burst: bool) {
+fn send_ack(handle: ChannelThing, burst: bool) {
     let mut buf = [0u8; 64];
     if let Some(len) = drvproto::encode_message(&mut buf, drvproto::MSG_ACK, &[]) {
         if burst {
@@ -110,7 +109,7 @@ fn send_ack(handle: ChannelHandle, burst: bool) {
     }
 }
 
-fn send_err(handle: ChannelHandle, code: u32) {
+fn send_err(handle: ChannelThing, code: u32) {
     let err = drvproto::ErrResp { code };
     let mut err_bytes = [0u8; drvproto::ERR_RESP_WIRE_SIZE];
     if let Some(len) = drvproto::encode_err_resp_le(&err, &mut err_bytes) {
@@ -139,7 +138,7 @@ fn main(arg: usize) -> ! {
     let mut bound = false;
     let mut bound_fd: Option<u32> = None;
 
-    let drv_req_fd = vfs_fd_from_handle(drv_req_read).expect("display_fake: fd_from_handle");
+    let drv_req_fd = vfs_thing_from_channel(drv_req_read).expect("display_fake: fd_from_handle");
     let mut ws = WaitSet::new();
     let _drv_req_tok = ws.add_fd_readable(drv_req_fd).unwrap();
 

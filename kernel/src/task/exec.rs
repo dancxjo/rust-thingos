@@ -71,7 +71,7 @@ pub fn task_exec_current<R: BootRuntime>(
     // 3. Resolve executable from FD
     let (node, exec_fd_path) = {
         let pinfo = pinfo_arc.lock();
-        let open_file = match pinfo.fd_table.get(fd) {
+        let open_file = match pinfo.thing_table.get(fd) {
             Ok(f) => f,
             Err(e) => abort_exec!(e),
         };
@@ -229,7 +229,7 @@ pub fn task_exec_current<R: BootRuntime>(
     }
 
     // 6. Update ProcessInfo metadata (argv, env, and auxv).
-    //    Also close all FD_CLOEXEC-flagged file descriptors and clear
+    //    Also close all THING_CLOEXEC-flagged file descriptors and clear
     //    exec_in_progress now that we are about to commit — the caller is the
     //    sole surviving thread from this point forward.
     {
@@ -242,8 +242,8 @@ pub fn task_exec_current<R: BootRuntime>(
         pinfo.unix_compat.auxv = build_auxv(&aux_info, page_size);
         // Record the executable path for /proc/self/exe.
         pinfo.exec_path = exec_fd_path;
-        // Close all file descriptors marked FD_CLOEXEC before the new image runs.
-        pinfo.fd_table.close_on_exec();
+        // Close all file descriptors marked THING_CLOEXEC before the new image runs.
+        pinfo.thing_table.close_on_exec();
         // Commit: caller is now the only thread; clear the flag.
         pinfo.lifecycle.exec_in_progress = false;
     }
@@ -496,7 +496,7 @@ mod tests {
                 exit_observer_inbox: None,
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(pid, false),
-            fd_table: crate::vfs::fd_table::FdTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
@@ -560,7 +560,7 @@ mod tests {
                 exit_observer_inbox: None,
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9230, false),
-            fd_table: crate::vfs::fd_table::FdTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
@@ -590,7 +590,7 @@ mod tests {
             pid: 9240,
             lifecycle: crate::task::ProcessLifecycle::new(1, 9240),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9240, false),
-            fd_table: crate::vfs::fd_table::FdTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
@@ -674,9 +674,9 @@ mod tests {
         );
     }
 
-    // ── FD_CLOEXEC / close-on-exec unit tests ────────────────────────────────
+    // ── THING_CLOEXEC / close-on-exec unit tests ────────────────────────────────
 
-    use crate::vfs::fd_table::FD_CLOEXEC;
+    use crate::vfs::thing_table::THING_CLOEXEC;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
     use abi::errors::SysResult;
 
@@ -703,7 +703,7 @@ mod tests {
     }
 
     /// Simulates the commit phase of exec: close_on_exec is called on the fd
-    /// table, then exec_in_progress is cleared.  FDs with FD_CLOEXEC should be
+    /// table, then exec_in_progress is cleared.  FDs with THING_CLOEXEC should be
     /// gone; others should remain.
     #[test]
     fn exec_commit_closes_cloexec_fds() {
@@ -711,46 +711,46 @@ mod tests {
             pid: 9300,
             lifecycle: crate::task::ProcessLifecycle::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
-            fd_table: crate::vfs::fd_table::FdTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
-        // Set up: fd 0 survives, fd 1 has FD_CLOEXEC.
+        // Set up: fd 0 survives, fd 1 has THING_CLOEXEC.
         {
             let mut pi = pinfo.lock();
-            pi.fd_table
+            pi.thing_table
                 .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
                 .unwrap();
-            pi.fd_table
+            pi.thing_table
                 .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec".into())
                 .unwrap();
-            pi.fd_table.set_fd_flags(1, FD_CLOEXEC).unwrap();
+            pi.thing_table.set_fd_flags(1, THING_CLOEXEC).unwrap();
         }
 
         // Simulate exec commit phase.
         {
             let mut pi = pinfo.lock();
             pi.lifecycle.exec_in_progress = true;
-            pi.fd_table.close_on_exec();
+            pi.thing_table.close_on_exec();
             pi.lifecycle.exec_in_progress = false;
         }
 
         let pi = pinfo.lock();
         assert!(
-            pi.fd_table.get(0).is_ok(),
-            "fd 0 (no FD_CLOEXEC) must survive exec"
+            pi.thing_table.get(0).is_ok(),
+            "fd 0 (no THING_CLOEXEC) must survive exec"
         );
         assert!(
-            matches!(pi.fd_table.get(1), Err(abi::errors::Errno::EBADF)),
-            "fd 1 (FD_CLOEXEC) must be closed on exec"
+            matches!(pi.thing_table.get(1), Err(abi::errors::Errno::EBADF)),
+            "fd 1 (THING_CLOEXEC) must be closed on exec"
         );
         assert!(!pi.lifecycle.exec_in_progress, "exec_in_progress cleared after commit");
     }
 
-    /// When no FDs have FD_CLOEXEC, close_on_exec during exec is a no-op and
+    /// When no FDs have THING_CLOEXEC, close_on_exec during exec is a no-op and
     /// all FDs survive.
     #[test]
     fn exec_commit_preserves_all_fds_without_cloexec() {
@@ -758,7 +758,7 @@ mod tests {
             pid: 9310,
             lifecycle: crate::task::ProcessLifecycle::new(1, 9310),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9310, false),
-            fd_table: crate::vfs::fd_table::FdTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
@@ -767,20 +767,20 @@ mod tests {
 
         {
             let mut pi = pinfo.lock();
-            pi.fd_table
+            pi.thing_table
                 .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
                 .unwrap();
-            pi.fd_table
+            pi.thing_table
                 .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
                 .unwrap();
         }
 
-        // Exec commit with no FD_CLOEXEC flags set.
-        pinfo.lock().fd_table.close_on_exec();
+        // Exec commit with no THING_CLOEXEC flags set.
+        pinfo.lock().thing_table.close_on_exec();
 
         let pi = pinfo.lock();
-        assert!(pi.fd_table.get(0).is_ok(), "fd 0 should survive");
-        assert!(pi.fd_table.get(1).is_ok(), "fd 1 should survive");
+        assert!(pi.thing_table.get(0).is_ok(), "fd 0 should survive");
+        assert!(pi.thing_table.get(1).is_ok(), "fd 1 should survive");
     }
 
     // ── VM ownership / process-scoped aspace tests ────────────────────────────
@@ -897,16 +897,16 @@ mod tests {
 
     /// Helper: build a ProcessInfo pre-loaded with realistic pre-exec metadata.
     fn make_pinfo_with_metadata(pid: u32) -> Arc<Mutex<ProcessInfo>> {
-        let mut fd_table = crate::vfs::fd_table::FdTable::new();
-        // fd 0: stays open (no FD_CLOEXEC)
-        fd_table
+        let mut thing_table = crate::vfs::thing_table::ThingTable::new();
+        // fd 0: stays open (no THING_CLOEXEC)
+        thing_table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/stdin".into())
             .unwrap();
-        // fd 1: marked FD_CLOEXEC, must be closed on exec
-        fd_table
+        // fd 1: marked THING_CLOEXEC, must be closed on exec
+        thing_table
             .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec_fd".into())
             .unwrap();
-        fd_table.set_fd_flags(1, FD_CLOEXEC).unwrap();
+        thing_table.set_fd_flags(1, THING_CLOEXEC).unwrap();
 
         Arc::new(Mutex::new(ProcessInfo {
             pid,
@@ -925,7 +925,7 @@ mod tests {
                 uc.auxv = alloc::vec![(AT_PAGESZ, 4096), (AT_ENTRY, 0x1000)];
                 uc
             },
-            fd_table,
+            thing_table,
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/old/cwd"),
             exec_path: alloc::string::String::from("/old/binary"),
@@ -1077,7 +1077,7 @@ mod tests {
             pi.unix_compat.env = new_env.clone();
             pi.unix_compat.auxv = new_auxv.clone();
             pi.exec_path = alloc::string::String::from("/new/binary");
-            pi.fd_table.close_on_exec();
+            pi.thing_table.close_on_exec();
             pi.lifecycle.exec_in_progress = false;
             pi.space.aspace_raw = 0x0000_C0DE_0000u64;
         }
@@ -1116,12 +1116,12 @@ mod tests {
             "new AT_ENTRY missing from auxv after exec"
         );
 
-        // fd_table: FD_CLOEXEC fd must be closed
+        // thing_table: THING_CLOEXEC fd must be closed
         assert!(
-            matches!(pi.fd_table.get(1), Err(abi::errors::Errno::EBADF)),
-            "FD_CLOEXEC fd must be closed after exec"
+            matches!(pi.thing_table.get(1), Err(abi::errors::Errno::EBADF)),
+            "THING_CLOEXEC fd must be closed after exec"
         );
-        assert!(pi.fd_table.get(0).is_ok(), "non-cloexec fd must survive");
+        assert!(pi.thing_table.get(0).is_ok(), "non-cloexec fd must survive");
 
         // exec_in_progress: must be cleared
         assert!(!pi.lifecycle.exec_in_progress, "exec_in_progress must be cleared after commit");
@@ -1161,7 +1161,7 @@ mod tests {
                 uc.argv = alloc::vec![b"old".to_vec()];
                 uc
             },
-            fd_table: crate::vfs::fd_table::FdTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::from("/old"),

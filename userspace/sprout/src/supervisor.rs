@@ -20,7 +20,7 @@ use abi::supervisor_protocol::{
     MSG_SERVICE_READY, classes,
 };
 use spin::Mutex;
-use stem::syscall::{ChannelHandle, channel_create, channel_send_all, vfs_mount};
+use stem::syscall::{ChannelThing, channel_create, channel_send_all, vfs_mount};
 use stem::{debug, error, info, warn};
 
 use crate::ledger::DeviceLedger;
@@ -299,7 +299,7 @@ impl Supervisor {
             let mut process_count = 0;
 
             // Convert the response channel handle to a VFS FD for recvmsg.
-            let resp_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_resp_read)
+            let resp_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_resp_read)
                 .unwrap_or(drv_resp_read);
 
             while let Ok((n, n_fds)) =
@@ -360,7 +360,7 @@ impl Supervisor {
     fn handle_bind_ready(
         &mut self,
         task_name: &str,
-        drv_req_write: ChannelHandle,
+        drv_req_write: ChannelThing,
         payload: &[u8],
         bundled_fd: u32,
     ) {

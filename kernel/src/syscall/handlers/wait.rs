@@ -235,7 +235,7 @@ fn poll_fd(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     let node = {
         let lock = pinfo_arc.lock();
         let file = lock
-            .fd_table
+            .thing_table
             .get(spec.object as u32)
             .map_err(|_| Errno::EBADF)?;
         file.node.clone()
@@ -341,7 +341,7 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
                 let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
                 let node = {
                     let lock = pinfo_arc.lock();
-                    lock.fd_table
+                    lock.thing_table
                         .get(spec.object as u32)
                         .ok()
                         .map(|f| f.node.clone())
@@ -438,8 +438,8 @@ mod tests {
         fd: u32,
         node: Arc<dyn crate::vfs::VfsNode>,
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
-        use crate::vfs::{fd_table::FdTable, OpenFlags};
-        let mut table = FdTable::new();
+        use crate::vfs::{thing_table::ThingTable, OpenFlags};
+        let mut table = ThingTable::new();
         table
             .insert_at(fd, node, OpenFlags::read_write(), "/test".into())
             .expect("insert_at");
@@ -447,7 +447,7 @@ mod tests {
             pid: 1,
             lifecycle: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
-            fd_table: table,
+            thing_table: table,
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
@@ -708,11 +708,11 @@ mod tests {
         let (read_node, write_node) = crate::ipc::pipe::create_fd_pair(0, false);
         write_node.write(0, b"x").expect("pipe write");
 
-        // Stash the pipe read node in a temporary FdTable so we can look it
+        // Stash the pipe read node in a temporary ThingTable so we can look it
         // up through the Fd WaitKind path.
         use crate::vfs::OpenFlags;
-        use crate::vfs::fd_table::FdTable;
-        let mut table = FdTable::new();
+        use crate::vfs::thing_table::ThingTable;
+        let mut table = ThingTable::new();
         table
             .insert_at(0, read_node, OpenFlags::read_only(), "/pipe/read".into())
             .expect("insert pipe");

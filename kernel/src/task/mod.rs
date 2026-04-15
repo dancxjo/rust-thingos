@@ -459,7 +459,7 @@ impl ProcessUnixCompat {
 /// | PPID / thread list      | Process | `process.lock().lifecycle.ppid` etc.             |
 /// | VM address space        | Process | `process.lock().space.aspace_raw`                |
 /// | VM mappings             | Process | `process.lock().space.mappings` (Arc)            |
-/// | FD table                | Process | `process.lock().fd_table`                        |
+/// | FD table                | Process | `process.lock().thing_table`                        |
 /// | CWD                     | Process | `process.lock().cwd`                             |
 /// | VFS namespace           | Process | `process.lock().namespace`                       |
 /// | Unix compat (legacy)    | Process | `process.lock().unix_compat.*`                   |
@@ -550,10 +550,10 @@ pub struct Process {
     pub unix_compat: ProcessUnixCompat,
 
     // ── Resource table ────────────────────────────────────────────────────────
-    // Future: fd_table will move to a resource-authority domain.  For now it
+    // Future: thing_table will move to a resource-authority domain.  For now it
     // remains as transitional Process baggage.
     /// File descriptor table — fds 0/1/2 pre-populated at spawn time.
-    pub fd_table: crate::vfs::fd_table::FdTable,
+    pub thing_table: crate::vfs::thing_table::ThingTable,
 
     // ── Place context (Phase 8 — world/visibility boundary) ──────────────────
     // These fields answer "in what world does this execution happen?".
