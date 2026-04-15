@@ -116,6 +116,8 @@ The system moves toward:
 
 The end state is a system where the definitions used to build it are the same definitions it uses to understand itself.
 
+For the explicit model of how Unix-visible concepts are projected from typed-world concepts, see [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md).
+
 ---
 
 # Summary
