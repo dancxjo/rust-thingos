@@ -1,0 +1,14 @@
+/// Stable coordination identity for a group.
+kind thingos.group.id = u64
+
+/// Coordination role for process-group and control semantics.
+kind thingos.group.kind = enum {
+  Foreground,
+  Coordination,
+}
+
+/// Canonical semantic record for a coordination group.
+kind thingos.group = struct {
+  id: thingos.group.id,
+  kind: thingos.group.kind,
+}
