@@ -5,6 +5,8 @@
 > All naming decisions in new code, docs, and reviews should be grounded here.
 >
 > Companion documents:
+> - `docs/architecture/ontology.md` — canonical typed-world ontology (architectural truth)
+> - `docs/architecture/unix-projection.md` — Unix compatibility projection model over the ontology
 > - `docs/architecture/concept-classification.md` — master classification table (Canonical / Compatibility / Transitional / Deprecated)
 > - `docs/migration/review-guidelines.md` — PR review rules derived from this mapping
 > - `docs/migration/process_responsibility_map.md` — field-level decomposition of `Process`
@@ -15,8 +17,8 @@
 
 ## Purpose
 
-This document is the **single source of truth** for conceptual translation between
-the legacy Unix/Linux model and the emerging ThingOS model.
+This document is the **single source of truth** for conceptual translation from
+legacy Unix/Linux vocabulary to the ThingOS typed-world model.
 
 It exists to:
 
@@ -25,30 +27,42 @@ It exists to:
 - establish unambiguous review criteria ("is this using the right concept?")
 - make conceptual entropy visible and reducible over time
 
-When in doubt about terminology, consult this document first.
+This mapping is intentionally **non-peer**:
+
+- **canonical typed-world truth** defines architecture
+- **compatibility projection** defines Unix-facing behavior only
+- **transitional decomposition seam** marks where legacy objects are being split
+- **deprecated naming artifact** marks terms that must not spread
+
+When in doubt about terminology, consult this document first, then verify the
+canonical meaning in `docs/architecture/ontology.md` and projection boundaries
+in `docs/architecture/unix-projection.md`.
 
 ---
 
 ## 1. Canonical Mapping Table
 
-| Legacy concept     | ThingOS concept              | Relationship         | Status       | Notes |
-|--------------------|----------------------------|----------------------|--------------|-------|
-| Thread             | Task                       | Equivalent (refined) | Stable       | Schedulable execution unit; `Thread` is the transitional kernel backing |
-| Process            | Job + Space + Authority + Place + Task(s) | Split | Transitional | No direct equivalent; decomposes into multiple first-class concepts |
-| Address space      | Space                      | Equivalent (explicit)| Target       | First-class object; `ProcessAddressSpace` is the extraction seam |
-| File descriptor    | Handle / FD                | Transitional         | Unresolved   | `fd_table` in `Process` is quarantined; handle-table concept not yet introduced |
-| Signal             | Event / Message            | Split                | Unresolved   | Job-control signals → Group; dispositions → Authority; IPC signals → Message |
-| Process group      | Group                      | Equivalent (refined) | Transitional | `pgid`/`sid` bridged through `kernel::group::bridge` |
-| Session            | Group (Foreground kind)    | Merged               | Transitional | Session leader semantics absorbed into `Group`; full TTY model pending |
-| PID                | Task ID / Job ID           | Split                | Transitional | TGID doubles as Job ID and Space tag today; split deferred |
-| UID/GID            | Authority (credentials)    | Equivalent (refined) | Target       | Not yet present in `Process`; planned addition before Authority extraction |
-| Capabilities/privs | Authority                  | Equivalent (refined) | Target       | Future `Authority` carries permission context |
-| Working directory  | Place (cwd)                | Refined              | Transitional | Bridged through `kernel::place::bridge`; backing field remains in `Process` |
-| Mount namespace    | Place (namespace)          | Refined              | Transitional | `NamespaceRef` is a unit struct today; per-process isolation deferred |
-| argv / env / auxv  | Spawn record               | Equivalent           | Unresolved   | No spawn-record concept yet; quarantined in `Process` |
-| Fork               | (eliminated)               | Eliminated           | Stable       | `SYS_FORK` does not exist; replaced by `SYS_SPAWN_PROCESS[_EX]` + `SYS_TASK_EXEC` |
-| TTY / controlling terminal | Presence          | Unresolved           | Unresolved   | `Presence` concept not yet introduced; quarantined in `signals`/session state |
-| Port (IPC)         | Port / Inbox               | Unresolved           | Unresolved   | Semantics under active design; see `docs/ipc/inbox_vs_port_semantics.md` |
+Read this table **left-to-right**: Unix terms are compatibility vocabulary; the
+canonical column defines architectural reality.
+
+| Legacy Unix term (compat vocabulary) | Canonical typed-world truth (defines reality) | Conceptual status | Transitional decomposition seam | Deprecated naming artifact | Notes |
+|--------------------------------------|-----------------------------------------------|-------------------|---------------------------------|----------------------------|-------|
+| Thread | Task | Canonical typed-world truth | `kernel::task::Thread<R>` backing `thingos::task::Task` | `Thread` outside kernel internals | Schedulable execution unit; canonical name is `Task` |
+| Process | Job + Space + Authority + Place + Task(s) | Compatibility projection | `Process`, `ProcessLifecycle`, `ProcessAddressSpace` | — | No direct canonical peer; decomposes into first-class concepts |
+| Address space | Space | Canonical typed-world truth | `ProcessAddressSpace` | — | First-class object target; extraction seam already named |
+| File descriptor | Handle / Thing reference model (pending) | Compatibility projection | `Process.fd_table` | — | Integer FD remains Unix surface; canonical handle model is unresolved |
+| Signal | Group + Authority + Message/Event split | Compatibility projection | `ProcessSignals`, `ThreadSignals` | — | Job-control/disposition/IPC aspects split across canonical concepts |
+| Process group | Group | Compatibility projection | `pgid` via `kernel::group::bridge` | — | Group is the canonical coordination concept |
+| Session | Group (`Foreground` kind) | Compatibility projection | `sid`, `session_leader` via group bridge | `Session` as a standalone core concept | Session semantics are absorbed into `Group` |
+| PID | Task ID + Job ID split | Compatibility projection | `Process.pid` (TGID dual-use) | `PID` as canonical identity model | Split deferred until `Job`/`Space` are first-class |
+| UID/GID | Authority (credentials) | Canonical typed-world truth | authority bridge path (field extraction pending) | — | Credential context belongs to `Authority` |
+| Capabilities/privs | Authority | Canonical typed-world truth | authority bridge path (field extraction pending) | — | Permission context belongs to `Authority` |
+| Working directory | Place (cwd cursor) | Compatibility projection | `Process.cwd` via `kernel::place::bridge` | — | CWD is one projection of `Place` |
+| Mount namespace | Place (namespace projection) | Compatibility projection | `Process.namespace` / `NamespaceRef` | — | Namespace view is a projected aspect of `Place` |
+| argv / env / auxv | Spawn record (not yet first-class) | Transitional decomposition seam | execution-context fields in `Process` | — | Migration target exists conceptually but extraction is unresolved |
+| Fork | Spawn + exec model (`SYS_SPAWN_PROCESS[_EX]` + `SYS_TASK_EXEC`) | Deprecated naming artifact | — | `fork` / `Fork` | `SYS_FORK` is intentionally absent |
+| TTY / controlling terminal | Presence (emerging) | Transitional decomposition seam | quarantined in process signal/session state | — | Canonical `Presence` integration is deferred |
+| Port (IPC) | Port / Inbox (unresolved ontology) | Transitional decomposition seam | IPC boundary under active design | — | See `docs/ipc/inbox_vs_port_semantics.md` |
 
 ### Relationship types
 
@@ -432,6 +446,8 @@ stable mapping. Additions or resolutions should update this document.
 
 ## Related Documents
 
+- `docs/architecture/ontology.md` — canonical typed-world ontology (architectural truth)
+- `docs/architecture/unix-projection.md` — Unix compatibility projection model over canonical ontology
 - `docs/architecture/concept-classification.md` — master classification table (Canonical / Compatibility / Transitional / Deprecated)
 - `docs/migration/review-guidelines.md` — actionable PR review checklist derived from this mapping
 - `docs/migration/process_responsibility_map.md` — field-level decomposition and extraction sequencing
