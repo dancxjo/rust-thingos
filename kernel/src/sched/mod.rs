@@ -2576,11 +2576,15 @@ pub fn remove_task_completely<R: BootRuntime>(tid: TaskId) {
     rt.irq_restore(_irq);
 }
 
-fn format_cpu_trace(cpu: Option<usize>) -> alloc::string::String {
-    cpu.map(|c| alloc::format!("{}", c))
-        .unwrap_or_else(|| alloc::string::String::from("-"))
+fn format_optional_cpu(cpu: Option<usize>) -> alloc::string::String {
+    cpu.map_or_else(|| alloc::string::String::from("-"), |c| alloc::format!("{}", c))
 }
 
+/// Build `(last_cpu, wake_cpu, run_cpu)` diagnostic strings for dump output.
+///
+/// `last_cpu` prefers scheduler hot-trace state when present and falls back to
+/// the task-local `last_cpu` mirror. `wake_cpu` and `run_cpu` come from
+/// scheduler trace fields.
 fn task_cpu_trace_strings(
     task_last_cpu: Option<usize>,
     sched_fields: Option<&crate::sched::state::ThreadSchedFields>,
@@ -2593,9 +2597,9 @@ fn task_cpu_trace_strings(
     let wake_cpu = sched_fields.and_then(|sf| sf.wake_cpu);
     let run_cpu = sched_fields.and_then(|sf| sf.run_cpu);
     (
-        format_cpu_trace(last_cpu),
-        format_cpu_trace(wake_cpu),
-        format_cpu_trace(run_cpu),
+        format_optional_cpu(last_cpu),
+        format_optional_cpu(wake_cpu),
+        format_optional_cpu(run_cpu),
     )
 }
 
@@ -2612,6 +2616,7 @@ pub fn dump_stats<R: BootRuntime>() {
         sched.state.online_cpu_count,
         sched.total_cpu_count
     );
+    // Columns: TID, STATE, PRI, LAST, WAKE, RUN, USER, SLICE, KSTK, AFFIN, NAME.
     crate::kprint!(
         " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
         "TID",
@@ -5282,6 +5287,12 @@ mod tests {
         assert_eq!(last, "4");
         assert_eq!(wake, "-");
         assert_eq!(run, "-");
+    }
+
+    #[test]
+    fn test_format_optional_cpu_formats_some_and_none() {
+        assert_eq!(format_optional_cpu(Some(7)), "7");
+        assert_eq!(format_optional_cpu(None), "-");
     }
 
     #[test]
