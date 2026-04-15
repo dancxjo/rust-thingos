@@ -15,7 +15,7 @@ use abi::hid::{
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use stem::syscall::vfs::{vfs_close, vfs_fd_from_handle, vfs_mkdir, vfs_open, vfs_read, vfs_write};
-use stem::syscall::{ChannelHandle, channel_recv, channel_send_all};
+use stem::syscall::{ChannelHandle, channel_send_all};
 use stem::{debug, info};
 
 fn ensure_session_roots() {
@@ -81,10 +81,24 @@ fn main(packed_handles: usize) -> ! {
     let mut kbd_tok = None;
     let mut mouse_tok = None;
 
-    if kbd_read != 0 {
-        kbd_tok = ws.add_port_readable(kbd_read as u64).ok();
-    }
-
+    // Keyboard input path: bridge the channel handle to a VFS FD so the read
+    // side uses the VFS-first message path (add_fd_readable + vfs_read) instead
+    // of the legacy port-based wait (add_port_readable + channel_recv).
+    let kbd_fd: Option<u32> = if kbd_read != 0 {
+        match vfs_fd_from_handle(kbd_read) {
+            Ok(fd) => {
+                // Re-register with the FD-based token, replacing the port token.
+                kbd_tok = ws.add_fd_readable(fd).ok();
+                Some(fd)
+            }
+            Err(e) => {
+                stem::debug!("bristle: kbd fd bridge failed ({:?}), keyboard disabled", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
     // Mouse input path: bridge the channel handle to a VFS FD so the read side
     // uses the VFS-first message path (add_fd_readable + vfs_read) instead of
     // the legacy port-based wait (add_port_readable + channel_recv).
@@ -117,10 +131,13 @@ fn main(packed_handles: usize) -> ! {
                 continue;
             }
 
-            // Dispatch: keyboard uses the legacy port recv; mouse uses the
-            // VFS-first fd read from the migrated message path.
+            // Dispatch: both keyboard and mouse use the VFS-first fd read path.
             let n_result = if Some(ev.token()) == kbd_tok {
-                channel_recv(kbd_read, &mut recv_buf)
+                if let Some(fd) = kbd_fd {
+                    vfs_read(fd, &mut recv_buf)
+                } else {
+                    continue;
+                }
             } else if Some(ev.token()) == mouse_tok {
                 if let Some(fd) = mouse_fd {
                     vfs_read(fd, &mut recv_buf)
