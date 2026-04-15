@@ -938,6 +938,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     }
 
                     // Write the new Runnable state to the canonical REGISTRY.
+                    // Both `state` and `enqueued_at_tick` are updated here; the
+                    // hot-field cache is then synced below so that subsequent
+                    // prepare_schedule aging calculations do not need to re-enter
+                    // REGISTRY.
                     if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
                         task.state = TaskState::Runnable;
                         task.enqueued_at_tick = now;
@@ -945,7 +949,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         continue;
                     } // REGISTRY lock dropped here!
 
-                    // Update the scheduler-side cache.
+                    // Update the scheduler-side cache to match the REGISTRY write above.
                     if let Some(sf) = self.state.get_thread_mut(tid) {
                         sf.state = TaskState::Runnable;
                         sf.enqueued_at_tick = now;
@@ -1292,7 +1296,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let mut reg = crate::task::registry::get_registry::<R>();
                 reg.threads[idx].state = TaskState::Running;
             }
-            // Keep the scheduler-side cache in sync.
+            // Keep the scheduler-side cache in sync.  Only `state` is updated
+            // here because `enqueued_at_tick` and `timeslice_remaining` are
+            // unchanged in the same-task (no-switch) case: the current task
+            // simply continues running without re-enqueueing.
             self.state.threads[idx].state = TaskState::Running;
             return None;
         }
@@ -1334,11 +1341,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // state transitions that just happened above.
         if self.state.threads[old_idx].state == TaskState::Running {
             self.state.threads[old_idx].state = TaskState::Runnable;
+            // Sync enqueued_at_tick from the REGISTRY value we just wrote so
+            // future aging calculations in prepare_schedule use the correct tick.
             self.state.threads[old_idx].enqueued_at_tick = old_task.enqueued_at_tick;
         }
         self.state.threads[old_idx].last_cpu = Some(cpu_idx);
         self.state.threads[new_idx].state = TaskState::Running;
         self.state.threads[new_idx].last_cpu = Some(cpu_idx);
+        // timeslice_remaining is managed exclusively via the hot-field cache:
+        // schedule_point decrements it without touching REGISTRY. The REGISTRY
+        // copy may therefore be stale between context switches; this is
+        // intentional and acceptable because no correctness-critical path reads
+        // it from REGISTRY (dump_stats shows it for diagnostics only).
 
         // Update the lock-free mapping cache for this CPU so check_user_mapping is fast
         crate::sched::vm::CURRENT_MAPPINGS[cpu_idx].store(
