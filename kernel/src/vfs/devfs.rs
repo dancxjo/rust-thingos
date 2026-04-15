@@ -791,11 +791,33 @@ impl VfsNode for ZeroNode {
 pub struct FbNode {
     fb: crate::FramebufferInfo,
     resource_id: u64,
+    shadow: Mutex<FbShadow>,
+}
+
+struct FbShadow {
+    bytes: Vec<u8>,
 }
 
 impl FbNode {
-    pub const fn new(fb: crate::FramebufferInfo, resource_id: u64) -> Self {
-        Self { fb, resource_id }
+    pub fn new(fb: crate::FramebufferInfo, resource_id: u64) -> Self {
+        Self {
+            fb,
+            resource_id,
+            shadow: Mutex::new(FbShadow::new(fb)),
+        }
+    }
+}
+
+impl FbShadow {
+    fn new(fb: crate::FramebufferInfo) -> Self {
+        let len = fb.byte_len as usize;
+        let mut bytes = vec![0u8; len];
+        if len > 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(fb.addr as *const u8, bytes.as_mut_ptr(), len);
+            }
+        }
+        Self { bytes }
     }
 }
 
@@ -853,9 +875,25 @@ impl VfsNode for FbNode {
             return Ok(0);
         }
 
+        let mut shadow = self.shadow.lock();
+        shadow.bytes[off..off + n].copy_from_slice(&buf[..n]);
+
+        // Full-frame writes are staged first, then published in one pass so
+        // the boot framebuffer does not expose the wallpaper as it streams in.
+        if off == 0 && n as u64 == self.fb.byte_len {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    shadow.bytes.as_ptr(),
+                    self.fb.addr as *mut u8,
+                    n,
+                );
+            }
+            return Ok(n);
+        }
+
         unsafe {
             core::ptr::copy_nonoverlapping(
-                buf.as_ptr(),
+                shadow.bytes.as_ptr().add(off),
                 (self.fb.addr as usize + off) as *mut u8,
                 n,
             );
@@ -1560,5 +1598,48 @@ mod tests {
             "dev dir nlink should be >= 2, got {}",
             st.nlink
         );
+    }
+
+    #[test]
+    fn test_fbnode_full_frame_write_updates_scanout_once_buffer_is_staged() {
+        let mut backing = vec![0u8; 16];
+        let fb = crate::FramebufferInfo {
+            addr: backing.as_mut_ptr() as u64,
+            byte_len: backing.len() as u64,
+            width: 2,
+            height: 2,
+            pitch: 8,
+            bpp: 32,
+            format: crate::PixelFormat::Bgra8888,
+        };
+        let node = FbNode::new(fb, 0);
+        let new_frame = [
+            1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        ];
+
+        let written = node.write(0, &new_frame).unwrap();
+        assert_eq!(written, new_frame.len());
+        assert_eq!(&backing[..], &new_frame);
+    }
+
+    #[test]
+    fn test_fbnode_partial_write_preserves_other_pixels_via_shadow_buffer() {
+        let mut backing = vec![10u8; 16];
+        let fb = crate::FramebufferInfo {
+            addr: backing.as_mut_ptr() as u64,
+            byte_len: backing.len() as u64,
+            width: 2,
+            height: 2,
+            pitch: 8,
+            bpp: 32,
+            format: crate::PixelFormat::Bgra8888,
+        };
+        let node = FbNode::new(fb, 0);
+
+        let written = node.write(4, &[1u8, 2, 3, 4]).unwrap();
+        assert_eq!(written, 4);
+        assert_eq!(&backing[..4], &[10u8; 4]);
+        assert_eq!(&backing[4..8], &[1u8, 2, 3, 4]);
+        assert_eq!(&backing[8..], &[10u8; 8]);
     }
 }
