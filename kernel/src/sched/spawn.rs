@@ -258,10 +258,7 @@ impl<R: BootRuntime> Scheduler<R> {
             );
         }
 
-        let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
-        // Link affinity and initial location
-        if let Affinity::Pinned(cpu) = affinity {}
-        // Initial location matches target runq
+        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
 
         id
     }
@@ -398,10 +395,7 @@ impl<R: BootRuntime> Scheduler<R> {
             );
         }
 
-        let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
-        // Link affinity and initial location
-        if let Affinity::Pinned(_cpu) = affinity {}
-        // Initial location matches target runq
+        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
 
         id
     }
@@ -499,8 +493,6 @@ impl<R: BootRuntime> Scheduler<R> {
                 id
             );
         }
-
-        if let Affinity::Pinned(_cpu) = affinity {}
 
         Some(id)
     }
