@@ -33,14 +33,14 @@ pub use hooks::{
     exit_current, get_signal_mask_current, get_thread_pending_current, get_user_mapping_at_current,
     handle_user_stack_fault_current, interrupt_task_current, kill_by_tid_current,
     list_processes_current, poll_task_exit_current, process_info_current,
-    process_info_for_pid_current, process_info_for_tid_current,
-    register_task_exit_waiter_current, register_timeout_wake_current,
-    remove_user_mappings_current, set_current_task_name_current, set_current_user_fs_base_current,
-    set_priority_current, set_signal_mask_current, set_thread_pending_current, sleep_ticks_current,
-    spawn_process_current, spawn_process_ex_current, spawn_process_from_path_current,
-    spawn_user_thread_current, take_pending_interrupt_current, task_exec_current,
-    task_status_current, task_wait_current, unregister_task_exit_waiter_current,
-    unregister_timeout_wake_current, waitpid_current, yield_now_current,
+    process_info_for_pid_current, process_info_for_tid_current, register_task_exit_waiter_current,
+    register_timeout_wake_current, remove_user_mappings_current, set_current_task_name_current,
+    set_current_user_fs_base_current, set_priority_current, set_signal_mask_current,
+    set_thread_pending_current, sleep_ticks_current, spawn_process_current,
+    spawn_process_ex_current, spawn_process_from_path_current, spawn_user_thread_current,
+    take_pending_interrupt_current, task_exec_current, task_status_current, task_wait_current,
+    unregister_task_exit_waiter_current, unregister_timeout_wake_current, waitpid_current,
+    yield_now_current,
 };
 pub use sleep::{sleep_ms, sleep_ticks, sleep_until, yield_now};
 pub use spawn::{
@@ -512,7 +512,7 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
 /// Called from timer ISR - records tick and triggers reschedule if needed
 /// Uses try_resched_if_needed to avoid deadlock when SCHEDULER is held by main code
 pub fn on_tick<R: BootRuntime>() {
-    let cpu_idx = crate::runtime::<R>().current_cpu_id().0;
+    let cpu_idx = crate::runtime::<R>().current_cpu_index();
     if let Some(lock) = SCHEDULER.try_lock() {
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
@@ -592,7 +592,7 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
 
 /// Called from IPI handler - triggers reschedule without advancing time
 pub fn on_resched_ipi<R: BootRuntime>() {
-    let cpu_idx = crate::runtime::<R>().current_cpu_id().0;
+    let cpu_idx = crate::runtime::<R>().current_cpu_index();
     if let Some(lock) = SCHEDULER.try_lock() {
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
@@ -727,10 +727,8 @@ fn try_resched_if_needed<R: BootRuntime>() {
                 if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
                     pc.stats.lock_trylock_misses = pc.stats.lock_trylock_misses.saturating_add(1);
                     if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
-                        pc.stats.lock_trylock_misses_with_pending_resched = pc
-                            .stats
-                            .lock_trylock_misses_with_pending_resched
-                            .saturating_add(1);
+                        pc.stats.lock_trylock_misses_with_pending_resched =
+                            pc.stats.lock_trylock_misses_with_pending_resched.saturating_add(1);
                         pc.stats.lock_blocked_dispatch =
                             pc.stats.lock_blocked_dispatch.saturating_add(1);
                     }
@@ -1126,8 +1124,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 sf.wake_cpu = Some(target_cpu);
             }
 
-            let actual_cpu =
-                if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
+            let actual_cpu = if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
             self.state.enqueue_task(actual_cpu, priority, tid);
             if let Some(pc) = self.state.per_cpu.get_mut(actual_cpu) {
                 pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
@@ -1368,8 +1365,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         if let crate::task::Affinity::Pinned(target) = sf.affinity {
                             if target != cpu_idx && target < per_cpu_len {
                                 if misrouted_count < MAX_MISROUTED {
-                                    misrouted[misrouted_count] =
-                                        (sf.priority as usize, target, id);
+                                    misrouted[misrouted_count] = (sf.priority as usize, target, id);
                                     misrouted_count += 1;
                                 }
                                 continue;
@@ -1961,7 +1957,8 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     space_id: pi.space.space_obj.id,
                     space_mapping_count: pi.space.space_obj.mapping_count() as u32,
                     // sharing_count = Arc strong_count − 1 (exclude this reference).
-                    space_sharing_count: (alloc::sync::Arc::strong_count(&pi.space.space_obj) as u32)
+                    space_sharing_count: (alloc::sync::Arc::strong_count(&pi.space.space_obj)
+                        as u32)
                         .saturating_sub(1),
                 });
             }
@@ -2075,11 +2072,8 @@ fn mark_task_exited<R: BootRuntime>(
         } else {
             abi::signal::w_exit_status(code as u8)
         };
-        let parent_waiters = crate::signal::queue_parent_child_event(
-            notify_ppid,
-            notify_pid,
-            encoded_status,
-        );
+        let parent_waiters =
+            crate::signal::queue_parent_child_event(notify_ppid, notify_pid, encoded_status);
         waiters.extend(parent_waiters);
     }
 
@@ -2117,10 +2111,7 @@ fn mark_task_exited<R: BootRuntime>(
     waiters
 }
 
-fn purge_task_from_scheduler_queues<R: BootRuntime>(
-    sched: &mut types::Scheduler<R>,
-    tid: TaskId,
-) {
+fn purge_task_from_scheduler_queues<R: BootRuntime>(sched: &mut types::Scheduler<R>, tid: TaskId) {
     sched.state.remove_task_from_runq(tid);
 
     if let Some(pos) = sched.state.wait_queue.iter().position(|&wid| wid == tid) {
@@ -2986,21 +2977,19 @@ mod tests {
         let dummy_current = make_task(0, TaskState::Running, TaskPriority::Normal);
         crate::task::registry::get_registry::<MockRuntime>()
             .insert(alloc::boxed::Box::new(dummy_current));
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 0,
-                runq_location: None,
-                state: TaskState::Running,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: Some(0),
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
         let task_normal = crate::task::Task {
             id: 1001,
             state: TaskState::Runnable,
@@ -3073,40 +3062,36 @@ mod tests {
 
         // Scheduler state entries are separate from the global registry and must
         // be inserted explicitly so `prepare_schedule` can locate them.
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 1001,
-                runq_location: None,
-                state: TaskState::Runnable,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: None,
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                // Must match `task_normal.enqueued_at_tick` above (600) so the
-                // hot-field cache reflects the correct wait time for aging.
-                enqueued_at_tick: 600,
-                wake_pending: false,
-            });
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 1002,
-                runq_location: None,
-                state: TaskState::Runnable,
-                priority: TaskPriority::Low,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: None,
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                // Must match `task_low.enqueued_at_tick` above (0) so the
-                // hot-field cache reflects the correct wait time for aging.
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 1001,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            // Must match `task_normal.enqueued_at_tick` above (600) so the
+            // hot-field cache reflects the correct wait time for aging.
+            enqueued_at_tick: 600,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 1002,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Low,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            // Must match `task_low.enqueued_at_tick` above (0) so the
+            // hot-field cache reflects the correct wait time for aging.
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 1001);
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 1002);
 
@@ -3206,36 +3191,32 @@ mod tests {
 
         sched.state.per_cpu[0].current = Some(2001);
         // Scheduler state entries for both tasks.
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 2001,
-                runq_location: None,
-                state: TaskState::Running,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: Some(0),
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 2002,
-                runq_location: None,
-                state: TaskState::Runnable,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: None,
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 500,
-                wake_pending: false,
-            });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 2001,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 2002,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 500,
+            wake_pending: false,
+        });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 2002);
 
         // Time moves forward
@@ -3332,36 +3313,32 @@ mod tests {
             .insert(alloc::boxed::Box::new(rt_task));
         sched.state.per_cpu[0].current = Some(3001); // Normal task is running
         // Scheduler state entries for both tasks.
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 3001,
-                runq_location: None,
-                state: TaskState::Running,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: Some(0),
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 3002,
-                runq_location: None,
-                state: TaskState::Runnable,
-                priority: TaskPriority::Realtime,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: None,
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 3001,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 3002,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Realtime,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
 
         // Put RT task in sleep queue with wake_tick in the past
         TICK_COUNT.store(100, Ordering::Relaxed);
@@ -4132,41 +4109,39 @@ mod tests {
         sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
         sched.state.per_cpu[0].current = Some(8303);
 
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(make_task(8303, TaskState::Running, TaskPriority::Normal)));
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(make_task(8304, TaskState::Runnable, TaskPriority::Normal)));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(8303, TaskState::Running, TaskPriority::Normal),
+        ));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(8304, TaskState::Runnable, TaskPriority::Normal),
+        ));
 
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 8303,
-                runq_location: None,
-                state: TaskState::Running,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: Some(0),
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 8304,
-                runq_location: None,
-                state: TaskState::Runnable,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: None,
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 8303,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 8304,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
 
         // Seed stale queue membership for the exiting task and ensure another
         // runnable task exists so terminate_current can produce a switch.
@@ -4187,7 +4162,9 @@ mod tests {
             Some(101)
         );
         assert!(
-            !sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].iter().any(|&tid| tid == 8303),
+            !sched.state.per_cpu[0].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 8303),
             "dead current task must be removed from the run queue"
         );
         assert!(
@@ -4211,36 +4188,32 @@ mod tests {
         dead.exit_code = Some(42);
         crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(dead));
 
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 0,
-                runq_location: None,
-                state: TaskState::Running,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: Some(0),
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
-        sched
-            .state
-            .insert_task(crate::sched::state::ThreadSchedFields {
-                tid: 8305,
-                runq_location: None,
-                state: TaskState::Dead,
-                priority: TaskPriority::Normal,
-                affinity: Affinity::Any,
-                last_cpu: Some(0),
-                wake_cpu: Some(0),
-                run_cpu: None,
-                timeslice_remaining: types::DEFAULT_TIMESLICE,
-                enqueued_at_tick: 0,
-                wake_pending: false,
-            });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 8305,
+            runq_location: None,
+            state: TaskState::Dead,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);
         sched.state.wait_queue.push_back(8305);
@@ -4255,7 +4228,9 @@ mod tests {
         assert!(crate::task::registry::get_task::<MockRuntime>(8305).is_none());
         assert!(sched.state.get_task(8305).is_none());
         assert!(
-            !sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].iter().any(|&tid| tid == 8305),
+            !sched.state.per_cpu[0].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 8305),
             "reaped task must be removed from the run queue"
         );
         assert!(
@@ -5217,8 +5192,9 @@ mod tests {
 
         crate::task::registry::get_registry::<MockRuntime>()
             .insert(alloc::boxed::Box::new(make_task(0, TaskState::Running, TaskPriority::Normal)));
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(make_task(9901, TaskState::Blocked, TaskPriority::Normal)));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(9901, TaskState::Blocked, TaskPriority::Normal),
+        ));
 
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 0,
@@ -5247,7 +5223,8 @@ mod tests {
             wake_pending: false,
         });
 
-        let (_ipi, _deferred) = crate::sched::blocking::wake_task_locked::<MockRuntime>(&mut sched, 9901);
+        let (_ipi, _deferred) =
+            crate::sched::blocking::wake_task_locked::<MockRuntime>(&mut sched, 9901);
         assert!(
             sched.state.per_cpu[2].runq[TaskPriority::Normal as usize]
                 .iter()
