@@ -5,7 +5,7 @@ use core::default::Default;
 extern crate alloc;
 
 use stem::syscall::vfs::{vfs_thing_from_channel, vfs_write};
-use stem::syscall::{ioport_read, irq_subscribe};
+use stem::syscall::{ioport_read, irq_subscribe, irq_wait};
 use stem::{error, info, warn};
 
 /// PS/2 controller status register
@@ -21,8 +21,10 @@ const STATUS_AUX_DATA: usize = 0x20;
 /// IRQ1 vector (keyboard) - legacy IRQ1 maps to vector 0x21 after IOAPIC remap
 const KBD_VECTOR: u8 = 0x21;
 
-/// Polling interval in milliseconds for the cooperative service loop.
-const POLLING_INTERVAL_MS: u64 = 8;
+/// Polling interval in milliseconds – used only in the fallback path when IRQ
+/// subscription fails.  25 ms is sufficient to catch any stray scancodes that
+/// arrive without an interrupt and low enough to avoid noticeable latency.
+const POLLING_INTERVAL_MS: u64 = 25;
 
 /// Driver state node kind
 const KIND_DRV_PS2_KBD: &str = "drv.Ps2Keyboard";
@@ -49,7 +51,7 @@ fn main(raw_write_handle: usize) -> ! {
     match irq_subscribe(KBD_VECTOR) {
         Ok(()) => {
             stem::debug!("ps2_kbd: subscribed to IRQ1 (vector 0x{:02x})", KBD_VECTOR);
-            polling_loop(fd);
+            interrupt_loop(fd);
         }
         Err(e) => {
             info!("ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling", e);
@@ -123,9 +125,34 @@ fn send_key_event(fd: u32, edge: KeyEdge, drop_counter: &mut u32) {
     }
 }
 
-/// Fallback polling loop (if IRQ subscribe fails)
+/// Interrupt-driven service loop (primary path).
+///
+/// Blocks on `irq_wait` until IRQ1 fires, then drains all pending scancodes.
+/// This avoids runnable-task churn during idle/low-input periods because the
+/// task is only scheduled when the hardware actually signals new data.
+fn interrupt_loop(fd: u32) -> ! {
+    stem::debug!("ps2_kbd: using interrupt-driven loop (IRQ vector 0x{:02x})", KBD_VECTOR);
+    let mut state = KeyboardState::new();
+    let mut drop_counter = 0u32;
+    loop {
+        match irq_wait(KBD_VECTOR) {
+            Ok(_pending) => {
+                drain_keyboard_data(fd, &mut state, &mut drop_counter);
+            }
+            Err(e) => {
+                // irq_wait should not fail once subscribed; if it does, fall
+                // back to polling so the driver keeps functioning.
+                warn!("ps2_kbd: irq_wait error ({:?}), switching to polling fallback", e);
+                break;
+            }
+        }
+    }
+    polling_loop(fd)
+}
+
+/// Fallback polling loop – used only when IRQ subscription is unavailable.
 fn polling_loop(fd: u32) -> ! {
-    stem::debug!("ps2_kbd: using cooperative polling loop ({}ms interval)", POLLING_INTERVAL_MS);
+    stem::debug!("ps2_kbd: using fallback polling loop ({}ms interval)", POLLING_INTERVAL_MS);
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
     loop {
