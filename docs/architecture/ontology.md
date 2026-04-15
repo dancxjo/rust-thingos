@@ -516,6 +516,7 @@ record once Presence runtime integration is introduced.
 
 - `docs/architecture/concept-classification.md` — canonical/compatibility/transitional taxonomy table
 - `docs/architecture/unix-projection.md` — full Unix → typed-world projection model
+- `docs/architecture/vfs-as-place-projection.md` — VFS as Place projection and Thing access form
 - `docs/migration/concept-mapping.md` — detailed Unix → ThingOS lexicon
 - `docs/migration/review-guidelines.md` — actionable PR review checklist
 - `docs/migration/bridge_architecture.md` — bridge layer design and conventions
