@@ -37,7 +37,7 @@ Quick test:
 
 Use these as the default vocabulary when proposing designs:
 
-- `Thing`: first-class managed object.
+- `Thing`: first-class managed object concept (architectural term, even if concrete implementation type names change).
 - `Kind` / `Form`: what a Thing is vs how it is represented.
 - `Place`: visibility/context world (where Things are reachable).
 - `Authority`: permission/capability context.
