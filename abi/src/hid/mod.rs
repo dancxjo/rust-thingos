@@ -46,12 +46,12 @@ pub const BRISTLE_EVENT_MAGIC: u32 = 0x48494445;
 /// Protocol version
 pub const BRISTLE_EVENT_VERSION: u16 = 0;
 
-pub use bristle::{BristleEventHeader, KeyEventPayload};
+pub use bristle::{BristleEventHeader, KeyEventPayload, KeyboardMessage};
 pub use event::{EventType, HidParseError};
 pub use input::{InputDeviceKind, Ps2KeyPayload, RawInputEnvelope};
 pub use key::Key;
 pub use modifiers::{Locks, Mods};
-pub use pointer::{PointerButtonPayload, PointerMovePayload, ScrollPayload};
+pub use pointer::{MouseButton, MouseMessage, PointerButtonPayload, PointerMovePayload, ScrollPayload};
 
 mod bristle;
 mod event;

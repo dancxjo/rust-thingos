@@ -14,8 +14,8 @@ use abi::hid::{
     KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
-use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
-use stem::syscall::{ChannelHandle, channel_recv, channel_send_all};
+use stem::syscall::vfs::{vfs_close, vfs_fd_from_handle, vfs_mkdir, vfs_open, vfs_read, vfs_write};
+use stem::syscall::{ChannelHandle, channel_send_all};
 use stem::{debug, info};
 
 fn ensure_session_roots() {
@@ -34,7 +34,7 @@ fn update_active_ui(target: &str) {
 }
 
 fn get_active_ui() -> alloc::string::String {
-    use stem::syscall::vfs::{vfs_read, vfs_stat};
+    use stem::syscall::vfs::vfs_stat;
     if let Ok(fd) = vfs_open("/session/active_ui", abi::syscall::vfs_flags::O_RDONLY) {
         if let Ok(stat) = vfs_stat(fd) {
             let size = stat.size as usize;
@@ -81,12 +81,41 @@ fn main(packed_handles: usize) -> ! {
     let mut kbd_tok = None;
     let mut mouse_tok = None;
 
-    if kbd_read != 0 {
-        kbd_tok = ws.add_port_readable(kbd_read as u64).ok();
-    }
-    if mouse_read != 0 {
-        mouse_tok = ws.add_port_readable(mouse_read as u64).ok();
-    }
+    // Keyboard input path: bridge the channel handle to a VFS FD so the read
+    // side uses the VFS-first message path (add_fd_readable + vfs_read) instead
+    // of the legacy port-based wait (add_port_readable + channel_recv).
+    let kbd_fd: Option<u32> = if kbd_read != 0 {
+        match vfs_fd_from_handle(kbd_read) {
+            Ok(fd) => {
+                // Re-register with the FD-based token, replacing the port token.
+                kbd_tok = ws.add_fd_readable(fd).ok();
+                Some(fd)
+            }
+            Err(e) => {
+                stem::debug!("bristle: kbd fd bridge failed ({:?}), keyboard disabled", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    // Mouse input path: bridge the channel handle to a VFS FD so the read side
+    // uses the VFS-first message path (add_fd_readable + vfs_read) instead of
+    // the legacy port-based wait (add_port_readable + channel_recv).
+    let mouse_fd: Option<u32> = if mouse_read != 0 {
+        match vfs_fd_from_handle(mouse_read) {
+            Ok(fd) => {
+                mouse_tok = ws.add_fd_readable(fd).ok();
+                Some(fd)
+            }
+            Err(e) => {
+                stem::debug!("bristle: mouse fd bridge failed ({:?}), mouse disabled", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     loop {
         let events = match ws.wait(None::<stem::time::Duration>) {
@@ -102,15 +131,24 @@ fn main(packed_handles: usize) -> ! {
                 continue;
             }
 
-            let ready_handle = if Some(ev.token()) == kbd_tok {
-                kbd_read
+            // Dispatch: both keyboard and mouse use the VFS-first fd read path.
+            let n_result = if Some(ev.token()) == kbd_tok {
+                if let Some(fd) = kbd_fd {
+                    vfs_read(fd, &mut recv_buf)
+                } else {
+                    continue;
+                }
             } else if Some(ev.token()) == mouse_tok {
-                mouse_read
+                if let Some(fd) = mouse_fd {
+                    vfs_read(fd, &mut recv_buf)
+                } else {
+                    continue;
+                }
             } else {
                 continue;
             };
 
-            if let Ok(n) = channel_recv(ready_handle, &mut recv_buf) {
+            if let Ok(n) = n_result {
                 if n > 0 {
                     let mut cursor = 0;
                     while cursor < n {

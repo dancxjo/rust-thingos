@@ -4,8 +4,9 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use stem::syscall::{channel_send_all, ioport_read, irq_subscribe, ChannelHandle};
-use stem::{info, warn};
+use stem::syscall::{ioport_read, irq_subscribe};
+use stem::syscall::vfs::{vfs_fd_from_handle, vfs_write};
+use stem::{error, info, warn};
 
 /// PS/2 controller status register
 const PS2_STATUS: usize = 0x64;
@@ -28,22 +29,34 @@ const KIND_DRV_PS2_KBD: &str = "drv.Ps2Keyboard";
 
 #[stem::main]
 fn main(raw_write_handle: usize) -> ! {
-    let handle = raw_write_handle as ChannelHandle;
+    let handle = raw_write_handle as u32;
 
     stem::debug!("ps2_kbd: online (handle={})", handle);
+
+    // Bridge the write channel handle to a VFS file descriptor so all I/O
+    // flows through the VFS-first message path rather than the legacy port API.
+    let fd = match vfs_fd_from_handle(handle) {
+        Ok(f) => f,
+        Err(e) => {
+            stem::error!("ps2_kbd: fd bridge failed ({:?}), aborting", e);
+            loop {
+                stem::sleep_ms(1000);
+            }
+        }
+    };
 
     // Subscribe to keyboard interrupt
     match irq_subscribe(KBD_VECTOR) {
         Ok(()) => {
             stem::debug!("ps2_kbd: subscribed to IRQ1 (vector 0x{:02x})", KBD_VECTOR);
-            polling_loop(handle);
+            polling_loop(fd);
         }
         Err(e) => {
             info!(
                 "ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling",
                 e
             );
-            polling_loop(handle);
+            polling_loop(fd);
         }
     }
 }
@@ -57,7 +70,7 @@ use abi::hid::{
 use thigmonasty::{KeyEdge, KeyboardState};
 
 /// Drain all pending keyboard data from the controller
-fn drain_keyboard_data(handle: ChannelHandle, state: &mut KeyboardState, drop_counter: &mut u32) {
+fn drain_keyboard_data(fd: u32, state: &mut KeyboardState, drop_counter: &mut u32) {
     // Read while data is available (handle burst of scancodes)
     for _ in 0..16 {
         let status = ioport_read(PS2_STATUS, 1);
@@ -70,7 +83,7 @@ fn drain_keyboard_data(handle: ChannelHandle, state: &mut KeyboardState, drop_co
             // Keyboard data - read and send
             let scancode = ioport_read(PS2_DATA, 1) as u8;
             if let Some(edge) = state.process_ps2(scancode) {
-                send_key_event(handle, edge, drop_counter);
+                send_key_event(fd, edge, drop_counter);
             }
         } else {
             // If aux data (mouse), stop draining - let ps2_mouse handle it
@@ -80,7 +93,7 @@ fn drain_keyboard_data(handle: ChannelHandle, state: &mut KeyboardState, drop_co
     }
 }
 
-fn send_key_event(handle: ChannelHandle, edge: KeyEdge, drop_counter: &mut u32) {
+fn send_key_event(fd: u32, edge: KeyEdge, drop_counter: &mut u32) {
     let timestamp_ns = stem::monotonic_ns();
     let mut buf = [0u8; 24]; // Max size is header + 4 byte payload
 
@@ -106,19 +119,23 @@ fn send_key_event(handle: ChannelHandle, edge: KeyEdge, drop_counter: &mut u32) 
     buf[0..20].copy_from_slice(&header.to_bytes());
     buf[20..24].copy_from_slice(&payload.to_bytes());
 
-    if channel_send_all(handle, &buf[..24]).is_err() {
+    // Publish the event through the VFS-first message path.
+    let send_ok = vfs_write(fd, &buf[..24])
+        .map(|n| n == 24)
+        .unwrap_or(false);
+    if !send_ok {
         *drop_counter = drop_counter.wrapping_add(1);
         if *drop_counter <= 4 || *drop_counter % 100 == 0 {
             warn!(
-                "ps2_kbd: dropped {} key events because raw input port {} is full",
-                *drop_counter, handle
+                "ps2_kbd: dropped {} key events (write fd={} failed)",
+                *drop_counter, fd
             );
         }
     }
 }
 
 /// Fallback polling loop (if IRQ subscribe fails)
-fn polling_loop(handle: ChannelHandle) -> ! {
+fn polling_loop(fd: u32) -> ! {
     stem::debug!(
         "ps2_kbd: using cooperative polling loop ({}ms interval)",
         POLLING_INTERVAL_MS
@@ -130,7 +147,7 @@ fn polling_loop(handle: ChannelHandle) -> ! {
 
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA == 0 {
-                drain_keyboard_data(handle, &mut state, &mut drop_counter);
+                drain_keyboard_data(fd, &mut state, &mut drop_counter);
             } else {
                 // Leave mouse bytes queued for ps2_mouse.
                 stem::sleep_ms(1);

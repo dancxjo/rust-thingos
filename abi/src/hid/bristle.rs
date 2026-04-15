@@ -86,3 +86,39 @@ impl KeyEventPayload {
         }
     }
 }
+
+// ============================================================================
+// Canonical Typed Keyboard Event
+// ============================================================================
+
+/// Canonical typed keyboard event.
+///
+/// This is the logical, strongly-typed view of keyboard input used throughout
+/// the new message-passing path.  The wire encoding remains the
+/// `BristleEventHeader` + `KeyEventPayload` structs (unchanged); this enum is
+/// the decoded form that producers build and consumers pattern-match on.
+///
+/// # Physical-key vs Text semantics
+///
+/// Thing-OS currently uses a **single unified stream** of physical key events.
+/// Text generation (character mapping, IME) is intentionally left to
+/// consumers: they receive `Key` + `Mods` and apply their own layout logic.
+/// A future `Text` variant can be added to this enum if a text-production
+/// layer is introduced upstream of consumers, but it is **not** added here to
+/// avoid implying that Bristle performs layout translation today.
+///
+/// # Variants
+/// * `Key` — a physical key press or release with full modifier and repeat state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyboardMessage {
+    /// Physical key event.
+    ///
+    /// `pressed = true` for key-down, `false` for key-up.
+    /// `repeat = true` when the key was already held (auto-repeat).
+    Key {
+        key: Key,
+        pressed: bool,
+        modifiers: Mods,
+        repeat: bool,
+    },
+}
