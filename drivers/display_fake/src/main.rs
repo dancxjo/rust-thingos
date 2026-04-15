@@ -9,7 +9,9 @@ use abi::driver_frame::FrameReader;
 use abi::ids::HandleId;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::info;
+use stem::syscall::vfs::vfs_fd_from_handle;
 use stem::syscall::{channel_recv, channel_send, ChannelHandle};
+use stem::wait_set::WaitSet;
 use stem::thing::ThingId;
 
 #[unsafe(link_section = ".thing_manifest")]
@@ -137,10 +139,13 @@ fn main(arg: usize) -> ! {
     let mut bound = false;
     let mut bound_fd: Option<u32> = None;
 
-    let wait_handles = [drv_req_read];
+    let drv_req_fd = vfs_fd_from_handle(drv_req_read).expect("display_fake: fd_from_handle");
+    let mut ws = WaitSet::new();
+    let _drv_req_tok = ws.add_fd_readable(drv_req_fd).unwrap();
+
     loop {
-        // Yield to let others run if we don't have data, blocking until we do
-        if let Err(_) = stem::syscall::channel_wait(&wait_handles, 1 /* READABLE */) {
+        // Block until the request channel has data available.
+        if ws.wait(None::<stem::time::Duration>).is_err() {
             stem::yield_now();
             continue;
         }
@@ -208,6 +213,5 @@ fn main(arg: usize) -> ! {
                 _ => {}
             }
         }
-        stem::yield_now();
     }
 }

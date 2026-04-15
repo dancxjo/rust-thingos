@@ -568,9 +568,13 @@ fn main(boot_fd: usize) -> ! {
         }
     }
 
+    let drv_req_fd = stem::syscall::vfs::vfs_fd_from_handle(drv_req_read)
+        .expect("display_virtio_gpu: fd_from_handle(drv_req_read)");
+    let vfs_read_fd = stem::syscall::vfs::vfs_fd_from_handle(vfs_read)
+        .expect("display_virtio_gpu: fd_from_handle(vfs_read)");
     let mut ws = stem::wait_set::WaitSet::new();
-    let drv_req_read_tok = ws.add_port_readable(drv_req_read as u64).unwrap();
-    let vfs_read_tok = ws.add_port_readable(vfs_read as u64).unwrap();
+    let drv_req_read_tok = ws.add_fd_readable(drv_req_fd).unwrap();
+    let vfs_read_tok = ws.add_fd_readable(vfs_read_fd).unwrap();
 
     loop {
         stem::trace!("display_virtio_gpu: waiting on WaitSet...");
