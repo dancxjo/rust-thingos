@@ -113,6 +113,16 @@ pub static PROF_RUNQ_LEN_MAX: [AtomicU64; types::MAX_CPUS] = {
     const ZERO: AtomicU64 = AtomicU64::new(0);
     [ZERO; types::MAX_CPUS]
 };
+pub static PROF_RUNQ_SAMPLE_COUNT: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+pub static PROF_RUNQ_SAMPLE_TOTAL: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
 
 /// Number of histogram buckets used for hold/wait time distributions.
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
@@ -408,11 +418,11 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
 /// This is a no-op when the `sched_telemetry` feature is disabled so that
 /// the per-schedule-point iteration incurs zero overhead in normal builds.
 #[inline]
-pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cpu: usize) {
-    if let Some(pc) = sched.state.per_cpu.get_mut(cpu) {
+pub(crate) fn sample_runq_len(sched: &types::Scheduler<impl BootRuntime>, cpu: usize) {
+    if let Some(pc) = sched.state.per_cpu.get(cpu) {
         let len64 = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
-        pc.stats.runq_sample_count = pc.stats.runq_sample_count.saturating_add(1);
-        pc.stats.runq_sample_total = pc.stats.runq_sample_total.saturating_add(len64);
+        PROF_RUNQ_SAMPLE_COUNT[cpu].fetch_add(1, Ordering::Relaxed);
+        PROF_RUNQ_SAMPLE_TOTAL[cpu].fetch_add(len64, Ordering::Relaxed);
         #[cfg(feature = "sched_telemetry")]
         {
             PROF_RUNQ_LEN_LAST[cpu].store(len64, Ordering::Relaxed);
@@ -518,10 +528,10 @@ pub fn on_tick<R: BootRuntime>() {
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
 
     try_resched_if_needed::<R>();
-    maybe_emit_debug_summary::<R>(cpu_idx);
+    emit_debug_summary::<R>(cpu_idx);
 }
 
-fn maybe_emit_debug_summary<R: BootRuntime>(cpu_idx: usize) {
+fn emit_debug_summary<R: BootRuntime>(cpu_idx: usize) {
     if cpu_idx != 0 {
         return;
     }
@@ -2663,10 +2673,12 @@ pub fn dump_stats<R: BootRuntime>() {
     for &i in &sched.state.online_cpus {
         let pc = &sched.state.per_cpu[i];
         let total: usize = pc.runq.iter().map(|q| q.len()).sum();
-        let avg_runq = if pc.stats.runq_sample_count == 0 {
+        let sample_count = PROF_RUNQ_SAMPLE_COUNT[i].load(Ordering::Relaxed);
+        let sample_total = PROF_RUNQ_SAMPLE_TOTAL[i].load(Ordering::Relaxed);
+        let avg_runq = if sample_count == 0 {
             0
         } else {
-            pc.stats.runq_sample_total / pc.stats.runq_sample_count
+            sample_total / sample_count
         };
         crate::kprint!(
             "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",

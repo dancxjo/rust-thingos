@@ -1906,26 +1906,28 @@ mod tests {
     #[test]
     fn test_spawn_any_affinity_fanout_after_bringup() {
         let _g = init_test_env();
+        const TEST_CPU_COUNT: usize = 6;
+        const TEST_TASK_COUNT: usize = TEST_CPU_COUNT * 2;
 
         let mut sched = Scheduler::<MockRuntime>::new();
-        for _ in 0..6 {
+        for _ in 0..TEST_CPU_COUNT {
             sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
         }
-        for cpu in 0..6 {
+        for cpu in 0..TEST_CPU_COUNT {
             sched.state.mark_cpu_online(cpu);
         }
         sched.state.per_cpu[0].current = Some(0);
         sched.bringup_in_progress = false;
 
-        for _ in 0..12 {
+        for _ in 0..TEST_TASK_COUNT {
             let _ = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
         }
 
-        let non_empty = (0..6)
+        let non_empty = (0..TEST_CPU_COUNT)
             .filter(|&cpu| sched.state.per_cpu[cpu].runq[crate::task::TaskPriority::Normal as usize].len() > 0)
             .count();
         assert!(
-            non_empty >= 2,
+            non_empty >= 3,
             "post-bringup Any-affinity spawn should fan out across CPUs; got {} non-empty CPUs",
             non_empty
         );
@@ -1966,5 +1968,7 @@ mod tests {
 
         let t = crate::task::registry::get_task::<MockRuntime>(id).expect("spawned task missing");
         assert_eq!(t.last_cpu, Some(0), "Any-affinity user thread should default to spawning CPU");
+        let sf = sched.state.get_task(id).expect("spawned task sched fields missing");
+        assert_eq!(sf.wake_cpu, Some(0), "wake_cpu should track spawning CPU for initial enqueue");
     }
 }
