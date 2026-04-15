@@ -362,6 +362,7 @@ be reworked at the typed-world level before any code is written.
 ## Related Documents
 
 - `docs/architecture/concept-classification.md` — canonical/compatibility/transitional taxonomy
+- `docs/architecture/presence.md` — Presence design reference; session/tty/embodiment semantics
 - `docs/migration/concept-mapping.md` — detailed Unix → ThingOS lexicon and migration guidance
 - `docs/migration/bridge_architecture.md` — bridge layer design, conventions, and guardrails
 - `docs/migration/review-guidelines.md` — actionable PR review checklist
