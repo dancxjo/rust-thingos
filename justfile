@@ -242,15 +242,15 @@ kindc *args:
 
 # Regenerate checked-in fixture output.
 kindc-gen:
-    cargo run -p kindc -- tools/kindc/kinds -o tools/kindc/fixtures/generated
+    cargo run -p kindc -- tools/kindc/kinds -o thingos/src/kinds/generated
 
 # Check that generated Kind output is up-to-date (fails if drift is detected).
 # Run `just kindc-gen` to fix.
 kindc-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo run -p kindc -- tools/kindc/kinds -o tools/kindc/fixtures/generated
-    if ! git diff --exit-code tools/kindc/fixtures/generated/; then
+    cargo run -p kindc -- tools/kindc/kinds -o thingos/src/kinds/generated
+    if ! git diff --exit-code thingos/src/kinds/generated/; then
         echo ""
         echo "ERROR: Generated Kind output is out of date."
         echo "Run 'just kindc-gen' to regenerate, then commit the result."

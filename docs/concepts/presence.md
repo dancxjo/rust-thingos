@@ -186,7 +186,7 @@ generated types, and sufficient for deferred use.
 
 The `presence.kind` file in `tools/kindc/kinds/` feeds into the `kindc`
 schema compiler.  Running `just kindc-gen` regenerates
-`tools/kindc/fixtures/generated/mod.rs` with updated Rust types.
+`thingos/src/kinds/generated/mod.rs` with updated Rust types.
 
 The canonical module at `thingos/src/presence.rs` wraps the generated type
 IDs (`KIND_ID_THINGOS_PRESENCE`, etc.) in handwritten idiomatic Rust types

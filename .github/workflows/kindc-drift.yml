@@ -7,7 +7,7 @@ on:
     paths:
       - 'tools/kindc/kinds/**'
       - 'tools/kindc/src/**'
-      - 'tools/kindc/fixtures/generated/**'
+      - 'thingos/src/kinds/generated/**'
       - 'tools/kindc/Cargo.toml'
   pull_request:
     branches:
@@ -15,7 +15,7 @@ on:
     paths:
       - 'tools/kindc/kinds/**'
       - 'tools/kindc/src/**'
-      - 'tools/kindc/fixtures/generated/**'
+      - 'thingos/src/kinds/generated/**'
       - 'tools/kindc/Cargo.toml'
 
 permissions:
@@ -33,18 +33,18 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Regenerate Kind output
-        run: cargo run -p kindc -- tools/kindc/kinds -o tools/kindc/fixtures/generated
+        run: cargo run -p kindc -- tools/kindc/kinds -o thingos/src/kinds/generated
 
       - name: Check for schema drift
         run: |
-          if ! git diff --exit-code tools/kindc/fixtures/generated/; then
+          if ! git diff --exit-code thingos/src/kinds/generated/; then
             echo ""
             echo "ERROR: Generated Kind output is out of date."
             echo "The .kind schema definitions and the checked-in generated Rust code have drifted."
             echo ""
             echo "To fix this, run:"
             echo "  just kindc-gen"
-            echo "Then commit the updated files in tools/kindc/fixtures/generated/."
+            echo "Then commit the updated files in thingos/src/kinds/generated/."
             exit 1
           fi
           echo "Kind schema drift check passed: generated output is up to date."
