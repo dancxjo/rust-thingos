@@ -2,7 +2,7 @@
 
 **Phase:** Space Phase 1 (VM identity extraction)
 **Status:** Initial audit
-**Related:** `docs/architecture/space-object.md`
+**Related:** `docs/architecture/space.md`
 
 This document inventories all places in the kernel where address-space semantics
 are implicitly attached to `Process` / `Task`, categorizes them by migration
@@ -152,7 +152,7 @@ distinguish "the original address space" from "the exec-replaced address space"
 by `SpaceId` alone.
 
 **Disposition:** Phase 3 target (see exec-replacement semantics in
-`space-object.md`).  For Phase 2, at minimum update `exec.rs` to also update
+`space.md`).  For Phase 2, at minimum update `exec.rs` to also update
 `space_obj.aspace_raw` when it updates `process.space.aspace_raw`.
 
 ---

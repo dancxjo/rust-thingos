@@ -603,7 +603,7 @@ pub struct Process {
     // `Process`.  This subdivision is the extraction seam for a future
     // first-class `Space` object.  Do NOT attach new memory-ownership state
     // directly to `Process` — add it to `ProcessAddressSpace` instead.
-    /// Address-space subdivision — conceptually future `Space` ownership.
+    /// Address-space subdivision — transitional backing for canonical `Space`.
     ///
     /// Contains the VM mapping list, the architecture-specific page-table
     /// token, and the first-class [`crate::space::Space`] object wrapper.

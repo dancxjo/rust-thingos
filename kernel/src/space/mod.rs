@@ -4,7 +4,7 @@
 //!
 //! This module introduces `Space` as a **first-class kernel object** — the
 //! explicit owner of virtual memory state.  It is Phase 1 of the Space
-//! extraction roadmap (see `docs/architecture/space-object.md`).
+//! extraction roadmap (see `docs/architecture/space.md`).
 //!
 //! ## Phase 1 goals (this module)
 //!
@@ -32,7 +32,7 @@
 //!
 //! ## What `Space` is
 //!
-//! See `docs/architecture/space-object.md` for the full design document.
+//! See `docs/architecture/space.md` for the canonical design document.
 //!
 //! | Field / concern           | Owner in Phase 1                            |
 //! |---------------------------|---------------------------------------------|
