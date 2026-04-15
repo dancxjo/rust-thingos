@@ -531,8 +531,8 @@ pub fn on_tick<R: BootRuntime>() {
     emit_debug_summary::<R>(cpu_idx);
 }
 
-fn emit_debug_summary<R: BootRuntime>(cpu_idx: usize) {
-    if cpu_idx != 0 {
+fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
+    if caller_cpu != 0 {
         return;
     }
     let rt = crate::runtime::<R>();
@@ -555,6 +555,8 @@ fn emit_debug_summary<R: BootRuntime>(cpu_idx: usize) {
     let Some(ptr) = *lock else {
         return;
     };
+    // SAFETY: `ptr` is written from `init::<R>` and remains valid for kernel
+    // lifetime; this function only reads scheduler state under SCHEDULER lock.
     let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
     crate::kdebug!("SCHED-DBG: cpus_online={}", sched.state.online_cpu_count);
     for &i in &sched.state.online_cpus {
@@ -1460,9 +1462,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             return None;
         }
 
-        let was_idle = Some(current_id) == self.state.per_cpu[cpu_idx].idle_task;
+        let current_was_idle = Some(current_id) == self.state.per_cpu[cpu_idx].idle_task;
         let next_is_nonidle = Some(next_id) != self.state.per_cpu[cpu_idx].idle_task;
-        if was_idle && next_is_nonidle {
+        if current_was_idle && next_is_nonidle {
             self.state.per_cpu[cpu_idx].stats.idle_to_nonidle =
                 self.state.per_cpu[cpu_idx].stats.idle_to_nonidle.saturating_add(1);
         }

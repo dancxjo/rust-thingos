@@ -1924,7 +1924,9 @@ mod tests {
         }
 
         let non_empty = (0..TEST_CPU_COUNT)
-            .filter(|&cpu| sched.state.per_cpu[cpu].runq[crate::task::TaskPriority::Normal as usize].len() > 0)
+            .filter(|&cpu| {
+                !sched.state.per_cpu[cpu].runq[crate::task::TaskPriority::Normal as usize].is_empty()
+            })
             .count();
         assert!(
             non_empty >= 3,
