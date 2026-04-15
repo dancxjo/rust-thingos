@@ -1,5 +1,6 @@
 pub mod arch;
 pub mod channel;
+pub mod message;
 pub mod signal;
 pub mod socket;
 pub mod vfs;
@@ -186,6 +187,12 @@ pub fn getpid() -> u32 {
 /// Get the parent process ID.
 pub fn getppid() -> u32 {
     let ret = unsafe { raw_syscall6(SYS_GETPPID, 0, 0, 0, 0, 0, 0) };
+    ret as u32
+}
+
+/// Get the process group ID of the calling process.
+pub fn getpgrp() -> u32 {
+    let ret = unsafe { raw_syscall6(SYS_GETPGRP, 0, 0, 0, 0, 0, 0) };
     ret as u32
 }
 

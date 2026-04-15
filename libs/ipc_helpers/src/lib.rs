@@ -7,6 +7,7 @@
 //! # Modules
 //!
 //! - [`channel`] — channel send/recv wrappers with RPC framing support
+//! - [`inbox`]   — typed message send/recv over the process inbox IPC path
 //! - [`provider`] — VFS provider server loop
 //! - [`rpc`] — typed request/reply client and server helpers
 //!
@@ -25,6 +26,20 @@
 //!     let req = server.next().unwrap();
 //!     server.reply(req.request_id, b"pong").unwrap();
 //! }
+//! ```
+//!
+//! **Sending and receiving inbox messages** (see [`inbox`]):
+//!
+//! ```ignore
+//! use ipc_helpers::inbox::{InboxReceiver, send_typed, MsgKindId};
+//! use abi::KindId;
+//!
+//! // Receiver side — block until a message arrives
+//! let rx = InboxReceiver::new(4096);
+//! let msg = rx.recv_blocking();
+//!
+//! // Sender side — deliver a typed message by PID
+//! send_typed(target_pid, KindId([0u8; 16]), b"hello").unwrap();
 //! ```
 //!
 //! **Writing a VFS provider** (see [`provider`]):
@@ -52,5 +67,6 @@
 extern crate alloc;
 
 pub mod channel;
+pub mod inbox;
 pub mod provider;
 pub mod rpc;
