@@ -73,18 +73,18 @@ impl TaskRuntime {
 
 impl SchedulableRuntime {
     /// Project dispatch-relevant runtime fields from a concrete task record.
-    pub fn from_thread<R: crate::BootRuntime>(thread: &crate::task::Thread<R>) -> Self {
+    pub fn from_thread<R: crate::BootRuntime>(task: &crate::task::Thread<R>) -> Self {
         let current_cpu =
-            if thread.state == state::TaskState::Running { thread.last_cpu } else { None };
+            if task.state == state::TaskState::Running { task.last_cpu } else { None };
         Self {
-            state: thread.state,
-            priority: thread.priority,
-            affinity: thread.affinity,
+            state: task.state,
+            priority: task.priority,
+            affinity: task.affinity,
             current_cpu,
-            last_cpu: thread.last_cpu,
-            slice_remaining: thread.timeslice_remaining,
-            enqueued_at_tick: thread.enqueued_at_tick,
-            wake_pending: thread.wake_pending,
+            last_cpu: task.last_cpu,
+            slice_remaining: task.timeslice_remaining,
+            enqueued_at_tick: task.enqueued_at_tick,
+            wake_pending: task.wake_pending,
         }
     }
 }
@@ -128,8 +128,8 @@ impl TaskSchedCache {
     }
 
     /// Load scheduler cache projection from a concrete runtime thread record.
-    pub fn from_thread<R: crate::BootRuntime>(thread: &crate::task::Thread<R>) -> Self {
-        let runtime = SchedulableRuntime::from_thread(thread);
+    pub fn from_thread<R: crate::BootRuntime>(task: &crate::task::Thread<R>) -> Self {
+        let runtime = SchedulableRuntime::from_thread(task);
         Self::from_schedulable_runtime(&runtime)
     }
 
