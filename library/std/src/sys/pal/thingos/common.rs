@@ -383,7 +383,7 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             call.out_len = core::mem::size_of::<u32>() as u32;
         }
         TIOCSPGRP => {
-            let pgid = unsafe { *argp.cast::<c_int>() };
+            let pgid = *argp.cast::<c_int>();
             if pgid <= 0 {
                 set_errno(EINVAL);
                 return -1;
@@ -417,6 +417,8 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
     };
     if ret >= 0 {
         if request == TIOCGPGRP {
+            // Kernel returns a u32 pgid payload; translate back to libc-facing
+            // c_int at the API boundary and reject non-positive values.
             let Ok(pgid) = c_int::try_from(pgid_out) else {
                 set_errno(EINVAL);
                 return -1;
