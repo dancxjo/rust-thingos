@@ -310,6 +310,15 @@ pub struct SpawnProcessExReq {
     /// Number of entries in the `thing_remap_ptr` array.
     pub thing_remap_len: u32,
     pub _pad5: u32,
+    /// Pointer to the name of the ELF symbol to use as the process entry point
+    /// (NOT null-terminated).  When non-zero and `entry_sym_len > 0`, the kernel
+    /// will resolve this symbol in the loaded image and jump to it instead of
+    /// the ELF `e_entry` field.  Used by `devd` to invoke driver entrypoints
+    /// (e.g. `thing_driver_entry_v1`) without going through `main`.
+    pub entry_sym_ptr: u64,
+    /// Byte length of the entry symbol name.  Zero means "use default ELF entry".
+    pub entry_sym_len: u32,
+    pub _pad6: u32,
 }
 
 /// Response payload for SYS_SPAWN_PROCESS_EX.

@@ -428,6 +428,7 @@ pub(crate) static mut SPAWN_PROCESS_FROM_PATH_HOOK: Option<
         Vec<u64>,
         Option<alloc::string::String>,
         Vec<abi::types::ThingRemap>,
+        Option<alloc::string::String>,
     ) -> Result<SpawnExResult, abi::errors::Errno>,
 > = None;
 
@@ -478,6 +479,7 @@ pub unsafe fn spawn_process_from_path_current(
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
     fd_remap: Vec<abi::types::ThingRemap>,
+    entry_sym_override: Option<alloc::string::String>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
     if let Some(hook) = SPAWN_PROCESS_FROM_PATH_HOOK {
         hook(
@@ -491,6 +493,7 @@ pub unsafe fn spawn_process_from_path_current(
             inherited_handles,
             cwd,
             fd_remap,
+            entry_sym_override,
         )
     } else {
         Err(abi::errors::Errno::ENOSYS)

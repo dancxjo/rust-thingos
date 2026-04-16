@@ -12,6 +12,7 @@ pub mod display_protocol;
 pub mod drawlist;
 pub mod driver_ctx;
 pub mod driver_frame;
+pub mod driver_interface;
 pub mod errors;
 pub mod fs;
 pub mod geometry;

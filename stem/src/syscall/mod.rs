@@ -742,6 +742,61 @@ pub fn spawn_process_ex_cwd(
     handles: &[u64],
     cwd: Option<&str>,
 ) -> Result<abi::types::SpawnProcessExResp, Errno> {
+    spawn_process_ex_full(
+        name,
+        argv,
+        env,
+        stdin_mode,
+        stdout_mode,
+        stderr_mode,
+        boot_arg,
+        handles,
+        cwd,
+        None,
+    )
+}
+
+/// Spawn a process with an optional driver entrypoint override.
+///
+/// When `entry_sym` is `Some(sym)`, the kernel will resolve `sym` in the
+/// loaded ELF image and enter the process at that symbol rather than the
+/// default `e_entry`.  Used by `devd` to invoke `thing_driver_entry_v1`
+/// directly without going through `main`.
+pub fn spawn_driver_ex(
+    name: &str,
+    argv: &[&[u8]],
+    env: &BTreeMap<Vec<u8>, Vec<u8>>,
+    boot_arg: u64,
+    handles: &[u64],
+    entry_sym: Option<&str>,
+) -> Result<abi::types::SpawnProcessExResp, Errno> {
+    use abi::types::stdio_mode;
+    spawn_process_ex_full(
+        name,
+        argv,
+        env,
+        stdio_mode::INHERIT,
+        stdio_mode::INHERIT,
+        stdio_mode::INHERIT,
+        boot_arg,
+        handles,
+        None,
+        entry_sym,
+    )
+}
+
+pub fn spawn_process_ex_full(
+    name: &str,
+    argv: &[&[u8]],
+    env: &BTreeMap<Vec<u8>, Vec<u8>>,
+    stdin_mode: u32,
+    stdout_mode: u32,
+    stderr_mode: u32,
+    boot_arg: u64,
+    handles: &[u64],
+    cwd: Option<&str>,
+    entry_sym: Option<&str>,
+) -> Result<abi::types::SpawnProcessExResp, Errno> {
     let argv_blob = serialize_argv(argv);
     let env_blob = serialize_env(env);
 
@@ -775,10 +830,13 @@ pub fn spawn_process_ex_cwd(
         thing_remap_ptr: 0,
         thing_remap_len: 0,
         _pad5: 0,
+        entry_sym_ptr: entry_sym.map_or(0, |s| s.as_ptr() as u64),
+        entry_sym_len: entry_sym.map_or(0, |s| s.len() as u32),
+        _pad6: 0,
     };
-    // SAFETY: `req`, `argv_blob`, `env_blob`, and `cwd` all live on the stack
-    // until after `raw_syscall6` returns.  The kernel copies all pointer fields
-    // synchronously during the syscall, so there is no use-after-free risk.
+    // SAFETY: `req`, `argv_blob`, `env_blob`, `cwd`, and `entry_sym` all live
+    // on the stack until after `raw_syscall6` returns.  The kernel copies all
+    // pointer fields synchronously during the syscall.
 
     let mut resp = abi::types::SpawnProcessExResp::default();
     let ret = unsafe {
