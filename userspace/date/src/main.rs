@@ -101,9 +101,19 @@ fn get_tz_offset() -> i32 {
                     let content = &buf[..n];
                     if let Ok(s) = core::str::from_utf8(content) {
                         for line in s.lines() {
+                            let line = line.trim();
+                            if line.is_empty() || line.starts_with('#') {
+                                continue;
+                            }
                             if line.starts_with("TZ_OFFSET=") {
-                                if let Ok(offset) = line.trim_start_matches("TZ_OFFSET=").parse::<i32>() {
-                                    vfs_close(fd).ok();
+                                if let Ok(offset) = line[10..].trim().parse::<i32>() {
+                                    let _ = vfs_close(fd);
+                                    return offset;
+                                }
+                            } else if line.starts_with("TZ=") {
+                                // Support simple TZ=offset format
+                                if let Ok(offset) = line[3..].trim().parse::<i32>() {
+                                    let _ = vfs_close(fd);
                                     return offset;
                                 }
                             }
@@ -112,7 +122,7 @@ fn get_tz_offset() -> i32 {
                 }
                 _ => {}
             }
-            vfs_close(fd).ok();
+            let _ = vfs_close(fd);
         }
         _ => {}
     }
@@ -123,42 +133,6 @@ fn print(msg: &str) {
     let _ = vfs_write(1, msg.as_bytes());
 }
 
-fn format_date(dt: DateTime, format: &str) -> String {
-    let mut result = String::new();
-    let mut chars = format.chars().peekable();
-    
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            if let Some(&next) = chars.peek() {
-                chars.next(); // Consume the format character
-                match next {
-                    'Y' => { let _ = write!(result, "{:04}", dt.year); },
-                    'm' => { let _ = write!(result, "{:02}", dt.month); },
-                    'd' => { let _ = write!(result, "{:02}", dt.day); },
-                    'H' => { let _ = write!(result, "{:02}", dt.hour); },
-                    'M' => { let _ = write!(result, "{:02}", dt.minute); },
-                    'S' => { let _ = write!(result, "{:02}", dt.second); },
-                    'A' => { let _ = write!(result, "{}", WEEKDAY_NAMES_LONG[dt.weekday as usize]); },
-                    'a' => { let _ = write!(result, "{}", WEEKDAY_NAMES[dt.weekday as usize]); },
-                    'b' | 'h' => { let _ = write!(result, "{}", MONTH_NAMES[dt.month as usize - 1]); },
-                    '%' => { result.push('%'); },
-                    'n' => { result.push('\n'); },
-                    't' => { result.push('\t'); },
-                    _ => {
-                        result.push('%');
-                        result.push(next);
-                    }
-                }
-            } else {
-                result.push('%');
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    
-    result
-}
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -191,22 +165,23 @@ fn main(_arg: usize) -> ! {
     let dt = unix_to_datetime(local_secs);
 
     if args.len() == 1 && args[0].starts_with('+') {
-        let format = &args[0][1..];
-        print(&format_date(dt, format));
+        let format_str = &args[0][1..];
+        print(&format_date(dt, format_str, tz_offset));
         print("\n");
     } else if args.is_empty() {
-        // Default format: Thu Apr 16 01:28:22 UTC 2026
-        // Actually showing TZ offset name might be hard, just use UTC or Local labels
-        let tz_label = if tz_offset == 0 { "UTC" } else { "Local" };
+        // Default format: Thu Apr 16 14:15:30 UTC-0700 2026
+        let sign = if tz_offset >= 0 { '+' } else { '-' };
+        let abs_offset = tz_offset.abs();
         let out = alloc::format!(
-            "{} {} {:02} {:02}:{:02}:{:02} {} {:04}\n",
+            "{} {} {:02} {:02}:{:02}:{:02} {}{:02}00 {:04}\n",
             WEEKDAY_NAMES[dt.weekday as usize],
             MONTH_NAMES[dt.month as usize - 1],
             dt.day,
             dt.hour,
             dt.minute,
             dt.second,
-            tz_label,
+            sign,
+            abs_offset,
             dt.year
         );
         print(&out);
@@ -216,4 +191,53 @@ fn main(_arg: usize) -> ! {
     }
 
     exit(0)
+}
+
+fn format_date(dt: DateTime, format: &str, tz_offset: i32) -> String {
+    let mut result = String::new();
+    let mut chars = format.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            if let Some(&next) = chars.peek() {
+                chars.next(); // Consume the format character
+                match next {
+                    'Y' => { let _ = write!(result, "{:04}", dt.year); },
+                    'm' => { let _ = write!(result, "{:02}", dt.month); },
+                    'd' => { let _ = write!(result, "{:02}", dt.day); },
+                    'H' => { let _ = write!(result, "{:02}", dt.hour); },
+                    'M' => { let _ = write!(result, "{:02}", dt.minute); },
+                    'S' => { let _ = write!(result, "{:02}", dt.second); },
+                    'A' => { let _ = write!(result, "{}", WEEKDAY_NAMES_LONG[dt.weekday as usize]); },
+                    'a' => { let _ = write!(result, "{}", WEEKDAY_NAMES[dt.weekday as usize]); },
+                    'b' | 'h' => { let _ = write!(result, "{}", MONTH_NAMES[dt.month as usize - 1]); },
+                    'z' => {
+                        let sign = if tz_offset >= 0 { '+' } else { '-' };
+                        let abs_offset = tz_offset.abs();
+                        let _ = write!(result, "{}{:02}00", sign, abs_offset);
+                    },
+                    'Z' => {
+                        if tz_offset == 0 {
+                            result.push_str("UTC");
+                        } else {
+                            let _ = write!(result, "UTC{:+02}", tz_offset);
+                        }
+                    },
+                    '%' => { result.push('%'); },
+                    'n' => { result.push('\n'); },
+                    't' => { result.push('\t'); },
+                    _ => {
+                        result.push('%');
+                        result.push(next);
+                    }
+                }
+            } else {
+                result.push('%');
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    
+    result
 }
