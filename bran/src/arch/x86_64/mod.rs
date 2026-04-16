@@ -1032,38 +1032,47 @@ impl ArchRuntime for X86_64Runtime {
         &self,
         entry: extern "C" fn(usize) -> !,
     ) -> Result<(), abi::errors::Errno> {
-        use kernel::{kdebug, kerror};
-
-        let total = CPU_COUNT.load(Ordering::SeqCst) as usize;
-        if total <= 1 {
-            kernel::kdebug!("SMP: No secondary CPUs to start");
+        #[cfg(not(feature = "smp"))]
+        {
+            kernel::kdebug!("SMP: Disabled via feature flag");
             return Ok(());
         }
 
-        kernel::kdebug!("SMP: Starting {} secondary CPUs...", total - 1);
-        let mut first_err: Option<abi::errors::Errno> = None;
+        #[cfg(feature = "smp")]
+        {
+            use kernel::{kdebug, kerror};
 
-        for cpu_index in 1..total {
-            let cpu_id = unsafe { CPU_IDS[cpu_index] };
-            let result = unsafe { self.start_cpu(cpu_id, entry, cpu_index) };
-            if let Err(err) = result {
-                kernel::kerror!(
-                    "SMP: Failed to start CPU {} (APIC {}): {:?}",
-                    cpu_index,
-                    cpu_id.0,
-                    err
-                );
-                if first_err.is_none() {
-                    first_err = Some(err);
+            let total = CPU_COUNT.load(Ordering::SeqCst) as usize;
+            if total <= 1 {
+                kernel::kdebug!("SMP: No secondary CPUs to start");
+                return Ok(());
+            }
+
+            kernel::kdebug!("SMP: Starting {} secondary CPUs...", total - 1);
+            let mut first_err: Option<abi::errors::Errno> = None;
+
+            for cpu_index in 1..total {
+                let cpu_id = unsafe { CPU_IDS[cpu_index] };
+                let result = unsafe { self.start_cpu(cpu_id, entry, cpu_index) };
+                if let Err(err) = result {
+                    kernel::kerror!(
+                        "SMP: Failed to start CPU {} (APIC {}): {:?}",
+                        cpu_index,
+                        cpu_id.0,
+                        err
+                    );
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
                 }
             }
-        }
 
-        if let Some(err) = first_err {
-            Err(err)
-        } else {
-            kernel::kdebug!("SMP: Secondary CPU startup complete");
-            Ok(())
+            if let Some(err) = first_err {
+                Err(err)
+            } else {
+                kernel::kdebug!("SMP: Secondary CPU startup complete");
+                Ok(())
+            }
         }
     }
 
