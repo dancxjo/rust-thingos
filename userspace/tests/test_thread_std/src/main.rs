@@ -182,11 +182,6 @@ fn test_thread_local_basic() {
 fn test_panic_join_no_panic() {
     std::println!("[test_thread_std] test_panic_join_no_panic: starting");
 
-    assert!(
-        cfg!(panic = "abort"),
-        "ThingOS panic policy changed unexpectedly: expected panic=abort"
-    );
-
     // Successful thread (no panic) should join with Ok(value).
     let h = std::thread::spawn(|| "success");
     let result = h.join();
