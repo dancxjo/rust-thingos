@@ -1,3 +1,7 @@
+EXTERN(__main_void);
+EXTERN(main);
+PROVIDE(_start = __main_void);
+PROVIDE(_start = main);
 ENTRY(_start)
 SECTIONS {
     . = 0x200000;
@@ -10,7 +14,7 @@ SECTIONS {
     .rodata : { *(.rodata*) }
     . = ALIGN(0x1000);
     .data : { *(.data*) }
-    .bss : { 
+    .bss : {
         *(.bss*)
         *(COMMON)
     }

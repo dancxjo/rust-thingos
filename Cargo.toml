@@ -39,6 +39,7 @@ members = [
   "src/rustdoc-json-types",
   "thingos",
   "xtask",
+  "vendor/runa",
   "src/tools/build-manifest",
   "src/tools/bump-stage0",
   "src/tools/cargotest",
@@ -159,6 +160,7 @@ members = [
   "userspace/wc",
   "userspace/which",
   "tools/kindc",
+  "vendor/lsv",
 # tidy-alphabetical-end
 ]
 
@@ -205,4 +207,13 @@ codegen-units = 1
 
 # If you want to use a crate with local modifications, you can set a path or git dependency here.
 # For git dependencies, also add your source to ALLOWED_SOURCES in src/tools/tidy/src/extdeps.rs.
-#[patch.crates-io]
+[patch.crates-io]
+crossterm = { path = "vendor/crossterm" }
+libc = { path = "vendor/libc" }
+which = { path = "vendor/which" }
+trash = { path = "vendor/trash" }
+dirs = { path = "vendor/dirs" }
+dirs-sys = { path = "vendor/dirs-sys" }
+errno = { path = "vendor/errno" }
+mio = { path = "vendor/mio" }
+filedescriptor = { path = "vendor/filedescriptor" }
