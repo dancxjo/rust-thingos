@@ -2083,7 +2083,8 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     capability_mask: pi.authority.capability_mask,
                     // Exit code only has meaning for exited jobs.
                     exit_code: if job.state == thingos::job::JobState::Exited {
-                        pi.job.leader_exit_code
+                        // Leader exit code is Job-owned once recorded.
+                        pi.effective_exit_code_for_tid(task.id, task.exit_code)
                     } else {
                         None
                     },
@@ -2230,7 +2231,9 @@ fn mark_task_exited<R: BootRuntime>(
                 notify_ppid = pi.runtime_parent_pid();
                 notify_pid = pi.runtime_pid();
                 exit_observer_inbox = pi.job_exit_observer_inbox();
-                waiters.extend(pi.job.complete_leader_exit(code));
+                if pi.job.leader_exit_code.is_none() {
+                    waiters.extend(pi.job.complete_leader_exit(code));
+                }
                 pi.take_job_thread_ids()
             } else {
                 alloc::vec::Vec::new()
@@ -2523,14 +2526,11 @@ fn waitpid_for_pid<R: BootRuntime>(
                     let (child_pid, code) = task
                         .process_info
                         .as_ref()
-                        .map(|pi| {
-                            let pi = pi.lock();
-                            let code = if pi.is_job_leader_tid(child_tid) {
-                                pi.job.leader_exit_code
-                            } else {
-                                task.exit_code
-                            };
-                            (pi.runtime_pid() as u64, code.unwrap_or(0))
+                        .map(|pinfo| {
+                            let pi_guard = pinfo.lock();
+                            let code =
+                                pi_guard.effective_exit_code_for_tid(child_tid, task.exit_code);
+                            (pi_guard.runtime_pid() as u64, code.unwrap_or(0))
                         })
                         .unwrap_or((child_tid, task.exit_code.unwrap_or(0)));
                     Some((child_pid, code))
@@ -4701,6 +4701,59 @@ mod tests {
         assert_eq!(snapshots[0].pid, 1200);
         assert_eq!(snapshots[0].state, TaskState::Running);
         assert_eq!(snapshots[0].exit_code, None);
+    }
+
+    #[test]
+    fn test_list_processes_prefers_job_leader_exit_code_for_leader() {
+        let _g = init_test_env();
+
+        let mut leader = make_process_task(1210, TaskState::Dead, 1210, 1, Some(7));
+        let pinfo = leader.process_info.as_ref().unwrap();
+        pinfo.lock().job.leader_exit_code = Some(33);
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(leader));
+
+        let snapshots = list_processes::<MockRuntime>();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].pid, 1210);
+        assert_eq!(snapshots[0].tid, 1210);
+        assert_eq!(snapshots[0].state, TaskState::Dead);
+        assert_eq!(snapshots[0].exit_code, Some(33));
+    }
+
+    #[test]
+    fn test_list_processes_uses_thread_exit_code_for_non_leader_tasks() {
+        let _g = init_test_env();
+
+        let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
+            pid: 1220,
+            job: crate::task::ProcessLifecycle {
+                ppid: 1,
+                thread_ids: alloc::vec![1220, 1221],
+                exec_in_progress: false,
+                children_done: alloc::collections::VecDeque::new(),
+                exit_observer_inbox: None,
+                leader_exit_code: Some(44),
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
+            },
+            unix_compat: crate::task::ProcessUnixCompat::isolated(1220, false),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            namespace: crate::vfs::NamespaceRef::global(),
+            cwd: alloc::string::String::from("/"),
+            exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
+            space: crate::task::ProcessAddressSpace::empty(),
+        }));
+
+        let mut sibling = make_task(1221, TaskState::Dead, TaskPriority::Normal);
+        sibling.exit_code = Some(9);
+        sibling.process_info = Some(alloc::sync::Arc::clone(&pinfo));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(sibling));
+
+        let snapshots = list_processes::<MockRuntime>();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].tid, 1221);
+        assert_eq!(snapshots[0].exit_code, Some(9));
     }
 
     #[test]

@@ -608,6 +608,22 @@ impl Process {
             .collect()
     }
 
+    /// Effective exit code for one runtime thread in this job.
+    ///
+    /// Leader threads prefer the Job-owned leader exit code once present.
+    /// Non-leader threads use their thread-local exit code.
+    pub fn effective_exit_code_for_tid(
+        &self,
+        tid: TaskId,
+        thread_exit_code: Option<i32>,
+    ) -> Option<i32> {
+        if self.is_job_leader_tid(tid) {
+            self.job.leader_exit_code.or(thread_exit_code)
+        } else {
+            thread_exit_code
+        }
+    }
+
     /// Compatibility projection wrapper for Unix-derived fields.
     pub fn unix_compat_projection(&self) -> ProcessUnixCompatProjection<'_> {
         ProcessUnixCompatProjection {
