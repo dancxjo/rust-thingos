@@ -435,7 +435,7 @@ unsafe fn allocate_stack(reserve_bytes: usize) -> crate::io::Result<(usize, Stac
 /// ```
 /// The mandatory ELF Variant II self-pointer `*TP = TP` is written before
 /// passing `TP` to `SYS_SPAWN_THREAD`.
-fn allocate_tls_block() -> usize {
+pub(crate) fn allocate_tls_block() -> usize {
     let info = match read_tls_info() {
         Some(i) if i.memsz > 0 => i,
         _ => return 0,

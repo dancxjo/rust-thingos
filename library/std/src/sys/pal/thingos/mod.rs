@@ -21,6 +21,14 @@ extern "C" fn thingos_start() -> ! {
         fn main(_: isize, _: *const *const u8, _: u8) -> i32;
     }
 
+    // Allocate and configure main thread TLS if present
+    let tls_base = crate::sys::thread::thingos::allocate_tls_block();
+    if tls_base != 0 {
+        unsafe {
+            crate::sys::pal::raw_syscall6(0x100E, tls_base, 0, 0, 0, 0, 0);
+        }
+    }
+
     let code = unsafe { main(0, core::ptr::null(), 0) };
     os::exit(code)
 }

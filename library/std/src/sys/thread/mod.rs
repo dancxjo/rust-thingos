@@ -118,7 +118,7 @@ cfg_select! {
     }
     target_os = "thingos" => {
         #[path = "../pal/thingos/thread.rs"]
-        mod thingos;
+        pub(crate) mod thingos;
         pub use thingos::{
             Thread, DEFAULT_MIN_STACK_SIZE, available_parallelism, current_os_id,
             sleep, yield_now, set_name,
