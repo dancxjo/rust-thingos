@@ -271,6 +271,65 @@ pub const SYS_FS_LUTIMES: u32 = 0x4025;
 /// Return whether an open thing is a terminal (isatty semantics).
 pub const SYS_FS_ISATTY: u32 = 0x4026;
 
+const FS_SYSCALL_NUMBERS: &[u32] = &[
+    SYS_FS_OPEN,
+    SYS_FS_CLOSE,
+    SYS_FS_READ,
+    SYS_FS_WRITE,
+    SYS_FS_SEEK,
+    SYS_FS_STAT,
+    SYS_FS_READDIR,
+    SYS_FS_MKDIR,
+    SYS_FS_UNLINK,
+    SYS_FS_MOUNT,
+    SYS_FS_UMOUNT,
+    SYS_FS_POLL,
+    SYS_FS_DUP,
+    SYS_FS_DUP2,
+    SYS_FS_WATCH_THING,
+    SYS_FS_WATCH_PATH,
+    SYS_FS_RENAME,
+    SYS_FS_DEVICE_CALL,
+    SYS_FS_CHDIR,
+    SYS_FS_GETCWD,
+    SYS_THING_FROM_CHANNEL,
+    SYS_FS_NOTIFY,
+    SYS_FS_REALPATH,
+    SYS_FS_SYNC,
+    SYS_FS_FCNTL,
+    SYS_FS_SYMLINK,
+    SYS_FS_READLINK,
+    SYS_FS_FTRUNCATE,
+    SYS_FS_CHMOD,
+    SYS_FS_FCHMOD,
+    SYS_FS_UTIMES,
+    SYS_FS_FUTIMES,
+    SYS_FS_LSTAT,
+    SYS_FS_READV,
+    SYS_FS_WRITEV,
+    SYS_FS_LINK,
+    SYS_FS_FLOCK,
+    SYS_FS_LUTIMES,
+    SYS_FS_ISATTY,
+];
+
+const fn all_unique(values: &[u32]) -> bool {
+    let mut outer_index = 0;
+    while outer_index < values.len() {
+        let mut inner_index = outer_index + 1;
+        while inner_index < values.len() {
+            if values[outer_index] == values[inner_index] {
+                return false;
+            }
+            inner_index += 1;
+        }
+        outer_index += 1;
+    }
+    true
+}
+
+const _: () = assert!(all_unique(FS_SYSCALL_NUMBERS));
+
 /// Flags for [`SYS_FS_FLOCK`].
 ///
 /// Mirrors the POSIX / Linux `flock(2)` flag values.
