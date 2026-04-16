@@ -509,6 +509,7 @@ impl ProcessUnixCompat {
 ///
 /// **Authority** (permission context — `kernel::authority::bridge`):
 /// * `exec_path` — used as authority name fallback today
+/// * `authority` — transitional principal/capability backing (`uid`,`gid`,`capability_mask`)
 ///
 /// **Identity** (shared between Job and Space — not yet extracted):
 /// * `pid` — TGID; doubles as lifecycle ID (→ `Job`) and address-space tag
@@ -592,6 +593,9 @@ pub struct Process {
     /// Path of the currently-running executable image.
     pub exec_path: alloc::string::String,
 
+    /// Transitional backing for canonical `Authority`.
+    pub authority: ProcessAuthority,
+
     // ── Space context (future `Space` kernel object) ──────────────────────────
     // Address-space concerns are grouped here rather than scattered across
     // `Process`.  This subdivision is the extraction seam for a future
@@ -620,6 +624,33 @@ pub struct ProcessUnixCompatProjection<'a> {
     pub pgid: u32,
     pub sid: u32,
     pub session_leader: bool,
+}
+
+/// Transitional process-backed authority state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessAuthority {
+    /// Principal user id.
+    pub uid: u32,
+    /// Principal group id.
+    pub gid: u32,
+    /// Capability bits granted to this process.
+    pub capability_mask: u64,
+}
+
+impl ProcessAuthority {
+    /// Privileged bootstrap/default authority.
+    pub const fn root() -> Self {
+        Self {
+            uid: 0,
+            gid: 0,
+            capability_mask: u64::MAX,
+        }
+    }
+
+    /// Inherit principal and capability bits from parent.
+    pub const fn inherit(parent: Self) -> Self {
+        parent
+    }
 }
 
 impl Process {

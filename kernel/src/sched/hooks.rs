@@ -28,6 +28,9 @@ pub struct ProcessSnapshot {
     pub state: TaskState,
     pub argv: Vec<Vec<u8>>,
     pub exec_path: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub capability_mask: u64,
     /// Exit code of the thread-group leader, present when `state` is `Dead`.
     pub exit_code: Option<i32>,
     // ── Unix legacy compatibility fields ─────────────────────────────────────

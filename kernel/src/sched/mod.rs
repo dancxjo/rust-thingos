@@ -2078,6 +2078,9 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     state: task.state,
                     argv: unix_compat.argv.to_vec(),
                     exec_path: pi.exec_path.clone(),
+                    uid: pi.authority.uid,
+                    gid: pi.authority.gid,
+                    capability_mask: pi.authority.capability_mask,
                     // Exit code only has meaning for exited jobs.
                     exit_code: if job.state == thingos::job::JobState::Exited {
                         task.exit_code
@@ -4638,6 +4641,7 @@ mod tests {
                 namespace: crate::vfs::NamespaceRef::global(),
                 cwd: alloc::string::String::from("/"),
                 exec_path: alloc::string::String::new(),
+                authority: crate::task::ProcessAuthority::root(),
                 space: crate::task::ProcessAddressSpace::empty(),
             }))),
             user_fs_base: 0,
@@ -4902,6 +4906,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -4935,6 +4940,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -4989,6 +4995,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -5052,6 +5059,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -5070,6 +5078,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -5117,6 +5126,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -5221,6 +5231,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::from("/old/binary"),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -5306,6 +5317,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
