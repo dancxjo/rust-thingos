@@ -7,7 +7,7 @@ Thing-OS distinguishes two first-class kernel objects:
 | Object      | Rust type       | Purpose                                |
 |-------------|-----------------|----------------------------------------|
 | `Thread<R>` | scheduler entry | schedulable execution unit             |
-| `Process`   | resource owner  | PID, FDs, VM mappings, env, thread IDs |
+| `Process`   | compatibility aggregator | transitional wiring over Job/Space/Authority/Place + compatibility state |
 
 A `Thread<R>` always belongs to exactly one `Process` (via
 `Arc<Mutex<Process>>`).  Pure kernel threads have `process_info = None`.
@@ -38,6 +38,14 @@ kernel/src/task/exec.rs     – exec/exec_current syscall implementation
 
 All backward-compat aliases are defined in the same module as the primary type.
 Prefer the new `Thread`/`ThreadId`/… names in all new code.
+
+## Aggregation role
+
+`Process` is a compatibility/runtime shell, not the semantic source of truth for
+lifecycle, VM, coordination, authority, or world context. Canonical ownership
+lives in first-class objects (`Job`, `Space`, `Group`, `Authority`, `Place`,
+`Presence`), and `Process` wires/projections those owners for legacy/runtime
+paths.
 
 ## VM ownership
 
@@ -91,7 +99,7 @@ exec / task_exec_current()
 
 ## Acceptance criteria (issues #734 / #736)
 
-- [x] `Process` is the unit of resource ownership (FDs, mappings, env, CWD)
+- [x] `Process` is a compatibility aggregator over canonical owners (Job/Space/Authority/Place)
 - [x] `Thread<R>` is the explicit schedulable object; `Task<R>` is an alias
 - [x] `Thread.mappings` is always a clone of `Process.mappings` (same Arc)
 - [x] Thread creation inherits the parent's `Process.mappings` Arc

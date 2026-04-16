@@ -24,7 +24,7 @@ Field ownership classification for `kernel/src/task/mod.rs::Process`:
 | Field | Classification | Canonical owner / notes |
 |---|---|---|
 | `pid` | lifecycle + space identity seam | Shared transitional identity (`Job` + `Space`) until split |
-| `lifecycle` | lifecycle / Job | `ProcessLifecycle` extraction seam |
+| `job` | lifecycle / Job | first-class `crate::job::Job` extraction seam |
 | `space` | address-space / Space | `ProcessAddressSpace` extraction seam |
 | `namespace` | place | feeds `Place::namespace` via `kernel::place::bridge` |
 | `cwd` | place | feeds `Place::cwd` via `kernel::place::bridge` |

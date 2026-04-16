@@ -369,25 +369,27 @@ impl ProcessUnixCompat {
     }
 }
 
-/// First-class process object.
+/// Compatibility process aggregation object.
 ///
-/// A `Process` is the unit of resource ownership in Thing-OS.  Every user
-/// process has exactly one `Process`, shared via `Arc<Mutex<Process>>` by all
-/// threads that belong to it.  Kernel-only threads have `process_info = None`.
+/// A `Process` is a **thin runtime aggregator/wiring shell** that composes
+/// canonical first-class owners (`Job`, `Space`, `Authority`, `Place`, etc.)
+/// for compatibility surfaces and scheduler plumbing.  It is not semantic
+/// architectural authority.
 ///
-/// # Ownership model
+/// Every user process has exactly one `Process`, shared via
+/// `Arc<Mutex<Process>>` by all threads that belong to it.  Kernel-only
+/// threads have `process_info = None`.
 ///
-/// | Resource                | Owner   | How threads access it                            |
-/// |-------------------------|---------|--------------------------------------------------|
-/// | PID                     | Process | `process.lock().pid`                             |
-/// | PPID / thread list      | Process | `process.lock().job.ppid` etc.                   |
-/// | VM address space        | Process | `process.lock().space.aspace_raw`                |
-/// | VM mappings             | Process | `process.lock().space.mappings` (Arc)            |
-/// | FD table                | Process | `process.lock().thing_table`                        |
-/// | CWD                     | Process | `process.lock().cwd`                             |
-/// | VFS namespace           | Process | `process.lock().namespace`                       |
-/// | Unix compat (legacy)    | Process | `process.lock().unix_compat.*`                   |
-/// | exec path               | Process | `process.lock().exec_path`                       |
+/// # Aggregation model
+///
+/// | Concern / resource      | Canonical owner                | `Process` role today                              |
+/// |-------------------------|--------------------------------|---------------------------------------------------|
+/// | Lifecycle               | `crate::job::Job`              | Holds/composes `job` for runtime wiring           |
+/// | VM address space        | `crate::space::Space`          | Holds/composes `space` extraction seam            |
+/// | Authority               | `thingos::authority::Authority`| Transitional backing + compatibility projection   |
+/// | World context           | `thingos::place::Place`        | Transitional backing + compatibility projection   |
+/// | Coordination / presence | `thingos::group::Group` + `thingos::presence::Presence` | Exposes compatibility/session projections |
+/// | Unix compatibility      | legacy compat boundary         | Quarantined in `unix_compat`                      |
 ///
 /// # Locking rules
 ///
@@ -664,6 +666,53 @@ impl Process {
     /// Canonical generated-kind projection for this process's `Space`.
     pub fn canonical_space(&self) -> thingos::space::Space {
         crate::space::bridge::space_from_arc(&self.space.space_obj)
+    }
+
+    /// Build a compatibility snapshot for one runtime task in this process.
+    ///
+    /// This keeps snapshot assembly bounded to `Process` aggregation/wiring so
+    /// scheduler call sites do not read transitional ownership fields ad hoc.
+    pub fn compatibility_snapshot_for_task(
+        &self,
+        tid: TaskId,
+        task_name: alloc::string::String,
+        task_state: TaskState,
+        thread_exit_code: Option<i32>,
+        foreground_pgid: Option<u32>,
+        tid_state: &alloc::collections::BTreeMap<TaskId, TaskState>,
+    ) -> crate::sched::hooks::ProcessSnapshot {
+        let thread_states = self.runtime_thread_states(tid_state);
+        let unix_compat = self.unix_compat_projection();
+        let space = self.canonical_space();
+        let job = self.canonical_job(&thread_states);
+        crate::sched::hooks::ProcessSnapshot {
+            pid: self.runtime_pid(),
+            ppid: self.runtime_parent_pid(),
+            tid,
+            name: task_name,
+            state: task_state,
+            argv: unix_compat.argv.to_vec(),
+            exec_path: self.exec_path.clone(),
+            uid: self.authority.uid,
+            gid: self.authority.gid,
+            capability_mask: self.authority.capability_mask,
+            exit_code: if job.state == thingos::job::JobState::Exited {
+                self.effective_exit_code_for_tid(tid, thread_exit_code)
+            } else {
+                None
+            },
+            pgid: unix_compat.pgid,
+            sid: unix_compat.sid,
+            session_leader: unix_compat.session_leader,
+            foreground_pgid,
+            cwd: self.cwd.clone(),
+            namespace_label: self.namespace.label(),
+            root_path: self.root.clone(),
+            thread_states,
+            space_id: space.id,
+            space_mapping_count: space.mapping_count,
+            space_sharing_count: space.sharing_count,
+        }
     }
 
 }
