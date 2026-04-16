@@ -56,6 +56,11 @@ fn open_output(path: &str, append: bool) -> Result<u32, ()> {
     vfs_open(path, flags).map_err(|_| ())
 }
 
+struct Output<'a> {
+    fd: u32,
+    path: &'a str,
+}
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let args = get_args();
@@ -77,12 +82,13 @@ fn main(_arg: usize) -> ! {
         }
     }
 
-    let mut out_fds: Vec<u32> = Vec::new();
+    let mut outputs: Vec<Output<'_>> = Vec::new();
     let mut had_error = false;
+    let mut stdout_ok = true;
 
     for path in &file_args {
         match open_output(path, append) {
-            Ok(fd) => out_fds.push(fd),
+            Ok(fd) => outputs.push(Output { fd, path }),
             Err(_) => {
                 print(2, "tee: cannot open ");
                 print(2, path);
@@ -104,22 +110,29 @@ fn main(_arg: usize) -> ! {
             }
         };
 
-        if write_all(1, &buf[..n]).is_err() {
+        if stdout_ok && write_all(1, &buf[..n]).is_err() {
             print(2, "tee: write error on stdout\n");
             had_error = true;
-            break;
+            stdout_ok = false;
         }
 
-        for &fd in &out_fds {
-            if write_all(fd, &buf[..n]).is_err() {
-                print(2, "tee: write error\n");
+        let mut i = 0;
+        while i < outputs.len() {
+            if write_all(outputs[i].fd, &buf[..n]).is_err() {
+                print(2, "tee: write error on ");
+                print(2, outputs[i].path);
+                print(2, "\n");
                 had_error = true;
+                let _ = vfs_close(outputs[i].fd);
+                outputs.swap_remove(i);
+                continue;
             }
+            i += 1;
         }
     }
 
-    for fd in out_fds {
-        let _ = vfs_close(fd);
+    for output in outputs {
+        let _ = vfs_close(output.fd);
     }
 
     if had_error {
