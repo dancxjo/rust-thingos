@@ -33,6 +33,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 pub mod pci;
 pub mod perf;
+pub mod pthread;
 pub mod rt;
 pub mod simd;
 pub mod stack;
