@@ -890,6 +890,33 @@ fn write_str(s: &str) {
     let _ = syscall::vfs_write(1, s.as_bytes());
 }
 
+fn print_motd() {
+    let mut buf = [0u8; 1024];
+    for path in ["/run/motd", "/etc/motd"] {
+        let fd = match vfs::vfs_open(path, vfs_flags::O_RDONLY) {
+            Ok(fd) => fd,
+            Err(_) => continue,
+        };
+
+        let res = syscall::vfs_read(fd, &mut buf);
+        let _ = syscall::vfs_close(fd);
+
+        let Ok(n) = res else {
+            continue;
+        };
+        if n == 0 {
+            continue;
+        }
+
+        write_str("\x1B[1;95mMOTD\x1B[0m \x1B[90m-\x1B[0m ");
+        let _ = syscall::vfs_write(1, &buf[..n]);
+        if buf[n - 1] != b'\n' {
+            write_str("\n");
+        }
+        return;
+    }
+}
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     install_signal_handlers();
@@ -897,6 +924,7 @@ fn main(_arg: usize) -> ! {
     write_str("\x1B[1;97m|        THING-OS SHELL           |\x1B[0m\n");
     write_str("\x1B[1;96m+---------------------------------+\x1B[0m\n");
     write_str("\x1B[36minteractive mode\x1B[0m\n");
+    print_motd();
 
     let mut shell = Shell::new();
     shell.load_profile("/etc/profile");
