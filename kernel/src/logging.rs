@@ -296,39 +296,15 @@ pub fn _log(meta: LogMetadata, args: fmt::Arguments) {
     _log_event(meta.clone(), meta.module, args, &[], &[]);
 }
 
-/// Contract-level logging - ALWAYS outputs regardless of log level filter.
-/// Use for critical boot milestones and test verification points.
+/// Contract-level logging now maps directly to INFO logging semantics.
 pub fn _log_contract(source: &'static str, args: fmt::Arguments) {
-    let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
-
-    if !MUTE_SERIAL.load(Ordering::Relaxed) {
-        let mut lock = GLOBAL_LOGGER.lock();
-        if let Some(writer) = lock.as_mut() {
-            let ts = writer.runtime.mono_ticks();
-            let _ = write!(
-                writer,
-                "[{}] [\x1b[36m-----\x1b[0m] [{}] [CPU{}] ",
-                ts,
-                source,
-                writer.runtime.current_cpu_id().0
-            );
-            let _ = writer.write_fmt(args);
-            let _ = writer.write_char('\n');
-        }
-    }
-
-    // 2. Log Buffer Output
-    {
-        let mut writer = LogBufferWriter;
-        let (ts, cpu) = if crate::is_runtime_initialized() {
-            (crate::runtime_base().mono_ticks(), crate::runtime_base().current_cpu_id().0)
-        } else {
-            (0, 0)
-        };
-        let _ = write!(writer, "[{}] [-----] [{}] [CPU{}] ", ts, source, cpu);
-        let _ = writer.write_fmt(args);
-        let _ = writer.write_str("\n");
-    }
+    _log_event(
+        LogMetadata { level: Level::Info, file: file!(), line: line!(), module: source },
+        source,
+        args,
+        &[],
+        &[],
+    );
 }
 
 /// Log a raw string without any formatting (for kprint! compatibility)
@@ -341,18 +317,42 @@ pub fn _log_raw(args: fmt::Arguments) {
     }
 }
 
-/// Contract-level logging now maps directly to INFO logging semantics.
+/// Contract-level logging macro (mapped to INFO level).
 #[macro_export]
-    _log_event(
-        LogMetadata { level: Level::Info, file: file!(), line: line!(), module: source },
-        source,
-        args,
-        &[],
-        &[],
-    );
+macro_rules! contract {
+    ($($arg:tt)*) => {
+        $crate::logging::_log_contract(module_path!(), format_args!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! log_event {
+    // With fields and about
+    ($lvl:expr, $event:expr, $msg:expr, { $($k:ident : $v:expr),* }, about=[$($about:expr),*]) => {
+        $crate::logging::_log_event(
+            $crate::logging::LogMetadata {
+                level: $lvl,
+                file: file!(),
+                line: line!(),
                 module: module_path!(),
             },
-/// Contract-level logging macro (mapped to INFO level).
+            $event,
+            format_args!($msg),
+            &[ $( (stringify!($k), $v) ),* ],
+            &[ $($about),* ]
+        )
+    };
+    // With format args, no extra fields
+    ($lvl:expr, $event:expr, $($arg:tt)*) => {
+        $crate::logging::_log_event(
+            $crate::logging::LogMetadata {
+                level: $lvl,
+                file: file!(),
+                line: line!(),
+                module: module_path!(),
+            },
+            $event,
+            format_args!($($arg)*),
             &[],
             &[]
         )

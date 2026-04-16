@@ -460,9 +460,9 @@ fn install_signal_handlers() {
 
 fn prompt(last_status: Option<i32>) {
     let status = match last_status {
-        Some(code) if wifexited(code) && wexitstatus(code) == 0 => "\x1B[1;96mOK\x1B[0m",
-        Some(_) => "\x1B[1;95mERR\x1B[0m",
-        None => "\x1B[1;94mNEW\x1B[0m",
+        Some(code) if wifexited(code) && wexitstatus(code) == 0 => "\x1B[1;36mOK\x1B[0m",
+        Some(_) => "\x1B[1;35mERR\x1B[0m",
+        None => "\x1B[2;36mBOOT\x1B[0m",
     };
 
     let mut buf = [0u8; 256];
@@ -470,14 +470,14 @@ fn prompt(last_status: Option<i32>) {
         Ok(n) => {
             let cwd = core::str::from_utf8(&buf[..n]).unwrap_or("/");
             let out = format!(
-                "\x1B[1;95mTHING\x1B[0m\x1B[1;96m-OS\x1B[0m \x1B[2;94m[\x1B[0m{}\x1B[2;94m]\x1B[0m \x1B[1;94m{}\x1B[0m \x1B[1;96m>>\x1B[0m ",
+                "\x1B[2;36mthing-os\x1B[0m \x1B[2;34m[\x1B[0m{}\x1B[2;34m]\x1B[0m \x1B[1;33m{}\x1B[0m \x1B[1;36m❯\x1B[0m ",
                 status, cwd
             );
             write_str(&out);
         }
         Err(_) => {
             let out = format!(
-                "\x1B[1;95mTHING\x1B[0m\x1B[1;96m-OS\x1B[0m \x1B[2;94m[\x1B[0m{}\x1B[2;94m]\x1B[0m \x1B[1;96m>>\x1B[0m ",
+                "\x1B[2;36mthing-os\x1B[0m \x1B[2;34m[\x1B[0m{}\x1B[2;34m]\x1B[0m \x1B[1;36m❯\x1B[0m ",
                 status
             );
             write_str(&out);
@@ -908,7 +908,7 @@ fn print_motd() {
             continue;
         }
 
-        write_str("\x1B[1;96mM\x1B[0m\x1B[1;95mO\x1B[0m\x1B[1;96mT\x1B[0m\x1B[1;95mD\x1B[0m \x1B[2;94m~\x1B[0m ");
+        write_str("\x1B[2;36m◉ MOTD\x1B[0m \x1B[2;34m│\x1B[0m ");
         let _ = syscall::vfs_write(1, &buf[..n]);
         if buf[n - 1] != b'\n' {
             write_str("\n");
@@ -920,12 +920,11 @@ fn print_motd() {
 #[stem::main]
 fn main(_arg: usize) -> ! {
     install_signal_handlers();
-    write_str("\x1B[2;94m+---------------------------------------------------------+\x1B[0m\n");
-    write_str("\x1B[1;95m|\x1B[0m \x1B[1;96mTHING-OS SHELL : MIAMI VICE NIGHT MODE ACTIVATED\x1B[0m \x1B[1;95m|\x1B[0m\n");
-    write_str("\x1B[1;95m|\x1B[0m \x1B[1;94mHOT PINK + ELECTRIC CYAN + MIDNIGHT BLUE = PURE SYNTH\x1B[0m \x1B[1;95m|\x1B[0m\n");
-    write_str("\x1B[1;95m|\x1B[0m \x1B[1;96mTYPE FAST | PIPE LOUD | GLIDE THROUGH THE TERMINAL\x1B[0m \x1B[1;95m|\x1B[0m\n");
-    write_str("\x1B[2;94m|\x1B[0m \x1B[1;35mneon nights | palm-byte dreams | darkwave terminal\x1B[0m \x1B[2;94m|\x1B[0m\n");
-    write_str("\x1B[2;94m+---------------------------------------------------------+\x1B[0m\n");
+    write_str("\x1B[2;34m╭──────────────────────────────────────────────╮\x1B[0m\n");
+    write_str("\x1B[1;36m│  THING-OS / CONSOLE BOOT                    │\x1B[0m\n");
+    write_str("\x1B[2;37m│  Version 0.1   © 2026 Thing-OS Project      │\x1B[0m\n");
+    write_str("\x1B[2;35m│  Minimal Interface · Retro Lab Palette       │\x1B[0m\n");
+    write_str("\x1B[2;34m╰──────────────────────────────────────────────╯\x1B[0m\n");
     print_motd();
 
     let mut shell = Shell::new();
