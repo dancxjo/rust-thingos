@@ -47,11 +47,74 @@ fn get_args() -> Vec<String> {
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let args = get_args();
-    // Skip the first argument (program name)
-    let text = args.into_iter().skip(1).collect::<Vec<String>>().join(" ");
+    let mut interpret_escapes = false;
+    let mut suppress_newline = false;
+    let mut start = 1usize;
 
-    let out = alloc::format!("{}\n", text);
+    while start < args.len() {
+        let flag = &args[start];
+        if !flag.starts_with('-') || flag.len() <= 1 {
+            break;
+        }
+
+        let mut valid = true;
+        for option in flag.as_bytes().iter().skip(1).copied() {
+            match option {
+                b'e' => interpret_escapes = true,
+                b'E' => interpret_escapes = false,
+                b'n' => suppress_newline = true,
+                _ => {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if !valid {
+            break;
+        }
+        start += 1;
+    }
+
+    let mut out = args[start..].join(" ");
+    if interpret_escapes {
+        out = expand_escapes(&out);
+    }
+    if !suppress_newline {
+        out.push('\n');
+    }
+
     let _ = vfs_write(1, out.as_bytes());
 
     stem::syscall::exit(0)
+}
+
+fn expand_escapes(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        match chars.next() {
+            Some('a') => out.push('\u{0007}'),
+            Some('b') => out.push('\u{0008}'),
+            Some('c') => break,
+            Some('f') => out.push('\u{000C}'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('v') => out.push('\u{000B}'),
+            Some('\\') => out.push('\\'),
+            Some(next) => {
+                out.push('\\');
+                out.push(next);
+            }
+            None => out.push('\\'),
+        }
+    }
+
+    out
 }
