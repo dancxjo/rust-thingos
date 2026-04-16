@@ -622,34 +622,9 @@ pub fn sys_pipe(pipefd_ptr: usize) -> SysResult<usize> {
 ///
 /// This allows standard `poll()` to be used across both files and channels.
 pub fn sys_fd_from_handle(handle_val: usize) -> SysResult<usize> {
-    let handle = crate::ipc::IpcThing(handle_val as u32);
+    let handle = crate::handle::bridge::Handle(handle_val as u32);
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
-
-    // Resolve handle through current process's handle table
-    let entry = {
-        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.get_any(handle).copied().ok_or(Errno::EBADF)?
-    };
-
-    let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
-
-    // Create a PortNode wrapper
-    let node = Arc::new(crate::vfs::port_node::PortNode::new(port, entry.mode));
-
-    // Insert into FD table
-    let fd = {
-        let mut lock = pinfo_arc.lock();
-        lock.thing_table.open(
-            node,
-            match entry.mode {
-                crate::ipc::IpcThingMode::Read => crate::vfs::OpenFlags::read_only(),
-                crate::ipc::IpcThingMode::Write => crate::vfs::OpenFlags::write_only(),
-            },
-            alloc::format!("handle:{}", handle_val),
-        )?
-    };
-
-    Ok(fd as usize)
+    Ok(crate::handle::bridge::install_fd_compat_for_channel_handle(&pinfo_arc, handle)? as usize)
 }
 
 // ── mount ───────────────────────────────────────────────────────────────────
@@ -683,35 +658,10 @@ pub fn sys_fs_mount(
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
 
     // Attempt 1: Check if it's a VFS FD pointing to a PortNode
-    let req_port = {
-        let lock = pinfo_arc.lock();
-        if let Ok(file) = lock.thing_table.get(provider_write_handle as u32) {
-            // Try to downcast or check if it's a PortNode
-            // Since we don't have easy downcasting for traits in no_std without more machinery,
-            // we'll use a hack or update the trait.
-            // Actually, we can check the mode and if it's S_IFIFO (set in PortNode)
-            // But the best way is to try to call a method.
-            // For now, let's assume if it came from recv_handle and it's a PortNode, we can get it.
-            // We'll add a helper to PortNode or use a well-known trick.
-
-            // I'll add a method `as_port()` to VfsNode with default None.
-            file.node.as_port()
-        } else {
-            None
-        }
-    };
-
-    let req_port = if let Some(p) = req_port {
-        p
-    } else {
-        // Attempt 2: IPC handle table
-        let prov_handle = crate::ipc::IpcThing(provider_write_handle as u32);
-        let prov_entry = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            table.get(prov_handle, crate::ipc::IpcThingMode::Write).copied().ok_or(Errno::EBADF)?
-        };
-        crate::ipc::get_port(prov_entry.port_id).ok_or(Errno::EBADF)?
-    };
+    let req_port = crate::handle::bridge::resolve_write_port_compat(
+        &pinfo_arc,
+        crate::handle::bridge::Handle(provider_write_handle as u32),
+    )?;
 
     // Create the kernel response port.
     // Large capacity to hold multiple concurrent responses (though we serialise
