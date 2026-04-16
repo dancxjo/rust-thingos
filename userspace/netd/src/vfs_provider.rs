@@ -1089,18 +1089,48 @@ impl NetVfsProvider {
                     };
                     let r = socket_api.handle_udp_set_multicast_loop_v6(api_handle, enabled);
                     return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
-                } else if text.strip_prefix("join_multicast_v4 ").is_some() {
-                    let r = socket_api.handle_udp_join_multicast_v4(api_handle);
-                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
-                } else if text.strip_prefix("leave_multicast_v4 ").is_some() {
-                    let r = socket_api.handle_udp_leave_multicast_v4(api_handle);
-                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
-                } else if text.strip_prefix("join_multicast_v6 ").is_some() {
-                    let r = socket_api.handle_udp_join_multicast_v6(api_handle);
-                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
-                } else if text.strip_prefix("leave_multicast_v6 ").is_some() {
-                    let r = socket_api.handle_udp_leave_multicast_v6(api_handle);
-                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                } else if let Some(rest) = text.strip_prefix("join_multicast_v4 ") {
+                    let parts: Vec<&str> = rest.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let (Some(group), Some(interface)) = (parse_ipv4(parts[0]), parse_ipv4(parts[1])) {
+                            let r = socket_api.handle_udp_join_multicast_v4(
+                                api_handle,
+                                group,
+                                interface,
+                            );
+                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                        }
+                    }
+                } else if let Some(rest) = text.strip_prefix("leave_multicast_v4 ") {
+                    let parts: Vec<&str> = rest.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let (Some(group), Some(interface)) = (parse_ipv4(parts[0]), parse_ipv4(parts[1])) {
+                            let r = socket_api.handle_udp_leave_multicast_v4(
+                                api_handle,
+                                group,
+                                interface,
+                            );
+                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                        }
+                    }
+                } else if let Some(rest) = text.strip_prefix("join_multicast_v6 ") {
+                    let parts: Vec<&str> = rest.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(interface) = parts[1].parse::<u32>() {
+                            let r =
+                                socket_api.handle_udp_join_multicast_v6(api_handle, parts[0], interface);
+                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                        }
+                    }
+                } else if let Some(rest) = text.strip_prefix("leave_multicast_v6 ") {
+                    let parts: Vec<&str> = rest.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(interface) = parts[1].parse::<u32>() {
+                            let r =
+                                socket_api.handle_udp_leave_multicast_v6(api_handle, parts[0], interface);
+                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                        }
+                    }
                 } else if text == "close" {
                     socket_api.handle_close(socket_set, api_handle);
                     return WriteResult::Ok(5);

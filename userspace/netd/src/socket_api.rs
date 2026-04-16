@@ -74,6 +74,10 @@ struct ManagedSocket {
     pub udp_multicast_ttl_v4: u32,
     /// UDP IPv6 multicast loopback toggle.
     pub udp_multicast_loop_v6: bool,
+    /// Tracked UDP IPv4 multicast memberships (`group`, `interface` octets).
+    pub udp_multicast_v4_groups: BTreeSet<([u8; 4], [u8; 4])>,
+    /// Tracked UDP IPv6 multicast memberships (`group`, `interface index`).
+    pub udp_multicast_v6_groups: BTreeSet<(String, u32)>,
 }
 
 impl ManagedSocket {
@@ -240,7 +244,9 @@ impl SocketApi {
             only_v6: false,
             udp_multicast_loop_v4: true,
             udp_multicast_ttl_v4: 1,
-            udp_multicast_loop_v6: false,
+            udp_multicast_loop_v6: true,
+            udp_multicast_v4_groups: BTreeSet::new(),
+            udp_multicast_v6_groups: BTreeSet::new(),
         }
     }
 
@@ -700,20 +706,72 @@ impl SocketApi {
         false
     }
 
-    pub fn handle_udp_join_multicast_v4(&mut self, api_handle: u32) -> bool {
-        self.sockets.get(&api_handle).is_some_and(|s| s.kind == SocketType::Udp)
+    pub fn handle_udp_join_multicast_v4(
+        &mut self,
+        api_handle: u32,
+        group: Ipv4Address,
+        interface: Ipv4Address,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v4_groups
+                    .insert((*group.as_bytes(), *interface.as_bytes()));
+                return true;
+            }
+        }
+        false
     }
 
-    pub fn handle_udp_leave_multicast_v4(&mut self, api_handle: u32) -> bool {
-        self.sockets.get(&api_handle).is_some_and(|s| s.kind == SocketType::Udp)
+    pub fn handle_udp_leave_multicast_v4(
+        &mut self,
+        api_handle: u32,
+        group: Ipv4Address,
+        interface: Ipv4Address,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v4_groups
+                    .remove(&(*group.as_bytes(), *interface.as_bytes()));
+                return true;
+            }
+        }
+        false
     }
 
-    pub fn handle_udp_join_multicast_v6(&mut self, api_handle: u32) -> bool {
-        self.sockets.get(&api_handle).is_some_and(|s| s.kind == SocketType::Udp)
+    pub fn handle_udp_join_multicast_v6(
+        &mut self,
+        api_handle: u32,
+        group: &str,
+        interface: u32,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v6_groups
+                    .insert((group.to_string(), interface));
+                return true;
+            }
+        }
+        false
     }
 
-    pub fn handle_udp_leave_multicast_v6(&mut self, api_handle: u32) -> bool {
-        self.sockets.get(&api_handle).is_some_and(|s| s.kind == SocketType::Udp)
+    pub fn handle_udp_leave_multicast_v6(
+        &mut self,
+        api_handle: u32,
+        group: &str,
+        interface: u32,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v6_groups
+                    .remove(&(group.to_string(), interface));
+                return true;
+            }
+        }
+        false
     }
 
     /// Handle a TCP_LISTEN request

@@ -437,9 +437,7 @@ impl TcpStream {
         match how {
             Shutdown::Read => {
                 *self.read_shutdown.lock().unwrap() = true;
-                {
-                    self.peek_buf.lock().unwrap().clear();
-                }
+                self.peek_buf.lock().unwrap().clear();
                 vfs_write(self.ctl_fd, b"shutdown read").map(|_| ())
             }
             Shutdown::Write => vfs_write(self.ctl_fd, b"shutdown write").map(|_| ()),
@@ -898,7 +896,7 @@ impl UdpSocket {
     }
 
     pub fn multicast_loop_v6(&self) -> crate::io::Result<bool> {
-        Ok(read_udp_status(self.id)?.multicast_loop_v6.unwrap_or(false))
+        Ok(read_udp_status(self.id)?.multicast_loop_v6.unwrap_or(true))
     }
 
     pub fn join_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> crate::io::Result<()> {
