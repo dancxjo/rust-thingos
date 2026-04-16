@@ -5,13 +5,42 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
+};
+use abi::motor::{
+    MOTOR_DESCRIPTOR_ABI_VERSION, MOTOR_HOST_DRIVER, MOTOR_INTERFACE_DRIVER_V1, MotorDescriptor,
+    MotorInterfaceDescriptor,
 };
 use stem::abi::driver_ctx::DriverCtx;
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::{debug, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"hwrng";
+const THINGOS_MOTOR_NAME: &[u8] = b"hwrng.motor";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_MOTOR: MotorDescriptor = MotorDescriptor {
+    abi_version: MOTOR_DESCRIPTOR_ABI_VERSION,
+    interface_count: 1,
+    hosting_modes: MOTOR_HOST_DRIVER,
+    capabilities: 0,
+    motor_name_ptr: THINGOS_MOTOR_NAME.as_ptr(),
+    motor_name_len: THINGOS_MOTOR_NAME.len(),
+    interfaces: [
+        MotorInterfaceDescriptor {
+            interface_id: MOTOR_INTERFACE_DRIVER_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: core::ptr::null(),
+            entry_symbol_len: 0,
+        },
+        MotorInterfaceDescriptor::default(),
+        MotorInterfaceDescriptor::default(),
+        MotorInterfaceDescriptor::default(),
+    ],
+};
 
 #[unsafe(no_mangle)]
 #[used]
@@ -25,7 +54,10 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     start: thingos_driver_start,
 };
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
@@ -49,9 +81,9 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
     kind: ModuleKind::Driver,
     // "dev.rng.HwRng"
     device_kind: [
-        0x64, 0x65, 0x76, 0x2e, 0x72, 0x6e, 0x67, 0x2e, 0x48, 0x77, 0x52, 0x6e, 0x67, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0x64, 0x65, 0x76, 0x2e, 0x72, 0x6e, 0x67, 0x2e, 0x48, 0x77, 0x52, 0x6e, 0x67, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ],
     version: 1,
     _reserved: 0,

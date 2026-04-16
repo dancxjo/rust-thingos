@@ -1,6 +1,11 @@
 # User Threads
 
-- Entry: annotate your entrypoint with `#[stem::main]` (enable the `rt` feature on `stem`). The macro exports `stem_user_main` for the runtime `_start` shim, so you never write `_start` or section attributes yourself. The function must return `!` and may take an optional `usize` arg for process payloads.
+- Entry:
+  - `#[stem::main]` remains the ergonomic path for no-std style tasks. The macro
+    exports `stem_user_main` for the runtime `_start` shim; the function must
+    return `!` and may take an optional `usize` payload argument.
+  - Motor `ProgramV1` binaries may also use regular plain-`main` program flow by
+    leaving the interface entry symbol empty (host uses the ELF default entry).
 - Scheduling: use `stem::thread::{spawn, spawn_on, yield_now}` and `stem::time::{sleep_ms, sleep, now_unix_seconds}`; user code should not call raw syscalls directly.
 
 ## Spawning
