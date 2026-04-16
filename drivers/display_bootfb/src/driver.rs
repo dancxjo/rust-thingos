@@ -2,12 +2,13 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-pub const FB_INFO_PAYLOAD_SIZE: usize = 24;
+use alloc::collections::BTreeMap;
+
 use abi::display::{BufferId, CommitRequest, DisplayInfo, PlaneCommit, PlaneId};
+use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
 use abi::errors::{Errno, SysResult};
 use abi::pixel::PixelFormat;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-use alloc::collections::BTreeMap;
 use stem::syscall::{vfs_close, vfs_open, vfs_read, vm_map, vm_unmap};
 use stem::{debug, info};
 
@@ -39,11 +40,7 @@ pub struct BootFbDriver {
 impl BootFbDriver {
     pub fn new() -> Option<Self> {
         let fb = find_framebuffer()?;
-        Some(Self {
-            fb,
-            buffers: BTreeMap::new(),
-            next_buffer_id: 1,
-        })
+        Some(Self { fb, buffers: BTreeMap::new(), next_buffer_id: 1 })
     }
 
     pub fn get_info(&self) -> DisplayInfo {
@@ -68,10 +65,7 @@ impl BootFbDriver {
             len: size,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::PRIVATE,
-            backing: VmBacking::File {
-                thing: handle.thing,
-                offset: handle.offset,
-            },
+            backing: VmBacking::File { thing: handle.thing, offset: handle.offset },
         };
 
         let resp = vm_map(&req).map_err(|_| Errno::ENOMEM)?;
@@ -121,11 +115,8 @@ impl BootFbDriver {
         let buffer = self.buffers.get(&commit.buffer_id).ok_or(Errno::ENOENT)?;
 
         // Determine bytes-per-pixel from framebuffer metadata.
-        let pitch_bpp = if self.fb.width > 0 {
-            (self.fb.stride / self.fb.width) as usize
-        } else {
-            0
-        };
+        let pitch_bpp =
+            if self.fb.width > 0 { (self.fb.stride / self.fb.width) as usize } else { 0 };
         let mut bpp = (self.fb.bpp / 8) as usize;
         if pitch_bpp >= bpp && pitch_bpp > 0 {
             bpp = pitch_bpp;
@@ -134,26 +125,16 @@ impl BootFbDriver {
         // Clip src_rect to buffer bounds.
         let src_x = commit.src_rect.x.min(buffer.width) as usize;
         let src_y = commit.src_rect.y.min(buffer.height) as usize;
-        let src_w = commit
-            .src_rect
-            .w
-            .min(buffer.width.saturating_sub(commit.src_rect.x)) as usize;
-        let src_h = commit
-            .src_rect
-            .h
-            .min(buffer.height.saturating_sub(commit.src_rect.y)) as usize;
+        let src_w = commit.src_rect.w.min(buffer.width.saturating_sub(commit.src_rect.x)) as usize;
+        let src_h = commit.src_rect.h.min(buffer.height.saturating_sub(commit.src_rect.y)) as usize;
 
         // Clip dest_rect to framebuffer bounds.
         let dst_x = commit.dest_rect.x.min(self.fb.width) as usize;
         let dst_y = commit.dest_rect.y.min(self.fb.height) as usize;
-        let dst_w = commit
-            .dest_rect
-            .w
-            .min(self.fb.width.saturating_sub(commit.dest_rect.x)) as usize;
-        let dst_h = commit
-            .dest_rect
-            .h
-            .min(self.fb.height.saturating_sub(commit.dest_rect.y)) as usize;
+        let dst_w =
+            commit.dest_rect.w.min(self.fb.width.saturating_sub(commit.dest_rect.x)) as usize;
+        let dst_h =
+            commit.dest_rect.h.min(self.fb.height.saturating_sub(commit.dest_rect.y)) as usize;
 
         // Copy extent is the intersection of the clipped src and dst dimensions.
         // Scaling is not supported; a 1:1 pixel mapping is performed.
@@ -168,12 +149,8 @@ impl BootFbDriver {
         for row in 0..copy_h {
             unsafe {
                 core::ptr::copy_nonoverlapping(
-                    buffer
-                        .ptr
-                        .add((src_y + row) * buffer.stride as usize + src_x * bpp),
-                    self.fb
-                        .base
-                        .add((dst_y + row) * self.fb.stride as usize + dst_x * bpp),
+                    buffer.ptr.add((src_y + row) * buffer.stride as usize + src_x * bpp),
+                    self.fb.base.add((dst_y + row) * self.fb.stride as usize + dst_x * bpp),
                     row_bytes,
                 );
             }

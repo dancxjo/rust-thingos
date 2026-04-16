@@ -864,7 +864,21 @@ impl VfsNode for FbNode {
     }
 
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
-        let off = offset as usize;
+        use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
+
+        let raw_off = offset as usize;
+        // /dev/fb0 read exposes a small metadata payload at the start of the
+        // file, while write historically treated offset 0 as framebuffer byte 0.
+        // Accept both conventions so a caller can read metadata then write on
+        // the same fd without an explicit seek.
+        let off = if raw_off >= FB_INFO_PAYLOAD_SIZE
+            && ((raw_off - FB_INFO_PAYLOAD_SIZE) as u64) < self.fb.byte_len
+        {
+            raw_off - FB_INFO_PAYLOAD_SIZE
+        } else {
+            raw_off
+        };
+
         if off as u64 >= self.fb.byte_len {
             return Ok(0);
         }
@@ -880,7 +894,7 @@ impl VfsNode for FbNode {
         shadow.bytes[off..off + n].copy_from_slice(&buf[..n]);
 
         let expected_frame_bytes = (self.fb.height as usize) * (self.fb.pitch as usize);
-        
+
         // Full-frame writes are staged first, then published in one pass so
         // the boot framebuffer does not expose the wallpaper as it streams in.
         if off == 0 && (n as u64 == self.fb.byte_len || n == expected_frame_bytes) {
@@ -889,12 +903,12 @@ impl VfsNode for FbNode {
             let payload_bytes = (self.fb.width as usize).saturating_mul(bytes_per_pixel).min(row_bytes);
 
             // Fast blitting: cast pointers to u64/u32 to force wide MMIO transactions.
-            // Generic [u8] copies often fall back to 1-byte writes on uncacheable memory, 
+            // Generic [u8] copies often fall back to 1-byte writes on uncacheable memory,
             // bypassing PCIe Write Combining and causing multi-second screen freezes.
             if bytes_per_pixel == 4 && row_bytes % 8 == 0 && (self.fb.addr as usize) % 8 == 0 && n % 8 == 0 {
                 let dst_u64 = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u64, n / 8) };
                 let src_u64 = unsafe { core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u64, n / 8) };
-                
+
                 if row_bytes == payload_bytes {
                     dst_u64.copy_from_slice(src_u64);
                 } else {
@@ -913,7 +927,7 @@ impl VfsNode for FbNode {
             } else if bytes_per_pixel == 4 && row_bytes % 4 == 0 && (self.fb.addr as usize) % 4 == 0 && n % 4 == 0 {
                 let dst_u32 = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u32, n / 4) };
                 let src_u32 = unsafe { core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u32, n / 4) };
-                
+
                 if row_bytes == payload_bytes {
                     dst_u32.copy_from_slice(src_u32);
                 } else {
