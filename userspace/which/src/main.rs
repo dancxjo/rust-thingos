@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 use stem::syscall::{argv_get, env_get, exit, vfs_close, vfs_open, vfs_stat, vfs_write};
 
