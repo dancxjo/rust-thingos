@@ -62,6 +62,7 @@ public surface** for its domain; new code must go through the bridge, not read
 | `kernel::authority::bridge`   | Authority   | `ProcessSnapshot` (`name`, `exec_path`)          | `thingos::authority::Authority`        | 7     |
 | `kernel::place::bridge`       | Place       | `ProcessSnapshot` (`cwd`, `namespace_label`)     | `thingos::place::Place`                | 8     |
 | `kernel::message::bridge`     | Message     | raw `(KindId, Vec<u8>)`                          | `thingos::message::Message`            | -     |
+| `kernel::spawn::bridge`       | Spawn record| `ProcessUnixCompat.spawn_record` / current task  | `SpawnRecord` (typed immutable argv/auxv) | 9  |
 
 ### Planned (not yet introduced)
 
@@ -69,7 +70,7 @@ public surface** for its domain; new code must go through the bridge, not read
 |-------------------------------|-------------|-------------------------------------------------|
 | `kernel::space::bridge`       | Space       | `ProcessAddressSpace` subdivision exists; first-class `Space` object not yet introduced |
 | `kernel::handle::bridge`      | Handle table| Handle-table concept not yet introduced         |
-| `kernel::spawn::bridge`       | Spawn record| Spawn-record concept not yet introduced         |
+| *(migrated to active inventory)* | Spawn record| Introduced in Phase 9 as immutable typed `SpawnRecord` |
 
 ---
 

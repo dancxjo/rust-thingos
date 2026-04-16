@@ -5326,7 +5326,7 @@ mod tests {
             },
             unix_compat: {
                 let mut uc = crate::task::ProcessUnixCompat::isolated(9700, false);
-                uc.argv = alloc::vec![b"old".to_vec()];
+                uc.set_spawn_context(alloc::vec![b"old".to_vec()], alloc::vec![]);
                 uc
             },
             thing_table: crate::vfs::thing_table::ThingTable::new(),

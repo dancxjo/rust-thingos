@@ -253,13 +253,14 @@ pub fn sys_getppid() -> SysResult<usize> {
 /// Format: count: u32, then for each arg: len: u32, bytes...
 /// Returns: total bytes needed (caller can retry with bigger buffer if it was too small).
 pub fn sys_argv_get(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
-    let pinfo = crate::sched::process_info_current();
-    let pinfo = pinfo.ok_or(Errno::ENOENT)?;
+    let pinfo = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let lock = pinfo.lock();
+    let spawn_record = crate::spawn::bridge::spawn_record_from_process(&lock);
+    let argv = spawn_record.argv();
 
     // Calculate total size needed
     let mut total = 4u32; // count
-    for arg in &lock.unix_compat.argv {
+    for arg in argv {
         total += 4 + arg.len() as u32; // len + bytes
     }
 
@@ -274,13 +275,13 @@ pub fn sys_argv_get(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
     let mut pos = 0usize;
 
     // Write count
-    let count = lock.unix_compat.argv.len() as u32;
+    let count = argv.len() as u32;
     if pos + 4 <= copy_len {
         out[pos..pos + 4].copy_from_slice(&count.to_le_bytes());
     }
     pos += 4;
 
-    for arg in &lock.unix_compat.argv {
+    for arg in argv {
         let len = arg.len() as u32;
         if pos + 4 <= copy_len {
             out[pos..pos + 4].copy_from_slice(&len.to_le_bytes());
@@ -460,8 +461,9 @@ pub(crate) fn serialize_auxv_to_buf(entries: &[(u64, u64)], out: &mut [u8]) -> u
 pub fn sys_auxv_get(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
     let info = scheduler::process_info_current().ok_or(Errno::ENOENT)?;
     let pi = info.lock();
+    let spawn_record = crate::spawn::bridge::spawn_record_from_process(&pi);
 
-    let total = serialize_auxv_to_buf(&pi.unix_compat.auxv, &mut []);
+    let total = serialize_auxv_to_buf(spawn_record.auxv(), &mut []);
 
     if buf_ptr == 0 || buf_len == 0 {
         return Ok(total);
@@ -469,8 +471,7 @@ pub fn sys_auxv_get(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
 
     let copy_len = buf_len.min(total);
     let mut out = alloc::vec![0u8; copy_len];
-    serialize_auxv_to_buf(&pi.unix_compat.auxv, &mut out);
-
+    serialize_auxv_to_buf(spawn_record.auxv(), &mut out);
     drop(pi);
 
     validate_user_range(buf_ptr, copy_len, true)?;

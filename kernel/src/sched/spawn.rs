@@ -686,8 +686,10 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     {
         let page_size = rt.page_size() as u64;
         let mut lock = pinfo.lock();
-        lock.unix_compat.argv = alloc::vec![module.name.as_bytes().to_vec()];
-        lock.unix_compat.auxv = crate::task::exec::build_auxv(&aux_info, page_size);
+        lock.unix_compat.set_spawn_context(
+            alloc::vec![module.name.as_bytes().to_vec()],
+            crate::task::exec::build_auxv(&aux_info, page_size),
+        );
         lock.exec_path = alloc::format!("/boot/{}", module.name);
     }
 
@@ -1062,15 +1064,19 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     let unix_compat = if let Some(parent_pi) = &parent_pinfo {
         let parent = parent_pi.lock();
         let mut uc = crate::task::ProcessUnixCompat::inherit(&parent.unix_compat);
-        uc.argv = final_argv;
+        uc.set_spawn_context(
+            final_argv,
+            crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64),
+        );
         uc.env = env;
-        uc.auxv = crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64);
         uc
     } else {
         let mut uc = crate::task::ProcessUnixCompat::isolated(id as u32, true);
-        uc.argv = final_argv;
+        uc.set_spawn_context(
+            final_argv,
+            crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64),
+        );
         uc.env = env;
-        uc.auxv = crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64);
         uc
     };
     let authority = if let Some(parent_pi) = &parent_pinfo {
@@ -1349,15 +1355,19 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     let unix_compat = if let Some(parent_pi) = &parent_pinfo {
         let parent = parent_pi.lock();
         let mut uc = crate::task::ProcessUnixCompat::inherit(&parent.unix_compat);
-        uc.argv = final_argv;
+        uc.set_spawn_context(
+            final_argv,
+            crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64),
+        );
         uc.env = env;
-        uc.auxv = crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64);
         uc
     } else {
         let mut uc = crate::task::ProcessUnixCompat::isolated(id as u32, true);
-        uc.argv = final_argv;
+        uc.set_spawn_context(
+            final_argv,
+            crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64),
+        );
         uc.env = env;
-        uc.auxv = crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64);
         uc
     };
     let authority = if let Some(parent_pi) = &parent_pinfo {

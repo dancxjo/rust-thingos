@@ -240,9 +240,8 @@ pub const PROCESS_MESSAGE_INBOX_CAPACITY: usize = 64;
 /// | `pgid`           | Process-group ID               | Group (Phase 5)                  |
 /// | `sid`            | Session ID                     | Group / Presence / Place (Phase 5)|
 /// | `session_leader` | Session-leader flag            | Group / Presence (Phase 5)       |
-/// | `argv`           | Spawn-time argument vector     | Structured spawn record → Job    |
+/// | `spawn_record`   | Spawn-time argv + ELF auxv     | `kernel::spawn::bridge::SpawnRecord` |
 /// | `env`            | Inherited environment map      | Place / Authority context        |
-/// | `auxv`           | ELF auxiliary vector           | Structured spawn record → Job    |
 ///
 /// # Note on Presence
 ///
@@ -281,20 +280,21 @@ pub struct ProcessUnixCompat {
     /// FUTURE: → Group / Presence (Phase 5)
     pub session_leader: bool,
 
-    /// Argument vector passed at spawn/exec time.
+    /// Immutable typed spawn metadata (`argv` + `auxv`).
     ///
-    /// FUTURE: → structured spawn record attached to Job
-    pub argv: Vec<Vec<u8>>,
+    /// This replaces direct `argv`/`auxv` storage so readers can only consume
+    /// spawn-time context through a typed record.
+    ///
+    /// FUTURE: → first-class SpawnRecord object attached to Job
+    spawn_record: crate::spawn::bridge::SpawnRecord,
 
     /// Environment variables inherited at spawn/exec time.
     ///
     /// FUTURE: → Place / Authority context propagation
     pub env: BTreeMap<Vec<u8>, Vec<u8>>,
 
-    /// ELF auxiliary vector (AT_* entries as `(type, value)` pairs).
-    ///
-    /// FUTURE: → structured spawn record attached to Job
-    pub auxv: Vec<(u64, u64)>,
+    // `argv` and `auxv` are intentionally no longer stored as standalone
+    // mutable blobs; they are represented by `spawn_record`.
 }
 
 impl ProcessUnixCompat {
@@ -310,9 +310,8 @@ impl ProcessUnixCompat {
             pgid: pid,
             sid: pid,
             session_leader: is_session_leader,
-            argv: Vec::new(),
+            spawn_record: crate::spawn::bridge::SpawnRecord::empty(),
             env: BTreeMap::new(),
-            auxv: Vec::new(),
         }
     }
 
@@ -328,9 +327,8 @@ impl ProcessUnixCompat {
             pgid: parent.pgid,
             sid: parent.sid,
             session_leader: false,
-            argv: Vec::new(),
+            spawn_record: crate::spawn::bridge::SpawnRecord::empty(),
             env: parent.env.clone(),
-            auxv: Vec::new(),
         }
     }
 
@@ -353,6 +351,21 @@ impl ProcessUnixCompat {
     /// Current inbox depth for diagnostics and tests.
     pub fn message_inbox_len(&self) -> usize {
         self.message_inbox.len()
+    }
+
+    /// Borrow immutable typed spawn metadata.
+    pub fn spawn_record(&self) -> &crate::spawn::bridge::SpawnRecord {
+        &self.spawn_record
+    }
+
+    /// Replace immutable typed spawn metadata atomically.
+    pub fn set_spawn_record(&mut self, spawn_record: crate::spawn::bridge::SpawnRecord) {
+        self.spawn_record = spawn_record;
+    }
+
+    /// Convenience wrapper to rebuild spawn metadata from raw parts.
+    pub fn set_spawn_context(&mut self, argv: Vec<Vec<u8>>, auxv: Vec<(u64, u64)>) {
+        self.spawn_record = crate::spawn::bridge::SpawnRecord::new(argv, auxv);
     }
 }
 
@@ -401,7 +414,7 @@ impl ProcessUnixCompat {
 ///
 /// **Unix legacy compatibility** (quarantined — see [`ProcessUnixCompat`]):
 /// * `unix_compat` — all Unix-derived state (`signals`, `pgid`, `sid`,
-///   `session_leader`, `argv`, `env`, `auxv`).
+///   `session_leader`, `spawn_record`, `env`).
 ///   These fields are NOT architectural truth; they are kept behind an
 ///   explicit compatibility boundary.  New code MUST NOT add to
 ///   `ProcessUnixCompat` without a Unix compatibility justification.
@@ -453,7 +466,7 @@ pub struct Process {
     // DO NOT move fields out of `unix_compat` back into top-level `Process`.
     // DO NOT add new Unix compatibility state to top-level `Process` directly.
     // Any unavoidable Unix compatibility code must live inside this boundary.
-    /// Unix legacy compatibility state — signals, pgid, sid, argv, env, auxv.
+    /// Unix legacy compatibility state — signals, pgid, sid, spawn_record, env.
     ///
     /// See [`ProcessUnixCompat`] for the full field inventory, future homes,
     /// and the rules that govern this boundary.
@@ -631,7 +644,7 @@ impl Process {
     /// Compatibility projection wrapper for Unix-derived fields.
     pub fn unix_compat_projection(&self) -> ProcessUnixCompatProjection<'_> {
         ProcessUnixCompatProjection {
-            argv: self.unix_compat.argv.as_slice(),
+            argv: self.unix_compat.spawn_record().argv(),
             pgid: self.unix_compat.pgid,
             sid: self.unix_compat.sid,
             session_leader: self.unix_compat.session_leader,
