@@ -82,10 +82,14 @@ pub struct Scheduler<R: BootRuntime> {
     pub(crate) total_cpu_count: usize,
     pub(crate) bringup_in_progress: bool,
     pub(crate) metrics: SchedulerMetrics,
-    /// IPIs deferred by `wake_sleepers`.  Populated under the SCHEDULER lock and
-    /// drained by the caller of `schedule_point` *after* the lock is released,
-    /// so that `send_ipi` is never called while SCHEDULER is held.
+    /// IPIs deferred by `wake_sleepers`. Populated under the SCHEDULER lock and
+    /// drained after the lock is released so that `send_ipi` is never called
+    /// while SCHEDULER is held.
     pub(crate) pending_wake_ipis: alloc::vec::Vec<usize>,
+    /// IPIs deferred by `prepare_schedule` misroute requeue handling.
+    /// Populated under the SCHEDULER lock and drained after the lock is
+    /// released so remote nudges never run in the scheduler critical section.
+    pub(crate) pending_prepare_schedule_ipis: alloc::vec::Vec<usize>,
     _phantom: core::marker::PhantomData<R>,
 }
 
@@ -113,6 +117,7 @@ impl<R: BootRuntime> Scheduler<R> {
             bringup_in_progress: false,
             metrics: SchedulerMetrics::new(),
             pending_wake_ipis: alloc::vec::Vec::new(),
+            pending_prepare_schedule_ipis: alloc::vec::Vec::new(),
             _phantom: PhantomData,
         }
     }

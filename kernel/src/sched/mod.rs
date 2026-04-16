@@ -714,6 +714,10 @@ fn try_resched_if_needed<R: BootRuntime>() {
             // Drain IPIs deferred by wake_sleepers while the SCHEDULER lock is
             // still held, so we can send them after releasing the lock.
             let deferred_ipis = core::mem::take(&mut sched.pending_wake_ipis);
+            // Drain IPIs deferred by prepare_schedule misroute handling while
+            // the lock is still held, so we can send them after unlock.
+            let deferred_prepare_ipis =
+                core::mem::take(&mut sched.pending_prepare_schedule_ipis);
             if let Some(switch) = switch {
                 // Must drop lock before context switch!
                 drop(lock);
@@ -724,6 +728,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
                     rt.send_ipi(cpu, 0x30);
                 }
+                send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
                 rt.tasking().activate_address_space(switch.to_aspace);
 
@@ -784,6 +789,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     DIAG_IPI_SENT_WAKE_SLEEPERS.fetch_add(1, Ordering::Relaxed);
                     rt.send_ipi(cpu, 0x30);
                 }
+                send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
             }
         }
     } else {
@@ -843,6 +849,20 @@ fn try_resched_if_needed<R: BootRuntime>() {
 pub(crate) fn current_cpu_index<R: BootRuntime>() -> usize {
     let rt = crate::runtime::<R>();
     rt.current_cpu_index()
+}
+
+pub(crate) fn send_deferred_prepare_schedule_ipis<R: BootRuntime>(
+    deferred_ipis: alloc::vec::Vec<usize>,
+) {
+    if deferred_ipis.is_empty() {
+        return;
+    }
+    let rt = crate::runtime::<R>();
+    for cpu in deferred_ipis {
+        DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+        DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
+        rt.send_ipi(cpu, 0x30);
+    }
 }
 
 pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
@@ -1291,9 +1311,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         );
 
         // Defer IPI sends until after the SCHEDULER lock is released.
-        // The caller (try_resched_if_needed) drains `self.pending_wake_ipis`
-        // and sends them after dropping the lock, so that `send_ipi` is never
-        // called while SCHEDULER is held.
+        // Lock-owning call sites drain `self.pending_wake_ipis` and send them
+        // after dropping the lock, so `send_ipi` is never called while
+        // SCHEDULER is held.
         for cpu in pending_ipis {
             self.pending_wake_ipis.push(cpu);
         }
@@ -1534,9 +1554,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         self.state.enqueue_task(target_cpu, prio, id);
                         let already_pending = set_global_need_resched(target_cpu);
                         if !already_pending {
-                            DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-                            DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
-                            crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+                            // Keep this de-dup cheap and bounded in practice:
+                            // `misrouted_count` is capped at MAX_MISROUTED (32),
+                            // and online CPU counts are small.
+                            if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
+                                self.pending_prepare_schedule_ipis.push(target_cpu);
+                            }
                         } else {
                             PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
                         }
@@ -1551,9 +1574,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
             self.state.enqueue_task(target_cpu, prio, id);
             let already_pending = set_global_need_resched(target_cpu);
             if !already_pending {
-                DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-                DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
-                crate::runtime::<R>().send_ipi(target_cpu, 0x30);
+                // Keep this de-dup cheap and bounded in practice:
+                // `misrouted_count` is capped at MAX_MISROUTED (32),
+                // and online CPU counts are small.
+                if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
+                    self.pending_prepare_schedule_ipis.push(target_cpu);
+                }
             } else {
                 PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
             }
@@ -2238,13 +2264,16 @@ pub fn exit<R: BootRuntime>(code: i32) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    let (switch, waiters) = {
+    let (switch, waiters, deferred_prepare_ipis) = {
         let lock = SCHEDULER.lock();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        sched.terminate_current(code)
+        let (switch, waiters) = sched.terminate_current(code);
+        let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+        (switch, waiters, deferred_prepare_ipis)
     };
 
+    send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
     wake_waiters(&waiters);
 
     unsafe {
@@ -3601,6 +3630,98 @@ mod tests {
         assert!(
             sched.pending_wake_ipis.is_empty(),
             "pending_wake_ipis should be empty after drain"
+        );
+    }
+
+    #[test]
+    fn test_prepare_schedule_defers_misroute_ipi_to_pending_prepare_queue() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.mark_cpu_online(1);
+
+        // Current task on CPU 0.
+        let current_task = make_task(9101, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current_task));
+        sched.state.per_cpu[0].current = Some(9101);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9101,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        // Runnable task incorrectly queued on CPU 0 but pinned to CPU 1.
+        let misrouted = make_task(9102, TaskState::Runnable, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(misrouted));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9102,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(1),
+            last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9102);
+
+        // No local idle task exists, so prepare_schedule returns None after
+        // requeueing the misrouted task and requesting a remote nudge.
+        let switch = sched.prepare_schedule();
+        assert!(
+            switch.is_none(),
+            "prepare_schedule should return None when only misrouted work exists and no idle task"
+        );
+        assert_eq!(
+            sched.pending_prepare_schedule_ipis,
+            alloc::vec![1usize],
+            "prepare_schedule should defer misroute nudge to pending_prepare_schedule_ipis"
+        );
+        assert!(
+            sched.pending_wake_ipis.is_empty(),
+            "misroute IPIs should not be mixed into pending_wake_ipis"
+        );
+        assert!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 9102),
+            "misrouted task should be moved to target CPU runq"
+        );
+    }
+
+    #[test]
+    fn test_send_deferred_prepare_schedule_ipis_updates_counters() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        DIAG_IPI_SENT.store(0, Ordering::Relaxed);
+        DIAG_IPI_SENT_PREPARE_SCHEDULE.store(0, Ordering::Relaxed);
+
+        send_deferred_prepare_schedule_ipis::<MockRuntime>(alloc::vec![1usize, 2usize]);
+
+        assert_eq!(
+            DIAG_IPI_SENT.load(Ordering::Relaxed),
+            2,
+            "generic IPI counter should increase for each deferred prepare_schedule send"
+        );
+        assert_eq!(
+            DIAG_IPI_SENT_PREPARE_SCHEDULE.load(Ordering::Relaxed),
+            2,
+            "prepare_schedule source counter should increase for each deferred send"
         );
     }
 
