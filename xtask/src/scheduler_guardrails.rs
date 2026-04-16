@@ -33,13 +33,16 @@ fn assert_no_forbidden_tokens(relative_path: &str, forbidden_tokens: &[&str]) {
 }
 
 fn thread_sched_fields_block(state_rs: &str) -> &str {
+    const STRUCT_DECL: &str = "pub struct ThreadSchedFields {";
     let start = state_rs
-        .find("pub struct ThreadSchedFields {")
+        .find(STRUCT_DECL)
         .expect("ThreadSchedFields struct must exist");
-    let open_brace = state_rs[start..]
-        .find('{')
-        .map(|offset| start + offset)
-        .expect("ThreadSchedFields opening brace must exist");
+    let open_brace = start + STRUCT_DECL.len() - 1;
+    assert_eq!(
+        state_rs.as_bytes().get(open_brace).copied(),
+        Some(b'{'),
+        "ThreadSchedFields opening brace must exist at declaration"
+    );
     let mut depth = 0usize;
     for (offset, ch) in state_rs[open_brace..].char_indices() {
         match ch {
@@ -81,6 +84,8 @@ fn scheduler_hot_paths_do_not_read_semantic_process_fields_directly() {
         ".exit_code",
     ];
 
+    // This is intentionally conservative string matching for fast CI guardrails.
+    // If a new comment or literal trips a rule, tighten the path or token list.
     for file in hot_scheduler_files {
         assert_no_forbidden_tokens(file, &forbidden);
     }
