@@ -736,20 +736,23 @@ impl VfsNode for ConsoleNode {
                 if fb.width == 0 || fb.height == 0 {
                     return Err(abi::errors::Errno::ENOSYS);
                 }
-                // Console text-mode geometry assumes 8x16 character cells.
+                // Console geometry currently uses fixed 8x16 text cells from
+                // the boot console renderer contract (not a runtime font query).
                 const CELL_WIDTH_PX: u32 = 8;
                 const CELL_HEIGHT_PX: u32 = 16;
                 if fb.width < CELL_WIDTH_PX || fb.height < CELL_HEIGHT_PX {
                     return Err(abi::errors::Errno::ENOSYS);
                 }
+                let clamp_u16 = |value: u32| value.min(u16::MAX as u32) as u16;
+                let clamp_tty_cells = |value: u32| value.max(1).min(u16::MAX as u32) as u16;
 
                 let ws = abi::termios::Winsize {
-                    ws_row: (fb.height / CELL_HEIGHT_PX).max(1).min(u16::MAX as u32) as u16,
-                    ws_col: (fb.width / CELL_WIDTH_PX).max(1).min(u16::MAX as u32) as u16,
+                    ws_row: clamp_tty_cells(fb.height / CELL_HEIGHT_PX),
+                    ws_col: clamp_tty_cells(fb.width / CELL_WIDTH_PX),
                     // POSIX winsize stores pixel dimensions as u16; clamp very
                     // large framebuffers to preserve ABI compatibility.
-                    ws_xpixel: fb.width.min(u16::MAX as u32) as u16,
-                    ws_ypixel: fb.height.min(u16::MAX as u32) as u16,
+                    ws_xpixel: clamp_u16(fb.width),
+                    ws_ypixel: clamp_u16(fb.height),
                 };
                 unsafe {
                     crate::syscall::validate::copyout(
