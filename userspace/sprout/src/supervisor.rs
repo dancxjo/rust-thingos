@@ -145,7 +145,7 @@ impl Supervisor {
         };
         // We could pass the registrar port to devd if it needs to register things,
         // but for now devd just spawns drivers.
-        match stem::syscall::spawn_process("/bin/devd", 0) {
+        match stem::syscall::spawn_process("/drivers/devd", 0) {
             Ok(pid) => {
                 info!("SPROUT: Spawned devd (PID={})", pid);
                 let mut tasks = self.tasks.lock();

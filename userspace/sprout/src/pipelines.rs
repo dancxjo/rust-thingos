@@ -296,7 +296,7 @@ pub fn setup_display_pipeline(
                 gpu_path, display_width, display_height
             );
         }
-        driver_name = Some("/bin/display_virtio_gpu");
+        driver_name = Some("/drivers/display_virtio_gpu");
         backend_name = "VirtIO-GPU";
         debug!(
             "SPROUT: Using VirtIO GPU at {} ({}x{} stride={})",
@@ -309,7 +309,7 @@ pub fn setup_display_pipeline(
         display_height = h;
         display_stride = stride;
         display_format = format;
-        driver_name = Some("/bin/display_bootfb");
+        driver_name = Some("/drivers/display_bootfb");
         backend_name = "BootFB";
         debug!(
             "SPROUT: Using /dev/fb0 boot framebuffer ({}x{} stride={})",
@@ -326,7 +326,7 @@ pub fn setup_display_pipeline(
         display_height = 768;
         display_stride = 1024 * 4;
         display_format = 1; // BGRA8888
-        driver_name = Some("/bin/display_fake");
+        driver_name = Some("/drivers/display_fake");
         backend_name = "Fake";
     }
 
@@ -570,7 +570,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
     };
 
     // Spawn ps2_kbd with raw write handle
-    match stem::syscall::spawn_process("/bin/ps2_kbd", kbd_raw.0 as usize) {
+    match stem::syscall::spawn_process("/drivers/ps2_kbd", kbd_raw.0 as usize) {
         Ok(pid) => {
             debug!("SPROUT: Spawned ps2_kbd (PID={})", pid);
             let _ = stem::thread::set_priority(pid, 2);
@@ -578,7 +578,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
             tasks.push(ManagedTask {
                 name: "/ps2_kbd".to_string(),
                 kind: TaskKind::Driver("dev.input.ps2.kbd".to_string()),
-                module_path: "/bin/ps2_kbd".to_string(),
+                module_path: "/drivers/ps2_kbd".to_string(),
                 pid: Some(pid),
                 restarts: 0,
                 spawn_arg: kbd_raw.0 as usize,
@@ -595,7 +595,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
     }
 
     // Spawn ps2_mouse with raw write handle
-    match stem::syscall::spawn_process("/bin/ps2_mouse", mouse_raw.0 as usize) {
+    match stem::syscall::spawn_process("/drivers/ps2_mouse", mouse_raw.0 as usize) {
         Ok(pid) => {
             debug!("SPROUT: Spawned ps2_mouse (PID={})", pid);
             let _ = stem::thread::set_priority(pid, 2);
@@ -603,7 +603,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
             tasks.push(ManagedTask {
                 name: "ps2_mouse".to_string(),
                 kind: TaskKind::Driver("dev.input.ps2.mouse".to_string()),
-                module_path: "/bin/ps2_mouse".to_string(),
+                module_path: "/drivers/ps2_mouse".to_string(),
                 pid: Some(pid),
                 restarts: 0,
                 spawn_arg: mouse_raw.0 as usize,
@@ -807,10 +807,10 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     let driver: Option<&'static str> = if find_sys_device_with_vendor("0x0401", "0x1af4").is_some()
     {
         info!("SPROUT: Found VirtIO sound device");
-        Some("/bin/virtio_sound")
+        Some("/drivers/virtio_sound")
     } else if find_sys_device("0x0403").is_some() {
         info!("SPROUT: Found HDA controller (class 0x0403)");
-        Some("/bin/hdaudio")
+        Some("/drivers/hdaudio")
     } else {
         info!("SPROUT: No audio hardware detected; skipping audio stack");
         None
@@ -870,7 +870,7 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     }
 
     // Spawn the beeper to play the start-up chime.
-    match stem::syscall::spawn_process("/bin/beeper", 0) {
+    match stem::syscall::spawn_process("/drivers/beeper", 0) {
         Ok(pid) => {
             info!("SPROUT: Spawned beeper (PID={})", pid);
             let mut tasks = shared_tasks.lock();

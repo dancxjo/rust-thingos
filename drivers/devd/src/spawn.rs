@@ -108,8 +108,7 @@ impl ManagedDriver {
             let _ = vfs_seek(boot_fd, 0, 0);
         }
 
-        let driver_path =
-            if driver.starts_with('/') { driver.to_string() } else { alloc::format!("/bin/{}", driver) };
+        let driver_path = if driver.starts_with('/') { driver.to_string() } else { alloc::format!("/drivers/{}", driver) };
 
         let boot_fd_str = alloc::format!("{}", boot_fd);
         let argv: &[&[u8]] = &[driver_path.as_bytes(), boot_fd_str.as_bytes()];

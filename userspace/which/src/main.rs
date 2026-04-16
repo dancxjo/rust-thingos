@@ -64,7 +64,7 @@ fn get_path_entries() -> Vec<String> {
         Err(_) => 0,
     };
     if needed == 0 {
-        return vec![String::from("/bin")];
+        return vec![String::from("/bin"), String::from("/drivers")];
     }
 
     let mut buf = alloc::vec![0u8; needed];
@@ -73,7 +73,7 @@ fn get_path_entries() -> Vec<String> {
         Err(_) => 0,
     };
     if n == 0 {
-        return vec![String::from("/bin")];
+        return vec![String::from("/bin"), String::from("/drivers")];
     }
 
     let path = match core::str::from_utf8(&buf[..n]) {
@@ -88,6 +88,7 @@ fn get_path_entries() -> Vec<String> {
         .collect();
     if entries.is_empty() {
         entries.push(String::from("/bin"));
+        entries.push(String::from("/drivers"));
     }
     entries
 }

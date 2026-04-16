@@ -5,7 +5,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use abi::errors::Errno;
@@ -798,6 +798,22 @@ fn spawn_job(cmds: &[Cmd<'_>], background: bool) -> Result<(u32, Vec<u32>), Errn
     let bg_in = if background { Some(open_read("/dev/null")?) } else { None };
     let bg_out = if background { Some(open_write("/dev/null", false)?) } else { None };
 
+    let path_needed = match syscall::env_get(b"PATH", &mut []) {
+        Ok(n) => n,
+        Err(_) => 0,
+    };
+    let path_env = if path_needed > 0 {
+        let mut buf = alloc::vec![0u8; path_needed];
+        if let Ok(n) = syscall::env_get(b"PATH", &mut buf) {
+            core::str::from_utf8(&buf[..n]).unwrap_or("/bin:/drivers").to_string()
+        } else {
+            "/bin:/drivers".to_string()
+        }
+    } else {
+        "/bin:/drivers".to_string()
+    };
+    let path_prefixes: Vec<&str> = path_env.split(':').collect();
+
     let env = BTreeMap::new();
     let mut spawned = Vec::new();
     let mut transient_fds = Vec::new();
@@ -807,7 +823,19 @@ fn spawn_job(cmds: &[Cmd<'_>], background: bool) -> Result<(u32, Vec<u32>), Errn
         let path = if cmd.program.starts_with('/') {
             String::from(cmd.program)
         } else {
-            format!("/bin/{}", cmd.program)
+            let mut resolved = format!("/bin/{}", cmd.program);
+            for prefix in &path_prefixes {
+                let mut candidate = prefix.to_string();
+                if !candidate.ends_with('/') {
+                    candidate.push('/');
+                }
+                candidate.push_str(cmd.program);
+                if vfs::vfs_open(&candidate, abi::syscall::vfs_flags::O_RDONLY).is_ok() {
+                    resolved = candidate;
+                    break;
+                }
+            }
+            resolved
         };
 
         let mut argv = Vec::new();

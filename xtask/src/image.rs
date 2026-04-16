@@ -188,7 +188,12 @@ fn generate_limine_config(
         if !prog.boot_module {
             continue;
         }
-        conf.push_str(&format!("    module_path: boot():/bin/{}\n", prog.name));
+        let bin_path = if is_driver(prog.name) {
+            format!("boot():/drivers/{}", prog.name)
+        } else {
+            format!("boot():/bin/{}", prog.name)
+        };
+        conf.push_str(&format!("    module_path: {}\n", bin_path));
         if prog.is_init {
             conf.push_str("    module_cmdline: init\n");
         }
@@ -274,6 +279,7 @@ pub fn build_iso_with_config(
     sh.create_dir(iso_root.join("boot"))?;
     sh.create_dir(iso_root.join("boot/limine"))?;
     sh.create_dir(iso_root.join("bin"))?;
+    sh.create_dir(iso_root.join("drivers"))?;
     sh.create_dir(iso_root.join("etc"))?;
     sh.create_dir(iso_root.join("usr/lib"))?;
     sh.create_dir(iso_root.join("lib"))?;
@@ -338,7 +344,10 @@ pub fn build_iso_with_config(
         "LOCALE=en_US\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n",
     )?;
 
-    sh.write_file(iso_root.join("etc/profile"), "alias ll='loglevel'\nalias halt='shutdown'\n")?;
+    sh.write_file(
+        iso_root.join("etc/profile"),
+        "export PATH=/bin:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
+    )?;
 
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
 
@@ -356,12 +365,13 @@ pub fn build_iso_with_config(
 
     for prog in programs {
         build_userspace_app_with_features(sh, prog.name, target, "release", &prog.features)?;
+        let dest_subdir = if is_driver(prog.name) { "drivers" } else { "bin" };
         copy_userspace_binary(
             sh,
             prog.name,
             target,
             "release",
-            iso_root.join(format!("bin/{}", prog.name)).to_str().unwrap(),
+            iso_root.join(format!("{}/{}", dest_subdir, prog.name)).to_str().unwrap(),
         )?;
     }
 
@@ -542,7 +552,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     }
 
     cmd!(sh, "mformat -i {hdd}@@1M").run()?;
-    cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine").run()?;
+    cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/drivers").run()?;
     cmd!(sh, "mcopy -i {hdd}@@1M -s assets ::").run()?;
 
     let mut asset_files = Vec::new();
@@ -567,7 +577,10 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     cmd!(sh, "mcopy -i {hdd}@@1M locale.conf ::/boot/locale.conf").run()?;
     sh.remove_path("locale.conf")?;
 
-    sh.write_file("profile", "alias ll='loglevel'\nalias halt='shutdown'\n")?;
+    sh.write_file(
+        "profile",
+        "export PATH=/bin:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
+    )?;
     sh.write_file("motd", generate_motd())?;
 
     // create /etc in the fat32 image if it doesn't exist
@@ -604,4 +617,29 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
 
     println!("HDD image created: {hdd}");
     Ok(PathBuf::from(hdd))
+}
+
+fn is_driver(name: &str) -> bool {
+    let drivers = [
+        "ahci_disk",
+        "ata_disk",
+        "beeper",
+        "devd",
+        "display_bootfb",
+        "display_fake",
+        "display_virtio_gpu",
+        "driver_wasm_host",
+        "hdaudio",
+        "hwrng",
+        "pci_stubd",
+        "proto_driver_wasm",
+        "ps2_kbd",
+        "ps2_mouse",
+        "rtc_cmos",
+        "rtl8168d",
+        "virtio_gpu",
+        "virtio_netd",
+        "virtio_sound",
+    ];
+    drivers.contains(&name)
 }
