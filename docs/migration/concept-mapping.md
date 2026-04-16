@@ -335,6 +335,9 @@ Process (legacy)
 
 **Relationship:** Split (transitional)
 
+See `docs/architecture/scheduler-identity-layering.md` for the current
+runtime/canonical/compatibility ID conversion rules and helper APIs.
+
 ---
 
 ### Fork → (Eliminated)
