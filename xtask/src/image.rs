@@ -1,10 +1,12 @@
 //! Image creation tasks - ISO and HDD.
 
-use crate::common::{Result, image_name};
-use crate::rustc_thingos::stage_rustc_for_iso;
 use std::path::{Path, PathBuf};
+
 use walkdir::WalkDir;
 use xshell::{Shell, cmd};
+
+use crate::common::{Result, image_name};
+use crate::rustc_thingos::stage_rustc_for_iso;
 
 pub struct ProgramConfig {
     pub name: &'static str,
@@ -22,7 +24,12 @@ pub struct IsoConfig<'a> {
 
 pub fn default_programs() -> Vec<ProgramConfig> {
     vec![
-        ProgramConfig { name: "sprout", is_init: true, boot_module: true, features: vec!["diagnostic-apps"] },
+        ProgramConfig {
+            name: "sprout",
+            is_init: true,
+            boot_module: true,
+            features: vec!["diagnostic-apps"],
+        },
         ProgramConfig { name: "bristle", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "rtc_cmos", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ps2_kbd", is_init: true, boot_module: true, features: vec![] },
@@ -56,8 +63,18 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "false", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "input_echo", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ps2_mouse", is_init: true, boot_module: true, features: vec![] },
-        ProgramConfig { name: "display_bootfb", is_init: true, boot_module: true, features: vec![] },
-        ProgramConfig { name: "display_virtio_gpu", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig {
+            name: "display_bootfb",
+            is_init: true,
+            boot_module: true,
+            features: vec![],
+        },
+        ProgramConfig {
+            name: "display_virtio_gpu",
+            is_init: true,
+            boot_module: true,
+            features: vec![],
+        },
         ProgramConfig { name: "devd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "virtio_netd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "rtl8168d", is_init: false, boot_module: true, features: vec![] },
@@ -74,10 +91,20 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "beeper", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "vfs_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "show_args", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "env_roundtrip", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig {
+            name: "env_roundtrip",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
         ProgramConfig { name: "cwd_test", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "date", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "wayland_hello", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig {
+            name: "wayland_hello",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
         ProgramConfig { name: "terminal", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "fontd", is_init: true, boot_module: true, features: vec![] },
@@ -86,17 +113,52 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "clear", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "loglevel", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "poll_mux", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "ipc_service_demo", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "ipc_pipe_demo", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "ipc_provider_demo", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "ipc_memfd_demo", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig {
+            name: "ipc_service_demo",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
+        ProgramConfig {
+            name: "ipc_pipe_demo",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
+        ProgramConfig {
+            name: "ipc_provider_demo",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
+        ProgramConfig {
+            name: "ipc_memfd_demo",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
         ProgramConfig { name: "test_exec", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "test_vm_protect", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "test_exec_env", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig {
+            name: "test_vm_protect",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
+        ProgramConfig {
+            name: "test_exec_env",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
         ProgramConfig { name: "test_threads", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "test_futex", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ld_so", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "test_dyn_loader", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig {
+            name: "test_dyn_loader",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
         ProgramConfig { name: "test_dlopen", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "reboot", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "shutdown", is_init: false, boot_module: true, features: vec![] },
@@ -143,8 +205,7 @@ fn generate_limine_config(
             || clean_path.ends_with("themes/genie_circles.wasm")
             || clean_path.ends_with("unifont.hex");
 
-        if allowed && !clean_path.ends_with("unifont.hex") && !clean_path.ends_with("locale.conf")
-        {
+        if allowed && !clean_path.ends_with("unifont.hex") && !clean_path.ends_with("locale.conf") {
             let iso_path = clean_path.replace("assets/", "share/");
             conf.push_str(&format!("    module_path: boot():/{iso_path}\n"));
         }
@@ -170,22 +231,10 @@ fn generate_motd() -> String {
         width = WIDTH
     ));
     motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
-    motd.push_str(&format!(
-        "  | {:<width$} |\n",
-        "People, places, things",
-        width = WIDTH
-    ));
-    motd.push_str(&format!(
-        "  | {:<width$} |\n",
-        "Foundational elements of Thing-OS.",
-        width = WIDTH
-    ));
+    motd.push_str(&format!("  | {:<width$} |\n", "People, places, things", width = WIDTH));
     motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
-    motd.push_str(&format!(
-        "  | {:<width$} |\n",
-        "Try: ls /bin, ps, cat /etc/version",
-        width = WIDTH
-    ));
+    motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
+    motd.push_str(&format!("  | {:<width$} |\n", "Try: ls /bin, ps, cat /version", width = WIDTH));
     motd.push_str(&border);
     motd
 }
@@ -202,9 +251,7 @@ pub fn build_iso_with_config(
     programs: &[ProgramConfig],
     config: &IsoConfig<'_>,
 ) -> Result<PathBuf> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
     let timestamp = now.as_secs();
     let nanos = now.subsec_nanos();
 
@@ -282,20 +329,14 @@ pub fn build_iso_with_config(
 
     let kernel_src = format!("bran/bin-{arch}/kernel");
     sh.copy_file(&kernel_src, iso_root.join("boot/kernel"))?;
-    sh.copy_file(
-        "assets/fonts/unifont.hex",
-        iso_root.join("share/fonts/unifont.hex"),
-    )?;
+    sh.copy_file("assets/fonts/unifont.hex", iso_root.join("share/fonts/unifont.hex"))?;
 
     sh.write_file(
         iso_root.join("etc/locale.conf"),
         "LOCALE=en_US\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n",
     )?;
 
-    sh.write_file(
-        iso_root.join("etc/profile"),
-        "alias ll='loglevel'\nalias halt='shutdown'\n",
-    )?;
+    sh.write_file(iso_root.join("etc/profile"), "alias ll='loglevel'\nalias halt='shutdown'\n")?;
 
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
 
@@ -325,14 +366,8 @@ pub fn build_iso_with_config(
     stage_rustc_for_iso(sh, iso_root)?;
 
     let limine_conf_content = generate_limine_config(sh, programs, &asset_files, config.resolution);
-    println!(
-        "--- DEBUG: Generated limine.conf ---\n{}\n--- END DEBUG ---",
-        limine_conf_content
-    );
-    sh.write_file(
-        iso_root.join("boot/limine/limine.conf"),
-        limine_conf_content,
-    )?;
+    println!("--- DEBUG: Generated limine.conf ---\n{}\n--- END DEBUG ---", limine_conf_content);
+    sh.write_file(iso_root.join("boot/limine/limine.conf"), limine_conf_content)?;
 
     match arch {
         "x86_64" => {
@@ -348,14 +383,8 @@ pub fn build_iso_with_config(
                 "vendor/limine/limine-uefi-cd.bin",
                 iso_root.join("boot/limine/limine-uefi-cd.bin"),
             )?;
-            sh.copy_file(
-                "vendor/limine/BOOTX64.EFI",
-                iso_root.join("EFI/BOOT/BOOTX64.EFI"),
-            )?;
-            sh.copy_file(
-                "vendor/limine/BOOTIA32.EFI",
-                iso_root.join("EFI/BOOT/BOOTIA32.EFI"),
-            )?;
+            sh.copy_file("vendor/limine/BOOTX64.EFI", iso_root.join("EFI/BOOT/BOOTX64.EFI"))?;
+            sh.copy_file("vendor/limine/BOOTIA32.EFI", iso_root.join("EFI/BOOT/BOOTIA32.EFI"))?;
 
             cmd!(sh, "xorriso -as mkisofs -R -J -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
             cmd!(sh, "./vendor/limine/limine bios-install {iso_name}").run()?;
@@ -369,10 +398,7 @@ pub fn build_iso_with_config(
                 "vendor/limine/limine-uefi-cd.bin",
                 iso_root.join("boot/limine/limine-uefi-cd.bin"),
             )?;
-            sh.copy_file(
-                "vendor/limine/BOOTAA64.EFI",
-                iso_root.join("EFI/BOOT/BOOTAA64.EFI"),
-            )?;
+            sh.copy_file("vendor/limine/BOOTAA64.EFI", iso_root.join("EFI/BOOT/BOOTAA64.EFI"))?;
 
             cmd!(sh, "xorriso -as mkisofs -R -J --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
 
@@ -386,11 +412,12 @@ pub fn build_iso_with_config(
             cmd!(sh, "dd if=/dev/zero of={efi_img_str} bs=1K count=2880 status=none").run()?;
             cmd!(sh, "mformat -i {efi_img_str} -f 2880 ::").run()?;
             cmd!(sh, "mmd -i {efi_img_str} ::/EFI ::/EFI/BOOT").run()?;
-            cmd!(sh, "mcopy -i {efi_img_str} vendor/limine/BOOTRISCV64.EFI ::/EFI/BOOT/BOOTRISCV64.EFI").run()?;
-            sh.write_file(
-                iso_root.join("startup.nsh"),
-                "\\EFI\\BOOT\\BOOTRISCV64.EFI\n",
-            )?;
+            cmd!(
+                sh,
+                "mcopy -i {efi_img_str} vendor/limine/BOOTRISCV64.EFI ::/EFI/BOOT/BOOTRISCV64.EFI"
+            )
+            .run()?;
+            sh.write_file(iso_root.join("startup.nsh"), "\\EFI\\BOOT\\BOOTRISCV64.EFI\n")?;
             let startup_nsh = iso_root.join("startup.nsh");
             let startup_nsh_str = startup_nsh.to_str().unwrap();
             cmd!(sh, "mcopy -i {efi_img_str} {startup_nsh_str} ::").run()?;
@@ -412,10 +439,7 @@ pub fn build_iso_with_config(
             cmd!(sh, "mformat -i {efi_img_str} -f 2880 ::").run()?;
             cmd!(sh, "mmd -i {efi_img_str} ::/EFI ::/EFI/BOOT").run()?;
             cmd!(sh, "mcopy -i {efi_img_str} vendor/limine/BOOTLOONGARCH64.EFI ::/EFI/BOOT/BOOTLOONGARCH64.EFI").run()?;
-            sh.write_file(
-                iso_root.join("startup.nsh"),
-                "\\EFI\\BOOT\\BOOTLOONGARCH64.EFI\n",
-            )?;
+            sh.write_file(iso_root.join("startup.nsh"), "\\EFI\\BOOT\\BOOTLOONGARCH64.EFI\n")?;
             let startup_nsh = iso_root.join("startup.nsh");
             let startup_nsh_str = startup_nsh.to_str().unwrap();
             cmd!(sh, "mcopy -i {efi_img_str} {startup_nsh_str} ::").run()?;
@@ -443,11 +467,8 @@ fn build_userspace_app_with_features(
 ) -> Result<()> {
     println!("Building {name} ...");
 
-    let extra_flags = if target.ends_with(".json") {
-        vec!["-Z", "json-target-spec"]
-    } else {
-        vec![]
-    };
+    let extra_flags =
+        if target.ends_with(".json") { vec!["-Z", "json-target-spec"] } else { vec![] };
 
     let cwd = std::env::current_dir().unwrap();
     let std_src = cwd.join("library");
@@ -462,11 +483,8 @@ fn build_userspace_app_with_features(
         && stage1_rustc_wrapper.exists()
         && !skip_rustc_thingos;
 
-    let build_std_crates = if use_fork_rustc {
-        "core,alloc,std,panic_abort"
-    } else {
-        "core,alloc,panic_abort"
-    };
+    let build_std_crates =
+        if use_fork_rustc { "core,alloc,std,panic_abort" } else { "core,alloc,panic_abort" };
 
     let rustflags = String::from("-Awarnings");
     let mut cmd_obj = cmd!(
@@ -499,10 +517,8 @@ fn copy_userspace_binary(
     profile_dir: &str,
     dst: &str,
 ) -> Result<()> {
-    let target_name = std::path::Path::new(target)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(target);
+    let target_name =
+        std::path::Path::new(target).file_stem().and_then(|s| s.to_str()).unwrap_or(target);
 
     let elf = format!("target/{target_name}/{profile_dir}/{name}");
     cmd!(sh, "cp {elf} {dst}").run()?;
