@@ -40,6 +40,18 @@ build arch=karch:
 # Build everything (ISO) - optionally specify architecture.
 # Examples: `just iso`, `just iso aarch64`
 iso arch=karch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mapfile -t before < <(find . -maxdepth 1 -mindepth 1 -type d -name 'iso_root_*' -printf '%P\n' | sort)
+    cleanup_iso_roots() {
+        mapfile -t after < <(find . -maxdepth 1 -mindepth 1 -type d -name 'iso_root_*' -printf '%P\n' | sort)
+        for dir in "${after[@]}"; do
+            if ! printf '%s\n' "${before[@]}" | grep -Fxq "$dir"; then
+                rm -rf -- "$dir"
+            fi
+        done
+    }
+    trap cleanup_iso_roots EXIT
     {{xtask}} iso --env {{arch}} --profile {{rust_profile}}
 
 # Build HDD image.
