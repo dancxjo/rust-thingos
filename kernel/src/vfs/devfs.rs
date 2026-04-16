@@ -727,7 +727,9 @@ impl VfsNode for ConsoleNode {
                     return Err(abi::errors::Errno::EINVAL);
                 }
 
-                // Derive tty geometry from the current boot framebuffer when present.
+                // Derive tty geometry from boot framebuffer state when usable.
+                // If no framebuffer is available (or it reports zero dimensions),
+                // treat winsize as unavailable for this terminal.
                 let Some((fb, _)) = *BOOT_FB_INFO.lock() else {
                     return Err(abi::errors::Errno::ENOSYS);
                 };
@@ -747,7 +749,10 @@ impl VfsNode for ConsoleNode {
                 unsafe {
                     crate::syscall::validate::copyout(
                         call.out_ptr as usize,
-                        core::slice::from_raw_parts(&ws as *const abi::termios::Winsize as *const u8, winsize_size),
+                        core::slice::from_raw_parts(
+                            &ws as *const abi::termios::Winsize as *const u8,
+                            core::mem::size_of_val(&ws),
+                        ),
                     )?;
                 }
                 Ok(0)
