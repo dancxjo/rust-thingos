@@ -132,19 +132,7 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         // but must not be extended or improved.  New coordination state should
         // use `/proc/<pid>/group_kind` or `/proc/<pid>/foreground_group`.
         "status" => {
-            let state_name = match snap.state {
-                crate::task::TaskState::Runnable => "R",
-                crate::task::TaskState::Running => "R",
-                crate::task::TaskState::Blocked => "S",
-                crate::task::TaskState::Dead => "Z",
-            };
-            let text = alloc::format!(
-                "Name:\t{}\nState:\t{}\nPid:\t{}\nPPid:\t{}\n",
-                snap.name,
-                state_name,
-                snap.pid,
-                snap.ppid,
-            );
+            let text = render_proc_status_text(&snap);
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), 300 + pid as u64 * 10 + 1)))
         }
         "cmdline" => {
@@ -375,6 +363,47 @@ fn process_ids() -> Vec<u32> {
         }
     }
     pids
+}
+
+/// Render `/proc/<pid>/status` using explicit projection boundaries.
+///
+/// Projection layering:
+/// - Canonical generated kinds: build `thingos::task::Task` from the snapshot.
+/// - Runtime bridge data: derive `thingos::job::JobState` from live thread-state
+///   aggregation through `kernel::job::bridge`.
+/// - Unix compatibility projection: map canonical task/job state into the
+///   legacy single-letter status code (`R`, `S`, `Z`) and emit PID/PPID lines.
+fn render_proc_status_text(snapshot: &crate::sched::ProcessSnapshot) -> String {
+    // `task_from_snapshot` projects the leader thread's canonical task shape
+    // (including TaskState/name), while `job_state_from_snapshot` aggregates
+    // runtime thread-group liveness to classify whole-job exit.
+    let task = crate::task::bridge::task_from_snapshot(snapshot);
+    let job_state = crate::job::bridge::job_state_from_snapshot(snapshot);
+    let state_name = unix_status_state_projection(task.state, job_state);
+    let name = task.name.unwrap_or_else(|| snapshot.name.clone());
+    alloc::format!(
+        "Name:\t{}\nState:\t{}\nPid:\t{}\nPPid:\t{}\n",
+        name,
+        state_name,
+        snapshot.pid,
+        snapshot.ppid,
+    )
+}
+
+fn unix_status_state_projection(
+    task_state: thingos::task::TaskState,
+    job_state: thingos::job::JobState,
+) -> &'static str {
+    if job_state == thingos::job::JobState::Exited {
+        return "Z";
+    }
+    match task_state {
+        thingos::task::TaskState::Blocked => "S",
+        thingos::task::TaskState::Exited => "Z",
+        thingos::task::TaskState::New
+        | thingos::task::TaskState::Ready
+        | thingos::task::TaskState::Running => "R",
+    }
 }
 
 // ── /proc root directory ──────────────────────────────────────────────────────
@@ -991,6 +1020,31 @@ impl VfsNode for IpcDiagNode {
 mod tests {
     use super::*;
 
+    fn snapshot_with_states(
+        state: crate::task::TaskState,
+        thread_states: Vec<crate::task::TaskState>,
+    ) -> crate::sched::ProcessSnapshot {
+        crate::sched::ProcessSnapshot {
+            pid: 42,
+            ppid: 7,
+            tid: 42,
+            name: String::from("demo"),
+            state,
+            argv: Vec::new(),
+            exec_path: String::from("/bin/demo"),
+            exit_code: None,
+            pgid: 42,
+            sid: 42,
+            session_leader: true,
+            cwd: String::from("/"),
+            namespace_label: String::from("global"),
+            thread_states,
+            space_id: thingos::space::SpaceId::NONE,
+            space_mapping_count: 0,
+            space_sharing_count: 1,
+        }
+    }
+
     fn lookup(path: &str) -> SysResult<Arc<dyn VfsNode>> {
         ProcFs::new().lookup(path)
     }
@@ -1168,5 +1222,57 @@ mod tests {
         let n = node.readdir(0, &mut buf).unwrap();
         let s = core::str::from_utf8(&buf[..n]).unwrap();
         assert!(s.contains("authority"), "self readdir must list 'authority': {s}");
+    }
+
+    #[test]
+    fn test_unix_status_state_projection_matches_legacy_letters() {
+        assert_eq!(
+            unix_status_state_projection(
+                thingos::task::TaskState::Running,
+                thingos::job::JobState::Running
+            ),
+            "R"
+        );
+        assert_eq!(
+            unix_status_state_projection(
+                thingos::task::TaskState::Ready,
+                thingos::job::JobState::Running
+            ),
+            "R"
+        );
+        assert_eq!(
+            unix_status_state_projection(
+                thingos::task::TaskState::Blocked,
+                thingos::job::JobState::Running
+            ),
+            "S"
+        );
+        assert_eq!(
+            unix_status_state_projection(
+                thingos::task::TaskState::Exited,
+                thingos::job::JobState::Exited
+            ),
+            "Z"
+        );
+    }
+
+    #[test]
+    fn test_render_proc_status_uses_job_bridge_for_exited_state() {
+        let snapshot = snapshot_with_states(
+            crate::task::TaskState::Running,
+            vec![crate::task::TaskState::Dead],
+        );
+        let text = render_proc_status_text(&snapshot);
+        assert!(text.contains("Name:\tdemo\n"), "unexpected text: {text}");
+        assert!(text.contains("State:\tZ\n"), "unexpected text: {text}");
+        assert!(text.contains("Pid:\t42\n"), "unexpected text: {text}");
+        assert!(text.contains("PPid:\t7\n"), "unexpected text: {text}");
+    }
+
+    #[test]
+    fn test_render_proc_status_handles_direct_exited_task_projection() {
+        let snapshot = snapshot_with_states(crate::task::TaskState::Dead, Vec::new());
+        let text = render_proc_status_text(&snapshot);
+        assert!(text.contains("State:\tZ\n"), "unexpected text: {text}");
     }
 }
