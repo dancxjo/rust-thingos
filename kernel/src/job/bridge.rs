@@ -226,6 +226,41 @@ pub fn job_wait_result_from_waitpid(exit_code: i32) -> JobWaitResult {
     JobWaitResult::Exited { code: Some(exit_code) }
 }
 
+/// Project a runtime leader-exit code to POSIX/Unix `waitpid` status encoding.
+pub fn wait_status_from_runtime_exit(code: i32) -> i32 {
+    if code < 0 {
+        abi::signal::w_term_sig((-code) as u8)
+    } else {
+        abi::signal::w_exit_status(code as u8)
+    }
+}
+
+/// Project one thread-group leader exit into parent wait queue + job observer.
+///
+/// Call after scheduler runtime state has already been committed (`Dead` state,
+/// exit code, and thread-group membership updates).
+pub fn publish_leader_exit(
+    parent_pid: u32,
+    child_pid: u32,
+    runtime_exit_code: i32,
+    exit_observer_inbox: Option<crate::inbox::InboxId>,
+) -> alloc::vec::Vec<u64> {
+    let mut parent_waiters = alloc::vec::Vec::new();
+
+    if parent_pid != 0 {
+        let wait_status = wait_status_from_runtime_exit(runtime_exit_code);
+        parent_waiters = crate::signal::queue_parent_child_event(parent_pid, child_pid, wait_status);
+    }
+
+    if child_pid != 0
+        && let Some(inbox_id) = exit_observer_inbox
+    {
+        crate::job::notify::emit_job_exit(inbox_id, child_pid, runtime_exit_code);
+    }
+
+    parent_waiters
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +409,18 @@ mod tests {
             job_wait_result_from_waitpid(127),
             JobWaitResult::Exited { code: Some(127) }
         );
+    }
+
+    // ── wait-status projection ───────────────────────────────────────────────
+
+    #[test]
+    fn test_wait_status_from_runtime_exit_normal_exit() {
+        assert_eq!(wait_status_from_runtime_exit(42), abi::signal::w_exit_status(42));
+    }
+
+    #[test]
+    fn test_wait_status_from_runtime_exit_signal_termination() {
+        assert_eq!(wait_status_from_runtime_exit(-9), abi::signal::w_term_sig(9));
     }
 
     // ── job_state_from_snapshot (multi-thread, Phase 9) ──────────────────────

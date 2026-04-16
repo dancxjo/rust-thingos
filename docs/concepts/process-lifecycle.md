@@ -65,6 +65,15 @@ Thread states are defined in `kernel/src/sched/state.rs`:
 - The parent PID is set at spawn time and does not change.
 - `waitpid` filters children by matching `child.ppid == parent.pid`.
 
+## Lifecycle ownership split (scheduler vs lifecycle bridge)
+
+| Concern | Current owner |
+|---|---|
+| Runnable / blocked / dead execution status, runqueue placement, wake registration | Scheduler (`kernel/src/sched/mod.rs`) |
+| Canonical task/job lifecycle projection (leader exit → parent queue + observer notification) | Job bridge (`kernel/src/job/bridge.rs`) |
+| Unix wait/exit status encoding and `waitpid`-facing queue entries | Job bridge + signal queue (`wait_status_from_runtime_exit`, `queue_parent_child_event`) |
+| Parent/child lifecycle event queue storage (`children_done`) | `ProcessLifecycle` transitional storage (future `Job`) |
+
 **Reparenting**: Not yet implemented.  If a parent exits before its children
 those children currently become un-waitable (ECHILD from any waitpid call on
 them by a different process).  A future act will reparent to `init` (PID 1).
