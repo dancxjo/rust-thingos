@@ -23,6 +23,7 @@ pub mod pal {
     pub mod clock;    // Time and monotonic clock
     pub mod abort;    // Panic and process termination
     pub mod alloc;    // Memory allocator hooks
+    pub mod net;      // Network device access
 }
 ```
 
@@ -234,12 +235,15 @@ When reviewing code:
 
 As of this writing, `stem::pal` provides:
 
+> **Doc maintenance note:** Keep this table in sync with `stem/src/pal/mod.rs` whenever PAL modules are added, removed, or renamed.
+
 | Module | Purpose | Key Functions |
 |--------|---------|---------------|
 | `pal::log` | Logging | `write()`, `write_with_provenance()` |
 | `pal::clock` | Time | `monotonic_ns()`, `sleep_ns()`, `unix_time_ns()` |
 | `pal::abort` | Termination | `abort()`, `debug_write_str()` |
 | `pal::alloc` | Heap management | `grow_heap()` |
+| `pal::net` | Networking | `tcp_connect()`, `tcp_bind()`, `udp_bind()`, `resolve_hostname()` |
 
 Higher-level APIs in stem build on these primitives:
 - `stem::println!()` → `pal::log`
