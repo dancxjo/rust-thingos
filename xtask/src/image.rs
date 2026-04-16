@@ -633,8 +633,7 @@ fn copy_shared_library(
 
     candidates.sort();
     let src = candidates
-        .iter()
-        .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(file_name))
+        .first()
         .ok_or_else(|| anyhow::anyhow!("shared library artifact not found for package '{package}'"))?;
 
     cmd!(sh, "cp {src} {dst}").run()?;
@@ -686,7 +685,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
 
     for lib in default_shared_libraries() {
         build_shared_library(sh, lib.package, target, "release")?;
-        let staged_lib = format!("staged_{}", lib.file_name);
+        let staged_lib = format!("/tmp/thingos_{}_{}", arch, lib.file_name);
         let lib_dst = format!("::/lib/{}", lib.file_name);
         copy_shared_library(sh, lib.package, lib.file_name, target, "release", &staged_lib)?;
         cmd!(sh, "mcopy -i {hdd}@@1M {staged_lib} {lib_dst}").run()?;
