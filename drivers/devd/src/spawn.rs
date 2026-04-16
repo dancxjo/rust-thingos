@@ -2,7 +2,7 @@
 extern crate alloc;
 use abi::driver_interface::DriverEntryCtx;
 use abi::types::TaskStatus;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use stem::syscall::{task_poll, vfs_umount};
 use stem::time::monotonic_ns;
 use stem::{debug, warn};

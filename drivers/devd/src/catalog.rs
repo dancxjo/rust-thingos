@@ -35,7 +35,8 @@ use abi::syscall::vfs_flags::O_RDONLY;
 const MAX_BINARY_INSPECT_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
 
 /// Directories searched for driver-capable binaries, in priority order.
-const SEARCH_PATHS: &[&str] = &["/bin", "/drivers"];
+/// Only `/drivers` is scanned — driver binaries must live there, not in `/bin`.
+const SEARCH_PATHS: &[&str] = &["/drivers"];
 
 /// Cached metadata extracted from a driver-capable binary.
 #[derive(Clone)]
@@ -138,6 +139,21 @@ impl Catalog {
                 }
             }
             offset = end.saturating_add(1);
+        }
+    }
+
+    /// Inspect a single binary at an explicit path and, if it is a valid
+    /// driver-capable binary, add it to the catalog.
+    ///
+    /// Returns `Some(&DriverEntry)` when the binary was accepted, `None` when
+    /// it is not driver-capable or cannot be read.
+    pub fn inspect_binary_path(&mut self, path: &str) -> Option<&DriverEntry> {
+        let before = self.entries.len();
+        self.inspect_binary(path);
+        if self.entries.len() > before {
+            Some(&self.entries[before])
+        } else {
+            None
         }
     }
 
