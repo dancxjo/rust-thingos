@@ -501,8 +501,9 @@ pub struct NamespaceRef {
 }
 
 const GLOBAL_NAMESPACE_ID: u64 = 1;
+const FIRST_ISOLATED_NAMESPACE_ID: u64 = GLOBAL_NAMESPACE_ID + 1;
 static NEXT_NAMESPACE_ID: core::sync::atomic::AtomicU64 =
-    core::sync::atomic::AtomicU64::new(GLOBAL_NAMESPACE_ID + 1);
+    core::sync::atomic::AtomicU64::new(FIRST_ISOLATED_NAMESPACE_ID);
 
 impl NamespaceRef {
     /// Return the shared (global) namespace reference.
