@@ -14,26 +14,7 @@ pub struct Binding {
     pub driver: &'static str,
 }
 
-const BUILTIN_BINDINGS: &[Binding] = &[
-    Binding {
-        vendor_id: 0x1af4,
-        device_id: 0x1000,
-        class_code: Some(0x020000), // Network controller
-        driver: "/virtio_netd",
-    },
-    Binding {
-        vendor_id: 0x1af4,
-        device_id: 0x1050,
-        class_code: Some(0x030000), // Display controller
-        driver: "/virtio_gpu",
-    },
-    Binding {
-        vendor_id: 0,
-        device_id: 0,
-        class_code: Some(0x010601), // AHCI Controller
-        driver: "/ahci_disk",
-    },
-];
+const BUILTIN_BINDINGS: &[Binding] = &[];
 
 pub fn match_binding(device: &SysDevice) -> Option<Binding> {
     BUILTIN_BINDINGS.iter().copied().find(|binding| {
