@@ -116,19 +116,19 @@ fn main(_arg: usize) -> ! {
             stdout_ok = false;
         }
 
-        let mut i = 0;
-        while i < outputs.len() {
-            if write_all(outputs[i].fd, &buf[..n]).is_err() {
+        let mut kept_outputs: Vec<Output<'_>> = Vec::new();
+        for output in outputs.drain(..) {
+            if write_all(output.fd, &buf[..n]).is_err() {
                 print(2, "tee: write error on ");
-                print(2, outputs[i].path);
+                print(2, output.path);
                 print(2, "\n");
                 had_error = true;
-                let _ = vfs_close(outputs[i].fd);
-                outputs.swap_remove(i);
-                continue;
+                let _ = vfs_close(output.fd);
+            } else {
+                kept_outputs.push(output);
             }
-            i += 1;
         }
+        outputs = kept_outputs;
     }
 
     for output in outputs {
