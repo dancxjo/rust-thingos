@@ -114,7 +114,7 @@ pub struct Space {
     /// Stores the page-table root in an architecture-neutral `u64` form (see
     /// [`crate::BootTasking::aspace_to_raw`]).  Written during spawn/exec;
     /// read by the scheduler on context switch.
-    pub aspace_raw: AtomicU64,
+    aspace_raw: AtomicU64,
 }
 
 impl Space {
@@ -171,12 +171,12 @@ impl Space {
 
     /// Return the current architecture-specific page-table token.
     pub fn aspace_raw(&self) -> u64 {
-        self.aspace_raw.load(Ordering::Relaxed)
+        self.aspace_raw.load(Ordering::Acquire)
     }
 
     /// Update the architecture-specific page-table token.
     pub fn set_aspace_raw(&self, aspace_raw: u64) {
-        self.aspace_raw.store(aspace_raw, Ordering::Relaxed);
+        self.aspace_raw.store(aspace_raw, Ordering::Release);
     }
 }
 
