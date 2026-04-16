@@ -12,6 +12,7 @@ use stem::abi::errors::Errno;
 use stem::syscall::{argv_get, env_get, spawn_process_ex, vfs_open, vfs_read, vfs_write, waitpid};
 
 const MAX_ARGV_BYTES: usize = 24 * 1024;
+const ARG_ENTRY_OVERHEAD: usize = 1 + core::mem::size_of::<usize>();
 
 fn get_args() -> Vec<String> {
     let mut len = 0;
@@ -189,39 +190,54 @@ fn main(_arg: usize) -> ! {
     let stdin_bytes = read_stdin();
     let items = split_whitespace_bytes(&stdin_bytes);
     let base_argv = build_base_argv(cmd, fixed_args);
-    let base_bytes: usize = base_argv.iter().map(Vec::len).sum();
+    let base_bytes: usize = base_argv.iter().map(|v| v.len() + ARG_ENTRY_OVERHEAD).sum();
 
     let mut exit_code = 0;
+    let mut child_failed = false;
     if items.is_empty() {
-        exit_code = run_command(&path, &base_argv);
+        let status = run_command(&path, &base_argv);
+        if status != 0 {
+            child_failed = true;
+        }
     } else {
         let mut idx = 0usize;
         while idx < items.len() {
             let mut argv = base_argv.clone();
             let mut current_bytes = base_bytes;
-            let mut added = false;
+            let mut added = 0usize;
 
             while idx < items.len() {
-                let item_len = items[idx].len();
-                if added && current_bytes + item_len > MAX_ARGV_BYTES {
+                let item_bytes = items[idx].len() + ARG_ENTRY_OVERHEAD;
+                if added > 0 && current_bytes + item_bytes > MAX_ARGV_BYTES {
+                    break;
+                }
+                if added == 0 && current_bytes + item_bytes > MAX_ARGV_BYTES {
+                    write_err("xargs: argument too long\n");
+                    if exit_code == 0 {
+                        exit_code = 124;
+                    }
+                    idx += 1;
                     break;
                 }
                 argv.push(items[idx].clone());
-                current_bytes += item_len;
+                current_bytes += item_bytes;
                 idx += 1;
-                added = true;
+                added += 1;
             }
 
-            if !added && idx < items.len() {
-                argv.push(items[idx].clone());
-                idx += 1;
+            if added == 0 {
+                continue;
             }
 
             let status = run_command(&path, &argv);
-            if status != 0 && exit_code == 0 {
-                exit_code = status;
+            if status != 0 {
+                child_failed = true;
             }
         }
+    }
+
+    if child_failed && exit_code == 0 {
+        exit_code = 123;
     }
 
     stem::syscall::exit(exit_code)
