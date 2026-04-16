@@ -120,6 +120,7 @@ impl ProviderChannel {
 /// A [`VfsDriver`] that forwards all operations to a userland provider via IPC.
 pub struct ProviderFs {
     channel: Mutex<ProviderChannel>,
+    rpc: Arc<Mutex<ProviderChannelRef>>,
 }
 
 static PROVIDER_MAP: Mutex<BTreeMap<u32, Weak<ProviderFs>>> = Mutex::new(BTreeMap::new());
@@ -131,6 +132,11 @@ impl ProviderFs {
         resp_write_handle: u32,
         req_port_id: u32,
     ) -> Arc<Self> {
+        let rpc = Arc::new(Mutex::new(ProviderChannelRef {
+            req: req_port.clone(),
+            resp: resp_port.clone(),
+            resp_write_handle,
+        }));
         let this = Arc::new(Self {
             channel: Mutex::new(ProviderChannel {
                 req: req_port,
@@ -138,6 +144,7 @@ impl ProviderFs {
                 resp_write_handle,
                 waiters: BTreeMap::new(),
             }),
+            rpc,
         });
         PROVIDER_MAP.lock().insert(req_port_id, Arc::downgrade(&this));
         this
@@ -163,15 +170,8 @@ impl VfsDriver for ProviderFs {
         let resp = self.channel.lock().rpc(VfsRpcOp::Lookup, &payload)?;
         parse_response_handle(&resp).map(|handle| {
             let wq = self.channel.lock().get_wait_queue(handle);
-            Arc::new(ProviderNode {
-                handle,
-                channel: Arc::new(Mutex::new(ProviderChannelRef {
-                    req: self.channel.lock().req.clone(),
-                    resp: self.channel.lock().resp.clone(),
-                    resp_write_handle: self.channel.lock().resp_write_handle,
-                })),
-                wait_queue: wq,
-            }) as Arc<dyn VfsNode>
+            Arc::new(ProviderNode { handle, channel: self.rpc.clone(), wait_queue: wq })
+                as Arc<dyn VfsNode>
         })
     }
 
@@ -340,8 +340,12 @@ impl VfsNode for ProviderNode {
     }
 
     fn close(&self) {
-        let payload = self.handle.to_le_bytes();
-        let _ = self.channel.lock().rpc(VfsRpcOp::Close, &payload);
+        // Best-effort close only: do not synchronously round-trip to userland
+        // providers on FD teardown. A stalled provider Close handler must not
+        // wedge the calling task (e.g. shell waiting on `ls` completion).
+        //
+        // If providers need strict handle-lifetime notifications in the future,
+        // this should be replaced with an asynchronous fire-and-forget channel.
     }
 
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
