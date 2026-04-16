@@ -530,40 +530,16 @@ fn main(boot_fd: usize) -> ! {
         }
     }
 
-    let mut path_buf = [0u8; 128];
-    let path = if boot_fd != 0 {
-        use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-        let req = VmMapReq {
-            addr_hint: 0,
-            len: 4096,
-            prot: VmProt::READ | VmProt::USER,
-            flags: VmMapFlags::empty(),
-            backing: VmBacking::File { thing: boot_fd as u32,
-                offset: 0,
-            },
-        };
-        if let Ok(resp) = stem::syscall::vm_map(&req) {
-            let ptr = resp.addr as *const u8;
-            let len = (0..128)
-                .find(|&i| unsafe { *ptr.add(i) == 0 })
-                .unwrap_or(128);
-            unsafe { core::slice::from_raw_parts(ptr, len) }
-        } else {
-            b"/sys/devices/pci-0000:00:1f.2" // Default to QEMU AHCI (q35)
-        }
-    } else {
-        b"/sys/devices/pci-0000:00:1f.2"
-    };
-    let path_str = core::str::from_utf8(path).unwrap_or("");
+    let path_override = resolve_device_path_from_boot_fd(boot_fd);
 
     // Resolve the sysfs path for this device.
-    let dev_path = if !path_str.is_empty() {
-        alloc::string::String::from(path_str)
+    let dev_path = if let Some(path) = path_override {
+        path
     } else {
         match find_ahci_device() {
             Some(p) => p,
             None => {
-                error!("AHCI: Failed to find controller info at '{}'", path_str);
+                error!("AHCI: Failed to find AHCI controller via boot context or scan");
                 loop {
                     stem::sleep(Duration::from_secs(60));
                 }
@@ -810,6 +786,45 @@ fn main(boot_fd: usize) -> ! {
             }
         }
     }
+}
+
+fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<alloc::string::String> {
+    if boot_fd == 0 {
+        return None;
+    }
+
+    use abi::driver_interface::DriverEntryCtx;
+    use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
+    let req = VmMapReq {
+        addr_hint: 0,
+        len: 4096,
+        prot: VmProt::READ | VmProt::USER,
+        flags: VmMapFlags::empty(),
+        backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
+    };
+    if let Ok(resp) = stem::syscall::vm_map(&req) {
+        // New devd path: DriverEntryCtx in boot memfd.
+        let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+        if ctx.version == 1 {
+            let s = ctx.device_path_str();
+            if !s.is_empty() {
+                return Some(alloc::string::String::from(s));
+            }
+        }
+
+        // Legacy fallback: NUL-terminated path starts at offset 0.
+        let ptr = resp.addr as *const u8;
+        let len = (0..128)
+            .find(|&i| unsafe { *ptr.add(i) == 0 })
+            .unwrap_or(128);
+        let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+        let s = core::str::from_utf8(bytes).unwrap_or("");
+        if !s.is_empty() {
+            return Some(alloc::string::String::from(s));
+        }
+    }
+
+    None
 }
 
 /// Handle a block device RPC request

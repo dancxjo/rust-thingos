@@ -591,22 +591,10 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         }
     }
 
-    // Resolve device path from boot_fd or auto-discovery.
-    let mut path_buf = [0u8; 128];
-    let path_len = if boot_fd != 0 {
-        use stem::syscall::vfs::vfs_read;
-        vfs_read(boot_fd as u32, &mut path_buf).unwrap_or(0)
-    } else {
-        0
-    };
-
     let path_str = if let Some(path) = explicit_path {
         path.to_string()
-    } else if path_len > 0 {
-        core::str::from_utf8(&path_buf[..path_len])
-            .unwrap_or("")
-            .trim_matches(char::from(0))
-            .to_string()
+    } else if let Some(path) = resolve_device_path_from_boot_fd(boot_fd) {
+        path
     } else if let Some(found) = find_virtio_sound_device() {
         info!("SND: Discovered device at {}", found);
         found
@@ -793,6 +781,48 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         if !had_rpc {
             stem::time::sleep_ms(1);
         }
+    }
+}
+
+fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<String> {
+    if boot_fd == 0 {
+        return None;
+    }
+
+    // New devd path: boot arg contains a DriverEntryCtx payload.
+    use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
+    let req = VmMapReq {
+        addr_hint: 0,
+        len: 4096,
+        prot: VmProt::READ | VmProt::USER,
+        flags: VmMapFlags::empty(),
+        backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
+    };
+    if let Ok(resp) = stem::syscall::vm_map(&req) {
+        let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+        if ctx.version == 1 {
+            let s = ctx.device_path_str();
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+
+    // Legacy fallback: boot_fd holds a plain path string.
+    let mut path_buf = [0u8; 128];
+    use stem::syscall::vfs::vfs_read;
+    let path_len = vfs_read(boot_fd as u32, &mut path_buf).unwrap_or(0);
+    if path_len == 0 {
+        return None;
+    }
+    let path = core::str::from_utf8(&path_buf[..path_len])
+        .unwrap_or("")
+        .trim_matches(char::from(0))
+        .to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
     }
 }
 

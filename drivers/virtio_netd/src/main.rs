@@ -144,6 +144,17 @@ fn parse_supervisor_bootstrap(arg: usize) -> (Option<String>, Option<SupervisorB
             backing: VmBacking::File { thing: arg as u32, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
+            // New devd path: boot arg contains DriverEntryCtx bytes.
+            let entry_ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+            if entry_ctx.version == 1 {
+                let s = entry_ctx.device_path_str();
+                if !s.is_empty() {
+                    claimed_path = Some(s.to_string());
+                }
+                return (claimed_path, None);
+            }
+
+            // Legacy sovereign bootstrap payload.
             let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
             let req_read = slice[0];
             let resp_write = slice[1];
@@ -159,7 +170,7 @@ fn parse_supervisor_bootstrap(arg: usize) -> (Option<String>, Option<SupervisorB
                 claimed_path = Some(path);
             }
 
-            if req_read != 0 && resp_write != 0 {
+            if req_read != 0 && resp_write != 0 && bind_instance_id != 0 {
                 bootstrap =
                     Some(SupervisorBootstrap { drv_req_read: req_read, drv_resp_write: resp_write, bind_instance_id });
             }
