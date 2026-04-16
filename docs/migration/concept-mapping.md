@@ -228,7 +228,7 @@ Process (legacy)
 
 **Current transitional backing:**
 - `ProcessAddressSpace` subdivision inside `Process` (`Process.space`)
-- No bridge module yet; `kernel::space::bridge` is planned
+- Bridged through `kernel::space::bridge` as the canonical public surface
 
 **Relationship:** Equivalent (explicit)
 

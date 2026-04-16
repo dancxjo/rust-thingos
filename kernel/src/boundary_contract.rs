@@ -14,6 +14,8 @@
 //! | authority bridge signatures          | [`bridge_signatures_return_canonical_types`] |
 //! | place bridge signatures              | [`bridge_signatures_return_canonical_types`] |
 //! | message bridge signatures            | [`bridge_signatures_return_canonical_types`] |
+//! | space bridge signatures              | [`bridge_signatures_return_canonical_types`] |
+//! | presence bridge signatures           | [`bridge_signatures_return_canonical_types`] |
 //! | KIND_ID_THINGOS_MESSAGE              | [`kind_ids_match_kindc_generated_constants`] |
 //! | KIND_ID_THINGOS_JOB_EXIT             | [`kind_ids_match_kindc_generated_constants`] |
 //! | KIND_ID_THINGOS_AUTHORITY            | [`kind_ids_match_kindc_generated_constants`] |
@@ -21,6 +23,8 @@
 //! | KIND_ID_THINGOS_JOB / JOB_STATE / JOB_WAIT_RESULT | [`kind_ids_match_kindc_generated_constants`] |
 //! | KIND_ID_THINGOS_GROUP                | [`kind_ids_match_kindc_generated_constants`] |
 //! | KIND_ID_THINGOS_PLACE                | [`kind_ids_match_kindc_generated_constants`] |
+//! | KIND_ID_THINGOS_SPACE                | [`kind_ids_match_kindc_generated_constants`] |
+//! | KIND_ID_THINGOS_PRESENCE / PRESENCE_MODE / PRESENCE_EMBODIMENT_KIND | [`kind_ids_match_kindc_generated_constants`] |
 
 use thingos::message::KindId;
 
@@ -52,6 +56,16 @@ fn bridge_signatures_return_canonical_types() {
 
     let _: fn(KindId, alloc::vec::Vec<u8>) -> thingos::message::Message =
         crate::message::bridge::message_from_parts;
+
+    let _: fn(&crate::sched::hooks::ProcessSnapshot) -> thingos::space::Space =
+        crate::space::bridge::space_from_snapshot;
+
+    let _: fn() -> thingos::space::Space = crate::space::bridge::space_for_current;
+
+    let _: fn(&crate::sched::hooks::ProcessSnapshot) -> thingos::presence::Presence =
+        crate::presence::bridge::presence_from_snapshot;
+
+    let _: fn() -> thingos::presence::Presence = crate::presence::bridge::presence_for_current;
 }
 
 #[test]
@@ -104,5 +118,25 @@ fn kind_ids_match_kindc_generated_constants() {
     assert_eq!(
         thingos::place::KIND_ID_THINGOS_PLACE,
         thingos::kinds::KIND_ID_THINGOS_PLACE,
+    );
+
+    // ── space ─────────────────────────────────────────────────────────────────
+    assert_eq!(
+        thingos::space::KIND_ID_THINGOS_SPACE,
+        thingos::kinds::KIND_ID_THINGOS_SPACE,
+    );
+
+    // ── presence ──────────────────────────────────────────────────────────────
+    assert_eq!(
+        thingos::presence::KIND_ID_THINGOS_PRESENCE,
+        thingos::kinds::KIND_ID_THINGOS_PRESENCE,
+    );
+    assert_eq!(
+        thingos::presence::KIND_ID_THINGOS_PRESENCE_MODE,
+        thingos::kinds::KIND_ID_THINGOS_PRESENCE_MODE,
+    );
+    assert_eq!(
+        thingos::presence::KIND_ID_THINGOS_PRESENCE_EMBODIMENT_KIND,
+        thingos::kinds::KIND_ID_THINGOS_PRESENCE_EMBODIMENT_KIND,
     );
 }
