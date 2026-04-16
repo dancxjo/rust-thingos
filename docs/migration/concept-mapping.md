@@ -264,6 +264,8 @@ Process (legacy)
 - New resource resolution code should use `kernel::handle::bridge` helpers
 - Keep fd integer semantics at explicit compat boundaries only
 - Continue migrating direct `thing_table`/IPC mixed probing into the bridge
+- Example boundary: syscall handlers that receive raw integers should convert to
+  `kernel::handle::bridge::Handle` immediately and delegate lookup to bridge helpers
 
 ---
 

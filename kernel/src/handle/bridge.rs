@@ -181,7 +181,7 @@ mod tests {
         }
     }
 
-    fn make_test_process_info(
+    fn make_test_process_with_thing_table(
         thing_table_entries: &[(u32, Arc<dyn VfsNode>)],
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
         let mut thing_table = ThingTable::new();
@@ -215,7 +215,7 @@ mod tests {
         };
 
         let node: Arc<dyn VfsNode> = Arc::new(NullNode);
-        let pinfo = make_test_process_info(&[(handle.0, node)]);
+        let pinfo = make_test_process_with_thing_table(&[(handle.0, node)]);
         let resolved = resolve_handle(&pinfo, Handle(handle.0)).expect("resolve");
         assert_eq!(resolved.kind(), HandleKind::File);
 
@@ -236,7 +236,7 @@ mod tests {
                 .expect("allocate handle")
         };
 
-        let pinfo = make_test_process_info(&[]);
+        let pinfo = make_test_process_with_thing_table(&[]);
         let fd = install_fd_compat_for_channel_handle(&pinfo, Handle(handle.0)).expect("fd");
 
         let lock = pinfo.lock();
