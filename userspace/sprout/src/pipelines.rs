@@ -743,39 +743,11 @@ pub fn setup_taskman_service(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 pub fn setup_ui_services(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     // Keep `placed` deterministic (window placement policy source), then fan out
     // independent UI services in parallel so startup is not serialized on one lane.
-    spawn_ui_service(shared_tasks.clone(), "/bin/placed", "svc.placed", 2);
-
-    let tasks_for_flytrap = shared_tasks.clone();
-    if let Err(e) = stem::thread::spawn_task(move || {
-        spawn_ui_service(tasks_for_flytrap, "/bin/flytrap", "svc.flytrap", 2);
-    }) {
-        warn!(
-            "SPROUT: Failed to create flytrap startup task: {:?}. The flytrap service will not be launched.",
-            e
-        );
-    }
-
-    let tasks_for_blossom = shared_tasks;
-    if let Err(e) = stem::thread::spawn_task(move || {
-        spawn_ui_service(tasks_for_blossom, "/bin/blossom", "svc.blossom", 2);
-    }) {
-        warn!(
-            "SPROUT: Failed to create blossom startup task: {:?}. The blossom service will not be launched.",
-            e
-        );
-    }
-}
-
-pub fn setup_blossom_service(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    spawn_ui_service(shared_tasks, "/bin/blossom", "svc.blossom", 2);
+    spawn_ui_service(shared_tasks, "/bin/placed", "svc.placed", 2);
 }
 
 pub fn setup_font_service(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     // Font handling is integrated into Bloom directly
-}
-
-pub fn setup_flytrap_service(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    spawn_ui_service(shared_tasks, "/bin/flytrap", "svc.flytrap", 2);
 }
 
 fn spawn_ui_service(
