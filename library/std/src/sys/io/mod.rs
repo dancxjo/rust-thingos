@@ -29,6 +29,10 @@ mod is_terminal {
             mod isatty;
             pub use isatty::*;
         }
+        target_os = "thingos" => {
+            mod thingos;
+            pub use thingos::*;
+        }
         target_os = "windows" => {
             mod windows;
             pub use windows::*;

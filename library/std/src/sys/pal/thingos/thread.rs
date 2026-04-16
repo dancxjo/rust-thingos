@@ -51,8 +51,11 @@ compile_error!(
     "ThingOS std thread PAL is abort-only: panic=unwind is not supported for target_os=thingos"
 );
 
-use crate::ffi::CStr;
+use crate::boxed::Box;
+use crate::collections::BTreeMap;
+use crate::ffi::{CStr, c_int, c_void};
 use crate::num::NonZero;
+use crate::sync::Mutex;
 use crate::thread::ThreadInit;
 use crate::time::Duration;
 
@@ -572,4 +575,270 @@ fn read_tls_info() -> Option<TlsInfo> {
 fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two(), "align must be a power of two");
     (value + align - 1) & !(align - 1)
+}
+
+// ── pthread C ABI compatibility ──────────────────────────────────────────────
+
+const ESRCH: c_int = 3;
+const EAGAIN: c_int = 11;
+const EINVAL: c_int = 22;
+
+const PTHREAD_CREATE_JOINABLE: c_int = 0;
+const PTHREAD_CREATE_DETACHED: c_int = 1;
+
+#[allow(non_camel_case_types)]
+pub type pthread_t = u64;
+
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct pthread_attr_t {
+    detachstate: c_int,
+}
+
+type PthreadStart = extern "C" fn(*mut c_void) -> *mut c_void;
+
+#[repr(C)]
+struct PthreadStartContext {
+    start: PthreadStart,
+    arg: *mut c_void,
+}
+
+struct PthreadRecord {
+    retval: usize,
+    detached: bool,
+    join_in_progress: bool,
+    exited: bool,
+}
+
+// SAFETY: pthread records are only accessed while holding PTHREADS.
+unsafe impl Send for PthreadRecord {}
+
+static PTHREADS: Mutex<BTreeMap<pthread_t, PthreadRecord>> = Mutex::new(BTreeMap::new());
+
+extern "C" fn pthread_start_trampoline(arg: usize) -> ! {
+    // SAFETY: `arg` was produced by Box::into_raw in pthread_create.
+    let start = unsafe { Box::from_raw(arg as *mut PthreadStartContext) };
+    let retval = (start.start)(start.arg);
+    pthread_exit(retval)
+}
+
+#[inline]
+fn decode_detachstate(attr: *const pthread_attr_t) -> Result<bool, c_int> {
+    if attr.is_null() {
+        return Ok(false);
+    }
+
+    // SAFETY: caller provided a non-null pointer; we only read detachstate.
+    let state = unsafe { (*attr).detachstate };
+    match state {
+        PTHREAD_CREATE_JOINABLE => Ok(false),
+        PTHREAD_CREATE_DETACHED => Ok(true),
+        _ => Err(EINVAL),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_init(attr: *mut pthread_attr_t) -> c_int {
+    if attr.is_null() {
+        return EINVAL;
+    }
+    // SAFETY: validated non-null by guard above.
+    unsafe {
+        (*attr).detachstate = PTHREAD_CREATE_JOINABLE;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_destroy(attr: *mut pthread_attr_t) -> c_int {
+    if attr.is_null() {
+        return EINVAL;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_setdetachstate(
+    attr: *mut pthread_attr_t,
+    detachstate: c_int,
+) -> c_int {
+    if attr.is_null() {
+        return EINVAL;
+    }
+    if detachstate != PTHREAD_CREATE_JOINABLE && detachstate != PTHREAD_CREATE_DETACHED {
+        return EINVAL;
+    }
+    // SAFETY: validated non-null by guard above.
+    unsafe {
+        (*attr).detachstate = detachstate;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_getdetachstate(
+    attr: *const pthread_attr_t,
+    detachstate: *mut c_int,
+) -> c_int {
+    if attr.is_null() || detachstate.is_null() {
+        return EINVAL;
+    }
+    // SAFETY: validated non-null by guard above.
+    unsafe {
+        *detachstate = (*attr).detachstate;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_create(
+    thread: *mut pthread_t,
+    attr: *const pthread_attr_t,
+    start_routine: PthreadStart,
+    arg: *mut c_void,
+) -> c_int {
+    if thread.is_null() {
+        return EINVAL;
+    }
+
+    let detached = match decode_detachstate(attr) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    let (sp, stack) = match unsafe { allocate_stack(DEFAULT_RESERVE) } {
+        Ok(v) => v,
+        Err(e) => return e.raw_os_error().unwrap_or(EAGAIN),
+    };
+    let tls_base = allocate_tls_block();
+
+    let start_ctx = Box::new(PthreadStartContext { start: start_routine, arg });
+    let start_ctx_ptr = Box::into_raw(start_ctx) as usize;
+
+    let req = SpawnThreadReq {
+        entry: pthread_start_trampoline as *const () as usize,
+        sp,
+        arg: start_ctx_ptr,
+        stack,
+        tls_base,
+        flags: 0,
+        _pad: 0,
+    };
+
+    let ret = unsafe {
+        raw_syscall6(SYS_SPAWN_THREAD, &req as *const SpawnThreadReq as usize, 0, 0, 0, 0, 0)
+    };
+    if ret < 0 {
+        // SAFETY: pointer came from Box::into_raw above and was not consumed.
+        unsafe { drop(Box::from_raw(start_ctx_ptr as *mut PthreadStartContext)) };
+        return (-ret) as c_int;
+    }
+
+    let tid = ret as pthread_t;
+    PTHREADS
+        .lock()
+        .insert(tid, PthreadRecord { retval: 0, detached, join_in_progress: false, exited: false });
+
+    // SAFETY: validated non-null by guard above.
+    unsafe {
+        *thread = tid;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_void) -> c_int {
+    let self_tid = match current_os_id() {
+        Some(tid) => tid as pthread_t,
+        None => return ESRCH,
+    };
+
+    if self_tid == thread {
+        return EINVAL;
+    }
+
+    {
+        let mut threads = PTHREADS.lock();
+        let Some(record) = threads.get_mut(&thread) else {
+            return ESRCH;
+        };
+        if record.detached || record.join_in_progress {
+            return EINVAL;
+        }
+        record.join_in_progress = true;
+    }
+
+    let wait_ret = unsafe { raw_syscall6(SYS_TASK_WAIT, thread as usize, 0, 0, 0, 0, 0) };
+    if wait_ret < 0 {
+        if let Some(record) = PTHREADS.lock().get_mut(&thread) {
+            record.join_in_progress = false;
+        }
+        return (-wait_ret) as c_int;
+    }
+
+    let Some(record) = PTHREADS.lock().remove(&thread) else {
+        return ESRCH;
+    };
+
+    if !retval.is_null() {
+        // SAFETY: caller provided a valid retval pointer contractually.
+        unsafe {
+            *retval = record.retval as *mut c_void;
+        }
+    }
+
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_detach(thread: pthread_t) -> c_int {
+    let self_tid = current_os_id().unwrap_or(0) as pthread_t;
+    if self_tid == thread {
+        return EINVAL;
+    }
+
+    let mut threads = PTHREADS.lock();
+    let Some(record) = threads.get_mut(&thread) else {
+        return ESRCH;
+    };
+    if record.detached {
+        return EINVAL;
+    }
+
+    if record.exited {
+        threads.remove(&thread);
+        return 0;
+    }
+
+    record.detached = true;
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pthread_self() -> pthread_t {
+    current_os_id().unwrap_or(0) as pthread_t
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
+    if let Some(tid) = current_os_id() {
+        let tid = tid as pthread_t;
+        let mut remove_record = false;
+        {
+            let mut threads = PTHREADS.lock();
+            if let Some(record) = threads.get_mut(&tid) {
+                record.retval = retval as usize;
+                record.exited = true;
+                remove_record = record.detached;
+            }
+            if remove_record {
+                threads.remove(&tid);
+            }
+        }
+    }
+
+    unsafe {
+        raw_syscall6(SYS_EXIT, 0, 0, 0, 0, 0, 0);
+        core::hint::unreachable_unchecked()
+    }
 }

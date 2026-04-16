@@ -1,7 +1,21 @@
 use crate::io::ErrorKind;
 
+#[thread_local]
+static mut ERRNO_SLOT: i32 = 0;
+
 pub fn errno() -> i32 {
-    0
+    unsafe { ERRNO_SLOT }
+}
+
+pub fn set_errno(code: i32) {
+    unsafe {
+        ERRNO_SLOT = code;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __errno_location() -> *mut i32 {
+    &raw mut ERRNO_SLOT
 }
 
 pub fn is_interrupted(code: i32) -> bool {

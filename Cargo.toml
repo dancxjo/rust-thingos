@@ -208,3 +208,7 @@ codegen-units = 1
 [patch.crates-io]
 crossterm = { path = "vendor/crossterm" }
 libc = { path = "vendor/libc" }
+which = { path = "vendor/which" }
+trash = { path = "vendor/trash" }
+dirs = { path = "vendor/dirs" }
+dirs-sys = { path = "vendor/dirs-sys" }
