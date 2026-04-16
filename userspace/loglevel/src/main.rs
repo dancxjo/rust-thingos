@@ -47,7 +47,7 @@ fn main(_arg: usize) -> ! {
     let args = get_args();
     if args.len() < 2 {
         println!("Usage: loglevel <0-5>");
-        println!("  0: Contract Only");
+        println!("  0: Off");
         println!("  1: Error");
         println!("  2: Warn");
         println!("  3: Info");

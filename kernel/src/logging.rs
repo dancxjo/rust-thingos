@@ -28,11 +28,11 @@ static LOG_STATE: Mutex<LogBufferState> = Mutex::new(LogBufferState { head: 0, l
 static IN_GRAPH_LOG: AtomicBool = AtomicBool::new(false);
 static MUTE_SERIAL: AtomicBool = AtomicBool::new(false);
 
-/// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Contract-only)
+/// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Off)
 /// Default is 2 (warn).
 static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(2);
 
-/// Set the minimum log level for output (0=Contract-only, 1=Error+, 2=Warn+, etc.)
+/// Set the minimum log level for output (0=Off, 1=Error+, 2=Warn+, etc.)
 pub fn set_log_level(level: u8) {
     MIN_LOG_LEVEL.store(level, Ordering::Relaxed);
 }
@@ -223,7 +223,7 @@ fn level_to_colored_str(level: Level) -> &'static str {
 #[inline]
 fn should_log(level: Level) -> bool {
     let min = MIN_LOG_LEVEL.load(Ordering::Relaxed);
-    // If min is 0, only contract! messages pass (they call _log_contract directly)
+    // If min is 0, all log output is disabled.
     // Otherwise, check if level <= min (Error=1 is most severe, Trace=5 is least)
     min > 0 && (level as u8) <= min
 }
@@ -341,43 +341,18 @@ pub fn _log_raw(args: fmt::Arguments) {
     }
 }
 
-/// Contract-level logging macro - ALWAYS outputs regardless of log level.
-/// Use for critical boot milestones and BDD test verification points.
+/// Contract-level logging now maps directly to INFO logging semantics.
 #[macro_export]
-macro_rules! contract {
-    ($($arg:tt)*) => {
-        $crate::logging::_log_contract(module_path!(), format_args!($($arg)*))
-    };
-}
-
-#[macro_export]
-macro_rules! log_event {
-    // With fields and about
-    ($lvl:expr, $event:expr, $msg:expr, { $($k:ident : $v:expr),* }, about=[$($about:expr),*]) => {
-        $crate::logging::_log_event(
-            $crate::logging::LogMetadata {
-                level: $lvl,
-                file: file!(),
-                line: line!(),
+    _log_event(
+        LogMetadata { level: Level::Info, file: file!(), line: line!(), module: source },
+        source,
+        args,
+        &[],
+        &[],
+    );
                 module: module_path!(),
             },
-            $event,
-            format_args!($msg),
-            &[ $( (stringify!($k), $v) ),* ],
-            &[ $($about),* ]
-        )
-    };
-    // With format args, no extra fields
-    ($lvl:expr, $event:expr, $($arg:tt)*) => {
-        $crate::logging::_log_event(
-            $crate::logging::LogMetadata {
-                level: $lvl,
-                file: file!(),
-                line: line!(),
-                module: module_path!(),
-            },
-            $event,
-            format_args!($($arg)*),
+/// Contract-level logging macro (mapped to INFO level).
             &[],
             &[]
         )
@@ -470,4 +445,42 @@ macro_rules! kprint {
 macro_rules! kprintln {
     () => ($crate::kprint!("\n"));
     ($($arg:tt)*) => ($crate::kprint!("{}\n", format_args!($($arg)*)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+    fn reset_test_state(min_level: u8) {
+        MUTE_SERIAL.store(true, Ordering::Relaxed);
+        set_log_level(min_level);
+        let mut state = LOG_STATE.lock();
+        state.head = 0;
+        state.len = 0;
+    }
+
+    #[test]
+    fn contract_log_is_formatted_as_info() {
+        let _guard = TEST_LOCK.lock();
+        reset_test_state(3);
+
+        _log_contract("contract.test", format_args!("hello"));
+
+        let mut buf = [0u8; 256];
+        let n = copy_log_buffer(&mut buf);
+        let s = core::str::from_utf8(&buf[..n]).expect("utf8");
+        assert!(s.contains("[INFO] [contract.test] [CPU0] hello"));
+    }
+
+    #[test]
+    fn contract_log_respects_info_filtering() {
+        let _guard = TEST_LOCK.lock();
+        reset_test_state(2);
+
+        _log_contract("contract.test", format_args!("hidden"));
+
+        assert_eq!(get_log_buffer_len(), 0);
+    }
 }
