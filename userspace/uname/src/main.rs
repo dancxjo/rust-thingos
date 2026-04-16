@@ -120,7 +120,9 @@ fn main(_arg: usize) -> ! {
         }
         print(MACHINE);
     }
-    print("\n");
+    if !first {
+        print("\n");
+    }
 
     exit(0)
 }
