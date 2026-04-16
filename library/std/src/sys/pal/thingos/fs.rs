@@ -90,11 +90,24 @@ fn cvt(ret: isize) -> crate::io::Result<usize> {
     if ret < 0 { Err(syscall_err(ret)) } else { Ok(ret as usize) }
 }
 
-/// Resolve a `Path` to a `&str` (paths are always UTF-8 on ThingOS).
+/// Resolve a `Path` to encoded bytes for syscall ABI passing.
 #[inline]
-fn path_to_str(path: &Path) -> crate::io::Result<&str> {
-    path.to_str()
-        .ok_or_else(|| io::const_error!(crate::io::ErrorKind::InvalidInput, "path is not valid UTF-8"))
+fn path_to_bytes(path: &Path) -> &[u8] {
+    path.as_os_str().as_encoded_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_to_bytes;
+    use crate::ffi::OsStr;
+    use crate::path::Path;
+
+    #[test]
+    fn path_to_bytes_accepts_non_utf8_paths() {
+        let bytes = [b'/', b't', 0xff, b's', b't'];
+        let os = unsafe { OsStr::from_encoded_bytes_unchecked(&bytes) };
+        assert_eq!(path_to_bytes(Path::new(os)), bytes);
+    }
 }
 
 // ── FileDesc: thin close-on-drop fd wrapper ───────────────────────────────────
@@ -403,15 +416,15 @@ impl File {
     }
 
     pub fn open(path: &Path, opts: &OpenOptions) -> crate::io::Result<File> {
-        let path_str = path_to_str(path)?;
+        let path = path_to_bytes(path);
         let mut flags = opts.get_access_mode()?;
         flags |= opts.get_creation_mode()?;
 
         let ret = unsafe {
             raw_syscall6(
                 SYS_FS_OPEN,
-                path_str.as_ptr() as usize,
-                path_str.len(),
+                path.as_ptr() as usize,
+                path.len(),
                 flags as usize,
                 0,
                 0,
@@ -759,12 +772,12 @@ impl DirBuilder {
 
 /// Open a file descriptor for `path` (read-only), run `f`, then close it.
 fn with_path_fd<T>(path: &Path, f: impl FnOnce(u32) -> crate::io::Result<T>) -> crate::io::Result<T> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_OPEN,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             O_RDONLY as usize,
             0,
             0,
@@ -796,13 +809,13 @@ pub fn stat(path: &Path) -> crate::io::Result<FileAttr> {
 }
 
 pub fn lstat(path: &Path) -> crate::io::Result<FileAttr> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let mut s = AbiFileStat::default();
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_LSTAT,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             &mut s as *mut AbiFileStat as usize,
             0,
             0,
@@ -815,13 +828,13 @@ pub fn lstat(path: &Path) -> crate::io::Result<FileAttr> {
 
 pub fn readdir(path: &Path) -> crate::io::Result<ReadDir> {
     let root = path.to_path_buf();
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     // Open the directory to get an fd.
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_OPEN,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             O_RDONLY as usize,
             0,
             0,
@@ -864,17 +877,17 @@ pub fn readdir(path: &Path) -> crate::io::Result<ReadDir> {
 }
 
 pub fn mkdir(path: &Path) -> crate::io::Result<()> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let ret = unsafe {
-        raw_syscall6(SYS_FS_MKDIR, path_str.as_ptr() as usize, path_str.len(), 0, 0, 0, 0)
+        raw_syscall6(SYS_FS_MKDIR, path.as_ptr() as usize, path.len(), 0, 0, 0, 0)
     };
     cvt(ret).map(|_| ())
 }
 
 pub fn unlink(path: &Path) -> crate::io::Result<()> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let ret = unsafe {
-        raw_syscall6(SYS_FS_UNLINK, path_str.as_ptr() as usize, path_str.len(), 0, 0, 0, 0)
+        raw_syscall6(SYS_FS_UNLINK, path.as_ptr() as usize, path.len(), 0, 0, 0, 0)
     };
     cvt(ret).map(|_| ())
 }
@@ -885,15 +898,15 @@ pub fn rmdir(path: &Path) -> crate::io::Result<()> {
 }
 
 pub fn rename(old: &Path, new: &Path) -> crate::io::Result<()> {
-    let old_str = path_to_str(old)?;
-    let new_str = path_to_str(new)?;
+    let old = path_to_bytes(old);
+    let new = path_to_bytes(new);
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_RENAME,
-            old_str.as_ptr() as usize,
-            old_str.len(),
-            new_str.as_ptr() as usize,
-            new_str.len(),
+            old.as_ptr() as usize,
+            old.len(),
+            new.as_ptr() as usize,
+            new.len(),
             0,
             0,
         )
@@ -902,13 +915,13 @@ pub fn rename(old: &Path, new: &Path) -> crate::io::Result<()> {
 }
 
 pub fn canonicalize(path: &Path) -> crate::io::Result<PathBuf> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let mut buf = vec![0u8; 4096];
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_REALPATH,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             buf.as_mut_ptr() as usize,
             buf.len(),
             0,
@@ -922,13 +935,13 @@ pub fn canonicalize(path: &Path) -> crate::io::Result<PathBuf> {
 }
 
 pub fn readlink(path: &Path) -> crate::io::Result<PathBuf> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let mut buf = vec![0u8; 4096];
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_READLINK,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             buf.as_mut_ptr() as usize,
             buf.len(),
             0,
@@ -941,15 +954,15 @@ pub fn readlink(path: &Path) -> crate::io::Result<PathBuf> {
 }
 
 pub fn symlink(src: &Path, dst: &Path) -> crate::io::Result<()> {
-    let src_str = path_to_str(src)?;
-    let dst_str = path_to_str(dst)?;
+    let src = path_to_bytes(src);
+    let dst = path_to_bytes(dst);
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_SYMLINK,
-            src_str.as_ptr() as usize,
-            src_str.len(),
-            dst_str.as_ptr() as usize,
-            dst_str.len(),
+            src.as_ptr() as usize,
+            src.len(),
+            dst.as_ptr() as usize,
+            dst.len(),
             0,
             0,
         )
@@ -958,15 +971,15 @@ pub fn symlink(src: &Path, dst: &Path) -> crate::io::Result<()> {
 }
 
 pub fn link(src: &Path, dst: &Path) -> crate::io::Result<()> {
-    let src_str = path_to_str(src)?;
-    let dst_str = path_to_str(dst)?;
+    let src = path_to_bytes(src);
+    let dst = path_to_bytes(dst);
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_LINK,
-            src_str.as_ptr() as usize,
-            src_str.len(),
-            dst_str.as_ptr() as usize,
-            dst_str.len(),
+            src.as_ptr() as usize,
+            src.len(),
+            dst.as_ptr() as usize,
+            dst.len(),
             0,
             0,
         )
@@ -975,12 +988,12 @@ pub fn link(src: &Path, dst: &Path) -> crate::io::Result<()> {
 }
 
 pub fn set_perm(path: &Path, perm: FilePermissions) -> crate::io::Result<()> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_CHMOD,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             perm.mode as usize,
             0,
             0,
@@ -991,13 +1004,13 @@ pub fn set_perm(path: &Path, perm: FilePermissions) -> crate::io::Result<()> {
 }
 
 pub fn set_times(path: &Path, times: FileTimes) -> crate::io::Result<()> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let req = AbiUtimesRequest::from_file_times(&times);
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_UTIMES,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             (&req as *const AbiUtimesRequest) as usize,
             0,
             0,
@@ -1008,13 +1021,13 @@ pub fn set_times(path: &Path, times: FileTimes) -> crate::io::Result<()> {
 }
 
 pub fn set_times_nofollow(path: &Path, times: FileTimes) -> crate::io::Result<()> {
-    let path_str = path_to_str(path)?;
+    let path = path_to_bytes(path);
     let req = AbiUtimesRequest::from_file_times(&times);
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_LUTIMES,
-            path_str.as_ptr() as usize,
-            path_str.len(),
+            path.as_ptr() as usize,
+            path.len(),
             (&req as *const AbiUtimesRequest) as usize,
             0,
             0,
