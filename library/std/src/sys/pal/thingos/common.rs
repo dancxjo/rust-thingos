@@ -427,21 +427,14 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             call.out_ptr = tio as usize as u64;
             call.out_len = core::mem::size_of::<termios>() as u32;
         }
-        TCSETS => {
+        TCSETS | TCSETSW | TCSETSF => {
             let tio = argp.cast::<termios>();
-            call.op = TERMINAL_OP_TCSETS;
-            call.in_ptr = tio as usize as u64;
-            call.in_len = core::mem::size_of::<termios>() as u32;
-        }
-        TCSETSW => {
-            let tio = argp.cast::<termios>();
-            call.op = TERMINAL_OP_TCSETSW;
-            call.in_ptr = tio as usize as u64;
-            call.in_len = core::mem::size_of::<termios>() as u32;
-        }
-        TCSETSF => {
-            let tio = argp.cast::<termios>();
-            call.op = TERMINAL_OP_TCSETSF;
+            call.op = match request {
+                TCSETS => TERMINAL_OP_TCSETS,
+                TCSETSW => TERMINAL_OP_TCSETSW,
+                TCSETSF => TERMINAL_OP_TCSETSF,
+                _ => unreachable!(),
+            };
             call.in_ptr = tio as usize as u64;
             call.in_len = core::mem::size_of::<termios>() as u32;
         }
