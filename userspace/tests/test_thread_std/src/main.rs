@@ -14,7 +14,7 @@
 //! | `thread_yield`             | Two threads making progress via `yield_now`         |
 //! | `thread_many_increments`   | Mutex-protected counter across N threads            |
 //! | `thread_local_basic`       | `thread_local!` value differs per thread            |
-//! | `thread_panic_join`        | Panicking thread aborts (panic = "abort" model)     |
+//! | `thread_panic_policy`      | Enforces and validates abort-only panic policy       |
 #![no_std]
 #![no_main]
 use alloc::string::ToString;
@@ -23,6 +23,9 @@ extern crate alloc;
 
 
 extern crate std;
+
+#[cfg(not(panic = "abort"))]
+compile_error!("ThingOS thread std tests require panic=abort policy");
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -178,6 +181,11 @@ fn test_thread_local_basic() {
 
 fn test_panic_join_no_panic() {
     std::println!("[test_thread_std] test_panic_join_no_panic: starting");
+
+    assert!(
+        cfg!(panic = "abort"),
+        "ThingOS panic policy changed unexpectedly: expected panic=abort"
+    );
 
     // Successful thread (no panic) should join with Ok(value).
     let h = std::thread::spawn(|| "success");
