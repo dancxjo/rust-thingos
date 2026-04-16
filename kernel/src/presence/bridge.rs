@@ -9,6 +9,9 @@ fn tagged_ref(tag: [u8; 4], value: u32) -> [u8; 16] {
     out
 }
 
+const PID_TAG: [u8; 4] = *b"pid\0";
+const PGID_TAG: [u8; 4] = *b"pgid";
+
 const CONSOLE_PLACE_REF_BYTES: [u8; 16] =
     [b't', b't', b'y', 0, b'c', b'o', b'n', b's', b'o', b'l', b'e', 0, 0, 0, 0, 1];
 
@@ -30,9 +33,9 @@ pub fn presence_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -
     };
 
     Presence {
-        subject: EntityRef(tagged_ref(*b"pid\0", snapshot.pid)),
+        subject: EntityRef(tagged_ref(PID_TAG, snapshot.pid)),
         place: if is_attached_session { Some(PlaceRef(CONSOLE_PLACE_REF_BYTES)) } else { None },
-        group: foreground_pgid.map(|pgid| GroupRef(tagged_ref(*b"pgid", pgid))),
+        group: foreground_pgid.map(|pgid| GroupRef(tagged_ref(PGID_TAG, pgid))),
         mode,
         embodiment: if is_attached_session { Some(EmbodimentKind::Direct) } else { None },
         observed_at: None,
@@ -58,9 +61,9 @@ pub fn presence_for_current() -> Presence {
         };
 
         return Presence {
-            subject: EntityRef(tagged_ref(*b"pid\0", p.pid)),
+            subject: EntityRef(tagged_ref(PID_TAG, p.pid)),
             place: if is_attached_session { Some(PlaceRef(CONSOLE_PLACE_REF_BYTES)) } else { None },
-            group: foreground_pgid.map(|pgid| GroupRef(tagged_ref(*b"pgid", pgid))),
+            group: foreground_pgid.map(|pgid| GroupRef(tagged_ref(PGID_TAG, pgid))),
             mode,
             embodiment: if is_attached_session { Some(EmbodimentKind::Direct) } else { None },
             observed_at: None,
@@ -118,7 +121,7 @@ mod tests {
         assert_eq!(p.mode, PresenceMode::Active);
         assert_eq!(p.embodiment, Some(EmbodimentKind::Direct));
         assert!(p.place.is_some());
-        assert_eq!(p.group, Some(GroupRef(tagged_ref(*b"pgid", 11))));
+        assert_eq!(p.group, Some(GroupRef(tagged_ref(PGID_TAG, 11))));
     }
 
     #[test]

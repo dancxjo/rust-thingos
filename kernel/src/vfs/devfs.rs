@@ -317,7 +317,7 @@ impl ConsoleNode {
 
     fn is_background_caller(
         caller: ConsoleCaller,
-        presence: crate::presence::ConsolePresenceState,
+        presence: &crate::presence::ConsolePresenceState,
     ) -> bool {
         match (presence.controlling_sid, presence.foreground_pgid) {
             (Some(sid), Some(fg_pgid)) => caller.sid == sid && caller.pgid != fg_pgid,
@@ -335,7 +335,7 @@ impl ConsoleNode {
             Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
             let presence = crate::presence::console_presence_state();
             (
-                Self::is_background_caller(caller, presence),
+                Self::is_background_caller(caller, &presence),
                 presence.controlling_sid,
                 presence.foreground_pgid,
             )
@@ -365,7 +365,7 @@ impl ConsoleNode {
             Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
             let presence = crate::presence::console_presence_state();
             (
-                Self::is_background_caller(caller, presence),
+                Self::is_background_caller(caller, &presence),
                 (state.termios.c_lflag & abi::termios::TOSTOP) != 0,
                 presence.controlling_sid,
                 presence.foreground_pgid,

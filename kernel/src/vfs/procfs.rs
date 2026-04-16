@@ -92,7 +92,7 @@ impl VfsDriver for ProcFs {
             // convenient self-introspection path: callers do not need to know
             // their own PID.
             //
-            // Note: terminal/UI/console attachment is not reported here.  Use
+            // Note: terminal/UI/console attachment is not reported here. Use
             // `/proc/self/presence` for person-in-place semantics.  This path
             // answers "in what world?", not "who is present?".
             "self/place" => Ok(Arc::new(ProcSelfPlaceNode)),
@@ -256,7 +256,7 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         // * `namespace` is derived from Process::namespace.
         // * `root` is derived from Process::root.
         //
-        // Note: terminal/UI/console attachment is not reported here.  Use
+        // Note: terminal/UI/console attachment is not reported here. Use
         // `/proc/<pid>/presence` for person-in-place semantics.  This path
         // answers "in what world?", not "who is present?".
         "place" => {
