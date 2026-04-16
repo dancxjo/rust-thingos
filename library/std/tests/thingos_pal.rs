@@ -4,7 +4,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::ffi::{OsString, c_void};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::os::fd::AsRawFd;
 use std::process::{self, Command};
 use std::sync::mpsc;
 use std::thread;
@@ -31,9 +32,13 @@ struct Winsize {
 }
 
 unsafe extern "C" {
+    /// SAFETY: Caller must pass a valid open file descriptor.
     fn isatty(fd: i32) -> i32;
+    /// SAFETY: Caller must pass a valid descriptor and request-specific pointer in `argp`.
     fn ioctl(fd: i32, request: usize, argp: *mut c_void) -> i32;
+    /// SAFETY: Caller must pass a socket fd and a valid readable `optval` buffer of `optlen`.
     fn setsockopt(fd: i32, level: i32, optname: i32, optval: *const c_void, optlen: u32) -> i32;
+    /// SAFETY: Caller must pass a socket fd and valid writable `optval`/`optlen` pointers.
     fn getsockopt(fd: i32, level: i32, optname: i32, optval: *mut c_void, optlen: *mut u32) -> i32;
 }
 
@@ -200,10 +205,13 @@ fn test_time_monotonic() {
 
 #[test]
 fn test_libc_network_sockopts_report_unsupported_enosys() {
+    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let fd = sock.as_raw_fd();
+
     let optval: i32 = 1;
     let rc = unsafe {
         setsockopt(
-            0,
+            fd,
             SOL_SOCKET,
             SO_REUSEADDR,
             &optval as *const i32 as *const c_void,
@@ -217,7 +225,7 @@ fn test_libc_network_sockopts_report_unsupported_enosys() {
     let mut read_back_len: u32 = core::mem::size_of::<i32>() as u32;
     let rc = unsafe {
         getsockopt(
-            0,
+            fd,
             SOL_SOCKET,
             SO_REUSEADDR,
             &mut read_back as *mut i32 as *mut c_void,
@@ -252,13 +260,13 @@ fn test_fs_non_utf8_path_roundtrip() {
     }
 
     let tmp = common::tmpdir();
-    let non_utf8_name = unsafe { OsString::from_encoded_bytes_unchecked(vec![b'n', b'o', b'n', b'-', 0xFF]) };
-    let path = tmp.join(&non_utf8_name);
+    let invalid_utf8_name = unsafe { OsString::from_encoded_bytes_unchecked(vec![b'n', b'o', b'n', 0xFF, b'-']) };
+    let path = tmp.join(&invalid_utf8_name);
     let _cleanup = RemoveOnDrop(path.clone());
 
     fs::write(&path, b"non-utf8-path").unwrap();
     let mut read_back = Vec::new();
     File::open(&path).unwrap().read_to_end(&mut read_back).unwrap();
     assert_eq!(read_back, b"non-utf8-path");
-    assert_eq!(path.file_name().unwrap().as_encoded_bytes(), non_utf8_name.as_encoded_bytes());
+    assert_eq!(path.file_name().unwrap().as_encoded_bytes(), invalid_utf8_name.as_encoded_bytes());
 }
