@@ -235,7 +235,6 @@ pub const SYS_FS_CHDIR: u32 = 0x4012;
 pub const SYS_FS_GETCWD: u32 = 0x4013;
 pub const SYS_THING_FROM_CHANNEL: u32 = 0x4014;
 pub const SYS_FS_NOTIFY: u32 = 0x4015;
-pub const SYS_FS_ISATTY: u32 = 0x4020;
 pub const SYS_FS_REALPATH: u32 = 0x4016;
 pub const SYS_FS_SYNC: u32 = 0x4017;
 pub const SYS_FS_FCNTL: u32 = 0x4018;
@@ -269,6 +268,8 @@ pub const SYS_FS_LINK: u32 = 0x4023;
 pub const SYS_FS_FLOCK: u32 = 0x4024;
 /// Set access and modification timestamps for a path without following symlinks (lutimes).
 pub const SYS_FS_LUTIMES: u32 = 0x4025;
+/// Return whether an open thing is a terminal (isatty semantics).
+pub const SYS_FS_ISATTY: u32 = 0x4026;
 
 /// Flags for [`SYS_FS_FLOCK`].
 ///

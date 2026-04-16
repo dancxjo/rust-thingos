@@ -9,11 +9,8 @@
 //!   reserved: u32 LE
 //! (matches abi/src/time.rs `TimeSpec`)
 
+use crate::sys::thingos_syscall_numbers::{SYS_TIME_MONOTONIC, SYS_TIME_NOW};
 use crate::time::Duration;
-
-// Syscall numbers (abi/src/numbers.rs)
-const SYS_TIME_MONOTONIC: u32 = 0x1202;
-const SYS_TIME_NOW: u32 = 0x1203;
 const CLOCK_REALTIME: usize = 2;
 
 /// Perform a raw syscall. Mirrors `sys/pal/thingos/common.rs`.

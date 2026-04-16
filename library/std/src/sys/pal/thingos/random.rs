@@ -5,11 +5,7 @@
 //! if early boot entropy is not yet available.
 use crate::io;
 use crate::sys::pal::raw_syscall6;
-
-/// Syscall number for SYS_GETRANDOM (defined in `abi/src/numbers.rs`).
-const SYS_GETRANDOM: u32 = 0x7001;
-/// Syscall number for yielding the current task back to the scheduler.
-const SYS_YIELD: u32 = 0x100B;
+use crate::sys::thingos_syscall_numbers::{SYS_GETRANDOM, SYS_YIELD};
 /// Maximum bytes the kernel fills per SYS_GETRANDOM call.
 const GETRANDOM_MAX: usize = 256;
 /// Maximum number of scheduler yields before surfacing EAGAIN to the caller.

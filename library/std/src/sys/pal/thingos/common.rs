@@ -5,13 +5,11 @@
 
 use crate::ffi::{c_int, c_ulong, c_void};
 use crate::io as std_io;
+use crate::sys::thingos_syscall_numbers::{SYS_FS_DEVICE_CALL, SYS_FS_ISATTY};
 
 pub const STDIN_FILENO: c_int = 0;
 pub const STDOUT_FILENO: c_int = 1;
 pub const STDERR_FILENO: c_int = 2;
-
-const SYS_FS_DEVICE_CALL: u32 = 0x4011;
-const SYS_FS_ISATTY: u32 = 0x4020;
 
 const EINVAL: c_int = 22;
 const ENOTTY: c_int = 25;

@@ -11,10 +11,7 @@
 //! on a serial/console input that delivers bytes one at a time.
 
 use crate::io;
-
-// Syscall numbers (abi/src/numbers.rs)
-const SYS_READ: u32 = 0x1400;
-const SYS_WRITE: u32 = 0x1401;
+use crate::sys::thingos_syscall_numbers::{SYS_READ, SYS_WRITE};
 
 #[inline(always)]
 unsafe fn raw_syscall6(

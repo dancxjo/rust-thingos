@@ -1,6 +1,7 @@
 use crate::sync::atomic::Atomic;
 use crate::sync::atomic::Ordering::Relaxed;
 use crate::time::Duration;
+use crate::sys::thingos_syscall_numbers::{SYS_FUTEX_WAIT, SYS_FUTEX_WAKE};
 
 /// An atomic for use as a futex that is at least 32-bits but may be larger.
 pub type Futex = Atomic<Primitive>;
@@ -11,10 +12,6 @@ pub type Primitive = u32;
 pub type SmallFutex = Atomic<SmallPrimitive>;
 /// Must be the underlying type of SmallFutex.
 pub type SmallPrimitive = u32;
-
-// Syscall numbers from ThingOS ABI (abi/src/numbers.rs).
-const SYS_FUTEX_WAIT: u32 = 0x1300;
-const SYS_FUTEX_WAKE: u32 = 0x1301;
 
 const EINTR: i32 = 4;
 const ETIMEDOUT: i32 = 110;

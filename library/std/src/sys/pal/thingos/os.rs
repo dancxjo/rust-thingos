@@ -4,16 +4,12 @@
 //! Unsupported operations return `io::Error::UNSUPPORTED_PLATFORM` explicitly.
 
 use super::raw_syscall6;
+use crate::sys::thingos_syscall_numbers::{
+    SYS_EXIT, SYS_FS_CHDIR, SYS_FS_GETCWD, SYS_FS_READLINK, SYS_GETPID,
+};
 use crate::ffi::{OsStr, OsString};
 use crate::path::{self, PathBuf};
 use crate::{fmt, io};
-
-// Syscall numbers (from abi/src/numbers.rs)
-const SYS_EXIT: u32 = 0x1000;
-const SYS_GETPID: u32 = 0x1002;
-const SYS_FS_CHDIR: u32 = 0x4012;
-const SYS_FS_GETCWD: u32 = 0x4013;
-const SYS_FS_READLINK: u32 = 0x401A;
 
 /// Converts a negative syscall return value to an io::Error.
 #[inline]

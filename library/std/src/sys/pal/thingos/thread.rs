@@ -58,19 +58,18 @@ use crate::num::NonZero;
 use crate::sync::Mutex;
 use crate::thread::ThreadInit;
 use crate::time::Duration;
-
-// ── Syscall numbers (abi/src/numbers.rs) ─────────────────────────────────────
-
-const SYS_EXIT: u32 = 0x1000;
-const SYS_GET_TID: u32 = 0x1001;
-const SYS_SPAWN_THREAD: u32 = 0x1004;
-const SYS_TASK_WAIT: u32 = 0x1007;
-const SYS_YIELD: u32 = 0x100B;
-const SYS_AVAILABLE_PARALLELISM: u32 = 0x1012;
-const SYS_TASK_SET_NAME: u32 = 0x101F;
-const SYS_SLEEP_NS: u32 = 0x1200;
-const SYS_AUXV_GET: u32 = 0x1105;
-const SYS_VM_MAP: u32 = 0x2001;
+use crate::sys::thingos_syscall_numbers::{
+    SYS_AUXV_GET,
+    SYS_AVAILABLE_PARALLELISM,
+    SYS_EXIT,
+    SYS_GET_TID,
+    SYS_SLEEP_NS,
+    SYS_SPAWN_THREAD,
+    SYS_TASK_SET_NAME,
+    SYS_TASK_WAIT,
+    SYS_VM_MAP,
+    SYS_YIELD,
+};
 
 // ── Local raw_syscall6 wrapper ────────────────────────────────────────────────
 

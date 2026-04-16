@@ -16,10 +16,7 @@ use crate::ptr;
 use crate::sync::atomic::Ordering::{Acquire, Release};
 use crate::sync::atomic::{Atomic, AtomicI32};
 use crate::sys::pal::raw_syscall6;
-
-// ── Syscall numbers (abi/src/numbers.rs) ─────────────────────────────────────
-const SYS_VM_MAP: u32 = 0x2001;
-const SYS_VM_UNMAP: u32 = 0x2002;
+use crate::sys::thingos_syscall_numbers::{SYS_VM_MAP, SYS_VM_UNMAP};
 
 // ── Protection flags (mirrors abi::vm::VmProt bits) ──────────────────────────
 const PROT_READ: u32 = 1 << 0;

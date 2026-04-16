@@ -31,42 +31,23 @@ use crate::sync::Arc;
 use crate::sys::time::SystemTime;
 pub use crate::sys::fs::common::{Dir, copy, exists, remove_dir_all};
 use crate::{fmt, vec};
+use crate::sys::thingos_syscall_numbers::{
+    flock_flags,
+    vfs_flags,
+    SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DUP, SYS_FS_FCHMOD, SYS_FS_FLOCK, SYS_FS_FTRUNCATE,
+    SYS_FS_FUTIMES, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_LUTIMES, SYS_FS_MKDIR, SYS_FS_OPEN,
+    SYS_FS_READ, SYS_FS_READDIR, SYS_FS_READLINK, SYS_FS_READV, SYS_FS_REALPATH, SYS_FS_RENAME,
+    SYS_FS_SEEK, SYS_FS_STAT, SYS_FS_SYNC, SYS_FS_SYMLINK, SYS_FS_UNLINK, SYS_FS_UTIMES,
+    SYS_FS_WRITE, SYS_FS_WRITEV,
+};
 
 use crate::sys::pal::raw_syscall6;
 
-// ── Syscall numbers (abi/src/numbers.rs) ─────────────────────────────────────
-const SYS_FS_OPEN: u32 = 0x4000;
-const SYS_FS_CLOSE: u32 = 0x4001;
-const SYS_FS_READ: u32 = 0x4002;
-const SYS_FS_WRITE: u32 = 0x4003;
-const SYS_FS_SEEK: u32 = 0x4004;
-const SYS_FS_STAT: u32 = 0x4005;
-const SYS_FS_READDIR: u32 = 0x4006;
-const SYS_FS_MKDIR: u32 = 0x4007;
-const SYS_FS_UNLINK: u32 = 0x4008;
-const SYS_FS_DUP: u32 = 0x400C;
-const SYS_FS_RENAME: u32 = 0x4010;
-const SYS_FS_SYNC: u32 = 0x4017;
-const SYS_FS_REALPATH: u32 = 0x4016;
-const SYS_FS_SYMLINK: u32 = 0x4019;
-const SYS_FS_READLINK: u32 = 0x401A;
-const SYS_FS_FTRUNCATE: u32 = 0x401B;
-const SYS_FS_CHMOD: u32 = 0x401C;
-const SYS_FS_FCHMOD: u32 = 0x401D;
-const SYS_FS_UTIMES: u32 = 0x401E;
-const SYS_FS_FUTIMES: u32 = 0x401F;
-const SYS_FS_LSTAT: u32 = 0x4020;
-const SYS_FS_READV: u32 = 0x4021;
-const SYS_FS_WRITEV: u32 = 0x4022;
-const SYS_FS_LINK: u32 = 0x4023;
-const SYS_FS_FLOCK: u32 = 0x4024;
-const SYS_FS_LUTIMES: u32 = 0x4025;
-
 // ── Advisory lock flags (mirror abi::syscall::flock_flags) ───────────────────
-const LOCK_SH: u32 = 1; // shared (read) lock
-const LOCK_EX: u32 = 2; // exclusive (write) lock
-const LOCK_NB: u32 = 4; // non-blocking
-const LOCK_UN: u32 = 8; // unlock
+const LOCK_SH: u32 = flock_flags::LOCK_SH; // shared (read) lock
+const LOCK_EX: u32 = flock_flags::LOCK_EX; // exclusive (write) lock
+const LOCK_NB: u32 = flock_flags::LOCK_NB; // non-blocking
+const LOCK_UN: u32 = flock_flags::LOCK_UN; // unlock
 
 // ── Scatter-gather I/O vector (matches abi::syscall::IoVec / POSIX struct iovec) ──
 #[repr(C)]
@@ -76,13 +57,13 @@ struct KernelIoVec {
 }
 
 // ── Open flags (abi/src/numbers.rs vfs_flags) ─────────────────────────────────
-const O_RDONLY: u32 = 0x0000;
-const O_WRONLY: u32 = 0x0001;
-const O_RDWR: u32 = 0x0002;
-const O_CREAT: u32 = 0x0040;
-const O_EXCL: u32 = 0x0080;
-const O_TRUNC: u32 = 0x0200;
-const O_APPEND: u32 = 0x0400;
+const O_RDONLY: u32 = vfs_flags::O_RDONLY;
+const O_WRONLY: u32 = vfs_flags::O_WRONLY;
+const O_RDWR: u32 = vfs_flags::O_RDWR;
+const O_CREAT: u32 = vfs_flags::O_CREAT;
+const O_EXCL: u32 = vfs_flags::O_EXCL;
+const O_TRUNC: u32 = vfs_flags::O_TRUNC;
+const O_APPEND: u32 = vfs_flags::O_APPEND;
 
 // ── File-type constants (POSIX st_mode bits) ──────────────────────────────────
 const S_IFMT: u32 = 0o170000;

@@ -17,6 +17,8 @@ pub use common::*;
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn thingos_start() -> ! {
+    use crate::sys::thingos_syscall_numbers::SYS_TASK_SET_TLS_BASE;
+
     unsafe extern "C" {
         fn main(_: isize, _: *const *const u8, _: u8) -> i32;
     }
@@ -25,7 +27,7 @@ extern "C" fn thingos_start() -> ! {
     let tls_base = crate::sys::thread::thingos::allocate_tls_block();
     if tls_base != 0 {
         unsafe {
-            crate::sys::pal::raw_syscall6(0x100E, tls_base, 0, 0, 0, 0, 0);
+            crate::sys::pal::raw_syscall6(SYS_TASK_SET_TLS_BASE, tls_base, 0, 0, 0, 0, 0);
         }
     }
 

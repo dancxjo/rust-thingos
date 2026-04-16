@@ -1,4 +1,18 @@
 use super::each_addr;
+use crate::sys::thingos_syscall_numbers::{
+    poll_flags,
+    vfs_flags,
+    SYS_FS_CLOSE as SYS_VFS_CLOSE,
+    SYS_FS_DUP,
+    SYS_FS_OPEN as SYS_VFS_OPEN,
+    SYS_FS_POLL,
+    SYS_FS_READ as SYS_VFS_READ,
+    SYS_FS_READV as SYS_VFS_READV,
+    SYS_FS_WRITE as SYS_VFS_WRITE,
+    SYS_FS_WRITEV as SYS_VFS_WRITEV,
+    SYS_SLEEP_NS,
+    SYS_TIME_MONOTONIC,
+};
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut};
 use crate::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use crate::string::String;
@@ -6,17 +20,6 @@ use crate::sync::{Arc, Mutex};
 use crate::sys::pal::raw_syscall6;
 use crate::time::Duration;
 use crate::{fmt, thread, vec};
-
-const SYS_SLEEP_NS: u32 = 0x1200;
-const SYS_TIME_MONOTONIC: u32 = 0x1202;
-const SYS_VFS_OPEN: u32 = 0x4000;
-const SYS_VFS_CLOSE: u32 = 0x4001;
-const SYS_VFS_READ: u32 = 0x4002;
-const SYS_VFS_WRITE: u32 = 0x4003;
-const SYS_VFS_READV: u32 = 0x4021;
-const SYS_VFS_WRITEV: u32 = 0x4022;
-const SYS_FS_DUP: u32 = 0x400C;
-const SYS_FS_POLL: u32 = 0x400B;
 
 // ── Scatter-gather I/O vector (matches abi::syscall::IoVec / POSIX struct iovec) ──
 #[repr(C)]
@@ -32,10 +35,10 @@ struct KernelPollFd {
     revents: u16,
 }
 
-const O_RDONLY: u32 = 0x0000;
-const O_WRONLY: u32 = 0x0001;
-const O_RDWR: u32 = 0x0002;
-const O_NONBLOCK: u32 = 0x0800;
+const O_RDONLY: u32 = vfs_flags::O_RDONLY;
+const O_WRONLY: u32 = vfs_flags::O_WRONLY;
+const O_RDWR: u32 = vfs_flags::O_RDWR;
+const O_NONBLOCK: u32 = vfs_flags::O_NONBLOCK;
 
 const EAGAIN: i32 = 11;
 const EINTR: i32 = 4;
@@ -51,8 +54,8 @@ const MAX_UDP_DATAGRAM_SIZE: usize = 65_535;
 const CONNECT_POLL_NS: u64 = 5_000_000;
 const IO_POLL_NS: u64 = 1_000_000;
 
-const POLLIN: u16 = 0x0001;
-const POLLOUT: u16 = 0x0004;
+const POLLIN: u16 = poll_flags::POLLIN;
+const POLLOUT: u16 = poll_flags::POLLOUT;
 
 /// Default TCP listen backlog passed to netd.
 const LISTEN_BACKLOG: u16 = 128;

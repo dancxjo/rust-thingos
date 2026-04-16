@@ -12,10 +12,8 @@
 //! Call with buf_ptr=0/buf_len=0 to query the required size first.
 
 pub use super::common::Args;
+use crate::sys::thingos_syscall_numbers::SYS_ARGV_GET;
 use crate::ffi::OsString;
-
-// Syscall number (abi/src/numbers.rs)
-const SYS_ARGV_GET: u32 = 0x1100;
 
 #[inline(always)]
 unsafe fn raw_syscall6(n: u32, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize) -> isize {

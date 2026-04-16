@@ -5,6 +5,7 @@ mod configure_builtins;
 mod helpers;
 mod pal;
 mod personality;
+pub(crate) mod thingos_syscall_numbers;
 
 pub mod args;
 pub mod backtrace;

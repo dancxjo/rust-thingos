@@ -14,13 +14,7 @@
 use crate::fmt;
 use crate::io::{BorrowedCursor, IoSlice, IoSliceMut};
 use crate::sys::pal::raw_syscall6;
-
-// Syscall numbers (abi/src/numbers.rs)
-const SYS_PIPE: u32 = 0x3015;
-const SYS_READ: u32 = 0x1400;
-const SYS_WRITE: u32 = 0x1401;
-const SYS_FS_DUP: u32 = 0x400C;
-const SYS_FS_CLOSE: u32 = 0x4001;
+use crate::sys::thingos_syscall_numbers::{SYS_FS_CLOSE, SYS_FS_DUP, SYS_PIPE, SYS_READ, SYS_WRITE};
 
 #[inline]
 fn cvt(ret: isize) -> crate::io::Result<usize> {

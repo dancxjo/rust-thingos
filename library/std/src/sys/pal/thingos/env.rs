@@ -15,12 +15,8 @@
 //! | SYS_ENV_LIST   | 0x1104 | List all variables   |
 
 pub use super::common::Env;
+use crate::sys::thingos_syscall_numbers::{SYS_ENV_GET, SYS_ENV_LIST, SYS_ENV_SET, SYS_ENV_UNSET};
 use crate::ffi::{OsStr, OsString};
-
-const SYS_ENV_GET: u32 = 0x1101;
-const SYS_ENV_SET: u32 = 0x1102;
-const SYS_ENV_UNSET: u32 = 0x1103;
-const SYS_ENV_LIST: u32 = 0x1104;
 
 #[inline(always)]
 unsafe fn raw_syscall6(

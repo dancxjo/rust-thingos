@@ -31,6 +31,16 @@
 //! target FD during spawn.
 
 use super::env::{CommandEnv, CommandEnvs};
+use crate::sys::thingos_syscall_numbers::{
+    fcntl_cmd,
+    poll_flags,
+    vfs_flags,
+    SYS_FS_FCNTL,
+    SYS_FS_POLL,
+    SYS_SPAWN_PROCESS_EX,
+    SYS_TASK_KILL,
+    SYS_WAITPID,
+};
 pub use crate::ffi::OsString as EnvKey;
 use crate::ffi::{OsStr, OsString};
 use crate::num::NonZero;
@@ -39,11 +49,6 @@ use crate::process::StdioPipes;
 use crate::sys::fs::File;
 use crate::sys::pal::raw_syscall6;
 use crate::{fmt, io};
-
-// Syscall numbers (abi/src/numbers.rs)
-const SYS_SPAWN_PROCESS_EX: u32 = 0x1006;
-const SYS_WAITPID: u32 = 0x1011;
-const SYS_TASK_KILL: u32 = 0x1008;
 
 /// waitpid WNOHANG: return immediately if no child has exited yet.
 const WNOHANG: usize = 1;
@@ -60,16 +65,13 @@ fn cvt(ret: isize) -> crate::io::Result<usize> {
     if ret < 0 { Err(crate::io::Error::from_raw_os_error((-ret) as i32)) } else { Ok(ret as usize) }
 }
 
-const SYS_FS_POLL: u32 = 0x400B;
-const SYS_FS_FCNTL: u32 = 0x4018;
+const F_GETFL: u32 = fcntl_cmd::F_GETFL;
+const F_SETFL: u32 = fcntl_cmd::F_SETFL;
+const O_NONBLOCK: u32 = vfs_flags::O_NONBLOCK;
 
-const F_GETFL: u32 = 3;
-const F_SETFL: u32 = 4;
-const O_NONBLOCK: u32 = 0x0800;
-
-const POLLIN: u16 = 0x0001;
-const POLLERR: u16 = 0x0008;
-const POLLHUP: u16 = 0x0010;
+const POLLIN: u16 = poll_flags::POLLIN;
+const POLLERR: u16 = poll_flags::POLLERR;
+const POLLHUP: u16 = poll_flags::POLLHUP;
 
 #[repr(C)]
 struct PollFd {
