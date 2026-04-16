@@ -48,6 +48,8 @@ impl ResolvedHandle {
 }
 
 fn classify_file_like(node: &Arc<dyn crate::vfs::VfsNode>) -> HandleKind {
+    // Classification is best-effort only and must not fail lookup paths.
+    // If metadata cannot be read, keep the conservative default `File`.
     match node.stat() {
         Ok(stat) if stat.is_fifo() => HandleKind::Pipe,
         _ => HandleKind::File,
@@ -180,10 +182,10 @@ mod tests {
     }
 
     fn make_test_process_info(
-        handle_node_pairs: &[(u32, Arc<dyn VfsNode>)],
+        thing_table_entries: &[(u32, Arc<dyn VfsNode>)],
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
         let mut thing_table = ThingTable::new();
-        for (fd, node) in handle_node_pairs {
+        for (fd, node) in thing_table_entries {
             thing_table
                 .insert_at(*fd, node.clone(), OpenFlags::read_write(), "/test".into())
                 .expect("insert_at");
