@@ -288,6 +288,7 @@ static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
 
 fn any_wake_policy_from_u8(v: u8) -> AnyWakeOverloadPolicy {
     match v {
+        0 => AnyWakeOverloadPolicy::Off,
         1 => AnyWakeOverloadPolicy::Redirect,
         2 => AnyWakeOverloadPolicy::Steal,
         _ => AnyWakeOverloadPolicy::Off,
@@ -5499,7 +5500,9 @@ mod tests {
         });
 
         // Make CPU 0 overloaded relative to CPU 1.
-        for id in 9912..9915 {
+        const OVERLOAD_TASK_START: u64 = 9912;
+        const OVERLOAD_TASK_END_EXCLUSIVE: u64 = 9915;
+        for id in OVERLOAD_TASK_START..OVERLOAD_TASK_END_EXCLUSIVE {
             crate::task::registry::get_registry::<MockRuntime>()
                 .insert(alloc::boxed::Box::new(make_task(id, TaskState::Runnable, TaskPriority::Low)));
             sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -5582,7 +5585,9 @@ mod tests {
             wake_pending: false,
         });
 
-        for id in 9922..9925 {
+        const OVERLOAD_TASK_START: u64 = 9922;
+        const OVERLOAD_TASK_END_EXCLUSIVE: u64 = 9925;
+        for id in OVERLOAD_TASK_START..OVERLOAD_TASK_END_EXCLUSIVE {
             let runnable = make_task(id, TaskState::Runnable, TaskPriority::Low);
             crate::task::registry::get_registry::<MockRuntime>()
                 .insert(alloc::boxed::Box::new(runnable));
