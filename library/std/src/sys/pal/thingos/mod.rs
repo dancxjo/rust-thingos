@@ -15,7 +15,7 @@ pub mod time;
 pub use common::*;
 
 #[cfg(not(test))]
-extern "C" {
+unsafe extern "C" {
     pub fn thingos_runtime_setup();
 }
 
