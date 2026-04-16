@@ -206,6 +206,7 @@ struct Shell {
     next_job_id: usize,
     last_foreground_status: Option<i32>,
     aliases: BTreeMap<String, String>,
+    env: BTreeMap<String, String>,
 }
 
 impl Shell {
@@ -221,6 +222,7 @@ impl Shell {
             next_job_id: 1,
             last_foreground_status: None,
             aliases: BTreeMap::new(),
+            env: BTreeMap::new(),
         }
     }
 
@@ -240,6 +242,13 @@ impl Shell {
                             let name = name.trim();
                             let value = value.trim().trim_matches('\'').trim_matches('"');
                             self.aliases.insert(String::from(name), String::from(value));
+                        }
+                    } else if line.starts_with("export ") {
+                        let rest = &line[7..];
+                        if let Some((name, value)) = rest.split_once('=') {
+                            let name = name.trim();
+                            let value = value.trim().trim_matches('\'').trim_matches('"');
+                            self.env.insert(String::from(name), String::from(value));
                         }
                     }
                 }
@@ -317,7 +326,7 @@ impl Shell {
     }
 
     fn launch_job(&mut self, cmds: &[Cmd<'_>], background: bool, command: &str) {
-        match spawn_job(cmds, background) {
+        match spawn_job(cmds, background, &self.env) {
             Ok((pgid, pids)) => {
                 let job_id = self.next_job_id;
                 self.next_job_id += 1;
@@ -783,7 +792,11 @@ fn open_write(path: &str, append: bool) -> Result<u32, Errno> {
     vfs::vfs_open(path, flags)
 }
 
-fn spawn_job(cmds: &[Cmd<'_>], background: bool) -> Result<(u32, Vec<u32>), Errno> {
+fn spawn_job(
+    cmds: &[Cmd<'_>],
+    background: bool,
+    env_map: &BTreeMap<String, String>,
+) -> Result<(u32, Vec<u32>), Errno> {
     if cmds.is_empty() {
         return Err(Errno::EINVAL);
     }
@@ -798,26 +811,17 @@ fn spawn_job(cmds: &[Cmd<'_>], background: bool) -> Result<(u32, Vec<u32>), Errn
     let bg_in = if background { Some(open_read("/dev/null")?) } else { None };
     let bg_out = if background { Some(open_write("/dev/null", false)?) } else { None };
 
-    let path_needed = match syscall::env_get(b"PATH", &mut []) {
-        Ok(n) => n,
-        Err(_) => 0,
-    };
-    let path_env = if path_needed > 0 {
-        let mut buf = alloc::vec![0u8; path_needed];
-        if let Ok(n) = syscall::env_get(b"PATH", &mut buf) {
-            core::str::from_utf8(&buf[..n]).unwrap_or("/bin:/drivers").to_string()
-        } else {
-            "/bin:/drivers".to_string()
-        }
-    } else {
-        "/bin:/drivers".to_string()
-    };
+    let path_env = env_map.get("PATH").map(|s| s.as_str()).unwrap_or("/bin:/drivers");
     let path_prefixes: Vec<&str> = path_env.split(':').collect();
 
-    let env = BTreeMap::new();
     let mut spawned = Vec::new();
     let mut transient_fds = Vec::new();
     let mut pgid = 0u32;
+
+    let mut spawn_env = BTreeMap::new();
+    for (k, v) in env_map {
+        spawn_env.insert(k.as_bytes().to_vec(), v.as_bytes().to_vec());
+    }
 
     for (idx, cmd) in cmds.iter().enumerate() {
         let path = if cmd.program.starts_with('/') {
@@ -877,7 +881,7 @@ fn spawn_job(cmds: &[Cmd<'_>], background: bool) -> Result<(u32, Vec<u32>), Errn
         match syscall::spawn_process_ex(
             &path,
             &argv_slices,
-            &env,
+            &spawn_env,
             stdin_mode,
             stdout_mode,
             stderr_mode,
@@ -1041,6 +1045,23 @@ fn main(_arg: usize) -> ! {
                 }
                 "bg" => {
                     shell.resume_job(cmds[0].args.first().copied(), false);
+                    continue;
+                }
+                "export" => {
+                    let arg = cmds[0].args.first().copied().unwrap_or("");
+                    if let Some((name, value)) = arg.split_once('=') {
+                        let name = name.trim();
+                        let value = value.trim().trim_matches('\'').trim_matches('"');
+                        shell.env.insert(String::from(name), String::from(value));
+                    } else if !arg.is_empty() {
+                        // Just 'export NAME' (present in env but no value change? or just list?)
+                        // For now we only support 'export NAME=VALUE'
+                    } else {
+                        // List all env vars
+                        for (k, v) in &shell.env {
+                            write_str(&format!("{}={}\n", k, v));
+                        }
+                    }
                     continue;
                 }
                 _ => {}
