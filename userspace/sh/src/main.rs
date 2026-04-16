@@ -207,6 +207,7 @@ struct Shell {
     last_foreground_status: Option<i32>,
     aliases: BTreeMap<String, String>,
     env: BTreeMap<String, String>,
+    history: Vec<String>,
 }
 
 impl Shell {
@@ -223,6 +224,7 @@ impl Shell {
             last_foreground_status: None,
             aliases: BTreeMap::new(),
             env: BTreeMap::new(),
+            history: Vec::new(),
         }
     }
 
@@ -624,15 +626,21 @@ fn complete_from_current_dir(fragment: &str) -> Option<String> {
     None
 }
 
-fn redraw_line(bytes: &[u8], last_status: Option<i32>) {
+fn redraw_line_at_cursor(bytes: &[u8], cursor: usize, last_status: Option<i32>) {
     write_str("\r\x1B[K");
     prompt(last_status);
     if let Ok(text) = core::str::from_utf8(bytes) {
         write_str(text);
     }
+    // Move the terminal cursor back to the insertion point when not at EOL.
+    let back = bytes.len() - cursor;
+    if back > 0 {
+        let seq = format!("\x1B[{}D", back);
+        write_str(&seq);
+    }
 }
 
-fn read_line(last_status: Option<i32>) -> ReadLineResult {
+fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineResult {
     let tty_guard = TtyModeGuard::raw(TTY_FD);
     if !tty_guard.is_active() {
         let mut buf = [0u8; 512];
@@ -657,50 +665,238 @@ fn read_line(last_status: Option<i32>) -> ReadLineResult {
     }
 
     let _tty_guard = tty_guard;
-    let mut buf = [0u8; 1];
-    let mut bytes = Vec::new();
+    let mut one = [0u8; 1];
+    let mut bytes: Vec<u8> = Vec::new();
+    // Byte index of the insertion point within `bytes`.
+    let mut cursor: usize = 0;
+    // History navigation state: None = editing a fresh line, Some(i) = viewing history[i].
+    let mut hist_idx: Option<usize> = None;
+    // Snapshot of the fresh line saved when history browsing begins.
+    let mut saved_line: Vec<u8> = Vec::new();
 
     loop {
-        match syscall::vfs_read(0, &mut buf) {
+        match syscall::vfs_read(0, &mut one) {
             Ok(0) => return ReadLineResult::Eof,
-            Ok(_) => match buf[0] {
+            Ok(_) => match one[0] {
                 b'\r' | b'\n' => {
                     write_str("\n");
+                    // Persist non-empty, non-duplicate-of-last lines in history.
+                    if let Ok(s) = core::str::from_utf8(&bytes) {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty()
+                            && history.last().map(|h| h.as_str()) != Some(trimmed)
+                        {
+                            history.push(String::from(trimmed));
+                        }
+                    }
                     bytes.push(b'\n');
                     return ReadLineResult::Line(String::from_utf8(bytes).unwrap_or_default());
                 }
                 0x03 => {
+                    // Ctrl-C: signal interrupt
                     write_str("^C\n");
                     return ReadLineResult::Interrupted;
                 }
                 0x04 => {
+                    // Ctrl-D: EOF on empty line
                     if bytes.is_empty() {
                         return ReadLineResult::Eof;
                     }
                 }
+                0x01 => {
+                    // Ctrl-A: move cursor to beginning of line
+                    cursor = 0;
+                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                }
+                0x05 => {
+                    // Ctrl-E: move cursor to end of line
+                    cursor = bytes.len();
+                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                }
+                0x0b => {
+                    // Ctrl-K: kill from cursor to end of line
+                    bytes.truncate(cursor);
+                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                }
+                0x15 => {
+                    // Ctrl-U: kill entire line
+                    bytes.clear();
+                    cursor = 0;
+                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                }
+                0x17 => {
+                    // Ctrl-W: kill the word immediately before the cursor
+                    if cursor > 0 {
+                        let word_start = trailing_word_start(&bytes[..cursor]).unwrap_or(0);
+                        bytes.drain(word_start..cursor);
+                        cursor = word_start;
+                        redraw_line_at_cursor(&bytes, cursor, last_status);
+                    }
+                }
                 0x08 | 0x7f => {
-                    if bytes.pop().is_some() {
-                        write_str("\x08 \x08");
+                    // Backspace / DEL: delete the character before the cursor
+                    if cursor > 0 {
+                        cursor -= 1;
+                        bytes.remove(cursor);
+                        redraw_line_at_cursor(&bytes, cursor, last_status);
                     }
                 }
                 b'\t' => {
-                    let Some(start) = trailing_word_start(&bytes) else {
+                    // Tab: complete the word immediately before the cursor
+                    let Some(start) = trailing_word_start(&bytes[..cursor]) else {
                         continue;
                     };
-                    let Ok(fragment) = core::str::from_utf8(&bytes[start..]) else {
+                    let Ok(fragment) = core::str::from_utf8(&bytes[start..cursor]) else {
                         continue;
                     };
                     let Some(completion) = complete_from_current_dir(fragment) else {
                         continue;
                     };
-
+                    // Replace [start..cursor] with the completion and preserve any suffix.
+                    let suffix: Vec<u8> = bytes[cursor..].to_vec();
                     bytes.truncate(start);
                     bytes.extend_from_slice(completion.as_bytes());
-                    redraw_line(&bytes, last_status);
+                    cursor = bytes.len();
+                    bytes.extend_from_slice(&suffix);
+                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                }
+                0x1b => {
+                    // ESC: beginning of a VT/ANSI escape sequence.
+                    // Read the next byte; we only handle CSI sequences (ESC [).
+                    if syscall::vfs_read(0, &mut one).unwrap_or(0) == 0 {
+                        continue;
+                    }
+                    if one[0] != b'[' {
+                        // Not a CSI sequence (e.g. bare ESC, or ESC O for SS3); ignore.
+                        continue;
+                    }
+                    // Accumulate optional decimal parameter, then the final byte.
+                    let mut param: u32 = 0;
+                    let mut final_byte: u8 = 0;
+                    loop {
+                        if syscall::vfs_read(0, &mut one).unwrap_or(0) == 0 {
+                            break;
+                        }
+                        let b2 = one[0];
+                        if b2.is_ascii_digit() {
+                            param = param
+                                .saturating_mul(10)
+                                .saturating_add((b2 - b'0') as u32);
+                        } else {
+                            final_byte = b2;
+                            break;
+                        }
+                    }
+                    match final_byte {
+                        b'A' => {
+                            // Up arrow: move to previous history entry
+                            if history.is_empty() {
+                                continue;
+                            }
+                            let new_idx = match hist_idx {
+                                None => {
+                                    saved_line = bytes.clone();
+                                    history.len() - 1
+                                }
+                                Some(i) if i > 0 => i - 1,
+                                Some(_) => {
+                                    // Already at the oldest entry; nothing to do.
+                                    continue;
+                                }
+                            };
+                            hist_idx = Some(new_idx);
+                            bytes = history[new_idx].as_bytes().to_vec();
+                            cursor = bytes.len();
+                            redraw_line_at_cursor(&bytes, cursor, last_status);
+                        }
+                        b'B' => {
+                            // Down arrow: move to next history entry or restore the fresh line
+                            match hist_idx {
+                                None => {
+                                    // Already on the fresh line; nothing to do.
+                                    continue;
+                                }
+                                Some(i) if i + 1 < history.len() => {
+                                    hist_idx = Some(i + 1);
+                                    bytes = history[i + 1].as_bytes().to_vec();
+                                    cursor = bytes.len();
+                                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                                }
+                                Some(_) => {
+                                    // Past the most recent entry: restore the fresh line.
+                                    hist_idx = None;
+                                    bytes = saved_line.clone();
+                                    cursor = bytes.len();
+                                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                                }
+                            }
+                        }
+                        b'C' => {
+                            // Right arrow: move cursor one character to the right
+                            if cursor < bytes.len() {
+                                cursor += 1;
+                                write_str("\x1B[C");
+                            }
+                        }
+                        b'D' => {
+                            // Left arrow: move cursor one character to the left
+                            if cursor > 0 {
+                                cursor -= 1;
+                                write_str("\x1B[D");
+                            }
+                        }
+                        b'H' => {
+                            // Home (xterm)
+                            cursor = 0;
+                            redraw_line_at_cursor(&bytes, cursor, last_status);
+                        }
+                        b'F' => {
+                            // End (xterm)
+                            cursor = bytes.len();
+                            redraw_line_at_cursor(&bytes, cursor, last_status);
+                        }
+                        b'~' => {
+                            // VT-style extended keys: ESC [ N ~
+                            match param {
+                                1 | 7 => {
+                                    // Home
+                                    cursor = 0;
+                                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                                }
+                                3 => {
+                                    // Delete: remove the character at the cursor
+                                    if cursor < bytes.len() {
+                                        bytes.remove(cursor);
+                                        redraw_line_at_cursor(&bytes, cursor, last_status);
+                                    }
+                                }
+                                4 | 8 => {
+                                    // End
+                                    cursor = bytes.len();
+                                    redraw_line_at_cursor(&bytes, cursor, last_status);
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 b => {
-                    bytes.push(b);
-                    let _ = syscall::vfs_write(1, &buf);
+                    // Accept printable ASCII (0x20–0x7E) and high bytes (UTF-8 lead/continuation).
+                    // Values below 0x20 are control characters handled by explicit arms above;
+                    // anything that reaches here unhandled is silently discarded.
+                    if b >= 0x20 {
+                        bytes.insert(cursor, b);
+                        cursor += 1;
+                        if cursor == bytes.len() {
+                            // Cursor is at EOL: just echo the byte.
+                            let _ = syscall::vfs_write(1, &one);
+                        } else {
+                            // Cursor is mid-line: redraw to keep display consistent.
+                            redraw_line_at_cursor(&bytes, cursor, last_status);
+                        }
+                    }
+                    // Unrecognised control characters (< 0x20) are silently ignored.
                 }
             },
             Err(Errno::EINTR) => return ReadLineResult::Interrupted,
@@ -1004,7 +1200,7 @@ fn main(_arg: usize) -> ! {
         shell.print_job_notifications();
 
         prompt(shell.last_foreground_status);
-        let line = match read_line(shell.last_foreground_status) {
+        let line = match read_line(shell.last_foreground_status, &mut shell.history) {
             ReadLineResult::Line(line) => line,
             ReadLineResult::Interrupted => {
                 write_str("\n");
