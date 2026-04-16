@@ -122,6 +122,7 @@ members = [
   "userspace/nslookup",
   "userspace/petals",
   "userspace/ping",
+  "userspace/placed",
   "userspace/poll_mux",
   "userspace/proc_smoke",
   "userspace/ps",

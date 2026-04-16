@@ -26,7 +26,7 @@ use stem::{debug, error, info, warn};
 use crate::ledger::DeviceLedger;
 use crate::pipelines::{
     DisplayHandles, setup_audio_stack, setup_display_pipeline, setup_graphics_stack,
-    setup_input_broker, setup_serial_shell,
+    setup_input_broker, setup_serial_shell, setup_ui_services,
 };
 use crate::task::{ManagedTask, TaskKind};
 
@@ -75,6 +75,11 @@ impl Supervisor {
         let tasks_for_graphics = self.tasks.clone();
         let _ = stem::thread::spawn_task(move || {
             setup_graphics_stack(tasks_for_graphics);
+        });
+
+        let tasks_for_ui = self.tasks.clone();
+        let _ = stem::thread::spawn_task(move || {
+            setup_ui_services(tasks_for_ui);
         });
 
         let tasks_for_input = self.tasks.clone();

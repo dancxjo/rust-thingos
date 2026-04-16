@@ -205,6 +205,7 @@ struct Shell {
     jobs: Vec<Job>,
     next_job_id: usize,
     last_foreground_status: Option<i32>,
+    aliases: BTreeMap<String, String>,
 }
 
 impl Shell {
@@ -214,7 +215,51 @@ impl Shell {
         let _ = signal::setpgid(0, 0);
         let shell_pgid = signal::getpgrp().unwrap_or(shell_pid as i32) as u32;
         let _ = vfs::tcsetpgrp(TTY_FD, shell_pgid);
-        Self { shell_pgid, jobs: Vec::new(), next_job_id: 1, last_foreground_status: None }
+        Self {
+            shell_pgid,
+            jobs: Vec::new(),
+            next_job_id: 1,
+            last_foreground_status: None,
+            aliases: BTreeMap::new(),
+        }
+    }
+
+    fn load_profile(&mut self, path: &str) {
+        let fd = match vfs::vfs_open(path, vfs_flags::O_RDONLY) {
+            Ok(fd) => fd,
+            Err(_) => return,
+        };
+        let mut buf = [0u8; 4096];
+        if let Ok(n) = syscall::vfs_read(fd, &mut buf) {
+            if let Ok(content) = core::str::from_utf8(&buf[..n]) {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.starts_with("alias ") {
+                        let rest = &line[6..];
+                        if let Some((name, value)) = rest.split_once('=') {
+                            let name = name.trim();
+                            let value = value.trim().trim_matches('\'').trim_matches('"');
+                            self.aliases.insert(String::from(name), String::from(value));
+                        }
+                    }
+                }
+            }
+        }
+        let _ = syscall::vfs_close(fd);
+    }
+
+    fn expand_aliases(&self, line: &str) -> String {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if let Some(first) = tokens.first().copied() {
+            if let Some(expansion) = self.aliases.get(first) {
+                if tokens.len() > 1 {
+                    return format!("{} {}", expansion, tokens[1..].join(" "));
+                } else {
+                    return format!("{}", expansion);
+                }
+            }
+        }
+        String::from(line)
     }
 
     fn reap_children(&mut self, nohang: bool) {
@@ -836,6 +881,7 @@ fn main(_arg: usize) -> ! {
     write_str("thingos sh\n");
 
     let mut shell = Shell::new();
+    shell.load_profile("/etc/profile");
 
     loop {
         shell.reap_children(true);
@@ -856,7 +902,8 @@ fn main(_arg: usize) -> ! {
             continue;
         }
 
-        let (cmds, background) = parse_line(trimmed);
+        let expanded = shell.expand_aliases(trimmed);
+        let (cmds, background) = parse_line(&expanded);
         if cmds.is_empty() {
             continue;
         }
@@ -888,7 +935,7 @@ fn main(_arg: usize) -> ! {
             }
         }
 
-        shell.launch_job(&cmds, background, trimmed);
+        shell.launch_job(&cmds, background, &expanded);
     }
 
     let _ = vfs::tcsetpgrp(TTY_FD, shell.shell_pgid);

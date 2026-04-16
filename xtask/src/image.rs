@@ -75,6 +75,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "wayland_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "terminal", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "fontd", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "placed", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "bloom", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "clear", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "loglevel", is_init: false, boot_module: true, features: vec![] },
@@ -142,6 +143,7 @@ fn generate_limine_config(
 
     conf.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
     conf.push_str("    module_path: boot():/etc/locale.conf\n");
+    conf.push_str("    module_path: boot():/etc/profile\n");
 
     conf
 }
@@ -246,6 +248,11 @@ pub fn build_iso_with_config(
     sh.write_file(
         iso_root.join("etc/locale.conf"),
         "LOCALE=en_US\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n",
+    )?;
+
+    sh.write_file(
+        iso_root.join("etc/profile"),
+        "alias ll='loglevel'\n",
     )?;
 
     println!("Building userspace programs...");
@@ -497,6 +504,12 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     )?;
     cmd!(sh, "mcopy -i {hdd}@@1M locale.conf ::/boot/locale.conf").run()?;
     sh.remove_path("locale.conf")?;
+
+    sh.write_file("profile", "alias ll='loglevel'\n")?;
+    // create /etc in the fat32 image if it doesn't exist
+    cmd!(sh, "mmd -i {hdd}@@1M ::/etc").run().ok();
+    cmd!(sh, "mcopy -i {hdd}@@1M profile ::/etc/profile").run()?;
+    sh.remove_path("profile")?;
 
     let limine_conf_content = generate_limine_config(sh, programs, &asset_files, None);
     let limine_cfg = "limine.generated.conf";

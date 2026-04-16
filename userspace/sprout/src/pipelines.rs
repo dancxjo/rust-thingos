@@ -63,6 +63,7 @@ fn ensure_session_roots() {
     use stem::syscall::vfs::vfs_mkdir;
     let _ = vfs_mkdir("/session");
     let _ = vfs_mkdir("/session/seat0");
+    let _ = vfs_mkdir("/session/seat0/presences");
     let _ = vfs_mkdir("/session/seat0/keyboard");
     let _ = vfs_mkdir("/session/seat0/pointer");
     let _ = vfs_mkdir("/session/display");
@@ -740,6 +741,7 @@ pub fn setup_taskman_service(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 }
 
 pub fn setup_ui_services(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    spawn_ui_service(shared_tasks.clone(), "/bin/placed", "svc.placed", 2);
     spawn_ui_service(shared_tasks.clone(), "/bin/flytrap", "svc.flytrap", 2);
     spawn_ui_service(shared_tasks, "/bin/blossom", "svc.blossom", 2);
 }
