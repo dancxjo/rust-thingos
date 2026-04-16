@@ -35,6 +35,8 @@ of a task context.
 
 - `docs/kernel/scheduler-anti-starvation.md` describes the aging invariants.
 - Scheduler unit tests live in `kernel/src/sched/`.
+- `xtask/src/scheduler_guardrails.rs` enforces static boundary checks that keep
+  hot scheduler paths free of semantic/process compatibility leakage.
 
 ---
 

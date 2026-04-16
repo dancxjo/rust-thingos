@@ -16,6 +16,8 @@ mod limine;
 mod run;
 mod rustc_thingos;
 mod scan;
+#[cfg(test)]
+mod scheduler_guardrails;
 
 use clap::{Parser, Subcommand};
 use xshell::Shell;
