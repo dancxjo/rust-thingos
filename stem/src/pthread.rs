@@ -24,11 +24,16 @@ struct StartContext {
 
 struct ThreadRecord {
     _stack: Stack,
-    retval: *mut c_void,
+    retval: usize,
     join_in_progress: bool,
 }
 
-// SAFETY: Access to thread records is synchronized by THREADS.
+// SAFETY: `ThreadRecord` is only accessed behind `THREADS` and never exposed by
+// reference outside the mutex critical section.  `retval` is stored as an
+// opaque integer payload (`usize`) and is only interpreted as a pointer by the
+// joining thread when copied back to userspace.  `_stack` ownership is
+// transferred into/out of the map only while holding the mutex, so moving a
+// record between scheduler threads does not permit unsynchronized aliasing.
 unsafe impl Send for ThreadRecord {}
 
 static THREADS: Mutex<BTreeMap<pthread_t, ThreadRecord>> = Mutex::new(BTreeMap::new());
@@ -40,6 +45,8 @@ const fn errno_code(errno: Errno) -> c_int {
 
 extern "C" fn pthread_start_trampoline(arg: usize) -> ! {
     let start = unsafe { Box::from_raw(arg as *mut StartContext) };
+    // ThingOS userspace is panic=abort; if the start routine panics the process
+    // aborts and there is no pthread recovery path.
     let retval = (start.start_routine)(start.arg);
     pthread_exit(retval)
 }
@@ -70,7 +77,8 @@ pub unsafe extern "C" fn pthread_create(
     ) {
         Ok(tid) => tid,
         Err(e) => {
-            drop(unsafe { Box::from_raw(start_ctx_ptr as *mut StartContext) });
+            // `stack` is a local value and is dropped automatically on return.
+            drop(Box::from_raw(start_ctx_ptr as *mut StartContext));
             return errno_code(e);
         }
     };
@@ -79,14 +87,12 @@ pub unsafe extern "C" fn pthread_create(
         tid,
         ThreadRecord {
             _stack: stack,
-            retval: core::ptr::null_mut(),
+            retval: 0,
             join_in_progress: false,
         },
     );
 
-    unsafe {
-        *thread = tid;
-    }
+    *thread = tid;
     0
 }
 
@@ -113,6 +119,9 @@ pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_voi
     }
 
     if let Err(e) = syscall::task_wait(thread) {
+        // Invariant: records are inserted by pthread_create and removed only by
+        // pthread_join on this path, so best-effort reset is sufficient even if
+        // the record is concurrently unavailable (e.g. future cleanup paths).
         if let Some(record) = THREADS.lock().get_mut(&thread) {
             record.join_in_progress = false;
         }
@@ -120,13 +129,13 @@ pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_voi
     }
 
     let Some(record) = THREADS.lock().remove(&thread) else {
+        // Kernel wait succeeded but userspace bookkeeping was missing.
+        // Treat this as "no such joinable thread handle".
         return errno_code(Errno::ESRCH);
     };
 
     if !retval.is_null() {
-        unsafe {
-            *retval = record.retval;
-        }
+        *retval = record.retval as *mut c_void;
     }
 
     0
@@ -136,7 +145,7 @@ pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_voi
 pub extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
     if let Ok(tid) = syscall::get_tid() {
         if let Some(record) = THREADS.lock().get_mut(&tid) {
-            record.retval = retval;
+            record.retval = retval as usize;
         }
     }
     syscall::exit(0)
