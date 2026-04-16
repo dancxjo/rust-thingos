@@ -63,7 +63,7 @@ fn read_all(fd: u32) -> Vec<u8> {
 
 fn collect_lines_from_bytes(data: &[u8], lines: &mut Vec<String>) {
     for line in data.split(|&b| b == b'\n') {
-        let mut s = String::from(core::str::from_utf8(line).unwrap_or(""));
+        let mut s = String::from_utf8_lossy(line).to_string();
         if s.ends_with('\r') {
             s.pop();
         }
@@ -71,40 +71,31 @@ fn collect_lines_from_bytes(data: &[u8], lines: &mut Vec<String>) {
     }
 }
 
-fn sort_and_write_lines(lines: &mut Vec<String>, reverse: bool, unique: bool) {
-    lines.sort_unstable();
-
+fn write_sorted_iter<'a, I: Iterator<Item = &'a String>>(iter: I, unique: bool) {
     let mut first = true;
     let mut previous: Option<&str> = None;
-
-    if reverse {
-        for line in lines.iter().rev() {
-            if unique && previous == Some(line.as_str()) {
-                continue;
-            }
-            if !first {
-                let _ = vfs_write(1, b"\n");
-            }
-            write_str(1, line);
-            first = false;
-            previous = Some(line.as_str());
+    for line in iter {
+        if unique && previous == Some(line.as_str()) {
+            continue;
         }
-    } else {
-        for line in lines.iter() {
-            if unique && previous == Some(line.as_str()) {
-                continue;
-            }
-            if !first {
-                let _ = vfs_write(1, b"\n");
-            }
-            write_str(1, line);
-            first = false;
-            previous = Some(line.as_str());
+        if !first {
+            let _ = vfs_write(1, b"\n");
         }
+        write_str(1, line);
+        first = false;
+        previous = Some(line.as_str());
     }
-
     if !first {
         let _ = vfs_write(1, b"\n");
+    }
+}
+
+fn sort_and_write_lines(lines: &mut Vec<String>, reverse: bool, unique: bool) {
+    lines.sort_unstable();
+    if reverse {
+        write_sorted_iter(lines.iter().rev(), unique);
+    } else {
+        write_sorted_iter(lines.iter(), unique);
     }
 }
 
@@ -116,9 +107,9 @@ fn main(_arg: usize) -> ! {
     let mut unique = false;
     let mut files: Vec<&str> = Vec::new();
 
-    let mut i = 1;
-    while i < args.len() {
-        let arg = &args[i];
+    let mut arg_index = 1;
+    while arg_index < args.len() {
+        let arg = &args[arg_index];
         if arg.starts_with('-') && arg.len() > 1 && arg != "--" {
             for ch in arg[1..].chars() {
                 match ch {
@@ -134,7 +125,7 @@ fn main(_arg: usize) -> ! {
         } else {
             files.push(arg.as_str());
         }
-        i += 1;
+        arg_index += 1;
     }
 
     let mut lines = Vec::new();
