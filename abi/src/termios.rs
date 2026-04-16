@@ -77,6 +77,8 @@ pub const ECHO: u32 = 0x0008;
 pub const ECHOE: u32 = 0x0010;
 /// Echo NL character even if ECHO is not set.
 pub const ECHONL: u32 = 0x0040;
+/// Send SIGTTOU for background output.
+pub const TOSTOP: u32 = 0x0100;
 
 // ── Control characters (c_cc indices) ────────────────────────────────────────
 

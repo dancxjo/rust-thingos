@@ -363,16 +363,17 @@ impl ConsoleNode {
             Some(c) => c,
             None => return Ok(()),
         };
-        let (is_background, controlling_sid, foreground_pgid) = {
+        let (is_background, tostop, controlling_sid, foreground_pgid) = {
             let mut state = CONSOLE_TTY_STATE.lock();
             Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
             (
                 Self::is_background_caller(&state, caller),
+                (state.termios.c_lflag & abi::termios::TOSTOP) != 0,
                 state.controlling_sid,
                 state.foreground_pgid,
             )
         };
-        if is_background {
+        if is_background && tostop {
             crate::kwarn!(
                 "console write rejected by job control: pgid={} sid={} leader={} tty_sid={:?} tty_fg={:?}",
                 caller.pgid,
