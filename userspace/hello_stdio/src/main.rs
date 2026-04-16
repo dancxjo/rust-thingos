@@ -9,24 +9,24 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use abi::motor::{
-    MOTOR_HOST_PROGRAM, MOTOR_INTERFACE_PROGRAM_V1, SEED_ABI_VERSION, Seed, SeedInterface,
+use abi::seed::{
+    HOST_PROGRAM, INTERFACE_PROGRAM_V1, SEED_ABI_VERSION, Seed, SeedInterface,
 };
 
 const SEED_NAME: &[u8] = b"hello_stdio";
 
 #[unsafe(no_mangle)]
 #[used]
-pub static THINGOS_MOTOR: Seed = Seed {
+pub static THINGOS_SEED: Seed = Seed {
     abi_version: SEED_ABI_VERSION,
     interface_count: 1,
-    hosting_modes: MOTOR_HOST_PROGRAM,
+    hosting_modes: HOST_PROGRAM,
     capabilities: 0,
-    motor_name_ptr: SEED_NAME.as_ptr(),
-    motor_name_len: SEED_NAME.len(),
+    name_ptr: SEED_NAME.as_ptr(),
+    name_len: SEED_NAME.len(),
     interfaces: [
         SeedInterface {
-            interface_id: MOTOR_INTERFACE_PROGRAM_V1,
+            interface_id: INTERFACE_PROGRAM_V1,
             interface_version: 1,
             flags: 0,
             reserved: 0,

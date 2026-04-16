@@ -1,20 +1,18 @@
-# Motors: Seed/Shoot binary model
+# Seed/Shoot binary model
 
 ## Overview
 
-Every image-built executable artifact in Thing-OS is a **Motor** — a loadable ELF
-with a canonical metadata descriptor.  The Motor model replaces the legacy split
-between "programs" (entered via `main`) and "drivers" (recognized by ad-hoc
-convention) with a single uniform abstraction.
+Every executable artifact in Thing-OS is a **Seed** — a loadable ELF with a
+canonical metadata descriptor embedded in it.  The Seed model replaces the
+legacy split between "programs" (entered via `main`) and "drivers" (recognized
+by ad-hoc convention) with a single uniform abstraction.
 
 ## Seed and Shoot
 
-The Motor model uses plant terminology to cleanly separate artifact from instance:
-
 | Term | Meaning |
 |---|---|
-| **Seed** | The compiled Motor artifact: an ELF image plus its embedded `THINGOS_MOTOR` descriptor.  Inert and inspectable; not yet executing. |
-| **Shoot** | A live, running realization of a Seed: a process, driver binding, or service instance. |
+| **Seed** | A compiled ELF binary with typed interface descriptors embedded in it.  Inert and inspectable; not yet executing. |
+| **Shoot** | A live, running realization of a Seed: a process, driver binding, or service instance created when the system germinates the Seed. |
 
 > **Key rule**: Seeds are inert and inspectable. Shoots are active and
 > scheduled/bound. Never conflate the two in APIs or architecture.
@@ -33,19 +31,19 @@ The Motor model uses plant terminology to cleanly separate artifact from instanc
 ## Seed descriptor
 
 Every Seed binary exports a `#[used] #[unsafe(no_mangle)]` static named
-`THINGOS_MOTOR` of type `abi::motor::Seed`.  The system discovers Seeds by
+`THINGOS_SEED` of type `abi::seed::Seed`.  The system discovers Seeds by
 scanning for this symbol.
 
-### `abi::motor::Seed` layout (ABI v1)
+### `abi::seed::Seed` layout (ABI v1)
 
 ```
 Seed {
     abi_version: u32,       // must equal SEED_ABI_VERSION (1)
     interface_count: u32,   // number of valid entries in interfaces[]
-    hosting_modes: u64,     // bitmask of MOTOR_HOST_* flags
+    hosting_modes: u64,     // bitmask of HOST_* flags
     capabilities: u64,      // reserved, set to 0
-    motor_name_ptr: *const u8,
-    motor_name_len: usize,  // UTF-8 Seed name, no null terminator
+    name_ptr: *const u8,
+    name_len: usize,        // UTF-8 Seed name, no null terminator
     interfaces: [SeedInterface; 4],
 }
 
@@ -63,44 +61,44 @@ SeedInterface {
 
 | Constant | Meaning |
 |---|---|
-| `MOTOR_HOST_PROGRAM` | Seed can be germinated as a program (ProgramV1) |
-| `MOTOR_HOST_LIFECYCLE` | Seed can be hosted as a resident service (LifecycleV1) |
-| `MOTOR_HOST_DRIVER` | Seed can be probed/bound as a driver (DriverV1) |
+| `HOST_PROGRAM` | Seed can be germinated as a program (ProgramV1) |
+| `HOST_LIFECYCLE` | Seed can be hosted as a resident service (LifecycleV1) |
+| `HOST_DRIVER` | Seed can be probed/bound as a driver (DriverV1) |
 
 ## Built-in interfaces
 
-### ProgramV1 (`MOTOR_INTERFACE_PROGRAM_V1 = 1`)
+### ProgramV1 (`INTERFACE_PROGRAM_V1 = 1`)
 
 Represents a conventional one-shot executable program.
 
 - **Required entry**: `main(args: ArgVec) -> ExitCode`
 - **Entry symbol**: empty (`len == 0`) means "use ELF default entry" —
   preserving plain `main`/crt-style programs with zero extra ceremony.
-- **Hosting mode**: `MOTOR_HOST_PROGRAM`
+- **Hosting mode**: `HOST_PROGRAM`
 
-### LifecycleV1 (`MOTOR_INTERFACE_LIFECYCLE_V1 = 2`)
+### LifecycleV1 (`INTERFACE_LIFECYCLE_V1 = 2`)
 
-Represents a Motor that can be started and stopped by the host/runtime.
+Represents a Seed that can be started and stopped by the host/runtime.
 
 - **Required entries**: `start(ctx: HostContext) -> Status`, `stop(ctx: HostContext) -> Status`
 - **Entry symbol**: must be non-empty; names the `start` entry surface.
-- **Hosting mode**: `MOTOR_HOST_LIFECYCLE`
+- **Hosting mode**: `HOST_LIFECYCLE`
 
-### DriverV1 (`MOTOR_INTERFACE_DRIVER_V1 = 3`)
+### DriverV1 (`INTERFACE_DRIVER_V1 = 3`)
 
-Represents a Motor that can be probed and bound as a driver.
+Represents a Seed that can be probed and bound as a driver.
 
 - **Required entries**: `probe(ctx, dev) -> ProbeDisposition`, `bind(ctx, dev) -> BindResult`, `unbind(ctx, dev) -> Status`
 - **Entry symbol**: must be non-empty; names the driver entry surface.
-- **Hosting mode**: `MOTOR_HOST_DRIVER`
+- **Hosting mode**: `HOST_DRIVER`
 
 ## Runtime discovery
 
 The driver orchestrator (`devd`) prefers the canonical Seed path:
 
-1. Read ELF symbol table; look for `THINGOS_MOTOR` (= `SEED_SYMBOL`).
+1. Read ELF symbol table; look for `THINGOS_SEED` (= `SEED_SYMBOL`).
 2. Parse embedded `Seed` descriptor; verify `abi_version == SEED_ABI_VERSION`.
-3. Check that the Seed declares `DriverV1` (`MOTOR_INTERFACE_DRIVER_V1`).
+3. Check that the Seed declares `DriverV1` (`INTERFACE_DRIVER_V1`).
 4. Also read legacy `THINGOS_DRIVER` descriptor for matching metadata during
    the transitional period.
 
@@ -110,13 +108,13 @@ keeps plain `main`-based programs working without any change.
 
 ## Transitional compatibility
 
-Legacy binary formats continue to work while codebase migrates:
+Legacy binary formats continue to work while the codebase migrates:
 
 - **Legacy driver path** (`THING_DRIVER_V1`, `THINGOS_DRIVER`): explicitly
   supported and labelled `// Transitional compatibility path` in `devd` catalog.
 - **Legacy program path** (plain ELF entry, no Seed descriptor): still launched
   normally; the Seed descriptor is additive.
-- **Canonical path**: binaries that export `THINGOS_MOTOR` are handled via the
+- **Canonical path**: binaries that export `THINGOS_SEED` are handled via the
   Seed-native code path; legacy fallbacks are only reached when the Seed
   descriptor is absent.
 
@@ -139,7 +137,6 @@ or extra boilerplate is required for programs that already use `fn main()`.
 
 ## Naming conventions
 
-- Seed binary name: use the program/driver name without any suffix (e.g. `b"hwrng"`, not `b"hwrng.motor"`).
-- Exported descriptor symbol: always `THINGOS_MOTOR` (the `SEED_SYMBOL` constant).
-- Types: `abi::motor::Seed`, `abi::motor::SeedInterface`.
-- Back-compat aliases `MotorDescriptor` / `MotorInterfaceDescriptor` remain but are deprecated.
+- Seed binary name: use the program/driver name without any suffix (e.g. `b"hwrng"`, not `b"hwrng.driver"`).
+- Exported descriptor symbol: always `THINGOS_SEED` (the `SEED_SYMBOL` constant).
+- Types: `abi::seed::Seed`, `abi::seed::SeedInterface`.

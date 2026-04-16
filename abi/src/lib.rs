@@ -20,7 +20,7 @@ pub mod ids;
 pub mod shared_memory;
 pub mod module;
 pub mod module_manifest;
-pub mod motor;
+pub mod seed;
 pub mod schema;
 pub mod service_contract;
 pub mod supervisor_protocol;

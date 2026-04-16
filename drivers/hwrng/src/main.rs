@@ -8,8 +8,8 @@ use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
     ProbeResult, Status,
 };
-use abi::motor::{
-    MOTOR_HOST_DRIVER, MOTOR_INTERFACE_DRIVER_V1, SEED_ABI_VERSION, Seed, SeedInterface,
+use abi::seed::{
+    HOST_DRIVER, INTERFACE_DRIVER_V1, SEED_ABI_VERSION, Seed, SeedInterface,
 };
 use stem::abi::driver_ctx::DriverCtx;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -19,16 +19,16 @@ const SEED_NAME: &[u8] = b"hwrng";
 
 #[unsafe(no_mangle)]
 #[used]
-pub static THINGOS_MOTOR: Seed = Seed {
+pub static THINGOS_SEED: Seed = Seed {
     abi_version: SEED_ABI_VERSION,
     interface_count: 1,
-    hosting_modes: MOTOR_HOST_DRIVER,
+    hosting_modes: HOST_DRIVER,
     capabilities: 0,
-    motor_name_ptr: SEED_NAME.as_ptr(),
-    motor_name_len: SEED_NAME.len(),
+    name_ptr: SEED_NAME.as_ptr(),
+    name_len: SEED_NAME.len(),
     interfaces: [
         SeedInterface {
-            interface_id: MOTOR_INTERFACE_DRIVER_V1,
+            interface_id: INTERFACE_DRIVER_V1,
             interface_version: 1,
             flags: 0,
             reserved: 0,

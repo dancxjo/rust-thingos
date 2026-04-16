@@ -6,7 +6,7 @@
 //! On each scan pass `devd` reads every regular file from the known search
 //! paths.  For each candidate binary the catalog:
 //!
-//! 1. Checks for the `THINGOS_MOTOR` ELF symbol and confirms `DriverV1`.
+//! 1. Checks for the `THINGOS_SEED` ELF symbol and confirms `DriverV1`.
 //! 2. Reads descriptor metadata and optional legacy hints.
 //! 3. Caches a [`DriverEntry`] record keyed by binary path.
 //!
@@ -25,7 +25,7 @@ use abi::driver_interface::{
     DRIVER_INTERFACE_ABI_VERSION, DRIVER_MARKER_SYMBOL, DRIVER_MATCH_ANY_CLASS,
     DRIVER_MATCH_ANY_ID, DriverClass, DriverDescriptor, DriverInterfaceV1,
 };
-use abi::motor::{MOTOR_INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
+use abi::seed::{INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
 use abi::syscall::vfs_flags::O_RDONLY;
 use stem::debug;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek};
@@ -45,7 +45,7 @@ pub struct DriverEntry {
     pub path: String,
     /// ABI version read from the marker symbol.
     pub abi_version: u32,
-    /// Human-readable driver name (from THINGOS_MOTOR/THINGOS_DRIVER when present).
+    /// Human-readable driver name (from THINGOS_SEED/THINGOS_DRIVER when present).
     pub driver_name: String,
     /// Driver class declared in the descriptor.
     pub driver_class: DriverClass,
