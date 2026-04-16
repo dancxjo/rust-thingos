@@ -2310,6 +2310,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "file"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"

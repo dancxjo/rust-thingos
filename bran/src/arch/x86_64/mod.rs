@@ -605,8 +605,9 @@ impl ArchRuntime for X86_64Runtime {
                 rip = in(reg) entry.entry_pc,
                 in("rdi") entry.arg0,
                 options(noreturn)
-            );
+            )
         }
+        hcf()
     }
 
     // Paging

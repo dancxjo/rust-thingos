@@ -12,7 +12,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use abi::signal::*;
-use stem::syscall::{argv_get, kill, vfs_write};
+use stem::syscall::{argv_get, exit, kill, vfs_write};
 
 fn write_stderr(msg: &str) {
     let _ = unsafe { vfs_write(2, msg.as_bytes()) };
@@ -149,8 +149,8 @@ fn print_signal_list() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn main() -> i32 {
+#[stem::main]
+fn main(_arg: usize) -> ! {
     let args = get_args();
 
     // Skip argv[0] (the program name).
@@ -158,14 +158,13 @@ pub extern "C" fn main() -> i32 {
 
     if args.is_empty() {
         write_stderr("Usage: kill [-<signal>] <pid> [<pid> ...]\n");
-        write_stderr("       kill -l\n");
-        return 1;
+        exit(1);
     }
 
     // Handle `kill -l`.
     if args[0] == "-l" || args[0] == "--list" {
         print_signal_list();
-        return 0;
+        exit(0);
     }
 
     // Parse optional signal argument (e.g. -9, -SIGTERM, -TERM).
@@ -175,7 +174,7 @@ pub extern "C" fn main() -> i32 {
             None => {
                 let msg = alloc::format!("kill: unknown signal: -{sig_str}\n");
                 write_stderr(&msg);
-                return 1;
+                exit(1);
             }
         }
     } else {
@@ -184,7 +183,7 @@ pub extern "C" fn main() -> i32 {
 
     if pids_start >= args.len() {
         write_stderr("kill: no PIDs specified\n");
-        return 1;
+        exit(1);
     }
 
     let mut exit_code = 0i32;
@@ -206,5 +205,5 @@ pub extern "C" fn main() -> i32 {
         }
     }
 
-    exit_code
+    exit(exit_code);
 }
