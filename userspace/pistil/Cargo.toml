@@ -1,5 +1,5 @@
 [package]
-name = "fontd"
+name = "pistil"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,5 +11,5 @@ petals = { path = "../petals" }
 fontdue = { version = "0.7", default-features = false }
 
 [[bin]]
-name = "fontd"
+name = "pistil"
 path = "src/main.rs"

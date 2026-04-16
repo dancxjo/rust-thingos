@@ -114,7 +114,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "terminal", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "xargs", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "fontd", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "pistil", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "placed", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "bloom", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "clear", is_init: false, boot_module: true, features: vec![] },

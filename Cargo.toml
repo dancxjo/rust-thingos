@@ -100,7 +100,7 @@ members = [
   "userspace/false",
   "userspace/fetchd",
   "userspace/file",
-  "userspace/fontd",
+  "userspace/pistil",
   "userspace/grep",
   "userspace/head",
   "userspace/hello_stdio",
