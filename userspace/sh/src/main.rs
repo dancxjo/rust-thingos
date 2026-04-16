@@ -700,8 +700,51 @@ fn read_line(last_status: Option<i32>) -> ReadLineResult {
     }
 }
 
+fn tokenize_line<'a>(line: &'a str) -> Vec<&'a str> {
+    let bytes = line.as_bytes();
+    let mut tokens = Vec::new();
+    let mut idx = 0;
+
+    while idx < bytes.len() {
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if idx >= bytes.len() {
+            break;
+        }
+
+        match bytes[idx] {
+            b'|' | b'<' | b'&' => {
+                tokens.push(&line[idx..idx + 1]);
+                idx += 1;
+            }
+            b'>' => {
+                if idx + 1 < bytes.len() && bytes[idx + 1] == b'>' {
+                    tokens.push(&line[idx..idx + 2]);
+                    idx += 2;
+                } else {
+                    tokens.push(&line[idx..idx + 1]);
+                    idx += 1;
+                }
+            }
+            _ => {
+                let start = idx;
+                while idx < bytes.len()
+                    && !bytes[idx].is_ascii_whitespace()
+                    && !matches!(bytes[idx], b'|' | b'<' | b'>' | b'&')
+                {
+                    idx += 1;
+                }
+                tokens.push(&line[start..idx]);
+            }
+        }
+    }
+
+    tokens
+}
+
 fn parse_line<'a>(line: &'a str) -> (Vec<Cmd<'a>>, bool) {
-    let mut tokens: Vec<&str> = line.split_whitespace().collect();
+    let mut tokens = tokenize_line(line);
     let background = matches!(tokens.last().copied(), Some("&"));
     if background {
         tokens.pop();
