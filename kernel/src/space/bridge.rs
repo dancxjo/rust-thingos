@@ -98,18 +98,16 @@ pub fn space_from_arc(space: &Arc<crate::space::Space>) -> PublicSpace {
 /// # Note on sharing_count
 ///
 /// When called with just a `ProcessAddressSpace`, the sharing count is
-/// derived from `Arc::strong_count(&pas.mappings)`.  This includes the
-/// copy held by each `Thread.mappings`; subtract 1 for the `Process.space`
-/// copy itself.
+/// derived from `Arc::strong_count(&pas.space_obj.mappings)`.
 pub fn space_from_process_address_space(
     pas: &crate::task::ProcessAddressSpace,
     space_id: SpaceId,
 ) -> PublicSpace {
-    let mapping_count = pas.mappings.lock().regions.len() as u32;
-    // strong_count includes: Process.space, space_obj, every Thread.mappings.
+    let mapping_count = pas.space_obj.mapping_count() as u32;
+    // strong_count includes: Process.space.space_obj and every Thread.mappings.
     // We use saturating_sub(1) to represent "other holders besides this one".
     let sharing_count =
-        (Arc::strong_count(&pas.mappings) as u32).saturating_sub(1);
+        (Arc::strong_count(&pas.space_obj.mappings) as u32).saturating_sub(1);
 
     PublicSpace {
         id: space_id,

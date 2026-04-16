@@ -292,7 +292,7 @@ impl<R: BootRuntime> Scheduler<R> {
         // MappingList object).  Fall back to an empty list only when there is
         // no parent process (should not happen for user threads).
         let mappings =
-            parent_pinfo.as_ref().map(|pi| pi.lock().space.mappings.clone()).unwrap_or_else(|| {
+            parent_pinfo.as_ref().map(|pi| pi.lock().space.mappings_arc()).unwrap_or_else(|| {
                 alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()))
             });
 

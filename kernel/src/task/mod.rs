@@ -90,27 +90,6 @@ impl StartupArg {
 ///   `mappings` and `aspace_raw` in-place; a real `Space` swap would instead
 ///   atomically replace the entire `ProcessAddressSpace`.
 pub struct ProcessAddressSpace {
-    /// Process-scoped VM mapping list.
-    ///
-    /// Every `Thread` in this process holds a clone of this `Arc` in its own
-    /// `mappings` field so the scheduler's hot path (the `CURRENT_MAPPINGS`
-    /// per-CPU cache) works without locking the `Process` mutex on every
-    /// context switch.  The underlying `MappingList` is therefore always the
-    /// same object visible from both `Process.space.mappings` and each
-    /// thread's `Thread.mappings`.
-    pub mappings: alloc::sync::Arc<spin::Mutex<crate::memory::mappings::MappingList>>,
-
-    /// Process-scoped address-space token (architecture-specific raw value).
-    ///
-    /// Stores the page-table root for this process in an architecture-neutral
-    /// `u64` representation (see [`crate::BootTasking::aspace_to_raw`]).  All
-    /// threads in this process share the same address space; `Thread.aspace`
-    /// holds a typed copy of the same token for the scheduler's fast path.
-    ///
-    /// Updated atomically with `Thread.aspace` during exec and remains 0
-    /// for kernel-only threads (which have no user address space).
-    pub aspace_raw: u64,
-
     /// First-class `Space` kernel object (Phase 1 — transitional).
     ///
     /// Wraps the same `mappings` `Arc` and carries a stable
@@ -129,8 +108,9 @@ pub struct ProcessAddressSpace {
     ///
     /// * Read `space.space_obj.id` when you need a stable `SpaceId`.
     /// * Read `space.space_obj.mapping_count()` for a diagnostic region count.
-    /// * Continue to use `space.mappings` and `space.aspace_raw` for all
-    ///   existing VM-mutation paths — they share the same `Arc` allocation.
+    /// * Use `space.mappings_arc()` when a cached clone is needed.
+    /// * Use `space.aspace_raw()` / `space.set_aspace_raw()` for page-table
+    ///   token reads/writes.
     pub space_obj: alloc::sync::Arc<crate::space::Space>,
 }
 
@@ -141,15 +121,8 @@ impl ProcessAddressSpace {
     /// address space.  A fresh `Space` kernel object is created automatically
     /// and shares the same `Arc<Mutex<MappingList>>`.
     pub fn empty() -> Self {
-        let mappings = alloc::sync::Arc::new(spin::Mutex::new(
-            crate::memory::mappings::MappingList::new(),
-        ));
-        let space_obj = alloc::sync::Arc::new(crate::space::Space {
-            id: crate::space::alloc_space_id(),
-            mappings: alloc::sync::Arc::clone(&mappings),
-            aspace_raw: 0,
-        });
-        ProcessAddressSpace { mappings, aspace_raw: 0, space_obj }
+        let space_obj = crate::space::Space::new_empty();
+        ProcessAddressSpace { space_obj }
     }
 
     /// Create an address space subdivision from an existing mappings `Arc` and
@@ -163,12 +136,32 @@ impl ProcessAddressSpace {
         mappings: alloc::sync::Arc<spin::Mutex<crate::memory::mappings::MappingList>>,
         aspace_raw: u64,
     ) -> Self {
-        let space_obj = alloc::sync::Arc::new(crate::space::Space {
-            id: crate::space::alloc_space_id(),
-            mappings: alloc::sync::Arc::clone(&mappings),
-            aspace_raw,
-        });
-        ProcessAddressSpace { mappings, aspace_raw, space_obj }
+        let space_obj = crate::space::Space::from_parts(mappings, aspace_raw);
+        ProcessAddressSpace { space_obj }
+    }
+
+    /// Clone the shared mappings arc used by this space.
+    pub fn mappings_arc(
+        &self,
+    ) -> alloc::sync::Arc<spin::Mutex<crate::memory::mappings::MappingList>> {
+        alloc::sync::Arc::clone(&self.space_obj.mappings)
+    }
+
+    /// Borrow the shared mappings list for lock-based access.
+    pub fn mappings(
+        &self,
+    ) -> &alloc::sync::Arc<spin::Mutex<crate::memory::mappings::MappingList>> {
+        &self.space_obj.mappings
+    }
+
+    /// Return the current architecture-specific page-table token.
+    pub fn aspace_raw(&self) -> u64 {
+        self.space_obj.aspace_raw()
+    }
+
+    /// Update the architecture-specific page-table token.
+    pub fn set_aspace_raw(&self, aspace_raw: u64) {
+        self.space_obj.set_aspace_raw(aspace_raw);
     }
 }
 
