@@ -18,10 +18,6 @@ use super::{VfsDriver, VfsNode, VfsStat};
 use crate::sched::wait_queue::WaitQueue;
 use crate::syscall::validate::{copyin, copyout};
 
-/// Maximum time to wait for a userland VFS provider response before failing.
-/// The scheduler tick is 100Hz, so 300 ticks is roughly 3 seconds.
-const PROVIDER_RPC_TIMEOUT_TICKS: u64 = 300;
-
 // ── ProviderChannel ──────────────────────────────────────────────────────────
 
 /// Inner state protected by the serialisation lock.
@@ -68,8 +64,6 @@ impl ProviderChannel {
 
     fn recv_response(&self, buf: &mut [u8]) -> SysResult<usize> {
         let tid = unsafe { crate::sched::current_tid_current() };
-        let deadline = crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed)
-            + PROVIDER_RPC_TIMEOUT_TICKS;
         loop {
             let n = self.resp.try_recv(buf);
             if n > 0 {
@@ -78,11 +72,6 @@ impl ProviderChannel {
             if !self.resp.has_writers() {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
-            }
-            if crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) >= deadline {
-                crate::ipc::diag::VFS_RPC_ERRORS
-                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                return Err(Errno::EAGAIN);
             }
             self.resp.add_waiter_read(tid);
             let n = self.resp.try_recv(buf);
@@ -95,17 +84,9 @@ impl ProviderChannel {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
-            if crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) >= deadline {
-                self.resp.remove_waiter_read(tid);
-                crate::ipc::diag::VFS_RPC_ERRORS
-                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                return Err(Errno::EAGAIN);
-            }
-            crate::sched::register_timeout_wake_current(tid, deadline);
             unsafe {
                 crate::sched::block_current_erased();
             }
-            crate::sched::unregister_timeout_wake_current(tid);
             self.resp.remove_waiter_read(tid);
         }
     }
@@ -247,8 +228,6 @@ impl ProviderChannelRef {
 
     fn recv_response(&self, buf: &mut [u8]) -> SysResult<usize> {
         let tid = unsafe { crate::sched::current_tid_current() };
-        let deadline = crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed)
-            + PROVIDER_RPC_TIMEOUT_TICKS;
         loop {
             let n = self.resp.try_recv(buf);
             if n > 0 {
@@ -257,11 +236,6 @@ impl ProviderChannelRef {
             if !self.resp.has_writers() {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
-            }
-            if crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) >= deadline {
-                crate::ipc::diag::VFS_RPC_ERRORS
-                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                return Err(Errno::EAGAIN);
             }
             self.resp.add_waiter_read(tid);
             let n = self.resp.try_recv(buf);
@@ -274,17 +248,9 @@ impl ProviderChannelRef {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
-            if crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) >= deadline {
-                self.resp.remove_waiter_read(tid);
-                crate::ipc::diag::VFS_RPC_ERRORS
-                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                return Err(Errno::EAGAIN);
-            }
-            crate::sched::register_timeout_wake_current(tid, deadline);
             unsafe {
                 crate::sched::block_current_erased();
             }
-            crate::sched::unregister_timeout_wake_current(tid);
             self.resp.remove_waiter_read(tid);
         }
     }

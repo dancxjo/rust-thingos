@@ -35,6 +35,10 @@
 //! ```
 
 use abi::errors::Errno;
+use abi::vfs_rpc::VfsRpcOp::{
+    Close, DeviceCall, Lookup, Poll, Read, Readdir, Rename, Stat, SubscribeReady,
+    UnsubscribeReady, Write,
+};
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader, VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP};
 use stem::syscall::channel::{channel_recv, channel_send_all, channel_try_recv};
 
@@ -131,7 +135,8 @@ impl ProviderResponse {
 /// loop to receive decoded requests, then call [`send_response`] to reply.
 pub struct ProviderLoop {
     read_handle: u32,
-    buf: alloc::vec::Vec<u8>,
+    recv_buf: alloc::vec::Vec<u8>,
+    pending: alloc::vec::Vec<u8>,
 }
 
 impl ProviderLoop {
@@ -140,8 +145,92 @@ impl ProviderLoop {
     pub fn new(vfs_read: u32) -> Self {
         Self {
             read_handle: vfs_read,
-            buf: alloc::vec![0u8; VFS_RPC_MAX_REQ],
+            recv_buf: alloc::vec![0u8; VFS_RPC_MAX_REQ],
+            pending: alloc::vec::Vec::new(),
         }
+    }
+
+    fn try_parse_one(&mut self) -> Result<Option<ProviderRequest>, Errno> {
+        let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
+        if self.pending.len() < hdr_size {
+            return Ok(None);
+        }
+
+        // SAFETY: pending has at least hdr_size bytes; header is repr(C, packed).
+        let hdr: VfsRpcReqHeader = unsafe {
+            core::ptr::read_unaligned(self.pending.as_ptr() as *const VfsRpcReqHeader)
+        };
+        let op = VfsRpcOp::from_u8(hdr.op).ok_or(Errno::EINVAL)?;
+
+        let payload_len = match op {
+            Lookup => {
+                if self.pending.len() < hdr_size + 4 {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                let path_len = u32::from_le_bytes([p[0], p[1], p[2], p[3]]) as usize;
+                4 + path_len
+            }
+            Read | Readdir => 20,
+            Write => {
+                if self.pending.len() < hdr_size + 20 {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                let data_len = u32::from_le_bytes([p[16], p[17], p[18], p[19]]) as usize;
+                20 + data_len
+            }
+            Stat | Close | UnsubscribeReady => 8,
+            Poll | SubscribeReady => 12,
+            DeviceCall => {
+                let dc_size = core::mem::size_of::<abi::device::DeviceCall>();
+                if self.pending.len() < hdr_size + 8 + dc_size {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                // payload: [handle: u64][DeviceCall][in_data...]
+                // DeviceCall.in_len is at byte offset 16 in the struct.
+                let in_len_off = 8 + 16;
+                let in_len = u32::from_le_bytes([
+                    p[in_len_off],
+                    p[in_len_off + 1],
+                    p[in_len_off + 2],
+                    p[in_len_off + 3],
+                ]) as usize;
+                8 + dc_size + in_len
+            }
+            Rename => {
+                if self.pending.len() < hdr_size + 4 {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                let old_len = u32::from_le_bytes([p[0], p[1], p[2], p[3]]) as usize;
+                if self.pending.len() < hdr_size + 4 + old_len + 4 {
+                    return Ok(None);
+                }
+                let q = &self.pending[hdr_size + 4 + old_len..];
+                let new_len = u32::from_le_bytes([q[0], q[1], q[2], q[3]]) as usize;
+                4 + old_len + 4 + new_len
+            }
+        };
+
+        if payload_len > (VFS_RPC_MAX_REQ - hdr_size) {
+            return Err(Errno::EINVAL);
+        }
+
+        let frame_len = hdr_size + payload_len;
+        if self.pending.len() < frame_len {
+            return Ok(None);
+        }
+
+        let payload = self.pending[hdr_size..frame_len].to_vec();
+        self.pending.drain(..frame_len);
+
+        Ok(Some(ProviderRequest {
+            resp_port: hdr.resp_port,
+            op,
+            payload,
+        }))
     }
 
     /// Try to receive the next request without blocking.
@@ -157,24 +246,15 @@ impl ProviderLoop {
     ///
     /// [`next_request`]: Self::next_request
     pub fn try_next_request(&mut self) -> Result<Option<ProviderRequest>, Errno> {
-        match channel_try_recv(self.read_handle, &mut self.buf) {
+        if let Some(req) = self.try_parse_one()? {
+            return Ok(Some(req));
+        }
+
+        match channel_try_recv(self.read_handle, &mut self.recv_buf) {
             Ok(0) => Ok(None),
             Ok(n) => {
-                let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
-                if n < hdr_size {
-                    return Err(Errno::EINVAL);
-                }
-                // SAFETY: we checked n >= hdr_size; the header struct is repr(C,packed).
-                let hdr: VfsRpcReqHeader = unsafe {
-                    core::ptr::read_unaligned(self.buf.as_ptr() as *const VfsRpcReqHeader)
-                };
-                let op = VfsRpcOp::from_u8(hdr.op).ok_or(Errno::EINVAL)?;
-                let payload = self.buf[hdr_size..n].to_vec();
-                Ok(Some(ProviderRequest {
-                    resp_port: hdr.resp_port,
-                    op,
-                    payload,
-                }))
+                self.pending.extend_from_slice(&self.recv_buf[..n]);
+                self.try_parse_one()
             }
             Err(Errno::EAGAIN) => Ok(None),
             Err(e) => Err(e),
@@ -186,26 +266,17 @@ impl ProviderLoop {
     /// Returns `Err(Errno::EPIPE)` when the channel is closed (provider
     /// should exit cleanly).
     pub fn next_request(&mut self) -> Result<ProviderRequest, Errno> {
-        let n = channel_recv(self.read_handle, &mut self.buf)?;
+        loop {
+            if let Some(req) = self.try_parse_one()? {
+                return Ok(req);
+            }
 
-        let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
-        if n < hdr_size {
-            return Err(Errno::EINVAL);
+            let n = channel_recv(self.read_handle, &mut self.recv_buf)?;
+            if n == 0 {
+                return Err(Errno::EPIPE);
+            }
+            self.pending.extend_from_slice(&self.recv_buf[..n]);
         }
-
-        // SAFETY: we checked n >= hdr_size; the header struct is repr(C,packed).
-        let hdr: VfsRpcReqHeader = unsafe {
-            core::ptr::read_unaligned(self.buf.as_ptr() as *const VfsRpcReqHeader)
-        };
-
-        let op = VfsRpcOp::from_u8(hdr.op).ok_or(Errno::EINVAL)?;
-        let payload = self.buf[hdr_size..n].to_vec();
-
-        Ok(ProviderRequest {
-            resp_port: hdr.resp_port,
-            op,
-            payload,
-        })
     }
 
     /// Send `response` back to the kernel on the given `resp_port`.
