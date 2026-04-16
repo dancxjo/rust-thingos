@@ -286,6 +286,7 @@ mod tests {
             foreground_pgid: None,
             cwd: alloc::string::String::from("/"),
             namespace_label: alloc::string::String::from("global"),
+            root_path: alloc::string::String::from("/"),
             // Phase 9: populate thread_states so job_state_from_snapshot uses
             // the full slice path rather than the single-leader fallback.
             thread_states: alloc::vec![state],
@@ -451,6 +452,7 @@ mod tests {
             foreground_pgid: None,
             cwd: alloc::string::String::from("/"),
             namespace_label: alloc::string::String::from("global"),
+            root_path: alloc::string::String::from("/"),
             thread_states: all_thread_states,
             space_id: thingos::space::SpaceId::NONE,
             space_mapping_count: 0,

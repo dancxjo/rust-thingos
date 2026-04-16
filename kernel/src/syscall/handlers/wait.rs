@@ -446,6 +446,7 @@ mod tests {
             thing_table: table,
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),

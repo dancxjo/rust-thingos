@@ -246,8 +246,8 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         //
         // In Phase 8:
         // * `cwd` is derived from Process::cwd.
-        // * `namespace` is always "global" (NamespaceRef is a unit struct).
-        // * `root` is always "/" (no per-process chroot yet).
+        // * `namespace` is derived from Process::namespace.
+        // * `root` is derived from Process::root.
         //
         // Note: terminal/UI/console attachment is NOT reported here.  That
         // belongs to Presence, which has not yet been introduced as a live
@@ -1042,6 +1042,7 @@ mod tests {
             foreground_pgid: Some(42),
             cwd: String::from("/"),
             namespace_label: String::from("global"),
+            root_path: String::from("/"),
             thread_states,
             space_id: thingos::space::SpaceId::NONE,
             space_mapping_count: 0,

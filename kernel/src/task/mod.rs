@@ -397,7 +397,7 @@ impl ProcessUnixCompat {
 /// **Place** (world/visibility context — `kernel::place::bridge`):
 /// * `cwd` — current working directory path → `Place::cwd`
 /// * `namespace` — VFS mount-table view → `Place::namespace`
-/// * *(no root field yet)* — effective filesystem root → `Place::root`
+/// * `root` — effective filesystem root (`chroot` / `pivot-root`) → `Place::root`
 ///
 /// **Unix legacy compatibility** (quarantined — see [`ProcessUnixCompat`]):
 /// * `unix_compat` — all Unix-derived state (`signals`, `pgid`, `sid`,
@@ -470,12 +470,10 @@ pub struct Process {
     // They feed `kernel::place::bridge` → `thingos::place::Place`.
     // They remain in `Process` as transitional backing; the canonical surface
     // is through the place bridge, not direct field access from new code.
-    /// VFS namespace — currently a global stub shared by all processes.
+    /// VFS namespace identity for this process.
     ///
-    /// [`crate::vfs::NamespaceRef`] is a unit struct today: all instances
-    /// resolve to the same underlying global mount table.  The field exists
-    /// so that per-process namespace isolation can be added later without
-    /// touching every spawn call site.
+    /// Backed by [`crate::vfs::NamespaceRef`] and surfaced through
+    /// `kernel::place::bridge` as canonical `Place::namespace`.
     ///
     /// Feeds `Place::namespace` through `kernel::place::bridge`.
     ///
@@ -488,6 +486,12 @@ pub struct Process {
     /// New code must not read this field directly for world-context purposes;
     /// use `crate::place::bridge::place_from_snapshot` instead.
     pub cwd: alloc::string::String,
+
+    /// Effective filesystem root for this process.
+    ///
+    /// This is the transitional backing for canonical `Place::root` and is
+    /// expected to track chroot/pivot-root style world-context changes.
+    pub root: alloc::string::String,
 
     /// Path of the currently-running executable image.
     pub exec_path: alloc::string::String,

@@ -79,12 +79,16 @@ pub struct ProcessSnapshot {
     pub cwd: String,
     /// VFS namespace label for this process's mount-table view.
     ///
-    /// Always `"global"` in Phase 8 because `NamespaceRef` is a unit struct
-    /// and all processes share one mount table.  Future phases will populate
-    /// this with a stable per-process namespace identifier.
+    /// Derived from `Process.namespace.label()` so Place/procfs reflect runtime
+    /// namespace identity for the process.
     ///
     /// Feeds `kernel::place::bridge::place_from_snapshot` → `thingos::place::Place::namespace`.
     pub namespace_label: String,
+    /// Effective filesystem root path for this process.
+    ///
+    /// Backed by `Process.root`.  This reflects chroot/pivot-root style
+    /// world-context state projected into canonical `Place::root`.
+    pub root_path: String,
     // ── Job-context fields (Phase 9) ──────────────────────────────────────────
     /// States of **all** threads in this process's thread group.
     ///

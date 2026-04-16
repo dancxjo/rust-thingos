@@ -75,6 +75,7 @@ fn default_process_info(
         thing_table,
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: alloc::string::String::from("/"),
+        root: alloc::string::String::from("/"),
         exec_path: alloc::string::String::new(),
         authority: crate::task::ProcessAuthority::root(),
         space,
@@ -100,6 +101,7 @@ fn inherit_process_info<R: BootRuntime>(
             thing_table: parent.thing_table.clone(),
             namespace: parent.namespace.clone(),
             cwd: parent.cwd.clone(),
+            root: parent.root.clone(),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::inherit(parent.authority),
             space,
@@ -1091,6 +1093,11 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         } else {
             alloc::string::String::from("/")
         },
+        root: if let Some(parent_pi) = &parent_pinfo {
+            parent_pi.lock().root.clone()
+        } else {
+            alloc::string::String::from("/")
+        },
         exec_path: alloc::format!("/boot/{}", module.name),
         authority,
         space: crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
@@ -1373,6 +1380,11 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         } else {
             alloc::string::String::from("/")
         },
+        root: if let Some(parent_pi) = &parent_pinfo {
+            parent_pi.lock().root.clone()
+        } else {
+            alloc::string::String::from("/")
+        },
         exec_path: alloc::string::String::from(path),
         authority,
         space: crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
@@ -1524,6 +1536,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
