@@ -662,8 +662,10 @@ fn setup_initial_tls_block<R: BootRuntime>(
     // Honor ELF-provided TLS alignment with a conservative 16-byte floor.
     // x86_64 runtimes commonly assume a 16-byte-aligned TP/TCB.
     let tls_align = tls.align.max(16);
-    // Round memsz up to the required TLS alignment so the TCB starts aligned.
-    let tls_data_size = align_up_u64(tls.memsz, tls_align);
+    // Use PT_TLS memsz exactly for static TLS geometry.
+    // Rust-generated TP-relative offsets are based on the linker-defined
+    // block size, so adding padding here shifts all TLS fields incorrectly.
+    let tls_data_size = tls.memsz;
     // The TCB needs at least 16 bytes: [self_ptr (u64), dtv_ptr (u64)].
     let tcb_size: u64 = 16;
     let total_size = tls_data_size.saturating_add(tcb_size);

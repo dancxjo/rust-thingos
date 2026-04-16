@@ -76,6 +76,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "show_args", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "env_roundtrip", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "cwd_test", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "date", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "wayland_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "terminal", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },

@@ -443,7 +443,8 @@ pub(crate) fn allocate_tls_block() -> usize {
 
     // Match ELF TLS offsets with a conservative 16-byte minimum alignment.
     let tls_align = info.align.max(16);
-    let data_size = align_up(info.memsz, tls_align);
+    // Keep TP-relative layout identical to the ELF PT_TLS definition.
+    let data_size = info.memsz;
     let tcb_size = 16usize; // Variant II TCB: self-pointer (u64) + DTV slot (u64)
     let total = data_size + tcb_size;
 

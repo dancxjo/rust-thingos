@@ -91,6 +91,7 @@ members = [
   "userspace/clear",
   "userspace/cp",
   "userspace/cwd_test",
+  "userspace/date",
   "userspace/dirname",
   "userspace/dmesg",
   "userspace/echo",
