@@ -41,9 +41,10 @@ use abi::driver_interface::{
 };
 use abi::errors::Errno;
 use abi::sound::{
-    AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START,
-    AUDIO_STOP, AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo,
-    format_bit,
+    AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS,
+    AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS, AUDIO_START, AUDIO_STOP, AudioMappedRingHeader,
+    AudioMappedRingInfo, AudioMappedRingSetup, AudioParams, AudioSampleFormat, AudioState,
+    AudioStatus, AudioStreamInfo, format_bit,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
@@ -52,6 +53,9 @@ use stem::syscall::channel::channel_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, info, warn};
 use virtio::device::VirtioDevice;
+
+const AUDIO_RING_SOCKET_PATH: &str = "/run/audio-card0.sock";
+const AUDIO_RING_SUGGESTED_BYTES: usize = 128 * 1024;
 
 #[unsafe(no_mangle)]
 #[used]
@@ -208,6 +212,7 @@ impl RingBuf {
 /// Mutable state shared between the VFS provider loop and hardware feed loop.
 struct AudioCard {
     ring: RingBuf,
+    mapped: Option<MappedRing>,
     params: AudioParams,
     state: u32, // AudioState as u32
     hw_frame: u64,
@@ -218,11 +223,94 @@ struct AudioCard {
     out0_subscribed: bool,
 }
 
+struct MappedRing {
+    control_fd: u32,
+    ring_fd: u32,
+    map_addr: usize,
+    map_len: usize,
+}
+
+fn mapped_header_mut(mapped: &mut MappedRing) -> &mut AudioMappedRingHeader {
+    unsafe { &mut *(mapped.map_addr as *mut AudioMappedRingHeader) }
+}
+
+fn mapped_header_ptr(mapped: &MappedRing) -> *mut AudioMappedRingHeader {
+    mapped.map_addr as *mut AudioMappedRingHeader
+}
+
+fn mapped_data_ptr(mapped: &MappedRing) -> *mut u8 {
+    (mapped.map_addr + core::mem::size_of::<AudioMappedRingHeader>()) as *mut u8
+}
+
+fn mapped_dequeue(mapped: &mut MappedRing, dst: &mut [u8]) -> usize {
+    let hdr = mapped_header_ptr(mapped);
+    let cap =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).capacity_bytes)) } as usize;
+    if cap == 0 {
+        return 0;
+    }
+
+    let w = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).write_index)) } as usize;
+    let mut r =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).read_index)) } as usize;
+    let avail = if w >= r { w - r } else { cap - (r - w) };
+    let n = avail.min(dst.len());
+    if n == 0 {
+        return 0;
+    }
+
+    let base = mapped_data_ptr(mapped);
+    let first = n.min(cap - r);
+    unsafe {
+        core::ptr::copy_nonoverlapping(base.add(r), dst.as_mut_ptr(), first);
+    }
+    if first < n {
+        unsafe {
+            core::ptr::copy_nonoverlapping(base, dst.as_mut_ptr().add(first), n - first);
+        }
+    }
+
+    r = (r + n) % cap;
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*hdr).read_index), r as u32);
+    }
+    n
+}
+
+fn teardown_mapped_ring(card: &mut AudioCard) {
+    if let Some(mapped) = card.mapped.take() {
+        let _ = stem::syscall::vm_unmap(mapped.map_addr, mapped.map_len);
+        let _ = stem::syscall::vfs_close(mapped.ring_fd);
+        let _ = stem::syscall::vfs_close(mapped.control_fd);
+    }
+}
+
+fn setup_mapped_ring_listener() -> Option<u32> {
+    use abi::syscall::fcntl_cmd::F_SETFL;
+    use abi::syscall::socket_domain::AF_UNIX;
+    use abi::syscall::socket_type::SOCK_STREAM;
+    use abi::syscall::vfs_flags::O_NONBLOCK;
+
+    let _ = stem::syscall::vfs::vfs_unlink(AUDIO_RING_SOCKET_PATH);
+    let fd = stem::syscall::socket::socket(AF_UNIX, SOCK_STREAM, 0).ok()?;
+    if stem::syscall::socket::bind(fd, AUDIO_RING_SOCKET_PATH).is_err() {
+        let _ = stem::syscall::vfs_close(fd);
+        return None;
+    }
+    if stem::syscall::socket::listen(fd, 1).is_err() {
+        let _ = stem::syscall::vfs_close(fd);
+        return None;
+    }
+    let _ = stem::syscall::vfs::vfs_fcntl(fd, F_SETFL, O_NONBLOCK);
+    Some(fd)
+}
+
 impl AudioCard {
     fn new() -> Self {
         // Default: S16LE, 44100 Hz, stereo, 1024-frame periods, 4096-frame buffer.
         Self {
             ring: RingBuf::new(64 * 1024),
+            mapped: None,
             params: AudioParams {
                 sample_format: AudioSampleFormat::S16LE as u32,
                 rate: 44100,
@@ -530,6 +618,23 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
             (ok_device_call(0, bytes), false)
         }
 
+        AUDIO_GET_MAPPED_RING_INFO => {
+            let mut info = AudioMappedRingInfo::default();
+            let path = AUDIO_RING_SOCKET_PATH.as_bytes();
+            let copy_n = path.len().min(info.socket_path.len());
+            info.supported = 1;
+            info.suggested_ring_bytes = AUDIO_RING_SUGGESTED_BYTES as u32;
+            info.socket_path_len = copy_n as u32;
+            info.socket_path[..copy_n].copy_from_slice(&path[..copy_n]);
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &info as *const AudioMappedRingInfo as *const u8,
+                    size_of::<AudioMappedRingInfo>(),
+                )
+            };
+            (ok_device_call(0, bytes), false)
+        }
+
         AUDIO_START => {
             card.state = AudioState::Running as u32;
             (ok_device_call(0, &[]), false)
@@ -538,6 +643,7 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
         AUDIO_STOP => {
             card.state = AudioState::Stopped as u32;
             card.ring = RingBuf::new(64 * 1024);
+            teardown_mapped_ring(card);
             (ok_device_call(0, &[]), false)
         }
 
@@ -718,10 +824,111 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     // ── Main event loop ───────────────────────────────────────────────────────
     let mut card = AudioCard::new();
     let mut provider_loop = ProviderLoop::new(req_read);
+    let mapped_listener = setup_mapped_ring_listener();
+    if mapped_listener.is_some() {
+        info!("SND: mapped ring control socket at {}", AUDIO_RING_SOCKET_PATH);
+    } else {
+        warn!("SND: mapped ring socket unavailable; using write() path");
+    }
+    let mut mapped_pending_fd: Option<u32> = None;
 
     loop {
         // 1. Process any pending VFS RPC requests (non-blocking).
         let mut had_rpc = false;
+
+        if let Some(listener_fd) = mapped_listener {
+            if mapped_pending_fd.is_none() {
+                match stem::syscall::socket::accept(listener_fd) {
+                    Ok(fd) => {
+                        use abi::syscall::fcntl_cmd::F_SETFL;
+                        use abi::syscall::vfs_flags::O_NONBLOCK;
+                        let _ = stem::syscall::vfs::vfs_fcntl(fd, F_SETFL, O_NONBLOCK);
+                        mapped_pending_fd = Some(fd);
+                    }
+                    Err(Errno::EAGAIN) => {}
+                    Err(e) => {
+                        warn!("SND: mapped ring accept failed: {:?}", e);
+                    }
+                }
+            }
+
+            if card.mapped.is_none() {
+                if let Some(ctrl_fd) = mapped_pending_fd {
+                    let mut setup_buf = [0u8; core::mem::size_of::<AudioMappedRingSetup>()];
+                    let mut fds = [0u32; 1];
+                    match stem::syscall::socket::recvmsg(ctrl_fd, &mut setup_buf, &mut fds) {
+                        Ok((n, fdc)) if n >= setup_buf.len() && fdc > 0 => {
+                            let setup: AudioMappedRingSetup = unsafe {
+                                core::ptr::read_unaligned(
+                                    setup_buf.as_ptr() as *const AudioMappedRingSetup
+                                )
+                            };
+                            let ring_fd = fds[0];
+                            if setup.version != AUDIO_MAPPED_RING_VERSION
+                                || (setup.ring_bytes as usize)
+                                    < core::mem::size_of::<AudioMappedRingHeader>() + 4096
+                            {
+                                let _ = stem::syscall::vfs_close(ring_fd);
+                                let _ = stem::syscall::vfs_close(ctrl_fd);
+                                mapped_pending_fd = None;
+                            } else {
+                                let req = abi::vm::VmMapReq {
+                                    addr_hint: 0,
+                                    len: setup.ring_bytes as usize,
+                                    prot: abi::vm::VmProt::READ
+                                        | abi::vm::VmProt::WRITE
+                                        | abi::vm::VmProt::USER,
+                                    flags: abi::vm::VmMapFlags::empty(),
+                                    backing: abi::vm::VmBacking::File { thing: ring_fd, offset: 0 },
+                                };
+                                match stem::syscall::vm_map(&req) {
+                                    Ok(resp) => {
+                                        let mut mapped = MappedRing {
+                                            control_fd: ctrl_fd,
+                                            ring_fd,
+                                            map_addr: resp.addr,
+                                            map_len: resp.len,
+                                        };
+                                        let cap =
+                                            mapped.map_len.saturating_sub(core::mem::size_of::<
+                                                AudioMappedRingHeader,
+                                            >(
+                                            ));
+                                        let hdr = mapped_header_mut(&mut mapped);
+                                        unsafe {
+                                            core::ptr::write_volatile(&mut hdr.write_index, 0);
+                                            core::ptr::write_volatile(&mut hdr.read_index, 0);
+                                            core::ptr::write_volatile(
+                                                &mut hdr.capacity_bytes,
+                                                cap as u32,
+                                            );
+                                            core::ptr::write_volatile(&mut hdr.flags, 0);
+                                        }
+                                        card.mapped = Some(mapped);
+                                        mapped_pending_fd = None;
+                                        info!("SND: mapped ring attached ({} bytes)", resp.len);
+                                    }
+                                    Err(e) => {
+                                        warn!("SND: mapped ring vm_map failed: {:?}", e);
+                                        let _ = stem::syscall::vfs_close(ring_fd);
+                                        let _ = stem::syscall::vfs_close(ctrl_fd);
+                                        mapped_pending_fd = None;
+                                    }
+                                }
+                            }
+                        }
+                        Ok((_n, _fdc)) => {}
+                        Err(Errno::EAGAIN) => {}
+                        Err(e) => {
+                            warn!("SND: mapped ring recvmsg failed: {:?}", e);
+                            let _ = stem::syscall::vfs_close(ctrl_fd);
+                            mapped_pending_fd = None;
+                        }
+                    }
+                }
+            }
+        }
+
         loop {
             match provider_loop.try_next_request() {
                 Ok(Some(req)) => {
@@ -766,14 +973,18 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         // 4. Feed hardware from ring if running.
         if card.state == AudioState::Running as u32 || card.state == AudioState::Draining as u32 {
             let chunk = 4096usize;
-            if card.ring.available() >= chunk && !tx_in_flight {
+            if !tx_in_flight {
                 let hdr_sz = size_of::<VirtioSndPcmXfer>();
                 unsafe {
                     *(tx_dma_ptr as *mut VirtioSndPcmXfer) = VirtioSndPcmXfer { stream_id };
                 }
                 let data_slice =
                     unsafe { core::slice::from_raw_parts_mut(tx_dma_ptr.add(hdr_sz), chunk) };
-                let n = card.ring.dequeue(data_slice);
+                let n = if let Some(mapped) = card.mapped.as_mut() {
+                    mapped_dequeue(mapped, data_slice)
+                } else {
+                    card.ring.dequeue(data_slice)
+                };
                 if n > 0 {
                     let bpf = card.bytes_per_frame().max(1);
                     card.hw_frame += (n / bpf) as u64;
@@ -795,7 +1006,10 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                 }
 
                 // Notify writers that ring space opened up.
-                if card.out0_subscribed && card.ring.free_space() > prev_free_before_tx {
+                if card.mapped.is_none()
+                    && card.out0_subscribed
+                    && card.ring.free_space() > prev_free_before_tx
+                {
                     let _ = stem::syscall::vfs::vfs_notify(
                         req_write,
                         HANDLE_OUT0,

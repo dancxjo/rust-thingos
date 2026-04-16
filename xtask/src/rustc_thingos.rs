@@ -28,6 +28,7 @@ const OUTPUT_DIR: &str = "target/rustc-thingos";
 const RUSTLIB_CACHE_DIR: &str = "target/rustc-thingos/lib/rustlib";
 const LIB_CACHE_DIR: &str = "target/rustc-thingos/lib";
 const THINGOS_RUSTC_BINARY: &str = "target/rustc-thingos/thingos-rustc";
+const THINGOS_CARGO_BINARY: &str = "target/rustc-thingos/thingos-cargo";
 const THINGOS_RUSTLIB_CACHE_DIR: &str = "target/rustc-thingos/thingos-rustlib";
 const ROOT_CONFIG_TOML: &str = "config.toml";
 const ROOT_CONFIG_BACKUP: &str = "target/rustc-thingos/config.toml.backup";
@@ -117,6 +118,16 @@ fn locate_thingos_rustc(cwd: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.exists())
 }
 
+fn locate_thingos_cargo(cwd: &Path) -> Option<PathBuf> {
+    let root_build = xpy_build_root(cwd);
+    let candidates = [
+        root_build.join("stage1-tools/x86_64-unknown-thingos/release/cargo"),
+        cwd.join("build/x86_64-unknown-thingos/stage1/bin/cargo"),
+    ];
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
 fn cache_rustlib_tree(sh: &Shell, cwd: &Path) -> Result<()> {
     let build_root = xpy_build_root(cwd);
     let cached_rustlib = cwd.join(RUSTLIB_CACHE_DIR);
@@ -172,19 +183,27 @@ fn cache_rustlib_tree(sh: &Shell, cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cache_thingos_rustc_tree(sh: &Shell, cwd: &Path, thingos_rustc: &Path) -> Result<()> {
+fn cache_thingos_rustc_tree(sh: &Shell, cwd: &Path, thingos_rustc: &Path, thingos_cargo: Option<&Path>) -> Result<()> {
     let cached_dir = cwd.join(THINGOS_RUSTLIB_CACHE_DIR);
 
     sh.remove_path(&cached_dir)?;
     sh.create_dir(&cached_dir)?;
     sh.copy_file(thingos_rustc, cwd.join(THINGOS_RUSTC_BINARY))?;
 
+    if let Some(cargo) = thingos_cargo {
+        sh.copy_file(cargo, cwd.join(THINGOS_CARGO_BINARY))?;
+    }
+
     #[cfg(unix)]
     {
-        let binary_path = cwd.join(THINGOS_RUSTC_BINARY);
-        let mut perms = std::fs::metadata(&binary_path)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&binary_path, perms)?;
+        for bin in &[THINGOS_RUSTC_BINARY, THINGOS_CARGO_BINARY] {
+            let binary_path = cwd.join(bin);
+            if binary_path.exists() {
+                let mut perms = std::fs::metadata(&binary_path)?.permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&binary_path, perms)?;
+            }
+        }
     }
 
     let thingos_rlibs_dst = cached_dir.join("x86_64-unknown-thingos/lib");
@@ -314,7 +333,7 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
     std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(true, true))?;
     seed_stage0_thingos_sysroot(cwd)?;
 
-    let native_build = cmd!(sh, "python3 x.py build --stage 1 compiler/rustc")
+    let native_build = cmd!(sh, "python3 x.py build --stage 1 compiler/rustc src/tools/cargo")
         .env("RUST_TARGET_PATH", target_dir_str)
         .run();
 
@@ -328,10 +347,12 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
 
     match locate_thingos_rustc(cwd) {
         Some(thingos_binary) => {
-            cache_thingos_rustc_tree(sh, cwd, &thingos_binary)?;
+            let thingos_cargo = locate_thingos_cargo(cwd);
+            cache_thingos_rustc_tree(sh, cwd, &thingos_binary, thingos_cargo.as_deref())?;
             println!(
-                "rustc-thingos: ThingOS-native binary cached at {}",
-                THINGOS_RUSTC_BINARY
+                "rustc-thingos: ThingOS-native binaries (rustc, cargo: {}) cached at {}",
+                thingos_cargo.is_some(),
+                OUTPUT_DIR
             );
             std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true))?;
             Ok(true)
@@ -428,10 +449,16 @@ pub fn stage_rustc_for_iso(sh: &Shell, iso_root: &Path) -> Result<()> {
         return Ok(());
     }
 
+    if std::env::var("INCLUDE_RUST_TOOLCHAIN").as_deref() != Ok("1") {
+        return Ok(());
+    }
+
     let thingos_rustc = Path::new(THINGOS_RUSTC_BINARY);
+    let thingos_cargo = Path::new(THINGOS_CARGO_BINARY);
+
     if !thingos_rustc.exists() {
         println!(
-            "rustc-thingos: ThingOS-native rustc not in cache ({}); skipping ISO staging.",
+            "rustc-thingos: ThingOS-native rustc not in cache ({}); skipping toolchain staging.",
             THINGOS_RUSTC_BINARY
         );
         return Ok(());
@@ -439,8 +466,22 @@ pub fn stage_rustc_for_iso(sh: &Shell, iso_root: &Path) -> Result<()> {
 
     let iso_bin = iso_root.join("bin");
     sh.create_dir(&iso_bin)?;
+
+    // Stage rustc
     let iso_rustc = iso_bin.join("rustc");
     sh.copy_file(thingos_rustc, &iso_rustc)?;
+
+    // Stage cargo
+    if thingos_cargo.exists() {
+        let iso_cargo = iso_bin.join("cargo");
+        sh.copy_file(thingos_cargo, &iso_cargo)?;
+        #[cfg(unix)]
+        {
+            let mut perms = std::fs::metadata(&iso_cargo)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&iso_cargo, perms)?;
+        }
+    }
 
     #[cfg(unix)]
     {

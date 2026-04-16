@@ -172,6 +172,70 @@ pub const AUDIO_STOP: u32 = 0x8006;
 /// `DeviceCall::op` — play remaining buffered frames then stop (playback only, no payload).
 pub const AUDIO_DRAIN: u32 = 0x8007;
 
+/// `DeviceCall::op` — query mapped-ring control endpoint information.
+///
+/// `out_ptr` -> [`AudioMappedRingInfo`].
+pub const AUDIO_GET_MAPPED_RING_INFO: u32 = 0x8008;
+
+/// Mapped-ring protocol version.
+pub const AUDIO_MAPPED_RING_VERSION: u32 = 1;
+
+/// Producer (app) -> driver setup message sent on the mapped-ring control socket.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AudioMappedRingSetup {
+    /// Must be [`AUDIO_MAPPED_RING_VERSION`].
+    pub version: u32,
+    /// Total bytes in the shared memory region.
+    pub ring_bytes: u32,
+    /// Reserved; must be zero.
+    pub _reserved: [u32; 2],
+}
+
+/// Header stored at the start of the mapped shared memory region.
+///
+/// Layout in memory: `[AudioMappedRingHeader][PCM bytes...]`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AudioMappedRingHeader {
+    /// Producer write index in bytes, modulo `capacity_bytes`.
+    pub write_index: u32,
+    /// Consumer read index in bytes, modulo `capacity_bytes`.
+    pub read_index: u32,
+    /// Data area size in bytes (not including this header).
+    pub capacity_bytes: u32,
+    /// Producer/consumer flags (reserved for future use).
+    pub flags: u32,
+    pub _reserved: [u32; 4],
+}
+
+/// Endpoint details returned by [`AUDIO_GET_MAPPED_RING_INFO`].
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AudioMappedRingInfo {
+    /// 0 => unsupported, non-zero => supported.
+    pub supported: u32,
+    /// Suggested total shared memory size (header + data bytes).
+    pub suggested_ring_bytes: u32,
+    /// Byte length of UTF-8 control socket path in `socket_path`.
+    pub socket_path_len: u32,
+    /// NUL-free UTF-8 path for AF_UNIX control socket.
+    pub socket_path: [u8; 96],
+    pub _reserved: [u32; 4],
+}
+
+impl Default for AudioMappedRingInfo {
+    fn default() -> Self {
+        Self {
+            supported: 0,
+            suggested_ring_bytes: 0,
+            socket_path_len: 0,
+            socket_path: [0; 96],
+            _reserved: [0; 4],
+        }
+    }
+}
+
 // ── Capability helpers ─────────────────────────────────────────────────────────
 
 /// Returns the `AudioStreamInfo::supported_formats` bitmask bit for `fmt`.

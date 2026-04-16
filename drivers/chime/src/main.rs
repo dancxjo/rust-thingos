@@ -18,10 +18,141 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use abi::sound::{
-    AUDIO_GET_INFO, AUDIO_SET_PARAMS, AUDIO_START, AudioParams, AudioSampleFormat, AudioStreamInfo,
+    AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS,
+    AUDIO_START, AudioMappedRingHeader, AudioMappedRingInfo, AudioMappedRingSetup, AudioParams,
+    AudioSampleFormat, AudioStreamInfo,
 };
 use stem::info;
 const THINGOS_DRIVER_NAME: &[u8] = b"chime";
+
+struct MappedProducer {
+    control_fd: u32,
+    ring_fd: u32,
+    map_addr: usize,
+    map_len: usize,
+    capacity: usize,
+}
+
+fn mapped_enqueue(prod: &mut MappedProducer, src: &[u8]) -> usize {
+    let hdr = prod.map_addr as *mut AudioMappedRingHeader;
+    let w = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).write_index)) } as usize;
+    let r = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).read_index)) } as usize;
+    let cap = prod.capacity;
+    if cap == 0 {
+        return 0;
+    }
+
+    // Keep one byte empty so full/empty states are unambiguous.
+    let used = if w >= r { w - r } else { cap - (r - w) };
+    let free = cap.saturating_sub(used + 1);
+    let n = free.min(src.len());
+    if n == 0 {
+        return 0;
+    }
+
+    let base = (prod.map_addr + core::mem::size_of::<AudioMappedRingHeader>()) as *mut u8;
+    let first = n.min(cap - w);
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.as_ptr(), base.add(w), first);
+    }
+    if first < n {
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.as_ptr().add(first), base, n - first);
+        }
+    }
+
+    let new_w = (w + n) % cap;
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*hdr).write_index), new_w as u32);
+    }
+    n
+}
+
+fn try_setup_mapped_ring(out_fd: u32) -> Option<MappedProducer> {
+    let mut info_buf = AudioMappedRingInfo::default();
+    let info_call = abi::device::DeviceCall {
+        kind: DeviceKind::Audio,
+        op: AUDIO_GET_MAPPED_RING_INFO,
+        in_ptr: 0,
+        in_len: 0,
+        out_ptr: &mut info_buf as *mut AudioMappedRingInfo as u64,
+        out_len: core::mem::size_of::<AudioMappedRingInfo>() as u32,
+    };
+    if stem::syscall::vfs::vfs_device_call_raw(out_fd, &info_call).is_err() {
+        return None;
+    }
+    if info_buf.supported == 0 || info_buf.socket_path_len == 0 {
+        return None;
+    }
+
+    let path_len = (info_buf.socket_path_len as usize).min(info_buf.socket_path.len());
+    let path = core::str::from_utf8(&info_buf.socket_path[..path_len]).ok()?;
+
+    let control_fd = stem::syscall::socket::socket(
+        abi::syscall::socket_domain::AF_UNIX,
+        abi::syscall::socket_type::SOCK_STREAM,
+        0,
+    )
+    .ok()?;
+    if stem::syscall::socket::connect(control_fd, path).is_err() {
+        let _ = stem::syscall::vfs::vfs_close(control_fd);
+        return None;
+    }
+
+    let ring_bytes = (info_buf.suggested_ring_bytes as usize)
+        .max(core::mem::size_of::<AudioMappedRingHeader>() + 64 * 1024);
+    let ring_fd = stem::syscall::memfd_create("audio-ring", ring_bytes).ok()?;
+    let req = abi::vm::VmMapReq {
+        addr_hint: 0,
+        len: ring_bytes,
+        prot: abi::vm::VmProt::READ | abi::vm::VmProt::WRITE | abi::vm::VmProt::USER,
+        flags: abi::vm::VmMapFlags::empty(),
+        backing: abi::vm::VmBacking::File { thing: ring_fd, offset: 0 },
+    };
+    let map = match stem::syscall::vm_map(&req) {
+        Ok(m) => m,
+        Err(_) => {
+            let _ = stem::syscall::vfs::vfs_close(ring_fd);
+            let _ = stem::syscall::vfs::vfs_close(control_fd);
+            return None;
+        }
+    };
+
+    let cap = map.len.saturating_sub(core::mem::size_of::<AudioMappedRingHeader>());
+    let hdr = map.addr as *mut AudioMappedRingHeader;
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*hdr).write_index), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*hdr).read_index), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*hdr).capacity_bytes), cap as u32);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*hdr).flags), 0);
+    }
+
+    let setup = AudioMappedRingSetup {
+        version: AUDIO_MAPPED_RING_VERSION,
+        ring_bytes: map.len as u32,
+        _reserved: [0; 2],
+    };
+    let setup_bytes = unsafe {
+        core::slice::from_raw_parts(
+            &setup as *const AudioMappedRingSetup as *const u8,
+            core::mem::size_of::<AudioMappedRingSetup>(),
+        )
+    };
+    if stem::syscall::socket::sendmsg(control_fd, setup_bytes, &[ring_fd]).is_err() {
+        let _ = stem::syscall::vm_unmap(map.addr, map.len);
+        let _ = stem::syscall::vfs::vfs_close(ring_fd);
+        let _ = stem::syscall::vfs::vfs_close(control_fd);
+        return None;
+    }
+
+    Some(MappedProducer {
+        control_fd,
+        ring_fd,
+        map_addr: map.addr,
+        map_len: map.len,
+        capacity: cap,
+    })
+}
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
@@ -212,6 +343,26 @@ fn main(_arg: usize) -> ! {
     };
 
     info!("chime: Playback started ({} bytes)", samples.len());
+
+    if let Some(mut mapped) = try_setup_mapped_ring(out_fd) {
+        info!("chime: Using mapped audio ring");
+        let mut offset = 0usize;
+        while offset < samples.len() {
+            let n = mapped_enqueue(&mut mapped, &samples[offset..]);
+            if n == 0 {
+                stem::time::sleep_ms(1);
+            } else {
+                offset += n;
+            }
+        }
+        let _ = stem::syscall::vm_unmap(mapped.map_addr, mapped.map_len);
+        let _ = stem::syscall::vfs::vfs_close(mapped.ring_fd);
+        let _ = stem::syscall::vfs::vfs_close(mapped.control_fd);
+        info!("chime: Finished (mapped ring).");
+        loop {
+            stem::time::sleep_ms(1000);
+        }
+    }
 
     let chunk_size = 4096usize;
     let mut offset = 0;
