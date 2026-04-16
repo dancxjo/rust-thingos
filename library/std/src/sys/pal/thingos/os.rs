@@ -41,7 +41,8 @@ pub fn getcwd() -> io::Result<PathBuf> {
     }
     let n = ret as usize;
     buf.truncate(n);
-    // SAFETY: bytes originate from the kernel path API and are in platform path encoding.
+    // SAFETY: the kernel returns paths in the platform OsStr encoding, so unchecked
+    // conversion to OsString preserves the same byte sequence.
     Ok(PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(buf) }))
 }
 
@@ -161,6 +162,7 @@ pub fn current_exe() -> io::Result<PathBuf> {
     }
     let n = ret as usize;
     buf.truncate(n);
-    // SAFETY: bytes originate from the kernel path API and are in platform path encoding.
+    // SAFETY: the kernel returns paths in the platform OsStr encoding, so unchecked
+    // conversion to OsString preserves the same byte sequence.
     Ok(PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(buf) }))
 }
