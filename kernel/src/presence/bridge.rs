@@ -2,6 +2,10 @@
 
 use thingos::presence::{EmbodimentKind, EntityRef, GroupRef, PlaceRef, Presence, PresenceMode};
 
+/// Build a stable 16-byte opaque reference using:
+/// - bytes 0..4: ASCII tag namespace
+/// - bytes 4..8: little-endian `u32` value
+/// - bytes 8..16: zero padding reserved for future expansion
 fn tagged_ref(tag: [u8; 4], value: u32) -> [u8; 16] {
     let mut out = [0u8; 16];
     out[0..4].copy_from_slice(&tag);
@@ -12,6 +16,10 @@ fn tagged_ref(tag: [u8; 4], value: u32) -> [u8; 16] {
 const PID_TAG: [u8; 4] = *b"pid\0";
 const PGID_TAG: [u8; 4] = *b"pgid";
 
+// Stable PlaceRef for `/dev/console` Presence attachment. Layout:
+// - `tty\0` namespace prefix
+// - `console\0` identifier
+// - remaining bytes reserved (final byte set to `1` as v1 discriminator)
 const CONSOLE_PLACE_REF_BYTES: [u8; 16] =
     [b't', b't', b'y', 0, b'c', b'o', b'n', b's', b'o', b'l', b'e', 0, 0, 0, 0, 1];
 

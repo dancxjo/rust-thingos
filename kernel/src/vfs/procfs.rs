@@ -707,6 +707,7 @@ impl VfsNode for ProcSelfPlaceNode {
 
 /// A read-only node that reports the calling task's canonical Presence.
 struct ProcSelfPresenceNode;
+const PROC_SELF_PRESENCE_INO: u64 = 214;
 
 impl VfsNode for ProcSelfPresenceNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
@@ -725,7 +726,12 @@ impl VfsNode for ProcSelfPresenceNode {
         Err(Errno::EROFS)
     }
     fn stat(&self) -> SysResult<VfsStat> {
-        Ok(VfsStat { mode: VfsStat::S_IFREG | 0o444, size: 0, ino: 214, ..Default::default() })
+        Ok(VfsStat {
+            mode: VfsStat::S_IFREG | 0o444,
+            size: 0,
+            ino: PROC_SELF_PRESENCE_INO,
+            ..Default::default()
+        })
     }
 }
 
