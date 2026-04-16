@@ -238,9 +238,7 @@ impl Thread {
 /// variables are immediately accessible.
 #[inline(never)]
 extern "C" fn thread_start(data: usize) -> ! {
-    unsafe {
-        crate::sys::thread_local::destructors::run();
-    }
+    crate::sys::thread_local::destructors::bootstrap();
 
     // Reconstruct the ThreadInit box that was leaked in Thread::new.
     // SAFETY: `data` is the pointer returned by Box::into_raw in Thread::new.
@@ -626,9 +624,7 @@ unsafe impl Send for PthreadRecord {}
 static PTHREADS: Mutex<BTreeMap<pthread_t, PthreadRecord>> = Mutex::new(BTreeMap::new());
 
 extern "C" fn pthread_start_trampoline(arg: usize) -> ! {
-    unsafe {
-        crate::sys::thread_local::destructors::run();
-    }
+    crate::sys::thread_local::destructors::bootstrap();
 
     // SAFETY: `arg` was produced by Box::into_raw in pthread_create.
     let start_ptr = core::ptr::with_exposed_provenance_mut::<PthreadStartContext>(arg);

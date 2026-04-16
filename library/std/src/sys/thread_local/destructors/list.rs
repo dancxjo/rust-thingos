@@ -6,6 +6,13 @@ use crate::sys::thread_local::guard;
 static DTORS: RefCell<Vec<(*mut u8, unsafe extern "C" fn(*mut u8)), System>> =
     RefCell::new(Vec::new_in(System));
 
+pub fn bootstrap() {
+    let Ok(dtors) = DTORS.try_borrow() else {
+        rtabort!("the System allocator may not use TLS with destructors")
+    };
+    drop(dtors);
+}
+
 pub unsafe fn register(t: *mut u8, dtor: unsafe extern "C" fn(*mut u8)) {
     let Ok(mut dtors) = DTORS.try_borrow_mut() else {
         rtabort!("the System allocator may not use TLS with destructors")
