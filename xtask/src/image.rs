@@ -631,6 +631,8 @@ fn copy_shared_library(
         }
     }
 
+    // Stable deterministic selection when multiple build directories contain
+    // the same SONAME (e.g. release root + deps copies).
     candidates.sort();
     let src = candidates
         .first()
@@ -685,7 +687,10 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
 
     for lib in default_shared_libraries() {
         build_shared_library(sh, lib.package, target, "release")?;
-        let staged_lib = format!("/tmp/thingos_{}_{}", arch, lib.file_name);
+        let staged_lib = std::env::temp_dir()
+            .join(format!("thingos_{}_{}", arch, lib.file_name))
+            .to_string_lossy()
+            .to_string();
         let lib_dst = format!("::/lib/{}", lib.file_name);
         copy_shared_library(sh, lib.package, lib.file_name, target, "release", &staged_lib)?;
         cmd!(sh, "mcopy -i {hdd}@@1M {staged_lib} {lib_dst}").run()?;

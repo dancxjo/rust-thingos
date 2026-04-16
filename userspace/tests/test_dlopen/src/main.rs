@@ -187,6 +187,11 @@ fn test_dlopen_pistil_shared_library() {
     // `pistil_pack_rgba8` returns 0xAARRGGBB.
     assert_eq!(packed, 0x78123456, "unexpected RGBA packing result");
 
+    let area_sym = dlsym_bytes(handle, b"pistil_rect_area");
+    assert!(!area_sym.is_null(), "expected exported symbol pistil_rect_area");
+    let area_fn: extern "C" fn(u32, u32) -> u64 = unsafe { core::mem::transmute(area_sym) };
+    assert_eq!(area_fn(9, 7), 63, "unexpected rectangle area result");
+
     let rc = dlclose(handle);
     assert_eq!(rc, 0, "dlclose should succeed for valid pistil handle");
 
