@@ -103,7 +103,7 @@ mod tests {
     use crate::path::Path;
 
     #[test]
-    fn path_to_bytes_accepts_non_utf8_paths() {
+    fn test_path_to_bytes_non_utf8() {
         let bytes = [b'/', b't', 0xff, b's', b't'];
         let os = unsafe { OsStr::from_encoded_bytes_unchecked(&bytes) };
         assert_eq!(path_to_bytes(Path::new(os)), bytes.as_slice());
