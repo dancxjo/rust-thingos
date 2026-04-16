@@ -20,9 +20,11 @@ fn read_repo_file(relative_path: &str) -> String {
 
 fn assert_no_forbidden_tokens(relative_path: &str, forbidden_tokens: &[&str]) {
     let contents = read_repo_file(relative_path);
+    let contents_lower = contents.to_ascii_lowercase();
     for token in forbidden_tokens {
+        let token_lower = token.to_ascii_lowercase();
         assert!(
-            !contents.contains(token),
+            !contents_lower.contains(&token_lower),
             "guardrail violated in {}: found forbidden token '{}'",
             relative_path,
             token
@@ -34,11 +36,25 @@ fn thread_sched_fields_block(state_rs: &str) -> &str {
     let start = state_rs
         .find("pub struct ThreadSchedFields {")
         .expect("ThreadSchedFields struct must exist");
-    let after_start = &state_rs[start..];
-    let end = after_start
-        .find("\n}\n")
-        .expect("ThreadSchedFields struct terminator must exist");
-    &after_start[..end]
+    let open_brace = state_rs[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .expect("ThreadSchedFields opening brace must exist");
+    let mut depth = 0usize;
+    for (offset, ch) in state_rs[open_brace..].char_indices() {
+        match ch {
+            '{' => depth = depth.saturating_add(1),
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let close_brace = open_brace + offset;
+                    return &state_rs[(open_brace + 1)..close_brace];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("ThreadSchedFields closing brace must exist")
 }
 
 #[test]
