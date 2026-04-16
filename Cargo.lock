@@ -10006,6 +10006,14 @@ name = "x"
 version = "0.1.1"
 
 [[package]]
+name = "xargs"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+]
+
+[[package]]
 name = "xattr"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
