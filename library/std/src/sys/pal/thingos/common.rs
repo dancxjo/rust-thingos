@@ -1,7 +1,19 @@
-//! ThingOS PAL — core platform primitives.
+//! ThingOS PAL — shared libc-style platform primitives.
 //!
-//! This is a stub implementation. Functions will be fleshed out as the
-//! Thing-OS userspace runtime (stem) exposes the necessary syscalls.
+//! This module provides the common syscall boundary used by ThingOS `std` PAL
+//! modules, plus C ABI entry points for terminal-oriented libc behavior.
+//!
+//! Implemented capabilities include:
+//! - cross-architecture `raw_syscall6` trampoline used across `sys::pal`
+//! - errno plumbing for negative syscall returns
+//! - `isatty`, `tcgetattr`, `tcsetattr`, and `ioctl(TIOCGWINSZ)` via
+//!   `SYS_FS_ISATTY` and `SYS_FS_DEVICE_CALL`
+//! - C-compatible `termios`/`winsize` types and constants used by callers
+//!
+//! Known limitations:
+//! - terminal/device operations are currently limited to the subset above
+//! - unsupported operations map to standard errno-style failures (`ENOSYS`,
+//!   `ENOTTY`, or `EINVAL` depending on call path)
 
 use crate::ffi::{c_int, c_ulong, c_void};
 use crate::io as std_io;
