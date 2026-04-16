@@ -342,6 +342,80 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
         return -1;
     }
 
+    if request == TIOCGPGRP {
+        let mut pgid_out: u32 = 0;
+        let call = DeviceCall {
+            kind: DEVICE_KIND_TERMINAL,
+            op: TERMINAL_OP_TCGETPGRP,
+            in_ptr: 0,
+            in_len: 0,
+            out_ptr: &mut pgid_out as *mut u32 as usize as u64,
+            out_len: core::mem::size_of::<u32>() as u32,
+        };
+        let ret = unsafe {
+            raw_syscall6(
+                SYS_FS_DEVICE_CALL,
+                fd as usize,
+                &call as *const DeviceCall as usize,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret < 0 {
+            set_errno(neg_errno_to_c_int(ret));
+            return -1;
+        }
+        let Ok(pgid) = c_int::try_from(pgid_out) else {
+            set_errno(EINVAL);
+            return -1;
+        };
+        if pgid <= 0 {
+            set_errno(EINVAL);
+            return -1;
+        }
+        unsafe {
+            *argp.cast::<c_int>() = pgid;
+        }
+        return 0;
+    }
+
+    if request == TIOCSPGRP {
+        // SAFETY: `argp` is non-null (checked above) and TIOCSPGRP requires a
+        // pointer to a single `c_int` pgid value.
+        let pgid = unsafe { *argp.cast::<c_int>() };
+        if pgid <= 0 {
+            set_errno(EINVAL);
+            return -1;
+        }
+        let pgid_in = pgid as u32;
+        let call = DeviceCall {
+            kind: DEVICE_KIND_TERMINAL,
+            op: TERMINAL_OP_TCSETPGRP,
+            in_ptr: &pgid_in as *const u32 as usize as u64,
+            in_len: core::mem::size_of::<u32>() as u32,
+            out_ptr: 0,
+            out_len: 0,
+        };
+        let ret = unsafe {
+            raw_syscall6(
+                SYS_FS_DEVICE_CALL,
+                fd as usize,
+                &call as *const DeviceCall as usize,
+                0,
+                0,
+                0,
+                0,
+            )
+        };
+        if ret < 0 {
+            set_errno(neg_errno_to_c_int(ret));
+            return -1;
+        }
+        return 0;
+    }
+
     let mut call = DeviceCall {
         kind: DEVICE_KIND_TERMINAL,
         op: 0,
@@ -350,8 +424,6 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
         out_ptr: 0,
         out_len: 0,
     };
-    let mut pgid_out: u32 = 0;
-    let mut pgid_in: u32 = 0;
     match request {
         TCGETS => {
             let tio = argp.cast::<termios>();
@@ -377,22 +449,6 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             call.in_ptr = tio as usize as u64;
             call.in_len = core::mem::size_of::<termios>() as u32;
         }
-        TIOCGPGRP => {
-            call.op = TERMINAL_OP_TCGETPGRP;
-            call.out_ptr = &mut pgid_out as *mut u32 as usize as u64;
-            call.out_len = core::mem::size_of::<u32>() as u32;
-        }
-        TIOCSPGRP => {
-            let pgid = *argp.cast::<c_int>();
-            if pgid <= 0 {
-                set_errno(EINVAL);
-                return -1;
-            }
-            pgid_in = pgid as u32;
-            call.op = TERMINAL_OP_TCSETPGRP;
-            call.in_ptr = &pgid_in as *const u32 as usize as u64;
-            call.in_len = core::mem::size_of::<u32>() as u32;
-        }
         TIOCGWINSZ => {
             let ws = argp.cast::<winsize>();
             call.op = TERMINAL_OP_TIOCGWINSZ;
@@ -416,21 +472,6 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
         )
     };
     if ret >= 0 {
-        if request == TIOCGPGRP {
-            // Kernel returns a u32 pgid payload; translate back to libc-facing
-            // c_int at the API boundary and reject non-positive values.
-            let Ok(pgid) = c_int::try_from(pgid_out) else {
-                set_errno(EINVAL);
-                return -1;
-            };
-            if pgid <= 0 {
-                set_errno(EINVAL);
-                return -1;
-            }
-            unsafe {
-                *argp.cast::<c_int>() = pgid;
-            }
-        }
         return 0;
     }
 
