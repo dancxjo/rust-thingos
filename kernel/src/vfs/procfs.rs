@@ -15,6 +15,7 @@
 //! | `/proc/self/exe`                 | Symlink to calling process's executable |
 //! | `/proc/self/authority`           | Canonical `thingos::authority::Authority` for the calling process |
 //! | `/proc/self/place`               | Canonical `thingos::place::Place` — world/visibility context for the calling process (Phase 8) |
+//! | `/proc/self/presence`            | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
 //! | `/proc/<pid>/status`             | Process state, name, ppid |
 //! | `/proc/<pid>/cmdline`            | argv as null-delimited bytes |
 //! | `/proc/<pid>/exe`                | Symlink to the process's executable |
@@ -30,6 +31,7 @@
 //! | `/proc/<pid>/foreground_group`   | Canonical foreground membership — `true`/`false` in Group terms (Phase 4) |
 //! | `/proc/<pid>/authority`          | Canonical `thingos::authority::Authority` — permission context (Phase 7) |
 //! | `/proc/<pid>/place`              | Canonical `thingos::place::Place` — world/visibility context (Phase 8)  |
+//! | `/proc/<pid>/presence`           | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -90,10 +92,15 @@ impl VfsDriver for ProcFs {
             // convenient self-introspection path: callers do not need to know
             // their own PID.
             //
-            // Note: terminal/UI/console attachment is NOT reported here.  That
-            // belongs to Presence, which has not yet been introduced.  This
-            // path answers "in what world?", not "who is present?".
+            // Note: terminal/UI/console attachment is not reported here.  Use
+            // `/proc/self/presence` for person-in-place semantics.  This path
+            // answers "in what world?", not "who is present?".
             "self/place" => Ok(Arc::new(ProcSelfPlaceNode)),
+            // /proc/self/presence — canonical Presence for the calling process.
+            //
+            // Reports controlling-terminal/session person-in-place semantics in
+            // canonical Presence terms via `kernel::presence::bridge::presence_for_current`.
+            "self/presence" => Ok(Arc::new(ProcSelfPresenceNode)),
             _ => {
                 // Try to match /proc/<pid>/... paths.
                 // `path` is already relative to the mount point, so it looks
@@ -249,14 +256,22 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         // * `namespace` is derived from Process::namespace.
         // * `root` is derived from Process::root.
         //
-        // Note: terminal/UI/console attachment is NOT reported here.  That
-        // belongs to Presence, which has not yet been introduced as a live
-        // execution concept.  This path answers "in what world?", not
-        // "who is present?".
+        // Note: terminal/UI/console attachment is not reported here.  Use
+        // `/proc/<pid>/presence` for person-in-place semantics.  This path
+        // answers "in what world?", not "who is present?".
         "place" => {
             let place = crate::place::bridge::place_from_snapshot(&snap);
             let text = place.as_text();
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), 300 + pid as u64 * 10 + 11)))
+        }
+        // /proc/<pid>/presence — canonical thingos::presence::Presence.
+        //
+        // Reports controlling-terminal/session person-in-place state in
+        // canonical Presence terms.
+        "presence" => {
+            let presence = crate::presence::bridge::presence_from_snapshot(&snap);
+            let text = presence.as_text();
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), 300 + pid as u64 * 10 + 13)))
         }
         _ => Err(Errno::ENOENT),
     }
@@ -462,7 +477,7 @@ impl VfsNode for ProcPidDirNode {
         // Legacy procfs entries (transitional internal model):
         //   status, cmdline, fd, exe, task
         // Canonical schema entries (Phase 1–8):
-        //   task_state, job_state, job_exit, job_wait, group_kind, foreground_group, authority, place
+        //   task_state, job_state, job_exit, job_wait, group_kind, foreground_group, authority, place, presence
         let entries = [
             "status",
             "cmdline",
@@ -477,6 +492,7 @@ impl VfsNode for ProcPidDirNode {
             "foreground_group",
             "authority",
             "place",
+            "presence",
         ];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
@@ -590,7 +606,7 @@ impl VfsNode for ProcSelfDirNode {
         Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 210, ..Default::default() })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let entries = ["exe", "authority", "place"];
+        let entries = ["exe", "authority", "place", "presence"];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
 }
@@ -684,6 +700,32 @@ impl VfsNode for ProcSelfPlaceNode {
     }
     fn stat(&self) -> SysResult<VfsStat> {
         Ok(VfsStat { mode: VfsStat::S_IFREG | 0o444, size: 0, ino: 213, ..Default::default() })
+    }
+}
+
+// ── /proc/self/presence — Presence for the calling process ────────────────────
+
+/// A read-only node that reports the calling task's canonical Presence.
+struct ProcSelfPresenceNode;
+
+impl VfsNode for ProcSelfPresenceNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let presence = crate::presence::bridge::presence_for_current();
+        let text = presence.as_text();
+        let data = text.as_bytes();
+        let off = offset as usize;
+        if off >= data.len() {
+            return Ok(0);
+        }
+        let n = (data.len() - off).min(buf.len());
+        buf[..n].copy_from_slice(&data[off..off + n]);
+        Ok(n)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EROFS)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat { mode: VfsStat::S_IFREG | 0o444, size: 0, ino: 214, ..Default::default() })
     }
 }
 
@@ -1227,6 +1269,37 @@ mod tests {
         let n = node.readdir(0, &mut buf).unwrap();
         let s = core::str::from_utf8(&buf[..n]).unwrap();
         assert!(s.contains("authority"), "self readdir must list 'authority': {s}");
+    }
+
+    #[test]
+    fn test_lookup_self_presence_succeeds() {
+        assert!(lookup("self/presence").is_ok());
+    }
+
+    #[test]
+    fn test_self_presence_is_readable() {
+        let node = lookup("self/presence").unwrap();
+        let mut buf = [0u8; 256];
+        let n = node.read(0, &mut buf).unwrap();
+        assert!(n > 0);
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("subject:"), "presence text must contain 'subject:': {s}");
+        assert!(s.contains("mode:"), "presence text must contain 'mode:': {s}");
+    }
+
+    #[test]
+    fn test_self_presence_is_readonly() {
+        let node = lookup("self/presence").unwrap();
+        assert!(matches!(node.write(0, b"x"), Err(Errno::EROFS)));
+    }
+
+    #[test]
+    fn test_self_dir_readdir_includes_presence() {
+        let node = lookup("self").unwrap();
+        let mut buf = [0u8; 256];
+        let n = node.readdir(0, &mut buf).unwrap();
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("presence"), "self readdir must list 'presence': {s}");
     }
 
     #[test]
