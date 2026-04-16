@@ -2060,50 +2060,14 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                 let pi = pi_arc.lock();
                 let name_bytes = &task.name[..task.name_len as usize];
                 let name = alloc::string::String::from_utf8_lossy(name_bytes).into_owned();
-                // Collect the live state for every TID in the thread group.
-                // TIDs that exited between the two passes are silently omitted;
-                // the bridge treats their absence as "no longer contributing to
-                // group liveness".
-                let thread_states = pi.runtime_thread_states(&tid_state);
-                let unix_compat = pi.unix_compat_projection();
-                let space = pi.canonical_space();
-                let job = pi.canonical_job(&thread_states);
-                out.push(hooks::ProcessSnapshot {
-                    pid: pi.runtime_pid(),
-                    ppid: pi.runtime_parent_pid(),
-                    tid: task.id,
+                out.push(pi.compatibility_snapshot_for_task(
+                    task.id,
                     name,
-                    state: task.state,
-                    argv: unix_compat.argv.to_vec(),
-                    exec_path: pi.exec_path.clone(),
-                    uid: pi.authority.uid,
-                    gid: pi.authority.gid,
-                    capability_mask: pi.authority.capability_mask,
-                    // Exit code only has meaning for exited jobs.
-                    exit_code: if job.state == thingos::job::JobState::Exited {
-                        // Leader exit code is Job-owned once recorded.
-                        pi.effective_exit_code_for_tid(task.id, task.exit_code)
-                    } else {
-                        None
-                    },
-                    pgid: unix_compat.pgid,
-                    sid: unix_compat.sid,
-                    session_leader: unix_compat.session_leader,
+                    task.state,
+                    task.exit_code,
                     foreground_pgid,
-                    // Place-context fields (Phase 8): extracted from Process into
-                    // the snapshot so the place bridge can build a canonical Place
-                    // without holding the Process lock.
-                    cwd: pi.cwd.clone(),
-                    namespace_label: pi.namespace.label(),
-                    root_path: pi.root.clone(),
-                    // Job-context field (Phase 9): all thread states for the group.
-                    thread_states,
-                    // Space-context fields (Space Phase 1): stable SpaceId plus
-                    // best-effort mapping and sharing counts from the live Space object.
-                    space_id: space.id,
-                    space_mapping_count: space.mapping_count,
-                    space_sharing_count: space.sharing_count,
-                });
+                    &tid_state,
+                ));
             }
         }
     }
@@ -4753,6 +4717,37 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].tid, 1221);
         assert_eq!(snapshots[0].exit_code, Some(9));
+    }
+
+    #[test]
+    fn test_list_processes_projects_place_and_authority_from_process_aggregator() {
+        let _g = init_test_env();
+
+        let mut leader = make_process_task(1230, TaskState::Running, 1230, 1, None);
+        let pinfo = leader.process_info.as_ref().unwrap();
+        {
+            let mut pi = pinfo.lock();
+            pi.cwd = alloc::string::String::from("/work");
+            pi.root = alloc::string::String::from("/srv/chroot");
+            pi.exec_path = alloc::string::String::from("/bin/demo");
+            pi.authority.uid = 1000;
+            pi.authority.gid = 1001;
+            pi.authority.capability_mask = 0x24;
+            pi.namespace = crate::vfs::NamespaceRef::isolated();
+        }
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(leader));
+
+        let snapshots = list_processes::<MockRuntime>();
+        assert_eq!(snapshots.len(), 1);
+        let snap = &snapshots[0];
+        assert_eq!(snap.pid, 1230);
+        assert_eq!(snap.cwd, "/work");
+        assert_eq!(snap.root_path, "/srv/chroot");
+        assert_eq!(snap.exec_path, "/bin/demo");
+        assert_eq!(snap.uid, 1000);
+        assert_eq!(snap.gid, 1001);
+        assert_eq!(snap.capability_mask, 0x24);
+        assert_ne!(snap.namespace_label, "global");
     }
 
     #[test]
