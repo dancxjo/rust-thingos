@@ -5,6 +5,10 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::display_driver_protocol as drvproto;
+use abi::driver_interface::{
+    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION,
+};
 use abi::driver_frame::FrameReader;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::info;
@@ -12,6 +16,35 @@ use stem::syscall::vfs::vfs_thing_from_channel;
 use stem::syscall::{channel_recv, channel_send, ChannelThing};
 use stem::wait_set::WaitSet;
 use stem::thing::ThingId;
+const THINGOS_DRIVER_NAME: &[u8] = b"display_fake";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Display,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let out = &mut *out;
+    out.matched = 0;
+    out.score = 0;
+    out.claimed_class = DriverClass::Display;
+    out.flags = 0;
+    Status::NoMatch
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]

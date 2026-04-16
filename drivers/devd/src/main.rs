@@ -81,8 +81,14 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
     };
 
     debug!(
-        "DEVD: driver '{}' vendor=0x{:04x} device=0x{:04x} class=0x{:06x} entry='{}'",
-        abs_path, entry.vendor_id, entry.device_id, entry.class_code, entry.entry_symbol
+        "DEVD: driver '{}' name='{}' class={:?} vendor=0x{:04x} device=0x{:04x} class_code=0x{:06x} start='{}'",
+        abs_path,
+        entry.driver_name,
+        entry.driver_class,
+        entry.vendor_id,
+        entry.device_id,
+        entry.class_code,
+        entry.start_symbol
     );
 
     // Find matching devices.
@@ -102,7 +108,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
                 && entry.matches_pci(d.vendor_id, d.device_id, d.class_code)
         })
         .map(|d| {
-            ManagedDriver::new_from_catalog(&d, abs_path.clone(), entry.entry_symbol.clone(), None)
+            ManagedDriver::new_from_catalog(&d, abs_path.clone(), entry.start_symbol.clone(), None)
         })
         .collect();
 
@@ -122,7 +128,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
             managed.push(ManagedDriver::new_from_catalog(
                 &fake_device,
                 abs_path.clone(),
-                entry.entry_symbol.clone(),
+                entry.start_symbol.clone(),
                 None,
             ));
         } else {
@@ -212,7 +218,7 @@ fn reconcile_devices(
                     ManagedDriver::new_from_catalog(
                         &device,
                         entry.path.clone(),
-                        entry.entry_symbol.clone(),
+                        entry.start_symbol.clone(),
                         None,
                     )
                 });

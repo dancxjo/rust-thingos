@@ -4,23 +4,22 @@ This document explains how the VirtIO sound driver is discovered by `devd`,
 how it exposes a PCM device through VFS, and how `beeper` can stream piped PCM
 data into that device.
 
-## Driver Discovery (`devd` + `THING_DRIVER_V1`)
+## Driver Discovery (`devd` + `THINGOS_DRIVER`)
 
 `devd` catalog/manual mode only treats a binary as driver-capable if the ELF
-exports a global symbol named `THING_DRIVER_V1` with type
-`DriverInterfaceV1`.
+exports a global symbol named `THINGOS_DRIVER` with type
+`DriverDescriptor`.
 
 `virtio_sound` now exports:
 
-- `THING_DRIVER_V1` with:
-  - `flags = DRIVER_FLAG_PCI`
-  - `vendor_id = 0x1af4` (VirtIO vendor)
-  - `class_code = 0x040100` and `class_mask = 0xffff00` (multimedia audio)
-- `thing_driver_entry_v1(ctx_ptr, ctx_len)` entrypoint
+- `THINGOS_DRIVER` with:
+  - `driver_class = DriverClass::Audio`
+  - `probe(dev, out)` matching VirtIO PCI audio devices
+  - `start(ctx)` long-lived service body
+- (compatibility) legacy `THING_DRIVER_V1` / `thing_driver_entry_v1` exports
 
-At spawn time, `devd` passes `DriverEntryCtx` to `thing_driver_entry_v1`. The
-driver reads `device_path` from that context and claims the exact device,
-instead of relying on fallback probing.
+At spawn time, `devd` resolves the descriptor start entrypoint symbol and
+launches that service for the selected device.
 
 ## Runtime VFS Contract
 

@@ -13,10 +13,43 @@ mod chime;
 mod tone;
 
 use abi::device::DeviceKind;
+use abi::driver_interface::{
+    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION,
+};
 use abi::sound::{
     AUDIO_GET_INFO, AUDIO_SET_PARAMS, AUDIO_START, AudioParams, AudioSampleFormat, AudioStreamInfo,
 };
 use stem::info;
+const THINGOS_DRIVER_NAME: &[u8] = b"beeper";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Audio,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let out = &mut *out;
+    out.matched = 0;
+    out.score = 0;
+    out.claimed_class = DriverClass::Audio;
+    out.flags = 0;
+    Status::NoMatch
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 fn read_piped_stdin() -> Option<Vec<u8>> {
     use abi::syscall::poll_flags::POLLIN;
