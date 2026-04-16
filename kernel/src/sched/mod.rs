@@ -2066,29 +2066,11 @@ fn mark_task_exited<R: BootRuntime>(
         }
     };
 
-    // If the thread-group leader exited, queue the lifecycle status for the
-    // parent and wake any parent threads blocked in `waitpid`.
-    if notify_ppid != 0 {
-        let encoded_status = if code < 0 {
-            abi::signal::w_term_sig((-code) as u8)
-        } else {
-            abi::signal::w_exit_status(code as u8)
-        };
-        let parent_waiters =
-            crate::signal::queue_parent_child_event(notify_ppid, notify_pid, encoded_status);
-        waiters.extend(parent_waiters);
-    }
-
-    // Emit canonical JobExit notification via Message/Inbox path.
-    //
-    // Called after the `children_done` lifecycle queue has been updated so
-    // state is already committed before the notification is sent. Delivery
-    // failure is logged inside emit_job_exit and does not corrupt state.
-    if notify_pid != 0 {
-        if let Some(inbox_id) = exit_observer_inbox {
-            crate::job::notify::emit_job_exit(inbox_id, notify_pid, code);
-        }
-    }
+    // Project leader-exit lifecycle semantics through the canonical Job bridge
+    // (Unix wait status queue + optional JobExit observer notification).
+    let parent_waiters =
+        crate::job::bridge::publish_leader_exit(notify_ppid, notify_pid, code, exit_observer_inbox);
+    waiters.extend(parent_waiters);
 
     // Kill sibling threads (thread-group exit).
     for &sibling in &siblings_to_kill {
@@ -4816,6 +4798,74 @@ mod tests {
         assert!(
             pinfo.lock().lifecycle.thread_ids.is_empty(),
             "thread_ids should be empty after group exit"
+        );
+    }
+
+    /// Leader exit is projected to the parent wait queue using encoded
+    /// wait-status semantics, and parent threads are returned as wake targets.
+    #[test]
+    fn test_mark_task_exited_queues_parent_wait_status() {
+        let _g = init_test_env();
+        unsafe {
+            crate::sched::hooks::PROCESS_INFO_FOR_PID_HOOK = Some(process_info_for_pid::<MockRuntime>);
+        }
+
+        // Parent process (pid 9900) with one thread waiting in waitpid path.
+        let parent_pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
+            pid: 9900,
+            lifecycle: crate::task::ProcessLifecycle {
+                ppid: 1,
+                thread_ids: alloc::vec![9900],
+                exec_in_progress: false,
+                children_done: alloc::collections::VecDeque::new(),
+                exit_observer_inbox: None,
+            },
+            unix_compat: crate::task::ProcessUnixCompat::isolated(9900, false),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            namespace: crate::vfs::NamespaceRef::global(),
+            cwd: alloc::string::String::from("/"),
+            exec_path: alloc::string::String::new(),
+            space: crate::task::ProcessAddressSpace::empty(),
+        }));
+
+        // Child process (pid 9800) whose leader exits with code 7.
+        let child_pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
+            pid: 9800,
+            lifecycle: crate::task::ProcessLifecycle {
+                ppid: 9900,
+                thread_ids: alloc::vec![9800],
+                exec_in_progress: false,
+                children_done: alloc::collections::VecDeque::new(),
+                exit_observer_inbox: None,
+            },
+            unix_compat: crate::task::ProcessUnixCompat::isolated(9800, false),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            namespace: crate::vfs::NamespaceRef::global(),
+            cwd: alloc::string::String::from("/"),
+            exec_path: alloc::string::String::new(),
+            space: crate::task::ProcessAddressSpace::empty(),
+        }));
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_thread_task(9900, TaskState::Blocked, 9900, 1, parent_pinfo.clone()),
+        ));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_thread_task(9800, TaskState::Running, 9800, 9900, child_pinfo),
+        ));
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(9800);
+
+        let waiters = mark_task_exited::<MockRuntime>(&mut sched, 9800, 7);
+        assert_eq!(waiters, alloc::vec![9900], "parent thread should be returned for wakeup");
+
+        let parent = parent_pinfo.lock();
+        assert_eq!(parent.lifecycle.children_done.len(), 1);
+        assert_eq!(
+            parent.lifecycle.children_done.front().copied(),
+            Some((9800, abi::signal::w_exit_status(7))),
+            "leader exit should be queued as encoded wait status"
         );
     }
 
