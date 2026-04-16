@@ -92,7 +92,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "virtio_sound", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "hdaudio", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "pci_stubd", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "beeper", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "chime", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "vfs_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "show_args", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
@@ -626,7 +626,7 @@ fn is_driver(name: &str) -> bool {
     let drivers = [
         "ahci_disk",
         "ata_disk",
-        "beeper",
+        "chime",
         "devd",
         "display_bootfb",
         "display_fake",

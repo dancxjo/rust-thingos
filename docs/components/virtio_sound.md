@@ -1,7 +1,7 @@
 # VirtIO Sound Driver (`virtio_sound`)
 
 This document explains how the VirtIO sound driver is discovered by `devd`,
-how it exposes a PCM device through VFS, and how `beeper` can stream piped PCM
+how it exposes a PCM device through VFS, and how `chime` can stream piped PCM
 data into that device.
 
 ## Driver Discovery (`devd` + `THINGOS_DRIVER`)
@@ -38,9 +38,9 @@ After initialization, `virtio_sound` mounts:
 Internally, the driver dequeues from its software ring and submits TX buffers
 to the VirtIO sound queue.
 
-## `beeper` Piped-PCM Behavior
+## `chime` Piped-PCM Behavior
 
-`beeper` now supports two input modes:
+`chime` now supports two input modes:
 
 1. Piped stdin PCM data (preferred when stdin is readable)
 2. Generated tone/chime fallback (when no stdin data is available)
@@ -63,18 +63,18 @@ devd virtio_sound
 Play generated chime:
 
 ```sh
-beeper
+chime
 ```
 
-Play raw piped PCM (S16LE, stereo, 44100 Hz expected by current beeper path):
+Play raw piped PCM (S16LE, stereo, 44100 Hz expected by current chime path):
 
 ```sh
-cat sample.raw | beeper
+cat sample.raw | chime
 ```
 
 ## Relevant Source Files
 
 - `drivers/virtio_sound/src/main.rs`
-- `drivers/beeper/src/main.rs`
+- `drivers/chime/src/main.rs`
 - `abi/src/driver_interface.rs`
 - `drivers/devd/src/catalog.rs`

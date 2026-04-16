@@ -68,17 +68,19 @@ run *args:
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
-        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
-            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pipewire-0" ]] && qemu-system-x86_64 -audiodev help 2>/dev/null | grep -Eq '^pipewire$'; then
+            export THINGOS_AUDIODEV="pipewire"
+        elif [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native"
         elif command -v pactl >/dev/null 2>&1; then
             PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
             if [[ -n "${PULSE_SERVER}" ]]; then
-                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER}"
             else
-                export THINGOS_AUDIODEV="alsa,id=audio0"
+                export THINGOS_AUDIODEV="alsa"
             fi
         else
-            export THINGOS_AUDIODEV="alsa,id=audio0"
+            export THINGOS_AUDIODEV="alsa"
         fi
     fi
     ARCH="{{karch}}"
@@ -108,17 +110,19 @@ run-with-proxy arch=karch port="8081":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
-        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
-            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pipewire-0" ]] && qemu-system-x86_64 -audiodev help 2>/dev/null | grep -Eq '^pipewire$'; then
+            export THINGOS_AUDIODEV="pipewire"
+        elif [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native"
         elif command -v pactl >/dev/null 2>&1; then
             PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
             if [[ -n "${PULSE_SERVER}" ]]; then
-                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER}"
             else
-                export THINGOS_AUDIODEV="alsa,id=audio0"
+                export THINGOS_AUDIODEV="alsa"
             fi
         else
-            export THINGOS_AUDIODEV="alsa,id=audio0"
+            export THINGOS_AUDIODEV="alsa"
         fi
     fi
     echo "Starting HTTPS proxy on port {{port}}..."
@@ -133,17 +137,19 @@ run-hdd *args:
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
-        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
-            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pipewire-0" ]] && qemu-system-x86_64 -audiodev help 2>/dev/null | grep -Eq '^pipewire$'; then
+            export THINGOS_AUDIODEV="pipewire"
+        elif [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native"
         elif command -v pactl >/dev/null 2>&1; then
             PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
             if [[ -n "${PULSE_SERVER}" ]]; then
-                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER}"
             else
-                export THINGOS_AUDIODEV="alsa,id=audio0"
+                export THINGOS_AUDIODEV="alsa"
             fi
         else
-            export THINGOS_AUDIODEV="alsa,id=audio0"
+            export THINGOS_AUDIODEV="alsa"
         fi
     fi
     ARCH="{{karch}}"
@@ -158,17 +164,19 @@ run-bios:
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
-        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
-            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pipewire-0" ]] && qemu-system-x86_64 -audiodev help 2>/dev/null | grep -Eq '^pipewire$'; then
+            export THINGOS_AUDIODEV="pipewire"
+        elif [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native"
         elif command -v pactl >/dev/null 2>&1; then
             PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
             if [[ -n "${PULSE_SERVER}" ]]; then
-                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER}"
             else
-                export THINGOS_AUDIODEV="alsa,id=audio0"
+                export THINGOS_AUDIODEV="alsa"
             fi
         else
-            export THINGOS_AUDIODEV="alsa,id=audio0"
+            export THINGOS_AUDIODEV="alsa"
         fi
     fi
     {{xtask}} run-bios --qemu-flags "{{qemuflags}}"

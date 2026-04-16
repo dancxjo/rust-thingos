@@ -795,7 +795,7 @@ const AUDIO_DEVICE_TIMEOUT_NS: u64 = 5_000_000_000; // 5 seconds
 const AUDIO_POLL_INTERVAL_MS: u64 = 100;
 
 /// Probe for an audio device, spawn the right driver, wait for the VFS node
-/// to appear, then launch the beeper to play the start-up chime.
+/// to appear, then launch the chime to play the start-up chime.
 ///
 /// Detection order (first match wins):
 ///   1. VirtIO sound — PCI class 0x0401xx **and** vendor 0x1af4
@@ -860,7 +860,7 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
             Err(_) => {
                 if stem::monotonic_ns() >= deadline_ns {
                     warn!(
-                        "SPROUT: Timeout waiting for /dev/audio/card0/out0; beeper will not start"
+                        "SPROUT: Timeout waiting for /dev/audio/card0/out0; chime will not start"
                     );
                     return;
                 }
@@ -869,15 +869,15 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         }
     }
 
-    // Spawn the beeper to play the start-up chime.
-    match stem::syscall::spawn_process("/drivers/beeper", 0) {
+    // Spawn the chime to play the start-up chime.
+    match stem::syscall::spawn_process("/drivers/chime", 0) {
         Ok(pid) => {
-            info!("SPROUT: Spawned beeper (PID={})", pid);
+            info!("SPROUT: Spawned chime (PID={})", pid);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
-                name: "beeper".to_string(),
+                name: "chime".to_string(),
                 kind: TaskKind::App,
-                module_path: "/bin/beeper".to_string(),
+                module_path: "/bin/chime".to_string(),
                 pid: Some(pid),
                 restarts: 0,
                 spawn_arg: 0,
@@ -889,7 +889,7 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
             });
         }
         Err(e) => {
-            warn!("SPROUT: Failed to spawn beeper: {:?}", e);
+            warn!("SPROUT: Failed to spawn chime: {:?}", e);
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Beeper — generates a PCM tone and streams it to the sound driver.
+//! chime — generates a PCM tone and streams it to the sound driver.
 //!
 //! Opens `/dev/audio/card0/out0`, configures the stream with `AUDIO_SET_PARAMS`,
 //! starts playback with `AUDIO_START`, and streams PCM frames via `vfs_write`.
@@ -14,14 +14,14 @@ mod tone;
 
 use abi::device::DeviceKind;
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
 };
 use abi::sound::{
     AUDIO_GET_INFO, AUDIO_SET_PARAMS, AUDIO_START, AudioParams, AudioSampleFormat, AudioStreamInfo,
 };
 use stem::info;
-const THINGOS_DRIVER_NAME: &[u8] = b"beeper";
+const THINGOS_DRIVER_NAME: &[u8] = b"chime";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
@@ -68,7 +68,10 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -
     thingos_driver_start(ctx)
 }
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
@@ -86,7 +89,13 @@ unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> St
 
 fn read_piped_stdin() -> Option<Vec<u8>> {
     use abi::syscall::poll_flags::POLLIN;
-    use stem::syscall::vfs::{vfs_poll, vfs_read};
+    use stem::syscall::vfs::{vfs_isatty, vfs_poll, vfs_read};
+
+    // Interactive launches inherit /dev/console on fd 0. Treat that as
+    // "no piped PCM" so we don't block waiting for EOF from a tty.
+    if matches!(vfs_isatty(0), Ok(true)) {
+        return None;
+    }
 
     let mut pollfds = [abi::syscall::PollThing { thing: 0, events: POLLIN, revents: 0 }];
 
@@ -112,7 +121,7 @@ fn main(_arg: usize) -> ! {
     let tone_freq: Option<f64> = None;
     let seconds: f64 = 1.0;
 
-    info!("Beeper: Waiting for /dev/audio/card0/out0 ...");
+    info!("chime: Waiting for /dev/audio/card0/out0 ...");
 
     // Wait for the audio driver to mount its VFS tree.
     let out_fd = loop {
@@ -124,7 +133,7 @@ fn main(_arg: usize) -> ! {
         }
     };
 
-    info!("Beeper: Opened /dev/audio/card0/out0 (fd={})", out_fd);
+    info!("chime: Opened /dev/audio/card0/out0 (fd={})", out_fd);
 
     // Query capabilities.
     let mut info_buf = AudioStreamInfo::default();
@@ -164,7 +173,7 @@ fn main(_arg: usize) -> ! {
 
     let sample_rate = accepted.rate;
     info!(
-        "Beeper: Configured stream (rate={}Hz, fmt={}, ch={})",
+        "chime: Configured stream (rate={}Hz, fmt={}, ch={})",
         sample_rate, accepted.sample_format, accepted.channels
     );
 
@@ -183,10 +192,10 @@ fn main(_arg: usize) -> ! {
 
     // Consume piped PCM when stdin is connected, otherwise generate samples.
     let samples: Vec<u8> = if let Some(stdin_pcm) = read_piped_stdin() {
-        info!("Beeper: Streaming piped PCM from stdin ({} bytes)", stdin_pcm.len());
+        info!("chime: Streaming piped PCM from stdin ({} bytes)", stdin_pcm.len());
         stdin_pcm
     } else if let Some(freq) = tone_freq {
-        info!("Beeper: Generating {}Hz sine wave for {}s", freq, seconds);
+        info!("chime: Generating {}Hz sine wave for {}s", freq, seconds);
         let mut gen = tone::ToneGenerator::new(freq, sample_rate as f64);
         let count = (seconds * sample_rate as f64) as usize;
         let mut v_i16 = Vec::with_capacity(count * 2);
@@ -198,11 +207,11 @@ fn main(_arg: usize) -> ! {
         }
         v_u8
     } else {
-        info!("Beeper: Generating classic chime...");
+        info!("chime: Generating classic chime...");
         chime::generate_chime(sample_rate)
     };
 
-    info!("Beeper: Playback started ({} bytes)", samples.len());
+    info!("chime: Playback started ({} bytes)", samples.len());
 
     let chunk_size = 4096usize;
     let mut offset = 0;
@@ -232,7 +241,7 @@ fn main(_arg: usize) -> ! {
         offset += to_write;
     }
 
-    info!("Beeper: Finished.");
+    info!("chime: Finished.");
     loop {
         stem::time::sleep_ms(1000);
     }

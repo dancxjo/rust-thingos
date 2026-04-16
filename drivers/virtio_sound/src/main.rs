@@ -674,6 +674,29 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_START, stream_id);
     info!("SND: Hardware playback started");
 
+    // Pre-allocate a reusable TX DMA staging buffer. Reallocating per-chunk
+    // eventually exhausts per-task DMA slots during sustained playback.
+    let tx_dma = match stem::syscall::device_alloc_dma(dma_dev, 2) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("SND: Failed to allocate TX DMA staging buffer: {:?}", e);
+            loop {
+                stem::time::sleep_ms(1000);
+            }
+        }
+    };
+    let tx_dma_phys = match stem::syscall::device_dma_phys(tx_dma) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("SND: Failed to resolve TX DMA physical address: {:?}", e);
+            loop {
+                stem::time::sleep_ms(1000);
+            }
+        }
+    };
+    let tx_dma_ptr = tx_dma as *mut u8;
+    let mut tx_in_flight = false;
+
     // ── Mount VFS provider at /dev/audio/card0/ ───────────────────────────────
     let (req_write, req_read) = match channel_create(VFS_RPC_MAX_REQ * 16) {
         Ok(p) => p,
@@ -736,32 +759,20 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
 
         // 3. Recycle completed TX descriptors.
         let prev_free_before_tx = card.ring.free_space();
-        process_tx_queue(&mut driver);
+        if process_tx_queue(&mut driver) > 0 {
+            tx_in_flight = false;
+        }
 
         // 4. Feed hardware from ring if running.
         if card.state == AudioState::Running as u32 || card.state == AudioState::Draining as u32 {
             let chunk = 4096usize;
-            if card.ring.available() >= chunk {
-                let dma_addr = match stem::syscall::device_alloc_dma(dma_dev, 2) {
-                    Ok(a) => a,
-                    Err(_) => {
-                        stem::syscall::yield_now();
-                        continue;
-                    }
-                };
-                let phys = match stem::syscall::device_dma_phys(dma_addr) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        stem::syscall::yield_now();
-                        continue;
-                    }
-                };
-                let ptr = dma_addr as *mut u8;
+            if card.ring.available() >= chunk && !tx_in_flight {
                 let hdr_sz = size_of::<VirtioSndPcmXfer>();
                 unsafe {
-                    *(ptr as *mut VirtioSndPcmXfer) = VirtioSndPcmXfer { stream_id };
+                    *(tx_dma_ptr as *mut VirtioSndPcmXfer) = VirtioSndPcmXfer { stream_id };
                 }
-                let data_slice = unsafe { core::slice::from_raw_parts_mut(ptr.add(hdr_sz), chunk) };
+                let data_slice =
+                    unsafe { core::slice::from_raw_parts_mut(tx_dma_ptr.add(hdr_sz), chunk) };
                 let n = card.ring.dequeue(data_slice);
                 if n > 0 {
                     let bpf = card.bytes_per_frame().max(1);
@@ -769,14 +780,15 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                     loop {
                         let added = {
                             let q = driver.queue_mut(VIRTIO_SND_VQ_TX).unwrap();
-                            q.add_buffer_single(phys, (hdr_sz + n) as u32, false).is_some()
+                            q.add_buffer_single(tx_dma_phys, (hdr_sz + n) as u32, false).is_some()
                         };
                         if added {
                             driver.notify_queue(VIRTIO_SND_VQ_TX);
+                            tx_in_flight = true;
                             stem::syscall::yield_now();
                             break;
                         } else {
-                            process_tx_queue(&mut driver);
+                            let _ = process_tx_queue(&mut driver);
                             stem::syscall::yield_now();
                         }
                     }
@@ -863,9 +875,13 @@ fn main(boot_fd: usize) -> ! {
 
 // ── Hardware helpers (unchanged from original) ────────────────────────────────
 
-fn process_tx_queue(driver: &mut VirtioDevice) {
+fn process_tx_queue(driver: &mut VirtioDevice) -> usize {
     let q = driver.queue_mut(VIRTIO_SND_VQ_TX).unwrap();
-    while q.poll_used().is_some() {}
+    let mut completed = 0usize;
+    while q.poll_used().is_some() {
+        completed += 1;
+    }
+    completed
 }
 
 #[derive(Clone, Copy, Default)]

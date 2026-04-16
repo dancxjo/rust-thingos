@@ -60,6 +60,11 @@ fn default_audiodev_arg() -> Option<String> {
     let backend = backend.trim();
     if backend.is_empty() || backend.eq_ignore_ascii_case("off") || backend.eq_ignore_ascii_case("none") {
         None
+    } else if backend
+        .split(',')
+        .any(|part| part.trim_start().starts_with("id="))
+    {
+        Some(backend.to_string())
     } else {
         Some(format!("{backend},id=audio0"))
     }

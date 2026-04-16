@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-# tidy-alphabetical-start
+  # tidy-alphabetical-start
   "abi",
   "abi-macros",
   "bran",
   "compiler/rustc",
   "drivers/ahci_disk",
   "drivers/ata_disk",
-  "drivers/beeper",
+  "drivers/chime",
   "drivers/devd",
   "drivers/display_bootfb",
   "drivers/display_fake",
@@ -169,7 +169,7 @@ members = [
   "userspace/xargs",
   "tools/kindc",
   "vendor/lsv",
-# tidy-alphabetical-end
+  # tidy-alphabetical-end
 ]
 
 exclude = [

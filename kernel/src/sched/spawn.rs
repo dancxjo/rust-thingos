@@ -639,7 +639,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
 
     let _irq = rt.irq_disable();
 
-    let affinity = if name.contains("virtio_sound") || name.contains("beeper") {
+    let affinity = if name.contains("virtio_sound") || name.contains("chime") {
         crate::task::Affinity::Pinned(0)
     } else if name == "bloom" {
         if rt.cpu_total_count() > 1 {
