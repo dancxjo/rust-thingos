@@ -44,10 +44,10 @@
 //! # Preferred source: `ProcessLifecycle`
 //!
 //! As of Phase 9, lifecycle-oriented state inside `Process` is grouped under
-//! [`crate::task::ProcessLifecycle`] (`Process.lifecycle`).  This bridge is
+//! [`crate::job::Job`] (`Process.job`).  This bridge is
 //! the **canonical public surface** for that data; new code mapping lifecycle
 //! state to `Job` / `JobExit` / `JobWaitResult` should read from
-//! `Process.lifecycle` rather than from top-level `Process` fields.
+//! `Process.job` rather than from top-level `Process` fields.
 //!
 //! | `ProcessLifecycle` field     | Canonical `Job` concept          |
 //! |------------------------------|----------------------------------|
@@ -154,17 +154,17 @@ pub fn job_state_from_snapshot(
 /// calling `job_state_from_thread_states` directly when `ProcessLifecycle` is
 /// in scope.
 pub fn job_state_from_lifecycle(
-    lifecycle: &crate::task::ProcessLifecycle,
+    job: &crate::task::ProcessLifecycle,
     thread_states: &[ThreadState],
 ) -> JobState {
     // Debug sanity: the caller should provide at most as many states as there
     // are known TIDs in the lifecycle.  Extra states are harmless but indicate
     // a likely bug in the caller.
     debug_assert!(
-        thread_states.len() <= lifecycle.thread_ids.len(),
+        thread_states.len() <= job.thread_ids.len(),
         "thread_states has more entries ({}) than lifecycle.thread_ids ({})",
         thread_states.len(),
-        lifecycle.thread_ids.len(),
+        job.thread_ids.len(),
     );
     job_state_from_thread_states(thread_states)
 }

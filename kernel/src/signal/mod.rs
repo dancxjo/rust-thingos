@@ -293,9 +293,9 @@ pub fn queue_parent_child_event(ppid: u32, child_pid: u32, status: i32) -> alloc
 
     let (tids, queue_len) = {
         let mut parent = parent_arc.lock();
-        parent.lifecycle.children_done.push_back((child_pid, status));
-        let queue_len = parent.lifecycle.children_done.len();
-        (parent.lifecycle.thread_ids.clone(), queue_len)
+        parent.job.children_done.push_back((child_pid, status));
+        let queue_len = parent.job.children_done.len();
+        (parent.job.thread_ids.clone(), queue_len)
     };
 
     crate::ktrace!(
@@ -388,7 +388,7 @@ pub fn setpgid_current(pid: i64, pgid: i64) -> Result<(), Errno> {
     let target_info = process_info_for_pid(target_pid).ok_or(Errno::ESRCH)?;
     {
         let target = target_info.lock();
-        if target.pid != caller_pid && target.lifecycle.ppid != caller_pid {
+        if target.pid != caller_pid && target.job.ppid != caller_pid {
             return Err(Errno::EPERM);
         }
         if target.unix_compat.sid != caller_sid {

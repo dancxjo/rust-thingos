@@ -111,7 +111,7 @@ pub fn register_exit_observer(pid: u32, inbox_id: InboxId) -> bool {
         return false;
     };
     let mut pi = pinfo_arc.lock();
-    pi.lifecycle.exit_observer_inbox = Some(inbox_id);
+    pi.job.exit_observer_inbox = Some(inbox_id);
     true
 }
 

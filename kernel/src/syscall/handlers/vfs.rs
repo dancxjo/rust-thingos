@@ -1698,7 +1698,7 @@ mod tests {
         }
         Arc::new(Mutex::new(crate::task::ProcessInfo {
             pid: 1,
-            lifecycle: crate::task::ProcessLifecycle::new(0, 1),
+            job: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
             thing_table,
             namespace: crate::vfs::NamespaceRef::global(),

@@ -2083,7 +2083,8 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     capability_mask: pi.authority.capability_mask,
                     // Exit code only has meaning for exited jobs.
                     exit_code: if job.state == thingos::job::JobState::Exited {
-                        task.exit_code
+                        // Leader exit code is Job-owned once recorded.
+                        pi.effective_exit_code_for_tid(task.id, task.exit_code)
                     } else {
                         None
                     },
@@ -2127,6 +2128,17 @@ fn register_task_exit_waiter<R: BootRuntime>(
         return Err(abi::errors::Errno::EINVAL);
     }
 
+    if let Some(pinfo) = target.process_info.as_ref() {
+        let mut pi = pinfo.lock();
+        if pi.is_job_leader_tid(target_tid) {
+            if let Some(code) = pi.job.leader_exit_code {
+                return Ok(Some(code));
+            }
+            pi.job.leader_exit_waiters.push_back(waiter_tid);
+            return Ok(None);
+        }
+    }
+
     if target.state == TaskState::Dead {
         return Ok(Some(target.exit_code.unwrap_or(0)));
     }
@@ -2140,6 +2152,16 @@ pub fn poll_task_exit<R: BootRuntime>(
 ) -> Result<Option<i32>, abi::errors::Errno> {
     let target =
         crate::task::registry::get_task::<R>(target_tid).ok_or(abi::errors::Errno::ECHILD)?;
+
+    if let Some(pinfo) = target.process_info.as_ref() {
+        let pi = pinfo.lock();
+        if pi.is_job_leader_tid(target_tid) {
+            if let Some(code) = pi.job.leader_exit_code {
+                return Ok(Some(code));
+            }
+            return Ok(None);
+        }
+    }
 
     if target.state == TaskState::Dead { Ok(Some(target.exit_code.unwrap_or(0))) } else { Ok(None) }
 }
@@ -2157,6 +2179,13 @@ pub fn unregister_task_exit_waiter<R: BootRuntime>(
 ) -> Result<(), abi::errors::Errno> {
     let target =
         crate::task::registry::get_task::<R>(target_tid).ok_or(abi::errors::Errno::ECHILD)?;
+    if let Some(pinfo) = target.process_info.as_ref() {
+        let mut pi = pinfo.lock();
+        if pi.is_job_leader_tid(target_tid) {
+            pi.job.leader_exit_waiters.remove(waiter_tid);
+            return Ok(());
+        }
+    }
     target.exit_waiters.remove(waiter_tid);
     Ok(())
 }
@@ -2202,6 +2231,9 @@ fn mark_task_exited<R: BootRuntime>(
                 notify_ppid = pi.runtime_parent_pid();
                 notify_pid = pi.runtime_pid();
                 exit_observer_inbox = pi.job_exit_observer_inbox();
+                if pi.job.leader_exit_code.is_none() {
+                    waiters.extend(pi.job.complete_leader_exit(code));
+                }
                 pi.take_job_thread_ids()
             } else {
                 alloc::vec::Vec::new()
@@ -2434,7 +2466,7 @@ fn take_queued_child_status<R: BootRuntime>(
     let mut process = our_process.lock();
     let mut match_index: Option<usize> = None;
 
-    for (idx, (child_pid, status)) in process.lifecycle.children_done.iter().enumerate() {
+    for (idx, (child_pid, status)) in process.job.children_done.iter().enumerate() {
         if target_pid > 0 && *child_pid != target_pid as u32 {
             continue;
         }
@@ -2444,7 +2476,7 @@ fn take_queued_child_status<R: BootRuntime>(
         }
     }
 
-    let (child_pid, status) = process.lifecycle.children_done.remove(match_index?)?;
+    let (child_pid, status) = process.job.children_done.remove(match_index?)?;
     drop(process);
     reap_child_pid_if_dead::<R>(child_pid, status);
     Some((child_pid as u64, status))
@@ -2491,12 +2523,16 @@ fn waitpid_for_pid<R: BootRuntime>(
             let dead_info = crate::task::registry::get_task::<R>(child_tid).and_then(|task| {
                 // `task` (ThreadRef / registry guard) is dropped when this closure returns.
                 if task.state == TaskState::Dead {
-                    let code = task.exit_code.unwrap_or(0);
-                    let child_pid = task
+                    let (child_pid, code) = task
                         .process_info
                         .as_ref()
-                        .map(|pi| pi.lock().runtime_pid() as u64)
-                        .unwrap_or(child_tid);
+                        .map(|pinfo| {
+                            let pi_guard = pinfo.lock();
+                            let code =
+                                pi_guard.effective_exit_code_for_tid(child_tid, task.exit_code);
+                            (pi_guard.runtime_pid() as u64, code.unwrap_or(0))
+                        })
+                        .unwrap_or((child_tid, task.exit_code.unwrap_or(0)));
                     Some((child_pid, code))
                 } else {
                     None
@@ -4635,7 +4671,7 @@ mod tests {
             name_len: 0,
             process_info: Some(alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
                 pid,
-                lifecycle: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
+                job: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
                 unix_compat: crate::task::ProcessUnixCompat::isolated(pid, false),
                 thing_table: crate::vfs::thing_table::ThingTable::new(),
                 namespace: crate::vfs::NamespaceRef::global(),
@@ -4665,6 +4701,59 @@ mod tests {
         assert_eq!(snapshots[0].pid, 1200);
         assert_eq!(snapshots[0].state, TaskState::Running);
         assert_eq!(snapshots[0].exit_code, None);
+    }
+
+    #[test]
+    fn test_list_processes_prefers_job_leader_exit_code_for_leader() {
+        let _g = init_test_env();
+
+        let mut leader = make_process_task(1210, TaskState::Dead, 1210, 1, Some(7));
+        let pinfo = leader.process_info.as_ref().unwrap();
+        pinfo.lock().job.leader_exit_code = Some(33);
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(leader));
+
+        let snapshots = list_processes::<MockRuntime>();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].pid, 1210);
+        assert_eq!(snapshots[0].tid, 1210);
+        assert_eq!(snapshots[0].state, TaskState::Dead);
+        assert_eq!(snapshots[0].exit_code, Some(33));
+    }
+
+    #[test]
+    fn test_list_processes_uses_thread_exit_code_for_non_leader_tasks() {
+        let _g = init_test_env();
+
+        let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
+            pid: 1220,
+            job: crate::task::ProcessLifecycle {
+                ppid: 1,
+                thread_ids: alloc::vec![1220, 1221],
+                exec_in_progress: false,
+                children_done: alloc::collections::VecDeque::new(),
+                exit_observer_inbox: None,
+                leader_exit_code: Some(44),
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
+            },
+            unix_compat: crate::task::ProcessUnixCompat::isolated(1220, false),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            namespace: crate::vfs::NamespaceRef::global(),
+            cwd: alloc::string::String::from("/"),
+            exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
+            space: crate::task::ProcessAddressSpace::empty(),
+        }));
+
+        let mut sibling = make_task(1221, TaskState::Dead, TaskPriority::Normal);
+        sibling.exit_code = Some(9);
+        sibling.process_info = Some(alloc::sync::Arc::clone(&pinfo));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(sibling));
+
+        let snapshots = list_processes::<MockRuntime>();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].tid, 1221);
+        assert_eq!(snapshots[0].exit_code, Some(9));
     }
 
     #[test]
@@ -4894,12 +4983,14 @@ mod tests {
         // pid = 7000 (thread-group leader), thread_ids = [7000, 7001].
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 7000,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: alloc::vec![7000, 7001],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(7000, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -4912,9 +5003,9 @@ mod tests {
 
         {
             let pi = pinfo.lock();
-            assert_eq!(pi.lifecycle.thread_ids.len(), 2);
-            assert!(pi.lifecycle.thread_ids.contains(&7000));
-            assert!(pi.lifecycle.thread_ids.contains(&7001));
+            assert_eq!(pi.job.thread_ids.len(), 2);
+            assert!(pi.job.thread_ids.contains(&7000));
+            assert!(pi.job.thread_ids.contains(&7001));
             assert_eq!(pi.pid, 7000);
         }
     }
@@ -4928,12 +5019,14 @@ mod tests {
         // Shared ProcessInfo for a 2-thread group: leader 8700, sibling 8701.
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 8700,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: alloc::vec![8700, 8701],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(8700, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -4962,9 +5055,9 @@ mod tests {
         {
             let pi = pinfo.lock();
             // 8701 should have been removed.
-            assert!(!pi.lifecycle.thread_ids.contains(&8701), "sibling TID still in thread_ids");
+            assert!(!pi.job.thread_ids.contains(&8701), "sibling TID still in thread_ids");
             // 8700 (leader) is still present — it hasn't exited yet.
-            assert!(pi.lifecycle.thread_ids.contains(&8700), "leader TID wrongly removed");
+            assert!(pi.job.thread_ids.contains(&8700), "leader TID wrongly removed");
         }
 
         assert_eq!(
@@ -4983,12 +5076,14 @@ mod tests {
         // Shared ProcessInfo for a 2-thread group: leader 8800, sibling 8801.
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 8800,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: alloc::vec![8800, 8801],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(8800, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -5029,7 +5124,7 @@ mod tests {
 
         // Both TIDs removed from thread_ids.
         assert!(
-            pinfo.lock().lifecycle.thread_ids.is_empty(),
+            pinfo.lock().job.thread_ids.is_empty(),
             "thread_ids should be empty after group exit"
         );
     }
@@ -5047,12 +5142,14 @@ mod tests {
         // Parent process (pid 9900) with one thread waiting in waitpid path.
         let parent_pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9900,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: alloc::vec![9900],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9900, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -5066,12 +5163,14 @@ mod tests {
         // Child process (pid 9800) whose leader exits with code 7.
         let child_pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9800,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 9900,
                 thread_ids: alloc::vec![9800],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9800, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -5097,9 +5196,9 @@ mod tests {
         assert_eq!(waiters, alloc::vec![9900], "parent thread should be returned for wakeup");
 
         let parent = parent_pinfo.lock();
-        assert_eq!(parent.lifecycle.children_done.len(), 1);
+        assert_eq!(parent.job.children_done.len(), 1);
         assert_eq!(
-            parent.lifecycle.children_done.front().copied(),
+            parent.job.children_done.front().copied(),
             Some((9800, abi::signal::w_exit_status(7))),
             "leader exit should be queued as encoded wait status"
         );
@@ -5114,12 +5213,14 @@ mod tests {
         // Shared ProcessInfo for a 3-thread group: leader 9100, siblings 9101, 9102.
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9100,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: alloc::vec![9100, 9101, 9102],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9100, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -5146,13 +5247,13 @@ mod tests {
         sched.state.per_cpu[0].current = Some(9100);
 
         // Step 1: simulate exec – set exec_in_progress.
-        pinfo.lock().lifecycle.exec_in_progress = true;
+        pinfo.lock().job.exec_in_progress = true;
 
         // Step 2: collect siblings.
         let caller_tid: TaskId = 9100;
         let siblings: alloc::vec::Vec<TaskId> = pinfo
             .lock()
-            .lifecycle
+            .job
             .thread_ids
             .iter()
             .copied()
@@ -5181,15 +5282,15 @@ mod tests {
         {
             let pi = pinfo.lock();
             assert_eq!(
-                pi.lifecycle.thread_ids,
+                pi.job.thread_ids,
                 alloc::vec![caller_tid],
                 "only caller TID should remain after collapse"
             );
         }
 
         // Step 4: simulate commit – clear exec_in_progress.
-        pinfo.lock().lifecycle.exec_in_progress = false;
-        assert!(!pinfo.lock().lifecycle.exec_in_progress, "exec_in_progress cleared after commit");
+        pinfo.lock().job.exec_in_progress = false;
+        assert!(!pinfo.lock().job.exec_in_progress, "exec_in_progress cleared after commit");
     }
 
     /// exec collapse with 4 threads is deterministic: ALL siblings (9701–9703)
@@ -5215,12 +5316,14 @@ mod tests {
 
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9700,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: all_tids.clone(),
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: {
                 let mut uc = crate::task::ProcessUnixCompat::isolated(9700, false);
@@ -5249,12 +5352,12 @@ mod tests {
         sched.state.per_cpu[0].current = Some(caller_tid);
 
         // Phase 1: set exec_in_progress atomically.
-        pinfo.lock().lifecycle.exec_in_progress = true;
+        pinfo.lock().job.exec_in_progress = true;
 
         // Phase 2: collect sibling TIDs (excluding caller).
         let siblings: alloc::vec::Vec<TaskId> = pinfo
             .lock()
-            .lifecycle
+            .job
             .thread_ids
             .iter()
             .copied()
@@ -5282,7 +5385,7 @@ mod tests {
 
         // thread_ids must contain only the exec-caller.
         assert_eq!(
-            pinfo.lock().lifecycle.thread_ids,
+            pinfo.lock().job.thread_ids,
             alloc::vec![caller_tid],
             "only exec-caller TID must remain in thread_ids after collapse"
         );
@@ -5297,9 +5400,9 @@ mod tests {
         );
 
         // Phase 5: commit — clear exec_in_progress.
-        pinfo.lock().lifecycle.exec_in_progress = false;
+        pinfo.lock().job.exec_in_progress = false;
         assert!(
-            !pinfo.lock().lifecycle.exec_in_progress,
+            !pinfo.lock().job.exec_in_progress,
             "exec_in_progress must be cleared after commit"
         );
     }
@@ -5311,7 +5414,7 @@ mod tests {
 
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9300,
-            lifecycle: crate::task::ProcessLifecycle::new(1, 9300),
+            job: crate::task::ProcessLifecycle::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
@@ -5322,21 +5425,21 @@ mod tests {
         }));
 
         // Before exec: flag is clear — new threads would be accepted.
-        assert!(!pinfo.lock().lifecycle.exec_in_progress);
+        assert!(!pinfo.lock().job.exec_in_progress);
 
         // Set exec_in_progress (as task_exec_current does at the start).
-        pinfo.lock().lifecycle.exec_in_progress = true;
+        pinfo.lock().job.exec_in_progress = true;
 
         // The sys_spawn_thread handler checks this flag and returns EAGAIN.
         // Here we verify the condition it tests.
         assert!(
-            pinfo.lock().lifecycle.exec_in_progress,
+            pinfo.lock().job.exec_in_progress,
             "exec_in_progress must be set to block SYS_SPAWN_THREAD"
         );
 
         // Rollback: clear the flag on pre-commit failure.
-        pinfo.lock().lifecycle.exec_in_progress = false;
-        assert!(!pinfo.lock().lifecycle.exec_in_progress, "flag cleared after rollback");
+        pinfo.lock().job.exec_in_progress = false;
+        assert!(!pinfo.lock().job.exec_in_progress, "flag cleared after rollback");
     }
 
     // ── TLS-base and detached-thread tests ───────────────────────────────────
