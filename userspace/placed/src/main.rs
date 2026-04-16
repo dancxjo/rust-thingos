@@ -68,6 +68,7 @@ fn main(_arg: usize) -> ! {
 
     let watch_mask = abi::vfs_watch::mask::CREATE
         | abi::vfs_watch::mask::REMOVE
+        | abi::vfs_watch::mask::MODIFY
         | abi::vfs_watch::mask::MOVE
         | abi::vfs_watch::mask::DELETE_SELF
         | abi::vfs_watch::mask::MOVE_SELF
