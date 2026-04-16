@@ -142,6 +142,7 @@ members = [
   "userspace/stdio_demo",
   "userspace/tail",
   "userspace/terminal",
+  "userspace/tee",
   "userspace/test_exec",
   "userspace/tests/test_dlopen",
   "userspace/tests/test_dyn_loader",
