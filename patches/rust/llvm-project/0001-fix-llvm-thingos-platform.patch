@@ -1,0 +1,42 @@
+diff --git a/llvm/cmake/config-ix.cmake b/llvm/cmake/config-ix.cmake
+index ed2bfa6df..c332f049a 100644
+--- a/llvm/cmake/config-ix.cmake
++++ b/llvm/cmake/config-ix.cmake
+@@ -12,7 +12,7 @@ include(CheckCompilerVersion)
+ include(CheckProblematicConfigurations)
+ include(HandleLLVMStdlib)
+ 
+-if (ANDROID OR CYGWIN OR CMAKE_SYSTEM_NAME MATCHES "AIX|DragonFly|FreeBSD|Haiku|Linux|NetBSD|OpenBSD|SunOS")
++if (ANDROID OR CYGWIN OR CMAKE_SYSTEM_NAME MATCHES "AIX|DragonFly|FreeBSD|Haiku|Linux|NetBSD|OpenBSD|SunOS|ThingOS")
+   set(HAVE_MACH_MACH_H 0)
+   set(HAVE_MALLOC_MALLOC_H 0)
+   set(HAVE_PTHREAD_H 1)
+diff --git a/llvm/cmake/modules/HandleLLVMOptions.cmake b/llvm/cmake/modules/HandleLLVMOptions.cmake
+index 311123084..377587d40 100644
+--- a/llvm/cmake/modules/HandleLLVMOptions.cmake
++++ b/llvm/cmake/modules/HandleLLVMOptions.cmake
+@@ -235,7 +235,7 @@ endif()
+ if(WIN32)
+   set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
+   set(LLVM_ON_UNIX 0)
+-elseif(FUCHSIA OR UNIX OR CYGWIN)
++elseif(FUCHSIA OR UNIX OR CYGWIN OR CMAKE_SYSTEM_NAME MATCHES "ThingOS" OR CMAKE_SYSTEM_NAME STREQUAL "thingos")
+   set(LLVM_ON_UNIX 1)
+   if(APPLE OR CYGWIN OR "${CMAKE_SYSTEM_NAME}" MATCHES "AIX")
+     set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
+@@ -243,8 +243,13 @@ elseif(FUCHSIA OR UNIX OR CYGWIN)
+     set(LLVM_HAVE_LINK_VERSION_SCRIPT 1)
+   endif()
+ elseif(CMAKE_SYSTEM_NAME STREQUAL "Generic")
+-  set(LLVM_ON_UNIX 0)
+-  set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
++  if(LLVM_DEFAULT_TARGET_TRIPLE MATCHES "thingos")
++    set(LLVM_ON_UNIX 1)
++    set(LLVM_HAVE_LINK_VERSION_SCRIPT 1)
++  else()
++    set(LLVM_ON_UNIX 0)
++    set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
++  endif()
+ else()
+   MESSAGE(SEND_ERROR "Unable to determine platform")
+ endif()
