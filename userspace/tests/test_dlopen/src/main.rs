@@ -184,6 +184,7 @@ fn test_dlopen_pistil_shared_library() {
     let pack_fn: extern "C" fn(u8, u8, u8, u8) -> u32 =
         unsafe { core::mem::transmute(pack_sym) };
     let packed = pack_fn(0x12, 0x34, 0x56, 0x78);
+    // `pistil_pack_rgba8` returns 0xAARRGGBB.
     assert_eq!(packed, 0x78123456, "unexpected RGBA packing result");
 
     let rc = dlclose(handle);

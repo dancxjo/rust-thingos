@@ -625,7 +625,7 @@ fn copy_shared_library(
                 continue;
             }
             let name = entry.file_name().to_string_lossy();
-            if name == file_name || (name.starts_with(&format!("lib{package}")) && name.ends_with(".so")) {
+            if name == file_name {
                 candidates.push(entry.path().to_path_buf());
             }
         }
@@ -635,7 +635,6 @@ fn copy_shared_library(
     let src = candidates
         .iter()
         .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(file_name))
-        .or_else(|| candidates.first())
         .ok_or_else(|| anyhow::anyhow!("shared library artifact not found for package '{package}'"))?;
 
     cmd!(sh, "cp {src} {dst}").run()?;

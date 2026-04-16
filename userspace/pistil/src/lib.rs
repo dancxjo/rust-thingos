@@ -11,6 +11,8 @@ const SEED_NAME: &[u8] = b"pistil";
 #[unsafe(no_mangle)]
 #[used]
 pub static THINGOS_SEED: Seed = Seed {
+    // Shared libraries are planted as inspectable Seeds but are not germinated
+    // directly as Program/Lifecycle/Driver shoots.
     abi_version: SEED_ABI_VERSION,
     interface_count: 0,
     hosting_modes: 0,

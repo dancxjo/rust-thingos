@@ -47,6 +47,7 @@ pub struct ColorRgba8 {
 }
 
 impl ColorRgba8 {
+    /// Pack as `0xAARRGGBB`.
     pub const fn to_u32(self) -> u32 {
         ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
