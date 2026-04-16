@@ -52,7 +52,7 @@ fn main(_arg: usize) -> ! {
     let mut start = 1usize;
 
     while start < args.len() {
-        let Some(flag) = args.get(start) else { break };
+        let flag = &args[start];
         if !flag.starts_with('-') || flag.len() <= 1 {
             break;
         }
@@ -75,8 +75,10 @@ fn main(_arg: usize) -> ! {
         start += 1;
     }
 
-    let text = args[start..].join(" ");
-    let mut out = if interpret_escapes { expand_escapes(&text) } else { text };
+    let mut out = args[start..].join(" ");
+    if interpret_escapes {
+        out = expand_escapes(&out);
+    }
     if !suppress_newline {
         out.push('\n');
     }
