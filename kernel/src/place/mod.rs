@@ -35,8 +35,8 @@
 //! | `Process` field       | World-context role                    | Intended canonical home       | Status       |
 //! |-----------------------|---------------------------------------|-------------------------------|--------------|
 //! | `cwd`                 | Current working directory             | `Place::cwd`                  | **Bridged**  |
-//! | `namespace`           | VFS mount-table view                  | `Place::namespace`            | Provisional  |
-//! | *(no root field yet)* | Effective filesystem root             | `Place::root`                 | Not yet added|
+//! | `namespace`           | VFS mount-table view                  | `Place::namespace`            | **Bridged**  |
+//! | `root`                | Effective filesystem root             | `Place::root`                 | **Bridged**  |
 //! | `env`                 | Inherited Unix environment blob       | **Legacy compat** (quarantine)| Provisional  |
 //! | `argv` / `auxv`       | Spawn-time invocation context         | **Legacy compat** (quarantine)| Provisional  |
 //! | `pgid` / `sid`        | Unix session/process-group            | `Group` (Phase 4 / 5)         | Provisional  |

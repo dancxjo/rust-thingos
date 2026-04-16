@@ -472,34 +472,37 @@ pub trait VfsDriver: Send + Sync {
 
 /// A reference to the VFS namespace (mount table view) for a process.
 ///
-/// # Current semantics (stub)
+/// # Current semantics
 ///
-/// All processes share a **single global mount table**.  `NamespaceRef` is a
-/// unit struct: every instance is equivalent and resolves to the same
-/// underlying state.  Mounts and unmounts performed by *any* process are
-/// immediately visible to *all* processes.
+/// `NamespaceRef` now carries a stable namespace identity.  The global
+/// namespace uses id `1` and label `"global"`; isolated namespace identities
+/// are created with monotonically increasing ids.
 ///
 /// The field `Process.namespace` is populated at spawn time and cloned into
-/// child processes, but both parent and child resolve to the same global state.
+/// child processes.
 ///
 /// # What is intentionally NOT guaranteed today
 ///
-/// - Mount isolation: a process cannot have a private mount table.
+/// - Mount isolation for VFS lookups: path resolution still uses the shared
+///   mount table implementation.
 /// - Privilege checking: `SYS_FS_MOUNT` does not verify ownership.
 /// - Snapshot-on-spawn: spawning a child does not fork the mount table.
 ///
 /// # Roadmap
 ///
-/// Per-process namespace divergence (sandboxing, containers) will be
-/// introduced in a future milestone.  The field in [`crate::task::Process`]
-/// and all call sites that call [`NamespaceRef::global()`] are already wired
-/// so that adding real isolation requires only changes to this struct and
-/// `vfs::mount`, without touching every spawn path again.
+/// Per-process namespace divergence for mount tables (sandboxing, containers)
+/// will be introduced in a future milestone.
 ///
 /// See `docs/concepts/namespaces.md` for the full behaviour matrix and
 /// staged implementation roadmap.
-#[derive(Clone, Debug, Default)]
-pub struct NamespaceRef;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespaceRef {
+    id: u64,
+}
+
+const GLOBAL_NAMESPACE_ID: u64 = 1;
+static NEXT_NAMESPACE_ID: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(GLOBAL_NAMESPACE_ID + 1);
 
 impl NamespaceRef {
     /// Return the shared (global) namespace reference.
@@ -509,17 +512,40 @@ impl NamespaceRef {
     /// namespace backed by a clone of the system-wide mount table, and this
     /// function will return the root (initial) namespace.
     pub fn global() -> Self {
-        Self
+        Self {
+            id: GLOBAL_NAMESPACE_ID,
+        }
     }
 
-    /// Returns `true` once per-process namespace isolation is implemented.
-    ///
-    /// Currently always returns `false` because all processes share the global
-    /// mount table.  Code that needs to behave differently when real isolation
-    /// is active should guard on this method rather than assuming one behaviour
-    /// or the other.
+    /// Create a new isolated namespace identity.
+    pub fn isolated() -> Self {
+        let id = NEXT_NAMESPACE_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        Self { id }
+    }
+
+    /// Stable namespace identifier.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Human-readable namespace label for bridge/procfs output.
+    pub fn label(&self) -> alloc::string::String {
+        if self.id == GLOBAL_NAMESPACE_ID {
+            alloc::string::String::from("global")
+        } else {
+            alloc::format!("ns-{}", self.id)
+        }
+    }
+
+    /// Returns `true` when this is not the global namespace identity.
     pub fn is_isolated(&self) -> bool {
-        false
+        self.id != GLOBAL_NAMESPACE_ID
+    }
+}
+
+impl Default for NamespaceRef {
+    fn default() -> Self {
+        Self::global()
     }
 }
 
@@ -931,5 +957,22 @@ mod tests {
         let mut buf = [0u8; 32];
         let n = write_readdir_entries(entries.into_iter(), 0, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"dup\0unique\0");
+    }
+
+    #[test]
+    fn test_namespace_global_identity_and_label() {
+        let ns = NamespaceRef::global();
+        assert_eq!(ns.id(), GLOBAL_NAMESPACE_ID);
+        assert_eq!(ns.label(), "global");
+        assert!(!ns.is_isolated());
+    }
+
+    #[test]
+    fn test_namespace_isolated_identity_is_unique() {
+        let a = NamespaceRef::isolated();
+        let b = NamespaceRef::isolated();
+        assert_ne!(a.id(), b.id());
+        assert!(a.is_isolated());
+        assert!(b.is_isolated());
     }
 }

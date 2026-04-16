@@ -13,8 +13,8 @@
 //! | `Process` / `ProcessSnapshot` field | World-context role            | Intended `Place` mapping      | Status       |
 //! |--------------------------------------|-------------------------------|-------------------------------|--------------|
 //! | `cwd`                                | Current working directory     | `Place::cwd`                  | **Bridged**  |
-//! | `namespace` (unit struct)            | VFS mount-table view          | `Place::namespace` (label)    | Provisional  |
-//! | *(no root field yet)*                | Effective filesystem root     | `Place::root`                 | Not yet added|
+//! | `namespace`                          | VFS mount-table view          | `Place::namespace` (label)    | **Bridged**  |
+//! | `root`                               | Effective filesystem root     | `Place::root`                 | **Bridged**  |
 //! | `env`                                | Inherited Unix env blob       | Legacy compat (quarantined)   | Provisional  |
 //! | `argv` / `auxv`                      | Spawn-time invocation context | Legacy compat (quarantined)   | Provisional  |
 //! | `pgid` / `sid` / `session_leader`   | Unix session/process-group    | `Group` domain (Phase 4/5)    | Provisional  |
@@ -26,14 +26,11 @@
 //! | `ProcessSnapshot` field  | `Place` field     | Notes                                           |
 //! |--------------------------|-------------------|-------------------------------------------------|
 //! | `cwd`                    | `cwd`             | Direct copy of the working directory path       |
-//! | `namespace_label`        | `namespace`       | Always `"global"` in Phase 8 (unit NamespaceRef)|
-//! | *(none)*                 | `root`            | Hardcoded `"/"` — no per-process root yet       |
+//! | `namespace_label`        | `namespace`       | Stable per-process namespace label                |
+//! | `root_path`              | `root`            | Effective per-process filesystem root             |
 //!
 //! # What is not yet replaced
 //!
-//! * Per-process namespace isolation — `NamespaceRef` is a unit struct today;
-//!   `Place::namespace` is always `"global"`.
-//! * Per-process chroot / pivot-root — `Place::root` is always `"/"`.
 //! * Inherited Unix environment blob (`Process::env`) — quarantined as legacy
 //!   compatibility, not surfaced through Place.
 //! * Terminal / UI attachment — belongs to `Presence` (not yet introduced).
@@ -65,10 +62,10 @@ use thingos::place::Place;
 ///
 /// # Transitional behaviour
 ///
-/// In Phase 8 this derives the `Place` from the current process's `cwd` field
-/// (via `process_info_current`) and hard-codes `"global"` for the namespace
-/// and `"/"` for the root.  When no process context is available (kernel
-/// threads), `cwd` falls back to `"/"`.
+/// In Phase 8 this derives the `Place` from the current process's world
+/// context fields (`cwd`, `namespace`, `root`) via `process_info_current`.
+/// When no process context is available (kernel threads), it falls back to
+/// global root defaults.
 ///
 /// # Migration note
 ///
@@ -76,29 +73,30 @@ use thingos::place::Place;
 /// this function remains the **single entry point** — callers will
 /// transparently receive a richer `Place` without code changes at call sites.
 pub fn place_for_current() -> Place {
-    // PROVISIONAL: cwd is taken from ProcessInfo::cwd (the Process struct).
-    // Future phases will replace this raw path with a stable VFS-node reference
-    // once cwd tracking migrates into a Place-shaped substructure.
-    let cwd = crate::sched::process_info_current()
-        .map(|p| p.lock().cwd.clone())
-        .unwrap_or_default();
+    if let Some(pinfo) = crate::sched::process_info_current() {
+        let pinfo = pinfo.lock();
+        let cwd = if pinfo.cwd.is_empty() {
+            alloc::string::String::from("/")
+        } else {
+            pinfo.cwd.clone()
+        };
+        let root = if pinfo.root.is_empty() {
+            alloc::string::String::from("/")
+        } else {
+            pinfo.root.clone()
+        };
+        return Place {
+            cwd,
+            namespace: pinfo.namespace.label(),
+            root,
+        };
+    }
 
-    let cwd = if cwd.is_empty() {
-        alloc::string::String::from("/")
-    } else {
-        cwd
-    };
-
-    // PROVISIONAL: namespace is always "global" in Phase 8 — all processes
-    // share one global mount table.  Future phases will derive a stable
-    // per-process namespace identifier from ProcessInfo::namespace.
-    let namespace = alloc::string::String::from("global");
-
-    // PROVISIONAL: root is always "/" because per-process chroot / pivot-root
-    // is not yet implemented.
-    let root = alloc::string::String::from("/");
-
-    Place { cwd, namespace, root }
+    Place {
+        cwd: alloc::string::String::from("/"),
+        namespace: alloc::string::String::from("global"),
+        root: alloc::string::String::from("/"),
+    }
 }
 
 /// Build a canonical `Place` from a [`crate::sched::hooks::ProcessSnapshot`].
@@ -107,16 +105,14 @@ pub fn place_for_current() -> Place {
 ///
 /// In Phase 8:
 /// * `cwd` is taken directly from `snapshot.cwd`.
-/// * `namespace` is always `"global"` because `NamespaceRef` is a unit struct
-///   and all processes share the same global mount table.
-/// * `root` is always `"/"` because per-process chroot is not yet implemented.
+/// * `namespace` is taken from `snapshot.namespace_label`.
+/// * `root` is taken from `snapshot.root_path`.
 ///
 /// # Note on provisional world-context state
 ///
-/// The current `Process` struct does not carry an explicit per-process
-/// namespace handle or chroot root.  All world-context state in `Process` is
-/// therefore **provisional** — it backs the canonical `Place` through this
-/// bridge but has not yet been fully extracted into `Place`-shaped storage.
+/// The current `Process` struct carries transitional world-context backing
+/// (`cwd`, `namespace`, `root`) that is projected into canonical `Place`
+/// through this bridge.
 ///
 /// # Note on Presence
 ///
@@ -136,17 +132,13 @@ pub fn place_from_snapshot(
         snapshot.cwd.clone()
     };
 
-    // PROVISIONAL: namespace is always "global" in Phase 8.  Process::namespace
-    // is a NamespaceRef unit struct — all processes share the same global mount
-    // table.  When per-process namespace isolation is implemented, this will be
-    // replaced with a stable namespace identifier derived from the per-process
-    // NamespaceRef.
     let namespace = snapshot.namespace_label.clone();
 
-    // PROVISIONAL: root is always "/" because per-process chroot / pivot-root
-    // is not yet implemented.  When a per-process root binding is introduced
-    // into Process, this bridge will be the sole site that reads and surfaces it.
-    let root = alloc::string::String::from("/");
+    let root = if snapshot.root_path.is_empty() {
+        alloc::string::String::from("/")
+    } else {
+        snapshot.root_path.clone()
+    };
 
     Place { cwd, namespace, root }
 }
@@ -157,7 +149,7 @@ mod tests {
     use crate::sched::hooks::ProcessSnapshot;
     use crate::task::TaskState;
 
-    fn make_snapshot(cwd: &str, namespace_label: &str) -> ProcessSnapshot {
+    fn make_snapshot(cwd: &str, namespace_label: &str, root_path: &str) -> ProcessSnapshot {
         ProcessSnapshot {
             pid: 1,
             ppid: 0,
@@ -176,6 +168,7 @@ mod tests {
             foreground_pgid: None,
             cwd: alloc::string::String::from(cwd),
             namespace_label: alloc::string::String::from(namespace_label),
+            root_path: alloc::string::String::from(root_path),
             thread_states: alloc::vec![TaskState::Runnable],
             space_id: thingos::space::SpaceId::NONE,
             space_mapping_count: 0,
@@ -187,14 +180,14 @@ mod tests {
 
     #[test]
     fn test_cwd_is_propagated_from_snapshot() {
-        let snap = make_snapshot("/home/user", "global");
+        let snap = make_snapshot("/home/user", "global", "/");
         let place = place_from_snapshot(&snap);
         assert_eq!(place.cwd, "/home/user");
     }
 
     #[test]
     fn test_empty_cwd_defaults_to_root() {
-        let snap = make_snapshot("", "global");
+        let snap = make_snapshot("", "global", "/");
         let place = place_from_snapshot(&snap);
         assert_eq!(place.cwd, "/");
     }
@@ -203,25 +196,25 @@ mod tests {
 
     #[test]
     fn test_namespace_label_is_propagated() {
-        let snap = make_snapshot("/", "global");
+        let snap = make_snapshot("/", "ns-42", "/");
         let place = place_from_snapshot(&snap);
-        assert_eq!(place.namespace, "global");
+        assert_eq!(place.namespace, "ns-42");
     }
 
     // ── root mapping ──────────────────────────────────────────────────────────
 
     #[test]
-    fn test_root_is_always_slash_in_phase_8() {
-        let snap = make_snapshot("/work", "global");
+    fn test_root_path_is_propagated() {
+        let snap = make_snapshot("/work", "global", "/srv/chroot");
         let place = place_from_snapshot(&snap);
-        assert_eq!(place.root, "/");
+        assert_eq!(place.root, "/srv/chroot");
     }
 
     // ── as_text output ────────────────────────────────────────────────────────
 
     #[test]
     fn test_place_from_snapshot_as_text_contains_cwd() {
-        let snap = make_snapshot("/srv", "global");
+        let snap = make_snapshot("/srv", "global", "/");
         let place = place_from_snapshot(&snap);
         let text = place.as_text();
         assert!(text.contains("cwd: /srv"), "unexpected: {text}");
@@ -229,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_place_from_snapshot_as_text_contains_namespace() {
-        let snap = make_snapshot("/", "global");
+        let snap = make_snapshot("/", "global", "/");
         let place = place_from_snapshot(&snap);
         let text = place.as_text();
         assert!(text.contains("namespace: global"), "unexpected: {text}");
@@ -237,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_place_from_snapshot_as_text_contains_root() {
-        let snap = make_snapshot("/", "global");
+        let snap = make_snapshot("/", "global", "/");
         let place = place_from_snapshot(&snap);
         let text = place.as_text();
         assert!(text.contains("root: /"), "unexpected: {text}");

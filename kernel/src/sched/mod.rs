@@ -2096,11 +2096,8 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     // the snapshot so the place bridge can build a canonical Place
                     // without holding the Process lock.
                     cwd: pi.cwd.clone(),
-                    // NamespaceRef is a unit struct in Phase 8 (all processes share
-                    // the global mount table).  Label it "global" here; future phases
-                    // will replace this with a stable per-process namespace identifier
-                    // once process namespace isolation is implemented.
-                    namespace_label: alloc::string::String::from("global"),
+                    namespace_label: pi.namespace.label(),
+                    root_path: pi.root.clone(),
                     // Job-context field (Phase 9): all thread states for the group.
                     thread_states,
                     // Space-context fields (Space Phase 1): stable SpaceId plus
@@ -4676,6 +4673,7 @@ mod tests {
                 thing_table: crate::vfs::thing_table::ThingTable::new(),
                 namespace: crate::vfs::NamespaceRef::global(),
                 cwd: alloc::string::String::from("/"),
+                root: alloc::string::String::from("/"),
                 exec_path: alloc::string::String::new(),
                 authority: crate::task::ProcessAuthority::root(),
                 space: crate::task::ProcessAddressSpace::empty(),
@@ -4740,6 +4738,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -4996,6 +4995,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -5032,6 +5032,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -5089,6 +5090,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -5155,6 +5157,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -5176,6 +5179,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -5226,6 +5230,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -5333,6 +5338,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::from("/old/binary"),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
@@ -5419,6 +5425,7 @@ mod tests {
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
+            root: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
