@@ -32,9 +32,10 @@ is systematic rather than ad hoc.
 | `Group`        | Coordination domain (process group, session)              | `kernel::group::bridge`         |
 | `Authority`    | Permission/credential context                             | `kernel::authority::bridge`     |
 | `Place`        | World/context boundary (cwd, namespace, root)             | `kernel::place::bridge`         |
-| `Space`        | Address space and memory-mapping ownership                | *(not yet introduced)*          |
-| Handle table   | Open-file/resource descriptor table                       | *(not yet introduced)*          |
-| Spawn record   | Immutable invocation context (argv, auxv, exec_path)      | *(not yet introduced)*          |
+| `Space`        | Address space and memory-mapping ownership                | `kernel::space::bridge`         |
+| Handle table   | Open-file/resource descriptor table                       | `kernel::handle::bridge`        |
+| Spawn record   | Immutable invocation context (argv, auxv, exec_path)      | `kernel::spawn::bridge`         |
+| `Presence`     | TTY/person-in-place attachment semantics                  | `kernel::presence::bridge`      |
 | Legacy compat  | Unix baggage with no clean architectural home             | quarantined inside `Process`    |
 
 ---
@@ -92,7 +93,10 @@ public surface** for its domain; new code must go through the bridge, not read
 | `kernel::group::bridge`             | `pgid`/`sid`/`session_leader` → `thingos::group::Group` | 4 |
 | `kernel::authority::bridge`         | `name`/`exec_path` → `thingos::authority::Authority` | 7   |
 | `kernel::place::bridge`             | `cwd`/`namespace` → `thingos::place::Place`         | 8     |
+| `kernel::space::bridge`             | `Process.space`/snapshot VM data → `thingos::space::Space` | 9 |
+| `kernel::handle::bridge`            | fd/IPC compat lookup → canonical handle resolution  | 9     |
 | `kernel::spawn::bridge`             | `spawn_record(argv,auxv)` → typed immutable `SpawnRecord` | 9 |
+| `kernel::presence::bridge`          | tty/session snapshot + runtime attachment → `thingos::presence::Presence` | 10 |
 
 ---
 
@@ -101,12 +105,11 @@ public surface** for its domain; new code must go through the bridge, not read
 | Responsibility                                        | Blocker / note                                                   |
 |-------------------------------------------------------|------------------------------------------------------------------|
 | Lifecycle fields (`ppid`, `thread_ids`, `exec_in_progress`, `children_done`) | Now grouped under `ProcessLifecycle` inside `Process.lifecycle`. Future work: introduce first-class `Job` object, promote subdivision into it. |
-| Address space / VM mappings (`space.mappings`, `space.aspace_raw`) | Now grouped under `ProcessAddressSpace` inside `Process.space`. Future work: introduce first-class `Space` object, promote subdivision into it. |
-| FD / handle table (`fd_table`)                        | Handle-table concept not yet introduced; extract after Phase 9+. |
-| Spawn invocation context (`argv`, `env`, `auxv`)      | No spawn-record concept; quarantined until one exists.           |
+| Address space / VM mappings (`space.mappings`, `space.aspace_raw`) | Bridged via `kernel::space::bridge`; final extraction still in progress while `Process` remains backing aggregator. |
+| FD / handle table (`thing_table`)                     | Bridged via `kernel::handle::bridge`; direct table probing still being migrated behind handle helpers. |
+| Spawn invocation context (`argv`, `env`, `auxv`)      | `argv`/`auxv` are bridged through immutable `SpawnRecord`; `env` remains quarantined pending Authority/Place policy model. |
 | Signal state (`ProcessSignals`, `ThreadSignals`)      | Needs split: disposition → Authority, job-control → Group; complex. |
-| UID/GID / capability mask *(planned addition)*        | Not yet present in `Process`; must be added to `Process` before a full Authority extraction is possible. Tracked here as a prerequisite gap, not as a current field. |
-| Controlling terminal / TTY attachment                 | Belongs to `Presence` (not yet introduced); quarantined for now. |
+| Controlling terminal / TTY attachment                 | Presence bridge exists; runtime backing is still transitional and tied to session/group compatibility state. |
 | Per-process namespace isolation                       | `NamespaceRef` is a unit struct; defer until namespace work.     |
 | Reparenting to init (orphan reaping)                  | No init-process concept yet; deferred.                           |
 
