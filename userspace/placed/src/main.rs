@@ -100,6 +100,8 @@ fn main(_arg: usize) -> ! {
             match vfs_poll(&mut fds, WATCH_POLL_TIMEOUT_MS) {
                 Ok(n) if n > 0 => {
                     // Drain pending watch payload so future poll calls can block again.
+                    // We intentionally ignore the payload and do a full recount because
+                    // policy depends only on aggregate presence count.
                     let mut watch_buf = [0u8; WATCH_BUFFER_SIZE];
                     if let Err(e) = vfs_read(fd, &mut watch_buf) {
                         warn!("placed: failed draining watch events: {:?}", e);
