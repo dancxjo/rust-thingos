@@ -27,9 +27,9 @@ const CACHE_KEY_FILE: &str = "target/rustc-thingos/.cache-key";
 const OUTPUT_DIR: &str = "target/rustc-thingos";
 const RUSTLIB_CACHE_DIR: &str = "target/rustc-thingos/lib/rustlib";
 const LIB_CACHE_DIR: &str = "target/rustc-thingos/lib";
-const THINGOS_RUSTC_BINARY: &str = "target/rustc-thingos/thingos-rustc";
-const THINGOS_CARGO_BINARY: &str = "target/rustc-thingos/thingos-cargo";
-const THINGOS_RUSTLIB_CACHE_DIR: &str = "target/rustc-thingos/thingos-rustlib";
+pub const THINGOS_RUSTC_BINARY: &str = "target/rustc-thingos/thingos-rustc";
+pub const THINGOS_CARGO_BINARY: &str = "target/rustc-thingos/thingos-cargo";
+pub const THINGOS_RUSTLIB_CACHE_DIR: &str = "target/rustc-thingos/thingos-rustlib";
 const ROOT_CONFIG_TOML: &str = "config.toml";
 const ROOT_CONFIG_BACKUP: &str = "target/rustc-thingos/config.toml.backup";
 

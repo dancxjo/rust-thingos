@@ -36,6 +36,14 @@ unsafe extern "C" fn kmain() -> ! {
         arch::init_interrupts();
     }
 
+    // Parse kernel command line for loglevel
+    let cmdline = requests::get_kernel_cmdline();
+    if let Some(pos) = cmdline.find("loglevel=") {
+        if let Some(digit) = cmdline[pos + 9..].chars().next().and_then(|c| c.to_digit(10)) {
+            kernel::logging::set_log_level(digit as u8);
+        }
+    }
+
     indicate_progress();
 
     kernel::start(&RUNTIME);

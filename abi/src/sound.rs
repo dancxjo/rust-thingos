@@ -177,6 +177,11 @@ pub const AUDIO_DRAIN: u32 = 0x8007;
 /// `out_ptr` -> [`AudioMappedRingInfo`].
 pub const AUDIO_GET_MAPPED_RING_INFO: u32 = 0x8008;
 
+/// `DeviceCall::op` — read mapped/legacy ring runtime counters.
+///
+/// `out_ptr` -> [`AudioMappedRingStats`].
+pub const AUDIO_GET_MAPPED_RING_STATS: u32 = 0x8009;
+
 /// Mapped-ring protocol version.
 pub const AUDIO_MAPPED_RING_VERSION: u32 = 1;
 
@@ -234,6 +239,27 @@ impl Default for AudioMappedRingInfo {
             _reserved: [0; 4],
         }
     }
+}
+
+/// Runtime counters and occupancy for audio ring diagnostics.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AudioMappedRingStats {
+    /// 1 when mapped-ring streaming is active; 0 for legacy write ring.
+    pub mapped_active: u32,
+    /// Current queued PCM bytes in the active ring.
+    pub ring_fill_bytes: u32,
+    /// Total PCM capacity bytes in the active ring.
+    pub ring_capacity_bytes: u32,
+    /// Number of successful mapped-ring attach handshakes since boot.
+    pub mapped_attach_count: u32,
+    /// Number of mapped-ring detach/teardown events since boot.
+    pub mapped_detach_count: u32,
+    /// Number of mapped-ring starvation edge events while running.
+    pub mapped_underrun_events: u32,
+    /// Total bytes consumed by hardware from mapped ring.
+    pub mapped_bytes_consumed: u64,
+    pub _reserved: [u32; 4],
 }
 
 // ── Capability helpers ─────────────────────────────────────────────────────────

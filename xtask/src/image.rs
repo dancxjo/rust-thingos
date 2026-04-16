@@ -6,7 +6,9 @@ use walkdir::WalkDir;
 use xshell::{Shell, cmd};
 
 use crate::common::{Result, image_name};
-use crate::rustc_thingos::stage_rustc_for_iso;
+use crate::rustc_thingos::{
+    THINGOS_CARGO_BINARY, THINGOS_RUSTC_BINARY, THINGOS_RUSTLIB_CACHE_DIR, stage_rustc_for_iso,
+};
 
 pub struct ProgramConfig {
     pub name: &'static str,
@@ -181,12 +183,9 @@ fn generate_limine_config(
 ) -> String {
     let res = resolution.unwrap_or("1920x1080");
     let mut conf = String::new();
-    conf.push_str("timeout: 0\nquiet: yes\nverbose: no\nserial: yes\n\n");
-    conf.push_str("/ThingOS\n");
-    conf.push_str("    protocol: limine\n");
-    conf.push_str(&format!("    resolution: {res}\n"));
-    conf.push_str("    kernel_path: boot():/boot/kernel\n");
+    conf.push_str("timeout: 3\nquiet: yes\nverbose: no\nserial: yes\n\n");
 
+    let mut common_modules = String::new();
     for prog in programs {
         if !prog.boot_module {
             continue;
@@ -196,9 +195,9 @@ fn generate_limine_config(
         } else {
             format!("boot():/bin/{}", prog.name)
         };
-        conf.push_str(&format!("    module_path: {}\n", bin_path));
+        common_modules.push_str(&format!("    module_path: {}\n", bin_path));
         if prog.is_init {
-            conf.push_str("    module_cmdline: init\n");
+            common_modules.push_str("    module_cmdline: init\n");
         }
     }
 
@@ -217,17 +216,43 @@ fn generate_limine_config(
 
         if allowed && !clean_path.ends_with("unifont.hex") && !clean_path.ends_with("locale.conf") {
             let iso_path = clean_path.replace("assets/", "share/");
-            conf.push_str(&format!("    module_path: boot():/{iso_path}\n"));
+            common_modules.push_str(&format!("    module_path: boot():/{iso_path}\n"));
         }
     }
 
-    conf.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
-    conf.push_str("    module_path: boot():/etc/locale.conf\n");
-    conf.push_str("    module_path: boot():/etc/profile\n");
-    conf.push_str("    module_path: boot():/etc/motd\n");
+    common_modules.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
+    common_modules.push_str("    module_path: boot():/etc/locale.conf\n");
+    common_modules.push_str("    module_path: boot():/etc/profile\n");
+    common_modules.push_str("    module_path: boot():/etc/motd\n");
+
+    // Standard entry
+    conf.push_str("/ThingOS\n");
+    conf.push_str("    protocol: limine\n");
+    conf.push_str(&format!("    resolution: {res}\n"));
+    conf.push_str("    kernel_path: boot():/boot/kernel\n");
+    conf.push_str(&common_modules);
+    conf.push('\n');
+
+    // Debug entry
+    conf.push_str("/ThingOS (Debug)\n");
+    conf.push_str("    protocol: limine\n");
+    conf.push_str(&format!("    resolution: {res}\n"));
+    conf.push_str("    kernel_path: boot():/boot/kernel\n");
+    conf.push_str("    kernel_cmdline: loglevel=4\n");
+    conf.push_str(&common_modules);
+    conf.push('\n');
+
+    // Trace entry
+    conf.push_str("/ThingOS (Trace)\n");
+    conf.push_str("    protocol: limine\n");
+    conf.push_str(&format!("    resolution: {res}\n"));
+    conf.push_str("    kernel_path: boot():/boot/kernel\n");
+    conf.push_str("    kernel_cmdline: loglevel=5\n");
+    conf.push_str(&common_modules);
 
     conf
 }
+
 
 fn generate_motd() -> String {
     const WIDTH: usize = 60;
@@ -555,7 +580,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     }
 
     cmd!(sh, "mformat -i {hdd}@@1M").run()?;
-    cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/drivers").run()?;
+    cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/drivers ::/bin ::/lib").run()?;
     cmd!(sh, "mcopy -i {hdd}@@1M -s assets ::").run()?;
 
     let mut asset_files = Vec::new();
@@ -605,6 +630,25 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
             cmd!(sh, "mcopy -i {hdd}@@1M vendor/limine/limine-bios.sys ::/boot/limine").run()?;
             cmd!(sh, "mcopy -i {hdd}@@1M vendor/limine/BOOTX64.EFI ::/EFI/BOOT").run()?;
             cmd!(sh, "mcopy -i {hdd}@@1M vendor/limine/BOOTIA32.EFI ::/EFI/BOOT").run()?;
+
+            if std::env::var("INCLUDE_RUST_TOOLCHAIN").as_deref() == Ok("1") {
+                let thingos_rustc = Path::new(THINGOS_RUSTC_BINARY);
+                let thingos_cargo = Path::new(THINGOS_CARGO_BINARY);
+                let thingos_rustlib = Path::new(THINGOS_RUSTLIB_CACHE_DIR);
+
+                if thingos_rustc.exists() {
+                    cmd!(sh, "mcopy -i {hdd}@@1M {THINGOS_RUSTC_BINARY} ::/bin/rustc").run()?;
+                }
+                if thingos_cargo.exists() {
+                    cmd!(sh, "mcopy -i {hdd}@@1M {THINGOS_CARGO_BINARY} ::/bin/cargo").run()?;
+                }
+                if thingos_rustlib.exists() {
+                    cmd!(sh, "mmd -i {hdd}@@1M ::/lib/rustlib").run().ok();
+                    let src = THINGOS_RUSTLIB_CACHE_DIR;
+                    cmd!(sh, "bash -c \"mcopy -i {hdd}@@1M -s {src}/* ::/lib/rustlib\"")
+                        .run()?;
+                }
+            }
         }
         "aarch64" => {
             cmd!(sh, "mcopy -i {hdd}@@1M vendor/limine/BOOTAA64.EFI ::/EFI/BOOT").run()?;

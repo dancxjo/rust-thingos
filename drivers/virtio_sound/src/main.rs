@@ -41,10 +41,11 @@ use abi::driver_interface::{
 };
 use abi::errors::Errno;
 use abi::sound::{
-    AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS,
-    AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS, AUDIO_START, AUDIO_STOP, AudioMappedRingHeader,
-    AudioMappedRingInfo, AudioMappedRingSetup, AudioParams, AudioSampleFormat, AudioState,
-    AudioStatus, AudioStreamInfo, format_bit,
+    AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_GET_MAPPED_RING_STATS,
+    AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS, AUDIO_START,
+    AUDIO_STOP, AudioMappedRingHeader, AudioMappedRingInfo, AudioMappedRingSetup,
+    AudioMappedRingStats, AudioParams, AudioSampleFormat, AudioState, AudioStatus,
+    AudioStreamInfo, format_bit,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
@@ -213,6 +214,11 @@ impl RingBuf {
 struct AudioCard {
     ring: RingBuf,
     mapped: Option<MappedRing>,
+    mapped_attach_count: u32,
+    mapped_detach_count: u32,
+    mapped_underrun_events: u32,
+    mapped_bytes_consumed: u64,
+    mapped_was_empty: bool,
     params: AudioParams,
     state: u32, // AudioState as u32
     hw_frame: u64,
@@ -277,11 +283,26 @@ fn mapped_dequeue(mapped: &mut MappedRing, dst: &mut [u8]) -> usize {
     n
 }
 
+fn mapped_fill_and_capacity(mapped: &MappedRing) -> (usize, usize) {
+    let hdr = mapped_header_ptr(mapped);
+    let cap =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).capacity_bytes)) } as usize;
+    if cap == 0 {
+        return (0, 0);
+    }
+    let w = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).write_index)) } as usize;
+    let r = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).read_index)) } as usize;
+    let fill = if w >= r { w - r } else { cap - (r - w) };
+    (fill, cap)
+}
+
 fn teardown_mapped_ring(card: &mut AudioCard) {
     if let Some(mapped) = card.mapped.take() {
         let _ = stem::syscall::vm_unmap(mapped.map_addr, mapped.map_len);
         let _ = stem::syscall::vfs_close(mapped.ring_fd);
         let _ = stem::syscall::vfs_close(mapped.control_fd);
+        card.mapped_detach_count = card.mapped_detach_count.saturating_add(1);
+        card.mapped_was_empty = false;
     }
 }
 
@@ -311,6 +332,11 @@ impl AudioCard {
         Self {
             ring: RingBuf::new(64 * 1024),
             mapped: None,
+            mapped_attach_count: 0,
+            mapped_detach_count: 0,
+            mapped_underrun_events: 0,
+            mapped_bytes_consumed: 0,
+            mapped_was_empty: false,
             params: AudioParams {
                 sample_format: AudioSampleFormat::S16LE as u32,
                 rate: 44100,
@@ -351,7 +377,13 @@ impl AudioCard {
 
     fn status(&self) -> AudioStatus {
         let bpf = self.bytes_per_frame();
-        let avail = if bpf > 0 { (self.ring.free_space() / bpf) as u32 } else { 0 };
+        let avail_bytes = if let Some(mapped) = self.mapped.as_ref() {
+            let (fill, cap) = mapped_fill_and_capacity(mapped);
+            cap.saturating_sub(fill)
+        } else {
+            self.ring.free_space()
+        };
+        let avail = if bpf > 0 { (avail_bytes / bpf) as u32 } else { 0 };
         AudioStatus {
             state: self.state,
             hw_frame: self.hw_frame,
@@ -459,7 +491,9 @@ fn dispatch_rpc(
             let resp = match handle {
                 HANDLE_ROOT => ProviderResponse::ok_stat(S_IFDIR | 0o755, 0, 1),
                 HANDLE_CTL => ProviderResponse::ok_stat(S_IFREG | 0o444, 0, 2),
-                HANDLE_OUT0 => ProviderResponse::ok_stat(S_IFREG | 0o222, 0, 3),
+                // Apps currently open out0 as O_RDWR before issuing device calls,
+                // so advertise read/write permissions for compatibility.
+                HANDLE_OUT0 => ProviderResponse::ok_stat(S_IFREG | 0o666, 0, 3),
                 _ => ProviderResponse::err(Errno::ENOENT),
             };
             (resp, false)
@@ -630,6 +664,32 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
                 core::slice::from_raw_parts(
                     &info as *const AudioMappedRingInfo as *const u8,
                     size_of::<AudioMappedRingInfo>(),
+                )
+            };
+            (ok_device_call(0, bytes), false)
+        }
+
+        AUDIO_GET_MAPPED_RING_STATS => {
+            let (fill, cap, active) = if let Some(mapped) = card.mapped.as_ref() {
+                let (f, c) = mapped_fill_and_capacity(mapped);
+                (f, c, 1u32)
+            } else {
+                (card.ring.available(), card.ring.cap, 0u32)
+            };
+            let stats = AudioMappedRingStats {
+                mapped_active: active,
+                ring_fill_bytes: fill.min(u32::MAX as usize) as u32,
+                ring_capacity_bytes: cap.min(u32::MAX as usize) as u32,
+                mapped_attach_count: card.mapped_attach_count,
+                mapped_detach_count: card.mapped_detach_count,
+                mapped_underrun_events: card.mapped_underrun_events,
+                mapped_bytes_consumed: card.mapped_bytes_consumed,
+                _reserved: [0; 4],
+            };
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &stats as *const AudioMappedRingStats as *const u8,
+                    size_of::<AudioMappedRingStats>(),
                 )
             };
             (ok_device_call(0, bytes), false)
@@ -905,6 +965,9 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                                             core::ptr::write_volatile(&mut hdr.flags, 0);
                                         }
                                         card.mapped = Some(mapped);
+                                        card.mapped_attach_count =
+                                            card.mapped_attach_count.saturating_add(1);
+                                        card.mapped_was_empty = false;
                                         mapped_pending_fd = None;
                                         info!("SND: mapped ring attached ({} bytes)", resp.len);
                                     }
@@ -986,6 +1049,10 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                     card.ring.dequeue(data_slice)
                 };
                 if n > 0 {
+                    if card.mapped.is_some() {
+                        card.mapped_bytes_consumed = card.mapped_bytes_consumed.saturating_add(n as u64);
+                        card.mapped_was_empty = false;
+                    }
                     let bpf = card.bytes_per_frame().max(1);
                     card.hw_frame += (n / bpf) as u64;
                     loop {
@@ -1002,6 +1069,11 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                             let _ = process_tx_queue(&mut driver);
                             stem::syscall::yield_now();
                         }
+                    }
+                } else if card.mapped.is_some() && card.state == AudioState::Running as u32 {
+                    if !card.mapped_was_empty {
+                        card.mapped_underrun_events = card.mapped_underrun_events.saturating_add(1);
+                        card.mapped_was_empty = true;
                     }
                 }
 

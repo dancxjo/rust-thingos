@@ -1,8 +1,8 @@
 use kernel::{BootModuleDesc, BootModuleKind};
 use limine::BaseRevision;
 use limine::request::{
-    DeviceTreeBlobRequest, FramebufferRequest, HhdmRequest, MemoryMapRequest, ModuleRequest,
-    RsdpRequest,
+    DeviceTreeBlobRequest, ExecutableFileRequest, FramebufferRequest, HhdmRequest,
+    MemoryMapRequest, ModuleRequest, RsdpRequest,
 };
 
 pub static BASE_REVISION: BaseRevision = BaseRevision::new();
@@ -18,6 +18,7 @@ pub static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 pub static DTB_REQUEST: DeviceTreeBlobRequest = DeviceTreeBlobRequest::new();
 
 pub static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
+pub static EXECUTABLE_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
 
 const MAX_MODULES: usize = 256;
 
@@ -83,3 +84,11 @@ pub fn get_modules() -> &'static [BootModuleDesc] {
         &MODULES_CACHE[..MODULES_LEN]
     }
 }
+
+pub fn get_kernel_cmdline() -> &'static str {
+    EXECUTABLE_FILE_REQUEST
+        .get_response()
+        .and_then(|r| r.file().string().to_str().ok())
+        .unwrap_or("")
+}
+
