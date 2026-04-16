@@ -56,12 +56,14 @@ pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
     let name_bytes = unsafe { crate::sched::current_task_name_current() };
     let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
     let task_name = core::str::from_utf8(&name_bytes[..name_len]).unwrap_or("unknown");
+    let hw_tls_base = crate::runtime_base().get_user_tls_base_dyn();
+    let task_tls_base = unsafe { crate::sched::current_user_fs_base_current() };
 
     // Structured page fault logging with decoded error bits
     crate::log_event!(
         crate::logging::LogLevel::Error,
         "kernel::trap",
-        "user_page_fault tid={} task='{}' va=0x{:016x} rip=0x{:016x} err=0x{:04x} p={} u={} w={} i={}",
+        "user_page_fault tid={} task='{}' va=0x{:016x} rip=0x{:016x} err=0x{:04x} p={} u={} w={} i={} fs=0x{:016x} task_fs=0x{:016x}",
         tid,
         task_name,
         addr,
@@ -70,7 +72,9 @@ pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
         present as u8,
         user as u8,
         write as u8,
-        instr_fetch as u8
+        instr_fetch as u8,
+        hw_tls_base,
+        task_tls_base
     );
 
     if stack_result == crate::sched::StackFaultResult::Overflow {

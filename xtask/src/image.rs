@@ -152,8 +152,41 @@ fn generate_limine_config(
     conf.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
     conf.push_str("    module_path: boot():/etc/locale.conf\n");
     conf.push_str("    module_path: boot():/etc/profile\n");
+    conf.push_str("    module_path: boot():/etc/motd\n");
 
     conf
+}
+
+fn generate_motd() -> String {
+    const WIDTH: usize = 60;
+    let mut motd = String::new();
+    let border = format!("  +{}+\n", "-".repeat(WIDTH + 2));
+
+    motd.push_str(&border);
+    motd.push_str(&format!(
+        "  | {:<width$} |\n",
+        "THING-OS  v0.1  (thingos ACT IV)                 2026-04-16",
+        width = WIDTH
+    ));
+    motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
+    motd.push_str(&format!(
+        "  | {:<width$} |\n",
+        "People, places, things",
+        width = WIDTH
+    ));
+    motd.push_str(&format!(
+        "  | {:<width$} |\n",
+        "Foundational elements of Thing-OS.",
+        width = WIDTH
+    ));
+    motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
+    motd.push_str(&format!(
+        "  | {:<width$} |\n",
+        "Try: ls /bin, ps, cat /etc/version",
+        width = WIDTH
+    ));
+    motd.push_str(&border);
+    motd
 }
 
 /// Build an ISO image for the target architecture with default settings.
@@ -262,6 +295,8 @@ pub fn build_iso_with_config(
         iso_root.join("etc/profile"),
         "alias ll='loglevel'\nalias halt='shutdown'\n",
     )?;
+
+    sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
 
     println!("Building userspace programs...");
 
@@ -514,10 +549,15 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     sh.remove_path("locale.conf")?;
 
     sh.write_file("profile", "alias ll='loglevel'\nalias halt='shutdown'\n")?;
+    sh.write_file("motd", generate_motd())?;
+
     // create /etc in the fat32 image if it doesn't exist
     cmd!(sh, "mmd -i {hdd}@@1M ::/etc").run().ok();
     cmd!(sh, "mcopy -i {hdd}@@1M profile ::/etc/profile").run()?;
+    cmd!(sh, "mcopy -i {hdd}@@1M motd ::/etc/motd").run()?;
+
     sh.remove_path("profile")?;
+    sh.remove_path("motd")?;
 
     let limine_conf_content = generate_limine_config(sh, programs, &asset_files, None);
     let limine_cfg = "limine.generated.conf";

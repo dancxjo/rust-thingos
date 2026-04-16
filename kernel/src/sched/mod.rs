@@ -30,7 +30,8 @@ pub use blocking::{
 pub use hooks::{
     ProcessSnapshot, add_user_mapping_current, alloc_user_stack_current,
     available_parallelism_current, check_user_mapping_current, current_priority_current,
-    current_task_name_current, current_task_resource_id, current_tid_current, dump_stats_current,
+    current_task_name_current, current_task_resource_id, current_tid_current,
+    current_user_fs_base_current, dump_stats_current,
     exit_current, get_signal_mask_current, get_thread_pending_current, get_user_mapping_at_current,
     handle_user_stack_fault_current, interrupt_task_current, kill_by_tid_current,
     list_processes_current, poll_task_exit_current, process_info_current,
@@ -963,6 +964,7 @@ pub fn init<R: BootRuntime>() {
             hooks::CURRENT_TASK_NAME_HOOK = Some(current_task_name_impl::<R>);
             hooks::TASK_EXEC_HOOK = Some(crate::task::exec::task_exec_current::<R>);
             hooks::SET_CURRENT_USER_FS_BASE_HOOK = Some(set_current_user_fs_base::<R>);
+            hooks::CURRENT_USER_FS_BASE_HOOK = Some(current_user_fs_base::<R>);
             hooks::SET_CURRENT_TASK_NAME_HOOK = Some(set_current_task_name::<R>);
             hooks::WAITPID_HOOK = Some(waitpid::<R>);
             hooks::GET_SIGNAL_MASK_HOOK = Some(get_signal_mask::<R>);
@@ -1903,6 +1905,12 @@ fn set_current_user_fs_base<R: BootRuntime>(base: u64) {
     if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
         task.user_fs_base = base;
     }
+}
+
+/// Return the current task's stored `user_fs_base` field.
+fn current_user_fs_base<R: BootRuntime>() -> u64 {
+    let tid = crate::runtime::<R>().current_tid();
+    crate::task::registry::get_task::<R>(tid).map(|task| task.user_fs_base).unwrap_or(0)
 }
 
 /// Update the calling thread's human-readable name.

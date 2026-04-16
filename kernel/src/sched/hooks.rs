@@ -195,6 +195,8 @@ pub(crate) static mut TASK_EXEC_HOOK: Option<
 > = None;
 /// Updates the current task's stored `user_fs_base` field without touching hardware.
 pub(crate) static mut SET_CURRENT_USER_FS_BASE_HOOK: Option<fn(u64)> = None;
+/// Returns the current task's stored `user_fs_base` field.
+pub(crate) static mut CURRENT_USER_FS_BASE_HOOK: Option<fn() -> u64> = None;
 /// Updates the calling thread's human-readable name (at most 31 bytes).
 pub(crate) static mut SET_CURRENT_TASK_NAME_HOOK: Option<fn(*const u8, usize)> = None;
 
@@ -553,6 +555,11 @@ pub unsafe fn set_current_user_fs_base_current(base: u64) {
     if let Some(hook) = unsafe { SET_CURRENT_USER_FS_BASE_HOOK } {
         hook(base)
     }
+}
+
+/// Return the current task's stored `user_fs_base` value.
+pub unsafe fn current_user_fs_base_current() -> u64 {
+    if let Some(hook) = unsafe { CURRENT_USER_FS_BASE_HOOK } { hook() } else { 0 }
 }
 
 /// Set the calling thread's human-readable name (at most 31 bytes, silently
