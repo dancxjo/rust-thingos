@@ -11,6 +11,9 @@ use stem::syscall::vfs::{
 };
 use stem::{info, warn};
 
+const WATCH_POLL_TIMEOUT_MS: u64 = 1000;
+const FALLBACK_SLEEP_MS: u64 = 250;
+
 pub fn derive_policy(presence_count: usize) -> (&'static str, &'static str) {
     if presence_count > 0 {
         ("true", "inhabited")
@@ -89,8 +92,9 @@ fn main(_arg: usize) -> ! {
                 events: poll_flags::POLLIN as u16,
                 revents: 0,
             }];
-            match vfs_poll(&mut fds, 1000) {
+            match vfs_poll(&mut fds, WATCH_POLL_TIMEOUT_MS) {
                 Ok(n) if n > 0 => {
+                    // Drain pending watch payload so future poll calls can block again.
                     let mut watch_buf = [0u8; 1024];
                     let _ = vfs_read(fd, &mut watch_buf);
                 }
@@ -98,11 +102,11 @@ fn main(_arg: usize) -> ! {
                 Err(_) => {
                     let _ = vfs_close(fd);
                     watch_fd = None;
-                    stem::time::sleep_ms(250);
+                    stem::time::sleep_ms(FALLBACK_SLEEP_MS);
                 }
             }
         } else {
-            stem::time::sleep_ms(250);
+            stem::time::sleep_ms(FALLBACK_SLEEP_MS);
         }
 
         if presences_fd.is_none() {
