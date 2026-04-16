@@ -63,7 +63,7 @@ fn read_all(fd: u32) -> Vec<u8> {
 
 fn collect_lines_from_bytes(data: &[u8], lines: &mut Vec<String>) {
     for line in data.split(|&b| b == b'\n') {
-        let mut s = String::from_utf8_lossy(line).to_string();
+        let mut s = String::from_utf8_lossy(line).into_owned();
         if s.ends_with('\r') {
             s.pop();
         }
@@ -91,7 +91,7 @@ fn write_sorted_iter<'a, I: Iterator<Item = &'a String>>(iter: I, unique: bool) 
 }
 
 fn sort_and_write_lines(lines: &mut Vec<String>, reverse: bool, unique: bool) {
-    lines.sort_unstable();
+    lines.sort();
     if reverse {
         write_sorted_iter(lines.iter().rev(), unique);
     } else {
