@@ -305,10 +305,7 @@ impl<R: BootRuntime> Scheduler<R> {
 
         let ctx = rt.tasking().init_user_context(spec, kstack_top);
 
-        let target_cpu = match affinity {
-            Affinity::Pinned(cpu) => cpu,
-            Affinity::Any => super::current_cpu_index::<R>(),
-        };
+        let target_cpu = self.pick_cpu_and_bringup(affinity, false);
         crate::kdebug!("SCHED: Task {} (user thread) assigned to CPU {}", id, target_cpu);
 
         // Push to target CPU's run queue
@@ -1901,30 +1898,106 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_user_thread_any_prefers_current_cpu() {
+    fn test_spawn_user_thread_any_fanout_after_bringup() {
         let _g = init_test_env();
 
         let mut sched = Scheduler::<MockRuntime>::new();
-        for _ in 0..4 {
+        const TEST_CPU_COUNT: usize = 4;
+        const TEST_THREAD_COUNT: usize = TEST_CPU_COUNT * 2;
+        const TEST_STACK_SPACING: usize = 0x10000;
+        const TEST_GUARD_START: usize = 0x3000;
+        const TEST_GUARD_END: usize = 0x4000;
+        const TEST_RESERVE_START: usize = 0x4000;
+        const TEST_RESERVE_END: usize = 0x8000;
+        const TEST_COMMITTED_START: usize = 0x7000;
+        const TEST_STACK_TOP: usize = 0x9000;
+        for _ in 0..TEST_CPU_COUNT {
             sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
         }
-        for cpu in 0..4 {
+        for cpu in 0..TEST_CPU_COUNT {
             sched.state.mark_cpu_online(cpu);
         }
-        // In MockRuntime current_cpu_index() is CPU 0, so Any user-thread spawn
-        // should stay local to that spawning CPU.
         sched.state.per_cpu[0].current = Some(0);
+        sched.bringup_in_progress = false;
+
+        let mut spawned = alloc::vec::Vec::new();
+        for i in 0..TEST_THREAD_COUNT {
+            let stack_base = (i + 1) * TEST_STACK_SPACING;
+            let stack_top = TEST_STACK_TOP + stack_base;
+            let stack_info = abi::types::StackInfo {
+                guard_start: TEST_GUARD_START + stack_base,
+                guard_end: TEST_GUARD_END + stack_base,
+                reserve_start: TEST_RESERVE_START + stack_base,
+                reserve_end: TEST_RESERVE_END + stack_base,
+                committed_start: TEST_COMMITTED_START + stack_base,
+                grow_chunk_bytes: 0x1000,
+            };
+            let id = sched.spawn_user_thread(
+                0x1000,
+                stack_top,
+                StartupArg::Raw(7),
+                stack_info,
+                crate::task::TaskPriority::Normal,
+                Affinity::Any,
+                0,
+                false,
+            );
+            spawned.push((id, stack_info));
+        }
+
+        assert!(
+            sched.state.per_cpu[0].runq[crate::task::TaskPriority::Normal as usize].is_empty(),
+            "[policy] post-bringup Any-affinity user-thread spawn should avoid BSP when secondary CPUs are online"
+        );
+        for cpu in 1..TEST_CPU_COUNT {
+            assert!(
+                !sched.state.per_cpu[cpu].runq[crate::task::TaskPriority::Normal as usize]
+                    .is_empty(),
+                "[policy] post-bringup Any-affinity user-thread spawn should fan out to secondary CPU {}",
+                cpu
+            );
+        }
+
+        for (id, expected_stack) in spawned {
+            let task = crate::task::registry::get_task::<MockRuntime>(id).expect("spawned task missing");
+            let got_stack = task.stack_info.expect("spawned task stack_info missing");
+            let sf = sched.state.get_task(id).expect("spawned task sched fields missing");
+            assert!(
+                sf.runq_location.is_some(),
+                "spawned task should be enqueued in a run queue"
+            );
+            assert_eq!(got_stack.guard_start, expected_stack.guard_start);
+            assert_eq!(got_stack.guard_end, expected_stack.guard_end);
+            assert_eq!(got_stack.reserve_start, expected_stack.reserve_start);
+            assert_eq!(got_stack.reserve_end, expected_stack.reserve_end);
+            assert_eq!(got_stack.committed_start, expected_stack.committed_start);
+            assert_eq!(got_stack.grow_chunk_bytes, expected_stack.grow_chunk_bytes);
+        }
+    }
+
+    #[test]
+    fn test_spawn_user_thread_any_stays_local_during_bringup() {
+        let _g = init_test_env();
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.per_cpu[0].current = Some(0);
+        sched.bringup_in_progress = true;
 
         let id = sched.spawn_user_thread(
             0x1000,
-            0x2000,
+            0x9000,
             StartupArg::Raw(7),
             abi::types::StackInfo {
-                guard_start: 0x1000,
-                guard_end: 0x2000,
-                reserve_start: 0x2000,
-                reserve_end: 0x3000,
-                committed_start: 0x2800,
+                guard_start: 0x3000,
+                guard_end: 0x4000,
+                reserve_start: 0x4000,
+                reserve_end: 0x8000,
+                committed_start: 0x7000,
                 grow_chunk_bytes: 0x1000,
             },
             crate::task::TaskPriority::Normal,
@@ -1937,13 +2010,7 @@ mod tests {
         assert_eq!(
             t.last_cpu,
             Some(0),
-            "[policy] Any-affinity user thread should default to spawning CPU"
-        );
-        let sf = sched.state.get_task(id).expect("spawned task sched fields missing");
-        assert_eq!(
-            sf.wake_cpu,
-            Some(0),
-            "[policy] wake_cpu should track spawning CPU for initial enqueue"
+            "[policy] Any-affinity user thread should stay local while bringup is in progress"
         );
     }
 }
