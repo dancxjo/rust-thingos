@@ -5601,6 +5601,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmdir"
+version = "0.1.0"
+dependencies = [
+ "stem",
+]
+
+[[package]]
 name = "rn"
 version = "0.11.0-beta.1"
 dependencies = [
