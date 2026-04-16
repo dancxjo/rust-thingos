@@ -15,6 +15,7 @@ pub mod memory;
 pub mod message;
 pub mod once_cell;
 pub mod place;
+pub mod presence;
 pub mod signal;
 pub mod space;
 

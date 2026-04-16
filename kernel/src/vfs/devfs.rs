@@ -259,16 +259,12 @@ static CONSOLE_BUF: Mutex<alloc::collections::VecDeque<u8>> =
 #[derive(Clone, Copy)]
 struct ConsoleTtyState {
     termios: abi::termios::Termios,
-    controlling_sid: Option<u32>,
-    foreground_pgid: Option<u32>,
 }
 
 impl Default for ConsoleTtyState {
     fn default() -> Self {
         Self {
             termios: abi::termios::DEFAULT_TERMIOS,
-            controlling_sid: None,
-            foreground_pgid: None,
         }
     }
 }
@@ -283,13 +279,11 @@ struct ConsoleCaller {
 /// Global tty state for `/dev/console`.
 static CONSOLE_TTY_STATE: Mutex<ConsoleTtyState> = Mutex::new(ConsoleTtyState {
     termios: abi::termios::DEFAULT_TERMIOS,
-    controlling_sid: None,
-    foreground_pgid: None,
 });
 
 /// Return the current `/dev/console` foreground process-group ID.
 pub(crate) fn console_foreground_pgid() -> Option<u32> {
-    CONSOLE_TTY_STATE.lock().foreground_pgid
+    crate::presence::console_foreground_pgid()
 }
 
 /// Character device node for `/dev/console`.
@@ -316,19 +310,16 @@ impl ConsoleNode {
     }
 
     fn maybe_acquire_controlling_tty(state: &mut ConsoleTtyState, caller: Option<ConsoleCaller>) {
-        if state.controlling_sid.is_some() {
-            return;
-        }
-        if let Some(c) = caller
-            && c.session_leader
-        {
-            state.controlling_sid = Some(c.sid);
-            state.foreground_pgid = Some(c.pgid);
+        if let Some(c) = caller {
+            crate::presence::maybe_attach_console_presence(c.sid, c.pgid, c.session_leader);
         }
     }
 
-    fn is_background_caller(state: &ConsoleTtyState, caller: ConsoleCaller) -> bool {
-        match (state.controlling_sid, state.foreground_pgid) {
+    fn is_background_caller(
+        caller: ConsoleCaller,
+        presence: &crate::presence::ConsolePresenceState,
+    ) -> bool {
+        match (presence.controlling_sid, presence.foreground_pgid) {
             (Some(sid), Some(fg_pgid)) => caller.sid == sid && caller.pgid != fg_pgid,
             _ => false,
         }
@@ -342,10 +333,11 @@ impl ConsoleNode {
         let (is_background, controlling_sid, foreground_pgid) = {
             let mut state = CONSOLE_TTY_STATE.lock();
             Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
+            let presence = crate::presence::console_presence_state();
             (
-                Self::is_background_caller(&state, caller),
-                state.controlling_sid,
-                state.foreground_pgid,
+                Self::is_background_caller(caller, &presence),
+                presence.controlling_sid,
+                presence.foreground_pgid,
             )
         };
         if is_background {
@@ -371,11 +363,12 @@ impl ConsoleNode {
         let (is_background, tostop, controlling_sid, foreground_pgid) = {
             let mut state = CONSOLE_TTY_STATE.lock();
             Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
+            let presence = crate::presence::console_presence_state();
             (
-                Self::is_background_caller(&state, caller),
+                Self::is_background_caller(caller, &presence),
                 (state.termios.c_lflag & abi::termios::TOSTOP) != 0,
-                state.controlling_sid,
-                state.foreground_pgid,
+                presence.controlling_sid,
+                presence.foreground_pgid,
             )
         };
         if is_background && tostop {
@@ -405,9 +398,7 @@ impl ConsoleNode {
 
     #[cfg(test)]
     fn set_tty_owner_for_test(sid: Option<u32>, fg_pgid: Option<u32>) {
-        let mut st = CONSOLE_TTY_STATE.lock();
-        st.controlling_sid = sid;
-        st.foreground_pgid = fg_pgid;
+        crate::presence::set_console_presence_for_test(sid, fg_pgid);
     }
 }
 
@@ -433,7 +424,7 @@ impl VfsNode for ConsoleNode {
             // consistent across one drain + one dequeue pass.
             let tty_state = CONSOLE_TTY_STATE.lock();
             let termios = tty_state.termios;
-            let foreground_pgid = tty_state.foreground_pgid;
+            let foreground_pgid = crate::presence::console_foreground_pgid();
             drop(tty_state);
 
             let canonical = termios.c_lflag & ICANON != 0;
@@ -682,11 +673,10 @@ impl VfsNode for ConsoleNode {
 
                 let caller = caller.ok_or(abi::errors::Errno::ENOTTY)?;
                 let fg_pgid = {
-                    let st = CONSOLE_TTY_STATE.lock();
-                    if st.controlling_sid != Some(caller.sid) {
+                    if !crate::presence::caller_in_controlling_console_session(caller.sid) {
                         return Err(abi::errors::Errno::ENOTTY);
                     }
-                    st.foreground_pgid.ok_or(abi::errors::Errno::ENOTTY)?
+                    crate::presence::console_foreground_pgid().ok_or(abi::errors::Errno::ENOTTY)?
                 };
 
                 unsafe {
@@ -718,8 +708,7 @@ impl VfsNode for ConsoleNode {
                 }
 
                 {
-                    let st = CONSOLE_TTY_STATE.lock();
-                    if st.controlling_sid != Some(caller.sid) {
+                    if !crate::presence::caller_in_controlling_console_session(caller.sid) {
                         return Err(abi::errors::Errno::ENOTTY);
                     }
                 }
@@ -728,7 +717,7 @@ impl VfsNode for ConsoleNode {
                     return Err(abi::errors::Errno::EPERM);
                 }
 
-                CONSOLE_TTY_STATE.lock().foreground_pgid = Some(new_pgid);
+                crate::presence::set_console_foreground_pgid(new_pgid);
                 Ok(0)
             }
             _ => Err(abi::errors::Errno::ENOSYS),
