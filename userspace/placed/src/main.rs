@@ -78,7 +78,13 @@ fn main(_arg: usize) -> ! {
         | abi::vfs_watch::mask::DELETE_SELF
         | abi::vfs_watch::mask::MOVE_SELF
         | abi::vfs_watch::mask::UNMOUNT;
-    let mut watch_fd = vfs_watch_path("/session/seat0/presences", watch_mask, 0).ok();
+    let mut watch_fd = match vfs_watch_path("/session/seat0/presences", watch_mask, 0) {
+        Ok(fd) => Some(fd),
+        Err(e) => {
+            warn!("placed: failed to watch presences dir: {:?}", e);
+            None
+        }
+    };
 
     let mut presences_fd = vfs_open("/session/seat0/presences", O_RDONLY).ok();
     let mut mode_fd = vfs_open("/session/seat0/presentation_mode", O_CREAT | O_RDWR).ok();
@@ -101,7 +107,8 @@ fn main(_arg: usize) -> ! {
                     let _ = vfs_read(fd, &mut watch_buf);
                 }
                 Ok(_) => {}
-                Err(_) => {
+                Err(e) => {
+                    warn!("placed: watch poll failed: {:?}, falling back to sleep", e);
                     let _ = vfs_close(fd);
                     watch_fd = None;
                     stem::time::sleep_ms(FALLBACK_SLEEP_MS);
@@ -139,6 +146,7 @@ fn main(_arg: usize) -> ! {
                 if write_policy_value(fd, mode_str).is_ok() {
                     last_mode = Some(mode_str);
                 } else {
+                    warn!("placed: failed writing presentation_mode");
                     let _ = vfs_close(fd);
                     mode_fd = None;
                 }
@@ -153,6 +161,7 @@ fn main(_arg: usize) -> ! {
                 if write_policy_value(fd, occupied_str).is_ok() {
                     last_occupied = Some(occupied_str);
                 } else {
+                    warn!("placed: failed writing occupied");
                     let _ = vfs_close(fd);
                     occupied_fd = None;
                 }
