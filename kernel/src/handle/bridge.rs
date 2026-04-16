@@ -59,12 +59,15 @@ fn classify_file_like(node: &Arc<dyn crate::vfs::VfsNode>) -> HandleKind {
 
 fn lookup_ipc_entry_any(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
     let ipc_handle = crate::ipc::IpcThing(handle.0);
+    // Keep this lock scope tiny: copy the entry and drop immediately.
+    // This path is intentionally short because it sits on syscall hot paths.
     let table = crate::ipc::GLOBAL_THING_TABLE.lock();
     table.get_any(ipc_handle).copied().ok_or(Errno::EBADF)
 }
 
 fn lookup_ipc_entry_write(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
     let ipc_handle = crate::ipc::IpcThing(handle.0);
+    // Keep this lock scope tiny: copy the entry and drop immediately.
     let table = crate::ipc::GLOBAL_THING_TABLE.lock();
     table
         .get(ipc_handle, crate::ipc::IpcThingMode::Write)
@@ -173,7 +176,7 @@ mod tests {
         }
     }
 
-    fn make_process_info_with_nodes(
+    fn make_test_process_info(
         nodes: &[(u32, Arc<dyn VfsNode>)],
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
         let mut thing_table = ThingTable::new();
@@ -197,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_handle_prefers_process_table_over_global_ipc_table() {
+    fn test_resolve_handle_prefers_process_table_over_global_ipc_table() {
         let port_id = crate::ipc::create_port(8);
         let handle = {
             let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
@@ -207,7 +210,7 @@ mod tests {
         };
 
         let node: Arc<dyn VfsNode> = Arc::new(NullNode);
-        let pinfo = make_process_info_with_nodes(&[(handle.0, node)]);
+        let pinfo = make_test_process_info(&[(handle.0, node)]);
         let resolved = resolve_handle(&pinfo, Handle(handle.0)).expect("resolve");
         assert_eq!(resolved.kind(), HandleKind::File);
 
@@ -219,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn install_fd_compat_for_channel_handle_creates_port_backed_fd() {
+    fn test_install_fd_compat_for_channel_handle_creates_port_backed_fd() {
         let port_id = crate::ipc::create_port(8);
         let handle = {
             let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
@@ -228,7 +231,7 @@ mod tests {
                 .expect("allocate handle")
         };
 
-        let pinfo = make_process_info_with_nodes(&[]);
+        let pinfo = make_test_process_info(&[]);
         let fd = install_fd_compat_for_channel_handle(&pinfo, Handle(handle.0)).expect("fd");
 
         let lock = pinfo.lock();
