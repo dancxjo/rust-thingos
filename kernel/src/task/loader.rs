@@ -458,6 +458,135 @@ pub fn extract_interp_path(bytes: &[u8]) -> Option<alloc::vec::Vec<u8>> {
     None
 }
 
+/// Resolve an ELF64 symbol by name and return its virtual address (file-relative,
+/// before load bias is applied).
+///
+/// Scans both the static symbol table (`.symtab`, section type `SHT_SYMTAB = 2`)
+/// and the dynamic symbol table (`.dynsym`, section type `SHT_DYNSYM = 11`).
+/// Returns the first symbol whose name matches `target` and whose `st_value`
+/// is non-zero.
+///
+/// Returns `None` when:
+/// - the ELF cannot be parsed,
+/// - no matching symbol is found, or
+/// - the symbol table structures are out of range.
+pub fn resolve_elf64_symbol(bytes: &[u8], target: &str) -> Option<u64> {
+    if bytes.len() < 64 {
+        return None;
+    }
+    if &bytes[0..4] != b"\x7fELF" {
+        return None;
+    }
+    // Must be ELF64 little-endian.
+    if bytes[4] != 2 || bytes[5] != 1 {
+        return None;
+    }
+
+    // ELF64 header fields.
+    let e_shoff = read_u64(bytes, 40)? as usize;
+    let e_shentsize = read_u16(bytes, 58)? as usize;
+    let e_shnum = read_u16(bytes, 60)? as usize;
+    let e_shstrndx = read_u16(bytes, 62)? as usize;
+
+    if e_shoff == 0 || e_shentsize < 64 || e_shnum == 0 {
+        return None;
+    }
+
+    // Section-header string table: find its file offset.
+    let shstr_sh_off = e_shoff.saturating_add(e_shstrndx.saturating_mul(e_shentsize));
+    if shstr_sh_off + e_shentsize > bytes.len() {
+        return None;
+    }
+    let shstr_offset = read_u64(bytes, shstr_sh_off + 24)? as usize;
+    let shstr_size = read_u64(bytes, shstr_sh_off + 32)? as usize;
+    if shstr_offset + shstr_size > bytes.len() {
+        return None;
+    }
+
+    // Walk section headers to find SYMTAB (2) and DYNSYM (11) sections.
+    for i in 0..e_shnum {
+        let sh_off = e_shoff.saturating_add(i.saturating_mul(e_shentsize));
+        if sh_off + e_shentsize > bytes.len() {
+            break;
+        }
+        let sh_type = read_u32(bytes, sh_off + 4)?;
+        // SHT_SYMTAB = 2, SHT_DYNSYM = 11
+        if sh_type != 2 && sh_type != 11 {
+            continue;
+        }
+
+        // sh_link holds the index of the associated string table section.
+        let sh_link = read_u32(bytes, sh_off + 40)? as usize;
+        let strtab_sh_off = e_shoff.saturating_add(sh_link.saturating_mul(e_shentsize));
+        if strtab_sh_off + e_shentsize > bytes.len() {
+            continue;
+        }
+        let strtab_offset = read_u64(bytes, strtab_sh_off + 24)? as usize;
+        let strtab_size = read_u64(bytes, strtab_sh_off + 32)? as usize;
+        if strtab_offset + strtab_size > bytes.len() {
+            continue;
+        }
+
+        let sym_offset = read_u64(bytes, sh_off + 24)? as usize;
+        let sym_size = read_u64(bytes, sh_off + 32)? as usize;
+        // ELF64 Sym entry is 24 bytes.
+        const SYM_ENTRY_SIZE: usize = 24;
+        if sym_size == 0 || sym_offset + sym_size > bytes.len() {
+            continue;
+        }
+        let sym_count = sym_size / SYM_ENTRY_SIZE;
+
+        for s in 0..sym_count {
+            let se = sym_offset.saturating_add(s.saturating_mul(SYM_ENTRY_SIZE));
+            if se + SYM_ENTRY_SIZE > bytes.len() {
+                break;
+            }
+            let st_name = read_u32(bytes, se)? as usize;
+            let st_value = read_u64(bytes, se + 8)?;
+            if st_value == 0 {
+                continue;
+            }
+            // Read the null-terminated symbol name from the string table.
+            let name_off = strtab_offset.saturating_add(st_name);
+            if name_off >= bytes.len() {
+                continue;
+            }
+            let name_end = bytes[name_off..]
+                .iter()
+                .position(|&b| b == 0)
+                .map(|n| name_off + n)
+                .unwrap_or(bytes.len());
+            if let Ok(name) = core::str::from_utf8(&bytes[name_off..name_end]) {
+                if name == target {
+                    return Some(st_value);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns `true` when the ELF binary at `bytes` contains a symbol named
+/// `target` with a non-zero value.
+///
+/// Cheaper to call than [`resolve_elf64_symbol`] when only presence matters.
+pub fn elf64_has_symbol(bytes: &[u8], target: &str) -> bool {
+    resolve_elf64_symbol(bytes, target).is_some()
+}
+
+/// Read the `e_entry` field from an ELF64 header.
+///
+/// Returns `None` when `bytes` is too short or is not a valid ELF64 LE image.
+pub fn read_elf64_entry(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() < 64 {
+        return None;
+    }
+    if &bytes[0..4] != b"\x7fELF" || bytes[4] != 2 || bytes[5] != 1 {
+        return None;
+    }
+    read_u64(bytes, 24)
+}
+
 fn align_up_u64(value: u64, align: u64) -> u64 {
     if align == 0 {
         return value;

@@ -1142,6 +1142,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
     fd_remap: Vec<abi::types::ThingRemap>,
+    entry_sym_override: Option<alloc::string::String>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
     // Step 1: Open the executable from the VFS.
     let node = crate::vfs::mount::lookup(path).map_err(|_| abi::errors::Errno::ENOENT)?;
@@ -1189,9 +1190,47 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         kind: crate::BootModuleKind::Elf,
     };
 
-    let (entry, stack_info, regions, aux_info) =
+    let (mut entry, stack_info, regions, aux_info) =
         crate::task::loader::load_module(rt, aspace, &module_desc)
             .ok_or(abi::errors::Errno::ENOEXEC)?;
+
+    // If the caller requested a specific driver entrypoint symbol, resolve it
+    // from the binary bytes and override the default ELF e_entry.  The symbol
+    // value is the file-relative VMA; the load bias is (load_base - min_vaddr)
+    // which `load_module` hard-codes to `0x200000 - min_vaddr`.  We derive it
+    // as `aux_info.entry_vaddr - elf_e_entry`, but the simpler approach is to
+    // re-read the min_vaddr directly from the binary.
+    if let Some(sym_name) = &entry_sym_override {
+        if let Some(sym_vaddr) =
+            crate::task::loader::resolve_elf64_symbol(&buffer, sym_name.as_str())
+        {
+            // Compute load bias: default load base is 0x200000; subtract min_vaddr.
+            // The helper returns the file-relative VMA so we apply the same bias
+            // that load_module_at used.
+            let default_load_base: u64 = 0x200000;
+            // We need min_vaddr.  Since we already loaded the binary and have
+            // aux_info.entry_vaddr == elf_e_entry + bias, derive bias as:
+            //   bias = entry_vaddr - (elf_e_entry from binary)
+            // We don't have elf_e_entry separately, but we can re-read it cheaply.
+            let elf_e_entry = crate::task::loader::read_elf64_entry(&buffer).unwrap_or(0);
+            let load_bias = if elf_e_entry != 0 {
+                (aux_info.entry_vaddr as i64).wrapping_sub(elf_e_entry as i64) as u64
+            } else {
+                default_load_base
+            };
+            let resolved_pc = sym_vaddr.wrapping_add(load_bias) as usize;
+            crate::kdebug!(
+                "SPAWN: driver entrypoint override '{}' => VA 0x{:x} + bias 0x{:x} = PC 0x{:x}",
+                sym_name, sym_vaddr, load_bias, resolved_pc
+            );
+            entry.entry_pc = resolved_pc;
+        } else {
+            crate::kerror!(
+                "SPAWN: entry symbol '{}' not found in '{}'; using default entry",
+                sym_name, path
+            );
+        }
+    }
 
     // Step 4: Create the scheduler task for the new process's initial thread.
     let _irq = rt.irq_disable();
@@ -1678,6 +1717,7 @@ mod tests {
                 alloc::vec![],
                 None,
                 alloc::vec![],
+                None,
             )
         };
 
@@ -1745,6 +1785,7 @@ mod tests {
                 alloc::vec![],
                 None,
                 alloc::vec![],
+                None,
             )
         };
 
@@ -1779,6 +1820,7 @@ mod tests {
                 alloc::vec![],
                 None,
                 alloc::vec![],
+                None,
             )
         };
 

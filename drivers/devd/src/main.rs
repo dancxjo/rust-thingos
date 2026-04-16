@@ -1,30 +1,158 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
-
 mod binding;
+mod catalog;
 mod spawn;
 mod sysfs;
 
 use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use binding::{match_binding, mount_hint};
+use catalog::Catalog;
 use spawn::ManagedDriver;
-use stem::{debug, info, warn};
-use sysfs::scan_devices;
+use stem::{debug, error, warn};
+use sysfs::{scan_devices, SysDevice};
+
+/// How many main-loop ticks between full catalog rescans.
+/// At 100 ms per tick this is ~30 seconds.
+const CATALOG_RESCAN_TICKS: u32 = 300;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    debug!("DEVD: starting device discovery manager");
+    // ── Parse argv ──────────────────────────────────────────────────────────
+    let args = get_args();
 
-    let mut drivers: BTreeMap<alloc::string::String, ManagedDriver> = BTreeMap::new();
+    if args.len() >= 2 {
+        // Manual mode: `devd <driver-path> [<device-slot>]`
+        //
+        // Reads the named binary, verifies it exports THING_DRIVER_V1, finds
+        // all matching devices in /sys/devices (or the explicitly named slot),
+        // spawns it via thing_driver_entry_v1, and monitors the process.
+        let driver_path = &args[1];
+        let slot_filter: Option<&str> = if args.len() >= 3 { Some(&args[2]) } else { None };
+        run_manual_mode(driver_path, slot_filter);
+    } else {
+        // Daemon mode: autonomously scan /drivers and bind devices.
+        run_daemon_mode();
+    }
+}
+
+// ── Manual mode ─────────────────────────────────────────────────────────────
+
+/// `devd <driver-path> [slot]`
+///
+/// 1. Inspect the binary at `driver_path` for the `THING_DRIVER_V1` marker.
+/// 2. Enumerate `/sys/devices` and find devices that match the driver's hints
+///    (or use `slot` directly when provided).
+/// 3. Spawn the driver via its `thing_driver_entry_v1` entrypoint for each
+///    matching device and monitor it — restarting on exit while the device is
+///    still present.
+fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
+    debug!("DEVD: manual mode, driver={}", driver_path);
+
+    // Resolve to an absolute path if needed.
+    let abs_path: String = if driver_path.starts_with('/') {
+        driver_path.to_string()
+    } else {
+        alloc::format!("/drivers/{}", driver_path)
+    };
+
+    // Inspect the binary.
+    let mut catalog = Catalog::new();
+    let entry = match catalog.inspect_binary_path(&abs_path) {
+        Some(e) => e.clone(),
+        None => {
+            error!(
+                "DEVD: '{}' does not export THING_DRIVER_V1 or could not be read",
+                abs_path
+            );
+            stem::syscall::exit(1);
+        }
+    };
+
+    debug!(
+        "DEVD: driver '{}' vendor=0x{:04x} device=0x{:04x} class=0x{:06x} entry='{}'",
+        abs_path, entry.vendor_id, entry.device_id, entry.class_code, entry.entry_symbol
+    );
+
+    // Find matching devices.
+    let devices = match scan_devices() {
+        Ok(d) => d,
+        Err(e) => {
+            error!("DEVD: failed to scan /sys/devices: {:?}", e);
+            stem::syscall::exit(1);
+        }
+    };
+
+    let mut managed: Vec<ManagedDriver> = devices
+        .into_iter()
+        .filter(|d| {
+            d.present
+                && slot_filter.map_or(true, |s| d.slot == s)
+                && entry.matches_pci(d.vendor_id, d.device_id, d.class_code)
+        })
+        .map(|d| {
+            ManagedDriver::new_from_catalog(&d, abs_path.clone(), entry.entry_symbol.clone(), None)
+        })
+        .collect();
+
+    if managed.is_empty() {
+        if let Some(slot) = slot_filter {
+            // If an explicit slot was given, try to run the driver for it
+            // regardless of the marker's match hints — the user said to do it.
+            debug!("DEVD: no match by hints for slot '{}'; spawning anyway (explicit override)", slot);
+            // Create a synthetic device record from what we know.
+            let fake_device = SysDevice {
+                slot: slot.to_string(),
+                vendor_id: 0,
+                device_id: 0,
+                class_code: 0,
+                present: true,
+            };
+            managed.push(ManagedDriver::new_from_catalog(
+                &fake_device,
+                abs_path.clone(),
+                entry.entry_symbol.clone(),
+                None,
+            ));
+        } else {
+            warn!("DEVD: no matching devices found for driver '{}'", abs_path);
+            stem::syscall::exit(0);
+        }
+    }
+
+    // Start all matched drivers.
+    for m in &mut managed {
+        m.ensure_running();
+    }
+
+    // Monitor loop — restart on exit while device is still present.
+    loop {
+        for m in &mut managed {
+            m.monitor();
+        }
+        stem::time::sleep_ms(100);
+    }
+}
+
+// ── Daemon mode ──────────────────────────────────────────────────────────────
+
+fn run_daemon_mode() -> ! {
+    debug!("DEVD: starting device discovery manager (daemon mode)");
+
+    let mut drivers: BTreeMap<String, ManagedDriver> = BTreeMap::new();
+    let mut catalog = Catalog::new();
+    let mut tick: u32 = 0;
+
+    // Initial catalog scan.
+    catalog.scan();
 
     loop {
         match scan_devices() {
-            Ok(devices) => reconcile_devices(&mut drivers, devices),
+            Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
             Err(err) => warn!("DEVD: scan of /sys/devices failed: {:?}", err),
         }
 
@@ -32,13 +160,20 @@ fn main(_arg: usize) -> ! {
             managed.monitor();
         }
 
+        tick = tick.wrapping_add(1);
+        if tick % CATALOG_RESCAN_TICKS == 0 {
+            debug!("DEVD: rescanning driver catalog");
+            catalog.scan();
+        }
+
         stem::time::sleep_ms(100);
     }
 }
 
 fn reconcile_devices(
-    drivers: &mut BTreeMap<alloc::string::String, ManagedDriver>,
-    devices: Vec<sysfs::SysDevice>,
+    drivers: &mut BTreeMap<String, ManagedDriver>,
+    catalog: &Catalog,
+    devices: Vec<SysDevice>,
 ) {
     let mut seen = BTreeMap::new();
 
@@ -47,10 +182,31 @@ fn reconcile_devices(
         if !device.present {
             continue;
         }
+
+        // First try the symbol-based catalog (new path).
+        if let Some(entry) = catalog.find_for_pci(
+            device.vendor_id,
+            device.device_id,
+            device.class_code,
+        ) {
+            let managed = drivers
+                .entry(device.slot.clone())
+                .or_insert_with(|| {
+                    ManagedDriver::new_from_catalog(
+                        &device,
+                        entry.path.clone(),
+                        entry.entry_symbol.clone(),
+                        None,
+                    )
+                });
+            managed.ensure_running();
+            continue;
+        }
+
+        // Fall back to the legacy static binding table.
         let Some(binding) = match_binding(&device) else {
             continue;
         };
-
         let mount_path = mount_hint(binding, &device);
         let managed = drivers
             .entry(device.slot.clone())
@@ -70,4 +226,21 @@ fn reconcile_devices(
             managed.mark_removed();
         }
     }
+}
+
+// ── argv helper ──────────────────────────────────────────────────────────────
+
+fn get_args() -> Vec<String> {
+    let len = match stem::syscall::argv_get(&mut []) {
+        Ok(l) if l > 0 => l,
+        _ => return Vec::new(),
+    };
+    let mut buf = alloc::vec![0u8; len];
+    if stem::syscall::argv_get(&mut buf).is_err() {
+        return Vec::new();
+    }
+    stem::utils::parse_argv(&buf)
+        .into_iter()
+        .map(|b| core::str::from_utf8(b).unwrap_or("").to_string())
+        .collect()
 }
