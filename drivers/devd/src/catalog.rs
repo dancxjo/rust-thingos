@@ -88,7 +88,7 @@ impl DriverEntry {
                 }
                 score += 300;
             }
-            // tie-break on abi and deterministic name length
+            // small tie-break preference on abi version
             return score.saturating_add(self.abi_version.min(50));
         }
 
