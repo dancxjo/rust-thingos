@@ -843,15 +843,19 @@ pub fn preempt_enable<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
 
-    let switch_params = {
+    let (switch_params, deferred_prepare_ipis) = {
         let lock = crate::sched::SCHEDULER.lock();
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-            sched.preempt_enable()
+            let switch = sched.preempt_enable();
+            let deferred_prepare_ipis =
+                core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            (switch, deferred_prepare_ipis)
         } else {
-            None
+            (None, alloc::vec::Vec::new())
         }
     };
+    crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(switch) = switch_params {
         let cr3_before = rt.debug_active_aspace_root();
@@ -880,15 +884,19 @@ pub fn resched_if_needed<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
 
-    let switch_params = {
+    let (switch_params, deferred_prepare_ipis) = {
         let lock = crate::sched::SCHEDULER.lock();
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-            sched.schedule_point(crate::sched::ScheduleReason::ReschedIfNeeded)
+            let switch = sched.schedule_point(crate::sched::ScheduleReason::ReschedIfNeeded);
+            let deferred_prepare_ipis =
+                core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            (switch, deferred_prepare_ipis)
         } else {
-            None
+            (None, alloc::vec::Vec::new())
         }
     };
+    crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(switch) = switch_params {
         let cr3_before = rt.debug_active_aspace_root();

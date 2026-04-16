@@ -41,7 +41,7 @@ pub fn block_current<R: BootRuntime>() {
     // false → task is blocking; write Blocked state to REGISTRY.
     let mut was_wake_pending = false;
 
-    let switch_params = {
+    let (switch_params, deferred_prepare_ipis) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::record_sched_lock_wait::<R>(
@@ -94,11 +94,13 @@ pub fn block_current<R: BootRuntime>() {
                 lock_start,
             );
             // Return None (no context switch); deferred REGISTRY clear handled below.
-            None
+            let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            (None, deferred_prepare_ipis)
         } else {
             // Add to wait queue and pick next task to run.
             sched.state.wait_queue.push_back(current_id);
             let switch = sched.prepare_schedule();
+            let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
             super::record_sched_lock_hold::<R>(
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
@@ -106,7 +108,7 @@ pub fn block_current<R: BootRuntime>() {
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                 lock_start,
             );
-            switch
+            (switch, deferred_prepare_ipis)
         }
     };
     // SCHEDULER lock is released here.
@@ -127,6 +129,7 @@ pub fn block_current<R: BootRuntime>() {
             }
         }
     }
+    super::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(switch) = switch_params {
         rt.tasking().activate_address_space(switch.to_aspace);

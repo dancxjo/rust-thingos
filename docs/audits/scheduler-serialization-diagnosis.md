@@ -111,3 +111,25 @@
   2. Keep wakeup-to-last_cpu locality but add optional steal/rebalance when one CPU is overloaded.
   3. Use collected lock telemetry to split global scheduler lock hot path if contention remains high.
   4. Re-check sprout/orchestrator dependency chain to reduce single-service serialized startup work.
+
+## 5) SMP 7/8 lock-splitting follow-up
+
+- **Highest-contention hot path targeted**
+  - `prepare_schedule` misroute requeue path in `kernel/src/sched/mod.rs` previously called
+    `send_ipi` while the global `SCHEDULER` mutex was held.
+  - This put cross-CPU nudge delivery in the enqueue/pick critical section and amplified
+    lock hold time under misroute pressure.
+
+- **Change made**
+  - Misroute IPIs are now queued in `pending_prepare_schedule_ipis` under lock and sent only
+    after unlocking (same pattern already used by `wake_sleepers`).
+  - Lock-owning call sites (`try_resched_if_needed`, `yield_now`, `sleep_ticks`,
+    `block_current`, `preempt_enable`, `resched_if_needed`, and `exit`) now drain/send this
+    deferred queue after dropping `SCHEDULER`.
+
+- **Telemetry expectation / before-after signal**
+  - Under pressure workloads, lock hold histograms should shrink in the `yield_now` /
+    `sleep_ticks` / preemption paths because remote IPI send latency is no longer paid while
+    holding `SCHEDULER`.
+  - Deferred dispatch pressure should improve indirectly (fewer long lock holds → fewer
+    `try_lock` misses and blocked dispatch events).
