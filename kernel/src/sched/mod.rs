@@ -4720,6 +4720,37 @@ mod tests {
     }
 
     #[test]
+    fn test_list_processes_projects_place_and_authority_from_process_aggregator() {
+        let _g = init_test_env();
+
+        let mut leader = make_process_task(1230, TaskState::Running, 1230, 1, None);
+        let pinfo = leader.process_info.as_ref().unwrap();
+        {
+            let mut pi = pinfo.lock();
+            pi.cwd = alloc::string::String::from("/work");
+            pi.root = alloc::string::String::from("/srv/chroot");
+            pi.exec_path = alloc::string::String::from("/bin/demo");
+            pi.authority.uid = 1000;
+            pi.authority.gid = 1001;
+            pi.authority.capability_mask = 0x24;
+            pi.namespace = crate::vfs::NamespaceRef::isolated();
+        }
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(leader));
+
+        let snapshots = list_processes::<MockRuntime>();
+        assert_eq!(snapshots.len(), 1);
+        let snap = &snapshots[0];
+        assert_eq!(snap.pid, 1230);
+        assert_eq!(snap.cwd, "/work");
+        assert_eq!(snap.root_path, "/srv/chroot");
+        assert_eq!(snap.exec_path, "/bin/demo");
+        assert_eq!(snap.uid, 1000);
+        assert_eq!(snap.gid, 1001);
+        assert_eq!(snap.capability_mask, 0x24);
+        assert_ne!(snap.namespace_label, "global");
+    }
+
+    #[test]
     fn test_waitpid_returns_exit_code_for_dead_specific_child() {
         let _g = init_test_env();
 
