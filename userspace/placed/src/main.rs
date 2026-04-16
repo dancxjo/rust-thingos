@@ -24,7 +24,7 @@ pub fn derive_policy(presence_count: usize) -> (&'static str, &'static str) {
 
 fn count_presences(dir_fd: u32) -> Result<usize, abi::errors::Errno> {
     let mut presence_count = 0;
-    let _ = vfs_seek(dir_fd, 0, 0);
+    vfs_seek(dir_fd, 0, 0)?;
     let mut buf = [0u8; 4096];
     let n = vfs_readdir(dir_fd, &mut buf)?;
     let mut offset = 0;
@@ -48,9 +48,9 @@ fn count_presences(dir_fd: u32) -> Result<usize, abi::errors::Errno> {
 }
 
 fn write_policy_value(fd: u32, value: &'static str) -> Result<(), abi::errors::Errno> {
-    let _ = vfs_seek(fd, 0, 0)?;
+    vfs_seek(fd, 0, 0)?;
     vfs_ftruncate(fd, 0)?;
-    let _ = vfs_write(fd, value.as_bytes())?;
+    vfs_write(fd, value.as_bytes())?;
     Ok(())
 }
 
