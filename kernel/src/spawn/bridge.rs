@@ -44,9 +44,9 @@ impl SpawnRecord {
     }
 }
 
-/// Clone the current process's immutable spawn record.
-pub fn spawn_record_for_current() -> Option<SpawnRecord> {
-    crate::sched::process_info_current().map(|pi| pi.lock().unix_compat.spawn_record().clone())
+/// Borrow typed spawn metadata from process backing.
+pub fn spawn_record_from_process(process: &crate::task::Process) -> &SpawnRecord {
+    process.unix_compat.spawn_record()
 }
 
 #[cfg(test)]
