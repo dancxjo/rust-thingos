@@ -235,11 +235,10 @@ pub fn task_exec_current<R: BootRuntime>(
     {
         let page_size = rt.page_size() as u64;
         let mut pinfo = pinfo_arc.lock();
-        pinfo.unix_compat.argv = argv;
         pinfo.unix_compat.env = env;
         // Rebuild auxv from freshly loaded image.  AT_* constants follow
         // the standard ELF auxiliary-vector specification (see elf.h).
-        pinfo.unix_compat.auxv = build_auxv(&aux_info, page_size);
+        pinfo.unix_compat.set_spawn_context(argv, build_auxv(&aux_info, page_size));
         // Record the executable path for /proc/self/exe.
         pinfo.exec_path = exec_fd_path;
         // Close all file descriptors marked THING_CLOEXEC before the new image runs.
@@ -928,16 +927,15 @@ mod tests {
             job: crate::task::ProcessLifecycle::new(1, pid as crate::task::TaskId),
             unix_compat: {
                 let mut uc = crate::task::ProcessUnixCompat::isolated(pid, false);
-                uc.argv = alloc::vec![
-                    b"old_binary".to_vec(),
-                    b"--old-arg".to_vec(),
-                ];
+                uc.set_spawn_context(
+                    alloc::vec![b"old_binary".to_vec(), b"--old-arg".to_vec()],
+                    alloc::vec![(AT_PAGESZ, 4096), (AT_ENTRY, 0x1000)],
+                );
                 uc.env = {
                     let mut m = alloc::collections::BTreeMap::new();
                     m.insert(b"OLD_VAR".to_vec(), b"old_value".to_vec());
                     m
                 };
-                uc.auxv = alloc::vec![(AT_PAGESZ, 4096), (AT_ENTRY, 0x1000)];
                 uc
             },
             thing_table,
@@ -961,7 +959,7 @@ mod tests {
     fn exec_commit_replaces_argv() {
         let pinfo = make_pinfo_with_metadata(9500);
 
-        let old_argv = pinfo.lock().unix_compat.argv.clone();
+        let old_argv = pinfo.lock().unix_compat.spawn_record().argv().to_vec();
         assert_eq!(old_argv[0], b"old_binary");
 
         // Simulate exec commit: replace argv.
@@ -969,14 +967,14 @@ mod tests {
             b"new_binary".to_vec(),
             b"--new-arg1".to_vec(),
         ];
-        pinfo.lock().unix_compat.argv = new_argv.clone();
+        pinfo.lock().unix_compat.set_spawn_context(new_argv.clone(), alloc::vec![]);
 
         let pi = pinfo.lock();
-        assert_eq!(pi.unix_compat.argv, new_argv, "argv must be completely replaced after exec");
-        assert_ne!(pi.unix_compat.argv, old_argv, "old argv must not survive exec commit");
+        assert_eq!(pi.unix_compat.spawn_record().argv(), new_argv, "argv must be completely replaced after exec");
+        assert_ne!(pi.unix_compat.spawn_record().argv(), old_argv, "old argv must not survive exec commit");
         // Old argv must not appear anywhere in the new argv
         assert!(
-            !pi.unix_compat.argv.iter().any(|a| a == b"old_binary"),
+            !pi.unix_compat.spawn_record().argv().iter().any(|a| a == b"old_binary"),
             "old binary name must not remain in argv after exec"
         );
     }
@@ -1037,7 +1035,7 @@ mod tests {
         let pinfo = make_pinfo_with_metadata(9530);
 
         // Pre-exec: auxv references the old image entry point.
-        assert!(pinfo.lock().unix_compat.auxv.contains(&(AT_ENTRY, 0x1000)));
+        assert!(pinfo.lock().unix_compat.spawn_record().auxv().contains(&(AT_ENTRY, 0x1000)));
 
         // Simulate exec commit: rebuild auxv from new image.
         let new_info = LoaderAuxInfo {
@@ -1048,16 +1046,16 @@ mod tests {
             ..Default::default()
         };
         let new_auxv = build_auxv(&new_info, 4096);
-        pinfo.lock().unix_compat.auxv = new_auxv.clone();
+        pinfo.lock().unix_compat.set_spawn_context(alloc::vec![], new_auxv.clone());
 
         let pi = pinfo.lock();
-        assert_eq!(pi.unix_compat.auxv, new_auxv, "auxv must be completely replaced after exec");
+        assert_eq!(pi.unix_compat.spawn_record().auxv(), new_auxv, "auxv must be completely replaced after exec");
         assert!(
-            !pi.unix_compat.auxv.contains(&(AT_ENTRY, 0x1000)),
+            !pi.unix_compat.spawn_record().auxv().contains(&(AT_ENTRY, 0x1000)),
             "old AT_ENTRY value must not survive exec commit"
         );
         assert!(
-            pi.unix_compat.auxv.contains(&(AT_ENTRY, 0x401000)),
+            pi.unix_compat.spawn_record().auxv().contains(&(AT_ENTRY, 0x401000)),
             "new AT_ENTRY must be present after exec"
         );
     }
@@ -1071,10 +1069,10 @@ mod tests {
         // Verify all pre-exec metadata is present before the commit.
         {
             let pi = pinfo.lock();
-            assert_eq!(pi.unix_compat.argv[0], b"old_binary");
+            assert_eq!(pi.unix_compat.spawn_record().argv()[0], b"old_binary");
             assert!(pi.unix_compat.env.contains_key(b"OLD_VAR".as_slice()));
             assert_eq!(pi.exec_path, "/old/binary");
-            assert!(pi.unix_compat.auxv.contains(&(AT_ENTRY, 0x1000)));
+            assert!(pi.unix_compat.spawn_record().auxv().contains(&(AT_ENTRY, 0x1000)));
             assert_eq!(pi.space.aspace_raw(), 0xDEAD_0000u64);
         }
 
@@ -1090,9 +1088,8 @@ mod tests {
 
         {
             let mut pi = pinfo.lock();
-            pi.unix_compat.argv = new_argv.clone();
+            pi.unix_compat.set_spawn_context(new_argv.clone(), new_auxv.clone());
             pi.unix_compat.env = new_env.clone();
-            pi.unix_compat.auxv = new_auxv.clone();
             pi.exec_path = alloc::string::String::from("/new/binary");
             pi.thing_table.close_on_exec();
             pi.job.exec_in_progress = false;
@@ -1103,9 +1100,9 @@ mod tests {
         let pi = pinfo.lock();
 
         // argv: old binary name must be gone, new one present
-        assert_eq!(pi.unix_compat.argv, new_argv, "argv not replaced");
+        assert_eq!(pi.unix_compat.spawn_record().argv(), new_argv, "argv not replaced");
         assert!(
-            !pi.unix_compat.argv.iter().any(|a| a == b"old_binary"),
+            !pi.unix_compat.spawn_record().argv().iter().any(|a| a == b"old_binary"),
             "stale argv entry 'old_binary' found after exec"
         );
 
@@ -1125,11 +1122,11 @@ mod tests {
 
         // auxv: old AT_ENTRY must be gone
         assert!(
-            !pi.unix_compat.auxv.contains(&(AT_ENTRY, 0x1000)),
+            !pi.unix_compat.spawn_record().auxv().contains(&(AT_ENTRY, 0x1000)),
             "stale auxv AT_ENTRY value found after exec"
         );
         assert!(
-            pi.unix_compat.auxv.contains(&(AT_ENTRY, 0x402000)),
+            pi.unix_compat.spawn_record().auxv().contains(&(AT_ENTRY, 0x402000)),
             "new AT_ENTRY missing from auxv after exec"
         );
 
@@ -1177,7 +1174,7 @@ mod tests {
             },
             unix_compat: {
                 let mut uc = crate::task::ProcessUnixCompat::isolated(9600, false);
-                uc.argv = alloc::vec![b"old".to_vec()];
+                uc.set_spawn_context(alloc::vec![b"old".to_vec()], alloc::vec![]);
                 uc
             },
             thing_table: crate::vfs::thing_table::ThingTable::new(),

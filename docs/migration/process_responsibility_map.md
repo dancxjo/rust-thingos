@@ -64,9 +64,9 @@ The table below covers every field currently present in `Process`
 | `sid: u32`                          | Session ID              | Group            | **bridged** ✓      | Surfaced through `kernel::group::bridge`; raw field is quarantined Unix state.            |
 | `session_leader: bool`              | TTY foreground proxy    | Group            | **bridged** ✓      | Used as `GroupKind::Foreground` heuristic until `foreground_pgid` is queryable.           |
 | `signals: ProcessSignals`           | Signal dispositions + pending set + stop/alarm state | Legacy compat → Authority/Group | quarantine | SIGTTOU/SIGTTIN job-control is Group concern; disposition table is Authority concern; not yet split. |
-| `argv: Vec<Vec<u8>>`                | Spawn-time arg vector   | Spawn record     | quarantine         | No principled spawn-record concept yet; quarantined legacy compat.                        |
+| `spawn_record.argv: Vec<Vec<u8>>`   | Spawn-time arg vector   | Spawn record     | **bridged** ✓      | Stored in immutable typed `SpawnRecord`; canonical reads go through `kernel::spawn::bridge`. |
 | `env: BTreeMap<Vec<u8>,Vec<u8>>`    | Unix environment blob   | Legacy compat    | quarantine         | Raw key→value env map has no clean architectural home; quarantined Unix baggage. Not part of any future canonical concept until a principled env-passing design is adopted. |
-| `auxv: Vec<(u64,u64)>`              | ELF auxiliary vector    | Spawn record     | quarantine         | ELF-specific Unix compat; quarantined until a spawn-record concept exists.                |
+| `spawn_record.auxv: Vec<(u64,u64)>` | ELF auxiliary vector    | Spawn record     | **bridged** ✓      | Stored in immutable typed `SpawnRecord`; canonical reads go through `kernel::spawn::bridge`. |
 
 ### Thread fields with Process-level coupling
 
@@ -92,6 +92,7 @@ public surface** for its domain; new code must go through the bridge, not read
 | `kernel::group::bridge`             | `pgid`/`sid`/`session_leader` → `thingos::group::Group` | 4 |
 | `kernel::authority::bridge`         | `name`/`exec_path` → `thingos::authority::Authority` | 7   |
 | `kernel::place::bridge`             | `cwd`/`namespace` → `thingos::place::Place`         | 8     |
+| `kernel::spawn::bridge`             | `spawn_record(argv,auxv)` → typed immutable `SpawnRecord` | 9 |
 
 ---
 

@@ -174,6 +174,7 @@ modules**:
 | `kernel::place::bridge` | cwd / namespace → `Place` | `cwd`, `namespace` |
 | `kernel::authority::bridge` | exec path → `Authority::name` | `exec_path` |
 | `kernel::job::bridge` | lifecycle → `Job` | `lifecycle.*` |
+| `kernel::spawn::bridge` | typed immutable spawn context | `spawn_record.(argv,auxv)` |
 
 New public-facing context code must go through a bridge module, not read
 `unix_compat.*` directly.
@@ -189,8 +190,8 @@ New public-facing context code must go through a bridge module, not read
 | `session_leader` — TTY foreground flag | `Group / Presence` | Phase 5 |
 | SIGTTOU/SIGTTIN job-control | `Group / Presence` | After Group + Presence |
 | `env` — environment blob | `Place` or `Authority` context | After Place-facing env design |
-| `argv` — argument vector | Structured spawn record → `Job` | After spawn-record concept |
-| `auxv` — ELF auxiliary vector | Structured spawn record → `Job` | After spawn-record concept |
+| `spawn_record.argv` — argument vector | Structured spawn record → `Job` | `SpawnRecord` introduced (Phase 9) |
+| `spawn_record.auxv` — ELF auxiliary vector | Structured spawn record → `Job` | `SpawnRecord` introduced (Phase 9) |
 | Signal dispositions/pending | `Message / Inbox / Group broadcast` | After signal authority work |
 | `controlling_sid` | `Presence` (terminal attachment) | After Presence |
 | `foreground_pgid` | `Group` | Phase 5 |

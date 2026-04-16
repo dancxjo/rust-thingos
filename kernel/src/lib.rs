@@ -17,6 +17,7 @@ pub mod once_cell;
 pub mod place;
 pub mod signal;
 pub mod space;
+pub mod spawn;
 
 #[cfg(test)]
 mod boundary_contract;
