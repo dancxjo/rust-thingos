@@ -5335,9 +5335,13 @@ mod tests {
             sched.state.per_cpu[2].runq[TaskPriority::Normal as usize]
                 .iter()
                 .any(|&tid| tid == 9901),
-            "wakeup should enqueue Any-affinity blocked task onto last_cpu"
+            "[policy] wakeup should enqueue Any-affinity blocked task onto last_cpu"
         );
-        assert_eq!(sched.state.get_task(9901).and_then(|sf| sf.wake_cpu), Some(2));
+        assert_eq!(
+            sched.state.get_task(9901).and_then(|sf| sf.wake_cpu),
+            Some(2),
+            "[policy] wake_cpu should preserve last_cpu routing for Any-affinity wakeup"
+        );
     }
 
     #[test]
@@ -5412,10 +5416,13 @@ mod tests {
         let after_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
         let after_pending =
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
-        assert!(after_miss > before_miss, "per-CPU trylock miss counter should increment");
+        assert!(
+            after_miss > before_miss,
+            "[contention] per-CPU trylock miss counter should increment"
+        );
         assert!(
             after_pending > before_pending,
-            "per-CPU pending-resched trylock miss counter should increment"
+            "[contention] per-CPU pending-resched trylock miss counter should increment"
         );
 
         drop(lock);
