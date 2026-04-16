@@ -57,22 +57,28 @@ fn classify_file_like(node: &Arc<dyn crate::vfs::VfsNode>) -> HandleKind {
     }
 }
 
-fn lookup_ipc_entry_any(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
+fn lookup_ipc_entry_with(
+    handle: Handle,
+    lookup: impl FnOnce(
+        &crate::ipc::IpcThingTable,
+        crate::ipc::IpcThing,
+    ) -> Option<&crate::ipc::IpcThingEntry>,
+) -> SysResult<crate::ipc::IpcThingEntry> {
     let ipc_handle = crate::ipc::IpcThing(handle.0);
     // Keep this lock scope tiny: copy the entry and drop immediately.
     // This path is intentionally short because it sits on syscall hot paths.
     let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    table.get_any(ipc_handle).copied().ok_or(Errno::EBADF)
+    lookup(&table, ipc_handle).copied().ok_or(Errno::EBADF)
+}
+
+fn lookup_ipc_entry_any(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
+    lookup_ipc_entry_with(handle, |table, ipc_handle| table.get_any(ipc_handle))
 }
 
 fn lookup_ipc_entry_write(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
-    let ipc_handle = crate::ipc::IpcThing(handle.0);
-    // Keep this lock scope tiny: copy the entry and drop immediately.
-    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    table
-        .get(ipc_handle, crate::ipc::IpcThingMode::Write)
-        .copied()
-        .ok_or(Errno::EBADF)
+    lookup_ipc_entry_with(handle, |table, ipc_handle| {
+        table.get(ipc_handle, crate::ipc::IpcThingMode::Write)
+    })
 }
 
 /// Resolve a handle by checking the process-owned open table first, then the
@@ -177,10 +183,10 @@ mod tests {
     }
 
     fn make_test_process_info(
-        nodes: &[(u32, Arc<dyn VfsNode>)],
+        fd_node_pairs: &[(u32, Arc<dyn VfsNode>)],
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
         let mut thing_table = ThingTable::new();
-        for (fd, node) in nodes {
+        for (fd, node) in fd_node_pairs {
             thing_table
                 .insert_at(*fd, node.clone(), OpenFlags::read_write(), "/test".into())
                 .expect("insert_at");
