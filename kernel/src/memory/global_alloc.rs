@@ -1,14 +1,14 @@
-use crate::BootRuntime;
-#[cfg(not(test))]
-use crate::memory::kheap::kernel_heap;
 #[cfg(not(test))]
 use core::alloc::{GlobalAlloc, Layout};
+#[cfg(not(test))]
+use core::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(not(test))]
 use linked_list_allocator::LockedHeap;
 
+use crate::BootRuntime;
 #[cfg(not(test))]
-use core::sync::atomic::{AtomicU64, Ordering};
+use crate::memory::kheap::kernel_heap;
 
 pub static TRACE_ALLOC: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -23,6 +23,16 @@ static LARGE_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 /// The inner heap allocator
 #[cfg(not(test))]
 static INNER_ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+#[cfg(not(test))]
+const BOOTSTRAP_HEAP_PAGES: usize = 4096; // 16 MiB
+#[cfg(not(test))]
+const GROWTH_HEAP_PAGES: usize = 1024; // 4 MiB
+
+#[cfg(not(test))]
+static HEAP_TOP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+#[cfg(not(test))]
+static mut HEAP_EXPAND_HOOK: Option<fn(usize) -> Result<(), ()>> = None;
 
 /// Wrapper allocator that logs large allocations
 #[cfg(not(test))]
@@ -48,8 +58,22 @@ unsafe impl GlobalAlloc for TracingAllocator {
         let safe_layout = Layout::from_size_align_unchecked(size, align);
 
         let irq = crate::irq::irq_disable_erased();
-        let ptr = unsafe { INNER_ALLOCATOR.alloc(safe_layout) };
+        let mut ptr = unsafe { INNER_ALLOCATOR.alloc(safe_layout) };
         crate::irq::irq_restore_erased(irq);
+
+        if ptr.is_null() {
+            let needed_pages = (size + 4095) / 4096;
+            let grow_pages = core::cmp::max(GROWTH_HEAP_PAGES, needed_pages);
+            let expanded = unsafe {
+                if let Some(hook) = HEAP_EXPAND_HOOK { hook(grow_pages).is_ok() } else { false }
+            };
+            if expanded {
+                let irq = crate::irq::irq_disable_erased();
+                ptr = unsafe { INNER_ALLOCATOR.alloc(safe_layout) };
+                crate::irq::irq_restore_erased(irq);
+            }
+        }
+
         ptr
     }
 
@@ -77,26 +101,49 @@ static ALLOCATOR: TracingAllocator = TracingAllocator;
 
 #[cfg(not(test))]
 pub fn init<R: BootRuntime>(_rt: &R) {
+    unsafe {
+        HEAP_EXPAND_HOOK = Some(expand_heap_impl::<R>);
+    }
+
     let mut heap = kernel_heap().lock();
-    // Reserve 128MB (32768 pages) for the global heap
+    // Keep early boot fast: bootstrap with a smaller heap and grow on demand.
     let (base, size) = heap
-        .reserve_region::<R>(32768)
+        .reserve_region::<R>(BOOTSTRAP_HEAP_PAGES)
         .expect("Failed to reserve kernel heap region");
 
     unsafe {
         INNER_ALLOCATOR.lock().init(base as *mut u8, size);
     }
+    HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
 
-    crate::kdebug!("Global allocator initialized (LinkedHeap, 128MB)");
+    crate::kdebug!(
+        "Global allocator initialized (LinkedHeap, {} MiB bootstrap)",
+        (size / (1024 * 1024))
+    );
+}
+
+#[cfg(not(test))]
+fn expand_heap_impl<R: BootRuntime>(pages: usize) -> Result<(), ()> {
+    let mut heap = kernel_heap().lock();
+    let expected_base = HEAP_TOP.load(Ordering::Relaxed);
+    let (base, size) = heap.reserve_region::<R>(pages)?;
+
+    if base != expected_base {
+        // linked_list_allocator::Heap::extend requires strictly contiguous memory.
+        return Err(());
+    }
+
+    unsafe {
+        INNER_ALLOCATOR.lock().extend(size);
+    }
+    HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
+    Ok(())
 }
 
 /// Get diagnostics about large allocations
 #[cfg(not(test))]
 pub fn alloc_stats() -> (u64, u64) {
-    (
-        LARGEST_ALLOC.load(Ordering::Relaxed),
-        LARGE_ALLOC_COUNT.load(Ordering::Relaxed),
-    )
+    (LARGEST_ALLOC.load(Ordering::Relaxed), LARGE_ALLOC_COUNT.load(Ordering::Relaxed))
 }
 
 #[cfg(test)]

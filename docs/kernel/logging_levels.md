@@ -171,11 +171,11 @@ There are also special kernel macros:
 
 ### Boot Sequence
 
-During boot, prefer `contract!` for critical milestones that must always be visible:
+During boot, prefer `info!` for critical milestones that must always be visible:
 ```rust
-contract!("Entering kernel");
-contract!("Memory initialized");
-contract!("Scheduler started");
+info!("Entering kernel");
+info!("Memory initialized");
+info!("Scheduler started");
 ```
 
 Use `kinfo!` for normal boot milestones, `kdebug!` for details.

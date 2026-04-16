@@ -458,15 +458,30 @@ fn install_signal_handlers() {
     let _ = signal::sigaction(SIGTTOU, Some(&ignore), None);
 }
 
-fn prompt() {
+fn prompt(last_status: Option<i32>) {
+    let status = match last_status {
+        Some(code) if wifexited(code) && wexitstatus(code) == 0 => "\x1B[1;32mOK\x1B[0m",
+        Some(_) => "\x1B[1;31mERR\x1B[0m",
+        None => "\x1B[1;36mNEW\x1B[0m",
+    };
+
     let mut buf = [0u8; 256];
     match syscall::vfs_getcwd(&mut buf) {
         Ok(n) => {
             let cwd = core::str::from_utf8(&buf[..n]).unwrap_or("/");
-            let out = format!("\x1B[32mthing\x1B[0m \x1B[34m{}\x1B[0m # ", cwd);
+            let out = format!(
+                "\x1B[1;96mTHING-OS\x1B[0m \x1B[1;90m[\x1B[0m{}\x1B[1;90m]\x1B[0m \x1B[1;34m{}\x1B[0m \x1B[1;93m>>\x1B[0m ",
+                status, cwd
+            );
             write_str(&out);
         }
-        Err(_) => write_str("\x1B[32mthing-os\x1B[0m # "),
+        Err(_) => {
+            let out = format!(
+                "\x1B[1;96mTHING-OS\x1B[0m \x1B[1;90m[\x1B[0m{}\x1B[1;90m]\x1B[0m \x1B[1;93m>>\x1B[0m ",
+                status
+            );
+            write_str(&out);
+        }
     }
 }
 
@@ -600,15 +615,15 @@ fn complete_from_current_dir(fragment: &str) -> Option<String> {
     None
 }
 
-fn redraw_line(bytes: &[u8]) {
+fn redraw_line(bytes: &[u8], last_status: Option<i32>) {
     write_str("\r\x1B[K");
-    prompt();
+    prompt(last_status);
     if let Ok(text) = core::str::from_utf8(bytes) {
         write_str(text);
     }
 }
 
-fn read_line() -> ReadLineResult {
+fn read_line(last_status: Option<i32>) -> ReadLineResult {
     let tty_guard = TtyModeGuard::raw(TTY_FD);
     if !tty_guard.is_active() {
         let mut buf = [0u8; 512];
@@ -672,7 +687,7 @@ fn read_line() -> ReadLineResult {
 
                     bytes.truncate(start);
                     bytes.extend_from_slice(completion.as_bytes());
-                    redraw_line(&bytes);
+                    redraw_line(&bytes, last_status);
                 }
                 b => {
                     bytes.push(b);
@@ -878,7 +893,10 @@ fn write_str(s: &str) {
 #[stem::main]
 fn main(_arg: usize) -> ! {
     install_signal_handlers();
-    write_str("thingos sh\n");
+    write_str("\x1B[1;96m+---------------------------------+\x1B[0m\n");
+    write_str("\x1B[1;97m|        THING-OS SHELL           |\x1B[0m\n");
+    write_str("\x1B[1;96m+---------------------------------+\x1B[0m\n");
+    write_str("\x1B[36minteractive mode\x1B[0m\n");
 
     let mut shell = Shell::new();
     shell.load_profile("/etc/profile");
@@ -887,8 +905,8 @@ fn main(_arg: usize) -> ! {
         shell.reap_children(true);
         shell.print_job_notifications();
 
-        prompt();
-        let line = match read_line() {
+        prompt(shell.last_foreground_status);
+        let line = match read_line(shell.last_foreground_status) {
             ReadLineResult::Line(line) => line,
             ReadLineResult::Interrupted => {
                 write_str("\n");

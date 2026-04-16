@@ -1,7 +1,6 @@
-use crate::BootModuleDesc;
-use crate::PhysRange;
-use crate::PhysRangeKind;
 use spin::Mutex;
+
+use crate::{BootModuleDesc, PhysRange, PhysRangeKind};
 
 pub static FRAME_ALLOCATOR: FrameAllocatorLocked = FrameAllocatorLocked::new();
 
@@ -30,6 +29,7 @@ pub struct FrameAllocator {
     bitmap: &'static mut [u64],
     total_frames: usize,
     free_frames: usize,
+    next_word: usize,
 }
 
 impl FrameAllocator {
@@ -39,11 +39,7 @@ impl FrameAllocator {
         bitmap: &'static mut [u64],
         hhdm: u64,
     ) -> Self {
-        let mut this = Self {
-            bitmap,
-            total_frames: 0,
-            free_frames: 0,
-        };
+        let mut this = Self { bitmap, total_frames: 0, free_frames: 0, next_word: 0 };
 
         this.total_frames = this.bitmap.len() * 64;
         this.bitmap.fill(!0);
@@ -69,11 +65,20 @@ impl FrameAllocator {
     }
 
     pub fn alloc(&mut self) -> Option<(u64,)> {
-        for i in 0..self.bitmap.len() {
+        if self.bitmap.is_empty() {
+            return None;
+        }
+
+        // Next-fit scan: resume from the previous successful word index
+        // instead of rescanning from zero on every allocation.
+        let start = self.next_word % self.bitmap.len();
+        for off in 0..self.bitmap.len() {
+            let i = (start + off) % self.bitmap.len();
             if self.bitmap[i] != !0 {
                 let bit = self.bitmap[i].trailing_ones() as usize;
                 self.bitmap[i] |= 1 << bit;
                 self.free_frames -= 1;
+                self.next_word = i;
                 return Some(((i * 64 + bit) as u64 * 4096,));
             }
         }
@@ -117,6 +122,7 @@ impl FrameAllocator {
                         self.bitmap[wi] |= 1 << bi;
                     }
                     self.free_frames -= count;
+                    self.next_word = run_start / 64;
                     return Some(run_start as u64 * 4096);
                 }
             } else {

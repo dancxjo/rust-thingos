@@ -1,10 +1,12 @@
 // Updated X86_64 runtime with user entry mapping and alignment check
-use crate::runtime::ArchRuntime;
 use core::arch::asm;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
 use kernel::once_cell::OnceCell;
 use kernel::time::MonotonicClamp;
 use kernel::{CpuId, FrameAllocatorHook, IrqState, MapKind, MapPerms, UserEntry, UserTaskSpec};
+
+use crate::runtime::ArchRuntime;
 
 pub mod acpi;
 pub mod apic;
@@ -47,11 +49,7 @@ pub struct SerialBuffer {
 
 impl SerialBuffer {
     pub const fn new() -> Self {
-        Self {
-            data: [0; 1024],
-            head: 0,
-            tail: 0,
-        }
+        Self { data: [0; 1024], head: 0, tail: 0 }
     }
 
     pub fn push(&mut self, val: u8) {
@@ -112,7 +110,7 @@ impl X86_64Runtime {
                 unsafe {
                     core::arch::asm!("in al, dx", out("al") ch, in("dx") 0x3f8u16, options(nostack, preserves_flags));
                 }
-                // kernel::contract!("[SERIAL] Received: 0x{:02x} ('{}')", ch, ch as char);
+                // kernel::info!("[SERIAL] Received: 0x{:02x} ('{}')", ch, ch as char);
                 buf.push(ch);
             } else {
                 break;
@@ -150,7 +148,7 @@ impl X86_64Runtime {
             // 8. Re-enable interrupts: Received Data Available
             core::arch::asm!("out dx, al", in("dx") port + 1, in("al") 0x01u8);
         }
-        kernel::contract!("[SERIAL] UART COM1 initialized (115200 8N1 FIFO-1 IRQ-on)");
+        kernel::kinfo!("[SERIAL] UART COM1 initialized (115200 8N1 FIFO-1 IRQ-on)");
     }
 }
 
@@ -410,7 +408,7 @@ impl ArchRuntime for X86_64Runtime {
         unsafe {
             core::arch::asm!("lidt [{}]", in(reg) 0, options(nostack, preserves_flags));
             core::arch::asm!("int3", options(noreturn));
-        } 
+        }
 
         // If that didn't work, halt
         hcf()
@@ -418,7 +416,7 @@ impl ArchRuntime for X86_64Runtime {
 
     fn shutdown(&self) -> ! {
         kernel::kinfo!("X86_64: performing shutdown (QEMU/ACPI)");
-        
+
         // 1. QEMU shutdown (newer)
         unsafe {
             core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16, options(nostack, preserves_flags));
@@ -555,8 +553,7 @@ impl ArchRuntime for X86_64Runtime {
             entry.user_sp
         );
 
-        self.map_user_entry(&entry)
-            .expect("failed to map user entry pages");
+        self.map_user_entry(&entry).expect("failed to map user entry pages");
         // x86_64 user mode entry via IRETQ
         let user_data_sel: u64 = gdt::USER_DATA_SEL as u64;
         let user_code_sel: u64 = gdt::USER_CODE_SEL as u64;
@@ -660,10 +657,8 @@ impl ArchRuntime for X86_64Runtime {
     fn setup_preemption_timer(&self, hz: u32) {
         let (init_cnt, ticks_per_sec) = ioapic::calibrate_lapic_timer(hz);
 
-        self.timer_vector
-            .store(idt::IRQ_TIMER_VECTOR as usize, Ordering::SeqCst);
-        self.timer_init_cnt
-            .store(init_cnt as usize, Ordering::SeqCst);
+        self.timer_vector.store(idt::IRQ_TIMER_VECTOR as usize, Ordering::SeqCst);
+        self.timer_init_cnt.store(init_cnt as usize, Ordering::SeqCst);
 
         ioapic::set_lapic_timer_periodic(idt::IRQ_TIMER_VECTOR, init_cnt);
 
@@ -754,11 +749,7 @@ impl ArchRuntime for X86_64Runtime {
     fn next_offline_cpu(&self) -> Option<CpuId> {
         let started = self.started_cpu_count.load(Ordering::SeqCst);
         let total = CPU_COUNT.load(Ordering::SeqCst) as usize;
-        if started < total {
-            Some(unsafe { CPU_IDS[started] })
-        } else {
-            None
-        }
+        if started < total { Some(unsafe { CPU_IDS[started] }) } else { None }
     }
 
     fn current_cpu_id(&self) -> CpuId {
@@ -878,6 +869,7 @@ impl ArchRuntime for X86_64Runtime {
         cpu_index: usize,
     ) -> Result<(), abi::errors::Errno> {
         use core::sync::atomic::Ordering;
+
         use kernel::{MapKind, MapPerms, kdebug, kerror, kwarn};
 
         let hhdm = self.hhdm_offset.load(Ordering::SeqCst);
@@ -886,10 +878,7 @@ impl ArchRuntime for X86_64Runtime {
         let trampoline_addr = trampoline_base + hhdm;
 
         // 1. One-time trampoline setup
-        if self
-            .trampoline_ready
-            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
+        if self.trampoline_ready.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_ok()
         {
             kernel::kdebug!("SMP: Initializing trampoline at 0x{:x}", trampoline_base);
 

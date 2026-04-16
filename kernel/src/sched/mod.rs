@@ -22,7 +22,7 @@ mod vm;
 pub(crate) mod wait_queue;
 
 // Re-export all public items
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 pub use blocking::{
     block_current, block_current_erased, init_blocking_hooks, wake_task, wake_task_erased,
@@ -327,11 +327,7 @@ fn init_any_wake_policy_from_env_once() {
 }
 
 fn runq_depth_for_cpu(state: &crate::sched::state::SchedState, cpu: usize) -> usize {
-    state
-        .per_cpu
-        .get(cpu)
-        .map(|pc| pc.runq.iter().map(|q| q.len()).sum::<usize>())
-        .unwrap_or(0)
+    state.per_cpu.get(cpu).map(|pc| pc.runq.iter().map(|q| q.len()).sum::<usize>()).unwrap_or(0)
 }
 
 fn least_loaded_online_cpu(state: &crate::sched::state::SchedState) -> Option<(usize, usize)> {
@@ -716,8 +712,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             let deferred_ipis = core::mem::take(&mut sched.pending_wake_ipis);
             // Drain IPIs deferred by prepare_schedule misroute handling while
             // the lock is still held, so we can send them after unlock.
-            let deferred_prepare_ipis =
-                core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
             if let Some(switch) = switch {
                 // Must drop lock before context switch!
                 drop(lock);
@@ -882,8 +877,7 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
         0
     };
 
-    let policy =
-        any_wake_overload_policy_from_u8(ANY_WAKE_OVERLOAD_POLICY.load(Ordering::Acquire));
+    let policy = any_wake_overload_policy_from_u8(ANY_WAKE_OVERLOAD_POLICY.load(Ordering::Acquire));
     if policy == AnyWakeOverloadPolicy::Off {
         return preferred;
     }
@@ -896,11 +890,7 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     // Run-queue depth is a bounded queue-length sum; use saturating subtraction
     // so "depth delta >= gap" cannot wrap.
     let overloaded = preferred_depth.saturating_sub(least_depth) >= overload_gap;
-    if overloaded && least_cpu != preferred {
-        least_cpu
-    } else {
-        preferred
-    }
+    if overloaded && least_cpu != preferred { least_cpu } else { preferred }
 }
 
 #[cfg(test)]
@@ -3704,7 +3694,8 @@ mod tests {
 
         // Runnable task incorrectly queued on CPU 0 but pinned to CPU 1.
         let misrouted = make_task(9102, TaskState::Runnable, TaskPriority::Normal);
-        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(misrouted));
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(misrouted));
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 9102,
             runq_location: None,
@@ -4748,7 +4739,8 @@ mod tests {
         let mut sibling = make_task(1221, TaskState::Dead, TaskPriority::Normal);
         sibling.exit_code = Some(9);
         sibling.process_info = Some(alloc::sync::Arc::clone(&pinfo));
-        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(sibling));
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(sibling));
 
         let snapshots = list_processes::<MockRuntime>();
         assert_eq!(snapshots.len(), 1);
@@ -5251,14 +5243,8 @@ mod tests {
 
         // Step 2: collect siblings.
         let caller_tid: TaskId = 9100;
-        let siblings: alloc::vec::Vec<TaskId> = pinfo
-            .lock()
-            .job
-            .thread_ids
-            .iter()
-            .copied()
-            .filter(|&t| t != caller_tid)
-            .collect();
+        let siblings: alloc::vec::Vec<TaskId> =
+            pinfo.lock().job.thread_ids.iter().copied().filter(|&t| t != caller_tid).collect();
         assert_eq!(siblings.len(), 2);
 
         // Step 3: kill siblings (simulates kill_by_tid path).
@@ -5355,14 +5341,8 @@ mod tests {
         pinfo.lock().job.exec_in_progress = true;
 
         // Phase 2: collect sibling TIDs (excluding caller).
-        let siblings: alloc::vec::Vec<TaskId> = pinfo
-            .lock()
-            .job
-            .thread_ids
-            .iter()
-            .copied()
-            .filter(|&t| t != caller_tid)
-            .collect();
+        let siblings: alloc::vec::Vec<TaskId> =
+            pinfo.lock().job.thread_ids.iter().copied().filter(|&t| t != caller_tid).collect();
         assert_eq!(siblings.len(), 3, "expected 3 siblings");
         assert!(!siblings.contains(&caller_tid), "caller must not appear in sibling list");
 
@@ -5756,8 +5736,9 @@ mod tests {
         const OVERLOAD_TASK_START: u64 = 9912;
         const OVERLOAD_TASK_END: u64 = 9915;
         for id in OVERLOAD_TASK_START..OVERLOAD_TASK_END {
-            crate::task::registry::get_registry::<MockRuntime>()
-                .insert(alloc::boxed::Box::new(make_task(id, TaskState::Runnable, TaskPriority::Low)));
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(id, TaskState::Runnable, TaskPriority::Low),
+            ));
             sched.state.insert_task(crate::sched::state::ThreadSchedFields {
                 tid: id,
                 runq_location: None,
@@ -5771,9 +5752,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
             });
-            sched
-                .state
-                .enqueue_task(0, TaskPriority::Low as usize, id);
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
         }
 
         let (_ipi, _deferred) =
@@ -5857,9 +5836,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
             });
-            sched
-                .state
-                .enqueue_task(0, TaskPriority::Low as usize, id);
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
         }
 
         TICK_COUNT.store(100, Ordering::Relaxed);

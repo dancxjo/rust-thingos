@@ -189,7 +189,7 @@ core::arch::global_asm!(
         jmp 2b
 
     irq_common_handler_shim:
-        // IRQ stubs (generic) don't push error code. 
+        // IRQ stubs (generic) don't push error code.
         // Stack has: RIP, CS, RFLAGS, RSP, SS
         testb $3, 8(%rsp)
         jz 1f
@@ -632,7 +632,7 @@ pub extern "C" fn rust_irq_handler(vector: u64) {
         // crate::theme::try_tick(now_ticks);
     } else if resolved == 0x24 {
         // Serial interrupt - poll into buffer
-        // kernel::contract!("[IRQ] Serial interrupt 0x24 fired");
+        // kernel::info!("[IRQ] Serial interrupt 0x24 fired");
         crate::RUNTIME.arch.poll_serial();
     } else if resolved == IRQ_RESCHED_VECTOR {
         kernel::sched::on_resched_ipi::<crate::arch::CurrentRuntime>();

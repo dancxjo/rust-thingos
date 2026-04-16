@@ -1,9 +1,10 @@
 //! BDD World - holds test state during scenario execution.
 
-use cucumber::World;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+
+use cucumber::World;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
@@ -60,19 +61,9 @@ impl ThingOsWorld {
             std::env::var("BDD_RESOLUTION").unwrap_or_else(|_| "1920x1080".to_string());
 
         // Build ISO using xtask command
-        eprintln!(
-            "[bdd] Building ISO {} with resolution {}...",
-            iso_name, resolution
-        );
+        eprintln!("[bdd] Building ISO {} with resolution {}...", iso_name, resolution);
         let build_status = std::process::Command::new("cargo")
-            .args([
-                "xtask",
-                "iso",
-                "--resolution",
-                &resolution,
-                "--output",
-                &iso_name,
-            ])
+            .args(["xtask", "iso", "--resolution", &resolution, "--output", &iso_name])
             .env("RUSTFLAGS", "-Awarnings")
             .status()?;
 
@@ -123,10 +114,7 @@ impl ThingOsWorld {
                     "-drive",
                     &format!("if=pflash,unit=0,format=raw,file={},readonly=on", ovmf_code),
                 ]);
-                cmd.args([
-                    "-drive",
-                    &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars),
-                ]);
+                cmd.args(["-drive", &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars)]);
                 cmd.args(["-cdrom", &iso_name]);
 
                 cmd.args(["-device", "virtio-net-pci,netdev=n0"]);
@@ -143,10 +131,7 @@ impl ThingOsWorld {
                     "-drive",
                     &format!("if=pflash,unit=0,format=raw,file={},readonly=on", ovmf_code),
                 ]);
-                cmd.args([
-                    "-drive",
-                    &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars),
-                ]);
+                cmd.args(["-drive", &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars)]);
                 cmd.args(["-cdrom", &iso_name]);
             }
             "riscv64" => {
@@ -154,10 +139,7 @@ impl ThingOsWorld {
                 // Also uses virtio-blk instead of -cdrom since riscv64 virt doesn't expose cdrom to UEFI properly
                 cmd.args([
                     "-blockdev",
-                    &format!(
-                        "node-name=pflash0,driver=file,read-only=on,filename={}",
-                        ovmf_code
-                    ),
+                    &format!("node-name=pflash0,driver=file,read-only=on,filename={}", ovmf_code),
                 ]);
                 cmd.args([
                     "-blockdev",
@@ -186,10 +168,7 @@ impl ThingOsWorld {
                     "-drive",
                     &format!("if=pflash,unit=0,format=raw,file={},readonly=on", ovmf_code),
                 ]);
-                cmd.args([
-                    "-drive",
-                    &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars),
-                ]);
+                cmd.args(["-drive", &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars)]);
                 cmd.args(["-cdrom", &iso_name]);
             }
             _ => {}
@@ -267,10 +246,7 @@ impl ThingOsWorld {
                     );
                 }
                 Err(e) => {
-                    eprintln!(
-                        "│  │  │      debug: FAILED to connect to QEMU serial socket: {}",
-                        e
-                    );
+                    eprintln!("│  │  │      debug: FAILED to connect to QEMU serial socket: {}", e);
                 }
             }
         });
@@ -288,16 +264,9 @@ impl ThingOsWorld {
 
         self.qemu = Some(child);
 
-        let global_path = if qmp_global_path.exists() {
-            Some(qmp_global_path.clone())
-        } else {
-            None
-        };
-        let world_path = if qmp_world_path.exists() {
-            Some(qmp_world_path.clone())
-        } else {
-            None
-        };
+        let global_path =
+            if qmp_global_path.exists() { Some(qmp_global_path.clone()) } else { None };
+        let world_path = if qmp_world_path.exists() { Some(qmp_world_path.clone()) } else { None };
 
         crate::artifacts::set_qmp_stream(global_path).await;
         self.qmp_control = world_path;
@@ -398,11 +367,7 @@ impl ThingOsWorld {
                         needle,
                         log.len()
                     );
-                    let tail = if log.len() > 200 {
-                        &log[log.len() - 200..]
-                    } else {
-                        &log[..]
-                    };
+                    let tail = if log.len() > 200 { &log[log.len() - 200..] } else { &log[..] };
                     eprintln!("│  │  │      debug: tail: {:?}", tail);
                     last_print = std::time::Instant::now();
                 }
@@ -462,29 +427,24 @@ pub fn diag_enabled() -> bool {
 
 /// Required boot signals that must ALL appear (order irrelevant).
 /// Each entry is a list of acceptable alternatives - pass if ANY in the group matches.
-/// These signals now use [CONTRACT] prefix for critical boot milestones.
+/// These signals now use [INFO] prefix for critical boot milestones.
 pub const REQUIRED_BOOT_SIGNALS: &[&[&str]] = &[
-    // Kernel start - now uses CONTRACT level
-    &["[CONTRACT]", "thing-os kernel"],
+    // Kernel start - now uses INFO level
+    &["[INFO]", "thing-os kernel"],
     // SIMD init (replaces legacy paging boundary signal)
-    &["[CONTRACT]", "Initializing SIMD"],
+    &["[INFO]", "Initializing SIMD"],
     // Memory map / allocator
-    &["[CONTRACT]", "Frame allocator initialized"],
-    &["[CONTRACT]", "Initializing global allocator"],
+    &["[INFO]", "Frame allocator initialized"],
+    &["[INFO]", "Initializing global allocator"],
     // Tasking bring-up
-    &["[CONTRACT]", "Initializing tasking"],
-    &["[CONTRACT]", "Scheduler initialized"],
-    &["[CONTRACT]", "Entering scheduler loop"],
+    &["[INFO]", "Initializing tasking"],
+    &["[INFO]", "Scheduler initialized"],
+    &["[INFO]", "Entering scheduler loop"],
 ];
 
 /// Liveness signals - at least one of these must appear.
-pub const LIVENESS_SIGNALS: &[&str] = &[
-    "A: tick",
-    "B: tick",
-    "threads_demo",
-    "BOOT: heartbeat",
-    "BOOT: ready",
-];
+pub const LIVENESS_SIGNALS: &[&str] =
+    &["A: tick", "B: tick", "threads_demo", "BOOT: heartbeat", "BOOT: ready"];
 
 impl ThingOsWorld {
     /// Wait until all required signals are found in the log (unordered).
