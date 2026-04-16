@@ -33,6 +33,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "head", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "tail", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "wc", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "yes", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "which", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "cp", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "mv", is_init: true, boot_module: true, features: vec![] },
