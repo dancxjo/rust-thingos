@@ -252,7 +252,7 @@ pub fn build_iso_with_config(
 
     sh.write_file(
         iso_root.join("etc/profile"),
-        "alias ll='loglevel'\n",
+        "alias ll='loglevel'\nalias halt='shutdown'\n",
     )?;
 
     println!("Building userspace programs...");
@@ -505,7 +505,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     cmd!(sh, "mcopy -i {hdd}@@1M locale.conf ::/boot/locale.conf").run()?;
     sh.remove_path("locale.conf")?;
 
-    sh.write_file("profile", "alias ll='loglevel'\n")?;
+    sh.write_file("profile", "alias ll='loglevel'\nalias halt='shutdown'\n")?;
     // create /etc in the fat32 image if it doesn't exist
     cmd!(sh, "mmd -i {hdd}@@1M ::/etc").run().ok();
     cmd!(sh, "mcopy -i {hdd}@@1M profile ::/etc/profile").run()?;
