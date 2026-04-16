@@ -2411,10 +2411,6 @@ name = "pistil"
 version = "0.1.0"
 dependencies = [
  "abi",
- "fontdue",
- "ipc_helpers",
- "petals",
- "stem",
 ]
 
 [[package]]

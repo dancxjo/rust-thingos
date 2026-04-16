@@ -895,49 +895,9 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 }
 
 pub fn setup_graphics_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    debug!("SPROUT: Setting up Graphics Stack (Bloom + pistil)...");
+    debug!("SPROUT: Setting up Graphics Stack (Bloom + shared pistil dylib)...");
 
-    // 1. Setup pistil
-    //
-    // pistil requires a paired channel: a request channel for receiving client
-    // requests and a reply channel for sending responses back.  We pass both
-    // handles to pistil as a single packed argument:
-    //   arg0 = (reply_write_h << 16) | req_read_h
-    //
-    // Clients (e.g. bloom) receive:
-    //   req_write_h — to send requests to pistil
-    //   rep_read_h  — to receive replies from pistil
-    let req_chan = channel_create(4096).expect("Failed to create pistil request channel");
-    let rep_chan = channel_create(4096).expect("Failed to create pistil reply channel");
-    // req_chan: (req_write_h, req_read_h) — clients write, pistil reads
-    // rep_chan: (rep_write_h, rep_read_h) — pistil writes, clients read
-    let pistil_arg = ((rep_chan.0 as usize) << 16) | (req_chan.1 as usize);
-
-    match stem::syscall::spawn_process("/bin/pistil", pistil_arg) {
-        Ok(pid) => {
-            debug!("SPROUT: Spawned pistil (PID={})", pid);
-            let _ = stem::thread::set_priority(pid, 2);
-            let mut tasks = shared_tasks.lock();
-            tasks.push(ManagedTask {
-                name: "pistil".to_string(),
-                kind: TaskKind::Service("svc.font".to_string()),
-                module_path: "/bin/pistil".to_string(),
-                pid: Some(pid),
-                restarts: 0,
-                spawn_arg: pistil_arg,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-            });
-        }
-        Err(e) => {
-            warn!("SPROUT: Failed to spawn pistil: {:?}", e);
-        }
-    }
-
-    // 2. Setup Bloom (Compositor)
+    // Setup Bloom (Compositor)
     match stem::syscall::spawn_process("/bin/bloom", 0) {
         Ok(pid) => {
             debug!("SPROUT: Spawned bloom (PID={})", pid);
