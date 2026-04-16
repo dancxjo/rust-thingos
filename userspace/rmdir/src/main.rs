@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
 use alloc::string::String;
