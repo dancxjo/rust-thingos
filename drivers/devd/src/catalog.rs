@@ -585,7 +585,10 @@ fn read_file(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
         }
     }
     let _ = vfs_close(fd);
-    if out.len() < 4 { None } else { Some(out) }
+    if out.len() < 4 {
+        return None;
+    }
+    Some(out)
 }
 
 // ── Byte readers ─────────────────────────────────────────────────────────────
