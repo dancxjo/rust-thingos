@@ -913,19 +913,10 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         detached: false,
         signals: crate::signal::ThreadSignals::new(),
     };
-    let sched_fields = crate::sched::state::TaskSchedFields {
-        tid: task.id,
-        runq_location: None,
-        state: crate::task::TaskState::Running,
-        priority: TaskPriority::Normal,
-        affinity: crate::task::Affinity::Any,
-        last_cpu: Some(0),
-        wake_cpu: Some(0),
-        run_cpu: Some(0),
-        timeslice_remaining: types::DEFAULT_TIMESLICE,
-        enqueued_at_tick: TICK_COUNT.load(Ordering::Relaxed),
-        wake_pending: false,
-    };
+    let sched_fields = bridge::TaskSchedCache::from_thread(&task)
+        .with_wake_cpu(Some(0))
+        .with_run_cpu(Some(0))
+        .into_sched_fields(task.id);
     sched.state.insert_task(sched_fields);
     crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
 
@@ -1705,7 +1696,7 @@ pub fn current_priority<R: BootRuntime>() -> TaskPriority {
                 .get(cpu)
                 .and_then(|pc| pc.current)
                 .and_then(|tid| crate::task::registry::get_task::<R>(tid))
-                .map(|t| t.priority)
+                .map(|t| bridge::SchedulableRuntime::from_thread(&*t).priority)
                 .unwrap_or(TaskPriority::Normal)
         } else {
             TaskPriority::Normal
@@ -1738,7 +1729,7 @@ pub fn available_parallelism<R: BootRuntime>() -> usize {
             let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
             let online = sched.state.online_cpu_count;
             let affinity = crate::task::registry::get_task::<R>(rt.current_tid())
-                .map(|task| task.affinity)
+                .map(|task| bridge::SchedulableRuntime::from_thread(&*task).affinity)
                 .unwrap_or(Affinity::Any);
             effective_parallelism_from_state(online, affinity)
         } else {
@@ -2380,7 +2371,9 @@ fn waitpid_for_pid<R: BootRuntime>(
                 Ok(Some(code)) => {
                     // Child died between our fast-path check and now.
                     let child_pid = crate::task::registry::get_task::<R>(child_tid)
-                        .and_then(|t| t.process_info.as_ref().map(|pi| pi.lock().runtime_pid() as u64))
+                        .and_then(|t| {
+                            t.process_info.as_ref().map(|pi| pi.lock().runtime_pid() as u64)
+                        })
                         .unwrap_or(child_tid);
                     early_result = Some((child_pid, code));
                     early_reap_tid = Some(child_tid);
@@ -2576,19 +2569,11 @@ fn format_optional_cpu(cpu: Option<usize>) -> alloc::string::String {
 fn task_cpu_trace_strings(
     task_last_cpu: Option<usize>,
     sched_fields: Option<&crate::sched::state::ThreadSchedFields>,
-) -> (
-    alloc::string::String,
-    alloc::string::String,
-    alloc::string::String,
-) {
+) -> (alloc::string::String, alloc::string::String, alloc::string::String) {
     let last_cpu = sched_fields.and_then(|sf| sf.last_cpu).or(task_last_cpu);
     let wake_cpu = sched_fields.and_then(|sf| sf.wake_cpu);
     let run_cpu = sched_fields.and_then(|sf| sf.run_cpu);
-    (
-        format_optional_cpu(last_cpu),
-        format_optional_cpu(wake_cpu),
-        format_optional_cpu(run_cpu),
-    )
+    (format_optional_cpu(last_cpu), format_optional_cpu(wake_cpu), format_optional_cpu(run_cpu))
 }
 
 pub fn dump_stats<R: BootRuntime>() {
@@ -2676,11 +2661,7 @@ pub fn dump_stats<R: BootRuntime>() {
         let total: usize = pc.runq.iter().map(|q| q.len()).sum();
         let sample_count = pc.stats.runq_sample_count;
         let sample_total = pc.stats.runq_sample_total;
-        let avg_runq = if sample_count == 0 {
-            0
-        } else {
-            sample_total / sample_count
-        };
+        let avg_runq = if sample_count == 0 { 0 } else { sample_total / sample_count };
         crate::kprint!(
             "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",
             i,
@@ -2997,9 +2978,7 @@ mod tests {
         );
         assert!(sched.state.per_cpu[0].runq[TaskPriority::Low as usize].is_empty());
         assert_eq!(
-            sched.state.per_cpu[0].runq[TaskPriority::High as usize]
-                .front()
-                .copied(),
+            sched.state.per_cpu[0].runq[TaskPriority::High as usize].front().copied(),
             Some(42)
         );
     }
@@ -4807,7 +4786,8 @@ mod tests {
     fn test_mark_task_exited_queues_parent_wait_status() {
         let _g = init_test_env();
         unsafe {
-            crate::sched::hooks::PROCESS_INFO_FOR_PID_HOOK = Some(process_info_for_pid::<MockRuntime>);
+            crate::sched::hooks::PROCESS_INFO_FOR_PID_HOOK =
+                Some(process_info_for_pid::<MockRuntime>);
         }
 
         // Parent process (pid 9900) with one thread waiting in waitpid path.

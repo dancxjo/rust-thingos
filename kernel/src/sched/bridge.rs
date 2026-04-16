@@ -20,6 +20,19 @@ pub struct TaskRuntime {
     pub name: Option<String>,
 }
 
+/// Narrow runtime contract for scheduler dispatch decisions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SchedulableRuntime {
+    pub state: state::TaskState,
+    pub priority: crate::task::TaskPriority,
+    pub affinity: crate::task::Affinity,
+    pub current_cpu: Option<usize>,
+    pub last_cpu: Option<usize>,
+    pub slice_remaining: u32,
+    pub enqueued_at_tick: u64,
+    pub wake_pending: bool,
+}
+
 /// Scheduler-cache projection from canonical task state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TaskSchedCache {
@@ -58,6 +71,24 @@ impl TaskRuntime {
     }
 }
 
+impl SchedulableRuntime {
+    /// Project dispatch-relevant runtime fields from a concrete task record.
+    pub fn from_thread<R: crate::BootRuntime>(task: &crate::task::Thread<R>) -> Self {
+        let current_cpu =
+            if task.state == state::TaskState::Running { task.last_cpu } else { None };
+        Self {
+            state: task.state,
+            priority: task.priority,
+            affinity: task.affinity,
+            current_cpu,
+            last_cpu: task.last_cpu,
+            slice_remaining: task.timeslice_remaining,
+            enqueued_at_tick: task.enqueued_at_tick,
+            wake_pending: task.wake_pending,
+        }
+    }
+}
+
 impl TaskSchedCache {
     /// Load scheduler cache projection from canonical generated Task.
     pub fn from_generated(task: &thingos::task::Task) -> Self {
@@ -68,17 +99,50 @@ impl TaskSchedCache {
     /// Load scheduler cache projection from runtime projection.
     pub fn from_runtime(runtime: &TaskRuntime) -> Self {
         let exited = runtime.state == state::TaskState::Dead;
-        Self {
+        let schedulable = SchedulableRuntime {
             state: runtime.state,
             priority: crate::task::TaskPriority::Normal,
             affinity: crate::task::Affinity::Any,
+            current_cpu: None,
             last_cpu: None,
-            wake_cpu: None,
-            run_cpu: None,
-            timeslice_remaining: if exited { 0 } else { crate::sched::DEFAULT_TIMESLICE },
+            slice_remaining: if exited { 0 } else { crate::sched::DEFAULT_TIMESLICE },
             enqueued_at_tick: 0,
             wake_pending: false,
+        };
+        Self::from_schedulable_runtime(&schedulable)
+    }
+
+    /// Load scheduler cache projection from the schedulable runtime boundary.
+    pub fn from_schedulable_runtime(runtime: &SchedulableRuntime) -> Self {
+        Self {
+            state: runtime.state,
+            priority: runtime.priority,
+            affinity: runtime.affinity,
+            last_cpu: runtime.last_cpu,
+            wake_cpu: None,
+            run_cpu: runtime.current_cpu,
+            timeslice_remaining: runtime.slice_remaining,
+            enqueued_at_tick: runtime.enqueued_at_tick,
+            wake_pending: runtime.wake_pending,
         }
+    }
+
+    /// Load scheduler cache projection from a concrete runtime thread record.
+    pub fn from_thread<R: crate::BootRuntime>(task: &crate::task::Thread<R>) -> Self {
+        let runtime = SchedulableRuntime::from_thread(task);
+        Self::from_schedulable_runtime(&runtime)
+    }
+
+    #[inline]
+    pub fn with_wake_cpu(mut self, wake_cpu: Option<usize>) -> Self {
+        self.wake_cpu = wake_cpu;
+        self
+    }
+
+    #[inline]
+    pub fn with_run_cpu(mut self, run_cpu: Option<usize>) -> Self {
+        self.run_cpu = run_cpu;
+        self
     }
 
     /// Materialize concrete scheduler hot-cache fields for a specific `tid`.
@@ -116,11 +180,7 @@ mod tests {
     use super::*;
 
     fn make_task(state: thingos::task::TaskState, job: Option<u32>) -> thingos::task::Task {
-        thingos::task::Task {
-            state,
-            job,
-            name: Some(alloc::string::String::from("demo")),
-        }
+        thingos::task::Task { state, job, name: Some(alloc::string::String::from("demo")) }
     }
 
     #[test]
@@ -170,6 +230,32 @@ mod tests {
         assert_eq!(fields.state, state::TaskState::Runnable);
         assert_eq!(fields.priority, crate::task::TaskPriority::Normal);
         assert_eq!(fields.affinity, crate::task::Affinity::Any);
+    }
+
+    #[test]
+    fn schedulable_runtime_projection_keeps_dispatch_fields() {
+        let runtime = SchedulableRuntime {
+            state: state::TaskState::Runnable,
+            priority: crate::task::TaskPriority::High,
+            affinity: crate::task::Affinity::Pinned(2),
+            current_cpu: None,
+            last_cpu: Some(2),
+            slice_remaining: 17,
+            enqueued_at_tick: 99,
+            wake_pending: true,
+        };
+        let cache = TaskSchedCache::from_schedulable_runtime(&runtime)
+            .with_wake_cpu(Some(1))
+            .into_sched_fields(7);
+        assert_eq!(cache.tid, 7);
+        assert_eq!(cache.state, state::TaskState::Runnable);
+        assert_eq!(cache.priority, crate::task::TaskPriority::High);
+        assert_eq!(cache.affinity, crate::task::Affinity::Pinned(2));
+        assert_eq!(cache.last_cpu, Some(2));
+        assert_eq!(cache.wake_cpu, Some(1));
+        assert_eq!(cache.timeslice_remaining, 17);
+        assert_eq!(cache.enqueued_at_tick, 99);
+        assert!(cache.wake_pending);
     }
 
     #[test]
