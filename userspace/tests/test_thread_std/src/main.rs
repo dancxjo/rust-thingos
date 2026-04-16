@@ -14,7 +14,7 @@
 //! | `thread_yield`             | Two threads making progress via `yield_now`         |
 //! | `thread_many_increments`   | Mutex-protected counter across N threads            |
 //! | `thread_local_basic`       | `thread_local!` value differs per thread            |
-//! | `thread_panic_join`        | Enforces and validates abort-only panic policy       |
+//! | `thread_panic_join`        | Verifies panic=abort policy for thread panic behavior |
 #![no_std]
 #![no_main]
 use alloc::string::ToString;
