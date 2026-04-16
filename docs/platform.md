@@ -99,7 +99,8 @@ To unblock common terminal stacks, prioritize this libc compatibility subset:
   `STDERR_FILENO`, `isatty`.
 - **`termios` basics**: `termios` struct + `tcgetattr`, `tcsetattr`,
   `TCSANOW`, canonical/raw-mode flag bits used by raw-mode toggling.
-- **TTY ioctl substrate**: `ioctl(TIOCGWINSZ)` for terminal sizing.
+- **TTY ioctl substrate**: `ioctl(TCGETS/TCSETS/TCSETSW/TCSETSF)`,
+  `ioctl(TIOCGPGRP/TIOCSPGRP)`, and `ioctl(TIOCGWINSZ)` for sizing.
 - **pthread baseline** (for std/threading consumers): `pthread_create`,
   `pthread_join`, `pthread_detach`, `pthread_self`, basic attrs.
 
