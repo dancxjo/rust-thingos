@@ -739,10 +739,15 @@ impl VfsNode for ConsoleNode {
                 // Console text-mode geometry assumes 8x16 character cells.
                 const CELL_WIDTH_PX: u32 = 8;
                 const CELL_HEIGHT_PX: u32 = 16;
+                if fb.width < CELL_WIDTH_PX || fb.height < CELL_HEIGHT_PX {
+                    return Err(abi::errors::Errno::ENOSYS);
+                }
 
                 let ws = abi::termios::Winsize {
                     ws_row: (fb.height / CELL_HEIGHT_PX).max(1).min(u16::MAX as u32) as u16,
                     ws_col: (fb.width / CELL_WIDTH_PX).max(1).min(u16::MAX as u32) as u16,
+                    // POSIX winsize stores pixel dimensions as u16; clamp very
+                    // large framebuffers to preserve ABI compatibility.
                     ws_xpixel: fb.width.min(u16::MAX as u32) as u16,
                     ws_ypixel: fb.height.min(u16::MAX as u32) as u16,
                 };
@@ -1635,6 +1640,39 @@ mod tests {
         let _g = CONSOLE_TEST_GUARD.lock();
         let prev_fb = *BOOT_FB_INFO.lock();
         *BOOT_FB_INFO.lock() = None;
+
+        let node = ConsoleNode;
+        let mut out = abi::termios::Winsize::default();
+        let call = abi::device::DeviceCall {
+            kind: abi::device::DeviceKind::Terminal,
+            op: abi::termios::TERMINAL_OP_TIOCGWINSZ,
+            in_ptr: 0,
+            in_len: 0,
+            out_ptr: &mut out as *mut _ as u64,
+            out_len: core::mem::size_of::<abi::termios::Winsize>() as u32,
+        };
+        let result = node.device_call(&call);
+        assert_eq!(result, Err(abi::errors::Errno::ENOSYS));
+
+        *BOOT_FB_INFO.lock() = prev_fb;
+    }
+
+    #[test]
+    fn test_console_device_call_tiocgwinsz_too_small_framebuffer_returns_enosys() {
+        let _g = CONSOLE_TEST_GUARD.lock();
+        let prev_fb = *BOOT_FB_INFO.lock();
+        set_boot_fb(
+            crate::FramebufferInfo {
+                addr: 0,
+                byte_len: 7 * 15 * 4,
+                width: 7,
+                height: 15,
+                pitch: 7 * 4,
+                bpp: 32,
+                format: crate::PixelFormat::Bgra8888,
+            },
+            0,
+        );
 
         let node = ConsoleNode;
         let mut out = abi::termios::Winsize::default();
