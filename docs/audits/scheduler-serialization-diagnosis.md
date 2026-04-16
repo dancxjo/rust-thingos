@@ -133,3 +133,35 @@
     holding `SCHEDULER`.
   - Deferred dispatch pressure should improve indirectly (fewer long lock holds → fewer
     `try_lock` misses and blocked dispatch events).
+
+## 6) SMP 8/8 orchestrator startup dependency de-serialization
+
+- **Targeted startup chain audited**
+  - `userspace/sprout/src/pipelines.rs::setup_ui_services`
+  - Previous behavior spawned UI services in one serialized chain on one startup lane:
+    - `placed -> flytrap -> blossom`
+
+- **Before dependency graph**
+  - `setup_ui_services`
+    - `spawn placed`
+    - `spawn flytrap`
+    - `spawn blossom`
+
+- **After dependency graph**
+  - `setup_ui_services`
+    - `spawn placed` (kept deterministic / first)
+    - fan out in bounded parallel:
+      - lane A: `spawn flytrap`
+      - lane B: `spawn blossom`
+
+- **Why this shape**
+  - `placed` remains deterministic and first because it provides placement policy.
+  - `flytrap` and `blossom` are independent of each other at spawn time, so they can
+    start concurrently without changing critical display/input bring-up semantics.
+  - Fanout is intentionally bounded to two additional startup tasks (no unbounded
+    worker creation).
+
+- **Expected diagnostics impact**
+  - Startup traces should show overlapping `flytrap` + `blossom` spawn work instead of
+    a single serialized UI chain, improving effective multi-CPU utilization during
+    userspace bring-up.
