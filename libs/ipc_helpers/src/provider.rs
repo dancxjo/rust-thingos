@@ -36,10 +36,10 @@
 
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp::{
-    Close, DeviceCall, Lookup, Poll, Read, Readdir, Rename, Stat, SubscribeReady,
-    UnsubscribeReady, Write,
+    Close, DeviceCall, Lookup, Poll, Read, Readdir, Rename, Stat, SubscribeReady, UnsubscribeReady,
+    Write,
 };
-use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader, VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP};
+use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
 use stem::syscall::channel::{channel_recv, channel_send_all, channel_try_recv};
 
 /// A decoded VFS RPC request from the kernel.
@@ -65,18 +65,12 @@ pub struct ProviderResponse {
 impl ProviderResponse {
     /// Successful response with no payload (e.g. `Close`).
     pub fn ok_empty() -> Self {
-        Self {
-            status: 0,
-            payload: alloc::vec![],
-        }
+        Self { status: 0, payload: alloc::vec![] }
     }
 
     /// Successful response with a raw byte payload.
     pub fn ok_bytes(data: &[u8]) -> Self {
-        Self {
-            status: 0,
-            payload: alloc::vec::Vec::from(data),
-        }
+        Self { status: 0, payload: alloc::vec::Vec::from(data) }
     }
 
     /// Successful `Lookup` response carrying a `u64` handle.
@@ -122,10 +116,7 @@ impl ProviderResponse {
 
     /// Error response carrying an errno.
     pub fn err(e: Errno) -> Self {
-        Self {
-            status: e as u8,
-            payload: alloc::vec![],
-        }
+        Self { status: e as u8, payload: alloc::vec![] }
     }
 }
 
@@ -157,9 +148,8 @@ impl ProviderLoop {
         }
 
         // SAFETY: pending has at least hdr_size bytes; header is repr(C, packed).
-        let hdr: VfsRpcReqHeader = unsafe {
-            core::ptr::read_unaligned(self.pending.as_ptr() as *const VfsRpcReqHeader)
-        };
+        let hdr: VfsRpcReqHeader =
+            unsafe { core::ptr::read_unaligned(self.pending.as_ptr() as *const VfsRpcReqHeader) };
         let op = VfsRpcOp::from_u8(hdr.op).ok_or(Errno::EINVAL)?;
 
         let payload_len = match op {
@@ -226,11 +216,7 @@ impl ProviderLoop {
         let payload = self.pending[hdr_size..frame_len].to_vec();
         self.pending.drain(..frame_len);
 
-        Ok(Some(ProviderRequest {
-            resp_port: hdr.resp_port,
-            op,
-            payload,
-        }))
+        Ok(Some(ProviderRequest { resp_port: hdr.resp_port, op, payload }))
     }
 
     /// Try to receive the next request without blocking.
@@ -246,15 +232,40 @@ impl ProviderLoop {
     ///
     /// [`next_request`]: Self::next_request
     pub fn try_next_request(&mut self) -> Result<Option<ProviderRequest>, Errno> {
-        if let Some(req) = self.try_parse_one()? {
-            return Ok(Some(req));
+        loop {
+            match self.try_parse_one() {
+                Ok(Some(req)) => return Ok(Some(req)),
+                Ok(None) => break,
+                Err(Errno::EINVAL) => {
+                    // Byte-stream channels can deliver fragmented/coalesced traffic.
+                    // If framing gets out of sync, drop one byte and retry to
+                    // recover alignment instead of returning EINVAL forever.
+                    if self.pending.is_empty() {
+                        break;
+                    }
+                    self.pending.drain(..1);
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         match channel_try_recv(self.read_handle, &mut self.recv_buf) {
             Ok(0) => Ok(None),
             Ok(n) => {
                 self.pending.extend_from_slice(&self.recv_buf[..n]);
-                self.try_parse_one()
+                loop {
+                    match self.try_parse_one() {
+                        Ok(Some(req)) => return Ok(Some(req)),
+                        Ok(None) => return Ok(None),
+                        Err(Errno::EINVAL) => {
+                            if self.pending.is_empty() {
+                                return Ok(None);
+                            }
+                            self.pending.drain(..1);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
             Err(Errno::EAGAIN) => Ok(None),
             Err(e) => Err(e),
@@ -267,8 +278,16 @@ impl ProviderLoop {
     /// should exit cleanly).
     pub fn next_request(&mut self) -> Result<ProviderRequest, Errno> {
         loop {
-            if let Some(req) = self.try_parse_one()? {
-                return Ok(req);
+            match self.try_parse_one() {
+                Ok(Some(req)) => return Ok(req),
+                Ok(None) => {}
+                Err(Errno::EINVAL) => {
+                    if !self.pending.is_empty() {
+                        self.pending.drain(..1);
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e),
             }
 
             let n = channel_recv(self.read_handle, &mut self.recv_buf)?;
@@ -280,11 +299,7 @@ impl ProviderLoop {
     }
 
     /// Send `response` back to the kernel on the given `resp_port`.
-    pub fn send_response(
-        &self,
-        resp_port: u32,
-        response: ProviderResponse,
-    ) -> Result<(), Errno> {
+    pub fn send_response(&self, resp_port: u32, response: ProviderResponse) -> Result<(), Errno> {
         let total = 1 + response.payload.len();
         let mut buf = alloc::vec![0u8; total.min(VFS_RPC_MAX_RESP)];
         buf[0] = response.status;
