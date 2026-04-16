@@ -9,10 +9,10 @@
 //! crosses a network boundary.
 //!
 //! # Relation to ioctls
-//! The terminal ioctl commands (`TCGETS`, `TCSETS`) are encoded as
+//! Terminal ioctl commands (`TCGETS`, `TCSETS`, `TIOCGWINSZ`) are encoded as
 //! [`crate::device::DeviceKind::Terminal`] operations with the `op` field set
-//! to [`TERMINAL_OP_TCGETS`] or [`TERMINAL_OP_TCSETS`].  The payload (the
-//! `Termios` struct) is passed via the `in_ptr`/`out_ptr` fields of
+//! to one of the `TERMINAL_OP_*` constants. The payload (`Termios`/`Winsize`)
+//! is passed via the `in_ptr`/`out_ptr` fields of
 //! [`crate::device::DeviceCall`].
 
 // ── Termios struct ────────────────────────────────────────────────────────────
@@ -38,6 +38,16 @@ pub struct Termios {
     pub _pad: [u8; 3],
     /// Special characters array (indexed by `V*` constants).
     pub c_cc: [u8; NCCS],
+}
+
+/// Terminal window size, mirroring POSIX `struct winsize`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct Winsize {
+    pub ws_row: u16,
+    pub ws_col: u16,
+    pub ws_xpixel: u16,
+    pub ws_ypixel: u16,
 }
 
 // ── Input flags (c_iflag) ─────────────────────────────────────────────────────
@@ -123,6 +133,9 @@ pub const TERMINAL_OP_TCGETPGRP: u32 = 5;
 /// Set foreground process group ID for the controlling terminal.
 /// The kernel reads a `u32` pgid from the user buffer at `in_ptr`.
 pub const TERMINAL_OP_TCSETPGRP: u32 = 6;
+/// Query terminal window size.
+/// The kernel writes a [`Winsize`] to the user buffer at `out_ptr`.
+pub const TERMINAL_OP_TIOCGWINSZ: u32 = 7;
 
 // ── Default termios ───────────────────────────────────────────────────────────
 
@@ -179,5 +192,10 @@ mod tests {
     #[test]
     fn default_termios_icrnl_set() {
         assert_ne!(DEFAULT_TERMIOS.c_iflag & ICRNL, 0);
+    }
+
+    #[test]
+    fn winsize_size_is_stable() {
+        assert_eq!(core::mem::size_of::<Winsize>(), 8);
     }
 }
