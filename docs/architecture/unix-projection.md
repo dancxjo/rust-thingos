@@ -227,9 +227,9 @@ answers "in what world does this execution occur?":
 
 | Unix concept | `Place` field | Current kernel backing |
 |---|---|---|
-| `cwd` | `Place.cwd` | `Process.cwd: Arc<Mutex<String>>` |
-| VFS root | `Place.root` | `Process.root` (currently always `"/"`) |
-| Mount namespace | `Place.namespace` | `Process.namespace: NamespaceRef` (global stub) |
+| `cwd` | `Place.cwd` | `Process.cwd: String` |
+| VFS root | `Place.root` | `Process.root: String` |
+| Mount namespace | `Place.namespace` | `Process.namespace: NamespaceRef` (`global` / `ns-*` labels) |
 
 #### Bridge
 
@@ -240,9 +240,9 @@ answers "in what world does this execution occur?":
 // kernel/src/place/bridge.rs
 pub fn place_from_snapshot(snap: &ProcessSnapshot) -> thingos::place::Place {
     thingos::place::Place {
-        cwd: snap.cwd.clone(),
-        namespace: snap.namespace_label.clone(),
-        root: alloc::string::String::from("/"),  // PROVISIONAL: always "/"
+        cwd: if snap.cwd.is_empty() { "/".into() } else { snap.cwd.clone() },
+        namespace: if snap.namespace_label.is_empty() { "global".into() } else { snap.namespace_label.clone() },
+        root: if snap.root_path.is_empty() || !snap.root_path.starts_with('/') { "/".into() } else { snap.root_path.clone() },
     }
 }
 ```
@@ -261,12 +261,11 @@ thingos::place::Place  ──► procfs /proc/<pid>/place  |  IPC
 
 #### Why this matters
 
-When per-process namespace isolation is introduced, only `Process.namespace`
-(and its stub `NamespaceRef`) needs to be replaced with a real namespace
-object.  The `Place` canonical type, the bridge, and all public consumers
-remain unchanged.  The Unix compatibility layer (`chdir`, `chroot`, `unshare`)
-becomes a thin wrapper over `Place` mutation rather than a direct `Process`
-field mutation.
+When per-process namespace mount isolation is introduced, only the
+`NamespaceRef` backing needs to gain mount-table lookup isolation.  The
+`Place` canonical type, the bridge, and all public consumers remain unchanged.
+The Unix compatibility layer (`chdir`, `chroot`, `unshare`) becomes a thin
+wrapper over `Place` mutation rather than direct `Process` field mutation.
 
 ---
 
