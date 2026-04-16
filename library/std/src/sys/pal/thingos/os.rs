@@ -63,7 +63,7 @@ mod tests {
     fn path_as_bytes_accepts_non_utf8_paths() {
         let bytes = [b'/', b't', 0xff, b's', b't'];
         let os = unsafe { OsStr::from_encoded_bytes_unchecked(&bytes) };
-        assert_eq!(path_as_bytes(Path::new(os)), bytes);
+        assert_eq!(path_as_bytes(Path::new(os)), bytes.as_slice());
     }
 }
 
