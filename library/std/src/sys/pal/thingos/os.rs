@@ -17,6 +17,11 @@ fn syscall_err(ret: isize) -> io::Error {
     io::Error::from_raw_os_error((-ret) as i32)
 }
 
+#[inline]
+fn path_as_bytes(path: &path::Path) -> &[u8] {
+    path.as_os_str().as_encoded_bytes()
+}
+
 pub fn getcwd() -> io::Result<PathBuf> {
     // First call: buf_ptr=0 returns the number of bytes needed.
     let needed = unsafe { raw_syscall6(SYS_FS_GETCWD, 0, 0, 0, 0, 0, 0) };
@@ -36,19 +41,31 @@ pub fn getcwd() -> io::Result<PathBuf> {
     }
     let n = ret as usize;
     buf.truncate(n);
-    let s = crate::string::String::from_utf8(buf)
-        .map_err(|_| io::const_error!(io::ErrorKind::InvalidData, "cwd is not valid UTF-8"))?;
-    Ok(PathBuf::from(s))
+    // SAFETY: the kernel returns paths in the platform OsStr encoding, so unchecked
+    // conversion to OsString preserves the same byte sequence.
+    Ok(PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(buf) }))
 }
 
 pub fn chdir(p: &path::Path) -> io::Result<()> {
-    let path = p
-        .to_str()
-        .ok_or_else(|| io::const_error!(io::ErrorKind::InvalidInput, "path is not valid UTF-8"))?;
+    let path = path_as_bytes(p);
     let ret = unsafe {
         raw_syscall6(SYS_FS_CHDIR, path.as_ptr() as usize, path.len(), 0, 0, 0, 0)
     };
     if ret < 0 { Err(syscall_err(ret)) } else { Ok(()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_as_bytes;
+    use crate::ffi::OsStr;
+    use crate::path::Path;
+
+    #[test]
+    fn test_path_as_bytes_non_utf8() {
+        let bytes = [b'/', b't', 0xff, b's', b't'];
+        let os = unsafe { OsStr::from_encoded_bytes_unchecked(&bytes) };
+        assert_eq!(path_as_bytes(Path::new(os)), bytes.as_slice());
+    }
 }
 
 pub struct SplitPaths<'a> {
@@ -145,8 +162,7 @@ pub fn current_exe() -> io::Result<PathBuf> {
     }
     let n = ret as usize;
     buf.truncate(n);
-    let s = crate::string::String::from_utf8(buf).map_err(|_| {
-        io::const_error!(io::ErrorKind::InvalidData, "current_exe path is not valid UTF-8")
-    })?;
-    Ok(PathBuf::from(s))
+    // SAFETY: the kernel returns paths in the platform OsStr encoding, so unchecked
+    // conversion to OsString preserves the same byte sequence.
+    Ok(PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(buf) }))
 }
