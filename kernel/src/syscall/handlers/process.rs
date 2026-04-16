@@ -613,6 +613,25 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
         Vec::new()
     };
 
+    // Decode optional driver entrypoint symbol override.
+    // When non-empty, the kernel will resolve this symbol in the loaded ELF
+    // and use it as the process entry point instead of the default e_entry.
+    let entry_sym_override = if req.entry_sym_len > 0 && req.entry_sym_ptr != 0 {
+        const MAX_SYM_LEN: usize = 128;
+        let slen = req.entry_sym_len as usize;
+        if slen > MAX_SYM_LEN {
+            return Err(Errno::EINVAL);
+        }
+        validate_user_range(req.entry_sym_ptr as usize, slen, false)?;
+        let mut sym_bytes = alloc::vec![0u8; slen];
+        unsafe {
+            copyin(&mut sym_bytes, req.entry_sym_ptr as usize)?;
+        }
+        Some(alloc::string::String::from_utf8(sym_bytes).map_err(|_| Errno::EINVAL)?)
+    } else {
+        None
+    };
+
     // Use the general-purpose VFS-based runtime process creation path.
     // The `name` field in the request is treated as the VFS path to the
     // executable (e.g. `/usr/bin/ls`).
@@ -628,6 +647,7 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
             inherited_handles,
             cwd,
             fd_remap,
+            entry_sym_override,
         )
     }?;
 
