@@ -315,9 +315,14 @@ impl ConsoleNode {
         }
     }
 
-    fn is_background_caller(state: &ConsoleTtyState, caller: ConsoleCaller) -> bool {
-        let _ = state;
-        crate::presence::is_background_console_presence(caller.sid, caller.pgid)
+    fn is_background_caller(
+        caller: ConsoleCaller,
+        presence: crate::presence::ConsolePresenceState,
+    ) -> bool {
+        match (presence.controlling_sid, presence.foreground_pgid) {
+            (Some(sid), Some(fg_pgid)) => caller.sid == sid && caller.pgid != fg_pgid,
+            _ => false,
+        }
     }
 
     fn enforce_job_control_before_read() -> SysResult<()> {
@@ -330,7 +335,7 @@ impl ConsoleNode {
             Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
             let presence = crate::presence::console_presence_state();
             (
-                Self::is_background_caller(&state, caller),
+                Self::is_background_caller(caller, presence),
                 presence.controlling_sid,
                 presence.foreground_pgid,
             )
@@ -360,7 +365,7 @@ impl ConsoleNode {
             Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
             let presence = crate::presence::console_presence_state();
             (
-                Self::is_background_caller(&state, caller),
+                Self::is_background_caller(caller, presence),
                 (state.termios.c_lflag & abi::termios::TOSTOP) != 0,
                 presence.controlling_sid,
                 presence.foreground_pgid,
