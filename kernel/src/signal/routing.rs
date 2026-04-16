@@ -273,7 +273,7 @@ pub fn deliver_to_recipient(pid: u32, sig: u8) -> SignalDeliveryOutcome {
     let tids = {
         let mut p = pinfo.lock();
         p.unix_compat.signals.post(sig);
-        p.lifecycle.thread_ids.clone()
+        p.job.thread_ids.clone()
     };
 
     for tid in tids {

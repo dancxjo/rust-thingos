@@ -165,108 +165,11 @@ impl ProcessAddressSpace {
     }
 }
 
-/// Lifecycle subdivision of a `Process`.
+/// Backward-compatible alias for the kernel Job object.
 ///
-/// This struct groups all lifecycle/accounting concerns that are conceptually
-/// owned by **Job**, not by `Process`, `Task`, or `Space`.  It lives inside
-/// `Process` as a transitional measure: the fields are here because a
-/// first-class `Job` kernel object does not yet exist, but they are
-/// deliberately separated so that future extraction into `Job` is obvious
-/// and mechanical.
-///
-/// # Conceptual future ownership
-///
-/// In the emerging ThingOS object model:
-/// - **Task** owns execution context (registers, stack, scheduling state).
-/// - **Job** owns lifecycle: creation, parent/child linkage, thread-group
-///   membership, exec gating, exit-status accumulation, and reaping.
-/// - **Process** is transitional and should stop accumulating lifecycle meaning.
-///
-/// New kernel code that needs to add lifecycle state should add it **here**,
-/// not directly to top-level `Process`.  When `Job` is introduced as a
-/// first-class object, this subdivision is the extraction seam.
-///
-/// # Current lifecycle responsibility set
-///
-/// | Field              | Role                                                        |
-/// |--------------------|-------------------------------------------------------------|
-/// | `ppid`             | Parent/child linkage for `waitpid` filtering                |
-/// | `thread_ids`       | Thread-group membership; drives group-exit and exec collapse|
-/// | `exec_in_progress` | Lifecycle gate; blocks `SYS_SPAWN_THREAD` during exec       |
-/// | `children_done`    | Exit-status accumulator consumed by parent `waitpid`        |
-///
-/// # Future extraction seams
-///
-/// Likely follow-on cuts once a first-class `Job` is introduced:
-/// - Promote `ProcessLifecycle` into `Job` and share it across threads in the
-///   group (replacing the `Arc<Mutex<Process>>` back-reference for lifecycle).
-/// - Move `exit_code` and `exit_waiters` from `Thread<R>` here, then into `Job`.
-/// - Move parent/child lifecycle semantics (SIGCHLD, orphan reaping) into `Job`.
-/// - Move `pid` (TGID) from top-level `Process` here once `Space` identity is
-///   separated; `pid` currently doubles as both lifecycle ID (→ `Job`) and
-///   address-space tag (→ `Space`).
-/// - Detach `children_done` from `Process` entirely once `Job` can hold its own
-///   wait queue.
-///
-/// # Relationship to the `kernel::job::bridge` module
-///
-/// `kernel::job::bridge` is the canonical public surface for lifecycle state.
-/// All lifecycle-facing public paths (procfs, introspection, wait syscalls)
-/// should derive `Job` / `JobExit` / `JobWaitResult` through that bridge
-/// rather than reading this subdivision directly.  This subdivision is the
-/// preferred **source** for those bridge mappings.
-pub struct ProcessLifecycle {
-    /// PID of the parent process.
-    ///
-    /// Used by `waitpid` to filter exit notifications to the correct parent.
-    /// Migrates to `Job` with exit/wait semantics.
-    pub ppid: u32,
-    /// TIDs of all threads in this thread group.
-    ///
-    /// The first entry is the thread-group leader (TID == PID).  Entries are
-    /// added on `spawn_user_thread` and removed when a thread exits.
-    /// Drives group-leader exit (kills siblings) and exec collapse.
-    pub thread_ids: Vec<ThreadId>,
-    /// Set while an `exec` is in progress; blocks new `SYS_SPAWN_THREAD` calls.
-    ///
-    /// This is a lifecycle gate: concurrent thread spawning is illegal during
-    /// exec collapse.  Belongs with `Job` lifecycle once extracted.
-    pub exec_in_progress: bool,
-    /// Exited children waiting for `waitpid` to consume their status.
-    ///
-    /// Each entry is `(child_pid, wait_status)`.  The status is encoded in
-    /// the same format as POSIX `waitpid`: normal exit uses `(code << 8)`,
-    /// signal termination uses `signum`, and stopped/continued children use
-    /// the appropriate `w_stop_sig` / `w_continued` values.
-    pub children_done: alloc::collections::VecDeque<(u32, i32)>,
-    /// Optional inbox to receive a canonical `JobExit` message when this job
-    /// exits.
-    ///
-    /// When set, `kernel::job::notify::emit_job_exit` delivers a typed
-    /// `Message` (kind `THINGOS_JOB_EXIT`) to this inbox at the moment the
-    /// thread-group leader transitions to the `Dead` state.
-    ///
-    /// Set via `kernel::job::notify::register_exit_observer`.  `None` means
-    /// no inbox delivery is attempted (legacy/transitional path only).
-    pub exit_observer_inbox: Option<crate::inbox::InboxId>,
-}
-
-impl ProcessLifecycle {
-    /// Create a fresh lifecycle subdivision for a new process.
-    ///
-    /// `ppid` is the PID of the creating (parent) process, or `0` for a
-    /// root/orphan process.  `leader_tid` is the TID of the thread-group
-    /// leader (normally equal to the new process's PID cast to `ThreadId`).
-    pub fn new(ppid: u32, leader_tid: ThreadId) -> Self {
-        ProcessLifecycle {
-            ppid,
-            thread_ids: alloc::vec![leader_tid],
-            exec_in_progress: false,
-            children_done: alloc::collections::VecDeque::new(),
-            exit_observer_inbox: None,
-        }
-    }
-}
+/// Transitional code that still references `ProcessLifecycle` now points to
+/// the first-class lifecycle owner in `crate::job::Job`.
+pub type ProcessLifecycle = crate::job::Job;
 
 /// Delivery strategy used when a message is enqueued into a process inbox.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -464,7 +367,7 @@ impl ProcessUnixCompat {
 /// | Resource                | Owner   | How threads access it                            |
 /// |-------------------------|---------|--------------------------------------------------|
 /// | PID                     | Process | `process.lock().pid`                             |
-/// | PPID / thread list      | Process | `process.lock().lifecycle.ppid` etc.             |
+/// | PPID / thread list      | Process | `process.lock().job.ppid` etc.                   |
 /// | VM address space        | Process | `process.lock().space.aspace_raw`                |
 /// | VM mappings             | Process | `process.lock().space.mappings` (Arc)            |
 /// | FD table                | Process | `process.lock().thing_table`                        |
@@ -486,10 +389,10 @@ impl ProcessUnixCompat {
 /// the appropriate bridge module.
 ///
 /// **Lifecycle** (Job — `kernel::job::bridge`):
-/// * `lifecycle` — grouped under [`ProcessLifecycle`]; contains `ppid`,
+/// * `job` — first-class [`crate::job::Job`], contains `ppid`,
 ///   `thread_ids`, `exec_in_progress`, and `children_done`.
 ///   New code must not add lifecycle state directly to `Process`; add it to
-///   `ProcessLifecycle` instead.
+///   `crate::job::Job` instead.
 ///
 /// **Place** (world/visibility context — `kernel::place::bridge`):
 /// * `cwd` — current working directory path → `Place::cwd`
@@ -529,7 +432,7 @@ pub struct Process {
     /// Thread Group ID — the PID of the thread-group leader.
     ///
     /// `pid` is kept at the top level of `Process` rather than inside
-    /// `lifecycle` because it currently doubles as both the lifecycle identity
+    /// `job` because it currently doubles as both the lifecycle identity
     /// (→ future `Job`) and the address-space identity (→ future `Space`).
     /// Once those two responsibilities are separated, `pid` will migrate into
     /// `ProcessLifecycle` alongside the other `Job`-bound fields.
@@ -540,12 +443,8 @@ pub struct Process {
     // This subdivision is the extraction seam for a future first-class `Job`
     // object.  Do NOT add new lifecycle state directly to top-level `Process` —
     // add it to `ProcessLifecycle` instead.
-    /// Lifecycle subdivision — conceptually future `Job` ownership.
-    ///
-    /// Contains parent/child linkage, thread-group membership, exec gating,
-    /// and the `waitpid` exit queue.  See [`ProcessLifecycle`] for the full
-    /// design rationale and future extraction seams.
-    pub lifecycle: ProcessLifecycle,
+    /// First-class job object containing lifecycle ownership.
+    pub job: crate::job::Job,
 
     // ── Unix legacy compatibility boundary ───────────────────────────────────
     // ALL Unix-derived compatibility state lives here, behind an explicit
@@ -661,7 +560,7 @@ impl Process {
 
     /// Transitional runtime parent linkage for scheduler/plumbing code.
     pub fn runtime_parent_pid(&self) -> u32 {
-        self.lifecycle.ppid
+        self.job.ppid
     }
 
     /// Explicit identity layering for one runtime task belonging to this process.
@@ -684,17 +583,17 @@ impl Process {
 
     /// Remove one thread from this job's lifecycle membership list.
     pub fn remove_thread_from_job(&mut self, tid: TaskId) {
-        self.lifecycle.thread_ids.retain(|&t| t != tid);
+        self.job.thread_ids.retain(|&t| t != tid);
     }
 
     /// Drain all tracked thread IDs from this job lifecycle.
     pub fn take_job_thread_ids(&mut self) -> Vec<TaskId> {
-        core::mem::take(&mut self.lifecycle.thread_ids)
+        core::mem::take(&mut self.job.thread_ids)
     }
 
     /// Job-exit observer inbox attached to this lifecycle, if any.
     pub fn job_exit_observer_inbox(&self) -> Option<crate::inbox::InboxId> {
-        self.lifecycle.exit_observer_inbox
+        self.job.exit_observer_inbox
     }
 
     /// Runtime helper: gather live thread states for this job from a TID map.
@@ -702,7 +601,7 @@ impl Process {
         &self,
         tid_state: &alloc::collections::BTreeMap<TaskId, TaskState>,
     ) -> Vec<TaskState> {
-        self.lifecycle
+        self.job
             .thread_ids
             .iter()
             .filter_map(|&tid| tid_state.get(&tid).copied())
@@ -725,7 +624,7 @@ impl Process {
     /// so this adapter intentionally populates just `state`.
     pub fn canonical_job(&self, thread_states: &[TaskState]) -> thingos::job::Job {
         thingos::job::Job {
-            state: crate::job::bridge::job_state_from_lifecycle(&self.lifecycle, thread_states),
+            state: crate::job::bridge::job_state_from_lifecycle(&self.job, thread_states),
         }
     }
 

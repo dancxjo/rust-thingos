@@ -37,9 +37,9 @@ pub fn task_exec_current<R: BootRuntime>(
     //    rejected with EAGAIN until the flag is cleared or the exec commits.
     let sibling_tids: Vec<crate::task::TaskId> = {
         let mut pinfo = pinfo_arc.lock();
-        pinfo.lifecycle.exec_in_progress = true;
+        pinfo.job.exec_in_progress = true;
         pinfo
-            .lifecycle.thread_ids
+            .job.thread_ids
             .iter()
             .copied()
             .filter(|&t| t != tid)
@@ -63,7 +63,7 @@ pub fn task_exec_current<R: BootRuntime>(
     // Helper macro: clear exec_in_progress and return an error.
     macro_rules! abort_exec {
         ($err:expr) => {{
-            pinfo_arc.lock().lifecycle.exec_in_progress = false;
+            pinfo_arc.lock().job.exec_in_progress = false;
             return Err($err);
         }};
     }
@@ -245,7 +245,7 @@ pub fn task_exec_current<R: BootRuntime>(
         // Close all file descriptors marked THING_CLOEXEC before the new image runs.
         pinfo.thing_table.close_on_exec();
         // Commit: caller is now the only thread; clear the flag.
-        pinfo.lifecycle.exec_in_progress = false;
+        pinfo.job.exec_in_progress = false;
     }
 
     // 7. Finalize the new task state
@@ -488,12 +488,14 @@ mod tests {
     ) -> Arc<Mutex<ProcessInfo>> {
         Arc::new(Mutex::new(ProcessInfo {
             pid,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: alloc::vec![tid_leader, tid_sibling],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(pid, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -509,7 +511,7 @@ mod tests {
     #[test]
     fn exec_in_progress_default_false() {
         let pinfo = make_two_thread_pinfo(9200, 9200, 9201);
-        assert!(!pinfo.lock().lifecycle.exec_in_progress, "should start as false");
+        assert!(!pinfo.lock().job.exec_in_progress, "should start as false");
     }
 
     /// Setting exec_in_progress blocks new siblings from being visible.
@@ -518,13 +520,13 @@ mod tests {
         let pinfo = make_two_thread_pinfo(9210, 9210, 9211);
         {
             let mut pi = pinfo.lock();
-            pi.lifecycle.exec_in_progress = true;
+            pi.job.exec_in_progress = true;
         }
-        assert!(pinfo.lock().lifecycle.exec_in_progress, "should be set");
+        assert!(pinfo.lock().job.exec_in_progress, "should be set");
 
         // Simulate pre-commit failure: clear the flag.
-        pinfo.lock().lifecycle.exec_in_progress = false;
-        assert!(!pinfo.lock().lifecycle.exec_in_progress, "should be cleared on rollback");
+        pinfo.lock().job.exec_in_progress = false;
+        assert!(!pinfo.lock().job.exec_in_progress, "should be cleared on rollback");
     }
 
     /// Verify that the sibling TID collection logic (filter out current TID)
@@ -537,7 +539,7 @@ mod tests {
         // Simulate the sibling collection step in task_exec_current.
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let pi = pinfo.lock();
-            pi.lifecycle.thread_ids
+            pi.job.thread_ids
                 .iter()
                 .copied()
                 .filter(|&t| t != caller_tid)
@@ -553,12 +555,14 @@ mod tests {
     fn exec_sibling_collection_three_threads() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9230,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: alloc::vec![9230, 9231, 9232],
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9230, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
@@ -572,7 +576,7 @@ mod tests {
         let caller_tid: crate::task::TaskId = 9230;
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let pi = pinfo.lock();
-            pi.lifecycle.thread_ids
+            pi.job.thread_ids
                 .iter()
                 .copied()
                 .filter(|&t| t != caller_tid)
@@ -590,7 +594,7 @@ mod tests {
     fn exec_single_threaded_no_siblings() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9240,
-            lifecycle: crate::task::ProcessLifecycle::new(1, 9240),
+            job: crate::task::ProcessLifecycle::new(1, 9240),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9240, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
@@ -603,8 +607,8 @@ mod tests {
         let caller_tid: crate::task::TaskId = 9240;
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let mut pi = pinfo.lock();
-            pi.lifecycle.exec_in_progress = true;
-            pi.lifecycle.thread_ids
+            pi.job.exec_in_progress = true;
+            pi.job.thread_ids
                 .iter()
                 .copied()
                 .filter(|&t| t != caller_tid)
@@ -612,7 +616,7 @@ mod tests {
         };
 
         assert!(siblings.is_empty(), "no siblings in single-threaded process");
-        assert!(pinfo.lock().lifecycle.exec_in_progress, "exec_in_progress should be set");
+        assert!(pinfo.lock().job.exec_in_progress, "exec_in_progress should be set");
     }
 
     /// After a simulated successful exec commit, exec_in_progress is cleared
@@ -625,8 +629,8 @@ mod tests {
         // Phase 1: set flag and collect siblings.
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let mut pi = pinfo.lock();
-            pi.lifecycle.exec_in_progress = true;
-            pi.lifecycle.thread_ids
+            pi.job.exec_in_progress = true;
+            pi.job.thread_ids
                 .iter()
                 .copied()
                 .filter(|&t| t != caller_tid)
@@ -638,16 +642,16 @@ mod tests {
         {
             let mut pi = pinfo.lock();
             for &s in &siblings {
-                pi.lifecycle.thread_ids.retain(|&t| t != s);
+                pi.job.thread_ids.retain(|&t| t != s);
             }
         }
 
         // Phase 3: simulate commit — clear exec_in_progress.
-        pinfo.lock().lifecycle.exec_in_progress = false;
+        pinfo.lock().job.exec_in_progress = false;
 
         let pi = pinfo.lock();
-        assert!(!pi.lifecycle.exec_in_progress, "flag should be cleared after commit");
-        assert_eq!(pi.lifecycle.thread_ids, alloc::vec![caller_tid], "only caller should remain");
+        assert!(!pi.job.exec_in_progress, "flag should be cleared after commit");
+        assert_eq!(pi.job.thread_ids, alloc::vec![caller_tid], "only caller should remain");
     }
 
     /// On pre-commit failure the exec_in_progress flag must be cleared so the
@@ -657,21 +661,21 @@ mod tests {
         let pinfo = make_two_thread_pinfo(9260, 9260, 9261);
 
         // Begin exec.
-        pinfo.lock().lifecycle.exec_in_progress = true;
-        assert!(pinfo.lock().lifecycle.exec_in_progress);
+        pinfo.lock().job.exec_in_progress = true;
+        assert!(pinfo.lock().job.exec_in_progress);
 
         // Simulate a pre-commit failure (e.g., ENOEXEC).
-        pinfo.lock().lifecycle.exec_in_progress = false;
+        pinfo.lock().job.exec_in_progress = false;
 
         assert!(
-            !pinfo.lock().lifecycle.exec_in_progress,
+            !pinfo.lock().job.exec_in_progress,
             "exec_in_progress must be cleared on rollback"
         );
         // thread_ids should be untouched (siblings are still alive in the real
         // failure path because kill_by_tid is only called during the sibling-kill
         // phase which happens before FD resolution and ELF loading).
         assert_eq!(
-            pinfo.lock().lifecycle.thread_ids.len(),
+            pinfo.lock().job.thread_ids.len(),
             2,
             "thread_ids still has both threads on rollback"
         );
@@ -712,7 +716,7 @@ mod tests {
     fn exec_commit_closes_cloexec_fds() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9300,
-            lifecycle: crate::task::ProcessLifecycle::new(1, 9300),
+            job: crate::task::ProcessLifecycle::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
@@ -737,9 +741,9 @@ mod tests {
         // Simulate exec commit phase.
         {
             let mut pi = pinfo.lock();
-            pi.lifecycle.exec_in_progress = true;
+            pi.job.exec_in_progress = true;
             pi.thing_table.close_on_exec();
-            pi.lifecycle.exec_in_progress = false;
+            pi.job.exec_in_progress = false;
         }
 
         let pi = pinfo.lock();
@@ -751,7 +755,7 @@ mod tests {
             matches!(pi.thing_table.get(1), Err(abi::errors::Errno::EBADF)),
             "fd 1 (THING_CLOEXEC) must be closed on exec"
         );
-        assert!(!pi.lifecycle.exec_in_progress, "exec_in_progress cleared after commit");
+        assert!(!pi.job.exec_in_progress, "exec_in_progress cleared after commit");
     }
 
     /// When no FDs have THING_CLOEXEC, close_on_exec during exec is a no-op and
@@ -760,7 +764,7 @@ mod tests {
     fn exec_commit_preserves_all_fds_without_cloexec() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9310,
-            lifecycle: crate::task::ProcessLifecycle::new(1, 9310),
+            job: crate::task::ProcessLifecycle::new(1, 9310),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9310, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
@@ -916,7 +920,7 @@ mod tests {
 
         Arc::new(Mutex::new(ProcessInfo {
             pid,
-            lifecycle: crate::task::ProcessLifecycle::new(1, pid as crate::task::TaskId),
+            job: crate::task::ProcessLifecycle::new(1, pid as crate::task::TaskId),
             unix_compat: {
                 let mut uc = crate::task::ProcessUnixCompat::isolated(pid, false);
                 uc.argv = alloc::vec![
@@ -1085,7 +1089,7 @@ mod tests {
             pi.unix_compat.auxv = new_auxv.clone();
             pi.exec_path = alloc::string::String::from("/new/binary");
             pi.thing_table.close_on_exec();
-            pi.lifecycle.exec_in_progress = false;
+            pi.job.exec_in_progress = false;
             pi.space.set_aspace_raw(0x0000_C0DE_0000u64);
         }
 
@@ -1131,7 +1135,7 @@ mod tests {
         assert!(pi.thing_table.get(0).is_ok(), "non-cloexec fd must survive");
 
         // exec_in_progress: must be cleared
-        assert!(!pi.lifecycle.exec_in_progress, "exec_in_progress must be cleared after commit");
+        assert!(!pi.job.exec_in_progress, "exec_in_progress must be cleared after commit");
 
         // aspace_raw: must reflect new address space
         assert_eq!(pi.space.aspace_raw(), 0x0000_C0DE_0000u64, "aspace_raw not updated");
@@ -1156,12 +1160,14 @@ mod tests {
 
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9600,
-            lifecycle: crate::task::ProcessLifecycle {
+            job: crate::task::ProcessLifecycle {
                 ppid: 1,
                 thread_ids: all_tids.clone(),
                 exec_in_progress: false,
                 children_done: alloc::collections::VecDeque::new(),
                 exit_observer_inbox: None,
+                leader_exit_code: None,
+                leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: {
                 let mut uc = crate::task::ProcessUnixCompat::isolated(9600, false);
@@ -1177,12 +1183,12 @@ mod tests {
         }));
 
         // ── Phase 1: set exec_in_progress ────────────────────────────────────
-        pinfo.lock().lifecycle.exec_in_progress = true;
+        pinfo.lock().job.exec_in_progress = true;
 
         // ── Phase 2: collect siblings (must exclude caller) ───────────────────
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let pi = pinfo.lock();
-            pi.lifecycle.thread_ids
+            pi.job.thread_ids
                 .iter()
                 .copied()
                 .filter(|&t| t != caller_tid)
@@ -1199,28 +1205,28 @@ mod tests {
 
         // ── Phase 3: simulate sibling removal (mark_task_exited removes from thread_ids) ─
         for sid in &siblings {
-            pinfo.lock().lifecycle.thread_ids.retain(|&t| t != *sid);
+            pinfo.lock().job.thread_ids.retain(|&t| t != *sid);
         }
 
         // ── Phase 4 invariant: only caller remains in thread_ids ──────────────
         {
             let pi = pinfo.lock();
             assert_eq!(
-                pi.lifecycle.thread_ids,
+                pi.job.thread_ids,
                 alloc::vec![caller_tid],
                 "only exec-caller TID must remain in thread_ids after collapse"
             );
             // exec_in_progress is still set (commit hasn't happened yet)
             assert!(
-                pi.lifecycle.exec_in_progress,
+                pi.job.exec_in_progress,
                 "exec_in_progress must remain set until commit"
             );
         }
 
         // ── Phase 5: commit (clear exec_in_progress) ─────────────────────────
-        pinfo.lock().lifecycle.exec_in_progress = false;
+        pinfo.lock().job.exec_in_progress = false;
         assert!(
-            !pinfo.lock().lifecycle.exec_in_progress,
+            !pinfo.lock().job.exec_in_progress,
             "exec_in_progress must be cleared after commit"
         );
     }

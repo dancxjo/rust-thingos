@@ -210,7 +210,7 @@ pub mod x86_64 {
                     // Queue lifecycle status before exiting.
                     {
                         let p = pinfo_arc.lock();
-                        let ppid = p.lifecycle.ppid;
+                        let ppid = p.job.ppid;
                         let pid = p.pid;
                         drop(p);
                         crate::signal::notify_parent_child_event(ppid, pid, status);
@@ -250,7 +250,7 @@ pub mod x86_64 {
             let status = abi::signal::w_term_sig(abi::signal::SIGSEGV);
             {
                 let p = pinfo_arc.lock();
-                let ppid = p.lifecycle.ppid;
+                let ppid = p.job.ppid;
                 let pid = p.pid;
                 drop(p);
                 crate::signal::notify_parent_child_event(ppid, pid, status);
@@ -348,7 +348,7 @@ pub mod x86_64 {
         {
             let mut p = pinfo_arc.lock();
             p.unix_compat.signals.stopped = true;
-            let ppid = p.lifecycle.ppid;
+            let ppid = p.job.ppid;
             let pid = p.pid;
             drop(p);
             crate::signal::notify_parent_child_event(ppid, pid, abi::signal::w_stop_sig(sig));
@@ -363,8 +363,8 @@ pub mod x86_64 {
             return;
         }
         p.unix_compat.signals.stopped = false;
-        let tids = p.lifecycle.thread_ids.clone();
-        let ppid = p.lifecycle.ppid;
+        let tids = p.job.thread_ids.clone();
+        let ppid = p.job.ppid;
         let pid = p.pid;
         drop(p);
         for tid in tids {

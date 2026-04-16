@@ -152,7 +152,7 @@ fn enqueue_to_process(
         .map_err(|err| match err {
             MessageEnqueueError::InboxFull { .. } => DeliveryFailureReason::InboxFull,
         })?;
-    let tids = process.lifecycle.thread_ids.clone();
+    let tids = process.job.thread_ids.clone();
     drop(process);
 
     for tid in tids {
