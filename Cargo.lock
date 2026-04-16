@@ -10012,6 +10012,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "yes"
+version = "0.1.0"
+dependencies = [
+ "stem",
+]
+
+[[package]]
 name = "yoke"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
