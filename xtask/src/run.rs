@@ -48,6 +48,23 @@ fn x86_qemu_trace_enabled() -> bool {
     }
 }
 
+fn has_user_audio_args(qemu_flags: &str) -> bool {
+    let f = qemu_flags;
+    f.contains("-audiodev") || f.contains("virtio-sound") || f.contains("intel-hda")
+        || f.contains("ich9-intel-hda") || f.contains("hda-output") || f.contains("hda-duplex")
+        || f.contains("ac97")
+}
+
+fn default_audiodev_arg() -> Option<String> {
+    let backend = std::env::var("THINGOS_AUDIODEV").unwrap_or_else(|_| "pa".to_string());
+    let backend = backend.trim();
+    if backend.is_empty() || backend.eq_ignore_ascii_case("off") || backend.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(format!("{backend},id=audio0"))
+    }
+}
+
 pub fn run(
     sh: &Shell,
     arch: &str,
@@ -132,6 +149,17 @@ pub fn run(
                     "-M",
                     "q35,usb=off,vmport=off,i8042=on",
                 ]);
+            }
+
+            if !has_user_audio_args(qemu_flags) {
+                if let Some(audiodev) = default_audiodev_arg() {
+                    args.extend_from_slice(&[
+                        "-audiodev",
+                        &audiodev,
+                        "-device",
+                        "virtio-sound-pci,audiodev=audio0",
+                    ]);
+                }
             }
 
             args.extend(&final_args);
@@ -267,6 +295,17 @@ pub fn run_bios(
         &netdev,
     ];
 
+    if !has_user_audio_args(qemu_flags) {
+        if let Some(audiodev) = default_audiodev_arg() {
+            args.extend_from_slice(&[
+                "-audiodev",
+                &audiodev,
+                "-device",
+                "virtio-sound-pci,audiodev=audio0",
+            ]);
+        }
+    }
+
     if interactive {
         args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,usb=off,vmport=off,i8042=on"]);
     }
@@ -330,6 +369,17 @@ pub fn run_hdd(
                     "-M",
                     "q35,usb=off,vmport=off,i8042=on",
                 ]);
+            }
+
+            if !has_user_audio_args(qemu_flags) {
+                if let Some(audiodev) = default_audiodev_arg() {
+                    args.extend_from_slice(&[
+                        "-audiodev",
+                        &audiodev,
+                        "-device",
+                        "virtio-sound-pci,audiodev=audio0",
+                    ]);
+                }
             }
 
             args.extend(&final_args);

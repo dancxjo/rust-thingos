@@ -659,6 +659,8 @@ fn setup_initial_tls_block<R: BootRuntime>(
     _load_bias: u64,
 ) -> Option<u64> {
     // ── Geometry ───────────────────────────────────────────────────────────
+    // Honor ELF-provided TLS alignment with a conservative 16-byte floor.
+    // x86_64 runtimes commonly assume a 16-byte-aligned TP/TCB.
     let tls_align = tls.align.max(16);
     // Round memsz up to the required TLS alignment so the TCB starts aligned.
     let tls_data_size = align_up_u64(tls.memsz, tls_align);
@@ -701,8 +703,16 @@ fn setup_initial_tls_block<R: BootRuntime>(
     // ── Set up the TCB self-pointer ─────────────────────────────────────────
     // TP = start of TCB = tls_block_vaddr + tls_data_size.
     let tp: u64 = tls_block_vaddr.saturating_add(tls_data_size);
-    // Write the self-pointer: *((u64*)tp) = tp.
+    // Write the TCB anchor words.
+    //   *((u64*)tp + 0) = tp  (self pointer)
+    //   *((u64*)tp + 1) = 0   (initial DTV pointer slot)
     hhdm_write_u64(&page_hhdms, tls_data_size, tp, page_size);
+    hhdm_write_u64(
+        &page_hhdms,
+        tls_data_size.saturating_add(core::mem::size_of::<u64>() as u64),
+        0,
+        page_size,
+    );
 
     // ── Record VM region ───────────────────────────────────────────────────
     regions.push(VmRegionInfo {

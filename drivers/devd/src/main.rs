@@ -13,6 +13,8 @@ use alloc::vec::Vec;
 use binding::{match_binding, mount_hint};
 use catalog::Catalog;
 use spawn::ManagedDriver;
+use abi::syscall::vfs_flags::O_RDONLY;
+use stem::syscall::vfs::{vfs_close, vfs_open};
 use stem::{debug, error, warn};
 use sysfs::{scan_devices, SysDevice};
 
@@ -57,7 +59,12 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
     let abs_path: String = if driver_path.starts_with('/') {
         driver_path.to_string()
     } else {
-        alloc::format!("/drivers/{}", driver_path)
+        let in_drivers = alloc::format!("/drivers/{}", driver_path);
+        if path_exists(&in_drivers) {
+            in_drivers
+        } else {
+            alloc::format!("/bin/{}", driver_path)
+        }
     };
 
     // Inspect the binary.
@@ -135,6 +142,16 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
             m.monitor();
         }
         stem::time::sleep_ms(100);
+    }
+}
+
+fn path_exists(path: &str) -> bool {
+    match vfs_open(path, O_RDONLY) {
+        Ok(fd) => {
+            let _ = vfs_close(fd);
+            true
+        }
+        Err(_) => false,
     }
 }
 

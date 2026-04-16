@@ -130,7 +130,7 @@ pub fn read_tls_info() -> Option<TlsInfo> {
 ///
 /// Returns [`Errno::ENOMEM`] when the anonymous memory allocation fails.
 pub fn alloc_tls_block(info: &TlsInfo) -> Result<usize, Errno> {
-    // Minimum alignment is 16 to satisfy compiler ABI expectations.
+    // Match ELF TLS offsets with a conservative 16-byte minimum alignment.
     let tls_align = info.align.max(16);
     let data_size = round_up(info.memsz, tls_align);
     let tcb_size: usize = 16; // self-pointer (u64) + DTV pointer (u64)
@@ -166,9 +166,10 @@ pub fn alloc_tls_block(info: &TlsInfo) -> Result<usize, Errno> {
     }
     // BSS bytes [filesz, memsz) are already zero from the anonymous mapping.
 
-    // Write the mandatory ELF x86_64 TCB self-pointer: *TP = TP.
+    // Initialize Variant II TCB words: self-pointer and initial DTV slot.
     unsafe {
         *(tp as *mut usize) = tp;
+        *((tp + core::mem::size_of::<usize>()) as *mut usize) = 0;
     }
 
     Ok(tp)

@@ -14,7 +14,34 @@ mod tone;
 
 use abi::device::DeviceKind;
 use abi::sound::{AudioParams, AudioSampleFormat, AudioStreamInfo, AUDIO_GET_INFO, AUDIO_SET_PARAMS, AUDIO_START};
-use stem::{info, warn};
+use stem::info;
+
+fn read_piped_stdin() -> Option<Vec<u8>> {
+    use abi::syscall::poll_flags::POLLIN;
+    use stem::syscall::vfs::{vfs_poll, vfs_read};
+
+    let mut pollfds = [abi::syscall::PollThing {
+        thing: 0,
+        events: POLLIN,
+        revents: 0,
+    }];
+
+    if vfs_poll(&mut pollfds, 0).is_err() || (pollfds[0].revents & POLLIN) == 0 {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match vfs_read(0, &mut chunk) {
+            Ok(0) => break,
+            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Err(_) => break,
+        }
+    }
+
+    if out.is_empty() { None } else { Some(out) }
+}
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -87,8 +114,11 @@ fn main(_arg: usize) -> ! {
         let _ = stem::syscall::vfs::vfs_device_call_raw(out_fd, &call);
     }
 
-    // Generate PCM samples.
-    let samples: Vec<u8> = if let Some(freq) = tone_freq {
+    // Consume piped PCM when stdin is connected, otherwise generate samples.
+    let samples: Vec<u8> = if let Some(stdin_pcm) = read_piped_stdin() {
+        info!("Beeper: Streaming piped PCM from stdin ({} bytes)", stdin_pcm.len());
+        stdin_pcm
+    } else if let Some(freq) = tone_freq {
         info!("Beeper: Generating {}Hz sine wave for {}s", freq, seconds);
         let mut gen = tone::ToneGenerator::new(freq, sample_rate as f64);
         let count = (seconds * sample_rate as f64) as usize;

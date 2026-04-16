@@ -26,12 +26,14 @@
 #![no_std]
 #![no_main]
 use alloc::string::{String, ToString};
-use core::default::Default;
 extern crate alloc;
 
 mod spec;
 
 use abi::device::DeviceKind;
+use abi::driver_interface::{
+    DriverEntryCtx, DriverInterfaceV1, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
+};
 use abi::errors::Errno;
 use abi::sound::{
     AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo, AUDIO_DRAIN,
@@ -47,6 +49,18 @@ use stem::syscall::channel::channel_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, info, warn};
 use virtio::device::VirtioDevice;
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THING_DRIVER_V1: DriverInterfaceV1 = DriverInterfaceV1 {
+    abi_version: DRIVER_INTERFACE_ABI_VERSION,
+    flags: DRIVER_FLAG_PCI,
+    vendor_id: 0x1af4,
+    device_id: 0,
+    class_code: 0x040100,
+    class_mask: 0xffff00,
+    entry_symbol: [0; 32],
+};
 
 // ── VirtIO queue indices ──────────────────────────────────────────────────────
 
@@ -492,14 +506,11 @@ fn ok_device_call(ret_val: u32, out_data: &[u8]) -> ProviderResponse {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-#[stem::main]
-fn main(boot_fd: usize) -> ! {
+fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     info!("SND: Starting VirtIO Sound Driver (boot_fd={})...", boot_fd);
 
-    let mut boot_fd = boot_fd;
-
     // Try to recover boot_fd from argv[1] if not passed directly.
-    if boot_fd == 0 {
+    if boot_fd == 0 && explicit_path.is_none() {
         let mut buf = [0u8; 1024];
         if let Ok(needed) = stem::syscall::argv_get(&mut buf) {
             if needed >= 4 {
@@ -537,7 +548,9 @@ fn main(boot_fd: usize) -> ! {
         0
     };
 
-    let path_str = if path_len > 0 {
+    let path_str = if let Some(path) = explicit_path {
+        path.to_string()
+    } else if path_len > 0 {
         core::str::from_utf8(&path_buf[..path_len])
             .unwrap_or("")
             .trim_matches(char::from(0))
@@ -546,7 +559,8 @@ fn main(boot_fd: usize) -> ! {
         info!("SND: Discovered device at {}", found);
         found
     } else {
-        "/sys/devices/pci-00:01.0".to_string()
+        error!("SND: No virtio-sound device found");
+        loop { stem::time::sleep_ms(1000); }
     };
 
     // Initialise hardware.
@@ -713,6 +727,24 @@ fn main(boot_fd: usize) -> ! {
             stem::time::sleep_ms(1);
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thing_driver_entry_v1(ctx_ptr: u64, ctx_len: u32) -> i32 {
+    let path_opt = if ctx_ptr != 0 && (ctx_len as usize) >= size_of::<DriverEntryCtx>() {
+        let ctx = unsafe { &*(ctx_ptr as *const DriverEntryCtx) };
+        let s = ctx.device_path_str();
+        if s.is_empty() { None } else { Some(s) }
+    } else {
+        None
+    };
+
+    run_driver(0, path_opt)
+}
+
+#[stem::main]
+fn main(boot_fd: usize) -> ! {
+    run_driver(boot_fd, None)
 }
 
 // ── Hardware helpers (unchanged from original) ────────────────────────────────

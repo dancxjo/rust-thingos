@@ -441,7 +441,7 @@ fn allocate_tls_block() -> usize {
         _ => return 0,
     };
 
-    // At least 16-byte alignment to satisfy compiler ABI expectations.
+    // Match ELF TLS offsets with a conservative 16-byte minimum alignment.
     let tls_align = info.align.max(16);
     let data_size = align_up(info.memsz, tls_align);
     let tcb_size = 16usize; // Variant II TCB: self-pointer (u64) + DTV slot (u64)
@@ -490,10 +490,16 @@ fn allocate_tls_block() -> usize {
         }
     }
 
-    // Write the ELF Variant II self-pointer: the first word of the TCB must
-    // contain the TP itself so that `mov rax, fs:0` returns the TP value.
+    // Initialize Variant II TCB anchor words.
+    // Word 0 is the required self-pointer; word 1 is the initial DTV slot.
     unsafe {
         core::ptr::write(crate::ptr::with_exposed_provenance_mut::<usize>(tp), tp);
+        core::ptr::write(
+            crate::ptr::with_exposed_provenance_mut::<usize>(
+                tp + core::mem::size_of::<usize>(),
+            ),
+            0,
+        );
     }
 
     tp
