@@ -76,11 +76,21 @@ struct StatusInfo {
     state: TcpState,
     local: Option<SocketAddr>,
     remote: Option<SocketAddr>,
+    linger_secs: Option<Option<u64>>,
+    ttl: Option<u32>,
+    only_v6: Option<bool>,
 }
 
 impl Default for StatusInfo {
     fn default() -> Self {
-        Self { state: TcpState::Other, local: None, remote: None }
+        Self {
+            state: TcpState::Other,
+            local: None,
+            remote: None,
+            linger_secs: None,
+            ttl: None,
+            only_v6: None,
+        }
     }
 }
 
@@ -93,6 +103,10 @@ struct PeekedUdpDatagram {
 #[derive(Debug, Clone, Copy, Default)]
 struct UdpStatusInfo {
     broadcast: Option<bool>,
+    ttl: Option<u32>,
+    multicast_loop_v4: Option<bool>,
+    multicast_ttl_v4: Option<u32>,
+    multicast_loop_v6: Option<bool>,
 }
 
 pub struct TcpStream {
@@ -105,6 +119,7 @@ pub struct TcpStream {
     nonblocking: Arc<Mutex<bool>>,
     /// Userspace peek buffer: bytes read from VFS but not yet consumed by `read()`.
     peek_buf: Arc<Mutex<vec::Vec<u8>>>,
+    read_shutdown: Arc<Mutex<bool>>,
 }
 
 impl TcpStream {
@@ -152,6 +167,7 @@ impl TcpStream {
             write_timeout: Arc::new(Mutex::new(None)),
             nonblocking: Arc::new(Mutex::new(false)),
             peek_buf: Arc::new(Mutex::new(vec::Vec::new())),
+            read_shutdown: Arc::new(Mutex::new(false)),
         };
 
         let peer_ip = peer_v4.ip().octets();
@@ -194,6 +210,9 @@ impl TcpStream {
     }
 
     pub fn peek(&self, buf: &mut [u8]) -> crate::io::Result<usize> {
+        if *self.read_shutdown.lock().unwrap() {
+            return Ok(0);
+        }
         if buf.is_empty() {
             return Ok(0);
         }
@@ -232,6 +251,9 @@ impl TcpStream {
     }
 
     pub fn read(&self, buf: &mut [u8]) -> crate::io::Result<usize> {
+        if *self.read_shutdown.lock().unwrap() {
+            return Ok(0);
+        }
         if buf.is_empty() {
             return Ok(0);
         }
@@ -272,6 +294,9 @@ impl TcpStream {
     }
 
     pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> crate::io::Result<usize> {
+        if *self.read_shutdown.lock().unwrap() {
+            return Ok(0);
+        }
         if bufs.is_empty() {
             return Ok(0);
         }
@@ -410,10 +435,13 @@ impl TcpStream {
 
     pub fn shutdown(&self, how: Shutdown) -> crate::io::Result<()> {
         match how {
-            // netd only exposes a full stream close today; treat write/both as FIN+close.
-            Shutdown::Write | Shutdown::Both => vfs_write(self.ctl_fd, b"close").map(|_| ()),
-            // TODO(thingos-net): add a VFS half-close control path for read shutdown.
-            Shutdown::Read => Err(crate::io::Error::from_raw_os_error(ENOSYS)),
+            Shutdown::Read => {
+                *self.read_shutdown.lock().unwrap() = true;
+                self.peek_buf.lock().unwrap().clear();
+                vfs_write(self.ctl_fd, b"shutdown read").map(|_| ())
+            }
+            Shutdown::Write => vfs_write(self.ctl_fd, b"shutdown write").map(|_| ()),
+            Shutdown::Both => vfs_write(self.ctl_fd, b"shutdown both").map(|_| ()),
         }
     }
 
@@ -441,17 +469,20 @@ impl TcpStream {
             write_timeout: Arc::new(Mutex::new(*self.write_timeout.lock().unwrap())),
             nonblocking: Arc::new(Mutex::new(*self.nonblocking.lock().unwrap())),
             peek_buf: Arc::new(Mutex::new(vec::Vec::new())),
+            read_shutdown: Arc::new(Mutex::new(*self.read_shutdown.lock().unwrap())),
         })
     }
 
-    pub fn set_linger(&self, _: Option<Duration>) -> crate::io::Result<()> {
-        // TODO(thingos-net): plumb SO_LINGER through netd control/status files.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_linger(&self, linger: Option<Duration>) -> crate::io::Result<()> {
+        let cmd = match linger {
+            Some(d) => format!("linger {}", d.as_secs()),
+            None => String::from("linger off"),
+        };
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn linger(&self) -> crate::io::Result<Option<Duration>> {
-        // TODO(thingos-net): plumb SO_LINGER through netd control/status files.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_status(self.id)?.linger_secs.unwrap_or(None).map(Duration::from_secs))
     }
 
     pub fn set_nodelay(&self, _: bool) -> crate::io::Result<()> {
@@ -462,14 +493,13 @@ impl TcpStream {
         Ok(true)
     }
 
-    pub fn set_ttl(&self, _: u32) -> crate::io::Result<()> {
-        // TODO(thingos-net): add TCP TTL control in the netd VFS protocol.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_ttl(&self, ttl: u32) -> crate::io::Result<()> {
+        let cmd = format!("ttl {ttl}");
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn ttl(&self) -> crate::io::Result<u32> {
-        // TODO(thingos-net): add TCP TTL control in the netd VFS protocol.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_status(self.id)?.ttl.unwrap_or(64))
     }
 
     pub fn take_error(&self) -> crate::io::Result<Option<crate::io::Error>> {
@@ -609,6 +639,7 @@ impl TcpListener {
                         write_timeout: Arc::new(Mutex::new(None)),
                         nonblocking: Arc::new(Mutex::new(false)),
                         peek_buf: Arc::new(Mutex::new(vec::Vec::new())),
+                        read_shutdown: Arc::new(Mutex::new(false)),
                     };
                     return Ok((stream, peer_addr));
                 }
@@ -646,24 +677,23 @@ impl TcpListener {
         })
     }
 
-    pub fn set_ttl(&self, _: u32) -> crate::io::Result<()> {
-        // TODO(thingos-net): add listener TTL control in the netd VFS protocol.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_ttl(&self, ttl: u32) -> crate::io::Result<()> {
+        let cmd = format!("ttl {ttl}");
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn ttl(&self) -> crate::io::Result<u32> {
-        // TODO(thingos-net): add listener TTL control in the netd VFS protocol.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_status(self.id)?.ttl.unwrap_or(64))
     }
 
-    pub fn set_only_v6(&self, _: bool) -> crate::io::Result<()> {
-        // TODO(thingos-net): IPv6 support is tracked separately; dual-stack toggles are unavailable.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_only_v6(&self, only_v6: bool) -> crate::io::Result<()> {
+        let value = if only_v6 { "1" } else { "0" };
+        let cmd = format!("only_v6 {value}");
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn only_v6(&self) -> crate::io::Result<bool> {
-        // TODO(thingos-net): IPv6 support is tracked separately; dual-stack toggles are unavailable.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_status(self.id)?.only_v6.unwrap_or(false))
     }
 
     pub fn take_error(&self) -> crate::io::Result<Option<crate::io::Error>> {
@@ -840,64 +870,72 @@ impl UdpSocket {
         Ok(read_udp_status(self.id)?.broadcast.unwrap_or(false))
     }
 
-    pub fn set_multicast_loop_v4(&self, _: bool) -> crate::io::Result<()> {
-        // TODO(thingos-net): add IPv4 multicast loopback control in netd.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_multicast_loop_v4(&self, enabled: bool) -> crate::io::Result<()> {
+        let value = if enabled { "1" } else { "0" };
+        let cmd = format!("multicast_loop_v4 {value}");
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn multicast_loop_v4(&self) -> crate::io::Result<bool> {
-        // TODO(thingos-net): add IPv4 multicast loopback control in netd.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_udp_status(self.id)?.multicast_loop_v4.unwrap_or(true))
     }
 
-    pub fn set_multicast_ttl_v4(&self, _: u32) -> crate::io::Result<()> {
-        // TODO(thingos-net): add IPv4 multicast TTL control in netd.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_multicast_ttl_v4(&self, ttl: u32) -> crate::io::Result<()> {
+        let cmd = format!("multicast_ttl_v4 {ttl}");
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn multicast_ttl_v4(&self) -> crate::io::Result<u32> {
-        // TODO(thingos-net): add IPv4 multicast TTL control in netd.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_udp_status(self.id)?.multicast_ttl_v4.unwrap_or(1))
     }
 
-    pub fn set_multicast_loop_v6(&self, _: bool) -> crate::io::Result<()> {
-        // TODO(thingos-net): IPv6 multicast support is tracked separately.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_multicast_loop_v6(&self, enabled: bool) -> crate::io::Result<()> {
+        let value = if enabled { "1" } else { "0" };
+        let cmd = format!("multicast_loop_v6 {value}");
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn multicast_loop_v6(&self) -> crate::io::Result<bool> {
-        // TODO(thingos-net): IPv6 multicast support is tracked separately.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_udp_status(self.id)?.multicast_loop_v6.unwrap_or(true))
     }
 
-    pub fn join_multicast_v4(&self, _: &Ipv4Addr, _: &Ipv4Addr) -> crate::io::Result<()> {
-        // TODO(thingos-net): add IPv4 multicast group membership control in netd.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn join_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> crate::io::Result<()> {
+        let group = multiaddr.octets();
+        let iface = interface.octets();
+        let cmd = format!(
+            "join_multicast_v4 {}.{}.{}.{} {}.{}.{}.{}",
+            group[0], group[1], group[2], group[3], iface[0], iface[1], iface[2], iface[3]
+        );
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
-    pub fn join_multicast_v6(&self, _: &Ipv6Addr, _: u32) -> crate::io::Result<()> {
-        // TODO(thingos-net): IPv6 multicast support is tracked separately.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> crate::io::Result<()> {
+        let cmd = format!("join_multicast_v6 {} {interface}", multiaddr);
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
-    pub fn leave_multicast_v4(&self, _: &Ipv4Addr, _: &Ipv4Addr) -> crate::io::Result<()> {
-        // TODO(thingos-net): add IPv4 multicast group membership control in netd.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn leave_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> crate::io::Result<()> {
+        let group = multiaddr.octets();
+        let iface = interface.octets();
+        let cmd = format!(
+            "leave_multicast_v4 {}.{}.{}.{} {}.{}.{}.{}",
+            group[0], group[1], group[2], group[3], iface[0], iface[1], iface[2], iface[3]
+        );
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
-    pub fn leave_multicast_v6(&self, _: &Ipv6Addr, _: u32) -> crate::io::Result<()> {
-        // TODO(thingos-net): IPv6 multicast support is tracked separately.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn leave_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> crate::io::Result<()> {
+        let cmd = format!("leave_multicast_v6 {} {interface}", multiaddr);
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
-    pub fn set_ttl(&self, _: u32) -> crate::io::Result<()> {
-        // TODO(thingos-net): add UDP TTL control in the netd VFS protocol.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+    pub fn set_ttl(&self, ttl: u32) -> crate::io::Result<()> {
+        let cmd = format!("ttl {ttl}");
+        vfs_write(self.ctl_fd, cmd.as_bytes()).map(|_| ())
     }
 
     pub fn ttl(&self) -> crate::io::Result<u32> {
-        // TODO(thingos-net): add UDP TTL control in the netd VFS protocol.
-        Err(crate::io::Error::from_raw_os_error(ENOSYS))
+        Ok(read_udp_status(self.id)?.ttl.unwrap_or(64))
     }
 
     pub fn take_error(&self) -> crate::io::Result<Option<crate::io::Error>> {
@@ -1107,18 +1145,7 @@ fn read_udp_status(id: u32) -> crate::io::Result<UdpStatusInfo> {
 
     let text = crate::str::from_utf8(&buf[..n])
         .map_err(|_| crate::io::Error::from_raw_os_error(EINVAL))?;
-
-    let mut out = UdpStatusInfo::default();
-    for line in text.lines() {
-        if let Some(broadcast) = line.strip_prefix("broadcast: ") {
-            out.broadcast = match broadcast.trim() {
-                "true" => Some(true),
-                "false" => Some(false),
-                _ => None,
-            };
-        }
-    }
-    Ok(out)
+    Ok(parse_udp_status_text(text))
 }
 
 fn read_status(id: u32) -> crate::io::Result<StatusInfo> {
@@ -1130,7 +1157,40 @@ fn read_status(id: u32) -> crate::io::Result<StatusInfo> {
 
     let text = crate::str::from_utf8(&buf[..n])
         .map_err(|_| crate::io::Error::from_raw_os_error(EINVAL))?;
+    Ok(parse_tcp_status_text(text))
+}
 
+fn parse_udp_status_text(text: &str) -> UdpStatusInfo {
+    let mut out = UdpStatusInfo::default();
+    for line in text.lines() {
+        if let Some(broadcast) = line.strip_prefix("broadcast: ") {
+            out.broadcast = match broadcast.trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            };
+        } else if let Some(ttl) = line.strip_prefix("ttl: ") {
+            out.ttl = ttl.trim().parse::<u32>().ok();
+        } else if let Some(v4_loop) = line.strip_prefix("multicast_loop_v4: ") {
+            out.multicast_loop_v4 = match v4_loop.trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            };
+        } else if let Some(v4_ttl) = line.strip_prefix("multicast_ttl_v4: ") {
+            out.multicast_ttl_v4 = v4_ttl.trim().parse::<u32>().ok();
+        } else if let Some(v6_loop) = line.strip_prefix("multicast_loop_v6: ") {
+            out.multicast_loop_v6 = match v6_loop.trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            };
+        }
+    }
+    out
+}
+
+fn parse_tcp_status_text(text: &str) -> StatusInfo {
     let mut out = StatusInfo::default();
     for line in text.lines() {
         if let Some(state) = line.strip_prefix("state: ") {
@@ -1147,9 +1207,23 @@ fn read_status(id: u32) -> crate::io::Result<StatusInfo> {
             out.local = parse_socket_addr(local.trim());
         } else if let Some(remote) = line.strip_prefix("remote: ") {
             out.remote = parse_socket_addr(remote.trim());
+        } else if let Some(ttl) = line.strip_prefix("ttl: ") {
+            out.ttl = ttl.trim().parse::<u32>().ok();
+        } else if let Some(linger) = line.strip_prefix("linger: ") {
+            out.linger_secs = if linger.trim() == "off" {
+                Some(None)
+            } else {
+                linger.trim().parse::<u64>().ok().map(Some)
+            };
+        } else if let Some(only_v6) = line.strip_prefix("only_v6: ") {
+            out.only_v6 = match only_v6.trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            };
         }
     }
-    Ok(out)
+    out
 }
 
 fn parse_socket_addr(text: &str) -> Option<SocketAddr> {
@@ -1163,6 +1237,34 @@ fn copy_udp_payload(buf: &mut [u8], datagram: &PeekedUdpDatagram) -> (usize, Soc
     let copy_len = buf.len().min(datagram.payload.len());
     buf[..copy_len].copy_from_slice(&datagram.payload[..copy_len]);
     (copy_len, datagram.src)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_tcp_status_options() {
+        let status = parse_tcp_status_text(
+            "state: established\nlocal: 127.0.0.1:1234\nremote: 127.0.0.1:5678\nttl: 42\nlinger: 3\nonly_v6: true\n",
+        );
+        assert_eq!(status.state, TcpState::Connected);
+        assert_eq!(status.ttl, Some(42));
+        assert_eq!(status.linger_secs, Some(Some(3)));
+        assert_eq!(status.only_v6, Some(true));
+    }
+
+    #[test]
+    fn parse_udp_status_options() {
+        let status = parse_udp_status_text(
+            "broadcast: false\nttl: 55\nmulticast_loop_v4: true\nmulticast_ttl_v4: 9\nmulticast_loop_v6: false\n",
+        );
+        assert_eq!(status.broadcast, Some(false));
+        assert_eq!(status.ttl, Some(55));
+        assert_eq!(status.multicast_loop_v4, Some(true));
+        assert_eq!(status.multicast_ttl_v4, Some(9));
+        assert_eq!(status.multicast_loop_v6, Some(false));
+    }
 }
 
 /// Parse an accept-response line: `"<conn_id> <a>.<b>.<c>.<d> <port>"`.

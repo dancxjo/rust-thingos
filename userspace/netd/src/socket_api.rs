@@ -62,6 +62,22 @@ struct ManagedSocket {
     pub listen_pool: Vec<(SocketHandle, usize)>,
     /// Whether limited IPv4 broadcast sends are enabled for this UDP socket.
     pub udp_broadcast: bool,
+    /// Configured TCP/UDP TTL value exposed through status/ctl.
+    pub ttl: u32,
+    /// Optional linger timeout in seconds for TCP sockets.
+    pub tcp_linger_secs: Option<u64>,
+    /// Listener IPv6-only toggle (stored for std::net parity).
+    pub only_v6: bool,
+    /// UDP IPv4 multicast loopback toggle.
+    pub udp_multicast_loop_v4: bool,
+    /// UDP IPv4 multicast TTL.
+    pub udp_multicast_ttl_v4: u32,
+    /// UDP IPv6 multicast loopback toggle.
+    pub udp_multicast_loop_v6: bool,
+    /// Tracked UDP IPv4 multicast memberships (`group`, `interface` octets).
+    pub udp_multicast_v4_groups: BTreeSet<([u8; 4], [u8; 4])>,
+    /// Tracked UDP IPv6 multicast memberships (`group`, `interface index`).
+    pub udp_multicast_v6_groups: BTreeSet<(String, u32)>,
 }
 
 impl ManagedSocket {
@@ -223,6 +239,14 @@ impl SocketApi {
             buf_idx,
             listen_pool: Vec::new(),
             udp_broadcast: false,
+            ttl: 64,
+            tcp_linger_secs: None,
+            only_v6: false,
+            udp_multicast_loop_v4: true,
+            udp_multicast_ttl_v4: 1,
+            udp_multicast_loop_v6: true,
+            udp_multicast_v4_groups: BTreeSet::new(),
+            udp_multicast_v6_groups: BTreeSet::new(),
         }
     }
 
@@ -363,11 +387,18 @@ impl SocketApi {
             Some(ep) => alloc::format!("{}:{}", ep.addr, ep.port),
             None => "none".into(),
         };
+        let linger = match managed.tcp_linger_secs {
+            Some(secs) => secs.to_string(),
+            None => "off".into(),
+        };
         alloc::format!(
-            "state: {}\nlocal: {}\nremote: {}\n",
+            "state: {}\nlocal: {}\nremote: {}\nttl: {}\nlinger: {}\nonly_v6: {}\n",
             Self::tcp_state_label(state),
             local,
-            remote
+            remote,
+            managed.ttl,
+            linger,
+            managed.only_v6
         )
     }
 
@@ -408,10 +439,14 @@ impl SocketApi {
             None => "none".into(),
         };
         alloc::format!(
-            "local: {}\nremote: {}\nbroadcast: {}\n",
+            "local: {}\nremote: {}\nbroadcast: {}\nttl: {}\nmulticast_loop_v4: {}\nmulticast_ttl_v4: {}\nmulticast_loop_v6: {}\n",
             local_str,
             remote_str,
-            managed.udp_broadcast
+            managed.udp_broadcast,
+            managed.ttl,
+            managed.udp_multicast_loop_v4,
+            managed.udp_multicast_ttl_v4,
+            managed.udp_multicast_loop_v6
         )
     }
 
@@ -574,6 +609,165 @@ impl SocketApi {
         if let Some(managed) = self.sockets.get_mut(&api_handle) {
             if managed.kind == SocketType::Udp {
                 managed.udp_broadcast = enabled;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_tcp_set_ttl(&mut self, api_handle: u32, ttl: u32) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Tcp {
+                managed.ttl = ttl;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_tcp_set_linger(&mut self, api_handle: u32, linger_secs: Option<u64>) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Tcp {
+                managed.tcp_linger_secs = linger_secs;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_tcp_set_only_v6(&mut self, api_handle: u32, enabled: bool) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Tcp {
+                managed.only_v6 = enabled;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_tcp_shutdown<'a>(
+        &mut self,
+        socket_set: &mut SocketSet<'a>,
+        api_handle: u32,
+        mode: &str,
+    ) -> bool {
+        let managed = match self.sockets.get(&api_handle) {
+            Some(s) if s.kind == SocketType::Tcp => s,
+            _ => return false,
+        };
+        let socket = socket_set.get_mut::<TcpSocket>(managed.handle);
+        match mode {
+            "read" => true,
+            "write" | "both" => {
+                socket.close();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn handle_udp_set_ttl(&mut self, api_handle: u32, ttl: u32) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed.ttl = ttl;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_udp_set_multicast_loop_v4(&mut self, api_handle: u32, enabled: bool) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed.udp_multicast_loop_v4 = enabled;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_udp_set_multicast_ttl_v4(&mut self, api_handle: u32, ttl: u32) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed.udp_multicast_ttl_v4 = ttl;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_udp_set_multicast_loop_v6(&mut self, api_handle: u32, enabled: bool) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed.udp_multicast_loop_v6 = enabled;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_udp_join_multicast_v4(
+        &mut self,
+        api_handle: u32,
+        group: Ipv4Address,
+        interface: Ipv4Address,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v4_groups
+                    .insert((*group.as_bytes(), *interface.as_bytes()));
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_udp_leave_multicast_v4(
+        &mut self,
+        api_handle: u32,
+        group: Ipv4Address,
+        interface: Ipv4Address,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v4_groups
+                    .remove(&(*group.as_bytes(), *interface.as_bytes()));
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_udp_join_multicast_v6(
+        &mut self,
+        api_handle: u32,
+        group: &str,
+        interface: u32,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v6_groups
+                    .insert((group.to_string(), interface));
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_udp_leave_multicast_v6(
+        &mut self,
+        api_handle: u32,
+        group: &str,
+        interface: u32,
+    ) -> bool {
+        if let Some(managed) = self.sockets.get_mut(&api_handle) {
+            if managed.kind == SocketType::Udp {
+                managed
+                    .udp_multicast_v6_groups
+                    .remove(&(group.to_string(), interface));
                 return true;
             }
         }
