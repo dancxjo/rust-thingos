@@ -71,6 +71,41 @@ To keep this failure mode explicit, Thing-OS runtime code emits a compile-time d
 
 These crates are clearly separated and never linked into the kernel or userspace binaries.
 
+## Porting Standard for Third-Party Rust Crates (`std` + `cfg(unix)`)
+
+For ecosystem crates like terminal UIs (`runa`) and file tools (`lsv`) that
+select Unix backends (`cfg(unix)`), ThingOS uses this default policy:
+
+1. **Default path (transparent)**: keep Unix-family compatibility and grow a
+   **thin libc POSIX shim** over existing ThingOS kernel/stem primitives.
+2. **Fallback path (targeted backend)**: add `cfg(target_os = "thingos")`
+   backends only for crates that require semantics we intentionally do not
+   emulate or where a native backend is materially better.
+3. **Do not fork by default**: prefer upstreamable backend additions over
+   long-lived private forks.
+
+### Option tradeoff summary
+
+| Option | Runtime overhead | Engineering overhead | Ecosystem compatibility |
+|---|---|---|---|
+| Full libc POSIX emulation | Moderate code-size growth; thin syscall translation cost; pthread/TLS bookkeeping in userspace | Lower per-crate maintenance after baseline lands | High (many `cfg(unix)` crates compile unchanged) |
+| Pure ThingOS-specific backends | Lowest runtime overhead for each crate | High ongoing maintenance across many crates | Medium/low unless each crate gains a native backend |
+
+### Minimum libc surface for `crossterm`-class crates
+
+To unblock common terminal stacks, prioritize this libc compatibility subset:
+
+- **`unistd` constants/functions**: `STDIN_FILENO`, `STDOUT_FILENO`,
+  `STDERR_FILENO`, `isatty`.
+- **`termios` basics**: `termios` struct + `tcgetattr`, `tcsetattr`,
+  `TCSANOW`, canonical/raw-mode flag bits used by raw-mode toggling.
+- **TTY ioctl substrate**: `ioctl(TIOCGWINSZ)` for terminal sizing.
+- **pthread baseline** (for std/threading consumers): `pthread_create`,
+  `pthread_join`, `pthread_detach`, `pthread_self`, basic attrs.
+
+This keeps the compatibility layer narrow while covering the most common
+`cfg(unix)` assumptions in CLI/TUI dependencies.
+
 ## Adding New Platform Capabilities
 
 When you need a new platform capability (e.g., file I/O, networking), follow this process:
