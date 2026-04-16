@@ -244,15 +244,21 @@ fn test_ioctl_tiocgwinsz_on_tty_reports_size() {
 
 #[test]
 fn test_fs_non_utf8_path_roundtrip() {
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
     let tmp = common::tmpdir();
     let non_utf8_name = unsafe { OsString::from_encoded_bytes_unchecked(vec![b'n', b'o', b'n', b'-', 0xFF]) };
     let path = tmp.join(&non_utf8_name);
+    let _cleanup = RemoveOnDrop(path.clone());
 
     fs::write(&path, b"non-utf8-path").unwrap();
     let mut read_back = Vec::new();
     File::open(&path).unwrap().read_to_end(&mut read_back).unwrap();
     assert_eq!(read_back, b"non-utf8-path");
     assert_eq!(path.file_name().unwrap().as_encoded_bytes(), non_utf8_name.as_encoded_bytes());
-
-    fs::remove_file(path).unwrap();
 }
