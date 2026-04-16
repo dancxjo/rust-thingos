@@ -865,7 +865,7 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
         return preferred;
     };
     let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
-    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire).max(1);
+    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
     let overloaded = preferred_depth >= least_depth.saturating_add(overload_gap);
     if overloaded && least_cpu != preferred {
         least_cpu
@@ -5505,8 +5505,8 @@ mod tests {
 
         // Make CPU 0 overloaded relative to CPU 1.
         const OVERLOAD_TASK_START: u64 = 9912;
-        const OVERLOAD_TASK_END_EXCLUSIVE: u64 = 9915;
-        for id in OVERLOAD_TASK_START..OVERLOAD_TASK_END_EXCLUSIVE {
+        const OVERLOAD_TASK_END: u64 = 9915;
+        for id in OVERLOAD_TASK_START..OVERLOAD_TASK_END {
             crate::task::registry::get_registry::<MockRuntime>()
                 .insert(alloc::boxed::Box::new(make_task(id, TaskState::Runnable, TaskPriority::Low)));
             sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -5590,8 +5590,8 @@ mod tests {
         });
 
         const OVERLOAD_TASK_START: u64 = 9922;
-        const OVERLOAD_TASK_END_EXCLUSIVE: u64 = 9925;
-        for id in OVERLOAD_TASK_START..OVERLOAD_TASK_END_EXCLUSIVE {
+        const OVERLOAD_TASK_END: u64 = 9925;
+        for id in OVERLOAD_TASK_START..OVERLOAD_TASK_END {
             let runnable = make_task(id, TaskState::Runnable, TaskPriority::Low);
             crate::task::registry::get_registry::<MockRuntime>()
                 .insert(alloc::boxed::Box::new(runnable));
