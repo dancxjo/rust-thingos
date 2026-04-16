@@ -1,6 +1,7 @@
 #![cfg(target_os = "thingos")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::ffi::{OsString, c_void};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
@@ -15,6 +16,26 @@ const PROCESS_CHILD_ENV: &str = "THINGOS_PAL_PROCESS_CHILD";
 const PROCESS_OUTPUT_STRESS_CHILD_ENV: &str = "THINGOS_PAL_PROCESS_OUTPUT_STRESS_CHILD";
 const PROCESS_OUTPUT_STRESS_CHUNK_SIZE: usize = 4096;
 const PROCESS_OUTPUT_STRESS_CHUNKS: usize = 128;
+const ENOSYS: i32 = 38;
+const TIOCGWINSZ: usize = 0x5413;
+const SOL_SOCKET: i32 = 1;
+const SO_REUSEADDR: i32 = 2;
+
+#[repr(C)]
+#[derive(Default)]
+struct Winsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+}
+
+unsafe extern "C" {
+    fn isatty(fd: i32) -> i32;
+    fn ioctl(fd: i32, request: usize, argp: *mut c_void) -> i32;
+    fn setsockopt(fd: i32, level: i32, optname: i32, optval: *const c_void, optlen: u32) -> i32;
+    fn getsockopt(fd: i32, level: i32, optname: i32, optval: *mut c_void, optlen: *mut u32) -> i32;
+}
 
 #[test]
 fn test_alloc() {
@@ -175,4 +196,63 @@ fn test_time_monotonic() {
     thread::sleep(Duration::from_millis(1));
     let b = Instant::now();
     assert!(b >= a, "Instant::now() must be non-decreasing");
+}
+
+#[test]
+fn test_libc_network_sockopts_report_unsupported_enosys() {
+    let optval: i32 = 1;
+    let rc = unsafe {
+        setsockopt(
+            0,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &optval as *const i32 as *const c_void,
+            core::mem::size_of::<i32>() as u32,
+        )
+    };
+    assert_eq!(rc, -1);
+    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(ENOSYS));
+
+    let mut read_back: i32 = 0;
+    let mut read_back_len: u32 = core::mem::size_of::<i32>() as u32;
+    let rc = unsafe {
+        getsockopt(
+            0,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &mut read_back as *mut i32 as *mut c_void,
+            &mut read_back_len as *mut u32,
+        )
+    };
+    assert_eq!(rc, -1);
+    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(ENOSYS));
+}
+
+#[test]
+fn test_ioctl_tiocgwinsz_on_tty_reports_size() {
+    let tty_fd = [0_i32, 1_i32, 2_i32].into_iter().find(|fd| unsafe { isatty(*fd) } == 1);
+    let Some(tty_fd) = tty_fd else {
+        return;
+    };
+
+    let mut ws = Winsize::default();
+    let rc = unsafe { ioctl(tty_fd, TIOCGWINSZ, &mut ws as *mut Winsize as *mut c_void) };
+    assert_eq!(rc, 0, "ioctl(TIOCGWINSZ) failed: {:?}", std::io::Error::last_os_error());
+    assert!(ws.ws_row > 0, "terminal rows should be non-zero");
+    assert!(ws.ws_col > 0, "terminal cols should be non-zero");
+}
+
+#[test]
+fn test_fs_non_utf8_path_roundtrip() {
+    let tmp = common::tmpdir();
+    let non_utf8_name = unsafe { OsString::from_encoded_bytes_unchecked(vec![b'n', b'o', b'n', b'-', 0xFF]) };
+    let path = tmp.join(&non_utf8_name);
+
+    fs::write(&path, b"non-utf8-path").unwrap();
+    let mut read_back = Vec::new();
+    File::open(&path).unwrap().read_to_end(&mut read_back).unwrap();
+    assert_eq!(read_back, b"non-utf8-path");
+    assert_eq!(path.file_name().unwrap().as_encoded_bytes(), non_utf8_name.as_encoded_bytes());
+
+    fs::remove_file(path).unwrap();
 }
