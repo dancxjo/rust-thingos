@@ -201,6 +201,15 @@ mod tests {
         assert_eq!(place.namespace, "ns-42");
     }
 
+    #[test]
+    fn test_namespace_label_from_isolated_namespace_is_propagated() {
+        let ns = crate::vfs::NamespaceRef::isolated();
+        let label = ns.label();
+        let snap = make_snapshot("/", &label, "/");
+        let place = place_from_snapshot(&snap);
+        assert_eq!(place.namespace, label);
+    }
+
     // ── root mapping ──────────────────────────────────────────────────────────
 
     #[test]

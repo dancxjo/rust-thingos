@@ -497,6 +497,10 @@ pub trait VfsDriver: Send + Sync {
 /// staged implementation roadmap.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceRef {
+    /// Stable namespace identifier.
+    ///
+    /// `1` is the global namespace.  Values `>= 2` are allocated
+    /// monotonically for isolated namespace identities.
     id: u64,
 }
 
