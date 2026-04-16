@@ -1,13 +1,13 @@
 //! Task and thread spawning functions.
 
-use crate::task::{Affinity, ProcessInfo, StartupArg, Task, TaskId, TaskState};
-use crate::{BootRuntime, BootTasking, UserEntry};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::SCHEDULER;
 use super::types::{DEFAULT_TIMESLICE, Scheduler};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::task::{Affinity, ProcessInfo, StartupArg, Task, TaskId, TaskState};
+use crate::{BootRuntime, BootTasking, UserEntry};
 
 const KERNEL_STACK_SIZE: usize = 65536;
 
@@ -189,9 +189,7 @@ impl<R: BootRuntime> Scheduler<R> {
         }
         let stack_top = (stack_base as u64) + KERNEL_STACK_SIZE as u64;
 
-        let ctx = rt
-            .tasking()
-            .init_kernel_context(entry, stack_top, arg.to_raw());
+        let ctx = rt.tasking().init_kernel_context(entry, stack_top, arg.to_raw());
 
         // Determine target CPU: Balanced among online CPUs.
         let target_cpu = self.pick_cpu_and_bringup(affinity, false);
@@ -199,11 +197,7 @@ impl<R: BootRuntime> Scheduler<R> {
 
         // Push to target CPU's run queue
         let cpu_count = self.state.per_cpu.len(); // Should match rt.cpu_count()
-        let safe_cpu = if target_cpu < cpu_count {
-            target_cpu
-        } else {
-            0
-        };
+        let safe_cpu = if target_cpu < cpu_count { target_cpu } else { 0 };
 
         let task: Task<R> = Task {
             id,
@@ -237,20 +231,9 @@ impl<R: BootRuntime> Scheduler<R> {
             signals: crate::signal::ThreadSignals::new(),
         };
 
-        let enqueued_at_tick = super::TICK_COUNT.load(Ordering::Relaxed);
-        let sched_fields = crate::sched::state::TaskSchedFields {
-            tid: task.id,
-            runq_location: None,
-            state: crate::task::TaskState::Runnable,
-            priority,
-            affinity,
-            last_cpu: Some(safe_cpu),
-            wake_cpu: Some(super::current_cpu_index::<R>()),
-            run_cpu: None,
-            timeslice_remaining: DEFAULT_TIMESLICE,
-            enqueued_at_tick,
-            wake_pending: false,
-        };
+        let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
+            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
         self.state.enqueue_task(safe_cpu, priority as usize, id);
@@ -308,10 +291,8 @@ impl<R: BootRuntime> Scheduler<R> {
         // Clone the mappings Arc from the parent process (same underlying
         // MappingList object).  Fall back to an empty list only when there is
         // no parent process (should not happen for user threads).
-        let mappings = parent_pinfo
-            .as_ref()
-            .map(|pi| pi.lock().space.mappings.clone())
-            .unwrap_or_else(|| {
+        let mappings =
+            parent_pinfo.as_ref().map(|pi| pi.lock().space.mappings.clone()).unwrap_or_else(|| {
                 alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()))
             });
 
@@ -328,19 +309,11 @@ impl<R: BootRuntime> Scheduler<R> {
             Affinity::Pinned(cpu) => cpu,
             Affinity::Any => super::current_cpu_index::<R>(),
         };
-        crate::kdebug!(
-            "SCHED: Task {} (user thread) assigned to CPU {}",
-            id,
-            target_cpu
-        );
+        crate::kdebug!("SCHED: Task {} (user thread) assigned to CPU {}", id, target_cpu);
 
         // Push to target CPU's run queue
         let cpu_count = self.state.per_cpu.len();
-        let safe_cpu = if target_cpu < cpu_count {
-            target_cpu
-        } else {
-            0
-        };
+        let safe_cpu = if target_cpu < cpu_count { target_cpu } else { 0 };
 
         let task: Task<R> = Task {
             id,
@@ -378,19 +351,9 @@ impl<R: BootRuntime> Scheduler<R> {
         // cannot accidentally skip registration.
         register_thread_in_process(&task.process_info, id);
 
-        let sched_fields = crate::sched::state::TaskSchedFields {
-            tid: task.id,
-            runq_location: None,
-            state: crate::task::TaskState::Runnable,
-            priority,
-            affinity,
-            last_cpu: Some(safe_cpu),
-            wake_cpu: Some(super::current_cpu_index::<R>()),
-            run_cpu: None,
-            timeslice_remaining: DEFAULT_TIMESLICE,
-            enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
-            wake_pending: false,
-        };
+        let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
+            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
         self.state.enqueue_task(safe_cpu, priority as usize, id);
@@ -431,8 +394,7 @@ impl<R: BootRuntime> Scheduler<R> {
         let entry_ptr = alloc::boxed::Box::into_raw(user_entry) as usize;
 
         let ctx =
-            rt.tasking()
-                .init_kernel_context(user_thread_trampoline::<R>, stack_top, entry_ptr);
+            rt.tasking().init_kernel_context(user_thread_trampoline::<R>, stack_top, entry_ptr);
 
         let mapping_list = crate::memory::mappings::MappingList { regions };
         let ppid = current_parent_pid::<R>(self);
@@ -478,19 +440,9 @@ impl<R: BootRuntime> Scheduler<R> {
             signals: crate::signal::ThreadSignals::new(),
         };
 
-        let sched_fields = crate::sched::state::TaskSchedFields {
-            tid: task.id,
-            runq_location: None,
-            state: crate::task::TaskState::Runnable,
-            priority,
-            affinity,
-            last_cpu: Some(safe_cpu),
-            wake_cpu: Some(super::current_cpu_index::<R>()),
-            run_cpu: None,
-            timeslice_remaining: DEFAULT_TIMESLICE,
-            enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
-            wake_pending: false,
-        };
+        let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
+            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
         self.state.enqueue_task(safe_cpu, priority as usize, id);
@@ -625,7 +577,9 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
 }
 
 fn nudge_spawned_task<R: BootRuntime>(current_cpu: usize, id: TaskId) {
-    let Some(target_cpu) = crate::task::registry::get_task::<R>(id).and_then(|task| task.last_cpu)
+    let Some(target_cpu) = crate::task::registry::get_task::<R>(id)
+        .map(|task| super::bridge::SchedulableRuntime::from_thread(&*task).last_cpu)
+        .flatten()
     else {
         return;
     };
@@ -714,9 +668,8 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
 
     // Retrieve the mappings Arc from the task that was just created so the
     // Process and Thread share the same underlying MappingList.
-    let task_mappings = crate::task::registry::get_task::<R>(id)
-        .map(|t| t.mappings.clone())
-        .unwrap_or_else(|| {
+    let task_mappings =
+        crate::task::registry::get_task::<R>(id).map(|t| t.mappings.clone()).unwrap_or_else(|| {
             alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()))
         });
 
@@ -724,7 +677,11 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     let aspace_raw = rt.tasking().aspace_to_raw(aspace);
 
     // Create per-process identity
-    let pinfo = inherit_process_info::<R>(id as u32, ppid, crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw));
+    let pinfo = inherit_process_info::<R>(
+        id as u32,
+        ppid,
+        crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
+    );
     {
         let page_size = rt.page_size() as u64;
         let mut lock = pinfo.lock();
@@ -777,8 +734,9 @@ fn setup_stdio_fds<R: BootRuntime>(
     stdout_spec: StdioSpec,
     stderr_spec: StdioSpec,
 ) -> (u64, u64, u64) {
-    use crate::vfs::{OpenFlags, VfsNode};
     use alloc::sync::Arc;
+
+    use crate::vfs::{OpenFlags, VfsNode};
 
     let console: Arc<dyn VfsNode> = Arc::new(crate::vfs::devfs::ConsoleNode);
     let null: Arc<dyn VfsNode> = Arc::new(crate::vfs::devfs::NullNode);
@@ -790,10 +748,7 @@ fn setup_stdio_fds<R: BootRuntime>(
             .and_then(|task| task.process_info.clone())
             .and_then(|pi| {
                 let lock = pi.lock();
-                lock.thing_table
-                    .get(fd)
-                    .ok()
-                    .map(|f| (f.node.clone(), *f.status_flags.lock()))
+                lock.thing_table.get(fd).ok().map(|f| (f.node.clone(), *f.status_flags.lock()))
             })
     };
 
@@ -816,7 +771,8 @@ fn setup_stdio_fds<R: BootRuntime>(
             }
         }
         StdioSpec::Null => {
-            let _ = thing_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
+            let _ =
+                thing_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
         }
         StdioSpec::Pipe => {
             // Create the raw pipe (readers=1, writers=1).  The child's fd 0 is
@@ -837,8 +793,12 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let path = alloc::format!("fd:{}", fd);
                 let _ = thing_table.insert_at(0, node, flags, path);
             } else {
-                let _ =
-                    thing_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
+                let _ = thing_table.insert_at(
+                    0,
+                    null.clone(),
+                    OpenFlags::read_only(),
+                    "/dev/null".into(),
+                );
             }
         }
     }
@@ -894,8 +854,12 @@ fn setup_stdio_fds<R: BootRuntime>(
             if let Some((node, flags)) = inherited_node(2) {
                 let _ = thing_table.insert_at(2, node, flags, "/dev/console".into());
             } else {
-                let _ =
-                    thing_table.insert_at(2, console, OpenFlags::write_only(), "/dev/console".into());
+                let _ = thing_table.insert_at(
+                    2,
+                    console,
+                    OpenFlags::write_only(),
+                    "/dev/console".into(),
+                );
             }
         }
         StdioSpec::Null => {
@@ -1004,11 +968,8 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         .unwrap_or(0);
 
     // Use provided argv, or fall back to module name
-    let final_argv = if argv.is_empty() {
-        alloc::vec![module.name.as_bytes().to_vec()]
-    } else {
-        argv
-    };
+    let final_argv =
+        if argv.is_empty() { alloc::vec![module.name.as_bytes().to_vec()] } else { argv };
 
     // Populate stdio fds in the child's thing_table.
     let tid = crate::runtime::<R>().current_tid();
@@ -1089,9 +1050,8 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
 
     // Retrieve the mappings Arc from the task so Process and Thread share the
     // same underlying MappingList.
-    let task_mappings = crate::task::registry::get_task::<R>(id)
-        .map(|t| t.mappings.clone())
-        .unwrap_or_else(|| {
+    let task_mappings =
+        crate::task::registry::get_task::<R>(id).map(|t| t.mappings.clone()).unwrap_or_else(|| {
             alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()))
         });
 
@@ -1203,9 +1163,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     let mut buffer = alloc::vec![0u8; size];
     let mut read_pos = 0;
     while read_pos < size {
-        let n = node
-            .read(read_pos as u64, &mut buffer[read_pos..])
-            .map_err(|e| e)?;
+        let n = node.read(read_pos as u64, &mut buffer[read_pos..]).map_err(|e| e)?;
         if n == 0 {
             break;
         }
@@ -1260,11 +1218,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     let ppid = current_parent_pid::<R>(sched);
 
     // Step 5: Resolve argv — fall back to the executable basename.
-    let final_argv = if argv.is_empty() {
-        alloc::vec![basename.as_bytes().to_vec()]
-    } else {
-        argv
-    };
+    let final_argv = if argv.is_empty() { alloc::vec![basename.as_bytes().to_vec()] } else { argv };
 
     // Step 6: Inherit and set up stdio fds in the child's thing_table.
     let parent_tid = rt.current_tid();
@@ -1334,9 +1288,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     }
 
     // Share the mapping list between the Thread and the Process.
-    let task_mappings = crate::task::registry::get_task::<R>(id)
-        .map(|t| t.mappings.clone())
-        .unwrap_or_else(|| {
+    let task_mappings =
+        crate::task::registry::get_task::<R>(id).map(|t| t.mappings.clone()).unwrap_or_else(|| {
             alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()))
         });
 
@@ -1418,13 +1371,12 @@ pub extern "C" fn user_thread_trampoline<R: BootRuntime>(arg: usize) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::TaskPriority;
-
     // Re-use the shared mock runtime defined in `sched::tests` so that both
     // this module and `sched::mod` share a single `init_runtime` call and a
     // single `MockRuntime` type.  This prevents the "Runtime type mismatch" /
     // double-init panics that occur when each module defines its own mock.
     use crate::sched::tests::{MockRuntime, init_test_env};
+    use crate::task::TaskPriority;
 
     #[test]
     fn boot_module_match_requires_exact_basename() {
@@ -1484,12 +1436,8 @@ mod tests {
 
         let stack_info = abi::types::StackInfo::default();
 
-        let cases: &[(usize, usize)] = &[
-            (0, 0),
-            (0x1234, 0x1234),
-            (0xDEAD_BEEF, 0xDEAD_BEEF),
-            (usize::MAX, usize::MAX),
-        ];
+        let cases: &[(usize, usize)] =
+            &[(0, 0), (0x1234, 0x1234), (0xDEAD_BEEF, 0xDEAD_BEEF), (usize::MAX, usize::MAX)];
 
         for &(raw_arg, expected) in cases {
             let id = sched.spawn_user_thread(
@@ -1505,11 +1453,7 @@ mod tests {
             let task = crate::task::registry::get_task::<MockRuntime>(id).unwrap();
 
             // MockRuntime::init_user_context stores spec.arg in MockContext.0
-            assert_eq!(
-                task.ctx.0, expected,
-                "user thread arg mismatch for raw_arg={:#x}",
-                raw_arg
-            );
+            assert_eq!(task.ctx.0, expected, "user thread arg mismatch for raw_arg={:#x}", raw_arg);
         }
     }
 
@@ -1865,9 +1809,24 @@ mod tests {
         sched.bringup_in_progress = true;
 
         // Spawn several tasks with Any affinity.
-        let id1 = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
-        let id2 = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
-        let id3 = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
+        let id1 = sched.spawn(
+            mock_entry,
+            StartupArg::None,
+            crate::task::TaskPriority::Normal,
+            Affinity::Any,
+        );
+        let id2 = sched.spawn(
+            mock_entry,
+            StartupArg::None,
+            crate::task::TaskPriority::Normal,
+            Affinity::Any,
+        );
+        let id3 = sched.spawn(
+            mock_entry,
+            StartupArg::None,
+            crate::task::TaskPriority::Normal,
+            Affinity::Any,
+        );
 
         // All tasks should land on the local CPU (CPU 0 in the mock).
         for id in [id1, id2, id3] {
@@ -1920,12 +1879,18 @@ mod tests {
         sched.bringup_in_progress = false;
 
         for _ in 0..TEST_TASK_COUNT {
-            let _ = sched.spawn(mock_entry, StartupArg::None, crate::task::TaskPriority::Normal, Affinity::Any);
+            let _ = sched.spawn(
+                mock_entry,
+                StartupArg::None,
+                crate::task::TaskPriority::Normal,
+                Affinity::Any,
+            );
         }
 
         let non_empty = (0..TEST_CPU_COUNT)
             .filter(|&cpu| {
-                !sched.state.per_cpu[cpu].runq[crate::task::TaskPriority::Normal as usize].is_empty()
+                !sched.state.per_cpu[cpu].runq[crate::task::TaskPriority::Normal as usize]
+                    .is_empty()
             })
             .count();
         assert!(
