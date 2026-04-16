@@ -29,7 +29,7 @@ static IN_GRAPH_LOG: AtomicBool = AtomicBool::new(false);
 static MUTE_SERIAL: AtomicBool = AtomicBool::new(false);
 
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Contract-only)
-/// Default is 3 (info).
+/// Default is 2 (warn).
 static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(2);
 
 /// Set the minimum log level for output (0=Contract-only, 1=Error+, 2=Warn+, etc.)
