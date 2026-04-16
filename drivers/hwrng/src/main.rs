@@ -9,26 +9,25 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use abi::motor::{
-    MOTOR_DESCRIPTOR_ABI_VERSION, MOTOR_HOST_DRIVER, MOTOR_INTERFACE_DRIVER_V1, MotorDescriptor,
-    MotorInterfaceDescriptor,
+    MOTOR_HOST_DRIVER, MOTOR_INTERFACE_DRIVER_V1, SEED_ABI_VERSION, Seed, SeedInterface,
 };
 use stem::abi::driver_ctx::DriverCtx;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::{debug, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"hwrng";
-const THINGOS_MOTOR_NAME: &[u8] = b"hwrng.motor";
+const SEED_NAME: &[u8] = b"hwrng";
 
 #[unsafe(no_mangle)]
 #[used]
-pub static THINGOS_MOTOR: MotorDescriptor = MotorDescriptor {
-    abi_version: MOTOR_DESCRIPTOR_ABI_VERSION,
+pub static THINGOS_MOTOR: Seed = Seed {
+    abi_version: SEED_ABI_VERSION,
     interface_count: 1,
     hosting_modes: MOTOR_HOST_DRIVER,
     capabilities: 0,
-    motor_name_ptr: THINGOS_MOTOR_NAME.as_ptr(),
-    motor_name_len: THINGOS_MOTOR_NAME.len(),
+    motor_name_ptr: SEED_NAME.as_ptr(),
+    motor_name_len: SEED_NAME.len(),
     interfaces: [
-        MotorInterfaceDescriptor {
+        SeedInterface {
             interface_id: MOTOR_INTERFACE_DRIVER_V1,
             interface_version: 1,
             flags: 0,
@@ -36,9 +35,9 @@ pub static THINGOS_MOTOR: MotorDescriptor = MotorDescriptor {
             entry_symbol_ptr: core::ptr::null(),
             entry_symbol_len: 0,
         },
-        MotorInterfaceDescriptor::default(),
-        MotorInterfaceDescriptor::default(),
-        MotorInterfaceDescriptor::default(),
+        SeedInterface::default(),
+        SeedInterface::default(),
+        SeedInterface::default(),
     ],
 };
 

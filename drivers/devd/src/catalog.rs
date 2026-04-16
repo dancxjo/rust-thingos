@@ -25,7 +25,7 @@ use abi::driver_interface::{
     DRIVER_INTERFACE_ABI_VERSION, DRIVER_MARKER_SYMBOL, DRIVER_MATCH_ANY_CLASS,
     DRIVER_MATCH_ANY_ID, DriverClass, DriverDescriptor, DriverInterfaceV1,
 };
-use abi::motor::{MOTOR_DESCRIPTOR_ABI_VERSION, MOTOR_DESCRIPTOR_SYMBOL, MotorDescriptor};
+use abi::motor::{MOTOR_INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
 use abi::syscall::vfs_flags::O_RDONLY;
 use stem::debug;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek};
@@ -205,24 +205,24 @@ impl Catalog {
             None => return,
         };
 
-        let motor_descriptor = resolve_elf64_symbol_from_bytes(&bytes, MOTOR_DESCRIPTOR_SYMBOL)
-            .and_then(|sym_vaddr| read_motor_descriptor(&bytes, sym_vaddr));
+        let seed_descriptor = resolve_elf64_symbol_from_bytes(&bytes, SEED_SYMBOL)
+            .and_then(|sym_vaddr| read_seed_descriptor(&bytes, sym_vaddr));
 
         let mut iface_legacy: Option<DriverInterfaceV1> = None;
         if let Some(sym_vaddr) = resolve_elf64_symbol_from_bytes(&bytes, DRIVER_MARKER_SYMBOL) {
             iface_legacy = read_driver_interface_v1(&bytes, sym_vaddr);
         }
 
-        // Canonical path: Motor descriptor declares DriverV1.
-        if let Some(motor) = motor_descriptor {
-            if motor.abi_version != MOTOR_DESCRIPTOR_ABI_VERSION {
+        // Canonical path: Seed descriptor declares DriverV1 interface.
+        if let Some(seed) = seed_descriptor {
+            if seed.abi_version != SEED_ABI_VERSION {
                 debug!(
-                    "DEVD CATALOG: {} has unknown motor abi_version {} (expected {}), skipping",
-                    path, motor.abi_version, MOTOR_DESCRIPTOR_ABI_VERSION
+                    "DEVD CATALOG: {} has unknown seed abi_version {} (expected {}), skipping",
+                    path, seed.abi_version, SEED_ABI_VERSION
                 );
                 return;
             }
-            if !motor.implements_driver_v1() {
+            if !seed.implements_driver_v1() {
                 return;
             }
         }
@@ -233,9 +233,9 @@ impl Catalog {
             Some(d) => d,
             None => {
                 // Transitional compatibility path: legacy marker-only drivers.
-                if motor_descriptor.is_some() {
+                if seed_descriptor.is_some() {
                     debug!(
-                        "DEVD CATALOG: {} advertises DriverV1 Motor metadata but lacks THINGOS_DRIVER; skipping",
+                        "DEVD CATALOG: {} declares DriverV1 in its Seed but lacks legacy THINGOS_DRIVER descriptor; skipping",
                         path
                     );
                     return;
@@ -531,14 +531,14 @@ fn read_driver_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<DriverDescript
     Some(desc)
 }
 
-fn read_motor_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<MotorDescriptor> {
+fn read_seed_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<Seed> {
     let file_off = vaddr_to_file_offset(bytes, sym_vaddr)?;
-    let size = core::mem::size_of::<MotorDescriptor>();
+    let size = core::mem::size_of::<Seed>();
     if file_off + size > bytes.len() {
         return None;
     }
-    let desc: MotorDescriptor = unsafe {
-        let mut tmp = core::mem::MaybeUninit::<MotorDescriptor>::uninit();
+    let desc: Seed = unsafe {
+        let mut tmp = core::mem::MaybeUninit::<Seed>::uninit();
         core::ptr::copy_nonoverlapping(
             bytes.as_ptr().add(file_off),
             tmp.as_mut_ptr() as *mut u8,
