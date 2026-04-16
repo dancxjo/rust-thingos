@@ -57,6 +57,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "dirname", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "basename", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "sleep", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "sort", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "env", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "uname", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "true", is_init: false, boot_module: true, features: vec![] },
