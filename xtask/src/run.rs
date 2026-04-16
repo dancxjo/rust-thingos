@@ -151,11 +151,17 @@ pub fn run(
                 ]);
             }
 
+            let default_audio = if !has_user_audio_args(qemu_flags) {
+                default_audiodev_arg()
+            } else {
+                None
+            };
+
             if !has_user_audio_args(qemu_flags) {
-                if let Some(audiodev) = default_audiodev_arg() {
+                if let Some(audiodev) = default_audio.as_deref() {
                     args.extend_from_slice(&[
                         "-audiodev",
-                        &audiodev,
+                        audiodev,
                         "-device",
                         "virtio-sound-pci,audiodev=audio0",
                     ]);
@@ -295,11 +301,17 @@ pub fn run_bios(
         &netdev,
     ];
 
+    let default_audio = if !has_user_audio_args(qemu_flags) {
+        default_audiodev_arg()
+    } else {
+        None
+    };
+
     if !has_user_audio_args(qemu_flags) {
-        if let Some(audiodev) = default_audiodev_arg() {
+        if let Some(audiodev) = default_audio.as_deref() {
             args.extend_from_slice(&[
                 "-audiodev",
-                &audiodev,
+                audiodev,
                 "-device",
                 "virtio-sound-pci,audiodev=audio0",
             ]);
@@ -371,11 +383,17 @@ pub fn run_hdd(
                 ]);
             }
 
+            let default_audio = if !has_user_audio_args(qemu_flags) {
+                default_audiodev_arg()
+            } else {
+                None
+            };
+
             if !has_user_audio_args(qemu_flags) {
-                if let Some(audiodev) = default_audiodev_arg() {
+                if let Some(audiodev) = default_audio.as_deref() {
                     args.extend_from_slice(&[
                         "-audiodev",
-                        &audiodev,
+                        audiodev,
                         "-device",
                         "virtio-sound-pci,audiodev=audio0",
                     ]);
