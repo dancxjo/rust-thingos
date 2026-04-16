@@ -31,7 +31,7 @@
 //! target FD during spawn.
 
 use super::env::{CommandEnv, CommandEnvs};
-use super::abi::{FdRemap, SpawnProcessExReq, SpawnProcessExResp};
+use crate::sys::abi::{FdRemap, SpawnProcessExReq, SpawnProcessExResp};
 use crate::sys::thingos_syscall_numbers::{
     fcntl_cmd,
     poll_flags,

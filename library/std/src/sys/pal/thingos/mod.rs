@@ -16,8 +16,9 @@ pub mod time;
 pub use common::*;
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    pub fn thingos_runtime_setup();
+#[unsafe(no_mangle)]
+extern "C" fn thingos_std_runtime_setup() {
+    // ThingOS std startup currently needs no extra runtime initialization.
 }
 
 #[cfg(not(test))]
@@ -28,7 +29,7 @@ extern "C" fn thingos_start() -> ! {
     }
 
     unsafe {
-        thingos_runtime_setup();
+        thingos_std_runtime_setup();
     }
 
     let code = unsafe { main(0, core::ptr::null(), 0) };
@@ -54,7 +55,7 @@ crate::arch::global_asm!(
         // We need 16n + 8 for the C entry point.
         sub rsp, 8
         // Call runtime setup (TLS, etc)
-        call thingos_runtime_setup
+        call thingos_std_runtime_setup
         // Restore stack for the actual start logic
         add rsp, 8
         // Jump to the driver's handle_start logic (must be provided or jumped from here)
