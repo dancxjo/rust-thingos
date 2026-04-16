@@ -183,7 +183,14 @@ fn generate_limine_config(
 ) -> String {
     let res = resolution.unwrap_or("1920x1080");
     let mut conf = String::new();
-    conf.push_str("timeout: 3\nquiet: yes\nverbose: no\nserial: yes\n\n");
+    conf.push_str("timeout: 3\nquiet: yes\nverbose: no\nserial: yes\n");
+    conf.push_str("interface_branding: no\n");
+    conf.push_str("interface_help: no\n");
+    conf.push_str("interface_background: 121212\n");
+    conf.push_str("interface_foreground: cccccc\n");
+    conf.push_str("interface_active_background: 333333\n");
+    conf.push_str("interface_active_foreground: ffffff\n");
+    conf.push_str("menu_hidden: yes\n\n");
 
     let mut common_modules = String::new();
     for prog in programs {

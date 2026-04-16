@@ -144,7 +144,8 @@ fn main(_arg: usize) -> ! {
     let args = if len > 0 {
         let mut buf = alloc::vec![0u8; len];
         if argv_get(&mut buf).is_ok() {
-            parse_argv(&buf).into_iter().skip(1).filter_map(|b| core::str::from_utf8(b).ok().map(String::from)).collect::<Vec<_>>()
+            let parsed = stem::utils::parse_argv(&buf);
+            parsed.into_iter().skip(1).filter_map(|b| core::str::from_utf8(b).ok().map(String::from)).collect::<Vec<_>>()
         } else {
             Vec::new()
         }
@@ -186,7 +187,7 @@ fn main(_arg: usize) -> ! {
         );
         print(&out);
     } else {
-        let _ = vfs_write(2, b"usage: date [+FORMAT]\n");
+        let _ = vfs_write(1, b"usage: date [+FORMAT]\n");
         exit(1);
     }
 
