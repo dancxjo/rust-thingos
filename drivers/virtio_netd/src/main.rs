@@ -16,9 +16,9 @@ mod driver;
 mod vfs_provider;
 
 use abi::driver_interface::{
-    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
-    DriverStartContext, ProbeResult, Status, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI,
-    DRIVER_INTERFACE_ABI_VERSION,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
+    DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
+    DriverStartContext, ProbeResult, Status,
 };
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::VirtioNetDriver;
@@ -70,9 +70,8 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     let dev = &*dev;
     let out = &mut *out;
     let class_major = ((dev.class_code >> 16) & 0xff) as u8;
-    let is_match = dev.bus == BusKind::Pci as u32
-        && dev.vendor_id as u16 == 0x1af4
-        && class_major == 0x02;
+    let is_match =
+        dev.bus == BusKind::Pci as u32 && dev.vendor_id as u16 == 0x1af4 && class_major == 0x02;
     out.matched = if is_match { 1 } else { 0 };
     out.score = if is_match { 1000 } else { 0 };
     out.claimed_class = DriverClass::Net;
@@ -113,13 +112,14 @@ struct SupervisorBootstrap {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thing_driver_entry_v1(ctx_ptr: u64, ctx_len: u32) -> i32 {
-    let claimed_path = if ctx_ptr != 0 && (ctx_len as usize) >= core::mem::size_of::<DriverEntryCtx>() {
-        let ctx = unsafe { &*(ctx_ptr as *const DriverEntryCtx) };
-        let s = ctx.device_path_str();
-        if s.is_empty() { None } else { Some(s.to_string()) }
-    } else {
-        None
-    };
+    let claimed_path =
+        if ctx_ptr != 0 && (ctx_len as usize) >= core::mem::size_of::<DriverEntryCtx>() {
+            let ctx = unsafe { &*(ctx_ptr as *const DriverEntryCtx) };
+            let s = ctx.device_path_str();
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        } else {
+            None
+        };
 
     run_driver(claimed_path, None)
 }
@@ -171,8 +171,11 @@ fn parse_supervisor_bootstrap(arg: usize) -> (Option<String>, Option<SupervisorB
             }
 
             if req_read != 0 && resp_write != 0 && bind_instance_id != 0 {
-                bootstrap =
-                    Some(SupervisorBootstrap { drv_req_read: req_read, drv_resp_write: resp_write, bind_instance_id });
+                bootstrap = Some(SupervisorBootstrap {
+                    drv_req_read: req_read,
+                    drv_resp_write: resp_write,
+                    bind_instance_id,
+                });
             }
         } else {
             warn!("VIRTIO_NETD: Failed to map bootstrap memfd");
@@ -247,8 +250,9 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     };
 
     if let Some(bootstrap) = bootstrap {
-        let drv_resp_write_fd = stem::syscall::vfs::vfs_thing_from_channel(bootstrap.drv_resp_write)
-            .expect("virtio_netd: vfs_thing_from_channel(drv_resp_write)");
+        let drv_resp_write_fd =
+            stem::syscall::vfs::vfs_thing_from_channel(bootstrap.drv_resp_write)
+                .expect("virtio_netd: vfs_thing_from_channel(drv_resp_write)");
 
         // Sovereign Handshake
         use abi::display_driver_protocol;
@@ -268,7 +272,11 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                 &ready_bytes[..len],
             ) {
                 // Bundle the VFS provider handle and the BIND_READY notification atomically.
-                let _ = stem::syscall::socket::sendmsg(drv_resp_write_fd, &buf[..total_len], &[req_write]);
+                let _ = stem::syscall::socket::sendmsg(
+                    drv_resp_write_fd,
+                    &buf[..total_len],
+                    &[req_write],
+                );
                 stem::debug!("VIRTIO_NETD: Sent MSG_BIND_READY, waiting for MSG_BIND_ASSIGNED...");
             }
         }
@@ -277,14 +285,17 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         let mut wait_buf = [0u8; 512];
         let assigned_bind_id = loop {
             if let Ok(n) = stem::syscall::channel_try_recv(bootstrap.drv_req_read, &mut wait_buf) {
-                if let Some((header, payload)) = display_driver_protocol::parse_message(&wait_buf[..n])
+                if let Some((header, payload)) =
+                    display_driver_protocol::parse_message(&wait_buf[..n])
                 {
                     if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
-                        if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
+                        if let Some(assigned) =
+                            supervisor_protocol::decode_bind_assigned_le(payload)
+                        {
                             let path_len =
                                 assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
-                            let path =
-                                core::str::from_utf8(&assigned.primary_path[..path_len]).unwrap_or("?");
+                            let path = core::str::from_utf8(&assigned.primary_path[..path_len])
+                                .unwrap_or("?");
                             stem::debug!(
                                 "VIRTIO_NETD: Sovereign registration COMPLETE. Assigned: {}",
                                 path
@@ -293,7 +304,8 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                         }
                     } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
                         if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
-                            let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
+                            let reason_len =
+                                failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
                             let reason =
                                 core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
                             stem::warn!(
@@ -318,14 +330,16 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         };
         let mut payload_bytes = [0u8; supervisor_protocol::SERVICE_READY_PAYLOAD_SIZE];
         let mut svc_buf = [0u8; 64];
-        if let Some(p_len) = supervisor_protocol::encode_service_ready_le(&svc_ready, &mut payload_bytes)
+        if let Some(p_len) =
+            supervisor_protocol::encode_service_ready_le(&svc_ready, &mut payload_bytes)
         {
             if let Some(total_len) = display_driver_protocol::encode_message(
                 &mut svc_buf,
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ = stem::syscall::socket::sendmsg(drv_resp_write_fd, &svc_buf[..total_len], &[]);
+                let _ =
+                    stem::syscall::socket::sendmsg(drv_resp_write_fd, &svc_buf[..total_len], &[]);
                 stem::debug!("VIRTIO_NETD: Sent MSG_SERVICE_READY.");
             }
         }

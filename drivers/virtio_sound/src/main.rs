@@ -35,9 +35,9 @@ use core::mem::size_of;
 
 use abi::device::DeviceKind;
 use abi::driver_interface::{
-    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
-    DriverStartContext, ProbeResult, Status, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI,
-    DRIVER_INTERFACE_ABI_VERSION,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
+    DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
+    DriverStartContext, ProbeResult, Status,
 };
 use abi::errors::Errno;
 use abi::sound::{
@@ -819,11 +819,7 @@ fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<String> {
         .unwrap_or("")
         .trim_matches(char::from(0))
         .to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(path)
-    }
+    if path.is_empty() { None } else { Some(path) }
 }
 
 #[unsafe(no_mangle)]
