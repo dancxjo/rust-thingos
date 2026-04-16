@@ -975,5 +975,7 @@ mod tests {
         assert_ne!(a.id(), b.id());
         assert!(a.is_isolated());
         assert!(b.is_isolated());
+        assert!(a.label().starts_with("ns-"));
+        assert!(b.label().starts_with("ns-"));
     }
 }

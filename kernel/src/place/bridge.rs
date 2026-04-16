@@ -210,6 +210,13 @@ mod tests {
         assert_eq!(place.root, "/srv/chroot");
     }
 
+    #[test]
+    fn test_empty_root_path_defaults_to_slash() {
+        let snap = make_snapshot("/work", "global", "");
+        let place = place_from_snapshot(&snap);
+        assert_eq!(place.root, "/");
+    }
+
     // ── as_text output ────────────────────────────────────────────────────────
 
     #[test]
