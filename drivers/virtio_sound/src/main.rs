@@ -853,9 +853,24 @@ fn populate_event_queue(driver: &mut VirtioDevice) {
         let q = driver.queue_mut(VIRTIO_SND_VQ_EVENT).unwrap();
         for _ in 0..8 {
             let size = size_of::<VirtioSndEvent>();
-            let dma = stem::syscall::device_alloc_dma(dma_dev, 1).unwrap();
-            let phys = stem::syscall::device_dma_phys(dma).unwrap();
-            q.add_buffer_single(phys, size as u32, true);
+            let dma = match stem::syscall::device_alloc_dma(dma_dev, 1) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("SND: event queue DMA alloc failed: {:?}", e);
+                    break;
+                }
+            };
+            let phys = match stem::syscall::device_dma_phys(dma) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("SND: event queue dma_phys failed: {:?}", e);
+                    break;
+                }
+            };
+            if q.add_buffer_single(phys, size as u32, true).is_none() {
+                warn!("SND: event queue full while populating");
+                break;
+            }
         }
     }
     driver.notify_queue(VIRTIO_SND_VQ_EVENT);
@@ -870,9 +885,24 @@ fn process_event_queue(driver: &mut VirtioDevice) -> bool {
         while let Some((_desc_id, _len)) = q.poll_used() {
             xrun_seen = true;
             let size = size_of::<VirtioSndEvent>();
-            let dma = stem::syscall::device_alloc_dma(dma_dev, 1).unwrap();
-            let phys = stem::syscall::device_dma_phys(dma).unwrap();
-            q.add_buffer_single(phys, size as u32, true);
+            let dma = match stem::syscall::device_alloc_dma(dma_dev, 1) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("SND: event requeue DMA alloc failed: {:?}", e);
+                    break;
+                }
+            };
+            let phys = match stem::syscall::device_dma_phys(dma) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("SND: event requeue dma_phys failed: {:?}", e);
+                    break;
+                }
+            };
+            if q.add_buffer_single(phys, size as u32, true).is_none() {
+                warn!("SND: event queue full while requeueing");
+                break;
+            }
             needs_notify = true;
         }
     }
@@ -883,10 +913,34 @@ fn process_event_queue(driver: &mut VirtioDevice) -> bool {
 }
 
 fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
-    let dma_req = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
-    let phys_req = stem::syscall::device_dma_phys(dma_req).unwrap();
-    let dma_resp = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
-    let phys_resp = stem::syscall::device_dma_phys(dma_resp).unwrap();
+    let dma_req = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: command DMA alloc(req) failed: {:?}", e);
+            return;
+        }
+    };
+    let phys_req = match stem::syscall::device_dma_phys(dma_req) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: command dma_phys(req) failed: {:?}", e);
+            return;
+        }
+    };
+    let dma_resp = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: command DMA alloc(resp) failed: {:?}", e);
+            return;
+        }
+    };
+    let phys_resp = match stem::syscall::device_dma_phys(dma_resp) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: command dma_phys(resp) failed: {:?}", e);
+            return;
+        }
+    };
     unsafe {
         *(dma_req as *mut VirtioSndPcmHdr) =
             VirtioSndPcmHdr { hdr: VirtioSndHdr { code: cmd }, stream_id };
@@ -898,7 +952,10 @@ fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
     ];
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
-        q.add_buffer(&bufs);
+        if q.add_buffer(&bufs).is_none() {
+            warn!("SND: control queue full for command {:x}", cmd);
+            return;
+        }
     }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
     loop {
@@ -914,10 +971,34 @@ fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
 }
 
 fn configure_stream(driver: &mut VirtioDevice, stream_id: u32) {
-    let dma_req = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
-    let phys_req = stem::syscall::device_dma_phys(dma_req).unwrap();
-    let dma_resp = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
-    let phys_resp = stem::syscall::device_dma_phys(dma_resp).unwrap();
+    let dma_req = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: set_params DMA alloc(req) failed: {:?}", e);
+            return;
+        }
+    };
+    let phys_req = match stem::syscall::device_dma_phys(dma_req) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: set_params dma_phys(req) failed: {:?}", e);
+            return;
+        }
+    };
+    let dma_resp = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: set_params DMA alloc(resp) failed: {:?}", e);
+            return;
+        }
+    };
+    let phys_resp = match stem::syscall::device_dma_phys(dma_resp) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: set_params dma_phys(resp) failed: {:?}", e);
+            return;
+        }
+    };
     unsafe {
         *(dma_req as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {
             hdr: VirtioSndHdr { code: VIRTIO_SND_R_PCM_SET_PARAMS },
@@ -936,7 +1017,10 @@ fn configure_stream(driver: &mut VirtioDevice, stream_id: u32) {
     ];
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
-        q.add_buffer(&bufs);
+        if q.add_buffer(&bufs).is_none() {
+            warn!("SND: control queue full for set_params");
+            return;
+        }
     }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
     loop {

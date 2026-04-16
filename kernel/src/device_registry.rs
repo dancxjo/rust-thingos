@@ -16,7 +16,7 @@ const MAX_CLAIMS: usize = 32;
 const MAX_BARS: usize = 6;
 
 /// Maximum DMA allocations tracked per device claim
-const MAX_DMA_BUFFERS_PER_CLAIM: usize = 8;
+const MAX_DMA_BUFFERS_PER_CLAIM: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IrqMode {
