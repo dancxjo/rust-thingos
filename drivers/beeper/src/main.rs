@@ -13,18 +13,16 @@ mod chime;
 mod tone;
 
 use abi::device::DeviceKind;
-use abi::sound::{AudioParams, AudioSampleFormat, AudioStreamInfo, AUDIO_GET_INFO, AUDIO_SET_PARAMS, AUDIO_START};
+use abi::sound::{
+    AUDIO_GET_INFO, AUDIO_SET_PARAMS, AUDIO_START, AudioParams, AudioSampleFormat, AudioStreamInfo,
+};
 use stem::info;
 
 fn read_piped_stdin() -> Option<Vec<u8>> {
     use abi::syscall::poll_flags::POLLIN;
     use stem::syscall::vfs::{vfs_poll, vfs_read};
 
-    let mut pollfds = [abi::syscall::PollThing {
-        thing: 0,
-        events: POLLIN,
-        revents: 0,
-    }];
+    let mut pollfds = [abi::syscall::PollThing { thing: 0, events: POLLIN, revents: 0 }];
 
     if vfs_poll(&mut pollfds, 0).is_err() || (pollfds[0].revents & POLLIN) == 0 {
         return None;
@@ -99,7 +97,10 @@ fn main(_arg: usize) -> ! {
     }
 
     let sample_rate = accepted.rate;
-    info!("Beeper: Configured stream (rate={}Hz, fmt={}, ch={})", sample_rate, accepted.sample_format, accepted.channels);
+    info!(
+        "Beeper: Configured stream (rate={}Hz, fmt={}, ch={})",
+        sample_rate, accepted.sample_format, accepted.channels
+    );
 
     // Start playback.
     {
@@ -150,13 +151,16 @@ fn main(_arg: usize) -> ! {
             match vfs_write(out_fd, &buf[sent..]) {
                 Ok(0) | Err(_) => {
                     // No space — wait for POLLOUT.
-                    let mut pollfds = [abi::syscall::PollThing { thing: out_fd as i32,
+                    let mut pollfds = [abi::syscall::PollThing {
+                        thing: out_fd as i32,
                         events: abi::syscall::poll_flags::POLLOUT,
                         revents: 0,
                     }];
                     let _ = stem::syscall::vfs::vfs_poll(&mut pollfds, u64::MAX);
                 }
-                Ok(n) => { sent += n; }
+                Ok(n) => {
+                    sent += n;
+                }
             }
         }
         offset += to_write;
@@ -167,4 +171,3 @@ fn main(_arg: usize) -> ! {
         stem::time::sleep_ms(1000);
     }
 }
-

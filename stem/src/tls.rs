@@ -30,6 +30,7 @@
 
 use abi::auxv;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
+
 use crate::errors::Errno;
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -99,12 +100,7 @@ pub fn read_tls_info() -> Option<TlsInfo> {
         return None; // No PT_TLS segment present.
     }
 
-    Some(TlsInfo {
-        template_va,
-        filesz,
-        memsz,
-        align: align.max(1),
-    })
+    Some(TlsInfo { template_va, filesz, memsz, align: align.max(1) })
 }
 
 /// Allocate and initialize a fresh per-thread TLS block.
@@ -223,12 +219,7 @@ mod tests {
     #[test]
     fn tls_info_align_minimum_is_one() {
         // TlsInfo stores align >= 1.
-        let info = TlsInfo {
-            template_va: 0,
-            filesz: 0,
-            memsz: 64,
-            align: 0,
-        };
+        let info = TlsInfo { template_va: 0, filesz: 0, memsz: 64, align: 0 };
         // align = 0 comes back from auxv parsing as 1 via .max(1)
         assert_eq!(info.align, 0); // raw field; callers use .max(1) in alloc_tls_block
         // alloc_tls_block itself clamps to max(16)

@@ -30,19 +30,20 @@ extern crate alloc;
 
 mod spec;
 
+use alloc::vec::Vec;
+use core::mem::size_of;
+
 use abi::device::DeviceKind;
 use abi::driver_interface::{
-    DriverEntryCtx, DriverInterfaceV1, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
+    DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION, DriverEntryCtx, DriverInterfaceV1,
 };
 use abi::errors::Errno;
 use abi::sound::{
-    AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo, AUDIO_DRAIN,
-    AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START, AUDIO_STOP,
+    AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START,
+    AUDIO_STOP, AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo,
     format_bit,
 };
-use abi::vfs_rpc::{VfsRpcOp, VFS_RPC_MAX_REQ};
-use alloc::vec::Vec;
-use core::mem::size_of;
+use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use spec::*;
 use stem::syscall::channel::channel_create;
@@ -104,8 +105,12 @@ impl RingBuf {
         Self { data, head: 0, tail: 0, len: 0, cap }
     }
 
-    fn free_space(&self) -> usize { self.cap - self.len }
-    fn available(&self) -> usize { self.len }
+    fn free_space(&self) -> usize {
+        self.cap - self.len
+    }
+    fn available(&self) -> usize {
+        self.len
+    }
 
     /// Enqueue up to `src.len()` bytes. Returns bytes written.
     fn enqueue(&mut self, src: &[u8]) -> usize {
@@ -216,11 +221,7 @@ fn find_virtio_sound_device() -> Option<String> {
     let mut pos = 0;
     while pos < n {
         let entry_buf = &buf[pos..n];
-        let name = core::str::from_utf8(entry_buf)
-            .unwrap_or("")
-            .split('\0')
-            .next()
-            .unwrap_or("");
+        let name = core::str::from_utf8(entry_buf).unwrap_or("").split('\0').next().unwrap_or("");
         if name.is_empty() {
             break;
         }
@@ -278,7 +279,8 @@ fn dispatch_rpc(
             if payload.len() < 4 {
                 return (ProviderResponse::err(Errno::EINVAL), false);
             }
-            let path_len = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+            let path_len =
+                u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
             let path = if payload.len() >= 4 + path_len {
                 core::str::from_utf8(&payload[4..4 + path_len]).unwrap_or("")
             } else {
@@ -316,10 +318,7 @@ fn dispatch_rpc(
             if handle != HANDLE_ROOT {
                 return (ProviderResponse::err(Errno::ENOTDIR), false);
             }
-            let entries: &[(&str, u32, u64)] = &[
-                ("ctl", S_IFREG, 2),
-                ("out0", S_IFREG, 3),
-            ];
+            let entries: &[(&str, u32, u64)] = &[("ctl", S_IFREG, 2), ("out0", S_IFREG, 3)];
             let dir_bytes = encode_readdir(entries, offset);
             (ProviderResponse::ok_read(&dir_bytes), false)
         }
@@ -337,9 +336,8 @@ fn dispatch_rpc(
             if handle != HANDLE_OUT0 {
                 return (ProviderResponse::err(Errno::EROFS), false);
             }
-            let data_len = u32::from_le_bytes(
-                payload[16..20].try_into().unwrap_or([0; 4])
-            ) as usize;
+            let data_len =
+                u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
             let data = if payload.len() >= 20 + data_len {
                 &payload[20..20 + data_len]
             } else {
@@ -361,17 +359,11 @@ fn dispatch_rpc(
                 // ctl: always return POLLOUT
                 return (ProviderResponse::ok_poll(POLLOUT as u32), false);
             }
-            let revents: u32 = if card.ring.free_space() > 0 {
-                POLLOUT as u32
-            } else {
-                0
-            };
+            let revents: u32 = if card.ring.free_space() > 0 { POLLOUT as u32 } else { 0 };
             (ProviderResponse::ok_poll(revents), false)
         }
 
-        VfsRpcOp::DeviceCall => {
-            dispatch_device_call(payload, card)
-        }
+        VfsRpcOp::DeviceCall => dispatch_device_call(payload, card),
 
         VfsRpcOp::SubscribeReady => {
             if payload.len() >= 8 {
@@ -393,13 +385,9 @@ fn dispatch_rpc(
             (ProviderResponse::ok_empty(), false)
         }
 
-        VfsRpcOp::Close => {
-            (ProviderResponse::ok_empty(), false)
-        }
+        VfsRpcOp::Close => (ProviderResponse::ok_empty(), false),
 
-        VfsRpcOp::Rename => {
-            (ProviderResponse::err(Errno::EROFS), false)
-        }
+        VfsRpcOp::Rename => (ProviderResponse::err(Errno::EROFS), false),
     }
 }
 
@@ -432,9 +420,8 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
 
         AUDIO_SET_PARAMS => {
             if in_data.len() >= size_of::<AudioParams>() {
-                let req: AudioParams = unsafe {
-                    core::ptr::read_unaligned(in_data.as_ptr() as *const AudioParams)
-                };
+                let req: AudioParams =
+                    unsafe { core::ptr::read_unaligned(in_data.as_ptr() as *const AudioParams) };
                 // Accept the request as-is (clamp channels to 2 if unsupported).
                 card.params = AudioParams {
                     sample_format: req.sample_format,
@@ -560,7 +547,9 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         found
     } else {
         error!("SND: No virtio-sound device found");
-        loop { stem::time::sleep_ms(1000); }
+        loop {
+            stem::time::sleep_ms(1000);
+        }
     };
 
     // Initialise hardware.
@@ -568,19 +557,25 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         Ok(d) => d,
         Err(e) => {
             error!("SND: Failed to claim device at {}: {:?}", path_str, e);
-            loop { stem::time::sleep_ms(1000); }
+            loop {
+                stem::time::sleep_ms(1000);
+            }
         }
     };
 
     if let Err(e) = driver.init(VIRTIO_SND_F_CTLS) {
         error!("SND: Failed to init device: {}", e);
-        loop { stem::time::sleep_ms(1); }
+        loop {
+            stem::time::sleep_ms(1);
+        }
     }
 
     for q in 0..4 {
         if let Err(e) = driver.setup_queue(q, QUEUE_SIZE) {
             error!("SND: Failed to setup queue {}: {}", q, e);
-            loop { stem::time::sleep_ms(1); }
+            loop {
+                stem::time::sleep_ms(1);
+            }
         }
     }
 
@@ -593,7 +588,9 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         Some(id) => id,
         None => {
             error!("SND: No output stream found");
-            loop { stem::time::sleep_ms(1); }
+            loop {
+                stem::time::sleep_ms(1);
+            }
         }
     };
     info!("SND: Using stream {}", stream_id);
@@ -607,7 +604,9 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         Ok(p) => p,
         Err(e) => {
             error!("SND: channel_create failed: {:?}", e);
-            loop { stem::time::sleep_ms(1000); }
+            loop {
+                stem::time::sleep_ms(1000);
+            }
         }
     };
 
@@ -638,8 +637,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
 
                     // Notify waiting writers on ring change (e.g. Write enqueued data,
                     // freeing up space for the next writer if partially consumed by HW).
-                    if card.out0_subscribed
-                        && (ring_changed || card.ring.free_space() > prev_free)
+                    if card.out0_subscribed && (ring_changed || card.ring.free_space() > prev_free)
                     {
                         let _ = stem::syscall::vfs::vfs_notify(
                             req_write,
@@ -667,25 +665,29 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         process_tx_queue(&mut driver);
 
         // 4. Feed hardware from ring if running.
-        if card.state == AudioState::Running as u32
-            || card.state == AudioState::Draining as u32
-        {
+        if card.state == AudioState::Running as u32 || card.state == AudioState::Draining as u32 {
             let chunk = 4096usize;
             if card.ring.available() >= chunk {
                 let dma_addr = match stem::syscall::device_alloc_dma(dma_dev, 2) {
                     Ok(a) => a,
-                    Err(_) => { stem::syscall::yield_now(); continue; }
+                    Err(_) => {
+                        stem::syscall::yield_now();
+                        continue;
+                    }
                 };
                 let phys = match stem::syscall::device_dma_phys(dma_addr) {
                     Ok(p) => p,
-                    Err(_) => { stem::syscall::yield_now(); continue; }
+                    Err(_) => {
+                        stem::syscall::yield_now();
+                        continue;
+                    }
                 };
                 let ptr = dma_addr as *mut u8;
                 let hdr_sz = size_of::<VirtioSndPcmXfer>();
-                unsafe { *(ptr as *mut VirtioSndPcmXfer) = VirtioSndPcmXfer { stream_id }; }
-                let data_slice = unsafe {
-                    core::slice::from_raw_parts_mut(ptr.add(hdr_sz), chunk)
-                };
+                unsafe {
+                    *(ptr as *mut VirtioSndPcmXfer) = VirtioSndPcmXfer { stream_id };
+                }
+                let data_slice = unsafe { core::slice::from_raw_parts_mut(ptr.add(hdr_sz), chunk) };
                 let n = card.ring.dequeue(data_slice);
                 if n > 0 {
                     let bpf = card.bytes_per_frame().max(1);
@@ -783,7 +785,9 @@ fn process_event_queue(driver: &mut VirtioDevice) -> bool {
             needs_notify = true;
         }
     }
-    if needs_notify { driver.notify_queue(VIRTIO_SND_VQ_EVENT); }
+    if needs_notify {
+        driver.notify_queue(VIRTIO_SND_VQ_EVENT);
+    }
     xrun_seen
 }
 
@@ -793,21 +797,27 @@ fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
     let dma_resp = stem::syscall::device_alloc_dma(driver.claim_thing(), 1).unwrap();
     let phys_resp = stem::syscall::device_dma_phys(dma_resp).unwrap();
     unsafe {
-        *(dma_req as *mut VirtioSndPcmHdr) = VirtioSndPcmHdr {
-            hdr: VirtioSndHdr { code: cmd },
-            stream_id,
-        };
+        *(dma_req as *mut VirtioSndPcmHdr) =
+            VirtioSndPcmHdr { hdr: VirtioSndHdr { code: cmd }, stream_id };
         *(dma_resp as *mut VirtioSndHdr) = VirtioSndHdr { code: 0 };
     }
     let bufs = [
         (phys_req, size_of::<VirtioSndPcmHdr>() as u32, false),
         (phys_resp, size_of::<VirtioSndHdr>() as u32, true),
     ];
-    { let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap(); q.add_buffer(&bufs); }
+    {
+        let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
+        q.add_buffer(&bufs);
+    }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
     loop {
-        let done = { let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap(); q.poll_used().is_some() };
-        if done { break; }
+        let done = {
+            let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
+            q.poll_used().is_some()
+        };
+        if done {
+            break;
+        }
         stem::time::sleep_ms(1);
     }
 }
@@ -833,11 +843,19 @@ fn configure_stream(driver: &mut VirtioDevice, stream_id: u32) {
         (phys_req, size_of::<VirtioSndPcmSetParams>() as u32, false),
         (phys_resp, size_of::<VirtioSndHdr>() as u32, true),
     ];
-    { let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap(); q.add_buffer(&bufs); }
+    {
+        let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
+        q.add_buffer(&bufs);
+    }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
     loop {
-        let done = { let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap(); q.poll_used().is_some() };
-        if done { break; }
+        let done = {
+            let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
+            q.poll_used().is_some()
+        };
+        if done {
+            break;
+        }
         stem::time::sleep_ms(1);
     }
     send_pcm_command(driver, VIRTIO_SND_R_PCM_PREPARE, stream_id);
