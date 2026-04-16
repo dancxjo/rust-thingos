@@ -13,8 +13,8 @@ struct Flags {
 
 fn get_args() -> (Flags, Vec<String>) {
     let mut len = 0;
-    if let Ok(l) = argv_get(&mut []) {
-        len = l;
+    if let Ok(arg_len) = argv_get(&mut []) {
+        len = arg_len;
     }
     if len == 0 {
         return (Flags::default(), Vec::new());
