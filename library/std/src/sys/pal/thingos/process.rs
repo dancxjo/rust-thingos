@@ -31,24 +31,18 @@
 //! target FD during spawn.
 
 use super::env::{CommandEnv, CommandEnvs};
-use crate::sys::abi::{FdRemap, SpawnProcessExReq, SpawnProcessExResp};
-use crate::sys::thingos_syscall_numbers::{
-    fcntl_cmd,
-    poll_flags,
-    vfs_flags,
-    SYS_FS_FCNTL,
-    SYS_FS_POLL,
-    SYS_SPAWN_PROCESS_EX,
-    SYS_TASK_KILL,
-    SYS_WAITPID,
-};
 pub use crate::ffi::OsString as EnvKey;
 use crate::ffi::{OsStr, OsString};
 use crate::num::NonZero;
 use crate::path::Path;
 use crate::process::StdioPipes;
+use crate::sys::abi::{FdRemap, SpawnProcessExReq, SpawnProcessExResp};
 use crate::sys::fs::File;
 use crate::sys::pal::raw_syscall6;
+use crate::sys::thingos_syscall_numbers::{
+    SYS_FS_FCNTL, SYS_FS_POLL, SYS_SPAWN_PROCESS_EX, SYS_TASK_KILL, SYS_WAITPID, fcntl_cmd,
+    poll_flags, vfs_flags,
+};
 use crate::{fmt, io};
 
 /// waitpid WNOHANG: return immediately if no child has exited yet.
@@ -144,15 +138,21 @@ impl From<ChildPipe> for Stdio {
 }
 
 impl From<io::Stdout> for Stdio {
-    fn from(_: io::Stdout) -> Stdio { Stdio::ParentStdout }
+    fn from(_: io::Stdout) -> Stdio {
+        Stdio::ParentStdout
+    }
 }
 
 impl From<io::Stderr> for Stdio {
-    fn from(_: io::Stderr) -> Stdio { Stdio::ParentStderr }
+    fn from(_: io::Stderr) -> Stdio {
+        Stdio::ParentStderr
+    }
 }
 
 impl From<File> for Stdio {
-    fn from(file: File) -> Stdio { Stdio::InheritFile(file) }
+    fn from(file: File) -> Stdio {
+        Stdio::InheritFile(file)
+    }
 }
 
 // ── Command ───────────────────────────────────────────────────────────────────
@@ -180,19 +180,31 @@ impl Command {
         }
     }
 
-    pub fn arg(&mut self, arg: &OsStr) { self.args.push(arg.to_owned()); }
+    pub fn arg(&mut self, arg: &OsStr) {
+        self.args.push(arg.to_owned());
+    }
 
-    pub fn env_mut(&mut self) -> &mut CommandEnv { &mut self.env }
+    pub fn env_mut(&mut self) -> &mut CommandEnv {
+        &mut self.env
+    }
 
     pub fn cwd(&mut self, dir: &OsStr) {
         self.cwd = Some(dir.to_owned());
     }
 
-    pub fn stdin(&mut self, stdin: Stdio) { self.stdin = Some(stdin); }
-    pub fn stdout(&mut self, stdout: Stdio) { self.stdout = Some(stdout); }
-    pub fn stderr(&mut self, stderr: Stdio) { self.stderr = Some(stderr); }
+    pub fn stdin(&mut self, stdin: Stdio) {
+        self.stdin = Some(stdin);
+    }
+    pub fn stdout(&mut self, stdout: Stdio) {
+        self.stdout = Some(stdout);
+    }
+    pub fn stderr(&mut self, stderr: Stdio) {
+        self.stderr = Some(stderr);
+    }
 
-    pub fn get_program(&self) -> &OsStr { &self.program }
+    pub fn get_program(&self) -> &OsStr {
+        &self.program
+    }
 
     pub fn get_args(&self) -> CommandArgs<'_> {
         let mut iter = self.args.iter();
@@ -200,8 +212,12 @@ impl Command {
         CommandArgs { iter }
     }
 
-    pub fn get_envs(&self) -> CommandEnvs<'_> { self.env.iter() }
-    pub fn get_env_clear(&self) -> bool { self.env.does_clear() }
+    pub fn get_envs(&self) -> CommandEnvs<'_> {
+        self.env.iter()
+    }
+    pub fn get_env_clear(&self) -> bool {
+        self.env.does_clear()
+    }
 
     pub fn get_current_dir(&self) -> Option<&Path> {
         self.cwd.as_ref().map(|cs| Path::new(cs))
@@ -265,7 +281,10 @@ impl Command {
                 SYS_SPAWN_PROCESS_EX,
                 &req as *const SpawnProcessExReq as usize,
                 &mut resp as *mut SpawnProcessExResp as usize,
-                0, 0, 0, 0,
+                0,
+                0,
+                0,
+                0,
             )
         };
         cvt(ret)?;
@@ -317,12 +336,18 @@ impl<'a> Iterator for CommandArgs<'a> {
     fn next(&mut self) -> Option<&'a OsStr> {
         self.iter.next().map(|os| &**os)
     }
-    fn size_hint(&self) -> (usize, Option<usize>) { self.iter.size_hint() }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
 }
 
 impl<'a> ExactSizeIterator for CommandArgs<'a> {
-    fn len(&self) -> usize { self.iter.len() }
-    fn is_empty(&self) -> bool { self.iter.is_empty() }
+    fn len(&self) -> usize {
+        self.iter.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.iter.is_empty()
+    }
 }
 
 impl<'a> fmt::Debug for CommandArgs<'a> {
@@ -345,7 +370,9 @@ impl ExitStatus {
             Err(ExitStatusError(NonZero::new(self.0).expect("non-zero exit code")))
         }
     }
-    pub fn code(&self) -> Option<i32> { Some(self.0) }
+    pub fn code(&self) -> Option<i32> {
+        Some(self.0)
+    }
 }
 
 impl Default for ExitStatus {
@@ -366,11 +393,15 @@ impl fmt::Display for ExitStatus {
 pub struct ExitStatusError(NonZero<i32>);
 
 impl Into<ExitStatus> for ExitStatusError {
-    fn into(self) -> ExitStatus { ExitStatus(self.0.get()) }
+    fn into(self) -> ExitStatus {
+        ExitStatus(self.0.get())
+    }
 }
 
 impl ExitStatusError {
-    pub fn code(self) -> Option<NonZero<i32>> { Some(self.0) }
+    pub fn code(self) -> Option<NonZero<i32>> {
+        Some(self.0)
+    }
 }
 
 // ── ExitCode ──────────────────────────────────────────────────────────────────
@@ -381,11 +412,15 @@ pub struct ExitCode(u8);
 impl ExitCode {
     pub const SUCCESS: ExitCode = ExitCode(0);
     pub const FAILURE: ExitCode = ExitCode(1);
-    pub fn as_i32(&self) -> i32 { self.0 as i32 }
+    pub fn as_i32(&self) -> i32 {
+        self.0 as i32
+    }
 }
 
 impl From<u8> for ExitCode {
-    fn from(code: u8) -> Self { Self(code) }
+    fn from(code: u8) -> Self {
+        Self(code)
+    }
 }
 
 // ── Process (child handle) ────────────────────────────────────────────────────
@@ -399,7 +434,9 @@ pub struct Process {
 }
 
 impl Process {
-    pub fn id(&self) -> u32 { self.pid }
+    pub fn id(&self) -> u32 {
+        self.pid
+    }
 
     /// Request termination of the child process via SYS_TASK_KILL (uses TID).
     pub fn kill(&mut self) -> crate::io::Result<()> {
@@ -409,11 +446,12 @@ impl Process {
 
     /// Block until child exits; returns cached status on second call.
     pub fn wait(&mut self) -> crate::io::Result<ExitStatus> {
-        if let Some(status) = self.status { return Ok(status); }
+        if let Some(status) = self.status {
+            return Ok(status);
+        }
         let mut code: i32 = 0;
         let ret = unsafe {
-            raw_syscall6(SYS_WAITPID, self.pid as usize,
-                &mut code as *mut i32 as usize, 0, 0, 0, 0)
+            raw_syscall6(SYS_WAITPID, self.pid as usize, &mut code as *mut i32 as usize, 0, 0, 0, 0)
         };
         cvt(ret)?;
         let status = ExitStatus(code);
@@ -423,11 +461,20 @@ impl Process {
 
     /// Non-blocking check; returns Ok(None) if child is still running.
     pub fn try_wait(&mut self) -> crate::io::Result<Option<ExitStatus>> {
-        if let Some(status) = self.status { return Ok(Some(status)); }
+        if let Some(status) = self.status {
+            return Ok(Some(status));
+        }
         let mut code: i32 = 0;
         let ret = unsafe {
-            raw_syscall6(SYS_WAITPID, self.pid as usize,
-                &mut code as *mut i32 as usize, WNOHANG, 0, 0, 0)
+            raw_syscall6(
+                SYS_WAITPID,
+                self.pid as usize,
+                &mut code as *mut i32 as usize,
+                WNOHANG,
+                0,
+                0,
+                0,
+            )
         };
         let child_pid = cvt(ret)?;
         if child_pid == 0 {

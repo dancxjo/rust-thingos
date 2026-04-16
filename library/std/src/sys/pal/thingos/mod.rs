@@ -7,8 +7,8 @@ compile_error!(
     "ThingOS std PAL is abort-only: panic=unwind is not supported for target_os=thingos"
 );
 
-pub mod common;
 pub(crate) mod abi;
+pub mod common;
 pub mod futex;
 pub mod os;
 pub mod time;
