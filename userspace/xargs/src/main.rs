@@ -53,19 +53,19 @@ fn read_stdin() -> Vec<u8> {
 
 fn split_whitespace_bytes(input: &[u8]) -> Vec<Vec<u8>> {
     let mut tokens = Vec::new();
-    let mut i = 0usize;
-    while i < input.len() {
-        while i < input.len() && input[i].is_ascii_whitespace() {
-            i += 1;
+    let mut index = 0usize;
+    while index < input.len() {
+        while index < input.len() && input[index].is_ascii_whitespace() {
+            index += 1;
         }
-        if i >= input.len() {
+        if index >= input.len() {
             break;
         }
-        let start = i;
-        while i < input.len() && !input[i].is_ascii_whitespace() {
-            i += 1;
+        let start = index;
+        while index < input.len() && !input[index].is_ascii_whitespace() {
+            index += 1;
         }
-        tokens.push(input[start..i].to_vec());
+        tokens.push(input[start..index].to_vec());
     }
     tokens
 }
@@ -212,7 +212,7 @@ fn main(_arg: usize) -> ! {
                 added = true;
             }
 
-            if !added {
+            if !added && idx < items.len() {
                 argv.push(items[idx].clone());
                 idx += 1;
             }
