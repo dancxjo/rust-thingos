@@ -157,6 +157,7 @@ members = [
   "userspace/vfs_hello",
   "userspace/wayland_hello",
   "userspace/wc",
+  "userspace/which",
   "tools/kindc",
 # tidy-alphabetical-end
 ]
