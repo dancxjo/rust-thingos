@@ -79,8 +79,8 @@ Items are grouped by location.
 | Current Process-Carried Context | Field / path | Current role | Future owner | Migration status | Notes |
 |---|---|---|---|---|---|
 | Current working directory | `Process.cwd` | Per-process path base for relative resolution | **Place** | **bridged ✓** | Surfaced through `kernel::place::bridge::place_from_snapshot` → `Place::cwd`; raw field stays as transitional backing. Extraction seam: move into `Place`-shaped substructure and replace raw String with VFS-node ref. |
-| VFS namespace / mount-table view | `Process.namespace` (NamespaceRef) | Determines which mount table the process sees | **Place** | bridge in place | `NamespaceRef` is a unit struct today — all processes share one global mount table. Bridged as `Place::namespace = "global"`. Per-process isolation deferred. |
-| Effective filesystem root | *(no field yet)* | Should bound the process's visible VFS tree | **Place** | not yet added | `Place::root` is hardcoded to `"/"` in the bridge. No per-process chroot/pivot-root implemented. Add field to `Process` before extraction can begin. |
+| VFS namespace / mount-table view | `Process.namespace` (`NamespaceRef`) | Determines which mount-table identity the process carries | **Place** | **bridged ✓** | Bridged as `Place::namespace = Process.namespace.label()` (for example `global`, `ns-42`). Mount-table isolation for lookups remains deferred. |
+| Effective filesystem root | `Process.root` | Bounds the process-visible VFS tree | **Place** | **bridged ✓** | Bridged as `Place::root = Process.root` with bridge fallback to `"/"` when unset/invalid. Chroot/pivot-root mutation paths are still future work. |
 | Executable image path | `Process.exec_path` | Path of the running image | Authority (name fallback) | **bridged ✓** | Feeds `Authority::name` in `kernel::authority::bridge`. Execution-context dimension: identifies *which world-image* is running. Not cwd/namespace. |
 | File descriptor table | `Process.fd_table` | Open-file "window" into the VFS | Handle table → Place adjacency | keep for now | FDs 0/1/2 carry stdout/stdin/stderr and may be TTY FDs. Constitutes the process's concrete VFS interface. No handle-table concept yet; extract after Authority stabilises. |
 
@@ -185,8 +185,8 @@ by extraction difficulty.
 
 | Responsibility | Blocker / note |
 |---|---|
-| Per-process namespace isolation | `NamespaceRef` is a unit struct; all processes share global mount table. Defer until namespace work. |
-| Per-process chroot / filesystem root | No root field on `Process`; `Place::root` hardcoded to `"/"`. Must add field before extraction. |
+| Per-process namespace isolation | `NamespaceRef` now carries stable IDs/labels (`global`, `ns-*`), but lookup isolation still shares the global mount table. |
+| Per-process chroot / filesystem root | `Process.root` now exists and bridges into `Place::root`; mutation/enforcement paths beyond default inheritance remain future work. |
 | Inherited environment blob | No Place-facing env model; quarantined as Unix legacy. |
 | Controlling TTY attachment | No Presence concept yet; implicit acquisition via `maybe_acquire_controlling_tty`. |
 | `foreground_pgid` query outside devfs | Global TTY state locked inside `devfs`; `group::bridge` uses heuristic fallback. |

@@ -22,9 +22,8 @@
 //!
 //! In Phase 8 its shape is intentionally minimal.  The `cwd` records the
 //! current working directory path.  The `namespace` labels the VFS mount
-//! table view (currently always `"global"` because all processes share one
-//! mount table).  The `root` records the effective filesystem root (always
-//! `"/"` in Phase 8; per-process chroot is not yet implemented).
+//! table view (for example `global`, `ns-42`).  The `root` records the
+//! effective filesystem root for the execution context.
 //!
 //! # What belongs under Place
 //!
@@ -62,8 +61,8 @@
 //! | Canonical field    | Current kernel source                        |
 //! |--------------------|----------------------------------------------|
 //! | `Place::cwd`       | `Process::cwd` (current working directory)   |
-//! | `Place::namespace` | `Process::namespace` (always `"global"` now) |
-//! | `Place::root`      | *(no per-process root yet — always `"/"`)    |
+//! | `Place::namespace` | `Process::namespace.label()`                  |
+//! | `Place::root`      | `Process::root`                               |
 //!
 //! # Future direction
 //!
@@ -115,17 +114,13 @@ pub struct Place {
 
     /// The VFS namespace label for this execution context.
     ///
-    /// In Phase 8 this is always `"global"` because all processes share a
-    /// single global mount table (`NamespaceRef` is a unit struct today).
-    /// Future phases will populate this with a stable namespace identifier
-    /// once per-process namespace isolation is implemented.
+    /// In Phase 8 this is derived from `Process::namespace.label()`, for
+    /// example `"global"` or `"ns-42"`.
     pub namespace: alloc::string::String,
 
     /// The effective filesystem root for this execution context.
     ///
-    /// Always `"/"` in Phase 8; per-process chroot / pivot-root is not yet
-    /// implemented.  Future phases will derive this from a per-process root
-    /// binding once that mechanism is introduced.
+    /// In Phase 8 this is derived from `Process::root`.
     pub root: alloc::string::String,
 }
 

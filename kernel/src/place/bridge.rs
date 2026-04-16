@@ -54,6 +54,22 @@
 
 use thingos::place::Place;
 
+fn normalize_namespace(namespace: &str) -> alloc::string::String {
+    if namespace.is_empty() {
+        alloc::string::String::from("global")
+    } else {
+        namespace.into()
+    }
+}
+
+fn normalize_root(root: &str) -> alloc::string::String {
+    if root.is_empty() || !root.starts_with('/') {
+        alloc::string::String::from("/")
+    } else {
+        root.into()
+    }
+}
+
 /// Return the canonical [`Place`] for the **currently running task**.
 ///
 /// This is the **preferred entry point** for any new world-context inspection
@@ -80,14 +96,10 @@ pub fn place_for_current() -> Place {
         } else {
             pinfo.cwd.clone()
         };
-        let root = if pinfo.root.is_empty() {
-            alloc::string::String::from("/")
-        } else {
-            pinfo.root.clone()
-        };
+        let root = normalize_root(&pinfo.root);
         return Place {
             cwd,
-            namespace: pinfo.namespace.label(),
+            namespace: normalize_namespace(&pinfo.namespace.label()),
             root,
         };
     }
@@ -132,13 +144,8 @@ pub fn place_from_snapshot(
         snapshot.cwd.clone()
     };
 
-    let namespace = snapshot.namespace_label.clone();
-
-    let root = if snapshot.root_path.is_empty() {
-        alloc::string::String::from("/")
-    } else {
-        snapshot.root_path.clone()
-    };
+    let namespace = normalize_namespace(&snapshot.namespace_label);
+    let root = normalize_root(&snapshot.root_path);
 
     Place { cwd, namespace, root }
 }
@@ -210,6 +217,13 @@ mod tests {
         assert_eq!(place.namespace, label);
     }
 
+    #[test]
+    fn test_empty_namespace_defaults_to_global() {
+        let snap = make_snapshot("/", "", "/");
+        let place = place_from_snapshot(&snap);
+        assert_eq!(place.namespace, "global");
+    }
+
     // ── root mapping ──────────────────────────────────────────────────────────
 
     #[test]
@@ -222,6 +236,13 @@ mod tests {
     #[test]
     fn test_empty_root_path_defaults_to_slash() {
         let snap = make_snapshot("/work", "global", "");
+        let place = place_from_snapshot(&snap);
+        assert_eq!(place.root, "/");
+    }
+
+    #[test]
+    fn test_relative_root_path_defaults_to_slash() {
+        let snap = make_snapshot("/work", "global", "relative/root");
         let place = place_from_snapshot(&snap);
         assert_eq!(place.root, "/");
     }
