@@ -9,6 +9,37 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
+use abi::seed::{
+    HOST_PROGRAM, INTERFACE_PROGRAM_V1, SEED_ABI_VERSION, Seed, SeedInterface,
+};
+
+const SEED_NAME: &[u8] = b"hello_stdio";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_SEED: Seed = Seed {
+    abi_version: SEED_ABI_VERSION,
+    interface_count: 1,
+    hosting_modes: HOST_PROGRAM,
+    capabilities: 0,
+    name_ptr: SEED_NAME.as_ptr(),
+    name_len: SEED_NAME.len(),
+    interfaces: [
+        SeedInterface {
+            interface_id: INTERFACE_PROGRAM_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            // Empty entry symbol means "use ELF default entry", which keeps
+            // regular plain-main program flow intact.
+            entry_symbol_ptr: core::ptr::null(),
+            entry_symbol_len: 0,
+        },
+        SeedInterface::default(),
+        SeedInterface::default(),
+        SeedInterface::default(),
+    ],
+};
 
 fn main() {
     println!("[hello_stdio] stdout: hello from ThingOS!");

@@ -1,15 +1,13 @@
-//! Driver catalog: scans `/bin` (and `/drivers` when present) for binaries
-//! that export the `THING_DRIVER_V1` marker symbol and caches their metadata.
+//! Driver catalog: scans `/drivers` for binaries that advertise DriverV1 via
+//! the canonical Motor descriptor and caches their metadata.
 //!
 //! # Discovery model
 //!
 //! On each scan pass `devd` reads every regular file from the known search
 //! paths.  For each candidate binary the catalog:
 //!
-//! 1. Checks for the `THING_DRIVER_V1` ELF symbol (presence = driver-capable).
-//! 2. Reads the [`DriverInterfaceV1`] struct from the symbol's virtual address
-//!    inside the loaded data to extract matching criteria and the entrypoint
-//!    symbol name.
+//! 1. Checks for the `THINGOS_SEED` ELF symbol and confirms `DriverV1`.
+//! 2. Reads descriptor metadata and optional legacy hints.
 //! 3. Caches a [`DriverEntry`] record keyed by binary path.
 //!
 //! The catalog is rescanned periodically so that newly installed driver
@@ -19,17 +17,18 @@
 
 extern crate alloc;
 
-use abi::driver_interface::{
-    DriverClass, DriverDescriptor, DriverInterfaceV1, DRIVER_DESCRIPTOR_ABI_VERSION,
-    DRIVER_DESCRIPTOR_SYMBOL, DRIVER_ENTRY_SYMBOL, DRIVER_INTERFACE_ABI_VERSION, DRIVER_MARKER_SYMBOL,
-    DRIVER_MATCH_ANY_CLASS, DRIVER_MATCH_ANY_ID,
-};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+use abi::driver_interface::{
+    DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_DESCRIPTOR_SYMBOL, DRIVER_ENTRY_SYMBOL,
+    DRIVER_INTERFACE_ABI_VERSION, DRIVER_MARKER_SYMBOL, DRIVER_MATCH_ANY_CLASS,
+    DRIVER_MATCH_ANY_ID, DriverClass, DriverDescriptor, DriverInterfaceV1,
+};
+use abi::seed::{INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
+use abi::syscall::vfs_flags::O_RDONLY;
 use stem::debug;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek};
-
-use abi::syscall::vfs_flags::O_RDONLY;
 
 /// Maximum ELF binary size the catalog will read into memory for symbol
 /// inspection.  Binaries larger than this are silently skipped.
@@ -46,7 +45,7 @@ pub struct DriverEntry {
     pub path: String,
     /// ABI version read from the marker symbol.
     pub abi_version: u32,
-    /// Human-readable driver name (from THINGOS_DRIVER when present).
+    /// Human-readable driver name (from THINGOS_SEED/THINGOS_DRIVER when present).
     pub driver_name: String,
     /// Driver class declared in the descriptor.
     pub driver_class: DriverClass,
@@ -196,11 +195,7 @@ impl Catalog {
     pub fn inspect_binary_path(&mut self, path: &str) -> Option<&DriverEntry> {
         let before = self.entries.len();
         self.inspect_binary(path);
-        if self.entries.len() > before {
-            Some(&self.entries[before])
-        } else {
-            None
-        }
+        if self.entries.len() > before { Some(&self.entries[before]) } else { None }
     }
 
     fn inspect_binary(&mut self, path: &str) {
@@ -210,9 +205,26 @@ impl Catalog {
             None => return,
         };
 
+        let seed_descriptor = resolve_elf64_symbol_from_bytes(&bytes, SEED_SYMBOL)
+            .and_then(|sym_vaddr| read_seed_descriptor(&bytes, sym_vaddr));
+
         let mut iface_legacy: Option<DriverInterfaceV1> = None;
         if let Some(sym_vaddr) = resolve_elf64_symbol_from_bytes(&bytes, DRIVER_MARKER_SYMBOL) {
             iface_legacy = read_driver_interface_v1(&bytes, sym_vaddr);
+        }
+
+        // Canonical path: Seed descriptor declares DriverV1 interface.
+        if let Some(seed) = seed_descriptor {
+            if seed.abi_version != SEED_ABI_VERSION {
+                debug!(
+                    "DEVD CATALOG: {} has unknown seed abi_version {} (expected {}), skipping",
+                    path, seed.abi_version, SEED_ABI_VERSION
+                );
+                return;
+            }
+            if !seed.implements_driver_v1() {
+                return;
+            }
         }
 
         let descriptor = match resolve_elf64_symbol_from_bytes(&bytes, DRIVER_DESCRIPTOR_SYMBOL)
@@ -220,7 +232,14 @@ impl Catalog {
         {
             Some(d) => d,
             None => {
-                // No v2 descriptor. Keep legacy support.
+                // Transitional compatibility path: legacy marker-only drivers.
+                if seed_descriptor.is_some() {
+                    debug!(
+                        "DEVD CATALOG: {} declares DriverV1 in its Seed but lacks legacy THINGOS_DRIVER descriptor; skipping",
+                        path
+                    );
+                    return;
+                }
                 let Some(iface) = iface_legacy else {
                     return;
                 };
@@ -260,12 +279,12 @@ impl Catalog {
             return;
         }
 
-        let driver_name = read_driver_name(&bytes, descriptor.driver_name_ptr as u64, descriptor.driver_name_len)
-            .unwrap_or_else(|| path.to_string());
+        let driver_name =
+            read_driver_name(&bytes, descriptor.driver_name_ptr as u64, descriptor.driver_name_len)
+                .unwrap_or_else(|| path.to_string());
         let start_symbol =
-            resolve_elf64_symbol_name_by_value(&bytes, descriptor.start as usize as u64).unwrap_or_else(
-                || DRIVER_ENTRY_SYMBOL.to_string(),
-            );
+            resolve_elf64_symbol_name_by_value(&bytes, descriptor.start as usize as u64)
+                .unwrap_or_else(|| DRIVER_ENTRY_SYMBOL.to_string());
         let legacy = iface_legacy.unwrap_or(DriverInterfaceV1 {
             abi_version: 0,
             flags: 0,
@@ -502,7 +521,29 @@ fn read_driver_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<DriverDescript
     }
     let desc: DriverDescriptor = unsafe {
         let mut tmp = core::mem::MaybeUninit::<DriverDescriptor>::uninit();
-        core::ptr::copy_nonoverlapping(bytes.as_ptr().add(file_off), tmp.as_mut_ptr() as *mut u8, size);
+        core::ptr::copy_nonoverlapping(
+            bytes.as_ptr().add(file_off),
+            tmp.as_mut_ptr() as *mut u8,
+            size,
+        );
+        tmp.assume_init()
+    };
+    Some(desc)
+}
+
+fn read_seed_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<Seed> {
+    let file_off = vaddr_to_file_offset(bytes, sym_vaddr)?;
+    let size = core::mem::size_of::<Seed>();
+    if file_off + size > bytes.len() {
+        return None;
+    }
+    let desc: Seed = unsafe {
+        let mut tmp = core::mem::MaybeUninit::<Seed>::uninit();
+        core::ptr::copy_nonoverlapping(
+            bytes.as_ptr().add(file_off),
+            tmp.as_mut_ptr() as *mut u8,
+            size,
+        );
         tmp.assume_init()
     };
     Some(desc)
@@ -545,10 +586,9 @@ fn read_file(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
     }
     let _ = vfs_close(fd);
     if out.len() < 4 {
-        None
-    } else {
-        Some(out)
+        return None;
     }
+    Some(out)
 }
 
 // ── Byte readers ─────────────────────────────────────────────────────────────

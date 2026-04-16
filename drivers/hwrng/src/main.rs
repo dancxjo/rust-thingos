@@ -5,13 +5,41 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
+};
+use abi::seed::{
+    HOST_DRIVER, INTERFACE_DRIVER_V1, SEED_ABI_VERSION, Seed, SeedInterface,
 };
 use stem::abi::driver_ctx::DriverCtx;
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::{debug, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"hwrng";
+const SEED_NAME: &[u8] = b"hwrng";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_SEED: Seed = Seed {
+    abi_version: SEED_ABI_VERSION,
+    interface_count: 1,
+    hosting_modes: HOST_DRIVER,
+    capabilities: 0,
+    name_ptr: SEED_NAME.as_ptr(),
+    name_len: SEED_NAME.len(),
+    interfaces: [
+        SeedInterface {
+            interface_id: INTERFACE_DRIVER_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: core::ptr::null(),
+            entry_symbol_len: 0,
+        },
+        SeedInterface::default(),
+        SeedInterface::default(),
+        SeedInterface::default(),
+    ],
+};
 
 #[unsafe(no_mangle)]
 #[used]
@@ -25,7 +53,10 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     start: thingos_driver_start,
 };
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
@@ -49,9 +80,9 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
     kind: ModuleKind::Driver,
     // "dev.rng.HwRng"
     device_kind: [
-        0x64, 0x65, 0x76, 0x2e, 0x72, 0x6e, 0x67, 0x2e, 0x48, 0x77, 0x52, 0x6e, 0x67, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0x64, 0x65, 0x76, 0x2e, 0x72, 0x6e, 0x67, 0x2e, 0x48, 0x77, 0x52, 0x6e, 0x67, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ],
     version: 1,
     _reserved: 0,
