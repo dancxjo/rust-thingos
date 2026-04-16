@@ -878,9 +878,11 @@ impl VfsNode for FbNode {
         let mut shadow = self.shadow.lock();
         shadow.bytes[off..off + n].copy_from_slice(&buf[..n]);
 
+        let expected_frame_bytes = (self.fb.height as usize) * (self.fb.pitch as usize);
+        
         // Full-frame writes are staged first, then published in one pass so
         // the boot framebuffer does not expose the wallpaper as it streams in.
-        if off == 0 && n as u64 == self.fb.byte_len {
+        if off == 0 && (n as u64 == self.fb.byte_len || n == expected_frame_bytes) {
             let row_bytes = self.fb.pitch as usize;
             let bytes_per_pixel = ((self.fb.bpp as usize) + 7) / 8;
             let payload_bytes = (self.fb.width as usize).saturating_mul(bytes_per_pixel).min(row_bytes);
