@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use stem::syscall::{argv_get, exit, vfs_link, vfs_symlink, vfs_write};
+use stem::syscall::{argv_get, exit, vfs, vfs_write};
 
 #[derive(Default)]
 struct Flags {
@@ -58,9 +58,9 @@ fn main(_arg: usize) -> ! {
     let link_name = &args[1];
 
     let result = if flags.symbolic {
-        vfs_symlink(target, link_name)
+        vfs::vfs_symlink(target, link_name)
     } else {
-        vfs_link(target, link_name)
+        vfs::vfs_link(target, link_name)
     };
 
     if let Err(e) = result {
