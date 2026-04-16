@@ -144,8 +144,20 @@ pub(super) struct ChildSpawnHooks {
 
 impl ChildSpawnHooks {
     // This is run on the newly spawned thread, directly at the start.
+    #[cfg(not(target_os = "thingos"))]
     pub(super) fn run(self) {
         SPAWN_HOOKS.set(self.hooks);
+        for run in self.to_run {
+            run();
+        }
+    }
+
+    // ThingOS currently boots child std threads before thread-local eager
+    // storage for spawn hooks is consistently usable. Avoid touching the TLS
+    // hook cell here to prevent null-pointer writes during bootstrap.
+    #[cfg(target_os = "thingos")]
+    pub(super) fn run(self) {
+        let _ = self.hooks;
         for run in self.to_run {
             run();
         }
