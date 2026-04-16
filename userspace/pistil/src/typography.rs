@@ -4,6 +4,7 @@ use abi::font_protocol::{
 };
 use abi::wire::ThingId;
 use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 use ipc_helpers::rpc::RpcServer;
@@ -429,7 +430,8 @@ fn handle_ensure_glyphs(
 
     // Get or create atlas
     if !service.atlases.contains_key(&(face_id_u64, px_size)) {
-        let atlas = Atlas::new("font_atlas", 1024, 1024, 1).expect("Failed to create atlas");
+        let atlas_name = format!("font_atlas_{face_id_u64}_{px_size}");
+        let atlas = Atlas::new(&atlas_name, 1024, 1024, 1).expect("Failed to create atlas");
         service.atlases.insert((face_id_u64, px_size), atlas);
     }
     let atlas = service.atlases.get_mut(&(face_id_u64, px_size)).unwrap();
