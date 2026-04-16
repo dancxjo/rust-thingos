@@ -94,6 +94,9 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "test_dlopen", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "reboot", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "shutdown", is_init: false, boot_module: true, features: vec![] },
+        #[cfg(feature = "lsv")]
+        ProgramConfig { name: "lsv", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "rn", is_init: false, boot_module: true, features: vec![] },
     ]
 }
 
