@@ -350,6 +350,8 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
         out_ptr: 0,
         out_len: 0,
     };
+    let mut pgid_out: u32 = 0;
+    let mut pgid_in: u32 = 0;
     match request {
         TCGETS => {
             let tio = argp.cast::<termios>();
@@ -376,15 +378,19 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             call.in_len = core::mem::size_of::<termios>() as u32;
         }
         TIOCGPGRP => {
-            let pgid = argp.cast::<u32>();
             call.op = TERMINAL_OP_TCGETPGRP;
-            call.out_ptr = pgid as usize as u64;
+            call.out_ptr = &mut pgid_out as *mut u32 as usize as u64;
             call.out_len = core::mem::size_of::<u32>() as u32;
         }
         TIOCSPGRP => {
-            let pgid = argp.cast::<u32>();
+            let pgid = unsafe { *argp.cast::<c_int>() };
+            if pgid <= 0 {
+                set_errno(EINVAL);
+                return -1;
+            }
+            pgid_in = pgid as u32;
             call.op = TERMINAL_OP_TCSETPGRP;
-            call.in_ptr = pgid as usize as u64;
+            call.in_ptr = &pgid_in as *const u32 as usize as u64;
             call.in_len = core::mem::size_of::<u32>() as u32;
         }
         TIOCGWINSZ => {
@@ -410,6 +416,19 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
         )
     };
     if ret >= 0 {
+        if request == TIOCGPGRP {
+            let Ok(pgid) = c_int::try_from(pgid_out) else {
+                set_errno(EINVAL);
+                return -1;
+            };
+            if pgid <= 0 {
+                set_errno(EINVAL);
+                return -1;
+            }
+            unsafe {
+                *argp.cast::<c_int>() = pgid;
+            }
+        }
         return 0;
     }
 
