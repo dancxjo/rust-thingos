@@ -40,6 +40,7 @@ pub struct ProcessSnapshot {
     //   pgid            → Group (Phase 5)
     //   sid             → Group / Presence / Place (Phase 5)
     //   session_leader  → Group / Presence (Phase 5)
+    //   foreground_pgid → Group (Phase 4 source-of-truth projection)
     //
     // New code must NOT read these fields directly for coordination or
     // world-context purposes; use `kernel::group::bridge` instead.
@@ -60,6 +61,12 @@ pub struct ProcessSnapshot {
     ///
     /// FUTURE: → `Group / Presence` (Phase 5)
     pub session_leader: bool,
+    /// Foreground process-group ID currently owning `/dev/console` (if any).
+    ///
+    /// Backed by `devfs::ConsoleTtyState::foreground_pgid` and projected here so
+    /// bridge modules can use source-of-truth foreground ownership semantics
+    /// without reaching into devfs internals directly.
+    pub foreground_pgid: Option<u32>,
     // ── Place-context fields (Phase 8) ────────────────────────────────────────
     /// Current working directory path.
     ///

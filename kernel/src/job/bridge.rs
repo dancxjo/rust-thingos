@@ -280,6 +280,7 @@ mod tests {
             pgid: 1,
             sid: 1,
             session_leader: false,
+            foreground_pgid: None,
             cwd: alloc::string::String::from("/"),
             namespace_label: alloc::string::String::from("global"),
             // Phase 9: populate thread_states so job_state_from_snapshot uses
@@ -441,6 +442,7 @@ mod tests {
             pgid: 1,
             sid: 1,
             session_leader: false,
+            foreground_pgid: None,
             cwd: alloc::string::String::from("/"),
             namespace_label: alloc::string::String::from("global"),
             thread_states: all_thread_states,

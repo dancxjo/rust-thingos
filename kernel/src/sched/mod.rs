@@ -2042,6 +2042,7 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
     let mut out = alloc::vec::Vec::new();
+    let foreground_pgid = crate::vfs::devfs::console_foreground_pgid();
     {
         let reg = crate::task::registry::get_registry::<R>();
 
@@ -2086,6 +2087,7 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
                     pgid: unix_compat.pgid,
                     sid: unix_compat.sid,
                     session_leader: unix_compat.session_leader,
+                    foreground_pgid,
                     // Place-context fields (Phase 8): extracted from Process into
                     // the snapshot so the place bridge can build a canonical Place
                     // without holding the Process lock.
