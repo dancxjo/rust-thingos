@@ -502,7 +502,7 @@ pub struct NamespaceRef {
 
 const GLOBAL_NAMESPACE_ID: u64 = 1;
 const FIRST_ISOLATED_NAMESPACE_ID: u64 = GLOBAL_NAMESPACE_ID + 1;
-static NEXT_NAMESPACE_ID: core::sync::atomic::AtomicU64 =
+static NAMESPACE_ID_ALLOCATOR: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(FIRST_ISOLATED_NAMESPACE_ID);
 
 impl NamespaceRef {
@@ -520,7 +520,7 @@ impl NamespaceRef {
 
     /// Create a new isolated namespace identity.
     pub fn isolated() -> Self {
-        let id = NEXT_NAMESPACE_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let id = NAMESPACE_ID_ALLOCATOR.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
         Self { id }
     }
 
