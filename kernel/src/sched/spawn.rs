@@ -76,6 +76,7 @@ fn default_process_info(
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: alloc::string::String::from("/"),
         exec_path: alloc::string::String::new(),
+        authority: crate::task::ProcessAuthority::root(),
         space,
     }))
 }
@@ -100,6 +101,7 @@ fn inherit_process_info<R: BootRuntime>(
             namespace: parent.namespace.clone(),
             cwd: parent.cwd.clone(),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::inherit(parent.authority),
             space,
         }))
     } else {
@@ -292,7 +294,7 @@ impl<R: BootRuntime> Scheduler<R> {
         // MappingList object).  Fall back to an empty list only when there is
         // no parent process (should not happen for user threads).
         let mappings =
-            parent_pinfo.as_ref().map(|pi| pi.lock().space.mappings.clone()).unwrap_or_else(|| {
+            parent_pinfo.as_ref().map(|pi| pi.lock().space.mappings_arc()).unwrap_or_else(|| {
                 alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()))
             });
 
@@ -1069,6 +1071,11 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         uc.auxv = crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64);
         uc
     };
+    let authority = if let Some(parent_pi) = &parent_pinfo {
+        parent_pi.lock().authority
+    } else {
+        crate::task::ProcessAuthority::root()
+    };
 
     // Create per-process identity with provided argv & env
     let pinfo = alloc::sync::Arc::new(spin::Mutex::new(ProcessInfo {
@@ -1085,6 +1092,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
             alloc::string::String::from("/")
         },
         exec_path: alloc::format!("/boot/{}", module.name),
+        authority,
         space: crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
     }));
 
@@ -1345,6 +1353,11 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         uc.auxv = crate::task::exec::build_auxv(&aux_info, rt.page_size() as u64);
         uc
     };
+    let authority = if let Some(parent_pi) = &parent_pinfo {
+        parent_pi.lock().authority
+    } else {
+        crate::task::ProcessAuthority::root()
+    };
 
     // Step 7: Build the ProcessInfo for the new process.
     let pinfo = alloc::sync::Arc::new(spin::Mutex::new(ProcessInfo {
@@ -1361,6 +1374,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
             alloc::string::String::from("/")
         },
         exec_path: alloc::string::String::from(path),
+        authority,
         space: crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
     }));
 
@@ -1511,6 +1525,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }))
     }

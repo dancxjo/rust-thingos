@@ -153,10 +153,12 @@ members = [
   "userspace/tests/test_vm_shared",
   "userspace/time_test",
   "userspace/touch",
+  "userspace/uname",
   "userspace/true",
   "userspace/vfs_hello",
   "userspace/wayland_hello",
   "userspace/wc",
+  "userspace/which",
   "tools/kindc",
   "vendor/lsv",
 # tidy-alphabetical-end

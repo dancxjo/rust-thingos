@@ -198,7 +198,7 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         // /proc/<pid>/group_kind — canonical thingos::group::GroupKind (Phase 4).
         //
         // Reports the coordination role of this process's group in canonical
-        // Group terms, bridged from the current session_leader field via
+        // Group terms, bridged from source-of-truth tty foreground pgid via
         // `kernel::group::bridge`.  This is the first public surface for the
         // Group ontology (Phase 4).
         "group_kind" => {
@@ -1032,10 +1032,14 @@ mod tests {
             state,
             argv: Vec::new(),
             exec_path: String::from("/bin/demo"),
+            uid: 0,
+            gid: 0,
+            capability_mask: 0,
             exit_code: None,
             pgid: 42,
             sid: 42,
             session_leader: true,
+            foreground_pgid: Some(42),
             cwd: String::from("/"),
             namespace_label: String::from("global"),
             thread_states,

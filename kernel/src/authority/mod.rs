@@ -11,9 +11,9 @@
 //! * **Authority** — permission context (this module)
 //!
 //! An `Authority` is the explicit, first-class answer to the question
-//! *"under what power does this action occur?"*.  In Phase 7 its only
-//! observable property is its `name` (derived from the running process/thread
-//! name) and an initially empty `capabilities` list.
+//! *"under what power does this action occur?"*.  The bridge now exposes
+//! principal (`uid`/`gid`) plus capability bits from `Process` backing, while
+//! preserving a human-readable `name` label.
 //!
 //! # Canonical entry points for new authorization code
 //!
@@ -32,8 +32,8 @@
 //! # Transitional mapping
 //!
 //! The current kernel still stores all permission-bearing state inside
-//! `Process` (pid, exec_path, etc.) with no explicit uid/gid or capability
-//! mask.  `kernel::authority::bridge` is the **single translation point**
+//! `Process` (including transitional `authority` backing). `kernel::authority::bridge`
+//! is the **single translation point**
 //! from the internal `ProcessSnapshot` into the canonical `Authority` type.
 //!
 //! # Future direction

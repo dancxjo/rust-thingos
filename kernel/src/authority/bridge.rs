@@ -22,8 +22,8 @@
 //! | `pid` / `ppid`                       | Process identity                 | Future principal identifier           | Provisional  |
 //! | `pgid` / `sid`                       | Coordination group identity      | `Group` domain (Phase 4)              | Provisional  |
 //! | `session_leader`                     | TTY foreground ownership         | `Group::kind` (Phase 4)               | Provisional  |
-//! | *(no uid/gid field yet)*             | POSIX user/group identity        | Future `Authority` fields             | Not yet added|
-//! | *(no capability mask yet)*           | Fine-grained privilege           | `Authority::capabilities`             | Not yet added|
+//! | `authority.uid` / `authority.gid`    | Principal identity               | `Authority::{uid,gid}`                | **Bridged**  |
+//! | `authority.capability_mask`          | Fine-grained privilege bits      | `Authority::capability_mask`          | **Bridged**  |
 //! | `thing_table` (open files)              | Resource access rights           | Out of `Authority` scope (Phase 8+)   | Provisional  |
 //! | `namespace`                          | VFS visibility                   | Future `Place` context (Phase 8)      | Provisional  |
 //! | `signals` (signal dispositions)      | Signal delivery permissions      | Future authority concern (Phase 9+)   | Provisional  |
@@ -32,8 +32,10 @@
 //!
 //! | `ProcessSnapshot` field | `Authority` field     | Notes                                      |
 //! |-------------------------|-----------------------|--------------------------------------------|
-//! | `name`                  | `name`                | Thread/process name used as authority label|
-//! | *(none)*                | `capabilities`        | Empty in Phase 7; no capability field yet  |
+//! | `authority.uid`         | `uid`                 | Principal user id                              |
+//! | `authority.gid`         | `gid`                 | Principal group id                             |
+//! | `authority.capability_mask` | `capability_mask` | Capability bits used for enforcement           |
+//! | `name`/`exec_path`      | `name`                | Human-readable label only (non-authoritative)  |
 //!
 //! # What is not yet replaced
 //!
@@ -67,17 +69,60 @@
 use abi::errors::{Errno, SysResult};
 use thingos::authority::Authority;
 
+/// Capability bit: reboot/power control operations.
+pub const CAP_REBOOT: u64 = 1 << 0;
+/// Capability bit: signal delivery to other processes/groups.
+pub const CAP_SIGNAL: u64 = 1 << 1;
+/// Capability bit: thread/process termination operations.
+pub const CAP_KILL: u64 = 1 << 2;
+/// Capability bit: realtime priority escalation.
+pub const CAP_REALTIME_PRIORITY: u64 = 1 << 3;
+
+fn capability_name(bit: u64) -> Option<&'static str> {
+    match bit {
+        CAP_REBOOT => Some("reboot"),
+        CAP_SIGNAL => Some("signal"),
+        CAP_KILL => Some("kill"),
+        CAP_REALTIME_PRIORITY => Some("realtime_priority"),
+        _ => None,
+    }
+}
+
+fn capabilities_from_mask(mask: u64) -> alloc::vec::Vec<alloc::string::String> {
+    let mut out = alloc::vec::Vec::new();
+    for bit in [
+        CAP_REBOOT,
+        CAP_SIGNAL,
+        CAP_KILL,
+        CAP_REALTIME_PRIORITY,
+    ] {
+        if (mask & bit) != 0 {
+            if let Some(name) = capability_name(bit) {
+                out.push(alloc::string::String::from(name));
+            }
+        }
+    }
+    out
+}
+
+fn required_capability(privilege: &str) -> Option<u64> {
+    match privilege {
+        "reboot" => Some(CAP_REBOOT),
+        "signal" => Some(CAP_SIGNAL),
+        "kill" => Some(CAP_KILL),
+        "realtime_priority" => Some(CAP_REALTIME_PRIORITY),
+        _ => None,
+    }
+}
+
 /// Build a canonical `Authority` from a [`crate::sched::hooks::ProcessSnapshot`].
 ///
 /// # Transitional mapping
 ///
-/// In Phase 7 the authority `name` is taken from `snapshot.name` (the
-/// thread/process name).  When `name` is empty, `exec_path` is used as the
-/// fallback so the authority is always non-empty and identifiable.
-///
-/// `capabilities` is always empty in Phase 7 because `Process` carries no
-/// explicit capability mask.  Once a capability field is added to `Process`
-/// this function will be the sole site that reads and surfaces it.
+/// The principal (`uid`/`gid`) and capability bits are sourced from
+/// `ProcessSnapshot` authority backing fields. `name` remains a
+/// human-readable label (`snapshot.name` with `exec_path` fallback) and is not
+/// used for privilege decisions.
 ///
 /// # Note on provisional credential state
 ///
@@ -108,8 +153,11 @@ pub fn authority_from_snapshot(
     // through the canonical `Authority` type.  New access-control code must NOT
     // read capability state from `Process` directly.
     Authority {
+        uid: snapshot.uid,
+        gid: snapshot.gid,
         name,
-        capabilities: alloc::vec::Vec::new(),
+        capability_mask: snapshot.capability_mask,
+        capabilities: capabilities_from_mask(snapshot.capability_mask),
     }
 }
 
@@ -121,11 +169,10 @@ pub fn authority_from_snapshot(
 ///
 /// # Transitional behaviour
 ///
-/// In Phase 7 this derives the `Authority` from the current thread name (via
-/// the scheduler's name hook) and falls back to the process `exec_path` when
-/// the thread name is not set.  When no process context is available (kernel
-/// threads), the returned `Authority` uses the string `"kernel"` as its name
-/// with no capabilities, representing unrestricted kernel-mode execution.
+/// This returns principal (`uid`/`gid`) and capability bits from the current
+/// `Process` authority backing. When no process context is available (kernel
+/// threads), the returned `Authority` uses root principal and full capability
+/// mask.
 ///
 /// # Migration note
 ///
@@ -133,34 +180,30 @@ pub fn authority_from_snapshot(
 /// function remains the **single entry point** — callers will transparently
 /// receive a richer `Authority` without code changes at call sites.
 pub fn authority_for_current() -> Authority {
-    // PROVISIONAL: Derive authority name from the current thread name.
-    // The scheduler's `current_task_name_current` hook returns a NUL-padded
-    // [u8; 32] name stored on the Thread struct (not on Process).
-    // Future phases will replace this with a stable principal identifier
-    // sourced from an Authority-shaped substructure inside Process.
-    let raw_name = unsafe { crate::sched::current_task_name_current() };
-    let end = raw_name.iter().position(|&b| b == 0).unwrap_or(32);
-    let name_str = core::str::from_utf8(&raw_name[..end]).unwrap_or("").trim();
-
-    let name = if name_str.is_empty() {
-        // Fall back to exec_path from ProcessInfo when thread name is not set.
-        crate::sched::process_info_current()
-            .map(|p| p.lock().exec_path.clone())
-            .unwrap_or_default()
-    } else {
-        alloc::string::String::from(name_str)
-    };
-
-    Authority {
-        name: if name.is_empty() {
-            // Kernel threads have no ProcessInfo and no name — label them
-            // explicitly so callers can identify privileged kernel context.
-            alloc::string::String::from("kernel")
+    if let Some(p) = crate::sched::process_info_current() {
+        let p = p.lock();
+        let name = if p.exec_path.is_empty() {
+            alloc::format!("pid:{}", p.pid)
         } else {
-            name
-        },
-        // PROVISIONAL: capabilities always empty; no capability field in Process yet.
-        capabilities: alloc::vec::Vec::new(),
+            p.exec_path.clone()
+        };
+        let capability_mask = p.authority.capability_mask;
+        Authority {
+            uid: p.authority.uid,
+            gid: p.authority.gid,
+            name,
+            capability_mask,
+            capabilities: capabilities_from_mask(capability_mask),
+        }
+    } else {
+        // Kernel threads execute with kernel authority.
+        Authority {
+            uid: 0,
+            gid: 0,
+            name: alloc::string::String::from("kernel"),
+            capability_mask: u64::MAX,
+            capabilities: capabilities_from_mask(u64::MAX),
+        }
     }
 }
 
@@ -172,14 +215,8 @@ pub fn authority_for_current() -> Authority {
 ///
 /// # Transitional behaviour
 ///
-/// In Phase 7 there is **no** explicit privilege model: `Process` carries no
-/// uid/gid, role, or capability mask.  This function currently always returns
-/// `Ok(())` so that the call sites compile and the pattern is established,
-/// while clearly documenting that real enforcement is deferred.
-///
-/// The return type is `SysResult<()>` so that future phases can return
-/// `Err(Errno::EPERM)` once a real privilege model is introduced, without
-/// touching every call site.
+/// Non-root callers must hold the capability bit mapped to `privilege`.
+/// Unknown privilege names fail closed with `Err(Errno::EPERM)`.
 ///
 /// # Usage
 ///
@@ -196,18 +233,18 @@ pub fn authority_for_current() -> Authority {
 /// the check.  All call sites will automatically gain real enforcement without
 /// code changes.
 ///
-/// # PROVISIONAL
-///
-/// This function is a **transitional stub**.  Real privilege enforcement is not
-/// yet implemented.  Do not rely on it for security decisions in production
-/// until the `TODO(authority-enforcement)` marker below is resolved.
-pub fn check_privilege(_authority: &Authority, _privilege: &str) -> SysResult<()> {
-    // TODO(authority-enforcement): enforce capability/role check once
-    // Process carries an explicit capability mask or role field.  For now
-    // this is a no-op stub that establishes the call-site pattern.
-    //
-    // PROVISIONAL: all calls succeed in Phase 7.
-    Ok(())
+pub fn check_privilege(authority: &Authority, privilege: &str) -> SysResult<()> {
+    // uid 0 is the privileged principal.
+    if authority.uid == 0 {
+        return Ok(());
+    }
+
+    let required = required_capability(privilege).ok_or(Errno::EPERM)?;
+    if (authority.capability_mask & required) != 0 {
+        Ok(())
+    } else {
+        Err(Errno::EPERM)
+    }
 }
 
 #[cfg(test)]
@@ -225,10 +262,14 @@ mod tests {
             state: TaskState::Runnable,
             argv: alloc::vec::Vec::new(),
             exec_path: alloc::string::String::from(exec_path),
+            uid: 1000,
+            gid: 1000,
+            capability_mask: 0,
             exit_code: None,
             pgid: 1,
             sid: 1,
             session_leader: false,
+            foreground_pgid: None,
             cwd: alloc::string::String::from("/"),
             namespace_label: alloc::string::String::from("global"),
             thread_states: alloc::vec![TaskState::Runnable],
@@ -262,6 +303,25 @@ mod tests {
     }
 
     #[test]
+    fn test_authority_from_snapshot_carries_uid_gid_and_mask() {
+        let mut snap = make_snapshot("svc", "/bin/svc");
+        snap.uid = 42;
+        snap.gid = 84;
+        snap.capability_mask = CAP_REBOOT | CAP_SIGNAL;
+        let auth = authority_from_snapshot(&snap);
+        assert_eq!(auth.uid, 42);
+        assert_eq!(auth.gid, 84);
+        assert_eq!(auth.capability_mask, CAP_REBOOT | CAP_SIGNAL);
+        assert_eq!(
+            auth.capabilities,
+            alloc::vec![
+                alloc::string::String::from("reboot"),
+                alloc::string::String::from("signal")
+            ]
+        );
+    }
+
+    #[test]
     fn test_authority_as_text_contains_name() {
         let snap = make_snapshot("bristle", "/bin/bristle");
         let auth = authority_from_snapshot(&snap);
@@ -287,11 +347,26 @@ mod tests {
     // ── check_privilege ──────────────────────────────────────────────────────
 
     #[test]
-    fn test_check_privilege_always_ok_in_phase7() {
+    fn test_check_privilege_root_uid_is_allowed() {
         let snap = make_snapshot("svc", "/bin/svc");
-        let auth = authority_from_snapshot(&snap);
-        // Phase 7: all privilege checks pass (no enforcement yet).
+        let mut auth = authority_from_snapshot(&snap);
+        auth.uid = 0;
         assert!(check_privilege(&auth, "reboot").is_ok());
         assert!(check_privilege(&auth, "any_privilege").is_ok());
+    }
+
+    #[test]
+    fn test_check_privilege_non_root_requires_matching_capability() {
+        let mut auth = authority_from_snapshot(&make_snapshot("svc", "/bin/svc"));
+        auth.uid = 1000;
+        auth.capability_mask = CAP_SIGNAL;
+        assert!(check_privilege(&auth, "signal").is_ok());
+        assert_eq!(check_privilege(&auth, "reboot"), Err(Errno::EPERM));
+    }
+
+    #[test]
+    fn test_check_privilege_unknown_privilege_fails_closed() {
+        let auth = authority_from_snapshot(&make_snapshot("svc", "/bin/svc"));
+        assert_eq!(check_privilege(&auth, "unknown_privilege"), Err(Errno::EPERM));
     }
 }
