@@ -64,33 +64,9 @@ impl Supervisor {
             setup_serial_shell(tasks_cloned);
         });
 
-        // Stage 4: Fan-out Setup Pipelines in parallel
-        info!("SPROUT: Fanning out setup pipelines...");
-
-        let tasks_for_display = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            let _ = setup_display_pipeline(tasks_for_display, 0, 1);
-        });
-
-        let tasks_for_graphics = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            setup_graphics_stack(tasks_for_graphics);
-        });
-
-        let tasks_for_ui = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            setup_ui_services(tasks_for_ui);
-        });
-
-        let tasks_for_input = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            setup_input_broker(tasks_for_input);
-        });
-
-        let tasks_for_audio = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            setup_audio_stack(tasks_for_audio);
-        });
+        // Stage 4: Launch devd
+        info!("SPROUT: Launching devd...");
+        self.spawn_devd();
 
         // Stage 8: Optional readiness model verification test.
         // Keep this opt-in so early-boot diagnosis is not perturbed by extra
