@@ -67,6 +67,20 @@ hdd arch=karch:
 run *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        elif command -v pactl >/dev/null 2>&1; then
+            PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
+            if [[ -n "${PULSE_SERVER}" ]]; then
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+            else
+                export THINGOS_AUDIODEV="alsa,id=audio0"
+            fi
+        else
+            export THINGOS_AUDIODEV="alsa,id=audio0"
+        fi
+    fi
     ARCH="{{karch}}"
     ARGS_ARRAY=({{args}})
     if [[ "${ARGS_ARRAY[0]-}" != "" && "${ARGS_ARRAY[0]}" != -* ]]; then
@@ -93,6 +107,20 @@ https-proxy port="8443" target="8888":
 run-with-proxy arch=karch port="8081":
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        elif command -v pactl >/dev/null 2>&1; then
+            PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
+            if [[ -n "${PULSE_SERVER}" ]]; then
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+            else
+                export THINGOS_AUDIODEV="alsa,id=audio0"
+            fi
+        else
+            export THINGOS_AUDIODEV="alsa,id=audio0"
+        fi
+    fi
     echo "Starting HTTPS proxy on port {{port}}..."
     {{xtask}} guest-proxy --port {{port}} &
     PROXY_PID=$!
@@ -104,6 +132,20 @@ run-with-proxy arch=karch port="8081":
 run-hdd *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        elif command -v pactl >/dev/null 2>&1; then
+            PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
+            if [[ -n "${PULSE_SERVER}" ]]; then
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+            else
+                export THINGOS_AUDIODEV="alsa,id=audio0"
+            fi
+        else
+            export THINGOS_AUDIODEV="alsa,id=audio0"
+        fi
+    fi
     ARCH="{{karch}}"
     if [[ "${1-}" != "" && "${1}" != -* ]]; then
         ARCH="$1"
@@ -113,6 +155,22 @@ run-hdd *args:
 
 # Run with BIOS (x86_64 only).
 run-bios:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${THINGOS_AUDIODEV:-}" ]]; then
+        if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+            export THINGOS_AUDIODEV="pa,server=${XDG_RUNTIME_DIR}/pulse/native,id=audio0"
+        elif command -v pactl >/dev/null 2>&1; then
+            PULSE_SERVER="$(pactl info 2>/dev/null | sed -n 's/^Server String: //p' | head -n1)"
+            if [[ -n "${PULSE_SERVER}" ]]; then
+                export THINGOS_AUDIODEV="pa,server=${PULSE_SERVER},id=audio0"
+            else
+                export THINGOS_AUDIODEV="alsa,id=audio0"
+            fi
+        else
+            export THINGOS_AUDIODEV="alsa,id=audio0"
+        fi
+    fi
     {{xtask}} run-bios --qemu-flags "{{qemuflags}}"
 
 # Build the kernel.

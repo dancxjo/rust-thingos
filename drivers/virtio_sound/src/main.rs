@@ -131,6 +131,9 @@ unsafe extern "C" fn thingos_driver_start_rust(boot_fd: usize) -> Status {
 // ── VirtIO queue indices ──────────────────────────────────────────────────────
 
 const QUEUE_SIZE: u16 = 64;
+const EVENT_QUEUE_SLOTS: usize = 8;
+const INVALID_EVENT_SLOT: u8 = 0xFF;
+const INVALID_DESC: u16 = u16::MAX;
 
 // ── VFS provider handle constants ─────────────────────────────────────────────
 
@@ -635,7 +638,26 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     driver.driver_ok();
     info!("SND: Device initialised");
 
-    populate_event_queue(&mut driver);
+    let dma_dev = driver.claim_thing();
+    let control_dma = match setup_control_dma(dma_dev) {
+        Some(v) => v,
+        None => {
+            error!("SND: Failed to allocate control DMA buffers");
+            loop {
+                stem::time::sleep_ms(1000);
+            }
+        }
+    };
+
+    let mut event_queue = match setup_event_queue(&mut driver, dma_dev) {
+        Some(v) => v,
+        None => {
+            error!("SND: Failed to populate event queue");
+            loop {
+                stem::time::sleep_ms(1000);
+            }
+        }
+    };
 
     let stream_id = match find_output_stream(&mut driver) {
         Some(id) => id,
@@ -648,8 +670,8 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     };
     info!("SND: Using stream {}", stream_id);
 
-    configure_stream(&mut driver, stream_id);
-    send_pcm_command(&mut driver, VIRTIO_SND_R_PCM_START, stream_id);
+    configure_stream(&mut driver, &control_dma, stream_id);
+    send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_START, stream_id);
     info!("SND: Hardware playback started");
 
     // ── Mount VFS provider at /dev/audio/card0/ ───────────────────────────────
@@ -671,7 +693,6 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     }
 
     // ── Main event loop ───────────────────────────────────────────────────────
-    let dma_dev = driver.claim_thing();
     let mut card = AudioCard::new();
     let mut provider_loop = ProviderLoop::new(req_read);
 
@@ -708,7 +729,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         }
 
         // 2. Detect xruns from the event queue.
-        if process_event_queue(&mut driver) {
+        if process_event_queue(&mut driver, &mut event_queue) {
             card.xruns += 1;
             warn!("SND: PCM xrun");
         }
@@ -773,7 +794,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                 // Stop if draining and ring is now empty.
                 if card.state == AudioState::Draining as u32 && card.ring.available() == 0 {
                     card.state = AudioState::Stopped as u32;
-                    send_pcm_command(&mut driver, VIRTIO_SND_R_PCM_STOP, stream_id);
+                    send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_STOP, stream_id);
                 }
             }
         }
@@ -847,63 +868,111 @@ fn process_tx_queue(driver: &mut VirtioDevice) {
     while q.poll_used().is_some() {}
 }
 
-fn populate_event_queue(driver: &mut VirtioDevice) {
-    let dma_dev = driver.claim_thing();
-    {
-        let q = driver.queue_mut(VIRTIO_SND_VQ_EVENT).unwrap();
-        for _ in 0..8 {
-            let size = size_of::<VirtioSndEvent>();
-            let dma = match stem::syscall::device_alloc_dma(dma_dev, 1) {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("SND: event queue DMA alloc failed: {:?}", e);
-                    break;
-                }
-            };
-            let phys = match stem::syscall::device_dma_phys(dma) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("SND: event queue dma_phys failed: {:?}", e);
-                    break;
-                }
-            };
-            if q.add_buffer_single(phys, size as u32, true).is_none() {
-                warn!("SND: event queue full while populating");
-                break;
-            }
-        }
-    }
-    driver.notify_queue(VIRTIO_SND_VQ_EVENT);
+#[derive(Clone, Copy, Default)]
+struct DmaPage {
+    virt: usize,
+    phys: usize,
 }
 
-fn process_event_queue(driver: &mut VirtioDevice) -> bool {
-    let dma_dev = driver.claim_thing();
+struct ControlDma {
+    req: DmaPage,
+    resp: DmaPage,
+}
+
+struct EventQueueState {
+    pages: [DmaPage; EVENT_QUEUE_SLOTS],
+    desc_to_slot: [u8; QUEUE_SIZE as usize],
+}
+
+fn alloc_dma_page(claim_thing: usize, tag: &str) -> Option<DmaPage> {
+    let virt = match stem::syscall::device_alloc_dma(claim_thing, 1) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("SND: DMA alloc failed for {}: {:?}", tag, e);
+            return None;
+        }
+    };
+    let phys = match stem::syscall::device_dma_phys(virt) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("SND: DMA phys failed for {}: {:?}", tag, e);
+            return None;
+        }
+    };
+    Some(DmaPage { virt: virt as usize, phys: phys as usize })
+}
+
+fn setup_control_dma(claim_thing: usize) -> Option<ControlDma> {
+    let req = alloc_dma_page(claim_thing, "control.req")?;
+    let resp = alloc_dma_page(claim_thing, "control.resp")?;
+    Some(ControlDma { req, resp })
+}
+
+fn setup_event_queue(driver: &mut VirtioDevice, claim_thing: usize) -> Option<EventQueueState> {
+    let mut pages = [DmaPage::default(); EVENT_QUEUE_SLOTS];
+    let mut desc_to_slot = [INVALID_EVENT_SLOT; QUEUE_SIZE as usize];
+    let mut queued = 0usize;
+
+    {
+        let q = driver.queue_mut(VIRTIO_SND_VQ_EVENT).unwrap();
+        for (slot, page) in pages.iter_mut().enumerate() {
+            let dma = match alloc_dma_page(claim_thing, "event") {
+                Some(v) => v,
+                None => break,
+            };
+            let desc = match q.add_buffer_single(
+                dma.phys as u64,
+                size_of::<VirtioSndEvent>() as u32,
+                true,
+            ) {
+                Some(d) => d,
+                None => {
+                    warn!("SND: event queue full while populating");
+                    break;
+                }
+            };
+            *page = dma;
+            desc_to_slot[desc as usize] = slot as u8;
+            queued += 1;
+        }
+    }
+
+    if queued == 0 {
+        return None;
+    }
+
+    driver.notify_queue(VIRTIO_SND_VQ_EVENT);
+    Some(EventQueueState { pages, desc_to_slot })
+}
+
+fn process_event_queue(driver: &mut VirtioDevice, state: &mut EventQueueState) -> bool {
     let mut needs_notify = false;
     let mut xrun_seen = false;
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_EVENT).unwrap();
-        while let Some((_desc_id, _len)) = q.poll_used() {
+        while let Some((desc_id, _len)) = q.poll_used() {
             xrun_seen = true;
-            let size = size_of::<VirtioSndEvent>();
-            let dma = match stem::syscall::device_alloc_dma(dma_dev, 1) {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("SND: event requeue DMA alloc failed: {:?}", e);
-                    break;
-                }
-            };
-            let phys = match stem::syscall::device_dma_phys(dma) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("SND: event requeue dma_phys failed: {:?}", e);
-                    break;
-                }
-            };
-            if q.add_buffer_single(phys, size as u32, true).is_none() {
+
+            if (desc_id as usize) >= state.desc_to_slot.len() {
+                continue;
+            }
+
+            let slot = state.desc_to_slot[desc_id as usize];
+            state.desc_to_slot[desc_id as usize] = INVALID_EVENT_SLOT;
+            if slot == INVALID_EVENT_SLOT {
+                continue;
+            }
+
+            let page = state.pages[slot as usize];
+            let new_desc =
+                q.add_buffer_single(page.phys as u64, size_of::<VirtioSndEvent>() as u32, true);
+            if let Some(new_desc) = new_desc {
+                state.desc_to_slot[new_desc as usize] = slot;
+                needs_notify = true;
+            } else {
                 warn!("SND: event queue full while requeueing");
                 break;
             }
-            needs_notify = true;
         }
     }
     if needs_notify {
@@ -912,43 +981,15 @@ fn process_event_queue(driver: &mut VirtioDevice) -> bool {
     xrun_seen
 }
 
-fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
-    let dma_req = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: command DMA alloc(req) failed: {:?}", e);
-            return;
-        }
-    };
-    let phys_req = match stem::syscall::device_dma_phys(dma_req) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: command dma_phys(req) failed: {:?}", e);
-            return;
-        }
-    };
-    let dma_resp = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: command DMA alloc(resp) failed: {:?}", e);
-            return;
-        }
-    };
-    let phys_resp = match stem::syscall::device_dma_phys(dma_resp) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: command dma_phys(resp) failed: {:?}", e);
-            return;
-        }
-    };
+fn send_pcm_command(driver: &mut VirtioDevice, control_dma: &ControlDma, cmd: u32, stream_id: u32) {
     unsafe {
-        *(dma_req as *mut VirtioSndPcmHdr) =
+        *(control_dma.req.virt as *mut VirtioSndPcmHdr) =
             VirtioSndPcmHdr { hdr: VirtioSndHdr { code: cmd }, stream_id };
-        *(dma_resp as *mut VirtioSndHdr) = VirtioSndHdr { code: 0 };
+        *(control_dma.resp.virt as *mut VirtioSndHdr) = VirtioSndHdr { code: 0 };
     }
     let bufs = [
-        (phys_req, size_of::<VirtioSndPcmHdr>() as u32, false),
-        (phys_resp, size_of::<VirtioSndHdr>() as u32, true),
+        (control_dma.req.phys as u64, size_of::<VirtioSndPcmHdr>() as u32, false),
+        (control_dma.resp.phys as u64, size_of::<VirtioSndHdr>() as u32, true),
     ];
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
@@ -970,37 +1011,9 @@ fn send_pcm_command(driver: &mut VirtioDevice, cmd: u32, stream_id: u32) {
     }
 }
 
-fn configure_stream(driver: &mut VirtioDevice, stream_id: u32) {
-    let dma_req = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: set_params DMA alloc(req) failed: {:?}", e);
-            return;
-        }
-    };
-    let phys_req = match stem::syscall::device_dma_phys(dma_req) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: set_params dma_phys(req) failed: {:?}", e);
-            return;
-        }
-    };
-    let dma_resp = match stem::syscall::device_alloc_dma(driver.claim_thing(), 1) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: set_params DMA alloc(resp) failed: {:?}", e);
-            return;
-        }
-    };
-    let phys_resp = match stem::syscall::device_dma_phys(dma_resp) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("SND: set_params dma_phys(resp) failed: {:?}", e);
-            return;
-        }
-    };
+fn configure_stream(driver: &mut VirtioDevice, control_dma: &ControlDma, stream_id: u32) {
     unsafe {
-        *(dma_req as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {
+        *(control_dma.req.virt as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {
             hdr: VirtioSndHdr { code: VIRTIO_SND_R_PCM_SET_PARAMS },
             buffer_bytes: 65536,
             period_bytes: 4096,
@@ -1012,8 +1025,8 @@ fn configure_stream(driver: &mut VirtioDevice, stream_id: u32) {
         };
     }
     let bufs = [
-        (phys_req, size_of::<VirtioSndPcmSetParams>() as u32, false),
-        (phys_resp, size_of::<VirtioSndHdr>() as u32, true),
+        (control_dma.req.phys as u64, size_of::<VirtioSndPcmSetParams>() as u32, false),
+        (control_dma.resp.phys as u64, size_of::<VirtioSndHdr>() as u32, true),
     ];
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
@@ -1033,7 +1046,7 @@ fn configure_stream(driver: &mut VirtioDevice, stream_id: u32) {
         }
         stem::time::sleep_ms(1);
     }
-    send_pcm_command(driver, VIRTIO_SND_R_PCM_PREPARE, stream_id);
+    send_pcm_command(driver, control_dma, VIRTIO_SND_R_PCM_PREPARE, stream_id);
 }
 
 fn find_output_stream(_driver: &mut VirtioDevice) -> Option<u32> {
