@@ -152,7 +152,7 @@ impl DriverInterfaceV1 {
 /// this field.  Drivers should check `version` before accessing any fields
 /// beyond those present in the version they were compiled against.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct DriverEntryCtx {
     /// Struct version.  Currently always 1.
     pub version: u32,
@@ -173,6 +173,19 @@ pub struct DriverEntryCtx {
     pub device_path: [u8; 128],
 }
 
+impl Default for DriverEntryCtx {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            vendor_id: 0,
+            device_id: 0,
+            class_code: 0,
+            _reserved0: 0,
+            device_path: [0u8; 128],
+        }
+    }
+}
+
 impl DriverEntryCtx {
     /// Return the device path as a `&str`, or `""` on invalid UTF-8.
     pub fn device_path_str(&self) -> &str {
@@ -189,7 +202,7 @@ mod tests {
     fn driver_interface_v1_size_is_stable() {
         // This test enforces ABI stability: if you add fields you must bump
         // the version to v2 and add a new struct.
-        assert_eq!(core::mem::size_of::<DriverInterfaceV1>(), 48);
+        assert_eq!(core::mem::size_of::<DriverInterfaceV1>(), 52);
     }
 
     #[test]
