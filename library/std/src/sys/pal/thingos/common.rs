@@ -13,6 +13,7 @@ pub const STDERR_FILENO: c_int = 2;
 
 const EINVAL: c_int = 22;
 const ENOTTY: c_int = 25;
+const ENOSYS: c_int = 38;
 
 const DEVICE_KIND_TERMINAL: u32 = 7;
 
@@ -20,6 +21,7 @@ const TERMINAL_OP_TCGETS: u32 = 1;
 const TERMINAL_OP_TCSETS: u32 = 2;
 const TERMINAL_OP_TCSETSW: u32 = 3;
 const TERMINAL_OP_TCSETSF: u32 = 4;
+const TERMINAL_OP_TIOCGWINSZ: u32 = 7;
 
 pub const TCSANOW: c_int = 0;
 pub const TCSADRAIN: c_int = 1;
@@ -312,6 +314,35 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
     }
 
     let ws = argp.cast::<winsize>();
+    let call = DeviceCall {
+        kind: DEVICE_KIND_TERMINAL,
+        op: TERMINAL_OP_TIOCGWINSZ,
+        in_ptr: 0,
+        in_len: 0,
+        out_ptr: ws as usize as u64,
+        out_len: core::mem::size_of::<winsize>() as u32,
+    };
+    let ret = unsafe {
+        raw_syscall6(
+            SYS_FS_DEVICE_CALL,
+            fd as usize,
+            &call as *const DeviceCall as usize,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    if ret >= 0 {
+        return 0;
+    }
+
+    // Explicit fallback for kernels that do not expose terminal geometry yet.
+    if neg_errno_to_c_int(ret) != ENOSYS {
+        set_errno(neg_errno_to_c_int(ret));
+        return -1;
+    }
+
     unsafe {
         (*ws).ws_row = 24;
         (*ws).ws_col = 80;

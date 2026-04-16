@@ -294,8 +294,8 @@ pub(crate) fn console_foreground_pgid() -> Option<u32> {
 ///   settings (canonical vs. raw mode, echo, ISIG, etc.).  Blocks (yields)
 ///   until data is available, and returns `EINTR` if a pending interrupt is
 ///   detected or if Ctrl-C is received while `ISIG` is set.
-/// - **device_call**: supports `TERMINAL_OP_TCGETS` and `TERMINAL_OP_TCSETS`
-///   to query/update the termios settings from userspace.
+/// - **device_call**: supports termios settings, process-group ioctls, and
+///   `TIOCGWINSZ` geometry queries.
 pub struct ConsoleNode;
 
 impl ConsoleNode {
@@ -610,11 +610,12 @@ impl VfsNode for ConsoleNode {
     /// | `TERMINAL_OP_TCSETS`    | in        | Copy `in_ptr` → termios        |
     /// | `TERMINAL_OP_TCSETSW`   | in        | Same as `TCSETS` (no drain)    |
     /// | `TERMINAL_OP_TCSETSF`   | in        | Same as `TCSETS` (no flush)    |
+    /// | `TERMINAL_OP_TIOCGWINSZ`| out       | Copy window size → `out_ptr`   |
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
         use abi::device::DeviceKind;
         use abi::termios::{
             TERMINAL_OP_TCGETPGRP, TERMINAL_OP_TCGETS, TERMINAL_OP_TCSETPGRP, TERMINAL_OP_TCSETS,
-            TERMINAL_OP_TCSETSF, TERMINAL_OP_TCSETSW,
+            TERMINAL_OP_TCSETSF, TERMINAL_OP_TCSETSW, TERMINAL_OP_TIOCGWINSZ,
         };
 
         if call.kind != DeviceKind::Terminal {
@@ -622,6 +623,7 @@ impl VfsNode for ConsoleNode {
         }
 
         let termios_size = core::mem::size_of::<abi::termios::Termios>();
+        let winsize_size = core::mem::size_of::<abi::termios::Winsize>();
         let pgid_size = core::mem::size_of::<u32>();
 
         let caller = Self::current_caller();
@@ -718,6 +720,49 @@ impl VfsNode for ConsoleNode {
                 }
 
                 crate::presence::set_console_foreground_pgid(new_pgid);
+                Ok(0)
+            }
+            TERMINAL_OP_TIOCGWINSZ => {
+                if call.out_len < winsize_size as u32 || call.out_ptr == 0 {
+                    return Err(abi::errors::Errno::EINVAL);
+                }
+
+                // Derive tty geometry from boot framebuffer state when usable.
+                // If no framebuffer is available (or it reports zero dimensions),
+                // treat winsize as unavailable for this terminal.
+                let Some((fb, _)) = *BOOT_FB_INFO.lock() else {
+                    return Err(abi::errors::Errno::ENOSYS);
+                };
+                if fb.width == 0 || fb.height == 0 {
+                    return Err(abi::errors::Errno::ENOSYS);
+                }
+                // Console geometry currently uses fixed 8x16 text cells from
+                // the boot console renderer contract (not a runtime font query).
+                const CELL_WIDTH_PX: u32 = 8;
+                const CELL_HEIGHT_PX: u32 = 16;
+                if fb.width < CELL_WIDTH_PX || fb.height < CELL_HEIGHT_PX {
+                    return Err(abi::errors::Errno::ENOSYS);
+                }
+                let clamp_u16 = |value: u32| value.min(u16::MAX as u32) as u16;
+                let clamp_tty_cells = |value: u32| value.max(1).min(u16::MAX as u32) as u16;
+
+                let ws = abi::termios::Winsize {
+                    ws_row: clamp_tty_cells(fb.height / CELL_HEIGHT_PX),
+                    ws_col: clamp_tty_cells(fb.width / CELL_WIDTH_PX),
+                    // POSIX winsize stores pixel dimensions as u16; clamp very
+                    // large framebuffers to preserve ABI compatibility.
+                    ws_xpixel: clamp_u16(fb.width),
+                    ws_ypixel: clamp_u16(fb.height),
+                };
+                unsafe {
+                    crate::syscall::validate::copyout(
+                        call.out_ptr as usize,
+                        core::slice::from_raw_parts(
+                            &ws as *const abi::termios::Winsize as *const u8,
+                            core::mem::size_of_val(&ws),
+                        ),
+                    )?;
+                }
                 Ok(0)
             }
             _ => Err(abi::errors::Errno::ENOSYS),
@@ -1554,6 +1599,98 @@ mod tests {
 
         // Restore.
         ConsoleNode::set_termios(abi::termios::DEFAULT_TERMIOS);
+    }
+
+    #[test]
+    fn test_console_device_call_tiocgwinsz_returns_framebuffer_geometry() {
+        let _g = CONSOLE_TEST_GUARD.lock();
+        let prev_fb = *BOOT_FB_INFO.lock();
+        set_boot_fb(
+            crate::FramebufferInfo {
+                addr: 0,
+                byte_len: 1600 * 1200 * 4,
+                width: 1600,
+                height: 1200,
+                pitch: 1600 * 4,
+                bpp: 32,
+                format: crate::PixelFormat::Bgra8888,
+            },
+            0,
+        );
+
+        let node = ConsoleNode;
+        let mut out = abi::termios::Winsize::default();
+        let call = abi::device::DeviceCall {
+            kind: abi::device::DeviceKind::Terminal,
+            op: abi::termios::TERMINAL_OP_TIOCGWINSZ,
+            in_ptr: 0,
+            in_len: 0,
+            out_ptr: &mut out as *mut _ as u64,
+            out_len: core::mem::size_of::<abi::termios::Winsize>() as u32,
+        };
+        let result = node.device_call(&call);
+        assert_eq!(result, Ok(0));
+        assert_eq!(out.ws_row, 75);
+        assert_eq!(out.ws_col, 200);
+        assert_eq!(out.ws_xpixel, 1600);
+        assert_eq!(out.ws_ypixel, 1200);
+
+        *BOOT_FB_INFO.lock() = prev_fb;
+    }
+
+    #[test]
+    fn test_console_device_call_tiocgwinsz_without_framebuffer_returns_enosys() {
+        let _g = CONSOLE_TEST_GUARD.lock();
+        let prev_fb = *BOOT_FB_INFO.lock();
+        *BOOT_FB_INFO.lock() = None;
+
+        let node = ConsoleNode;
+        let mut out = abi::termios::Winsize::default();
+        let call = abi::device::DeviceCall {
+            kind: abi::device::DeviceKind::Terminal,
+            op: abi::termios::TERMINAL_OP_TIOCGWINSZ,
+            in_ptr: 0,
+            in_len: 0,
+            out_ptr: &mut out as *mut _ as u64,
+            out_len: core::mem::size_of::<abi::termios::Winsize>() as u32,
+        };
+        let result = node.device_call(&call);
+        assert_eq!(result, Err(abi::errors::Errno::ENOSYS));
+
+        *BOOT_FB_INFO.lock() = prev_fb;
+    }
+
+    #[test]
+    fn test_console_device_call_tiocgwinsz_too_small_framebuffer_returns_enosys() {
+        let _g = CONSOLE_TEST_GUARD.lock();
+        let prev_fb = *BOOT_FB_INFO.lock();
+        set_boot_fb(
+            crate::FramebufferInfo {
+                addr: 0,
+                byte_len: 7 * 15 * 4,
+                width: 7,
+                height: 15,
+                pitch: 7 * 4,
+                bpp: 32,
+                format: crate::PixelFormat::Bgra8888,
+            },
+            0,
+        );
+
+        let node = ConsoleNode;
+        let mut out = abi::termios::Winsize::default();
+        let call = abi::device::DeviceCall {
+            kind: abi::device::DeviceKind::Terminal,
+            op: abi::termios::TERMINAL_OP_TIOCGWINSZ,
+            in_ptr: 0,
+            in_len: 0,
+            out_ptr: &mut out as *mut _ as u64,
+            out_len: core::mem::size_of::<abi::termios::Winsize>() as u32,
+        };
+        let result = node.device_call(&call);
+        assert_eq!(result, Err(abi::errors::Errno::ENOSYS));
+
+        *BOOT_FB_INFO.lock() = prev_fb;
     }
 
     #[test]
