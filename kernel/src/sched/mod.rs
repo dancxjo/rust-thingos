@@ -287,7 +287,7 @@ enum AnyWakeOverloadPolicy {
     Steal = 2,
 }
 
-static ANY_WAKE_POLICY_INIT: AtomicBool = AtomicBool::new(false);
+static ANY_WAKE_POLICY_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Off as u8);
 static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
 
@@ -309,7 +309,10 @@ fn parse_any_wake_overload_policy(value: &str) -> AnyWakeOverloadPolicy {
 }
 
 fn init_any_wake_policy_from_env_once() {
-    if !ANY_WAKE_POLICY_INIT.swap(true, Ordering::AcqRel) {
+    if ANY_WAKE_POLICY_INIT_DONE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
         // Build-time tunables via `option_env!` (captured at compile time).
         if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_POLICY") {
             ANY_WAKE_OVERLOAD_POLICY
@@ -870,9 +873,9 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     };
     let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
     let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
-    // Run-queue depth is a bounded queue length sum; we still use saturation for
-    // defensive arithmetic to avoid wrap-around in overload comparisons.
-    let overloaded = preferred_depth >= least_depth.saturating_add(overload_gap);
+    // Run-queue depth is a bounded queue-length sum; use saturating subtraction
+    // so "depth delta >= gap" cannot wrap.
+    let overloaded = preferred_depth.saturating_sub(least_depth) >= overload_gap;
     if overloaded && least_cpu != preferred {
         least_cpu
     } else {
@@ -882,12 +885,14 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
 
 #[cfg(test)]
 fn reset_any_wake_policy_for_tests() {
+    ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
     ANY_WAKE_OVERLOAD_POLICY.store(AnyWakeOverloadPolicy::Off as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(4, Ordering::Release);
 }
 
 #[cfg(test)]
 fn set_any_wake_policy_for_tests(policy: &str, overload_gap: usize) {
+    ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
     ANY_WAKE_OVERLOAD_POLICY.store(parse_any_wake_overload_policy(policy) as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(overload_gap.max(1), Ordering::Release);
 }
