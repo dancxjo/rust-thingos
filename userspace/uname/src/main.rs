@@ -119,10 +119,13 @@ fn main(_arg: usize) -> ! {
             print(" ");
         }
         print(MACHINE);
+        first = false;
     }
-    if !first {
+    if first {
         print("\n");
+        exit(0)
     }
+    print("\n");
 
     exit(0)
 }
