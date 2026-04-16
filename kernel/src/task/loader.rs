@@ -1,10 +1,12 @@
-use crate::memory;
-use crate::{
-    BootModuleDesc, BootRuntime, BootTasking, FrameAllocatorHook, MapKind, MapPerms, UserEntry,
-};
+use core::cmp::{max, min};
+
 use abi::types::StackInfo;
 use abi::vm::{VmBackingKind, VmMapFlags, VmProt, VmRegionInfo};
-use core::cmp::{max, min};
+
+use crate::{
+    BootModuleDesc, BootRuntime, BootTasking, FrameAllocatorHook, MapKind, MapPerms, UserEntry,
+    memory,
+};
 
 struct LoaderAllocHook;
 impl FrameAllocatorHook for LoaderAllocHook {
@@ -79,20 +81,16 @@ pub fn load_module_at<R: BootRuntime>(
     }
 
     let load_addr: u64 = load_base;
-    let stack_top = 0x0080_0000;
+    let stack_top: usize = 0x0080_0000;
+    let mut user_sp = stack_top;
     let reserve_bytes = 2 * 1024 * 1024;
     let guard_pages = 1usize;
     let initial_commit_bytes = 64 * 1024;
     let grow_chunk_bytes = 64 * 1024;
 
     let hook = LoaderAllocHook;
-    let data_perms = MapPerms {
-        user: true,
-        read: true,
-        write: true,
-        exec: false,
-        kind: MapKind::Normal,
-    };
+    let data_perms =
+        MapPerms { user: true, read: true, write: true, exec: false, kind: MapKind::Normal };
 
     let page_size = rt.page_size() as u64;
     let mut entry_pc = load_addr;
@@ -132,6 +130,23 @@ pub fn load_module_at<R: BootRuntime>(
             }
         }
 
+        // rustc's freestanding startup stub on x86_64 currently starts with:
+        //   push rax; xor edi,edi; xor esi,esi; xor edx,edx; call main
+        // which expects initial RSP % 16 == 8 before entry. Kernel normally
+        // enters user code with 16-byte-aligned RSP. Adjust by one word only
+        // for this prologue shape to preserve ABI expectations.
+        if cfg!(target_arch = "x86_64")
+            && elf_entry_starts_with(
+                module.bytes,
+                &elf,
+                elf.entry,
+                &[0x50, 0x31, 0xff, 0x31, 0xf6, 0x31, 0xd2, 0xe8],
+            )
+        {
+            user_sp = user_sp.saturating_sub(core::mem::size_of::<usize>());
+            crate::kdebug!("LOADER: adjusted initial user SP for rustc _start ABI: {:x}", user_sp);
+        }
+
         // Build auxv metadata from ELF header fields.
         aux_info = LoaderAuxInfo {
             phdr_vaddr: elf.phoff.saturating_add(load_bias),
@@ -151,13 +166,8 @@ pub fn load_module_at<R: BootRuntime>(
 
         let mut last_virt_page = u64::MAX;
         let mut last_phys_page = 0;
-        let mut last_perms = MapPerms {
-            user: false,
-            read: false,
-            write: false,
-            exec: false,
-            kind: MapKind::Normal,
-        };
+        let mut last_perms =
+            MapPerms { user: false, read: false, write: false, exec: false, kind: MapKind::Normal };
         // Track the highest mapped virtual address end for TLS placement.
         let mut max_elf_vaddr_end: u64 = load_addr;
 
@@ -328,13 +338,8 @@ pub fn load_module_at<R: BootRuntime>(
     } else {
         // Hardcoded load address for simple PIE/or-not-PIE loading.
         // Fixed address 0x200000 is fine for the main executable today.
-        let text_perms = MapPerms {
-            user: true,
-            read: true,
-            write: true,
-            exec: true,
-            kind: MapKind::Normal,
-        };
+        let text_perms =
+            MapPerms { user: true, read: true, write: true, exec: true, kind: MapKind::Normal };
         let mut virt = load_addr as u64;
 
         // Record mapping
@@ -367,9 +372,7 @@ pub fn load_module_at<R: BootRuntime>(
                 }
             }
 
-            rt.tasking()
-                .map_page(aspace, virt, phys, text_perms, MapKind::Normal, &hook)
-                .unwrap();
+            rt.tasking().map_page(aspace, virt, phys, text_perms, MapKind::Normal, &hook).unwrap();
             virt += page_size;
         }
     }
@@ -403,9 +406,7 @@ pub fn load_module_at<R: BootRuntime>(
         unsafe {
             core::ptr::write_bytes(hhdm_virt as *mut u8, 0, page_size as usize);
         }
-        rt.tasking()
-            .map_page(aspace, virt, phys, data_perms, MapKind::Normal, &hook)
-            .unwrap();
+        rt.tasking().map_page(aspace, virt, phys, data_perms, MapKind::Normal, &hook).unwrap();
         virt += page_size;
     }
 
@@ -427,11 +428,7 @@ pub fn load_module_at<R: BootRuntime>(
     }
 
     Some((
-        UserEntry {
-            entry_pc: entry_pc as usize,
-            user_sp: stack_top,
-            arg0: 0,
-        },
+        UserEntry { entry_pc: entry_pc as usize, user_sp, arg0: 0 },
         stack_info,
         regions,
         aux_info,
@@ -684,9 +681,7 @@ fn setup_initial_tls_block<R: BootRuntime>(
         unsafe {
             core::ptr::write_bytes(hhdm as *mut u8, 0, page_size as usize);
         }
-        rt.tasking()
-            .map_page(aspace, virt, phys, perms, MapKind::Normal, hook)
-            .ok()?;
+        rt.tasking().map_page(aspace, virt, phys, perms, MapKind::Normal, hook).ok()?;
         page_hhdms.push(hhdm);
         virt += page_size;
     }
@@ -867,6 +862,31 @@ fn parse_elf64(bytes: &[u8]) -> Option<ElfInfo> {
     })
 }
 
+fn elf_entry_starts_with(bytes: &[u8], elf: &ElfInfo, entry_vaddr: u64, prefix: &[u8]) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+
+    for seg in &elf.load_segments {
+        if entry_vaddr < seg.vaddr {
+            continue;
+        }
+
+        let seg_file_end = seg.vaddr.saturating_add(seg.filesz);
+        let prefix_end = entry_vaddr.saturating_add(prefix.len() as u64);
+        if prefix_end > seg_file_end {
+            continue;
+        }
+
+        let off = seg.offset.saturating_add(entry_vaddr.saturating_sub(seg.vaddr)) as usize;
+        if let Some(window) = bytes.get(off..off + prefix.len()) {
+            return window == prefix;
+        }
+    }
+
+    false
+}
+
 fn read_u16(bytes: &[u8], off: usize) -> Option<u16> {
     let slice = bytes.get(off..off + 2)?;
     Some(u16::from_le_bytes([slice[0], slice[1]]))
@@ -907,34 +927,14 @@ mod tests {
 
     #[test]
     fn test_merge_perms() {
-        let r = MapPerms {
-            user: true,
-            read: true,
-            write: false,
-            exec: false,
-            kind: MapKind::Normal,
-        };
-        let rw = MapPerms {
-            user: true,
-            read: true,
-            write: true,
-            exec: false,
-            kind: MapKind::Normal,
-        };
-        let rx = MapPerms {
-            user: true,
-            read: true,
-            write: false,
-            exec: true,
-            kind: MapKind::Normal,
-        };
-        let x = MapPerms {
-            user: true,
-            read: false,
-            write: false,
-            exec: true,
-            kind: MapKind::Normal,
-        };
+        let r =
+            MapPerms { user: true, read: true, write: false, exec: false, kind: MapKind::Normal };
+        let rw =
+            MapPerms { user: true, read: true, write: true, exec: false, kind: MapKind::Normal };
+        let rx =
+            MapPerms { user: true, read: true, write: false, exec: true, kind: MapKind::Normal };
+        let x =
+            MapPerms { user: true, read: false, write: false, exec: true, kind: MapKind::Normal };
 
         // RX + RW -> Error
         assert!(merge_perms(rx, rw).is_err());
@@ -1135,9 +1135,9 @@ mod tests {
         let e_phnum: u16 = 2; // PT_LOAD + PT_INTERP
 
         bytes[24..32].copy_from_slice(&0x200100u64.to_le_bytes()); // e_entry
-        bytes[32..40].copy_from_slice(&e_phoff.to_le_bytes());     // e_phoff
+        bytes[32..40].copy_from_slice(&e_phoff.to_le_bytes()); // e_phoff
         bytes[54..56].copy_from_slice(&e_phentsize.to_le_bytes()); // e_phentsize
-        bytes[56..58].copy_from_slice(&e_phnum.to_le_bytes());     // e_phnum
+        bytes[56..58].copy_from_slice(&e_phnum.to_le_bytes()); // e_phnum
 
         // PT_LOAD at [64..120)
         let p0 = 64usize;
@@ -1174,13 +1174,8 @@ mod tests {
     #[test]
     fn test_extract_interp_path_absent() {
         // An ELF with only PT_LOAD — no PT_INTERP.
-        let bytes = build_elf64_with_tls(
-            0x200100, 0x200000, 100, 100, 256, 0x201000, 8, 16, 8,
-        );
-        assert!(
-            extract_interp_path(&bytes).is_none(),
-            "should return None when PT_INTERP absent"
-        );
+        let bytes = build_elf64_with_tls(0x200100, 0x200000, 100, 100, 256, 0x201000, 8, 16, 8);
+        assert!(extract_interp_path(&bytes).is_none(), "should return None when PT_INTERP absent");
     }
 
     #[test]
@@ -1189,10 +1184,7 @@ mod tests {
         let interp = b"/lib/ld-thingos.so";
         let bytes = build_elf64_with_interp(interp);
         let path = extract_interp_path(&bytes).expect("should extract");
-        assert!(
-            !path.contains(&0u8),
-            "returned path should not contain NUL bytes"
-        );
+        assert!(!path.contains(&0u8), "returned path should not contain NUL bytes");
         assert_eq!(path, interp);
     }
 
