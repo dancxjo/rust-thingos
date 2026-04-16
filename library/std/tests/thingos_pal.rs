@@ -204,7 +204,7 @@ fn test_time_monotonic() {
 }
 
 #[test]
-fn test_libc_network_sockopts_report_unsupported_enosys() {
+fn test_libc_network_sockopts_return_enosys() {
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
     let fd = sock.as_raw_fd();
 
@@ -237,7 +237,7 @@ fn test_libc_network_sockopts_report_unsupported_enosys() {
 }
 
 #[test]
-fn test_ioctl_tiocgwinsz_on_tty_reports_size() {
+fn test_ioctl_tiocgwinsz_on_tty_returns_nonzero_dimensions() {
     let tty_fd = [0_i32, 1_i32, 2_i32].into_iter().find(|fd| unsafe { isatty(*fd) } == 1);
     let Some(tty_fd) = tty_fd else {
         return;
