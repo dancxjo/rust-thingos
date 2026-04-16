@@ -12,6 +12,10 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use abi::driver_interface::{
+    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION,
+};
 use core::time::Duration;
 use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
@@ -19,6 +23,35 @@ use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelThing
 use stem::syscall::vfs::vfs_thing_from_channel;
 use stem::syscall::{ioport_read, ioport_write};
 use stem::{error, info};
+const THINGOS_DRIVER_NAME: &[u8] = b"ata_disk";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Block,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let out = &mut *out;
+    out.matched = 0;
+    out.score = 0;
+    out.claimed_class = DriverClass::Block;
+    out.flags = 0;
+    Status::NoMatch
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]

@@ -6,6 +6,10 @@ extern crate alloc;
 
 
 use abi::device::PCI_IRQ_MODE_MSIX;
+use abi::driver_interface::{
+    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION,
+};
 use core::ptr::write_volatile;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -15,6 +19,39 @@ use stem::thread;
 use stem::{error, info, warn};
 
 use virtio_gpu::{Rect, VirtioGpu};
+const THINGOS_DRIVER_NAME: &[u8] = b"virtio_gpu";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Display,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if dev.is_null() || out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let dev = &*dev;
+    let out = &mut *out;
+    let is_match = dev.bus == BusKind::Pci as u32
+        && dev.vendor_id as u16 == 0x1af4
+        && ((dev.class_code >> 16) & 0xff) == 0x03;
+    out.matched = if is_match { 1 } else { 0 };
+    out.score = if is_match { 1000 } else { 0 };
+    out.claimed_class = DriverClass::Display;
+    out.flags = 0;
+    if is_match { Status::Ok } else { Status::NoMatch }
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 static IRQ_HANDLE: AtomicUsize = AtomicUsize::new(0);
 const DEMO_RESOURCE_ID: u32 = 1;

@@ -10,12 +10,49 @@ use abi::display::{
     PlaneCommit, PlaneId,
 };
 use abi::display_driver_protocol as drvproto;
+use abi::driver_interface::{
+    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION,
+};
 use abi::driver_frame::FrameReader;
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::syscall::{ChannelThing, channel_create, channel_send};
 use stem::{info, warn};
 use virtio_gpu::{Rect, VirtioGpu};
+const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Display,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if dev.is_null() || out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let dev = &*dev;
+    let out = &mut *out;
+    let is_match = dev.bus == BusKind::Pci as u32
+        && dev.vendor_id as u16 == 0x1af4
+        && ((dev.class_code >> 16) & 0xff) == 0x03;
+    out.matched = if is_match { 1 } else { 0 };
+    out.score = if is_match { 1000 } else { 0 };
+    out.claimed_class = DriverClass::Display;
+    out.flags = 0;
+    if is_match { Status::Ok } else { Status::NoMatch }
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 // ============================================================================
 // Rect Utilities - no allocations, fast inline helpers

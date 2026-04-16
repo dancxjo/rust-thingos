@@ -16,7 +16,9 @@ mod driver;
 mod vfs_provider;
 
 use abi::driver_interface::{
-    DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION, DriverEntryCtx, DriverInterfaceV1,
+    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
+    DriverStartContext, ProbeResult, Status, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI,
+    DRIVER_INTERFACE_ABI_VERSION,
 };
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::VirtioNetDriver;
@@ -27,6 +29,7 @@ use stem::{error, warn};
 use vfs_provider::{NetVfsState, handle_vfs_rpc};
 
 const DEFAULT_MOUNT_PATH: &str = "/dev/net/virtio0";
+const THINGOS_DRIVER_NAME: &[u8] = b"virtio_netd";
 
 #[unsafe(no_mangle)]
 #[used]
@@ -39,6 +42,39 @@ pub static THING_DRIVER_V1: DriverInterfaceV1 = DriverInterfaceV1 {
     class_mask: 0xffff00,
     entry_symbol: [0; 32],
 };
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Net,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if dev.is_null() || out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let dev = &*dev;
+    let out = &mut *out;
+    let class_major = ((dev.class_code >> 16) & 0xff) as u8;
+    let is_match = dev.bus == BusKind::Pci as u32
+        && dev.vendor_id as u16 == 0x1af4
+        && class_major == 0x02;
+    out.matched = if is_match { 1 } else { 0 };
+    out.score = if is_match { 1000 } else { 0 };
+    out.claimed_class = DriverClass::Net;
+    out.flags = 0;
+    if is_match { Status::Ok } else { Status::NoMatch }
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 struct SupervisorBootstrap {
     drv_req_read: u32,

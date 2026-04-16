@@ -35,7 +35,9 @@ use core::mem::size_of;
 
 use abi::device::DeviceKind;
 use abi::driver_interface::{
-    DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION, DriverEntryCtx, DriverInterfaceV1,
+    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
+    DriverStartContext, ProbeResult, Status, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI,
+    DRIVER_INTERFACE_ABI_VERSION,
 };
 use abi::errors::Errno;
 use abi::sound::{
@@ -62,6 +64,40 @@ pub static THING_DRIVER_V1: DriverInterfaceV1 = DriverInterfaceV1 {
     class_mask: 0xffff00,
     entry_symbol: [0; 32],
 };
+
+const THINGOS_DRIVER_NAME: &[u8] = b"virtio_sound";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Audio,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if dev.is_null() || out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let dev = &*dev;
+    let out = &mut *out;
+    let is_match = dev.bus == BusKind::Pci as u32
+        && dev.vendor_id as u16 == 0x1af4
+        && (dev.class_code & 0xffff00) == 0x040100;
+    out.matched = if is_match { 1 } else { 0 };
+    out.score = if is_match { 1000 } else { 0 };
+    out.claimed_class = DriverClass::Audio;
+    out.flags = 0;
+    if is_match { Status::Ok } else { Status::NoMatch }
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 // ── VirtIO queue indices ──────────────────────────────────────────────────────
 

@@ -43,8 +43,14 @@
 /// ABI version constant embedded in every [`DriverInterfaceV1`] record.
 pub const DRIVER_INTERFACE_ABI_VERSION: u32 = 1;
 
+/// ABI version for [`DriverDescriptor`] exported as [`DRIVER_DESCRIPTOR_SYMBOL`].
+pub const DRIVER_DESCRIPTOR_ABI_VERSION: u32 = 1;
+
 /// Name of the well-known global symbol that marks a binary as driver-capable.
 pub const DRIVER_MARKER_SYMBOL: &str = "THING_DRIVER_V1";
+
+/// Name of the stable descriptor symbol exported by v2-style drivers.
+pub const DRIVER_DESCRIPTOR_SYMBOL: &str = "THINGOS_DRIVER";
 
 /// Name of the default driver entrypoint invoked by `devd`.
 pub const DRIVER_ENTRY_SYMBOL: &str = "thing_driver_entry_v1";
@@ -60,6 +66,208 @@ pub const DRIVER_FLAG_PCI: u32 = 1 << 0;
 
 /// Flag: the binary can serve as a driver for platform/non-PCI devices.
 pub const DRIVER_FLAG_PLATFORM: u32 = 1 << 1;
+
+/// Opaque host/kernel-owned capability handle.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Handle(pub u64);
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Ok = 0,
+    NotDriver = -1,
+    NoMatch = -2,
+    Unsupported = -3,
+    InvalidArgument = -4,
+    BindFailed = -5,
+    PublishFailed = -6,
+    InternalError = -7,
+}
+
+impl Status {
+    #[inline]
+    pub const fn from_i32(code: i32) -> Self {
+        match code {
+            0 => Self::Ok,
+            -1 => Self::NotDriver,
+            -2 => Self::NoMatch,
+            -3 => Self::Unsupported,
+            -4 => Self::InvalidArgument,
+            -5 => Self::BindFailed,
+            -6 => Self::PublishFailed,
+            _ => Self::InternalError,
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverClass {
+    Unknown = 0,
+    Net = 1,
+    Block = 2,
+    Display = 3,
+    Input = 4,
+    Audio = 5,
+    Serial = 6,
+    Other = 0xffff_ffff,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusKind {
+    Unknown = 0,
+    Pci = 1,
+    Virtio = 2,
+    Platform = 3,
+    Usb = 4,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    Unknown = 0,
+    Mmio = 1,
+    Pio = 2,
+    VirtioPci = 3,
+    VirtioMmio = 4,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Trace = 0,
+    Debug = 1,
+    Info = 2,
+    Warn = 3,
+    Error = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeviceLocator {
+    pub bus: u32,
+    pub slot: u32,
+    pub function: u32,
+    pub instance: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MmioRegion {
+    pub base: u64,
+    pub length: u64,
+    pub flags: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeviceCapability {
+    pub key: u32,
+    pub value: u32,
+    pub data0: u64,
+    pub data1: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceInfo {
+    pub bus: u32,
+    pub locator: DeviceLocator,
+    pub vendor_id: u32,
+    pub device_id: u32,
+    pub subsystem_vendor_id: u32,
+    pub subsystem_device_id: u32,
+    pub class_code: u32,
+    pub transport: u32,
+    pub irq: u32,
+    pub mmio_regions_ptr: *const MmioRegion,
+    pub mmio_regions_len: usize,
+    pub caps_ptr: *const DeviceCapability,
+    pub caps_len: usize,
+}
+
+impl Default for DeviceInfo {
+    fn default() -> Self {
+        Self {
+            bus: BusKind::Unknown as u32,
+            locator: DeviceLocator::default(),
+            vendor_id: 0,
+            device_id: 0,
+            subsystem_vendor_id: 0,
+            subsystem_device_id: 0,
+            class_code: 0,
+            transport: TransportKind::Unknown as u32,
+            irq: 0,
+            mmio_regions_ptr: core::ptr::null(),
+            mmio_regions_len: 0,
+            caps_ptr: core::ptr::null(),
+            caps_len: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ProbeResult {
+    pub matched: u32,
+    pub score: u32,
+    pub claimed_class: DriverClass,
+    pub flags: u64,
+}
+
+impl Default for ProbeResult {
+    fn default() -> Self {
+        Self { matched: 0, score: 0, claimed_class: DriverClass::Unknown, flags: 0 }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DriverHostVtable {
+    pub version: u32,
+    pub log: unsafe extern "C" fn(level: LogLevel, ptr: *const u8, len: usize),
+    pub publish_devnode: unsafe extern "C" fn(
+        devfs_root: Handle,
+        path_ptr: *const u8,
+        path_len: usize,
+        service_handle: Handle,
+    ) -> Status,
+    pub create_channel: unsafe extern "C" fn(out_server: *mut Handle, out_client: *mut Handle) -> Status,
+    pub create_stream_pair: unsafe extern "C" fn(out_a: *mut Handle, out_b: *mut Handle) -> Status,
+    pub wait: unsafe extern "C" fn(
+        handles_ptr: *const Handle,
+        handles_len: usize,
+        timeout_ms: u64,
+        out_index: *mut usize,
+    ) -> Status,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DriverStartContext {
+    pub abi_version: u32,
+    pub device: DeviceInfo,
+    pub device_handle: Handle,
+    pub devfs_root: Handle,
+    pub event_port: Handle,
+    pub host: DriverHostVtable,
+    pub publish_name_ptr: *const u8,
+    pub publish_name_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DriverDescriptor {
+    pub abi_version: u32,
+    pub driver_name_ptr: *const u8,
+    pub driver_name_len: usize,
+    pub driver_class: DriverClass,
+    pub flags: u64,
+    pub probe: unsafe extern "C" fn(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status,
+    pub start: unsafe extern "C" fn(ctx: *const DriverStartContext) -> Status,
+}
 
 /// Marker struct exported as `THING_DRIVER_V1` by driver-capable binaries.
 ///

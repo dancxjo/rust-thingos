@@ -17,6 +17,10 @@ extern crate alloc;
 
 
 use alloc::vec::Vec;
+use abi::driver_interface::{
+    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION,
+};
 use core::time::Duration;
 use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
@@ -25,6 +29,37 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
 use stem::syscall::{channel_create, channel_send, channel_try_recv, ChannelThing};
 use stem::syscall::vfs::vfs_thing_from_channel;
 use stem::{debug, error, info};
+const THINGOS_DRIVER_NAME: &[u8] = b"ahci_disk";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Block,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if dev.is_null() || out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let dev = &*dev;
+    let out = &mut *out;
+    let is_match = dev.bus == BusKind::Pci as u32 && (dev.class_code & 0x00ff_ffff) == 0x010601;
+    out.matched = if is_match { 1 } else { 0 };
+    out.score = if is_match { 900 } else { 0 };
+    out.claimed_class = DriverClass::Block;
+    out.flags = 0;
+    if is_match { Status::Ok } else { Status::NoMatch }
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]

@@ -20,8 +20,9 @@
 extern crate alloc;
 
 use abi::driver_interface::{
-    DriverEntryCtx, DriverInterfaceV1, DRIVER_ENTRY_SYMBOL, DRIVER_INTERFACE_ABI_VERSION,
-    DRIVER_MARKER_SYMBOL, DRIVER_MATCH_ANY_CLASS, DRIVER_MATCH_ANY_ID,
+    DriverClass, DriverDescriptor, DriverInterfaceV1, DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_SYMBOL, DRIVER_ENTRY_SYMBOL, DRIVER_INTERFACE_ABI_VERSION, DRIVER_MARKER_SYMBOL,
+    DRIVER_MATCH_ANY_CLASS, DRIVER_MATCH_ANY_ID,
 };
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -45,34 +46,69 @@ pub struct DriverEntry {
     pub path: String,
     /// ABI version read from the marker symbol.
     pub abi_version: u32,
-    /// PCI vendor ID to match (0 = any).
+    /// Human-readable driver name (from THINGOS_DRIVER when present).
+    pub driver_name: String,
+    /// Driver class declared in the descriptor.
+    pub driver_class: DriverClass,
+    /// PCI vendor ID to match (legacy hint, 0 = any).
     pub vendor_id: u16,
-    /// PCI device ID to match (0 = any).
+    /// PCI device ID to match (legacy hint, 0 = any).
     pub device_id: u16,
-    /// PCI class code to match (0 = any).
+    /// PCI class code to match (legacy hint, 0 = any).
     pub class_code: u32,
-    /// Class code bitmask (0 = exact match or no-mask).
+    /// Class code bitmask (legacy hint, 0 = exact match or no-mask).
     pub class_mask: u32,
-    /// Name of the driver entrypoint symbol.
-    pub entry_symbol: String,
+    /// Name of the driver start symbol.
+    pub start_symbol: String,
 }
 
 impl DriverEntry {
+    /// Return match score for this driver against a discovered PCI device.
+    /// Zero means no match.
+    pub fn pci_match_score(&self, vendor: u16, device: u16, class: u32) -> u32 {
+        // Prefer explicit legacy match hints when available.
+        if self.vendor_id != 0 || self.device_id != 0 || self.class_code != 0 {
+            let mut score = 0u32;
+            if self.vendor_id != DRIVER_MATCH_ANY_ID && self.vendor_id != vendor {
+                return 0;
+            }
+            if self.vendor_id != DRIVER_MATCH_ANY_ID {
+                score += 200;
+            }
+            if self.device_id != DRIVER_MATCH_ANY_ID && self.device_id != device {
+                return 0;
+            }
+            if self.device_id != DRIVER_MATCH_ANY_ID {
+                score += 400;
+            }
+            if self.class_code != DRIVER_MATCH_ANY_CLASS {
+                let mask = if self.class_mask != 0 { self.class_mask } else { 0xFFFFFF };
+                if (class & mask) != (self.class_code & mask) {
+                    return 0;
+                }
+                score += 300;
+            }
+            // tie-break on abi and deterministic name length
+            return score.saturating_add(self.abi_version.min(50));
+        }
+
+        // Class-only fallback for descriptor-only drivers.
+        let major = (class >> 16) as u8;
+        match self.driver_class {
+            DriverClass::Net if major == 0x02 => 100,
+            DriverClass::Block if major == 0x01 => 100,
+            DriverClass::Display if major == 0x03 => 100,
+            DriverClass::Input if major == 0x09 => 100,
+            DriverClass::Audio if major == 0x04 => 100,
+            DriverClass::Serial if major == 0x07 => 100,
+            DriverClass::Unknown | DriverClass::Other => 0,
+            _ => 0,
+        }
+    }
+
     /// Returns `true` when this driver matches the given PCI identifiers.
     pub fn matches_pci(&self, vendor: u16, device: u16, class: u32) -> bool {
-        if self.vendor_id != DRIVER_MATCH_ANY_ID && self.vendor_id != vendor {
-            return false;
-        }
-        if self.device_id != DRIVER_MATCH_ANY_ID && self.device_id != device {
-            return false;
-        }
-        if self.class_code != DRIVER_MATCH_ANY_CLASS {
-            let mask = if self.class_mask != 0 { self.class_mask } else { 0xFFFFFF };
-            if (class & mask) != (self.class_code & mask) {
-                return false;
-            }
-        }
-        true
+        self.pci_match_score(vendor, device, class) != 0
     }
 }
 
@@ -98,7 +134,17 @@ impl Catalog {
     /// Return the first driver entry whose PCI match criteria cover the given
     /// device.  Returns `None` when no registered driver matches.
     pub fn find_for_pci(&self, vendor: u16, device: u16, class: u32) -> Option<&DriverEntry> {
-        self.entries.iter().find(|e| e.matches_pci(vendor, device, class))
+        let mut best: Option<(&DriverEntry, u32)> = None;
+        for entry in &self.entries {
+            let score = entry.pci_match_score(vendor, device, class);
+            if score == 0 {
+                continue;
+            }
+            if best.map_or(true, |(_, s)| score > s) {
+                best = Some((entry, score));
+            }
+        }
+        best.map(|(e, _)| e)
     }
 
     /// All catalogued driver entries.
@@ -164,46 +210,86 @@ impl Catalog {
             None => return,
         };
 
-        // Check for the driver marker symbol.
-        let sym_vaddr = match resolve_elf64_symbol_from_bytes(&bytes, DRIVER_MARKER_SYMBOL) {
-            Some(v) => v,
-            None => return,
-        };
+        let mut iface_legacy: Option<DriverInterfaceV1> = None;
+        if let Some(sym_vaddr) = resolve_elf64_symbol_from_bytes(&bytes, DRIVER_MARKER_SYMBOL) {
+            iface_legacy = read_driver_interface_v1(&bytes, sym_vaddr);
+        }
 
-        // The symbol value is the file-relative VMA.  Read the
-        // DriverInterfaceV1 struct from the file at the segment offset that
-        // corresponds to sym_vaddr.
-        let iface = match read_driver_interface_v1(&bytes, sym_vaddr) {
-            Some(i) => i,
+        let descriptor = match resolve_elf64_symbol_from_bytes(&bytes, DRIVER_DESCRIPTOR_SYMBOL)
+            .and_then(|sym_vaddr| read_driver_descriptor(&bytes, sym_vaddr))
+        {
+            Some(d) => d,
             None => {
-                debug!("DEVD CATALOG: {} has THING_DRIVER_V1 but could not read struct", path);
+                // No v2 descriptor. Keep legacy support.
+                let Some(iface) = iface_legacy else {
+                    return;
+                };
+                if iface.abi_version != DRIVER_INTERFACE_ABI_VERSION {
+                    debug!(
+                        "DEVD CATALOG: {} has unknown legacy abi_version {} (expected {}), skipping",
+                        path, iface.abi_version, DRIVER_INTERFACE_ABI_VERSION
+                    );
+                    return;
+                }
+                let start_symbol = iface.entry_symbol_name().to_string();
+                debug!(
+                    "DEVD CATALOG: registered legacy driver '{}' vendor=0x{:04x} device=0x{:04x} \
+                     class=0x{:06x} entry='{}'",
+                    path, iface.vendor_id, iface.device_id, iface.class_code, start_symbol
+                );
+                self.entries.push(DriverEntry {
+                    path: path.to_string(),
+                    abi_version: iface.abi_version,
+                    driver_name: path.to_string(),
+                    driver_class: DriverClass::Unknown,
+                    vendor_id: iface.vendor_id,
+                    device_id: iface.device_id,
+                    class_code: iface.class_code,
+                    class_mask: iface.class_mask,
+                    start_symbol,
+                });
                 return;
             }
         };
 
-        if iface.abi_version != DRIVER_INTERFACE_ABI_VERSION {
+        if descriptor.abi_version != DRIVER_DESCRIPTOR_ABI_VERSION {
             debug!(
-                "DEVD CATALOG: {} has unknown abi_version {} (expected {}), skipping",
-                path, iface.abi_version, DRIVER_INTERFACE_ABI_VERSION
+                "DEVD CATALOG: {} has unknown descriptor abi_version {} (expected {}), skipping",
+                path, descriptor.abi_version, DRIVER_DESCRIPTOR_ABI_VERSION
             );
             return;
         }
 
-        let entry_symbol = iface.entry_symbol_name().to_string();
+        let driver_name = read_driver_name(&bytes, descriptor.driver_name_ptr as u64, descriptor.driver_name_len)
+            .unwrap_or_else(|| path.to_string());
+        let start_symbol =
+            resolve_elf64_symbol_name_by_value(&bytes, descriptor.start as usize as u64).unwrap_or_else(
+                || DRIVER_ENTRY_SYMBOL.to_string(),
+            );
+        let legacy = iface_legacy.unwrap_or(DriverInterfaceV1 {
+            abi_version: 0,
+            flags: 0,
+            vendor_id: 0,
+            device_id: 0,
+            class_code: 0,
+            class_mask: 0,
+            entry_symbol: [0u8; 32],
+        });
         debug!(
-            "DEVD CATALOG: registered driver '{}' vendor=0x{:04x} device=0x{:04x} \
-             class=0x{:06x} entry='{}'",
-            path, iface.vendor_id, iface.device_id, iface.class_code, entry_symbol
+            "DEVD CATALOG: registered driver '{}' name='{}' class={:?} start='{}'",
+            path, driver_name, descriptor.driver_class, start_symbol
         );
 
         self.entries.push(DriverEntry {
             path: path.to_string(),
-            abi_version: iface.abi_version,
-            vendor_id: iface.vendor_id,
-            device_id: iface.device_id,
-            class_code: iface.class_code,
-            class_mask: iface.class_mask,
-            entry_symbol,
+            abi_version: descriptor.abi_version,
+            driver_name,
+            driver_class: descriptor.driver_class,
+            vendor_id: legacy.vendor_id,
+            device_id: legacy.device_id,
+            class_code: legacy.class_code,
+            class_mask: legacy.class_mask,
+            start_symbol,
         });
     }
 }
@@ -285,6 +371,76 @@ fn resolve_elf64_symbol_from_bytes(bytes: &[u8], target: &str) -> Option<u64> {
     None
 }
 
+/// Resolve an ELF64 symbol name by symbol value.
+fn resolve_elf64_symbol_name_by_value(bytes: &[u8], target_value: u64) -> Option<String> {
+    if bytes.len() < 64 || target_value == 0 {
+        return None;
+    }
+    if &bytes[0..4] != b"\x7fELF" || bytes[4] != 2 || bytes[5] != 1 {
+        return None;
+    }
+
+    let e_shoff = read_u64(bytes, 40)? as usize;
+    let e_shentsize = read_u16(bytes, 58)? as usize;
+    let e_shnum = read_u16(bytes, 60)? as usize;
+    if e_shoff == 0 || e_shentsize < 64 || e_shnum == 0 {
+        return None;
+    }
+
+    for i in 0..e_shnum {
+        let sh_off = e_shoff.saturating_add(i.saturating_mul(e_shentsize));
+        if sh_off + e_shentsize > bytes.len() {
+            break;
+        }
+        let sh_type = read_u32(bytes, sh_off + 4)?;
+        if sh_type != 2 && sh_type != 11 {
+            continue;
+        }
+        let sh_link = read_u32(bytes, sh_off + 40)? as usize;
+        let strtab_sh_off = e_shoff.saturating_add(sh_link.saturating_mul(e_shentsize));
+        if strtab_sh_off + e_shentsize > bytes.len() {
+            continue;
+        }
+        let strtab_off = read_u64(bytes, strtab_sh_off + 24)? as usize;
+        let strtab_size = read_u64(bytes, strtab_sh_off + 32)? as usize;
+        if strtab_off + strtab_size > bytes.len() {
+            continue;
+        }
+        let sym_off = read_u64(bytes, sh_off + 24)? as usize;
+        let sym_size = read_u64(bytes, sh_off + 32)? as usize;
+        const SYM_ENTRY: usize = 24;
+        if sym_size == 0 || sym_off + sym_size > bytes.len() {
+            continue;
+        }
+        for s in 0..(sym_size / SYM_ENTRY) {
+            let se = sym_off + s * SYM_ENTRY;
+            if se + SYM_ENTRY > bytes.len() {
+                break;
+            }
+            let st_name = read_u32(bytes, se)? as usize;
+            let st_value = read_u64(bytes, se + 8)?;
+            if st_value != target_value {
+                continue;
+            }
+            let name_off = strtab_off + st_name;
+            if name_off >= bytes.len() {
+                continue;
+            }
+            let name_end = bytes[name_off..]
+                .iter()
+                .position(|&b| b == 0)
+                .map(|n| name_off + n)
+                .unwrap_or(bytes.len());
+            if let Ok(name) = core::str::from_utf8(&bytes[name_off..name_end]) {
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Given a file-relative virtual address `vaddr`, find the PT_LOAD segment
 /// that covers it and return the corresponding file offset.
 fn vaddr_to_file_offset(bytes: &[u8], vaddr: u64) -> Option<usize> {
@@ -336,6 +492,32 @@ fn read_driver_interface_v1(bytes: &[u8], sym_vaddr: u64) -> Option<DriverInterf
         tmp.assume_init()
     };
     Some(iface)
+}
+
+fn read_driver_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<DriverDescriptor> {
+    let file_off = vaddr_to_file_offset(bytes, sym_vaddr)?;
+    let size = core::mem::size_of::<DriverDescriptor>();
+    if file_off + size > bytes.len() {
+        return None;
+    }
+    let desc: DriverDescriptor = unsafe {
+        let mut tmp = core::mem::MaybeUninit::<DriverDescriptor>::uninit();
+        core::ptr::copy_nonoverlapping(bytes.as_ptr().add(file_off), tmp.as_mut_ptr() as *mut u8, size);
+        tmp.assume_init()
+    };
+    Some(desc)
+}
+
+fn read_driver_name(bytes: &[u8], vaddr: u64, len: usize) -> Option<String> {
+    if len == 0 {
+        return None;
+    }
+    let file_off = vaddr_to_file_offset(bytes, vaddr)?;
+    if file_off + len > bytes.len() {
+        return None;
+    }
+    let raw = &bytes[file_off..file_off + len];
+    core::str::from_utf8(raw).ok().map(|s| s.to_string())
 }
 
 // ── VFS read helper ──────────────────────────────────────────────────────────

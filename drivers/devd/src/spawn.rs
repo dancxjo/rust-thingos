@@ -19,7 +19,7 @@ enum SpawnMode {
     /// Legacy mode: spawn via `main`, use `binding.driver` path.
     Legacy { driver: &'static str },
     /// Catalog mode: spawn via driver entrypoint symbol.
-    Catalog { driver_path: String, entry_symbol: String },
+    Catalog { driver_path: String, start_symbol: String },
 }
 
 pub struct ManagedDriver {
@@ -53,17 +53,17 @@ impl ManagedDriver {
 
     /// Create from the symbol-based driver catalog.
     ///
-    /// `driver_path` is the absolute VFS path to the binary; `entry_symbol`
-    /// is the name of the driver entrypoint symbol (e.g. `thing_driver_entry_v1`).
+    /// `driver_path` is the absolute VFS path to the binary; `start_symbol`
+    /// is the name of the driver start entrypoint symbol.
     pub fn new_from_catalog(
         device: &SysDevice,
         driver_path: String,
-        entry_symbol: String,
+        start_symbol: String,
         mount_path: Option<String>,
     ) -> Self {
         Self {
             slot: device.slot.clone(),
-            mode: SpawnMode::Catalog { driver_path, entry_symbol },
+            mode: SpawnMode::Catalog { driver_path, start_symbol },
             mount_path,
             pid: None,
             vendor_id: device.vendor_id,
@@ -87,10 +87,10 @@ impl ManagedDriver {
 
         match &self.mode {
             SpawnMode::Legacy { driver } => self.spawn_legacy(driver),
-            SpawnMode::Catalog { driver_path, entry_symbol } => {
+            SpawnMode::Catalog { driver_path, start_symbol } => {
                 // Clone to satisfy borrow checker before calling &mut self method.
                 let path = driver_path.clone();
-                let sym = entry_symbol.clone();
+                let sym = start_symbol.clone();
                 self.spawn_via_entrypoint(&path, &sym);
             }
         }

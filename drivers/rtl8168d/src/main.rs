@@ -7,12 +7,49 @@ extern crate alloc;
 mod driver;
 mod protocol;
 
+use abi::driver_interface::{
+    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION,
+};
 use driver::Rtl8168Driver;
 use protocol::{MSG_FRAME_RX, MSG_FRAME_TX, MSG_MAC_REQ, MSG_MAC_RESP, NetDriverMsg};
 use stem::syscall::{channel_create, channel_recv, channel_send};
 use stem::{error, info, warn};
 
 const KIND_NET_DRIVER: &str = "svc.net.Driver";
+const THINGOS_DRIVER_NAME: &[u8] = b"rtl8168d";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
+    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
+    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
+    driver_name_len: THINGOS_DRIVER_NAME.len(),
+    driver_class: DriverClass::Net,
+    flags: 0,
+    probe: thingos_driver_probe,
+    start: thingos_driver_start,
+};
+
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if dev.is_null() || out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let dev = &*dev;
+    let out = &mut *out;
+    let is_match = dev.bus == BusKind::Pci as u32
+        && dev.vendor_id as u16 == 0x10ec
+        && ((dev.class_code >> 16) & 0xff) == 0x02;
+    out.matched = if is_match { 1 } else { 0 };
+    out.score = if is_match { 950 } else { 0 };
+    out.claimed_class = DriverClass::Net;
+    out.flags = 0;
+    if is_match { Status::Ok } else { Status::NoMatch }
+}
+
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+    main(0)
+}
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
