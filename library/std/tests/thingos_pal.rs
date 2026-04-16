@@ -5,12 +5,16 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{self, Command};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 mod common;
 
 const PROCESS_CHILD_ENV: &str = "THINGOS_PAL_PROCESS_CHILD";
+const PROCESS_OUTPUT_STRESS_CHILD_ENV: &str = "THINGOS_PAL_PROCESS_OUTPUT_STRESS_CHILD";
+const PROCESS_OUTPUT_STRESS_CHUNK_SIZE: usize = 4096;
+const PROCESS_OUTPUT_STRESS_CHUNKS: usize = 128;
 
 #[test]
 fn test_alloc() {
@@ -117,6 +121,52 @@ fn test_process_spawn_exit() {
         .unwrap();
 
     assert_eq!(status.code(), Some(23));
+}
+
+#[test]
+fn test_process_output_interleaved_stress() {
+    if std::env::var_os(PROCESS_OUTPUT_STRESS_CHILD_ENV).is_some() {
+        let mut out = std::io::stdout().lock();
+        let mut err = std::io::stderr().lock();
+        let out_chunk = [b'o'; PROCESS_OUTPUT_STRESS_CHUNK_SIZE];
+        let err_chunk = [b'e'; PROCESS_OUTPUT_STRESS_CHUNK_SIZE];
+
+        for _ in 0..PROCESS_OUTPUT_STRESS_CHUNKS {
+            out.write_all(&out_chunk).unwrap();
+            err.write_all(&err_chunk).unwrap();
+        }
+        out.write_all(b"stdout-done\n").unwrap();
+        err.write_all(b"stderr-done\n").unwrap();
+        out.flush().unwrap();
+        err.flush().unwrap();
+        process::exit(0);
+    }
+
+    let me = std::env::current_exe().unwrap();
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let output = Command::new(me)
+            .env(PROCESS_OUTPUT_STRESS_CHILD_ENV, "1")
+            .arg("--exact")
+            .arg("test_process_output_interleaved_stress")
+            .arg("--nocapture")
+            .output();
+        tx.send(output).unwrap();
+    });
+
+    let timeout = Duration::from_secs(10);
+    let output = rx
+        .recv_timeout(timeout)
+        .expect("Command::output timed out (possible stdout/stderr drain deadlock)")
+        .unwrap();
+
+    assert!(output.status.success(), "child status: {:?}", output.status);
+    assert!(output.stdout.ends_with(b"stdout-done\n"));
+    assert!(output.stderr.ends_with(b"stderr-done\n"));
+
+    let expected_min = PROCESS_OUTPUT_STRESS_CHUNK_SIZE * PROCESS_OUTPUT_STRESS_CHUNKS;
+    assert!(output.stdout.len() >= expected_min);
+    assert!(output.stderr.len() >= expected_min);
 }
 
 #[test]

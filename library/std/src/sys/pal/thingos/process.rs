@@ -499,6 +499,7 @@ pub type ChildPipe = crate::sys::pipe::Pipe;
 ///
 /// This prevents deadlocks where the child blocks writing to stderr
 /// because the parent is blocked reading from stdout, or vice versa.
+/// Semantics match upstream std's deadlock-safe dual-pipe draining.
 pub fn read_output(
     out: ChildPipe,
     stdout: &mut crate::vec::Vec<u8>,
