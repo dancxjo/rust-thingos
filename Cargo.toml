@@ -212,3 +212,6 @@ which = { path = "vendor/which" }
 trash = { path = "vendor/trash" }
 dirs = { path = "vendor/dirs" }
 dirs-sys = { path = "vendor/dirs-sys" }
+errno = { path = "vendor/errno" }
+mio = { path = "vendor/mio" }
+filedescriptor = { path = "vendor/filedescriptor" }

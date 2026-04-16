@@ -181,7 +181,14 @@ pub struct winsize {
 
 #[inline]
 fn set_errno(code: c_int) {
-    crate::sys::io::set_errno(code);
+    unsafe extern "C" {
+        fn __errno_location() -> *mut i32;
+    }
+
+    // SAFETY: __errno_location returns a valid thread-local errno slot.
+    unsafe {
+        *__errno_location() = code;
+    }
 }
 
 #[inline]

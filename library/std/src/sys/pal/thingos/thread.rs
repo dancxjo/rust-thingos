@@ -617,7 +617,9 @@ static PTHREADS: Mutex<BTreeMap<pthread_t, PthreadRecord>> = Mutex::new(BTreeMap
 
 extern "C" fn pthread_start_trampoline(arg: usize) -> ! {
     // SAFETY: `arg` was produced by Box::into_raw in pthread_create.
-    let start = unsafe { Box::from_raw(arg as *mut PthreadStartContext) };
+    let start_ptr = core::ptr::with_exposed_provenance_mut::<PthreadStartContext>(arg);
+    // SAFETY: `start_ptr` was reconstructed from the original exposed address.
+    let start = unsafe { Box::from_raw(start_ptr) };
     let retval = (start.start)(start.arg);
     pthread_exit(retval)
 }
@@ -730,13 +732,17 @@ pub unsafe extern "C" fn pthread_create(
     };
     if ret < 0 {
         // SAFETY: pointer came from Box::into_raw above and was not consumed.
-        unsafe { drop(Box::from_raw(start_ctx_ptr as *mut PthreadStartContext)) };
+        let start_ptr =
+            core::ptr::with_exposed_provenance_mut::<PthreadStartContext>(start_ctx_ptr);
+        // SAFETY: reconstructed pointer came from Box::into_raw above and was not consumed.
+        unsafe { drop(Box::from_raw(start_ptr)) };
         return (-ret) as c_int;
     }
 
     let tid = ret as pthread_t;
     PTHREADS
         .lock()
+        .expect("pthread map poisoned")
         .insert(tid, PthreadRecord { retval: 0, detached, join_in_progress: false, exited: false });
 
     // SAFETY: validated non-null by guard above.
@@ -758,7 +764,7 @@ pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_voi
     }
 
     {
-        let mut threads = PTHREADS.lock();
+        let mut threads = PTHREADS.lock().expect("pthread map poisoned");
         let Some(record) = threads.get_mut(&thread) else {
             return ESRCH;
         };
@@ -770,20 +776,20 @@ pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_voi
 
     let wait_ret = unsafe { raw_syscall6(SYS_TASK_WAIT, thread as usize, 0, 0, 0, 0, 0) };
     if wait_ret < 0 {
-        if let Some(record) = PTHREADS.lock().get_mut(&thread) {
+        if let Some(record) = PTHREADS.lock().expect("pthread map poisoned").get_mut(&thread) {
             record.join_in_progress = false;
         }
         return (-wait_ret) as c_int;
     }
 
-    let Some(record) = PTHREADS.lock().remove(&thread) else {
+    let Some(record) = PTHREADS.lock().expect("pthread map poisoned").remove(&thread) else {
         return ESRCH;
     };
 
     if !retval.is_null() {
         // SAFETY: caller provided a valid retval pointer contractually.
         unsafe {
-            *retval = record.retval as *mut c_void;
+            *retval = core::ptr::with_exposed_provenance_mut::<c_void>(record.retval);
         }
     }
 
@@ -797,7 +803,7 @@ pub unsafe extern "C" fn pthread_detach(thread: pthread_t) -> c_int {
         return EINVAL;
     }
 
-    let mut threads = PTHREADS.lock();
+    let mut threads = PTHREADS.lock().expect("pthread map poisoned");
     let Some(record) = threads.get_mut(&thread) else {
         return ESRCH;
     };
@@ -825,7 +831,7 @@ pub extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
         let tid = tid as pthread_t;
         let mut remove_record = false;
         {
-            let mut threads = PTHREADS.lock();
+            let mut threads = PTHREADS.lock().expect("pthread map poisoned");
             if let Some(record) = threads.get_mut(&tid) {
                 record.retval = retval as usize;
                 record.exited = true;

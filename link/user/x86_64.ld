@@ -1,3 +1,7 @@
+EXTERN(__main_void);
+EXTERN(main);
+PROVIDE(_start = __main_void);
+PROVIDE(_start = main);
 ENTRY(_start)
 
 PHDRS {
@@ -28,7 +32,7 @@ SECTIONS {
     . = ALIGN(0x1000);
     .data : {
         *(.data .data.*)
-        LONG(0); 
+        LONG(0);
     } :data
 
     .tdata : {
