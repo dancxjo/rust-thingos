@@ -34,14 +34,13 @@ fn print(msg: &str) {
 fn main(_arg: usize) -> ! {
     let args = get_args();
     if args.is_empty() {
-        print("usage: rmdir <directory>...\n");
+        print("usage: rmdir <path>...\n");
         exit(1)
     }
     let mut had_error = false;
     for path in &args {
-        // ThingOS currently exposes directory removal through the unified unlink syscall.
         if let Err(e) = vfs_unlink(path) {
-            print(&alloc::format!("rmdir: failed to remove directory '{}': {:?}\n", path, e));
+            print(&alloc::format!("rmdir: failed to remove '{}': {:?}\n", path, e));
             had_error = true;
         }
     }
