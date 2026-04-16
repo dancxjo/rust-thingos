@@ -374,6 +374,9 @@ fn process_ids() -> Vec<u32> {
 /// - Unix compatibility projection: map canonical task/job state into the
 ///   legacy single-letter status code (`R`, `S`, `Z`) and emit PID/PPID lines.
 fn render_proc_status_text(snapshot: &crate::sched::ProcessSnapshot) -> String {
+    // `task_from_snapshot` projects the leader thread's canonical task shape
+    // (including TaskState/name), while `job_state_from_snapshot` aggregates
+    // runtime thread-group liveness to classify whole-job exit.
     let task = crate::task::bridge::task_from_snapshot(snapshot);
     let job_state = crate::job::bridge::job_state_from_snapshot(snapshot);
     let state_name = unix_status_state_projection(task.state, job_state);
@@ -1264,5 +1267,12 @@ mod tests {
         assert!(text.contains("State:\tZ\n"), "unexpected text: {text}");
         assert!(text.contains("Pid:\t42\n"), "unexpected text: {text}");
         assert!(text.contains("PPid:\t7\n"), "unexpected text: {text}");
+    }
+
+    #[test]
+    fn test_render_proc_status_handles_direct_exited_task_projection() {
+        let snapshot = snapshot_with_states(crate::task::TaskState::Dead, Vec::new());
+        let text = render_proc_status_text(&snapshot);
+        assert!(text.contains("State:\tZ\n"), "unexpected text: {text}");
     }
 }
