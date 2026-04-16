@@ -314,16 +314,16 @@ const FS_SYSCALL_NUMBERS: &[u32] = &[
 ];
 
 const fn all_unique(values: &[u32]) -> bool {
-    let mut i = 0;
-    while i < values.len() {
-        let mut j = i + 1;
-        while j < values.len() {
-            if values[i] == values[j] {
+    let mut outer_index = 0;
+    while outer_index < values.len() {
+        let mut inner_index = outer_index + 1;
+        while inner_index < values.len() {
+            if values[outer_index] == values[inner_index] {
                 return false;
             }
-            j += 1;
+            inner_index += 1;
         }
-        i += 1;
+        outer_index += 1;
     }
     true
 }

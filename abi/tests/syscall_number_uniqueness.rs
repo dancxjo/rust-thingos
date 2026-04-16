@@ -1,5 +1,4 @@
 use abi::syscall::*;
-use std::collections::BTreeSet;
 
 #[test]
 fn fs_syscall_numbers_are_unique() {
@@ -44,9 +43,19 @@ fn fs_syscall_numbers_are_unique() {
         SYS_FS_LUTIMES,
         SYS_FS_ISATTY,
     ];
-    let mut seen = BTreeSet::new();
-    for number in fs_syscalls {
-        assert!(seen.insert(number), "duplicate FS syscall number: 0x{number:04X}");
+    let mut outer_index = 0;
+    while outer_index < fs_syscalls.len() {
+        let mut inner_index = outer_index + 1;
+        while inner_index < fs_syscalls.len() {
+            assert_ne!(
+                fs_syscalls[outer_index],
+                fs_syscalls[inner_index],
+                "duplicate FS syscall number: 0x{:04X}",
+                fs_syscalls[outer_index]
+            );
+            inner_index += 1;
+        }
+        outer_index += 1;
     }
 }
 
