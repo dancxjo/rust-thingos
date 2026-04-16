@@ -313,7 +313,7 @@ pub enum Primitive {
     },
 }
 
-pub struct FontService {
+pub struct TypographyService {
     renderer: TextRenderer,
     // (face_id, px_size) -> Atlas
     atlases: BTreeMap<(u64, u16), Atlas>,
@@ -344,7 +344,7 @@ pub fn run_service(arg0: usize) -> ! {
     let (write_h, read_h) = unpack_handles(arg0);
     info!("pistil: Entering RPC loop (read={}, write={})", read_h, write_h);
 
-    let mut service = FontService {
+    let mut service = TypographyService {
         renderer: TextRenderer::load_from_boot("/share/fonts/NotoSans-Regular.ttf")
             .expect("Failed to load default font"),
         atlases: BTreeMap::new(),
@@ -418,7 +418,7 @@ pub fn run_service(arg0: usize) -> ! {
 }
 
 fn handle_ensure_glyphs(
-    service: &mut FontService,
+    service: &mut TypographyService,
     server: &RpcServer,
     write_h: u32,
     request_id: u64,

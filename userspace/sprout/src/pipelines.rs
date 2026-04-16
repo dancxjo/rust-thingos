@@ -920,7 +920,7 @@ pub fn setup_graphics_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
                 name: "pistil".to_string(),
-                kind: TaskKind::Service("svc.pistil".to_string()),
+                kind: TaskKind::Service("svc.font".to_string()),
                 module_path: "/bin/pistil".to_string(),
                 pid: Some(pid),
                 restarts: 0,
