@@ -13,6 +13,8 @@ use stem::{info, warn};
 
 const WATCH_POLL_TIMEOUT_MS: u64 = 1000;
 const FALLBACK_SLEEP_MS: u64 = 250;
+const READDIR_BUFFER_SIZE: usize = 4096;
+const WATCH_BUFFER_SIZE: usize = 1024;
 
 pub fn derive_policy(presence_count: usize) -> (&'static str, &'static str) {
     if presence_count > 0 {
@@ -25,7 +27,7 @@ pub fn derive_policy(presence_count: usize) -> (&'static str, &'static str) {
 fn count_presences(dir_fd: u32) -> Result<usize, abi::errors::Errno> {
     let mut presence_count = 0;
     vfs_seek(dir_fd, 0, 0)?;
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; READDIR_BUFFER_SIZE];
     let n = vfs_readdir(dir_fd, &mut buf)?;
     let mut offset = 0;
     while offset < n {
@@ -95,7 +97,7 @@ fn main(_arg: usize) -> ! {
             match vfs_poll(&mut fds, WATCH_POLL_TIMEOUT_MS) {
                 Ok(n) if n > 0 => {
                     // Drain pending watch payload so future poll calls can block again.
-                    let mut watch_buf = [0u8; 1024];
+                    let mut watch_buf = [0u8; WATCH_BUFFER_SIZE];
                     let _ = vfs_read(fd, &mut watch_buf);
                 }
                 Ok(_) => {}
