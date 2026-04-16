@@ -352,17 +352,15 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             out_ptr: &mut pgid_out as *mut u32 as usize as u64,
             out_len: core::mem::size_of::<u32>() as u32,
         };
-        let ret = unsafe {
-            raw_syscall6(
-                SYS_FS_DEVICE_CALL,
-                fd as usize,
-                &call as *const DeviceCall as usize,
-                0,
-                0,
-                0,
-                0,
-            )
-        };
+        let ret = raw_syscall6(
+            SYS_FS_DEVICE_CALL,
+            fd as usize,
+            &call as *const DeviceCall as usize,
+            0,
+            0,
+            0,
+            0,
+        );
         if ret < 0 {
             set_errno(neg_errno_to_c_int(ret));
             return -1;
@@ -398,17 +396,15 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             out_ptr: 0,
             out_len: 0,
         };
-        let ret = unsafe {
-            raw_syscall6(
-                SYS_FS_DEVICE_CALL,
-                fd as usize,
-                &call as *const DeviceCall as usize,
-                0,
-                0,
-                0,
-                0,
-            )
-        };
+        let ret = raw_syscall6(
+            SYS_FS_DEVICE_CALL,
+            fd as usize,
+            &call as *const DeviceCall as usize,
+            0,
+            0,
+            0,
+            0,
+        );
         if ret < 0 {
             set_errno(neg_errno_to_c_int(ret));
             return -1;
@@ -460,17 +456,15 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             return -1;
         }
     }
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_DEVICE_CALL,
-            fd as usize,
-            &call as *const DeviceCall as usize,
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret = raw_syscall6(
+        SYS_FS_DEVICE_CALL,
+        fd as usize,
+        &call as *const DeviceCall as usize,
+        0,
+        0,
+        0,
+        0,
+    );
     if ret >= 0 {
         return 0;
     }
