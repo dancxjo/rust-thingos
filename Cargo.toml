@@ -166,6 +166,7 @@ members = [
   "userspace/wc",
   "userspace/yes",
   "userspace/which",
+  "userspace/xargs",
   "tools/kindc",
   "vendor/lsv",
 # tidy-alphabetical-end
