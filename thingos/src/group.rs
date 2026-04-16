@@ -49,7 +49,6 @@
 //!
 //! | Kernel source                                       | Canonical `Group`               |
 //! |-----------------------------------------------------|---------------------------------|
-//! | `Process::session_leader == true`                   | `GroupKind::Foreground`         |
 //! | `ConsoleTtyState::foreground_pgid == Some(this.pgid)` | `GroupKind::Foreground`       |
 //! | otherwise                                           | `GroupKind::Coordination`       |
 //!

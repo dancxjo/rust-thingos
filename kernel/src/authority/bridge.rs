@@ -229,6 +229,7 @@ mod tests {
             pgid: 1,
             sid: 1,
             session_leader: false,
+            foreground_pgid: None,
             cwd: alloc::string::String::from("/"),
             namespace_label: alloc::string::String::from("global"),
             thread_states: alloc::vec![TaskState::Runnable],

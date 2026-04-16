@@ -287,6 +287,11 @@ static CONSOLE_TTY_STATE: Mutex<ConsoleTtyState> = Mutex::new(ConsoleTtyState {
     foreground_pgid: None,
 });
 
+/// Return the current `/dev/console` foreground process-group ID.
+pub(crate) fn console_foreground_pgid() -> Option<u32> {
+    CONSOLE_TTY_STATE.lock().foreground_pgid
+}
+
 /// Character device node for `/dev/console`.
 ///
 /// - **write**: each byte is forwarded to the kernel's boot console via
