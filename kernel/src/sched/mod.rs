@@ -281,6 +281,9 @@ enum AnyWakeOverloadPolicy {
     Redirect = 1,
     /// Preserve locality preference only when not overloaded; otherwise treat
     /// the wakeup as stealable by the least-loaded online CPU.
+    ///
+    /// Current implementation routes to the same target as `Redirect`; the
+    /// distinct variant keeps a policy surface for follow-up steal mechanics.
     Steal = 2,
 }
 
@@ -307,6 +310,7 @@ fn parse_any_wake_overload_policy(value: &str) -> AnyWakeOverloadPolicy {
 
 fn init_any_wake_policy_from_env_once() {
     if !ANY_WAKE_POLICY_INIT.swap(true, Ordering::AcqRel) {
+        // Build-time tunables via `option_env!` (captured at compile time).
         if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_POLICY") {
             ANY_WAKE_OVERLOAD_POLICY
                 .store(parse_any_wake_overload_policy(v) as u8, Ordering::Release);
@@ -866,6 +870,8 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     };
     let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
     let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
+    // Run-queue depth is a bounded queue length sum; we still use saturation for
+    // defensive arithmetic to avoid wrap-around in overload comparisons.
     let overloaded = preferred_depth >= least_depth.saturating_add(overload_gap);
     if overloaded && least_cpu != preferred {
         least_cpu

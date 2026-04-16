@@ -41,12 +41,12 @@
 
 The Any-affinity wake path keeps `last_cpu` locality by default.
 
-Build-time environment knobs:
+Build-time (compile-time) environment knobs:
 
 - `THINGOS_SCHED_ANY_WAKE_POLICY=off|redirect|steal` (default: `off`)
 - `THINGOS_SCHED_ANY_WAKE_OVERLOAD_GAP=<N>` (default: `4`)
 
-When policy is `redirect` or `steal`, wakeups whose preferred CPU is overloaded by at least `N` runnable entries are routed to the least-loaded online CPU. IPI signaling remains deduped via the existing pending-resched gate.
+When policy is `redirect` or `steal`, wakeups whose preferred CPU is overloaded by at least `N` runnable entries are routed to the least-loaded online CPU. IPI signaling remains deduped via the existing pending-resched gate. These knobs are compile-time only today (via `option_env!`), not runtime-toggled.
 
 ## 2) Global serialization points and contention paths
 
