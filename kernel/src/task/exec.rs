@@ -293,7 +293,7 @@ pub fn task_exec_current<R: BootRuntime>(
     // never be taken while the registry lock is held).
     {
         let aspace_raw = rt.tasking().aspace_to_raw(new_aspace);
-        pinfo_arc.lock().space.aspace_raw = aspace_raw;
+        pinfo_arc.lock().space.set_aspace_raw(aspace_raw);
     }
 
     // 8. Perform the actual transition
@@ -790,7 +790,7 @@ mod tests {
     #[test]
     fn process_aspace_raw_default_is_zero() {
         let pinfo = make_two_thread_pinfo(9400, 9400, 9401);
-        assert_eq!(pinfo.lock().space.aspace_raw, 0, "aspace_raw should default to 0");
+        assert_eq!(pinfo.lock().space.aspace_raw(), 0, "aspace_raw should default to 0");
     }
 
     /// Verify that updating `aspace_raw` on the process is visible to all
@@ -801,13 +801,14 @@ mod tests {
 
         // Simulate the exec commit: update aspace_raw on the process.
         const FAKE_CR3: u64 = 0x0000_0010_0000_0000;
-        pinfo.lock().space.aspace_raw = FAKE_CR3;
+        pinfo.lock().space.set_aspace_raw(FAKE_CR3);
 
         // Both thread representations reference the same Arc, so both observe
         // the same updated value.
         let pi = pinfo.lock();
         assert_eq!(
-            pi.space.aspace_raw, FAKE_CR3,
+            pi.space.aspace_raw(),
+            FAKE_CR3,
             "process aspace_raw must be visible to all threads sharing the Arc"
         );
     }
@@ -864,14 +865,14 @@ mod tests {
         let pinfo = make_two_thread_pinfo(9420, 9420, 9421);
 
         // Before exec: initial state.
-        assert_eq!(pinfo.lock().space.aspace_raw, 0);
-        assert_eq!(pinfo.lock().space.mappings.lock().regions.len(), 0);
+        assert_eq!(pinfo.lock().space.aspace_raw(), 0);
+        assert_eq!(pinfo.lock().space.mappings().lock().regions.len(), 0);
 
         // Simulate exec commit: replace mappings and update aspace_raw.
         const NEW_CR3: u64 = 0x0000_0020_0000_0000;
         {
             let mut pi = pinfo.lock();
-            let mut ml = pi.space.mappings.lock();
+            let mut ml = pi.space.mappings().lock();
             *ml = crate::memory::mappings::MappingList::new();
             ml.insert(abi::vm::VmRegionInfo {
                 start: 0x200000,
@@ -880,14 +881,14 @@ mod tests {
                 ..Default::default()
             });
             drop(ml);
-            pi.space.aspace_raw = NEW_CR3;
+            pi.space.set_aspace_raw(NEW_CR3);
         }
 
         // After exec: process reflects new VM state.
         let pi = pinfo.lock();
-        assert_eq!(pi.space.aspace_raw, NEW_CR3, "aspace_raw must reflect new page table after exec");
+        assert_eq!(pi.space.aspace_raw(), NEW_CR3, "aspace_raw must reflect new page table after exec");
         assert_eq!(
-            pi.space.mappings.lock().regions.len(),
+            pi.space.mappings().lock().regions.len(),
             1,
             "mappings must contain the new region after exec"
         );
@@ -1058,7 +1059,7 @@ mod tests {
             assert!(pi.unix_compat.env.contains_key(b"OLD_VAR".as_slice()));
             assert_eq!(pi.exec_path, "/old/binary");
             assert!(pi.unix_compat.auxv.contains(&(AT_ENTRY, 0x1000)));
-            assert_eq!(pi.space.aspace_raw, 0xDEAD_0000u64);
+            assert_eq!(pi.space.aspace_raw(), 0xDEAD_0000u64);
         }
 
         // --- exec commit phase ---
@@ -1079,7 +1080,7 @@ mod tests {
             pi.exec_path = alloc::string::String::from("/new/binary");
             pi.thing_table.close_on_exec();
             pi.lifecycle.exec_in_progress = false;
-            pi.space.aspace_raw = 0x0000_C0DE_0000u64;
+            pi.space.set_aspace_raw(0x0000_C0DE_0000u64);
         }
 
         // --- verify no stale metadata ---
@@ -1127,7 +1128,7 @@ mod tests {
         assert!(!pi.lifecycle.exec_in_progress, "exec_in_progress must be cleared after commit");
 
         // aspace_raw: must reflect new address space
-        assert_eq!(pi.space.aspace_raw, 0x0000_C0DE_0000u64, "aspace_raw not updated");
+        assert_eq!(pi.space.aspace_raw(), 0x0000_C0DE_0000u64, "aspace_raw not updated");
     }
 
     // ── Thread-group collapse determinism (ProcessInfo-level) ────────────────

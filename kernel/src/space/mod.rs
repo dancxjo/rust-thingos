@@ -114,7 +114,7 @@ pub struct Space {
     /// Stores the page-table root in an architecture-neutral `u64` form (see
     /// [`crate::BootTasking::aspace_to_raw`]).  Written during spawn/exec;
     /// read by the scheduler on context switch.
-    pub aspace_raw: u64,
+    pub aspace_raw: AtomicU64,
 }
 
 impl Space {
@@ -128,7 +128,19 @@ impl Space {
             mappings: Arc::new(Mutex::new(
                 crate::memory::mappings::MappingList::new(),
             )),
-            aspace_raw: 0,
+            aspace_raw: AtomicU64::new(0),
+        })
+    }
+
+    /// Create a `Space` from explicit VM fields and a freshly allocated id.
+    pub fn from_parts(
+        mappings: Arc<Mutex<crate::memory::mappings::MappingList>>,
+        aspace_raw: u64,
+    ) -> Arc<Self> {
+        Arc::new(Space {
+            id: alloc_space_id(),
+            mappings,
+            aspace_raw: AtomicU64::new(aspace_raw),
         })
     }
 
@@ -146,11 +158,7 @@ impl Space {
     pub fn from_process_address_space(
         pas: &crate::task::ProcessAddressSpace,
     ) -> Arc<Self> {
-        Arc::new(Space {
-            id: alloc_space_id(),
-            mappings: Arc::clone(&pas.mappings),
-            aspace_raw: pas.aspace_raw,
-        })
+        Space::from_parts(pas.mappings_arc(), pas.aspace_raw())
     }
 
     /// Return the number of mapped virtual regions at this moment.
@@ -160,6 +168,16 @@ impl Space {
     pub fn mapping_count(&self) -> usize {
         self.mappings.lock().regions.len()
     }
+
+    /// Return the current architecture-specific page-table token.
+    pub fn aspace_raw(&self) -> u64 {
+        self.aspace_raw.load(Ordering::Relaxed)
+    }
+
+    /// Update the architecture-specific page-table token.
+    pub fn set_aspace_raw(&self, aspace_raw: u64) {
+        self.aspace_raw.store(aspace_raw, Ordering::Relaxed);
+    }
 }
 
 impl core::fmt::Debug for Space {
@@ -167,7 +185,7 @@ impl core::fmt::Debug for Space {
         f.debug_struct("Space")
             .field("id", &self.id)
             .field("mapping_count", &self.mapping_count())
-            .field("aspace_raw", &self.aspace_raw)
+            .field("aspace_raw", &self.aspace_raw())
             .finish()
     }
 }
@@ -209,7 +227,7 @@ mod tests {
     #[test]
     fn test_new_empty_has_zero_aspace_raw() {
         let s = Space::new_empty();
-        assert_eq!(s.aspace_raw, 0);
+        assert_eq!(s.aspace_raw(), 0);
     }
 
     // ── Space::from_process_address_space ─────────────────────────────────────
@@ -237,7 +255,7 @@ mod tests {
             0xCAFE_0000,
         );
         let space = Space::from_process_address_space(&pas);
-        assert_eq!(space.aspace_raw, 0xCAFE_0000);
+        assert_eq!(space.aspace_raw(), 0xCAFE_0000);
     }
 
     #[test]
@@ -275,7 +293,7 @@ mod tests {
         let space = Space::from_process_address_space(&pas);
 
         // Mutate through the ProcessAddressSpace mappings arc.
-        pas.mappings.lock().insert(abi::vm::VmRegionInfo {
+        pas.mappings().lock().insert(abi::vm::VmRegionInfo {
             start: 0x4000,
             end: 0x5000,
             prot: abi::vm::VmProt::READ | abi::vm::VmProt::WRITE,
