@@ -184,7 +184,7 @@ fn generate_limine_config(
     let res = resolution.unwrap_or("1920x1080");
     let mut conf = String::new();
     conf.push_str("timeout: 3\nquiet: yes\nverbose: no\nserial: yes\n");
-    conf.push_str("interface_branding: no\n");
+    conf.push_str("interface_branding: yes\n");
     conf.push_str("interface_help: no\n");
     conf.push_str("interface_background: 121212\n");
     conf.push_str("interface_foreground: cccccc\n");
