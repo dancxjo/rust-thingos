@@ -750,7 +750,7 @@ pub fn setup_ui_services(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         spawn_ui_service(tasks_for_flytrap, "/bin/flytrap", "svc.flytrap", 2);
     }) {
         warn!(
-            "SPROUT: Failed to launch flytrap startup task (flytrap service unavailable): {:?}",
+            "SPROUT: Failed to create flytrap startup task: {:?}. The flytrap service will not be launched.",
             e
         );
     }
@@ -760,7 +760,7 @@ pub fn setup_ui_services(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         spawn_ui_service(tasks_for_blossom, "/bin/blossom", "svc.blossom", 2);
     }) {
         warn!(
-            "SPROUT: Failed to launch blossom startup task (blossom service unavailable): {:?}",
+            "SPROUT: Failed to create blossom startup task: {:?}. The blossom service will not be launched.",
             e
         );
     }
