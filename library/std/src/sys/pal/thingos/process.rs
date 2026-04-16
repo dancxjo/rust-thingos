@@ -31,6 +31,7 @@
 //! target FD during spawn.
 
 use super::env::{CommandEnv, CommandEnvs};
+use super::abi::{FdRemap, SpawnProcessExReq, SpawnProcessExResp};
 use crate::sys::thingos_syscall_numbers::{
     fcntl_cmd,
     poll_flags,
@@ -81,57 +82,6 @@ struct PollFd {
 }
 
 // ── ABI structs (must match abi/src/types/system.rs) ─────────────────────────
-
-#[repr(C)]
-#[derive(Default)]
-struct SpawnProcessExReq {
-    name_ptr: u64,
-    name_len: u32,
-    _pad0: u32,
-    argv_ptr: u64,
-    argv_len: u32,
-    _pad1: u32,
-    env_ptr: u64,
-    env_len: u32,
-    _pad2: u32,
-    stdin_mode: u32,
-    stdout_mode: u32,
-    stderr_mode: u32,
-    _reserved: u32,
-    boot_arg: u64,
-    handles_to_inherit: [u64; 8],
-    num_inherited_handles: u32,
-    _pad3: u32,
-    /// Pointer to desired working directory bytes (NOT null-terminated).
-    /// Set to 0 to inherit the parent's cwd.
-    cwd_ptr: u64,
-    /// Length of the cwd bytes (0 = inherit parent cwd).
-    cwd_len: u32,
-    _pad4: u32,
-    /// Pointer to array of FdRemap structs.
-    fd_remap_ptr: u64,
-    /// Number of entries in the fd_remap array.
-    fd_remap_len: u32,
-    _pad5: u32,
-}
-
-#[repr(C)]
-#[derive(Default, Clone, Copy)]
-struct FdRemap {
-    src_fd: u64,
-    dst_fd: u64,
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct SpawnProcessExResp {
-    child_tid: u64,
-    child_pid: u32,
-    _pad: u32,
-    stdin_pipe: u64,
-    stdout_pipe: u64,
-    stderr_pipe: u64,
-}
 
 // ── Serialization helpers ─────────────────────────────────────────────────────
 
