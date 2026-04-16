@@ -74,10 +74,7 @@ fn main(_arg: usize) -> ! {
     let watch_mask = abi::vfs_watch::mask::CREATE
         | abi::vfs_watch::mask::REMOVE
         | abi::vfs_watch::mask::MODIFY
-        | abi::vfs_watch::mask::MOVE
-        | abi::vfs_watch::mask::DELETE_SELF
-        | abi::vfs_watch::mask::MOVE_SELF
-        | abi::vfs_watch::mask::UNMOUNT;
+        | abi::vfs_watch::mask::MOVE;
     let mut watch_fd = match vfs_watch_path("/session/seat0/presences", watch_mask, 0) {
         Ok(fd) => Some(fd),
         Err(e) => {
@@ -104,7 +101,11 @@ fn main(_arg: usize) -> ! {
                 Ok(n) if n > 0 => {
                     // Drain pending watch payload so future poll calls can block again.
                     let mut watch_buf = [0u8; WATCH_BUFFER_SIZE];
-                    let _ = vfs_read(fd, &mut watch_buf);
+                    if let Err(e) = vfs_read(fd, &mut watch_buf) {
+                        warn!("placed: failed draining watch events: {:?}", e);
+                        let _ = vfs_close(fd);
+                        watch_fd = None;
+                    }
                 }
                 Ok(_) => {}
                 Err(e) => {
