@@ -238,6 +238,12 @@ pub unsafe extern "C" fn tcgetattr(fd: c_int, tio: *mut termios) -> c_int {
         set_errno(EINVAL);
         return -1;
     }
+    if unsafe { isatty(fd) } == 0 {
+        // Keep tcgetattr semantics aligned with POSIX/libc: non-tty fds fail
+        // with ENOTTY rather than exposing driver-specific errors.
+        set_errno(ENOTTY);
+        return -1;
+    }
 
     let call = DeviceCall {
         kind: DEVICE_KIND_TERMINAL,
@@ -282,6 +288,13 @@ pub unsafe extern "C" fn tcsetattr(
         set_errno(EINVAL);
         return -1;
     };
+
+    if unsafe { isatty(fd) } == 0 {
+        // Keep tcsetattr semantics aligned with POSIX/libc: non-tty fds fail
+        // with ENOTTY rather than exposing driver-specific errors.
+        set_errno(ENOTTY);
+        return -1;
+    }
 
     let call = DeviceCall {
         kind: DEVICE_KIND_TERMINAL,
