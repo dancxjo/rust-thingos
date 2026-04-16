@@ -743,7 +743,7 @@ pub fn setup_taskman_service(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 pub fn setup_ui_services(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     // Keep `placed` deterministic (window placement policy source), then fan out
     // independent UI services in parallel so startup is not serialized on one lane.
-    spawn_ui_service(shared_tasks, "/bin/placed", "svc.placed", 2);
+    // spawn_ui_service(shared_tasks, "/bin/placed", "svc.placed", 2);
 }
 
 pub fn setup_font_service(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
