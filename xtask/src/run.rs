@@ -50,20 +50,24 @@ fn x86_qemu_trace_enabled() -> bool {
 
 fn has_user_audio_args(qemu_flags: &str) -> bool {
     let f = qemu_flags;
-    f.contains("-audiodev") || f.contains("virtio-sound") || f.contains("intel-hda")
-        || f.contains("ich9-intel-hda") || f.contains("hda-output") || f.contains("hda-duplex")
+    f.contains("-audiodev")
+        || f.contains("virtio-sound")
+        || f.contains("intel-hda")
+        || f.contains("ich9-intel-hda")
+        || f.contains("hda-output")
+        || f.contains("hda-duplex")
         || f.contains("ac97")
 }
 
 fn default_audiodev_arg() -> Option<String> {
     let backend = std::env::var("THINGOS_AUDIODEV").unwrap_or_else(|_| "pa".to_string());
     let backend = backend.trim();
-    if backend.is_empty() || backend.eq_ignore_ascii_case("off") || backend.eq_ignore_ascii_case("none") {
-        None
-    } else if backend
-        .split(',')
-        .any(|part| part.trim_start().starts_with("id="))
+    if backend.is_empty()
+        || backend.eq_ignore_ascii_case("off")
+        || backend.eq_ignore_ascii_case("none")
     {
+        None
+    } else if backend.split(',').any(|part| part.trim_start().starts_with("id=")) {
         Some(backend.to_string())
     } else {
         Some(format!("{backend},id=audio0"))
@@ -156,11 +160,8 @@ pub fn run(
                 ]);
             }
 
-            let default_audio = if !has_user_audio_args(qemu_flags) {
-                default_audiodev_arg()
-            } else {
-                None
-            };
+            let default_audio =
+                if !has_user_audio_args(qemu_flags) { default_audiodev_arg() } else { None };
 
             if !has_user_audio_args(qemu_flags) {
                 if let Some(audiodev) = default_audio.as_deref() {
@@ -306,11 +307,8 @@ pub fn run_bios(
         &netdev,
     ];
 
-    let default_audio = if !has_user_audio_args(qemu_flags) {
-        default_audiodev_arg()
-    } else {
-        None
-    };
+    let default_audio =
+        if !has_user_audio_args(qemu_flags) { default_audiodev_arg() } else { None };
 
     if !has_user_audio_args(qemu_flags) {
         if let Some(audiodev) = default_audio.as_deref() {
@@ -388,11 +386,8 @@ pub fn run_hdd(
                 ]);
             }
 
-            let default_audio = if !has_user_audio_args(qemu_flags) {
-                default_audiodev_arg()
-            } else {
-                None
-            };
+            let default_audio =
+                if !has_user_audio_args(qemu_flags) { default_audiodev_arg() } else { None };
 
             if !has_user_audio_args(qemu_flags) {
                 if let Some(audiodev) = default_audio.as_deref() {
