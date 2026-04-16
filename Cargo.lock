@@ -8253,6 +8253,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "uname"
+version = "0.1.0"
+dependencies = [
+ "stem",
+]
+
+[[package]]
 name = "unic-langid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
