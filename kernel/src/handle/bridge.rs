@@ -56,6 +56,8 @@ fn classify_file_like(node: &Arc<dyn crate::vfs::VfsNode>) -> HandleKind {
     }
 }
 
+/// Shared IPC-table lookup helper that keeps lock hold time minimal by copying
+/// the matched entry out of the table before returning.
 fn lookup_ipc_entry_with(
     handle: Handle,
     lookup: impl FnOnce(
@@ -205,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_handle_prefers_process_table_over_global_ipc_table() {
+    fn test_resolve_handle_prefers_process_table() {
         let port_id = crate::ipc::create_port(8);
         let handle = {
             let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
