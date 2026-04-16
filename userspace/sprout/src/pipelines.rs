@@ -749,14 +749,20 @@ pub fn setup_ui_services(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     if let Err(e) = stem::thread::spawn_task(move || {
         spawn_ui_service(tasks_for_flytrap, "/bin/flytrap", "svc.flytrap", 2);
     }) {
-        warn!("SPROUT: Failed to launch flytrap startup task: {:?}", e);
+        warn!(
+            "SPROUT: Failed to launch flytrap startup task (flytrap service unavailable): {:?}",
+            e
+        );
     }
 
     let tasks_for_blossom = shared_tasks;
     if let Err(e) = stem::thread::spawn_task(move || {
         spawn_ui_service(tasks_for_blossom, "/bin/blossom", "svc.blossom", 2);
     }) {
-        warn!("SPROUT: Failed to launch blossom startup task: {:?}", e);
+        warn!(
+            "SPROUT: Failed to launch blossom startup task (blossom service unavailable): {:?}",
+            e
+        );
     }
 }
 
