@@ -7,23 +7,11 @@ static DTORS: RefCell<Vec<(*mut u8, unsafe extern "C" fn(*mut u8)), System>> =
     RefCell::new(Vec::new_in(System));
 
 pub unsafe fn register(t: *mut u8, dtor: unsafe extern "C" fn(*mut u8)) {
-    #[cfg(target_os = "thingos")]
-    {
-        // ThingOS currently runs into unstable TLS-destructor list bootstrap in
-        // spawned threads; avoid list registration until that runtime path is
-        // fixed. This intentionally leaks per-thread TLS destructors.
-        let _ = (t, dtor);
-        return;
-    }
-
-    #[cfg(not(target_os = "thingos"))]
-    {
-        let Ok(mut dtors) = DTORS.try_borrow_mut() else {
-            rtabort!("the System allocator may not use TLS with destructors")
-        };
-        guard::enable();
-        dtors.push((t, dtor));
-    }
+    let Ok(mut dtors) = DTORS.try_borrow_mut() else {
+        rtabort!("the System allocator may not use TLS with destructors")
+    };
+    guard::enable();
+    dtors.push((t, dtor));
 }
 
 /// The [`guard`] module contains platform-specific functions which will run this
