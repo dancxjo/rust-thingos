@@ -1895,7 +1895,7 @@ mod tests {
             .count();
         assert!(
             non_empty >= 3,
-            "post-bringup Any-affinity spawn should fan out across CPUs; got {} non-empty CPUs",
+            "[policy] post-bringup Any-affinity spawn should fan out across CPUs; got {} non-empty CPUs",
             non_empty
         );
     }
@@ -1934,8 +1934,16 @@ mod tests {
         );
 
         let t = crate::task::registry::get_task::<MockRuntime>(id).expect("spawned task missing");
-        assert_eq!(t.last_cpu, Some(0), "Any-affinity user thread should default to spawning CPU");
+        assert_eq!(
+            t.last_cpu,
+            Some(0),
+            "[policy] Any-affinity user thread should default to spawning CPU"
+        );
         let sf = sched.state.get_task(id).expect("spawned task sched fields missing");
-        assert_eq!(sf.wake_cpu, Some(0), "wake_cpu should track spawning CPU for initial enqueue");
+        assert_eq!(
+            sf.wake_cpu,
+            Some(0),
+            "[policy] wake_cpu should track spawning CPU for initial enqueue"
+        );
     }
 }
