@@ -10,6 +10,7 @@
 //! (matches abi/src/time.rs `TimeSpec`)
 
 use crate::sys::thingos_syscall_numbers::{SYS_TIME_MONOTONIC, SYS_TIME_NOW};
+use super::abi::TimeSpec;
 use crate::time::Duration;
 const CLOCK_REALTIME: usize = 2;
 
@@ -36,14 +37,6 @@ unsafe fn raw_syscall6(
 fn monotonic_ns() -> u64 {
     let ret = unsafe { raw_syscall6(SYS_TIME_MONOTONIC, 0, 0, 0, 0, 0, 0) };
     if ret < 0 { 0 } else { ret as u64 }
-}
-
-/// ThingOS TimeSpec layout (16 bytes, matches abi::time::TimeSpec).
-#[repr(C)]
-struct TimeSpec {
-    secs: u64,
-    nanos: u32,
-    _reserved: u32,
 }
 
 /// Query SYS_TIME_NOW for the real-time clock; returns total nanoseconds.

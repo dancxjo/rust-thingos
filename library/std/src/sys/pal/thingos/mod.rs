@@ -8,6 +8,7 @@ compile_error!(
 );
 
 pub mod common;
+pub(crate) mod abi;
 pub mod futex;
 pub mod os;
 pub mod time;

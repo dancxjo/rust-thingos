@@ -83,6 +83,7 @@ Higher-level design decisions, cross-cutting concerns, and reference specs.
 **Platform and Runtime**
 - [`userland.md`](concepts/userland.md) — userspace threading and runtime model
 - [`pal-examples.md`](concepts/pal-examples.md) — PAL usage examples
+- [`thingos-pal-abi-sync.md`](concepts/thingos-pal-abi-sync.md) — checklist for ThingOS std PAL syscall/ABI mirror sync
 - [`unix-compat.md`](concepts/unix-compat.md) — Unix compatibility layer
 
 **Kernel Internals**
