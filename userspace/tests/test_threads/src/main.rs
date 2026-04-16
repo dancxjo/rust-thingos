@@ -338,7 +338,7 @@ fn test_pthread_baseline_surface() {
     );
 
     // invalid target must fail cleanly.
-    let bogus = tid.wrapping_add(0x100000);
+    let bogus = u64::MAX;
     let rc = unsafe { pthread::pthread_join(bogus, core::ptr::null_mut()) };
     assert!(rc != 0, "joining invalid pthread_t must fail");
 
