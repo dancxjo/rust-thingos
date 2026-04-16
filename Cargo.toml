@@ -138,6 +138,7 @@ members = [
   "userspace/shutdown",
   "userspace/sleep",
   "userspace/smallsh",
+  "userspace/sort",
   "userspace/sprout",
   "userspace/stat",
   "userspace/stdio_demo",
