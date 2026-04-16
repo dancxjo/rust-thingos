@@ -36,6 +36,10 @@ fn print_err(msg: &str) {
     let _ = vfs_write(2, msg.as_bytes());
 }
 
+const S_IFMT: u32 = 0o170000;
+const S_IFREG: u32 = 0o100000;
+const S_IXUGO: u32 = 0o111;
+
 fn is_executable_file(path: &str) -> bool {
     let fd = match vfs_open(path, 0) {
         Ok(fd) => fd,
@@ -50,8 +54,8 @@ fn is_executable_file(path: &str) -> bool {
     };
     let _ = vfs_close(fd);
 
-    let kind = stat.mode & 0o170000;
-    kind == 0o100000 && (stat.mode & 0o111) != 0
+    let kind = stat.mode & S_IFMT;
+    kind == S_IFREG && (stat.mode & S_IXUGO) != 0
 }
 
 fn get_path_entries() -> Vec<String> {
