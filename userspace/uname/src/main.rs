@@ -88,42 +88,28 @@ fn main(_arg: usize) -> ! {
         }
     }
 
-    let mut first = true;
+    let mut fields: Vec<&str> = Vec::new();
     if show_s {
-        print(SYSNAME);
-        first = false;
+        fields.push(SYSNAME);
     }
     if show_n {
-        if !first {
-            print(" ");
-        }
-        print(NODENAME);
-        first = false;
+        fields.push(NODENAME);
     }
     if show_r {
-        if !first {
-            print(" ");
-        }
-        print(RELEASE);
-        first = false;
+        fields.push(RELEASE);
     }
     if show_v {
-        if !first {
-            print(" ");
-        }
-        print(VERSION);
-        first = false;
+        fields.push(VERSION);
     }
     if show_m {
-        if !first {
+        fields.push(MACHINE);
+    }
+
+    for (i, field) in fields.iter().enumerate() {
+        if i != 0 {
             print(" ");
         }
-        print(MACHINE);
-        first = false;
-    }
-    if first {
-        print("\n");
-        exit(0)
+        print(field);
     }
     print("\n");
 
