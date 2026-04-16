@@ -29,12 +29,24 @@
 - **Spawn**: task creation selects/targets a CPU and enqueues on that CPU; remote nudge is issued after lock release.
 - **Wakeup**:
   - blocked `Affinity::Any` tends to wake to `last_cpu` (with fallback to current CPU),
+  - optional overload-aware rebalance can redirect Any-affinity wakeups to a less-loaded online CPU when the preferred CPU run-queue depth is above a configurable gap,
   - pinned wakeups route to pinned target.
 - **Preemption**: timer and resched-IPI paths call preemption checks; lock contention can defer immediate dispatch.
 - **Resched IPI**: enqueue/wake paths can set pending-resched and send a deduped reschedule IPI to target CPU.
 - **Idle loop**: CPUs repeatedly yield/schedule and then sleep waiting for interrupts when no runnable work is available.
 
 ---
+
+### Any-affinity wake overload policy tuning
+
+The Any-affinity wake path keeps `last_cpu` locality by default.
+
+Build-time (compile-time) environment knobs:
+
+- `THINGOS_SCHED_ANY_WAKE_POLICY=off|redirect|steal` (default: `off`)
+- `THINGOS_SCHED_ANY_WAKE_OVERLOAD_GAP=<N>` (default: `4`)
+
+When policy is `redirect` or `steal`, wakeups whose preferred CPU is overloaded by at least `N` runnable entries are routed to the least-loaded online CPU. IPI signaling remains deduped via the existing pending-resched gate. These knobs are compile-time only today (via `option_env!`), not runtime-toggled.
 
 ## 2) Global serialization points and contention paths
 
