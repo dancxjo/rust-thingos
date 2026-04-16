@@ -1159,7 +1159,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     stdin_spec: StdioSpec,
     stdout_spec: StdioSpec,
     stderr_spec: StdioSpec,
-    _boot_arg: u64,
+    boot_arg: u64,
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
     fd_remap: Vec<abi::types::ThingRemap>,
@@ -1214,6 +1214,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     let (mut entry, stack_info, regions, aux_info) =
         crate::task::loader::load_module(rt, aspace, &module_desc)
             .ok_or(abi::errors::Errno::ENOEXEC)?;
+    entry.arg0 = boot_arg as usize;
 
     // If the caller requested a specific driver entrypoint symbol, resolve it
     // from the binary bytes and override the default ELF e_entry.  The symbol
@@ -1242,13 +1243,17 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
             let resolved_pc = sym_vaddr.wrapping_add(load_bias) as usize;
             crate::kdebug!(
                 "SPAWN: driver entrypoint override '{}' => VA 0x{:x} + bias 0x{:x} = PC 0x{:x}",
-                sym_name, sym_vaddr, load_bias, resolved_pc
+                sym_name,
+                sym_vaddr,
+                load_bias,
+                resolved_pc
             );
             entry.entry_pc = resolved_pc;
         } else {
             crate::kerror!(
                 "SPAWN: entry symbol '{}' not found in '{}'; using default entry",
-                sym_name, path
+                sym_name,
+                path
             );
         }
     }
@@ -1722,11 +1727,7 @@ mod tests {
             "all spawned threads plus leader must be in thread_ids"
         );
         for &cid in &child_ids {
-            assert!(
-                pi.job.thread_ids.contains(&cid),
-                "child TID {} must be in thread_ids",
-                cid
-            );
+            assert!(pi.job.thread_ids.contains(&cid), "child TID {} must be in thread_ids", cid);
         }
     }
 
@@ -2039,13 +2040,11 @@ mod tests {
         }
 
         for (id, expected_stack) in spawned {
-            let task = crate::task::registry::get_task::<MockRuntime>(id).expect("spawned task missing");
+            let task =
+                crate::task::registry::get_task::<MockRuntime>(id).expect("spawned task missing");
             let got_stack = task.stack_info.expect("spawned task stack_info missing");
             let sf = sched.state.get_task(id).expect("spawned task sched fields missing");
-            assert!(
-                sf.runq_location.is_some(),
-                "spawned task should be enqueued in a run queue"
-            );
+            assert!(sf.runq_location.is_some(), "spawned task should be enqueued in a run queue");
             assert_eq!(got_stack.guard_start, expected_stack.guard_start);
             assert_eq!(got_stack.guard_end, expected_stack.guard_end);
             assert_eq!(got_stack.reserve_start, expected_stack.reserve_start);

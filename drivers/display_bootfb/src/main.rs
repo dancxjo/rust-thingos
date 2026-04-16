@@ -27,7 +27,7 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
     driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
     driver_name_len: THINGOS_DRIVER_NAME.len(),
-    driver_class: DriverClass::Display,
+    driver_class: DriverClass::Unknown,
     flags: 0,
     probe: thingos_driver_probe,
     start: thingos_driver_start,

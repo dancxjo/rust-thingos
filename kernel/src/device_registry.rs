@@ -15,6 +15,9 @@ const MAX_CLAIMS: usize = 32;
 /// Maximum BARs per device
 const MAX_BARS: usize = 6;
 
+/// Maximum DMA allocations tracked per device claim
+const MAX_DMA_BUFFERS_PER_CLAIM: usize = 8;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IrqMode {
     Legacy = 0,
@@ -130,7 +133,7 @@ pub struct ClaimedDevice {
     pub task_id: u64,
     pub valid: bool,
     pub mapped_bar_virt: [u64; MAX_BARS], // Virtual addresses of mapped BARs
-    pub dma_buffers: [DmaBuffer; 4],      // Up to 4 DMA buffers per claim
+    pub dma_buffers: [DmaBuffer; MAX_DMA_BUFFERS_PER_CLAIM],
 }
 
 /// Global device registry
@@ -152,12 +155,8 @@ impl DeviceRegistry {
                 task_id: 0,
                 valid: false,
                 mapped_bar_virt: [0; MAX_BARS],
-                dma_buffers: [DmaBuffer {
-                    phys_addr: 0,
-                    virt_addr: 0,
-                    page_count: 0,
-                    valid: false,
-                }; 4],
+                dma_buffers: [DmaBuffer { phys_addr: 0, virt_addr: 0, page_count: 0, valid: false };
+                    MAX_DMA_BUFFERS_PER_CLAIM],
             }; MAX_CLAIMS],
         }
     }
@@ -220,20 +219,12 @@ impl DeviceRegistry {
     }
 
     pub fn entry_copy(&self, index: usize) -> Option<DeviceEntry> {
-        if index < self.device_count {
-            self.devices[index]
-        } else {
-            None
-        }
+        if index < self.device_count { self.devices[index] } else { None }
     }
 
     /// Get device by index
     pub fn get(&self, index: usize) -> Option<&DeviceEntry> {
-        if index < self.device_count {
-            self.devices[index].as_ref()
-        } else {
-            None
-        }
+        if index < self.device_count { self.devices[index].as_ref() } else { None }
     }
 
     /// Find device by PCI slot name (e.g. `"pci-0000:00:1f.2"`).
@@ -244,10 +235,8 @@ impl DeviceRegistry {
         for i in 0..self.device_count {
             if let Some(entry) = &self.devices[i] {
                 if let Some(loc) = entry.pci_location {
-                    let name = alloc::format!(
-                        "pci-0000:{:02x}:{:02x}.{}",
-                        loc.bus, loc.dev, loc.func
-                    );
+                    let name =
+                        alloc::format!("pci-0000:{:02x}:{:02x}.{}", loc.bus, loc.dev, loc.func);
                     if name == slot {
                         return Some(i);
                     }
@@ -291,7 +280,7 @@ impl DeviceRegistry {
                 claim.task_id = task_id;
                 claim.valid = true;
                 claim.mapped_bar_virt = [0; MAX_BARS];
-                claim.dma_buffers = [DmaBuffer::default(); 4];
+                claim.dma_buffers = [DmaBuffer::default(); MAX_DMA_BUFFERS_PER_CLAIM];
                 return Some(i);
             }
         }
@@ -493,45 +482,30 @@ mod tests {
     #[test]
     fn test_device_claiming_ownership() {
         let mut reg = DeviceRegistry::new();
-        let dev_idx = reg
-            .register(DeviceEntry::new_legacy("test_dev", &[], 123))
-            .unwrap();
+        let dev_idx = reg.register(DeviceEntry::new_legacy("test_dev", &[], 123)).unwrap();
 
         // Task A claims device
-        let claim_a = reg
-            .claim(dev_idx, 10)
-            .expect("Task A should be able to claim");
+        let claim_a = reg.claim(dev_idx, 10).expect("Task A should be able to claim");
         assert_eq!(reg.claims[claim_a].task_id, 10);
 
         // Task B tries to claim same device -> should fail
         let claim_b = reg.claim(dev_idx, 20);
-        assert!(
-            claim_b.is_none(),
-            "Task B should NOT be able to claim already claimed device"
-        );
+        assert!(claim_b.is_none(), "Task B should NOT be able to claim already claimed device");
 
         // Task A exits -> release all
         reg.release_all_for_task(10);
-        assert!(
-            !reg.claims[claim_a].valid,
-            "Claim should be invalid after release"
-        );
+        assert!(!reg.claims[claim_a].valid, "Claim should be invalid after release");
 
         // Task C claims same device -> should succeed
-        let _claim_c = reg
-            .claim(dev_idx, 30)
-            .expect("Task C should be able to claim after Task A release");
+        let _claim_c =
+            reg.claim(dev_idx, 30).expect("Task C should be able to claim after Task A release");
     }
 
     #[test]
     fn test_multiple_devices_per_task() {
         let mut reg = DeviceRegistry::new();
-        let dev1 = reg
-            .register(DeviceEntry::new_legacy("dev1", &[], 1))
-            .unwrap();
-        let dev2 = reg
-            .register(DeviceEntry::new_legacy("dev2", &[], 2))
-            .unwrap();
+        let dev1 = reg.register(DeviceEntry::new_legacy("dev1", &[], 1)).unwrap();
+        let dev2 = reg.register(DeviceEntry::new_legacy("dev2", &[], 2)).unwrap();
 
         reg.claim(dev1, 100).unwrap();
         reg.claim(dev2, 100).unwrap();
