@@ -51,9 +51,7 @@ pub struct Idt {
     entries: [IdtEntry; 256],
 }
 
-pub static mut IDT: Idt = Idt {
-    entries: [IdtEntry::missing(); 256],
-};
+pub static mut IDT: Idt = Idt { entries: [IdtEntry::missing(); 256] };
 
 #[repr(C, packed)]
 struct IdtDescriptor {
