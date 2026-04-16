@@ -545,7 +545,7 @@ owner = "mixed"
 rust_blocker = false
 cargo_blocker = false
 posix = "termios"
-notes = "Audit marks raw mode and termios-like support missing."
+notes = "Audit marks raw mode and termios-like support missing. Highest-impact subset for Rust TUI crates: tcgetattr/tcsetattr, TCSANOW, raw/canonical flag bits, and TIOCGWINSZ."
 
 # ---- Threads and TLS ---------------------------------------------------------
 
@@ -559,7 +559,7 @@ owner = "kernel"
 rust_blocker = true
 cargo_blocker = false
 posix = "pthread substrate"
-notes = "Audit reports SYS_SPAWN_THREAD and wait semantics for threads."
+notes = "Audit reports SYS_SPAWN_THREAD and wait semantics for threads. libc-facing pthread baseline still needs stable wrappers (pthread_create/join/detach/self + basic attrs)."
 
 [[features]]
 id = "threads.futex_basic"
