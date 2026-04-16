@@ -379,20 +379,5 @@ fn resolve_fd_or_handle(
     pinfo_arc: &alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>>,
     raw: u32,
 ) -> SysResult<alloc::sync::Arc<dyn crate::vfs::VfsNode>> {
-    // Try VFS FD table.
-    {
-        let lock = pinfo_arc.lock();
-        if let Ok(file) = lock.thing_table.get(raw) {
-            return Ok(file.node.clone());
-        }
-    }
-    // Fall back to IPC handle table.
-    let h = crate::ipc::IpcThing(raw);
-    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    let entry = table
-        .get(h, crate::ipc::IpcThingMode::Write)
-        .or_else(|| table.get(h, crate::ipc::IpcThingMode::Read))
-        .ok_or(Errno::EBADF)?;
-    let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
-    Ok(alloc::sync::Arc::new(crate::vfs::port_node::PortNode::new(port, entry.mode)))
+    crate::handle::bridge::resolve_io_node_compat(pinfo_arc, crate::handle::bridge::Handle(raw))
 }

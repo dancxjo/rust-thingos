@@ -247,21 +247,25 @@ Process (legacy)
 - May reference files, pipes, sockets, devices, etc.
 - Inherited across fork; closed-on-exec semantics
 
-**ThingOS Handle / FD (tentative):**
+**ThingOS Handle / FD:**
 - The FD integer representation is likely preserved at the POSIX compatibility surface
-- A first-class `Handle` concept may wrap the underlying resource reference
-- The handle table (today: `Process.fd_table`) becomes a first-class object
+- A first-class `Handle` concept wraps the underlying resource reference
+- Handle lookup is owned by `kernel::handle::bridge` over transitional tables
+- Process `thing_table` remains the fd-compat table during migration
 
 **Current state:**
-- `fd_table: FdTable` lives in `Process`; quarantined until a handle-table concept exists
-- No bridge module; extraction deferred to Phase 9+
+- `thing_table: ThingTable` lives in `Process` as fd compatibility storage
+- `kernel::handle::bridge` is the canonical lookup/conversion boundary
+- Raw fd-style probing is being migrated behind that bridge
 
 **Relationship:** Transitional (probably Equivalent with clarified model)
 
 **Migration guidance:**
-- Do not add new open-resource types directly to `FdTable` without consulting the
-  handle-table design when it exists
-- Keep FD semantics in `kernel/src/vfs/fd_table.rs` for now
+- New resource resolution code should use `kernel::handle::bridge` helpers
+- Keep fd integer semantics at explicit compat boundaries only
+- Continue migrating direct `thing_table`/IPC mixed probing into the bridge
+- Example boundary: syscall handlers that receive raw integers should convert to
+  `kernel::handle::bridge::Handle` immediately and delegate lookup to bridge helpers
 
 ---
 

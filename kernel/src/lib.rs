@@ -6,6 +6,7 @@ pub mod authority;
 pub mod device_registry;
 pub mod entropy;
 pub mod group;
+pub mod handle;
 pub mod inbox;
 pub mod ipc;
 pub mod irq;
