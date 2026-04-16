@@ -18,7 +18,7 @@
 //! ├── tcp/
 //! │   ├── new           ← read:  allocates socket, returns id
 //! │   └── <id>/
-//! │       ├── ctl       ← write: "connect IP PORT" / "listen PORT [BACKLOG]" / "close"
+//! │       ├── ctl       ← write: "connect IP PORT" / "listen PORT [BACKLOG]" / "shutdown read|write|both" / "ttl N" / "linger off|SECS" / "only_v6 0|1" / "close"
 //! │       ├── data      ← read/write: TCP byte stream
 //! │       ├── accept    ← read:  "<conn_id> <ip> <port>\n" (listener sockets only)
 //! │       ├── status    ← read:  state text
@@ -26,7 +26,7 @@
 //! ├── udp/
 //! │   ├── new           ← read:  allocates socket, returns id
 //! │   └── <id>/
-//! │       ├── ctl       ← write: "bind PORT" / "connect IP PORT" / "broadcast 0|1" / "close"
+//! │       ├── ctl       ← write: "bind PORT" / "connect IP PORT" / "broadcast 0|1" / "ttl N" / "multicast_loop_v4 0|1" / "multicast_ttl_v4 N" / "multicast_loop_v6 0|1" / "join_multicast_v4 G IFACE" / "leave_multicast_v4 G IFACE" / "join_multicast_v6 G IFIDX" / "leave_multicast_v6 G IFIDX" / "close"
 //! │       ├── data      ← write: [4: dest_ipv4][2: dest_port_le][4: len_le][payload]
 //! │       │               read:  [4: src_ipv4][2: src_port_le][4: len_le][payload]
 //! │       └── status    ← read:  state text, including `broadcast: true|false`
@@ -933,7 +933,8 @@ impl NetVfsProvider {
     ) -> WriteResult {
         match sf {
             SF_CTL => {
-                // "connect IP PORT", "listen PORT [BACKLOG]", or "close"
+                // "connect IP PORT", "listen PORT [BACKLOG]", "shutdown read|write|both",
+                // "ttl N", "linger off|SECS", "only_v6 0|1", or "close"
                 if let Some(rest) = text.strip_prefix("connect ") {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
                     if parts.len() >= 2 {
@@ -965,6 +966,32 @@ impl NetVfsProvider {
                             };
                         }
                     }
+                } else if let Some(rest) = text.strip_prefix("shutdown ") {
+                    let r = socket_api.handle_tcp_shutdown(socket_set, api_handle, rest.trim());
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                } else if let Some(rest) = text.strip_prefix("ttl ") {
+                    if let Ok(ttl) = rest.trim().parse::<u32>() {
+                        let r = socket_api.handle_tcp_set_ttl(api_handle, ttl);
+                        return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                    }
+                } else if let Some(rest) = text.strip_prefix("linger ") {
+                    let linger = if rest.trim() == "off" {
+                        Some(None)
+                    } else {
+                        rest.trim().parse::<u64>().ok().map(Some)
+                    };
+                    if let Some(linger) = linger {
+                        let r = socket_api.handle_tcp_set_linger(api_handle, linger);
+                        return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                    }
+                } else if let Some(rest) = text.strip_prefix("only_v6 ") {
+                    let enabled = match rest.trim() {
+                        "1" | "true" => true,
+                        "0" | "false" => false,
+                        _ => return WriteResult::Error,
+                    };
+                    let r = socket_api.handle_tcp_set_only_v6(api_handle, enabled);
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
                 } else if text == "close" {
                     socket_api.handle_close(socket_set, api_handle);
                     return WriteResult::Ok(5);
@@ -997,7 +1024,10 @@ impl NetVfsProvider {
     ) -> WriteResult {
         match sf {
             SF_CTL => {
-                // "bind PORT", "connect IP PORT", "broadcast 0|1", or "close"
+                // "bind PORT", "connect IP PORT", "broadcast 0|1", "ttl N",
+                // "multicast_loop_v4 0|1", "multicast_ttl_v4 N",
+                // "multicast_loop_v6 0|1", "join/leave_multicast_v4",
+                // "join/leave_multicast_v6", or "close"
                 if let Some(rest) = text.strip_prefix("bind ") {
                     if let Ok(port) = rest.trim().parse::<u16>() {
                         let r = socket_api.handle_udp_bind_port(socket_set, api_handle, port);
@@ -1033,6 +1063,44 @@ impl NetVfsProvider {
                     } else {
                         WriteResult::Error
                     };
+                } else if let Some(rest) = text.strip_prefix("ttl ") {
+                    if let Ok(ttl) = rest.trim().parse::<u32>() {
+                        let r = socket_api.handle_udp_set_ttl(api_handle, ttl);
+                        return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                    }
+                } else if let Some(rest) = text.strip_prefix("multicast_loop_v4 ") {
+                    let enabled = match rest.trim() {
+                        "1" | "true" => true,
+                        "0" | "false" => false,
+                        _ => return WriteResult::Error,
+                    };
+                    let r = socket_api.handle_udp_set_multicast_loop_v4(api_handle, enabled);
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                } else if let Some(rest) = text.strip_prefix("multicast_ttl_v4 ") {
+                    if let Ok(ttl) = rest.trim().parse::<u32>() {
+                        let r = socket_api.handle_udp_set_multicast_ttl_v4(api_handle, ttl);
+                        return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                    }
+                } else if let Some(rest) = text.strip_prefix("multicast_loop_v6 ") {
+                    let enabled = match rest.trim() {
+                        "1" | "true" => true,
+                        "0" | "false" => false,
+                        _ => return WriteResult::Error,
+                    };
+                    let r = socket_api.handle_udp_set_multicast_loop_v6(api_handle, enabled);
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                } else if text.strip_prefix("join_multicast_v4 ").is_some() {
+                    let r = socket_api.handle_udp_join_multicast_v4(api_handle);
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                } else if text.strip_prefix("leave_multicast_v4 ").is_some() {
+                    let r = socket_api.handle_udp_leave_multicast_v4(api_handle);
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                } else if text.strip_prefix("join_multicast_v6 ").is_some() {
+                    let r = socket_api.handle_udp_join_multicast_v6(api_handle);
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                } else if text.strip_prefix("leave_multicast_v6 ").is_some() {
+                    let r = socket_api.handle_udp_leave_multicast_v6(api_handle);
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
                 } else if text == "close" {
                     socket_api.handle_close(socket_set, api_handle);
                     return WriteResult::Ok(5);
