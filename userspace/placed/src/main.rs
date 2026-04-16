@@ -11,7 +11,9 @@ use stem::syscall::vfs::{
 };
 use stem::{info, warn};
 
+/// Watch poll timeout in milliseconds.
 const WATCH_POLL_TIMEOUT_MS: u64 = 1000;
+/// Sleep interval in milliseconds when watch mode is unavailable.
 const FALLBACK_SLEEP_MS: u64 = 250;
 const READDIR_BUFFER_SIZE: usize = 4096;
 const WATCH_BUFFER_SIZE: usize = 1024;
@@ -82,6 +84,11 @@ fn main(_arg: usize) -> ! {
             None
         }
     };
+    if watch_fd.is_some() {
+        info!("placed: using watch-driven presence updates");
+    } else {
+        info!("placed: using fallback periodic presence polling");
+    }
 
     let mut presences_fd = vfs_open("/session/seat0/presences", O_RDONLY).ok();
     let mut mode_fd = vfs_open("/session/seat0/presentation_mode", O_CREAT | O_RDWR).ok();
