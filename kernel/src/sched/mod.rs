@@ -279,6 +279,8 @@ static GLOBAL_NEED_RESCHED: [AtomicBool; types::MAX_CPUS] = {
 enum AnyWakeOverloadPolicy {
     Off = 0,
     Redirect = 1,
+    /// Preserve locality preference only when not overloaded; otherwise treat
+    /// the wakeup as stealable by the least-loaded online CPU.
     Steal = 2,
 }
 
@@ -286,7 +288,7 @@ static ANY_WAKE_POLICY_INIT: AtomicBool = AtomicBool::new(false);
 static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Off as u8);
 static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
 
-fn any_wake_policy_from_u8(v: u8) -> AnyWakeOverloadPolicy {
+fn any_wake_overload_policy_from_u8(v: u8) -> AnyWakeOverloadPolicy {
     match v {
         0 => AnyWakeOverloadPolicy::Off,
         1 => AnyWakeOverloadPolicy::Redirect,
@@ -295,7 +297,7 @@ fn any_wake_policy_from_u8(v: u8) -> AnyWakeOverloadPolicy {
     }
 }
 
-fn parse_any_wake_policy(value: &str) -> AnyWakeOverloadPolicy {
+fn parse_any_wake_overload_policy(value: &str) -> AnyWakeOverloadPolicy {
     match value {
         "redirect" => AnyWakeOverloadPolicy::Redirect,
         "steal" => AnyWakeOverloadPolicy::Steal,
@@ -306,7 +308,8 @@ fn parse_any_wake_policy(value: &str) -> AnyWakeOverloadPolicy {
 fn init_any_wake_policy_from_env_once() {
     if !ANY_WAKE_POLICY_INIT.swap(true, Ordering::AcqRel) {
         if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_POLICY") {
-            ANY_WAKE_OVERLOAD_POLICY.store(parse_any_wake_policy(v) as u8, Ordering::Release);
+            ANY_WAKE_OVERLOAD_POLICY
+                .store(parse_any_wake_overload_policy(v) as u8, Ordering::Release);
         }
         if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_OVERLOAD_GAP") {
             if let Ok(gap) = v.parse::<usize>() {
@@ -852,7 +855,8 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
         0
     };
 
-    let policy = any_wake_policy_from_u8(ANY_WAKE_OVERLOAD_POLICY.load(Ordering::Acquire));
+    let policy =
+        any_wake_overload_policy_from_u8(ANY_WAKE_OVERLOAD_POLICY.load(Ordering::Acquire));
     if policy == AnyWakeOverloadPolicy::Off {
         return preferred;
     }
@@ -878,7 +882,7 @@ fn reset_any_wake_policy_for_tests() {
 
 #[cfg(test)]
 fn set_any_wake_policy_for_tests(policy: &str, overload_gap: usize) {
-    ANY_WAKE_OVERLOAD_POLICY.store(parse_any_wake_policy(policy) as u8, Ordering::Release);
+    ANY_WAKE_OVERLOAD_POLICY.store(parse_any_wake_overload_policy(policy) as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(overload_gap.max(1), Ordering::Release);
 }
 
