@@ -26,6 +26,18 @@ pub const TCSADRAIN: c_int = 1;
 pub const TCSAFLUSH: c_int = 2;
 
 #[stable(feature = "os_thingos", since = "1.0.0")]
+pub const TCGETS: c_ulong = 0x5401;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub const TCSETS: c_ulong = 0x5402;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub const TCSETSW: c_ulong = 0x5403;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub const TCSETSF: c_ulong = 0x5404;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub const TIOCGPGRP: c_ulong = 0x540F;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub const TIOCSPGRP: c_ulong = 0x5410;
+#[stable(feature = "os_thingos", since = "1.0.0")]
 pub const TIOCGWINSZ: c_ulong = 0x5413;
 
 #[stable(feature = "os_thingos", since = "1.0.0")]

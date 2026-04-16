@@ -6,12 +6,12 @@
 //! Implemented capabilities include:
 //! - cross-architecture `raw_syscall6` trampoline used across `sys::pal`
 //! - errno plumbing for negative syscall returns
-//! - `isatty`, `tcgetattr`, `tcsetattr`, and `ioctl(TIOCGWINSZ)` via
+//! - `isatty`, `tcgetattr`, `tcsetattr`, and terminal `ioctl` requests
 //!   `SYS_FS_ISATTY` and `SYS_FS_DEVICE_CALL`
 //! - C-compatible `termios`/`winsize` types and constants used by callers
 //!
 //! Known limitations:
-//! - terminal/device operations are currently limited to the subset above
+//! - terminal/device operations are currently limited to terminal control calls
 //! - unsupported operations map to standard errno-style failures (`ENOSYS`,
 //!   `ENOTTY`, or `EINVAL` depending on call path)
 
@@ -33,12 +33,20 @@ const TERMINAL_OP_TCGETS: u32 = 1;
 const TERMINAL_OP_TCSETS: u32 = 2;
 const TERMINAL_OP_TCSETSW: u32 = 3;
 const TERMINAL_OP_TCSETSF: u32 = 4;
+const TERMINAL_OP_TCGETPGRP: u32 = 5;
+const TERMINAL_OP_TCSETPGRP: u32 = 6;
 const TERMINAL_OP_TIOCGWINSZ: u32 = 7;
 
 pub const TCSANOW: c_int = 0;
 pub const TCSADRAIN: c_int = 1;
 pub const TCSAFLUSH: c_int = 2;
 
+pub const TCGETS: c_ulong = 0x5401;
+pub const TCSETS: c_ulong = 0x5402;
+pub const TCSETSW: c_ulong = 0x5403;
+pub const TCSETSF: c_ulong = 0x5404;
+pub const TIOCGPGRP: c_ulong = 0x540F;
+pub const TIOCSPGRP: c_ulong = 0x5410;
 pub const TIOCGWINSZ: c_ulong = 0x5413;
 
 // SAFETY: must be called only once during runtime initialization.
@@ -326,10 +334,6 @@ pub unsafe extern "C" fn tcsetattr(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -> c_int {
-    if request != TIOCGWINSZ {
-        set_errno(ENOTTY);
-        return -1;
-    }
     if argp.is_null() {
         set_errno(EINVAL);
         return -1;
@@ -338,17 +342,17 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
         return -1;
     }
 
-    let ws = argp.cast::<winsize>();
-    let call = DeviceCall {
-        kind: DEVICE_KIND_TERMINAL,
-        op: TERMINAL_OP_TIOCGWINSZ,
-        in_ptr: 0,
-        in_len: 0,
-        out_ptr: ws as usize as u64,
-        out_len: core::mem::size_of::<winsize>() as u32,
-    };
-    let ret = unsafe {
-        raw_syscall6(
+    if request == TIOCGPGRP {
+        let mut pgid_out: u32 = 0;
+        let call = DeviceCall {
+            kind: DEVICE_KIND_TERMINAL,
+            op: TERMINAL_OP_TCGETPGRP,
+            in_ptr: 0,
+            in_len: 0,
+            out_ptr: &mut pgid_out as *mut u32 as usize as u64,
+            out_len: core::mem::size_of::<u32>() as u32,
+        };
+        let ret = raw_syscall6(
             SYS_FS_DEVICE_CALL,
             fd as usize,
             &call as *const DeviceCall as usize,
@@ -356,18 +360,115 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -
             0,
             0,
             0,
-        )
+        );
+        if ret < 0 {
+            set_errno(neg_errno_to_c_int(ret));
+            return -1;
+        }
+        let Ok(pgid) = c_int::try_from(pgid_out) else {
+            set_errno(EINVAL);
+            return -1;
+        };
+        if pgid <= 0 {
+            set_errno(EINVAL);
+            return -1;
+        }
+        unsafe {
+            *argp.cast::<c_int>() = pgid;
+        }
+        return 0;
+    }
+
+    if request == TIOCSPGRP {
+        // SAFETY: `argp` is non-null (checked above) and TIOCSPGRP requires a
+        // pointer to a single `c_int` pgid value.
+        let pgid = unsafe { *argp.cast::<c_int>() };
+        if pgid <= 0 {
+            set_errno(EINVAL);
+            return -1;
+        }
+        let pgid_in = pgid as u32;
+        let call = DeviceCall {
+            kind: DEVICE_KIND_TERMINAL,
+            op: TERMINAL_OP_TCSETPGRP,
+            in_ptr: &pgid_in as *const u32 as usize as u64,
+            in_len: core::mem::size_of::<u32>() as u32,
+            out_ptr: 0,
+            out_len: 0,
+        };
+        let ret = raw_syscall6(
+            SYS_FS_DEVICE_CALL,
+            fd as usize,
+            &call as *const DeviceCall as usize,
+            0,
+            0,
+            0,
+            0,
+        );
+        if ret < 0 {
+            set_errno(neg_errno_to_c_int(ret));
+            return -1;
+        }
+        return 0;
+    }
+
+    let mut call = DeviceCall {
+        kind: DEVICE_KIND_TERMINAL,
+        op: 0,
+        in_ptr: 0,
+        in_len: 0,
+        out_ptr: 0,
+        out_len: 0,
     };
+    match request {
+        TCGETS => {
+            let tio = argp.cast::<termios>();
+            call.op = TERMINAL_OP_TCGETS;
+            call.out_ptr = tio as usize as u64;
+            call.out_len = core::mem::size_of::<termios>() as u32;
+        }
+        TCSETS | TCSETSW | TCSETSF => {
+            let tio = argp.cast::<termios>();
+            call.op = match request {
+                TCSETS => TERMINAL_OP_TCSETS,
+                TCSETSW => TERMINAL_OP_TCSETSW,
+                TCSETSF => TERMINAL_OP_TCSETSF,
+                _ => unreachable!(),
+            };
+            call.in_ptr = tio as usize as u64;
+            call.in_len = core::mem::size_of::<termios>() as u32;
+        }
+        TIOCGWINSZ => {
+            let ws = argp.cast::<winsize>();
+            call.op = TERMINAL_OP_TIOCGWINSZ;
+            call.out_ptr = ws as usize as u64;
+            call.out_len = core::mem::size_of::<winsize>() as u32;
+        }
+        _ => {
+            set_errno(ENOTTY);
+            return -1;
+        }
+    }
+    let ret = raw_syscall6(
+        SYS_FS_DEVICE_CALL,
+        fd as usize,
+        &call as *const DeviceCall as usize,
+        0,
+        0,
+        0,
+        0,
+    );
     if ret >= 0 {
         return 0;
     }
 
     // Explicit fallback for kernels that do not expose terminal geometry yet.
-    if neg_errno_to_c_int(ret) != ENOSYS {
+    if request != TIOCGWINSZ || neg_errno_to_c_int(ret) != ENOSYS {
         set_errno(neg_errno_to_c_int(ret));
         return -1;
     }
 
+    let ws = argp.cast::<winsize>();
     unsafe {
         (*ws).ws_row = 24;
         (*ws).ws_col = 80;
