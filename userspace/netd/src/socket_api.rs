@@ -3,18 +3,18 @@
 //! Provides a high-level socket management API used by the VFS provider
 //! to implement the `/net/` tree with smoltcp TCP/UDP sockets.
 extern crate alloc;
-use alloc::string::ToString;
-
 use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::String;
-use alloc::{vec, vec::Vec};
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer, State as TcpState};
 use smoltcp::time::Instant;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address};
+use stem::{debug, info, trace, warn};
 
 use crate::dns;
-use stem::{debug, info, trace, warn};
 
 pub static mut CONN_RX: [[u8; 8192]; 256] = [[0; 8192]; 256];
 pub static mut CONN_TX: [[u8; 32768]; 256] = [[0; 32768]; 256];
@@ -350,20 +350,12 @@ impl SocketApi {
 
     /// Return the API handles of all active TCP sockets.
     pub fn tcp_socket_ids(&self) -> Vec<u32> {
-        self.sockets
-            .iter()
-            .filter(|(_, s)| s.kind == SocketType::Tcp)
-            .map(|(id, _)| *id)
-            .collect()
+        self.sockets.iter().filter(|(_, s)| s.kind == SocketType::Tcp).map(|(id, _)| *id).collect()
     }
 
     /// Return the API handles of all active UDP sockets.
     pub fn udp_socket_ids(&self) -> Vec<u32> {
-        self.sockets
-            .iter()
-            .filter(|(_, s)| s.kind == SocketType::Udp)
-            .map(|(id, _)| *id)
-            .collect()
+        self.sockets.iter().filter(|(_, s)| s.kind == SocketType::Udp).map(|(id, _)| *id).collect()
     }
 
     /// Returns `true` if an API handle exists in the socket pool.
@@ -562,14 +554,9 @@ impl SocketApi {
         match socket.connect(iface.context(), endpoint, local_port) {
             Ok(()) => {
                 if let Some(m) = self.sockets.get_mut(&api_handle) {
-                    m.remote = Some(EndpointV4 {
-                        ip: remote_ip,
-                        port: remote_port,
-                    });
-                    m.local = Some(EndpointV4 {
-                        ip: Ipv4Address::new(0, 0, 0, 0),
-                        port: local_port,
-                    });
+                    m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
+                    m.local =
+                        Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port: local_port });
                 }
                 info!(
                     "SOCKET_API: connect_existing handle={} to {}:{}",
@@ -595,10 +582,7 @@ impl SocketApi {
     ) -> bool {
         if let Some(m) = self.sockets.get_mut(&api_handle) {
             if m.kind == SocketType::Udp {
-                m.remote = Some(EndpointV4 {
-                    ip: remote_ip,
-                    port: remote_port,
-                });
+                m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
                 return true;
             }
         }
@@ -714,9 +698,17 @@ impl SocketApi {
     ) -> bool {
         if let Some(managed) = self.sockets.get_mut(&api_handle) {
             if managed.kind == SocketType::Udp {
-                managed
-                    .udp_multicast_v4_groups
-                    .insert((*group.as_bytes(), *interface.as_bytes()));
+                let group_bytes = group.as_bytes();
+                let interface_bytes = interface.as_bytes();
+                managed.udp_multicast_v4_groups.insert((
+                    [group_bytes[0], group_bytes[1], group_bytes[2], group_bytes[3]],
+                    [
+                        interface_bytes[0],
+                        interface_bytes[1],
+                        interface_bytes[2],
+                        interface_bytes[3],
+                    ],
+                ));
                 return true;
             }
         }
@@ -731,9 +723,17 @@ impl SocketApi {
     ) -> bool {
         if let Some(managed) = self.sockets.get_mut(&api_handle) {
             if managed.kind == SocketType::Udp {
-                managed
-                    .udp_multicast_v4_groups
-                    .remove(&(*group.as_bytes(), *interface.as_bytes()));
+                let group_bytes = group.as_bytes();
+                let interface_bytes = interface.as_bytes();
+                managed.udp_multicast_v4_groups.remove(&(
+                    [group_bytes[0], group_bytes[1], group_bytes[2], group_bytes[3]],
+                    [
+                        interface_bytes[0],
+                        interface_bytes[1],
+                        interface_bytes[2],
+                        interface_bytes[3],
+                    ],
+                ));
                 return true;
             }
         }
@@ -748,9 +748,7 @@ impl SocketApi {
     ) -> bool {
         if let Some(managed) = self.sockets.get_mut(&api_handle) {
             if managed.kind == SocketType::Udp {
-                managed
-                    .udp_multicast_v6_groups
-                    .insert((group.to_string(), interface));
+                managed.udp_multicast_v6_groups.insert((group.to_string(), interface));
                 return true;
             }
         }
@@ -765,9 +763,7 @@ impl SocketApi {
     ) -> bool {
         if let Some(managed) = self.sockets.get_mut(&api_handle) {
             if managed.kind == SocketType::Udp {
-                managed
-                    .udp_multicast_v6_groups
-                    .remove(&(group.to_string(), interface));
+                managed.udp_multicast_v6_groups.remove(&(group.to_string(), interface));
                 return true;
             }
         }
@@ -784,10 +780,7 @@ impl SocketApi {
         backlog: u16,
         buf_idx: usize,
     ) -> Vec<u8> {
-        info!(
-            "SOCKET_API: TCP_LISTEN on port {} with backlog {}",
-            port, backlog
-        );
+        info!("SOCKET_API: TCP_LISTEN on port {} with backlog {}", port, backlog);
 
         let rx_buffer = SocketBuffer::new(unsafe { &mut CONN_RX[buf_idx][..] });
         let tx_buffer = SocketBuffer::new(unsafe { &mut CONN_TX[buf_idx][..] });
@@ -808,10 +801,7 @@ impl SocketApi {
             socket_handle,
             SocketType::Tcp,
             true,
-            Some(EndpointV4 {
-                ip: Ipv4Address::new(0, 0, 0, 0),
-                port,
-            }),
+            Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port }),
             owner_tid,
             api_handle,
             now_ms,
@@ -836,10 +826,7 @@ impl SocketApi {
         self.sockets.insert(api_handle, managed);
         self.pending_accepts.insert(api_handle, Vec::new());
 
-        info!(
-            "SOCKET_API: Listening on port {}, handle={}",
-            port, api_handle
-        );
+        info!("SOCKET_API: Listening on port {}, handle={}", port, api_handle);
         encode_handle(api_handle)
     }
 
@@ -878,29 +865,20 @@ impl SocketApi {
             socket_handle,
             SocketType::Tcp,
             false,
-            Some(EndpointV4 {
-                ip: Ipv4Address::new(0, 0, 0, 0),
-                port: local_port,
-            }),
+            Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port: local_port }),
             owner_tid,
             api_handle,
             now_ms,
             Some(buf_idx),
         );
-        managed.remote = Some(EndpointV4 {
-            ip: remote_ip,
-            port: remote_port,
-        });
+        managed.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
         // DEFERRED: No blocking graph operations in network hot-path
         // Self::sync_remote_edge(&managed);
         // Self::ensure_tcp_connection(&mut managed, now_ms, "syn-sent");
 
         self.sockets.insert(api_handle, managed);
 
-        info!(
-            "SOCKET_API: Connected handle={} local_port={}",
-            api_handle, local_port
-        );
+        info!("SOCKET_API: Connected handle={} local_port={}", api_handle, local_port);
         encode_handle(api_handle)
     }
 
@@ -980,10 +958,7 @@ impl SocketApi {
         // Diagnostic: log the listener socket state on every accept attempt
         let state = socket.state();
         if state != TcpState::Listen {
-            info!(
-                "SOCKET_API: TCP_ACCEPT handle={} socket state={:?}",
-                listen_handle, state
-            );
+            info!("SOCKET_API: TCP_ACCEPT handle={} socket state={:?}", listen_handle, state);
         }
 
         // Check socket state - if it's established, we have a connection
@@ -1006,19 +981,13 @@ impl SocketApi {
                     listener_socket_handle,
                     SocketType::Tcp,
                     false,
-                    Some(EndpointV4 {
-                        ip: Ipv4Address::new(0, 0, 0, 0),
-                        port: listen_port,
-                    }),
+                    Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port: listen_port }),
                     socket_owner,
                     conn_handle,
                     now_ms,
                     Some(bidx_connected),
                 );
-                conn_managed.remote = Some(EndpointV4 {
-                    ip: remote_ip,
-                    port: remote_port,
-                });
+                conn_managed.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
                 self.sockets.insert(conn_handle, conn_managed);
                 self.pending_accepts.remove(&listen_handle);
 
@@ -1076,10 +1045,7 @@ impl SocketApi {
         let endpoint = IpListenEndpoint::from(port);
         let socket = socket_set.get_mut::<TcpSocket>(managed.handle);
         if let Err(e) = socket.listen(endpoint) {
-            warn!(
-                "SOCKET_API: handle_listen_existing: listen failed on port {}: {:?}",
-                port, e
-            );
+            warn!("SOCKET_API: handle_listen_existing: listen failed on port {}: {:?}", port, e);
             return false;
         }
 
@@ -1087,10 +1053,7 @@ impl SocketApi {
         if let Some(local) = managed.local.as_mut() {
             local.port = port;
         } else {
-            managed.local = Some(EndpointV4 {
-                ip: Ipv4Address::new(0, 0, 0, 0),
-                port,
-            });
+            managed.local = Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port });
         }
 
         // Fill the backlog pool with additional listener sockets.
@@ -1144,22 +1107,13 @@ impl SocketApi {
 
         let socket = socket_set.get_mut::<smoltcp::socket::udp::Socket>(managed.handle);
         if let Err(e) = socket.bind(port) {
-            warn!(
-                "SOCKET_API: handle_udp_bind_port: bind failed on port {}: {:?}",
-                port, e
-            );
+            warn!("SOCKET_API: handle_udp_bind_port: bind failed on port {}: {:?}", port, e);
             return false;
         }
 
-        managed.local = Some(EndpointV4 {
-            ip: Ipv4Address::new(0, 0, 0, 0),
-            port,
-        });
+        managed.local = Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port });
 
-        info!(
-            "SOCKET_API: Bound UDP on port {}, handle={}",
-            port, api_handle
-        );
+        info!("SOCKET_API: Bound UDP on port {}, handle={}", port, api_handle);
         true
     }
 
@@ -1197,10 +1151,7 @@ impl SocketApi {
             socket_handle,
             SocketType::Udp,
             false,
-            Some(EndpointV4 {
-                ip: Ipv4Address::new(0, 0, 0, 0),
-                port,
-            }),
+            Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port }),
             owner_tid,
             api_handle,
             now_ms,
@@ -1209,10 +1160,7 @@ impl SocketApi {
 
         self.sockets.insert(api_handle, managed);
 
-        info!(
-            "SOCKET_API: Bound UDP on port {}, handle={}",
-            port, api_handle
-        );
+        info!("SOCKET_API: Bound UDP on port {}, handle={}", port, api_handle);
         encode_handle(api_handle)
     }
 
@@ -1260,10 +1208,7 @@ impl SocketApi {
                 m.packets_tx = m.packets_tx.saturating_add(1);
                 m.last_seen_ms = Self::now_ms();
             }
-            m.remote = Some(EndpointV4 {
-                ip: remote_ip,
-                port: remote_port,
-            });
+            m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
             Self::sync_remote_edge(m);
         }
 
@@ -1304,10 +1249,7 @@ impl SocketApi {
                     m.bytes_rx = m.bytes_rx.saturating_add(data.len() as u64);
                     m.packets_rx = m.packets_rx.saturating_add(1);
                     m.last_seen_ms = Self::now_ms();
-                    m.remote = Some(EndpointV4 {
-                        ip: remote_ip,
-                        port: remote_port,
-                    });
+                    m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
                     Self::sync_remote_edge(m);
                 }
 
@@ -1333,9 +1275,7 @@ impl SocketApi {
     ) -> Vec<u8> {
         info!("SOCKET_API: Joining multicast group {}", multicast_ip);
         let now = Instant::from_millis(stem::time::now().as_millis() as i64);
-        iface
-            .join_multicast_group(device, IpAddress::Ipv4(multicast_ip), now)
-            .ok();
+        iface.join_multicast_group(device, IpAddress::Ipv4(multicast_ip), now).ok();
         encode_ok()
     }
 
@@ -1589,8 +1529,9 @@ unsafe fn split_packet_buffer(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use smoltcp::wire::Ipv4Address;
+
+    use super::*;
 
     #[test]
     fn test_encode_ok() {
@@ -1654,22 +1595,11 @@ mod tests {
     #[test]
     fn test_resp_constants_distinct() {
         // Verify all response type constants are distinct
-        let constants = [
-            RESP_OK,
-            RESP_ERROR,
-            RESP_HANDLE,
-            RESP_DATA,
-            RESP_ACCEPT,
-            RESP_EMPTY,
-            RESP_CLOSED,
-        ];
+        let constants =
+            [RESP_OK, RESP_ERROR, RESP_HANDLE, RESP_DATA, RESP_ACCEPT, RESP_EMPTY, RESP_CLOSED];
         for i in 0..constants.len() {
             for j in (i + 1)..constants.len() {
-                assert_ne!(
-                    constants[i], constants[j],
-                    "constants[{}] == constants[{}]",
-                    i, j
-                );
+                assert_ne!(constants[i], constants[j], "constants[{}] == constants[{}]", i, j);
             }
         }
     }
