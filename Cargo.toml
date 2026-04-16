@@ -115,6 +115,7 @@ members = [
   "userspace/kill",
   "userspace/ld_so",
   "userspace/libdl",
+  "userspace/ln",
   "userspace/loglevel",
   "userspace/ls",
   "userspace/mkdir",
