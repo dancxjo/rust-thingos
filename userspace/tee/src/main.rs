@@ -85,6 +85,7 @@ fn main(_arg: usize) -> ! {
     let mut outputs: Vec<Output<'_>> = Vec::new();
     let mut had_error = false;
     let mut stdout_ok = true;
+    let mut buf = vec![0u8; BUF_SIZE];
 
     for path in &file_args {
         match open_output(path, append) {
@@ -98,7 +99,6 @@ fn main(_arg: usize) -> ! {
         }
     }
 
-    let mut buf = vec![0u8; BUF_SIZE];
     loop {
         let n = match vfs_read(0, &mut buf) {
             Ok(0) => break,
@@ -116,19 +116,18 @@ fn main(_arg: usize) -> ! {
             stdout_ok = false;
         }
 
-        let mut kept_outputs: Vec<Output<'_>> = Vec::new();
-        for output in outputs.drain(..) {
+        outputs.retain_mut(|output| {
             if write_all(output.fd, &buf[..n]).is_err() {
                 print(2, "tee: write error on ");
                 print(2, output.path);
                 print(2, "\n");
                 had_error = true;
                 let _ = vfs_close(output.fd);
+                false
             } else {
-                kept_outputs.push(output);
+                true
             }
-        }
-        outputs = kept_outputs;
+        });
     }
 
     for output in outputs {
