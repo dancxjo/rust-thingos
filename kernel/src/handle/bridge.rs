@@ -48,9 +48,6 @@ impl ResolvedHandle {
 }
 
 fn classify_file_like(node: &Arc<dyn crate::vfs::VfsNode>) -> HandleKind {
-    if node.as_port().is_some() {
-        return HandleKind::Channel;
-    }
     match node.stat() {
         Ok(stat) if stat.is_fifo() => HandleKind::Pipe,
         _ => HandleKind::File,
@@ -183,10 +180,10 @@ mod tests {
     }
 
     fn make_test_process_info(
-        fd_node_pairs: &[(u32, Arc<dyn VfsNode>)],
+        handle_node_pairs: &[(u32, Arc<dyn VfsNode>)],
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
         let mut thing_table = ThingTable::new();
-        for (fd, node) in fd_node_pairs {
+        for (fd, node) in handle_node_pairs {
             thing_table
                 .insert_at(*fd, node.clone(), OpenFlags::read_write(), "/test".into())
                 .expect("insert_at");
