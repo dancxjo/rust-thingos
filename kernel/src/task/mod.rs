@@ -14,6 +14,7 @@
 //! `Process` is projection/backing only, not architectural truth.
 pub mod bridge;
 pub mod exec;
+pub mod identity;
 pub mod loader;
 pub mod registry;
 use alloc::collections::{BTreeMap, VecDeque};
@@ -639,9 +640,22 @@ impl Process {
         self.lifecycle.ppid
     }
 
+    /// Explicit identity layering for one runtime task belonging to this process.
+    pub fn identity_layers_for_tid(&self, tid: TaskId) -> crate::task::identity::TaskIdentityLayers {
+        crate::task::identity::TaskIdentityLayers::for_process_task(
+            tid,
+            crate::task::identity::CompatibilityIds {
+                pid: self.pid,
+                pgid: self.unix_compat.pgid,
+                sid: self.unix_compat.sid,
+            },
+            self.space.space_obj.id,
+        )
+    }
+
     /// Return `true` when `tid` is the thread-group leader TID for this job.
     pub fn is_job_leader_tid(&self, tid: TaskId) -> bool {
-        self.pid as TaskId == tid
+        self.identity_layers_for_tid(tid).is_job_leader()
     }
 
     /// Remove one thread from this job's lifecycle membership list.
