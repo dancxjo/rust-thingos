@@ -60,13 +60,13 @@ pub struct TlsInfo {
 /// from an ELF binary without thread-local storage, or the kernel did not emit
 /// the ThingOS TLS auxiliary entries).
 pub fn read_tls_info() -> Option<TlsInfo> {
-    // First call: discover required buffer size.
     let needed = crate::syscall::auxv_get(&mut []).ok()?;
-    if needed == 0 {
+    if needed == 0 || needed > 1024 {
         return None;
     }
-    let mut buf = alloc::vec![0u8; needed];
-    crate::syscall::auxv_get(&mut buf).ok()?;
+    let mut buf = [0u8; 1024];
+    crate::syscall::auxv_get(&mut buf[..needed]).ok()?;
+    let buf = &buf[..needed];
 
     // Serialized format: count: u32 LE, then count × (type: u64 LE, value: u64 LE).
     if buf.len() < 4 {

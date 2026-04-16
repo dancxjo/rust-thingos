@@ -269,6 +269,10 @@ pub struct DriverDescriptor {
     pub start: unsafe extern "C" fn(ctx: *const DriverStartContext) -> Status,
 }
 
+unsafe impl Sync for DriverDescriptor {}
+unsafe impl Send for DriverDescriptor {}
+
+
 /// Marker struct exported as `THING_DRIVER_V1` by driver-capable binaries.
 ///
 /// `devd` locates this symbol by walking the ELF symbol table of each binary

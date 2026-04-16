@@ -19,6 +19,11 @@ use stem::{error, info, warn};
 const KIND_NET_DRIVER: &str = "svc.net.Driver";
 const THINGOS_DRIVER_NAME: &[u8] = b"rtl8168d";
 
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" {
+    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+}
+
 #[unsafe(no_mangle)]
 #[used]
 pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
@@ -28,8 +33,36 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     driver_class: DriverClass::Net,
     flags: 0,
     probe: thingos_driver_probe,
+    #[cfg(target_arch = "x86_64")]
+    start: thingos_driver_start_safe,
+    #[cfg(not(target_arch = "x86_64"))]
     start: thingos_driver_start,
 };
+
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    r#"
+    .section .text
+    .global thingos_driver_start_safe
+    thingos_driver_start_safe:
+        // RSP = 16n (kernel spawn)
+        sub rsp, 8
+        push rdi
+        // Call std initialization (TLS, etc)
+        call thingos_runtime_setup
+        // Restore RDI and realign for the next call.
+        pop rdi
+        add rsp, 8
+        // CALL will push 8 bytes, so inside Rust entry RSP = 16n + 8.
+        call thingos_driver_start_rust
+        ret
+"#
+);
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+    thingos_driver_start(ctx)
+}
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
     if dev.is_null() || out.is_null() {

@@ -15,20 +15,19 @@ pub mod time;
 pub use common::*;
 
 #[cfg(not(test))]
+extern "C" {
+    pub fn thingos_runtime_setup();
+}
+
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn thingos_start() -> ! {
-    use crate::sys::thingos_syscall_numbers::SYS_TASK_SET_TLS_BASE;
-
     unsafe extern "C" {
         fn main(_: isize, _: *const *const u8, _: u8) -> i32;
     }
 
-    // Allocate and configure main thread TLS if present
-    let tls_base = crate::sys::thread::thingos::allocate_tls_block();
-    if tls_base != 0 {
-        unsafe {
-            crate::sys::pal::raw_syscall6(SYS_TASK_SET_TLS_BASE, tls_base, 0, 0, 0, 0, 0);
-        }
+    unsafe {
+        thingos_runtime_setup();
     }
 
     let code = unsafe { main(0, core::ptr::null(), 0) };
@@ -45,6 +44,23 @@ crate::arch::global_asm!(
         // CALL creates the standard SysV entry stack shape for Rust code.
         call thingos_start
         ud2
+
+    // Unified driver entry trampoline for Catalog-mode spawns.
+    // Preserves SysV alignment (call pushes 8 bytes) and ensures TLS is ready.
+    .global thingos_driver_trampoline
+    thingos_driver_trampoline:
+        // RSP is 16-byte aligned on entry to the process.
+        // We need 16n + 8 for the C entry point.
+        sub rsp, 8
+        // Call runtime setup (TLS, etc)
+        call thingos_runtime_setup
+        // Restore stack for the actual start logic
+        add rsp, 8
+        // Jump to the driver's handle_start logic (must be provided or jumped from here)
+        // For simplicity, we assume RDI still holds the context pointer.
+        // But we need to know WHERE the driver's start is.
+        // Better: let the driver's start symbol BE the trampoline target.
+        ret
 "#
 );
 

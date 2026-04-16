@@ -67,6 +67,11 @@ pub static THING_DRIVER_V1: DriverInterfaceV1 = DriverInterfaceV1 {
 
 const THINGOS_DRIVER_NAME: &[u8] = b"virtio_sound";
 
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" {
+    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+}
+
 #[unsafe(no_mangle)]
 #[used]
 pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
@@ -76,7 +81,10 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     driver_class: DriverClass::Audio,
     flags: 0,
     probe: thingos_driver_probe,
-    start: thingos_driver_start,
+    #[cfg(target_arch = "x86_64")]
+    start: thingos_driver_start_safe,
+    #[cfg(not(target_arch = "x86_64"))]
+    start: thingos_driver_start_rust,
 };
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
@@ -95,8 +103,29 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     if is_match { Status::Ok } else { Status::NoMatch }
 }
 
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
-    main(0)
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    r#"
+    .section .text
+    .global thingos_driver_start_safe
+    thingos_driver_start_safe:
+        // RSP = 16n (kernel spawn)
+        sub rsp, 8
+        push rdi
+        // Call std initialization (TLS, etc)
+        call thingos_runtime_setup
+        // Restore RDI and realign for the next call.
+        pop rdi
+        add rsp, 8
+        // CALL will push 8 bytes, so inside Rust entry RSP = 16n + 8.
+        call thingos_driver_start_rust
+        ret
+"#
+);
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn thingos_driver_start_rust(boot_fd: usize) -> Status {
+    main(boot_fd)
 }
 
 // ── VirtIO queue indices ──────────────────────────────────────────────────────

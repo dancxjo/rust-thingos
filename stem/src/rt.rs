@@ -5,7 +5,16 @@ extern "C" {
 
 #[cfg(feature = "rt")]
 #[no_mangle]
+pub unsafe extern "C" fn thingos_runtime_setup() {
+    if let Some(info) = crate::tls::read_tls_info() {
+        let _ = crate::tls::setup_thread_tls(&info);
+    }
+}
+
+#[cfg(feature = "rt")]
+#[no_mangle]
 pub unsafe extern "C" fn entry_impl(arg: usize) -> ! {
+    thingos_runtime_setup();
     stem_user_main(arg)
 }
 
