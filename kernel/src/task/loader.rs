@@ -105,7 +105,32 @@ pub fn load_module_at<R: BootRuntime>(
         elf.load_segments.sort_by(|a, b| a.vaddr.cmp(&b.vaddr));
 
         let load_bias = load_addr.saturating_sub(elf.min_vaddr);
+        let any_exec_segment = elf.load_segments.iter().any(|ph| ph.exec);
         entry_pc = elf.entry.saturating_add(load_bias);
+
+        if entry_pc == 0 {
+            for candidate in ["_start", "main", "__main_void"] {
+                if let Some(sym) = resolve_elf64_symbol(module.bytes, candidate)
+                    && sym != 0
+                {
+                    entry_pc = sym.saturating_add(load_bias);
+                    crate::kdebug!(
+                        "LOADER: ELF entry fallback via symbol '{}' -> {:x}",
+                        candidate,
+                        entry_pc
+                    );
+                    break;
+                }
+            }
+
+            if entry_pc == 0 {
+                entry_pc = elf.min_vaddr.saturating_add(load_bias);
+                crate::kdebug!(
+                    "LOADER: ELF entry fallback to min_vaddr -> {:x} (original entry was 0)",
+                    entry_pc
+                );
+            }
+        }
 
         // Build auxv metadata from ELF header fields.
         aux_info = LoaderAuxInfo {
@@ -156,6 +181,14 @@ pub fn load_module_at<R: BootRuntime>(
                 exec: ph.exec,
                 kind: MapKind::Normal,
             };
+
+            // Some userland linkers emit `e_entry = 0` and/or omit PF_X on the
+            // entry segment. If no PT_LOAD is executable, make the segment that
+            // contains the chosen entry executable so the process can start.
+            if !any_exec_segment && seg_vaddr <= entry_pc && entry_pc < seg_mem_end {
+                perms.exec = true;
+            }
+
             crate::ktrace!("Segment: vaddr={:x} exec={}", seg_vaddr, perms.exec);
 
             // Record mapping
