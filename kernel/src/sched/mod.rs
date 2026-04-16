@@ -1554,6 +1554,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         self.state.enqueue_task(target_cpu, prio, id);
                         let already_pending = set_global_need_resched(target_cpu);
                         if !already_pending {
+                            // Keep this de-dup cheap and bounded in practice:
+                            // `misrouted_count` is capped at MAX_MISROUTED (32),
+                            // and online CPU counts are small.
                             if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
                                 self.pending_prepare_schedule_ipis.push(target_cpu);
                             }
@@ -1571,6 +1574,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             self.state.enqueue_task(target_cpu, prio, id);
             let already_pending = set_global_need_resched(target_cpu);
             if !already_pending {
+                // Keep this de-dup cheap and bounded in practice:
+                // `misrouted_count` is capped at MAX_MISROUTED (32),
+                // and online CPU counts are small.
                 if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
                     self.pending_prepare_schedule_ipis.push(target_cpu);
                 }
@@ -3694,6 +3700,28 @@ mod tests {
                 .iter()
                 .any(|&tid| tid == 9102),
             "misrouted task should be moved to target CPU runq"
+        );
+    }
+
+    #[test]
+    fn test_send_deferred_prepare_schedule_ipis_updates_counters() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        DIAG_IPI_SENT.store(0, Ordering::Relaxed);
+        DIAG_IPI_SENT_PREPARE_SCHEDULE.store(0, Ordering::Relaxed);
+
+        send_deferred_prepare_schedule_ipis::<MockRuntime>(alloc::vec![1usize, 2usize]);
+
+        assert_eq!(
+            DIAG_IPI_SENT.load(Ordering::Relaxed),
+            2,
+            "generic IPI counter should increase for each deferred prepare_schedule send"
+        );
+        assert_eq!(
+            DIAG_IPI_SENT_PREPARE_SCHEDULE.load(Ordering::Relaxed),
+            2,
+            "prepare_schedule source counter should increase for each deferred send"
         );
     }
 
