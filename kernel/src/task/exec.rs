@@ -500,6 +500,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }))
     }
@@ -564,6 +565,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -594,6 +596,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -715,6 +718,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -762,6 +766,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::new(),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
@@ -930,6 +935,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/old/cwd"),
             exec_path: alloc::string::String::from("/old/binary"),
+            authority: crate::task::ProcessAuthority::root(),
             space: {
                 let mappings = alloc::sync::Arc::new(spin::Mutex::new(
                     crate::memory::mappings::MappingList::new(),
@@ -1166,6 +1172,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             exec_path: alloc::string::String::from("/old"),
+            authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 

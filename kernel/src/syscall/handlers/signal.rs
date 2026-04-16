@@ -31,15 +31,15 @@ use core::mem::size_of;
 /// - `pid == -1` is currently not implemented
 /// - `sig == 0` → permission/existence check only (no signal sent)
 ///
-/// # TRANSITIONAL — Process-based authorization
+/// # Transitional authorization and migration path
 ///
 /// This handler reads the caller's `pgid` directly from `Process.unix_compat`
-/// (see `pid == 0` branch below) and performs no sender/receiver relationship
-/// check.  Any process can send any signal to any other PID or group.
+/// (see `pid == 0` branch below). Privilege is now enforced through
+/// `Authority` (`check_privilege("signal")`) for cross-process/group delivery.
 ///
-/// Future work: gate signal delivery through `authority_for_current()` +
-/// `check_privilege("signal")`, and verify that the caller's Authority has a
-/// legitimate relationship with the target.
+/// Future work: migrate remaining relationship checks into Authority/Group
+/// boundaries (same Authority principal, same Group/session ownership, or
+/// explicit delegated capability).
 /// See `docs/migration/authority_inventory.md` §1.6 for the inventory entry.
 ///
 /// DO NOT add new authorization logic here that reads Process fields
@@ -47,6 +47,9 @@ use core::mem::size_of;
 pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
     let pid = pid_raw as isize as i64;
     let sig = sig_raw as u8;
+    let caller_pid = sched::process_info_current()
+        .map(|p| p.lock().pid)
+        .unwrap_or(0);
 
     // Validate signal number.
     if sig >= abi::signal::NSIG && sig != 0 {
@@ -55,6 +58,10 @@ pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
 
     if pid > 0 {
         let target_pid = pid as u32;
+        if target_pid != caller_pid {
+            let authority = crate::authority::bridge::authority_for_current();
+            crate::authority::bridge::check_privilege(&authority, "signal")?;
+        }
         // Existence check (sig == 0).
         if sig == 0 {
             let exists = sched::list_processes_current()
@@ -69,6 +76,8 @@ pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
             }
         }
     } else if pid == 0 {
+        let authority = crate::authority::bridge::authority_for_current();
+        crate::authority::bridge::check_privilege(&authority, "signal")?;
         let pinfo = sched::process_info_current().ok_or(Errno::ESRCH)?;
         let pgid = pinfo.lock().unix_compat.pgid;
         let delivered = if sig == 0 {
@@ -82,6 +91,8 @@ pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
             Ok(0)
         }
     } else if pid < -1 {
+        let authority = crate::authority::bridge::authority_for_current();
+        crate::authority::bridge::check_privilege(&authority, "signal")?;
         let pgid = (-pid) as u32;
         let delivered = if sig == 0 {
             crate::signal::send_signal_to_group(pgid, 0)
@@ -350,4 +361,3 @@ pub fn sys_pause() -> SysResult<usize> {
 
 // No extra helpers needed — this module uses `super::copyout` and `super::copyin`
 // from `crate::syscall::validate` (re-exported in `handlers/mod.rs`).
-

@@ -5,7 +5,10 @@
 //! ```text
 //! /// A capability-based authority
 //! kind thingos.authority = struct {
+//!   uid: u32,
+//!   gid: u32,
 //!   name: string,
+//!   capability_mask: u64,
 //!   capabilities: list<string>,
 //! }
 //! ```
@@ -41,16 +44,17 @@
 //!
 //! | Canonical field          | Current kernel source                               |
 //! |--------------------------|-----------------------------------------------------|
-//! | `Authority::name`        | `ProcessSnapshot::name` (process/thread name)       |
-//! | `Authority::capabilities`| *(empty — no capability field in `Process` yet)*    |
+//! | `Authority::uid`         | `Process.authority.uid`                              |
+//! | `Authority::gid`         | `Process.authority.gid`                              |
+//! | `Authority::capability_mask` | `Process.authority.capability_mask`            |
+//! | `Authority::name`        | `ProcessSnapshot::name` / `Process.exec_path` label  |
+//! | `Authority::capabilities`| Derived from `Authority::capability_mask`            |
 //!
 //! # Note on `Process` as transitional backing
 //!
-//! The `Process` struct currently carries no explicit uid/gid, capability
-//! mask, or service-account field.  Those fields will be added to `Process`
-//! (or its Authority-shaped substructure introduced in Phase 5) and surfaced
-//! here as the extraction matures.  The bridge documents all Process-carried
-//! credential state that remains provisional pending fuller extraction.
+//! The current kernel stores principal and capability bits in a transitional
+//! `Process.authority` backing field surfaced through the bridge.  Extraction
+//! of this backing into a first-class authority owner remains follow-up work.
 //!
 //! # Future direction
 //!
@@ -81,11 +85,17 @@ pub const KIND_ID_THINGOS_AUTHORITY: [u8; 16] = [
 /// and the internal `Process` credential state is progressively extracted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Authority {
+    /// Principal user identifier for this authority context.
+    pub uid: u32,
+    /// Principal group identifier for this authority context.
+    pub gid: u32,
     /// The canonical name of this authority context.
     ///
     /// In Phase 7 this is derived from the process/thread name.  Future phases
     /// will refine this to a stable service-account or principal identifier.
     pub name: alloc::string::String,
+    /// Bitmask of active capabilities for this authority context.
+    pub capability_mask: u64,
     /// Active capability strings for this authority context.
     ///
     /// Empty in Phase 7 because `Process` carries no explicit capability mask.
@@ -99,7 +109,10 @@ impl Authority {
     ///
     /// Output:
     /// ```text
+    /// uid: 0
+    /// gid: 0
     /// name: bristle
+    /// capability_mask: 0x0
     /// capabilities: []
     /// ```
     /// or (once capabilities are populated):
@@ -113,7 +126,14 @@ impl Authority {
         } else {
             alloc::format!("[{}]", self.capabilities.join(", "))
         };
-        alloc::format!("name: {}\ncapabilities: {}\n", self.name, caps)
+        alloc::format!(
+            "uid: {}\ngid: {}\nname: {}\ncapability_mask: 0x{:x}\ncapabilities: {}\n",
+            self.uid,
+            self.gid,
+            self.name,
+            self.capability_mask,
+            caps
+        )
     }
 }
 
@@ -138,7 +158,10 @@ mod tests {
     #[test]
     fn test_authority_carries_name() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("bristle"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         assert_eq!(a.name, "bristle");
@@ -147,7 +170,10 @@ mod tests {
     #[test]
     fn test_authority_carries_capabilities() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("svc"),
+            capability_mask: 0b11,
             capabilities: alloc::vec![
                 alloc::string::String::from("net_bind"),
                 alloc::string::String::from("read_fs"),
@@ -163,18 +189,27 @@ mod tests {
     #[test]
     fn test_as_text_empty_capabilities() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("bristle"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         let text = a.as_text();
+        assert!(text.contains("uid: 0"), "unexpected: {text}");
+        assert!(text.contains("gid: 0"), "unexpected: {text}");
         assert!(text.contains("name: bristle"), "unexpected: {text}");
+        assert!(text.contains("capability_mask: 0x0"), "unexpected: {text}");
         assert!(text.contains("capabilities: []"), "unexpected: {text}");
     }
 
     #[test]
     fn test_as_text_with_capabilities() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("my-service"),
+            capability_mask: 0b11,
             capabilities: alloc::vec![
                 alloc::string::String::from("net_bind"),
                 alloc::string::String::from("read_fs"),
@@ -182,6 +217,7 @@ mod tests {
         };
         let text = a.as_text();
         assert!(text.contains("name: my-service"), "unexpected: {text}");
+        assert!(text.contains("capability_mask: 0x3"), "unexpected: {text}");
         assert!(
             text.contains("capabilities: [net_bind, read_fs]"),
             "unexpected: {text}"
@@ -191,7 +227,10 @@ mod tests {
     #[test]
     fn test_as_text_ends_with_newline() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("x"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         assert!(a.as_text().ends_with('\n'));
@@ -202,11 +241,17 @@ mod tests {
     #[test]
     fn test_authority_equality_same() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("svc"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         let b = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("svc"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         assert_eq!(a, b);
@@ -215,11 +260,17 @@ mod tests {
     #[test]
     fn test_authority_inequality_different_name() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("alpha"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         let b = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("beta"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         assert_ne!(a, b);
@@ -228,11 +279,17 @@ mod tests {
     #[test]
     fn test_authority_inequality_different_capabilities() {
         let a = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("svc"),
+            capability_mask: 0b1,
             capabilities: alloc::vec![alloc::string::String::from("net_bind")],
         };
         let b = Authority {
+            uid: 0,
+            gid: 0,
             name: alloc::string::String::from("svc"),
+            capability_mask: 0,
             capabilities: alloc::vec::Vec::new(),
         };
         assert_ne!(a, b);

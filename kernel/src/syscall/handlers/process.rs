@@ -199,17 +199,12 @@ pub fn sys_waitpid(pid: usize, status_ptr: usize, flags: usize) -> SysResult<usi
 }
 
 pub fn sys_set_priority(tid: usize, priority: usize) -> SysResult<usize> {
-    // TRANSITIONAL: Only a bounds check is applied; any thread may raise any
-    // other thread to Realtime priority.  No authority check is performed.
-    //
-    // Future work: gate escalation to Realtime (priority == 4) through
-    // `authority_for_current()` + `check_privilege("realtime_priority")`.
-    // See `docs/migration/authority_inventory.md` §2.1 for the inventory entry.
-    //
-    // DO NOT add new authorization logic here that reads Process fields
-    // directly — introduce it through `crate::authority::bridge` instead.
     if priority > 4 {
         return Err(Errno::EINVAL);
+    }
+    if priority == 4 {
+        let authority = crate::authority::bridge::authority_for_current();
+        crate::authority::bridge::check_privilege(&authority, "realtime_priority")?;
     }
     let p = match priority {
         0 => crate::task::TaskPriority::Idle,
@@ -226,17 +221,8 @@ pub fn sys_set_priority(tid: usize, priority: usize) -> SysResult<usize> {
 }
 
 pub fn sys_task_kill(tid: usize) -> SysResult<usize> {
-    // TRANSITIONAL: This check uses the scheduler's TID existence lookup
-    // directly, with no relationship or authority check between caller and
-    // target.  Any thread can kill any other thread by TID.
-    //
-    // Future work: gate this through `authority_for_current()` +
-    // `check_privilege("kill")`, and verify that the caller's Authority has a
-    // relationship with the target (same Job/Group, or an explicit capability).
-    // See `docs/migration/authority_inventory.md` §2.1 for the inventory entry.
-    //
-    // DO NOT add new authorization logic here that reads Process fields
-    // directly — introduce it through `crate::authority::bridge` instead.
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "kill")?;
     let killed = unsafe { crate::sched::kill_by_tid_current(tid as u64) };
     if killed { Ok(0) } else { Err(Errno::ESRCH) }
 }
