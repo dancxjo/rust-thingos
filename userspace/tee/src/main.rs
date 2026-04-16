@@ -8,6 +8,8 @@ use alloc::vec::Vec;
 use stem::abi::syscall::vfs_flags;
 use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_read, vfs_write};
 
+const BUF_SIZE: usize = 4096;
+
 fn get_args() -> Vec<String> {
     let mut len = 0;
     if let Ok(l) = argv_get(&mut []) {
@@ -90,7 +92,7 @@ fn main(_arg: usize) -> ! {
         }
     }
 
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; BUF_SIZE];
     loop {
         let n = match vfs_read(0, &mut buf) {
             Ok(0) => break,
