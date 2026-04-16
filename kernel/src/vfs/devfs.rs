@@ -734,10 +734,13 @@ impl VfsNode for ConsoleNode {
                 if fb.width == 0 || fb.height == 0 {
                     return Err(abi::errors::Errno::ENOSYS);
                 }
+                // Console text-mode geometry assumes 8x16 character cells.
+                const CELL_WIDTH_PX: u32 = 8;
+                const CELL_HEIGHT_PX: u32 = 16;
 
                 let ws = abi::termios::Winsize {
-                    ws_row: (fb.height / 16).max(1).min(u16::MAX as u32) as u16,
-                    ws_col: (fb.width / 8).max(1).min(u16::MAX as u32) as u16,
+                    ws_row: (fb.height / CELL_HEIGHT_PX).max(1).min(u16::MAX as u32) as u16,
+                    ws_col: (fb.width / CELL_WIDTH_PX).max(1).min(u16::MAX as u32) as u16,
                     ws_xpixel: fb.width.min(u16::MAX as u32) as u16,
                     ws_ypixel: fb.height.min(u16::MAX as u32) as u16,
                 };
