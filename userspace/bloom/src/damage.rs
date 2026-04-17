@@ -45,4 +45,11 @@ impl DamageTracker {
         core::mem::swap(&mut out, &mut self.regions);
         out
     }
+
+    pub fn restore(&mut self, mut regions: Vec<Rect>) {
+        if !regions.is_empty() {
+            self.regions.append(&mut regions);
+        }
+        self.dirty = true;
+    }
 }

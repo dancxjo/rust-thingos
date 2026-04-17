@@ -64,18 +64,14 @@ impl InputState {
                 }
                 damage.mark_dirty();
             }
-            Ok(EventType::PointerButtonDown) | Ok(EventType::PointerButtonUp)
-                if payload.len() >= PointerButtonPayload::SIZE =>
-            {
+            Ok(EventType::PointerButtonDown) if payload.len() >= PointerButtonPayload::SIZE => {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
                 p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
                 let btn = PointerButtonPayload::from_bytes(&p);
                 self.update_pointer_focus(scene);
-                if matches!(EventType::from_raw(header.event_type), Ok(EventType::PointerButtonDown)) {
-                    let old_focus = scene.keyboard_focus;
-                    scene.keyboard_focus = scene.pointer_focus;
-                    self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
-                }
+                let old_focus = scene.keyboard_focus;
+                scene.keyboard_focus = scene.pointer_focus;
+                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(ch) = scene
                         .surface_client(surface_id)
@@ -85,7 +81,7 @@ impl InputState {
                             header: msg_header(EVT_POINTER_BUTTON),
                             surface_id,
                             button: btn.button,
-                            pressed: event_type_to_pressed(header.event_type, EventType::PointerButtonDown),
+                            pressed: pressed_flag(true),
                             _pad: [0; 2],
                             timestamp_ns: header.timestamp_ns,
                         };
@@ -94,7 +90,30 @@ impl InputState {
                 }
                 damage.mark_dirty();
             }
-            Ok(EventType::KeyDown) | Ok(EventType::KeyUp) if payload.len() >= KeyEventPayload::SIZE => {
+            Ok(EventType::PointerButtonUp) if payload.len() >= PointerButtonPayload::SIZE => {
+                let mut p = [0u8; PointerButtonPayload::SIZE];
+                p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
+                let btn = PointerButtonPayload::from_bytes(&p);
+                self.update_pointer_focus(scene);
+                if let Some(surface_id) = scene.pointer_focus {
+                    if let Some(ch) = scene
+                        .surface_client(surface_id)
+                        .and_then(|client| scene.client_event_channel(client))
+                    {
+                        let ev = PointerButtonEvent {
+                            header: msg_header(EVT_POINTER_BUTTON),
+                            surface_id,
+                            button: btn.button,
+                            pressed: pressed_flag(false),
+                            _pad: [0; 2],
+                            timestamp_ns: header.timestamp_ns,
+                        };
+                        let _ = channel_send_all(ch, &to_vec(&ev));
+                    }
+                }
+                damage.mark_dirty();
+            }
+            Ok(EventType::KeyDown) if payload.len() >= KeyEventPayload::SIZE => {
                 let mut p = [0u8; KeyEventPayload::SIZE];
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
@@ -107,7 +126,30 @@ impl InputState {
                             header: msg_header(EVT_KEYBOARD_KEY),
                             surface_id,
                             key: key.key,
-                            pressed: event_type_to_pressed(header.event_type, EventType::KeyDown),
+                            pressed: pressed_flag(true),
+                            modifiers: key.mods,
+                            repeat: if key.is_repeat() { 1 } else { 0 },
+                            _pad: [0; 3],
+                            timestamp_ns: header.timestamp_ns,
+                        };
+                        let _ = channel_send_all(ch, &to_vec(&ev));
+                    }
+                }
+            }
+            Ok(EventType::KeyUp) if payload.len() >= KeyEventPayload::SIZE => {
+                let mut p = [0u8; KeyEventPayload::SIZE];
+                p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
+                let key = KeyEventPayload::from_bytes(&p);
+                if let Some(surface_id) = scene.keyboard_focus {
+                    if let Some(ch) = scene
+                        .surface_client(surface_id)
+                        .and_then(|client| scene.client_event_channel(client))
+                    {
+                        let ev = KeyboardKeyEvent {
+                            header: msg_header(EVT_KEYBOARD_KEY),
+                            surface_id,
+                            key: key.key,
+                            pressed: pressed_flag(false),
                             modifiers: key.mods,
                             repeat: if key.is_repeat() { 1 } else { 0 },
                             _pad: [0; 3],
@@ -198,6 +240,6 @@ impl InputState {
 }
 
 #[inline]
-fn event_type_to_pressed(event_type: u16, down_type: EventType) -> u8 {
-    if event_type == down_type as u16 { 1 } else { 0 }
+fn pressed_flag(pressed: bool) -> u8 {
+    if pressed { 1 } else { 0 }
 }

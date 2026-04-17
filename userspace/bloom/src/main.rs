@@ -94,7 +94,8 @@ fn main(arg: usize) -> ! {
     loop {
         if needs_redraw && damage.is_dirty() {
             let composition = scene.collect_composition();
-            let present = display.present(&composition, &damage.take(), visuals.fallback_buffer_id());
+            let pending_damage = damage.take();
+            let present = display.present(&composition, &pending_damage, visuals.fallback_buffer_id());
             if present.success {
                 let ts = stem::monotonic_ns();
                 for entry in composition {
@@ -110,8 +111,11 @@ fn main(arg: usize) -> ! {
                         }
                     }
                 }
+                needs_redraw = false;
+            } else {
+                damage.restore(pending_damage);
+                needs_redraw = true;
             }
-            needs_redraw = false;
         }
 
         let events = match ws.wait(None::<stem::time::Duration>) {

@@ -305,10 +305,12 @@ impl Scene {
                 continue;
             }
             let rect = surface.current.input_region.unwrap_or(surface.current.dest_rect);
+            let max_x = rect.x.saturating_add(rect.w) as i32;
+            let max_y = rect.y.saturating_add(rect.h) as i32;
             let inside = x >= rect.x as i32
                 && y >= rect.y as i32
-                && x < (rect.x + rect.w) as i32
-                && y < (rect.y + rect.h) as i32;
+                && x < max_x
+                && y < max_y;
             if !inside {
                 continue;
             }

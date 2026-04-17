@@ -124,58 +124,51 @@ pub fn parse_request(raw: &[u8]) -> Option<ClientRequest> {
         return None;
     }
 
-    let header = unsafe { *(raw.as_ptr() as *const MessageHeader) };
+    let header = read_packed::<MessageHeader>(raw)?;
     if header.magic != BLOOM_PROTOCOL_MAGIC || header.version != BLOOM_PROTOCOL_VERSION {
         return None;
     }
 
     match header.msg_type {
         MSG_CONNECT if raw.len() >= core::mem::size_of::<ConnectRequest>() => {
-            Some(ClientRequest::Connect(unsafe { *(raw.as_ptr() as *const ConnectRequest) }))
+            read_packed::<ConnectRequest>(raw).map(ClientRequest::Connect)
         }
         MSG_CREATE_SURFACE if raw.len() >= core::mem::size_of::<CreateSurfaceRequest>() => {
-            Some(ClientRequest::CreateSurface(unsafe {
-                *(raw.as_ptr() as *const CreateSurfaceRequest)
-            }))
+            read_packed::<CreateSurfaceRequest>(raw).map(ClientRequest::CreateSurface)
         }
         MSG_DESTROY_SURFACE if raw.len() >= core::mem::size_of::<DestroySurfaceRequest>() => {
-            Some(ClientRequest::DestroySurface(unsafe {
-                *(raw.as_ptr() as *const DestroySurfaceRequest)
-            }))
+            read_packed::<DestroySurfaceRequest>(raw).map(ClientRequest::DestroySurface)
         }
         MSG_ATTACH_BUFFER if raw.len() >= core::mem::size_of::<AttachBufferRequest>() => {
-            Some(ClientRequest::AttachBuffer(unsafe {
-                *(raw.as_ptr() as *const AttachBufferRequest)
-            }))
+            read_packed::<AttachBufferRequest>(raw).map(ClientRequest::AttachBuffer)
         }
         MSG_DAMAGE if raw.len() >= core::mem::size_of::<RectRequest>() => {
-            Some(ClientRequest::Damage(unsafe { *(raw.as_ptr() as *const RectRequest) }))
+            read_packed::<RectRequest>(raw).map(ClientRequest::Damage)
         }
         MSG_SET_INPUT_REGION if raw.len() >= core::mem::size_of::<RectRequest>() => {
-            Some(ClientRequest::SetInputRegion(unsafe {
-                *(raw.as_ptr() as *const RectRequest)
-            }))
+            read_packed::<RectRequest>(raw).map(ClientRequest::SetInputRegion)
         }
         MSG_SET_OPAQUE_REGION if raw.len() >= core::mem::size_of::<RectRequest>() => {
-            Some(ClientRequest::SetOpaqueRegion(unsafe {
-                *(raw.as_ptr() as *const RectRequest)
-            }))
+            read_packed::<RectRequest>(raw).map(ClientRequest::SetOpaqueRegion)
         }
         MSG_SET_DEST_RECT if raw.len() >= core::mem::size_of::<RectRequest>() => {
-            Some(ClientRequest::SetDestRect(unsafe {
-                *(raw.as_ptr() as *const RectRequest)
-            }))
+            read_packed::<RectRequest>(raw).map(ClientRequest::SetDestRect)
         }
         MSG_SET_Z_ORDER if raw.len() >= core::mem::size_of::<SetZOrderRequest>() => {
-            Some(ClientRequest::SetZOrder(unsafe {
-                *(raw.as_ptr() as *const SetZOrderRequest)
-            }))
+            read_packed::<SetZOrderRequest>(raw).map(ClientRequest::SetZOrder)
         }
         MSG_COMMIT if raw.len() >= core::mem::size_of::<CommitRequest>() => {
-            Some(ClientRequest::Commit(unsafe { *(raw.as_ptr() as *const CommitRequest) }))
+            read_packed::<CommitRequest>(raw).map(ClientRequest::Commit)
         }
         _ => None,
     }
+}
+
+fn read_packed<T: Copy>(raw: &[u8]) -> Option<T> {
+    if raw.len() < core::mem::size_of::<T>() {
+        return None;
+    }
+    Some(unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const T) })
 }
 
 #[repr(C, packed)]
