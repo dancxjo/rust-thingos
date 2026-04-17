@@ -1353,12 +1353,28 @@ fn send_pcm_command(driver: &mut VirtioDevice, control_dma: &ControlDma, cmd: u3
         }
     }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
+    let start_ns = stem::time::monotonic_ns();
     loop {
         let done = {
             let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
             q.poll_used().is_some()
         };
         if done {
+            let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
+            if resp.code != VIRTIO_SND_S_OK {
+                warn!(
+                    "SND: control command {:x} for stream {} completed with status {:x}",
+                    cmd, stream_id, resp.code
+                );
+            }
+            break;
+        }
+        if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
+            let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
+            warn!(
+                "SND: control command {:x} for stream {} timed out (resp={:x})",
+                cmd, stream_id, resp.code
+            );
             break;
         }
         stem::time::sleep_ms(1);
@@ -1369,6 +1385,7 @@ fn configure_stream(driver: &mut VirtioDevice, control_dma: &ControlDma, stream_
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {
             hdr: VirtioSndHdr { code: VIRTIO_SND_R_PCM_SET_PARAMS },
+            stream_id,
             buffer_bytes: 65536,
             period_bytes: 4096,
             features: 0,
@@ -1390,13 +1407,26 @@ fn configure_stream(driver: &mut VirtioDevice, control_dma: &ControlDma, stream_
         }
     }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
+    let start_ns = stem::time::monotonic_ns();
     loop {
         let done = {
             let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
             q.poll_used().is_some()
         };
         if done {
+            let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
+            if resp.code != VIRTIO_SND_S_OK {
+                warn!(
+                    "SND: set_params for stream {} completed with status {:x}",
+                    stream_id, resp.code
+                );
+            }
             break;
+        }
+        if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
+            let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
+            warn!("SND: set_params for stream {} timed out (resp={:x})", stream_id, resp.code);
+            return;
         }
         stem::time::sleep_ms(1);
     }

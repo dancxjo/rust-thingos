@@ -59,6 +59,8 @@ pub struct DriverEntry {
     pub class_mask: u32,
     /// Name of the driver start symbol.
     pub start_symbol: String,
+    /// Canonical device kind matched by this driver (e.g. `dev.rtc.Cmos`).
+    pub device_kind: String,
 }
 
 impl DriverEntry {
@@ -109,6 +111,11 @@ impl DriverEntry {
     pub fn matches_pci(&self, vendor: u16, device: u16, class: u32) -> bool {
         self.pci_match_score(vendor, device, class) != 0
     }
+
+    /// Returns `true` when this driver matches the given device kind.
+    pub fn matches_kind(&self, kind: &str) -> bool {
+        self.device_kind == kind
+    }
 }
 
 /// In-memory driver catalog populated by [`scan`].
@@ -144,6 +151,11 @@ impl Catalog {
             }
         }
         best.map(|(e, _)| e)
+    }
+
+    /// Return the first driver entry that matches the given device kind.
+    pub fn find_for_kind(&self, kind: &str) -> Option<&DriverEntry> {
+        self.entries.iter().find(|e| e.matches_kind(kind))
     }
 
     /// All catalogued driver entries.
@@ -294,9 +306,22 @@ impl Catalog {
             class_mask: 0,
             entry_symbol: [0u8; 32],
         });
+        let manifest = resolve_elf64_section_from_bytes(&bytes, abi::module_manifest::SECTION_NAME)
+            .and_then(|info| read_manifest(&bytes, info.offset));
+
+        let device_kind = manifest
+            .map(|m| {
+                let bytes = &m.device_kind;
+                let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                core::str::from_utf8(&bytes[..len])
+                    .unwrap_or("unknown")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".into());
+
         debug!(
-            "DEVD CATALOG: registered driver '{}' name='{}' class={:?} start='{}'",
-            path, driver_name, descriptor.driver_class, start_symbol
+            "DEVD CATALOG: registered driver '{}' name='{}' class={:?} kind='{}' start='{}'",
+            path, driver_name, descriptor.driver_class, device_kind, start_symbol
         );
 
         self.entries.push(DriverEntry {
@@ -309,6 +334,7 @@ impl Catalog {
             class_code: legacy.class_code,
             class_mask: legacy.class_mask,
             start_symbol,
+            device_kind,
         });
     }
 }
@@ -384,6 +410,53 @@ fn resolve_elf64_symbol_from_bytes(bytes: &[u8], target: &str) -> Option<u64> {
                 if name == target {
                     return Some(st_value);
                 }
+            }
+        }
+    }
+    None
+}
+
+struct SectionInfo {
+    offset: usize,
+    size: usize,
+}
+
+fn resolve_elf64_section_from_bytes(bytes: &[u8], target: &str) -> Option<SectionInfo> {
+    if bytes.len() < 64 {
+        return None;
+    }
+    let e_shoff = read_u64(bytes, 40)? as usize;
+    let e_shentsize = read_u16(bytes, 58)? as usize;
+    let e_shnum = read_u16(bytes, 60)? as usize;
+    let e_shstrndx = read_u16(bytes, 62)? as usize;
+
+    if e_shoff == 0 || e_shentsize < 64 || e_shnum == 0 {
+        return None;
+    }
+
+    let shstrtab_sh_off = e_shoff.saturating_add(e_shstrndx.saturating_mul(e_shentsize));
+    let shstrtab_off = read_u64(bytes, shstrtab_sh_off + 24)? as usize;
+    let shstrtab_size = read_u64(bytes, shstrtab_sh_off + 32)? as usize;
+
+    for i in 0..e_shnum {
+        let sh_off = e_shoff.saturating_add(i.saturating_mul(e_shentsize));
+        let sh_name_off = read_u32(bytes, sh_off)? as usize;
+        let name_off = shstrtab_off + sh_name_off;
+        if name_off >= shstrtab_off + shstrtab_size || name_off >= bytes.len() {
+            continue;
+        }
+
+        let name_end = bytes[name_off..]
+            .iter()
+            .position(|&b| b == 0)
+            .map(|n| name_off + n)
+            .unwrap_or(bytes.len());
+        if let Ok(name) = core::str::from_utf8(&bytes[name_off..name_end]) {
+            if name == target {
+                return Some(SectionInfo {
+                    offset: read_u64(bytes, sh_off + 24)? as usize,
+                    size: read_u64(bytes, sh_off + 32)? as usize,
+                });
             }
         }
     }
@@ -547,6 +620,26 @@ fn read_seed_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<Seed> {
         tmp.assume_init()
     };
     Some(desc)
+}
+
+fn read_manifest(bytes: &[u8], offset: usize) -> Option<abi::module_manifest::ManifestHeader> {
+    let size = core::mem::size_of::<abi::module_manifest::ManifestHeader>();
+    if offset + size > bytes.len() {
+        return None;
+    }
+    let manifest: abi::module_manifest::ManifestHeader = unsafe {
+        let mut tmp = core::mem::MaybeUninit::<abi::module_manifest::ManifestHeader>::uninit();
+        core::ptr::copy_nonoverlapping(
+            bytes.as_ptr().add(offset),
+            tmp.as_mut_ptr() as *mut u8,
+            size,
+        );
+        tmp.assume_init()
+    };
+    if manifest.magic != abi::module_manifest::MANIFEST_MAGIC {
+        return None;
+    }
+    Some(manifest)
 }
 
 fn read_driver_name(bytes: &[u8], vaddr: u64, len: usize) -> Option<String> {

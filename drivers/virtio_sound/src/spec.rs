@@ -125,6 +125,7 @@ pub struct VirtioSndPcmInfo {
 #[derive(Debug, Clone, Copy)]
 pub struct VirtioSndPcmSetParams {
     pub hdr: VirtioSndHdr, // h.code = VIRTIO_SND_R_PCM_SET_PARAMS
+    pub stream_id: u32,
     pub buffer_bytes: u32,
     pub period_bytes: u32,
     pub features: u32,

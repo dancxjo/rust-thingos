@@ -11,6 +11,7 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
 #[derive(Clone)]
 pub struct SysDevice {
     pub slot: String,
+    pub kind: String,
     pub vendor_id: u16,
     pub device_id: u16,
     pub class_code: u32, // Full class triplet: class << 16 | subclass << 8 | prog_if
@@ -21,18 +22,20 @@ pub fn scan_devices() -> Result<Vec<SysDevice>, Errno> {
     let slots = read_dir("/sys/devices")?;
     let mut devices = Vec::new();
     for slot in slots {
-        if !slot.starts_with("pci-") {
+        if !slot.starts_with("pci-") && !slot.starts_with("isa-") {
             continue;
         }
 
         let base = alloc::format!("/sys/devices/{}", slot);
-        let vendor_id = read_hex_u16(&alloc::format!("{}/vendor", base))?;
-        let device_id = read_hex_u16(&alloc::format!("{}/device", base))?;
-        let class_triplet = read_hex_u32(&alloc::format!("{}/class", base))?;
-        let status = read_string(&alloc::format!("{}/status", base))?;
+        let vendor_id = read_hex_u16(&alloc::format!("{}/vendor", base)).unwrap_or(0);
+        let device_id = read_hex_u16(&alloc::format!("{}/device", base)).unwrap_or(0);
+        let class_triplet = read_hex_u32(&alloc::format!("{}/class", base)).unwrap_or(0);
+        let status = read_string(&alloc::format!("{}/status", base)).unwrap_or_else(|_| "present".into());
+        let kind = read_string(&alloc::format!("{}/kind", base)).unwrap_or_else(|_| "unknown".into());
 
         devices.push(SysDevice {
             slot,
+            kind,
             vendor_id,
             device_id,
             class_code: class_triplet,

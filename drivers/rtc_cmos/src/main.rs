@@ -34,11 +34,27 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     start: thingos_driver_start_rust,
 };
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
-    if out.is_null() {
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+    if dev.is_null() || out.is_null() {
         return Status::InvalidArgument;
     }
+    let dev = &*dev;
     let out = &mut *out;
+
+    // Check for "Other" class or specifically System/RTC (0x080001) if we ever use it.
+    // For now, if devd matched us via device_kind, it will spawn us.
+    // If we are here via a probe scan, we check if the device looks like an RTC.
+
+    // Match if class is Other (0x00) and it's a legacy/platform device.
+    // (In our current system, legacy devices have vendor=0, device=0 on bus 0)
+    if dev.vendor_id == 0 && dev.device_id == 0 {
+        out.matched = 1;
+        out.score = 100;
+        out.claimed_class = DriverClass::Other;
+        out.flags = 0;
+        return Status::Ok;
+    }
+
     out.matched = 0;
     out.score = 0;
     out.claimed_class = DriverClass::Other;

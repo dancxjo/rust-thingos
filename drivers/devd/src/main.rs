@@ -120,6 +120,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
             // Create a synthetic device record from what we know.
             let fake_device = SysDevice {
                 slot: slot.to_string(),
+                kind: "unknown".into(),
                 vendor_id: 0,
                 device_id: 0,
                 class_code: 0,
@@ -207,11 +208,15 @@ fn reconcile_devices(
         }
 
         // First try the symbol-based catalog (new path).
-        if let Some(entry) = catalog.find_for_pci(
-            device.vendor_id,
-            device.device_id,
-            device.class_code,
-        ) {
+        let maybe_entry = if device.kind != "unknown" {
+            catalog.find_for_kind(&device.kind)
+        } else {
+            None
+        };
+
+        if let Some(entry) = maybe_entry.or_else(|| {
+            catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code)
+        }) {
             // SPROUT-DRIVEN ORCHESTRATION: Display drivers are managed explicitly
             // by sprout via the Sovereign Display Protocol to coordinate boot
             // graphics. devd must ignore them to avoid duplicate spawns.

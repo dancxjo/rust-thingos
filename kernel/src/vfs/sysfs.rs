@@ -191,7 +191,7 @@ impl VfsNode for DevicesDirNode {
     }
 
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let slots = pci_slot_names();
+        let slots = device_slot_names();
         crate::ktrace!("sysfs: readdir found {} slots", slots.len());
         let n = super::write_readdir_entries(slots.iter().map(|s| s.as_str()), offset, buf)?;
         crate::ktrace!("sysfs: readdir wrote {} bytes", n);
@@ -249,6 +249,9 @@ impl VfsNode for DeviceDirNode {
             entries.push("virtio");
         }
 
+        entries.push("kind");
+        entries.push("ioports");
+
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
 }
@@ -290,16 +293,14 @@ impl VfsNode for StaticTextNode {
     }
 }
 
-fn pci_slot_names() -> Vec<alloc::string::String> {
+fn device_slot_names() -> Vec<alloc::string::String> {
     let reg = REGISTRY.lock();
     let mut out = Vec::new();
     for index in 0..reg.len() {
         let Some(entry) = reg.entry_copy(index) else {
             continue;
         };
-        if entry.pci_location.is_some() {
-            out.push(slot_name(entry));
-        }
+        out.push(slot_name(entry));
     }
     out
 }
@@ -310,7 +311,7 @@ fn find_device_by_slot(slot: &str) -> SysResult<(usize, DeviceEntry)> {
         let Some(entry) = reg.entry_copy(index) else {
             continue;
         };
-        if entry.pci_location.is_some() && slot_name(entry) == slot {
+        if slot_name(entry) == slot {
             return Ok((index, entry));
         }
     }
@@ -318,8 +319,13 @@ fn find_device_by_slot(slot: &str) -> SysResult<(usize, DeviceEntry)> {
 }
 
 fn slot_name(entry: DeviceEntry) -> alloc::string::String {
-    let loc = entry.pci_location.expect("slot_name requires pci_location");
-    format!("pci-0000:{:02x}:{:02x}.{}", loc.bus, loc.dev, loc.func)
+    if let Some(loc) = entry.pci_location {
+        format!("pci-0000:{:02x}:{:02x}.{}", loc.bus, loc.dev, loc.func)
+    } else if !entry.ioport_ranges.is_empty() {
+        format!("isa-{:04x}", entry.ioport_ranges[0].0)
+    } else {
+        format!("platform-{:08x}", entry.resource_id)
+    }
 }
 
 fn lookup_device_file(device_index: usize, entry: DeviceEntry, file: &str) -> SysResult<StaticTextNode> {
@@ -338,6 +344,15 @@ fn lookup_device_file(device_index: usize, entry: DeviceEntry, file: &str) -> Sy
         "bar3" => format!("0x{:x} 0x{:x}\n", entry.mmio_bars[3], entry.mmio_sizes[3]),
         "bar4" => format!("0x{:x} 0x{:x}\n", entry.mmio_bars[4], entry.mmio_sizes[4]),
         "bar5" => format!("0x{:x} 0x{:x}\n", entry.mmio_bars[5], entry.mmio_sizes[5]),
+        "kind" => format!("{}\n", entry.kind),
+        "ioports" => {
+            let mut s = alloc::string::String::new();
+            for &(start, end) in entry.ioport_ranges {
+                use core::fmt::Write;
+                let _ = write!(s, "0x{:x}-0x{:x}\n", start, end);
+            }
+            s
+        }
         _ => return Err(Errno::ENOENT),
     };
     Ok(StaticTextNode::new(text.into_bytes(), ino_base))

@@ -878,6 +878,23 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     kdebug!("Scanning PCI bus...");
     scan_pci();
 
+    // Register legacy ISA devices
+    {
+        let mut reg = crate::device_registry::REGISTRY.lock();
+        // RTC CMOS (0x70, 0x71)
+        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+            "rtc_cmos",
+            crate::device_registry::CMOS_IOPORT_RANGES,
+            0x70, // Port base as unique-ish ID
+        ));
+        // PS/2 Controller (0x60, 0x64)
+        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+            "ps2_controller",
+            crate::device_registry::PS2_IOPORT_RANGES,
+            0x60,
+        ));
+    }
+
     // CRITICAL: Calibrate the BSP preemption timer BEFORE starting secondary CPUs.
     // Secondary CPUs read timer_vector/timer_init_cnt in init_secondary_cpu().
     // If these aren't set yet, secondary CPUs get no LAPIC timer, meaning
