@@ -9,6 +9,7 @@ use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_readdir, vfs_stat, 
 
 const S_IFDIR: u32 = 0o040000;
 const S_IFMT: u32 = 0o170000;
+const READDIR_BUF_SIZE: usize = 4096;
 
 fn get_args() -> Vec<String> {
     let mut len = 0;
@@ -31,7 +32,7 @@ fn get_args() -> Vec<String> {
         .collect()
 }
 
-fn print(fd: u32, msg: &str) {
+fn write_to_fd(fd: u32, msg: &str) {
     let _ = vfs_write(fd, msg.as_bytes());
 }
 
@@ -50,15 +51,15 @@ fn path_join(parent: &str, name: &str) -> String {
     path
 }
 
-fn walk(path: &str, had_error: &mut bool) {
-    print(1, path);
-    print(1, "\n");
+fn walk(path: &str, has_error: &mut bool) {
+    write_to_fd(1, path);
+    write_to_fd(1, "\n");
 
     let fd = match vfs_open(path, 0) {
         Ok(fd) => fd,
         Err(e) => {
-            print(2, &alloc::format!("find: cannot open '{}': {:?}\n", path, e));
-            *had_error = true;
+            write_to_fd(2, &alloc::format!("find: cannot open '{}': {:?}\n", path, e));
+            *has_error = true;
             return;
         }
     };
@@ -66,9 +67,9 @@ fn walk(path: &str, had_error: &mut bool) {
     let stat = match vfs_stat(fd) {
         Ok(stat) => stat,
         Err(e) => {
-            print(2, &alloc::format!("find: cannot stat '{}': {:?}\n", path, e));
+            write_to_fd(2, &alloc::format!("find: cannot stat '{}': {:?}\n", path, e));
             let _ = vfs_close(fd);
-            *had_error = true;
+            *has_error = true;
             return;
         }
     };
@@ -79,7 +80,7 @@ fn walk(path: &str, had_error: &mut bool) {
     }
 
     let mut entries = Vec::new();
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; READDIR_BUF_SIZE];
     loop {
         match vfs_readdir(fd, &mut buf) {
             Ok(0) => break,
@@ -103,8 +104,8 @@ fn walk(path: &str, had_error: &mut bool) {
                 }
             }
             Err(e) => {
-                print(2, &alloc::format!("find: cannot read directory '{}': {:?}\n", path, e));
-                *had_error = true;
+                write_to_fd(2, &alloc::format!("find: cannot read directory '{}': {:?}\n", path, e));
+                *has_error = true;
                 break;
             }
         }
@@ -113,7 +114,7 @@ fn walk(path: &str, had_error: &mut bool) {
     let _ = vfs_close(fd);
     entries.sort();
     for child in entries {
-        walk(&child, had_error);
+        walk(&child, has_error);
     }
 }
 
