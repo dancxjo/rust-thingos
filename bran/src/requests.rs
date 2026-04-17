@@ -5,19 +5,44 @@ use limine::request::{
     ModuleRequest, RsdpRequest,
 };
 
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static BASE_REVISION: BaseRevision = BaseRevision::new();
 
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
 
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static DTB_REQUEST: DeviceTreeBlobRequest = DeviceTreeBlobRequest::new();
 
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
+
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 pub static EXECUTABLE_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
 
 const MAX_MODULES: usize = 256;

@@ -580,6 +580,8 @@ impl Supervisor {
                     );
                 }
             }
+            // Close the bundled FD now that we're done with it (mount is established or failed).
+            let _ = vfs_close(bundled_fd);
         } else {
             warn!("SPROUT: Received malformed BIND_READY from {} — rejecting", task_name);
             send_failed(

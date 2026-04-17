@@ -226,22 +226,31 @@ impl SchedState {
     }
 
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
-        if let Some(pc) = self.per_cpu.get_mut(cpu) {
+        let SchedState {
+            threads,
+            per_cpu,
+            ..
+        } = self;
+
+        if let Some(pc) = per_cpu.get_mut(cpu) {
             while let Some(tid) = pc.runq[prio].pop_front() {
                 // Lazy-invalidation model: entries may stay in the VecDeque after
                 // `remove_thread_from_runq` marks them not-enqueued.
                 // Only return the entry if it still matches the task's canonical
                 // runq placement metadata.
-                let valid_location = self
-                    .get_thread(tid)
-                    .and_then(|t| t.runq_location)
+                let valid_location = threads
+                    .binary_search_by_key(&tid, |t| t.tid)
+                    .ok()
+                    .and_then(|idx| threads[idx].runq_location)
                     == Some((cpu, prio));
+
                 if !valid_location {
                     continue;
                 }
+
                 pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
-                if let Some(t) = self.get_thread_mut(tid) {
-                    t.runq_location = None;
+                if let Ok(idx) = threads.binary_search_by_key(&tid, |t| t.tid) {
+                    threads[idx].runq_location = None;
                 }
                 return Some(tid);
             }
