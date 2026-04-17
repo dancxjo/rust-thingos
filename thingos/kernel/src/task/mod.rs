@@ -851,7 +851,7 @@ pub fn preempt_enable<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
 
-    let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
+    let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
         crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
         if let Some(ptr) = *lock {
@@ -870,7 +870,11 @@ pub fn preempt_enable<R: BootRuntime>() {
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
-    if let Some(switch) = switch_params {
+    if let Some(decision) = switch_decision {
+        let Some(switch) = crate::sched::resolve_switch_params::<R>(decision) else {
+            rt.irq_restore(irq);
+            return;
+        };
         let cr3_before = rt.debug_active_aspace_root();
 
         rt.tasking().activate_address_space(switch.to_aspace);
@@ -897,7 +901,7 @@ pub fn resched_if_needed<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
 
-    let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
+    let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
         crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
         if let Some(ptr) = *lock {
@@ -916,7 +920,11 @@ pub fn resched_if_needed<R: BootRuntime>() {
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
-    if let Some(switch) = switch_params {
+    if let Some(decision) = switch_decision {
+        let Some(switch) = crate::sched::resolve_switch_params::<R>(decision) else {
+            rt.irq_restore(irq);
+            return;
+        };
         let cr3_before = rt.debug_active_aspace_root();
 
         rt.tasking().activate_address_space(switch.to_aspace);

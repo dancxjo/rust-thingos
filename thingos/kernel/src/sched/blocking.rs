@@ -41,7 +41,7 @@ pub fn block_current<R: BootRuntime>() {
     // false → task is blocking; write Blocked state to REGISTRY.
     let mut was_wake_pending = false;
 
-    let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
+    let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(rt.current_cpu_index());
@@ -139,7 +139,11 @@ pub fn block_current<R: BootRuntime>() {
     }
     super::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
-    if let Some(switch) = switch_params {
+    if let Some(decision) = switch_decision {
+        let Some(switch) = super::resolve_switch_params::<R>(decision) else {
+            rt.irq_restore(_irq);
+            return;
+        };
         rt.tasking().activate_address_space(switch.to_aspace);
 
         unsafe {

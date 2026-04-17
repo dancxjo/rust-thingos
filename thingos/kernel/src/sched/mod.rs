@@ -50,7 +50,9 @@ pub use spawn::{
 };
 use spin::Mutex;
 pub use stack::{alloc_user_stack, handle_stack_fault, map_user_page, map_user_page_perms};
-pub use types::{DEFAULT_TIMESLICE, ScheduleReason, Scheduler, StackFaultResult, SwitchParams};
+pub use types::{
+    DEFAULT_TIMESLICE, ScheduleReason, Scheduler, StackFaultResult, SwitchDecision, SwitchParams,
+};
 pub use wait_queue::WaitQueue;
 
 use crate::task::{Affinity, StartupArg, Task, TaskId, TaskPriority, TaskState};
@@ -77,6 +79,20 @@ pub fn clear_sched_lock_tracking<R: BootRuntime>() {
         .is_ok()
     {
         SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Release);
+    }
+}
+
+#[inline]
+fn debug_assert_scheduler_not_held_by_this_cpu<R: BootRuntime>(context: &str) {
+    #[cfg(debug_assertions)]
+    {
+        let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
+        let cpu = crate::runtime::<R>().current_cpu_index() as isize;
+        debug_assert_ne!(
+            owner, cpu,
+            "scheduler lock-order violation: {} attempted while SCHEDULER is held on CPU {}",
+            context, cpu
+        );
     }
 }
 
@@ -944,7 +960,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             // the lock is still held, so we can send them after unlock.
             let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
-            if let Some(switch) = switch {
+            if let Some(switch_decision) = switch {
                 // Must drop lock before context switch!
                 clear_sched_lock_tracking::<R>();
                 drop(lock);
@@ -957,6 +973,10 @@ fn try_resched_if_needed<R: BootRuntime>() {
                 }
                 send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
                 apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
+                let Some(switch) = resolve_switch_params::<R>(switch_decision) else {
+                    rt.irq_restore(irq);
+                    return;
+                };
 
                 rt.tasking().activate_address_space(switch.to_aspace);
 
@@ -1118,6 +1138,57 @@ pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
             }
         }
     }
+}
+
+pub(crate) fn resolve_switch_params<R: BootRuntime>(
+    decision: SwitchDecision,
+) -> Option<
+    SwitchParams<
+        <R::Tasking as BootTasking>::Context,
+        <R::Tasking as BootTasking>::AddressSpace,
+    >,
+> {
+    debug_assert_scheduler_not_held_by_this_cpu::<R>("resolve_switch_params");
+    let mut reg = crate::task::registry::get_registry::<R>();
+    let from_idx = reg
+        .threads
+        .binary_search_by_key(&decision.from_tid, |t| t.id)
+        .ok()?;
+    let to_idx = reg.threads.binary_search_by_key(&decision.to_tid, |t| t.id).ok()?;
+    let (from_task, to_task) = if from_idx < to_idx {
+        let (left, right) = reg.threads.split_at_mut(to_idx);
+        (&mut left[from_idx], &mut right[0])
+    } else {
+        let (left, right) = reg.threads.split_at_mut(from_idx);
+        (&mut right[0], &mut left[to_idx])
+    };
+
+    crate::sched::vm::CURRENT_MAPPINGS[decision.cpu_idx].store(
+        alloc::sync::Arc::as_ptr(&to_task.mappings) as *mut _,
+        Ordering::Release,
+    );
+
+    from_task.simd.save(crate::runtime::<R>());
+    to_task.simd.restore(crate::runtime::<R>());
+
+    crate::trace::irq_ring::push(abi::trace::TraceEvent::ContextSwitch {
+        from: from_task.id,
+        to: to_task.id,
+        timestamp: crate::trace::now(),
+    });
+
+    Some(SwitchParams {
+        from_ctx: &mut from_task.ctx as *mut _,
+        to_ctx: &to_task.ctx as *const _,
+        to_aspace: to_task.aspace,
+        from_aspace: from_task.aspace,
+        from_tid: from_task.id,
+        to_tid: to_task.id,
+        from_user: from_task.is_user,
+        to_user: to_task.is_user,
+        from_user_fs_base: &mut from_task.user_fs_base as *mut u64,
+        to_user_fs_base: to_task.user_fs_base,
+    })
 }
 
 pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
@@ -1393,12 +1464,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
     pub fn schedule_point(
         &mut self,
         reason: ScheduleReason,
-    ) -> Option<
-        SwitchParams<
-            <R::Tasking as BootTasking>::Context,
-            <R::Tasking as BootTasking>::AddressSpace,
-        >,
-    > {
+    ) -> Option<SwitchDecision> {
         let cpu_idx = current_cpu_index::<R>();
         let global_requested = GLOBAL_NEED_RESCHED[cpu_idx].swap(false, Ordering::Acquire);
 
@@ -1686,12 +1752,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
     pub fn preempt_enable(
         &mut self,
-    ) -> Option<
-        SwitchParams<
-            <R::Tasking as BootTasking>::Context,
-            <R::Tasking as BootTasking>::AddressSpace,
-        >,
-    > {
+    ) -> Option<SwitchDecision> {
         let cpu_idx = current_cpu_index::<R>();
         let per_cpu = &mut self.state.per_cpu[cpu_idx];
         if per_cpu.preempt_disable_depth > 0 {
@@ -1707,12 +1768,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
     pub fn prepare_yield(
         &mut self,
-    ) -> Option<
-        SwitchParams<
-            <R::Tasking as BootTasking>::Context,
-            <R::Tasking as BootTasking>::AddressSpace,
-        >,
-    > {
+    ) -> Option<SwitchDecision> {
         let cpu_idx = current_cpu_index::<R>();
         let current_id = self.state.per_cpu.get(cpu_idx)?.current?;
 
@@ -1789,12 +1845,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
     pub(crate) fn prepare_schedule(
         &mut self,
-    ) -> Option<
-        SwitchParams<
-            <R::Tasking as BootTasking>::Context,
-            <R::Tasking as BootTasking>::AddressSpace,
-        >,
-    > {
+    ) -> Option<SwitchDecision> {
         self.flush_metrics_if_needed();
 
         let rt = crate::runtime::<R>();
@@ -2110,55 +2161,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // intentional and acceptable because no correctness-critical path reads
         // it from REGISTRY (dump_stats shows it for diagnostics only), unlike
         // lifecycle/placement fields which are now deferred-synced above.
-        let mut reg = crate::task::registry::get_registry::<R>();
-        let old_idx = reg
-            .threads
-            .binary_search_by_key(&current_id, |t| t.id)
-            .unwrap_or_else(|_| {
-                crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
-                panic!("failed to find current_id {} in scheduler registry", current_id)
-            });
-        let new_idx = reg.threads.binary_search_by_key(&next_id, |t| t.id).unwrap_or_else(|_| {
-            crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
-            panic!("failed to find next_id {} in scheduler registry", next_id)
-        });
-        let (old_task, new_task) = if old_idx < new_idx {
-            let (left, right) = reg.threads.split_at_mut(new_idx);
-            (&mut left[old_idx], &mut right[0])
-        } else {
-            let (left, right) = reg.threads.split_at_mut(old_idx);
-            (&mut right[0], &mut left[new_idx])
-        };
-
-        // Update the lock-free mapping cache for this CPU so check_user_mapping is fast
-        crate::sched::vm::CURRENT_MAPPINGS[cpu_idx].store(
-            alloc::sync::Arc::as_ptr(&new_task.mappings) as *mut _,
-            core::sync::atomic::Ordering::Release,
-        );
-
-        old_task.simd.save(crate::runtime::<R>());
-        new_task.simd.restore(crate::runtime::<R>());
-
-        crate::trace::irq_ring::push(abi::trace::TraceEvent::ContextSwitch {
-            from: old_task.id,
-            to: new_task.id,
-            timestamp: crate::trace::now(),
-        });
-
         let next_is_idle = Some(next_id) == self.state.per_cpu[cpu_idx].idle_task;
         rt.set_idle_task_current(next_is_idle);
 
-        Some(SwitchParams {
-            from_ctx: &mut old_task.ctx as *mut _,
-            to_ctx: &new_task.ctx as *const _,
-            to_aspace: new_task.aspace,
-            from_tid: old_task.id,
-            to_tid: new_task.id,
-            from_aspace: old_task.aspace,
-            from_user: old_task.is_user,
-            to_user: new_task.is_user,
-            from_user_fs_base: &mut old_task.user_fs_base as *mut u64,
-            to_user_fs_base: new_task.user_fs_base,
+        Some(SwitchDecision {
+            cpu_idx,
+            from_tid: current_id,
+            to_tid: next_id,
         })
     }
 
@@ -2221,13 +2230,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
     pub fn terminate_current(
         &mut self,
         code: i32,
-    ) -> (
-        SwitchParams<
-            <R::Tasking as BootTasking>::Context,
-            <R::Tasking as BootTasking>::AddressSpace,
-        >,
-        alloc::vec::Vec<u64>,
-    ) {
+    ) -> (SwitchDecision, alloc::vec::Vec<u64>) {
         let cpu_idx = current_cpu_index::<R>();
         let current_id = self
             .state
@@ -2252,30 +2255,28 @@ impl<R: BootRuntime> types::Scheduler<R> {
         }
     }
 
-    pub fn set_priority(&mut self, id: TaskId, priority: TaskPriority) {
-        if self.state.get_task(id).is_some() {
-            if let Some(task) = crate::task::registry::get_registry::<R>().get_mut(id) {
-                task.priority = priority;
-                task.base_priority = priority; // Update base priority for anti-starvation
-            } else {
-                return;
-            }
+    fn set_priority_hot_cache(&mut self, id: TaskId, priority: TaskPriority) -> bool {
+        if self.state.get_task(id).is_none() {
+            return false;
+        }
 
-            // Keep the scheduler-side priority cache in sync.
-            let mut requeue_cpu = None;
-            if let Some(task) = self.state.get_task_mut(id) {
-                task.priority = priority;
-                if task.state == TaskState::Runnable {
-                    requeue_cpu = task.runq_location.map(|(cpu, _)| cpu);
-                }
-            }
-
-            // If it's runnable and in a runq, move it to the new runq
-            if let Some(cpu) = requeue_cpu {
-                self.state.remove_task_from_runq(id);
-                self.state.enqueue_task(cpu, priority as usize, id);
+        let mut requeue_cpu = None;
+        if let Some(task) = self.state.get_task_mut(id) {
+            task.priority = priority;
+            if task.state == TaskState::Runnable {
+                requeue_cpu = task.runq_location.map(|(cpu, _)| cpu);
             }
         }
+
+        if let Some(cpu) = requeue_cpu {
+            self.state.remove_task_from_runq(id);
+            self.state.enqueue_task(cpu, priority as usize, id);
+        }
+        true
+    }
+
+    pub fn set_priority(&mut self, id: TaskId, priority: TaskPriority) {
+        let _ = self.set_priority_hot_cache(id, priority);
     }
 
     /// Mark a secondary CPU as online and initialize its idle task.
@@ -2336,10 +2337,22 @@ pub fn end_bringup<R: BootRuntime>() {
 pub fn set_priority<R: BootRuntime>(id: TaskId, priority: TaskPriority) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
-    let lock = SCHEDULER.lock();
-    if let Some(ptr) = *lock {
-        let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        sched.set_priority(id, priority);
+    let updated = {
+        let lock = SCHEDULER.lock();
+        let updated = if let Some(ptr) = *lock {
+            let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+            sched.set_priority_hot_cache(id, priority)
+        } else {
+            false
+        };
+        updated
+    };
+    if updated {
+        debug_assert_scheduler_not_held_by_this_cpu::<R>("set_priority registry sync");
+        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(id) {
+            task.priority = priority;
+            task.base_priority = priority;
+        }
     }
     rt.irq_restore(_irq);
 }
@@ -2792,21 +2805,28 @@ pub fn exit<R: BootRuntime>(code: i32) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    let (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs) = {
+    let (switch_decision, waiters, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = SCHEDULER.lock();
         set_sched_lock_tracking::<R>(rt.current_cpu_index());
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        let (switch, waiters) = sched.terminate_current(code);
+        let (switch_decision, waiters) = sched.terminate_current(code);
         let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
         clear_sched_lock_tracking::<R>();
-        (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs)
+        (
+            switch_decision,
+            waiters,
+            deferred_prepare_ipis,
+            deferred_registry_syncs,
+        )
     };
 
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
     apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     wake_waiters(&waiters);
+    let switch = resolve_switch_params::<R>(switch_decision)
+        .expect("terminate_current produced switch for missing registry tasks");
 
     unsafe {
         rt.tasking().activate_address_space(switch.to_aspace);
@@ -3727,7 +3747,8 @@ mod tests {
         assert_eq!(sched.state.get_task(42).unwrap().priority, TaskPriority::High);
         assert_eq!(
             crate::task::registry::get_registry::<MockRuntime>().threads[0].priority,
-            TaskPriority::High
+            TaskPriority::Low,
+            "scheduler-only set_priority keeps REGISTRY sync out of the hot path"
         );
         assert!(sched.state.per_cpu[0].runq[TaskPriority::Low as usize].is_empty());
         assert_eq!(

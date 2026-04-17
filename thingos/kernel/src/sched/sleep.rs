@@ -18,7 +18,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
 
     let cpu_idx = super::current_cpu_index::<R>();
 
-    let (switch_params, has_work, deferred_prepare_ipis, deferred_registry_syncs) = {
+    let (switch_decision, has_work, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(cpu_idx);
@@ -49,7 +49,11 @@ pub fn yield_now<R: BootRuntime>() -> bool {
     super::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     super::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
-    if let Some(switch) = switch_params {
+    if let Some(decision) = switch_decision {
+        let Some(switch) = super::resolve_switch_params::<R>(decision) else {
+            rt.irq_restore(_irq);
+            return has_work;
+        };
         rt.tasking().activate_address_space(switch.to_aspace);
 
         unsafe {
@@ -81,10 +85,10 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    // Both switch_params and the deferred REGISTRY state update are returned
+    // Both switch_decision and the deferred REGISTRY state update are returned
     // from the SCHEDULER lock scope so that REGISTRY is written outside the
     // lock, avoiding the nested SCHEDULER → REGISTRY lock ordering.
-    let (switch_params, deferred_state, deferred_prepare_ipis, deferred_registry_syncs) = {
+    let (switch_decision, deferred_state, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(super::current_cpu_index::<R>());
@@ -178,7 +182,11 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
         task.state = deferred_task_state;
     }
 
-    if let Some(switch) = switch_params {
+    if let Some(decision) = switch_decision {
+        let Some(switch) = super::resolve_switch_params::<R>(decision) else {
+            rt.irq_restore(_irq);
+            return;
+        };
         rt.tasking().activate_address_space(switch.to_aspace);
 
         unsafe {
