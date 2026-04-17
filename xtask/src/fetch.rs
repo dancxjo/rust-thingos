@@ -17,6 +17,7 @@ pub fn fetch() -> Result<()> {
         fs::create_dir_all(&vendor)?;
     }
 
+    fetch_vendor_repos(&vendor)?;
     fetch_limine(&vendor)?;
     fetch_ovmf(&vendor)?;
     fetch_fonts(&assets)?;
@@ -27,6 +28,40 @@ pub fn fetch() -> Result<()> {
     #[cfg(feature = "svg-cursors")]
     fetch_future_cursors(&assets)?;
     fetch_pciids(&assets)?;
+
+    Ok(())
+}
+
+fn fetch_vendor_repos(vendor: &Path) -> Result<()> {
+    println!("==> Fetching vendor repositories...");
+    require_tool("git")?;
+
+    ensure_vendor_repo(vendor, "lsv", "https://github.com/SecretDeveloper/lsv")?;
+    ensure_vendor_repo(vendor, "runa", "https://github.com/alexm-dev/runa")?;
+
+    Ok(())
+}
+
+fn ensure_vendor_repo(vendor: &Path, name: &str, url: &str) -> Result<()> {
+    let repo_dir = vendor.join(name);
+    if repo_dir.join(".git").exists() {
+        println!("    vendor/{name} already exists, skipping clone.");
+        return Ok(());
+    }
+
+    if repo_dir.exists() {
+        fs::remove_dir_all(&repo_dir)
+            .with_context(|| format!("Failed to clean existing directory {:?}", repo_dir))?;
+    }
+
+    println!("    Cloning {name}...");
+    run_cmd(
+        Command::new("git")
+            .arg("clone")
+            .arg("--depth=1")
+            .arg(url)
+            .arg(&repo_dir),
+    )?;
 
     Ok(())
 }
