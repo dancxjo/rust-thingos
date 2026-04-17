@@ -1207,6 +1207,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let to_take = core::cmp::min(wake_budget, tids.len());
 
                 for tid in tids.drain(..to_take) {
+                    // This task left the sleep queue (woken or dropped if task
+                    // record vanished), so clear direct membership now.
                     self.state.sleep_membership.remove(&tid);
                     // Read scheduling fields from the hot-field cache only.
                     // REGISTRY is not accessed in this inner loop.
@@ -1228,6 +1230,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 wake_budget = wake_budget.saturating_sub(to_take);
                 if !tids.is_empty() {
                     self.state.sleep_queue.insert(wake_tick, tids);
+                    // Remaining tids stayed in this bucket after budget limiting;
+                    // refresh their direct membership indices in one pass.
                     self.state.refresh_sleep_bucket_membership(wake_tick);
                     break;
                 }
@@ -4711,7 +4715,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unregister_timeout_wake_removes_task_from_tracked_bucket() {
+    fn test_unregister_timeout_wake_removes_task_and_updates_membership() {
         let _g = init_test_env();
 
         let mut sched = types::Scheduler::<MockRuntime>::new();

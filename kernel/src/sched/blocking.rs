@@ -226,7 +226,8 @@ pub fn wake_task_locked<R: BootRuntime>(
             sched.state.wait_queue.remove(pos);
         }
 
-        sched.state.remove_task_from_sleep_queue(id);
+        // Best-effort cleanup: the target may be blocked on non-timeout paths.
+        let _ = sched.state.remove_task_from_sleep_queue(id);
 
         if safe_cpu >= sched.state.per_cpu.len() {
             safe_cpu = 0;

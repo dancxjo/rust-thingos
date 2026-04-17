@@ -277,7 +277,8 @@ impl SchedState {
     }
 
     pub fn remove_thread(&mut self, tid: ThreadId) -> bool {
-        self.sleep_membership.remove(&tid);
+        // Best-effort cleanup: thread may not be sleeping.
+        let _ = self.remove_task_from_sleep_queue(tid);
         if let Ok(idx) = self.threads.binary_search_by_key(&tid, |t| t.tid) {
             self.threads.remove(idx);
             true
@@ -287,6 +288,9 @@ impl SchedState {
     }
 
     pub fn refresh_sleep_bucket_membership(&mut self, wake_tick: u64) {
+        // Callers must clear membership for tids removed from this bucket before
+        // invoking refresh. This helper only rebuilds indices for tids that are
+        // still present in `sleep_queue[wake_tick]`.
         let Some(bucket) = self.sleep_queue.get(&wake_tick) else {
             return;
         };
@@ -302,18 +306,6 @@ impl SchedState {
     }
 
     pub fn add_task_to_sleep_queue(&mut self, tid: ThreadId, wake_tick: u64) {
-        if let Some(membership) = self.sleep_membership.get(&tid).copied() {
-            if membership.wake_tick == wake_tick
-                && self
-                    .sleep_queue
-                    .get(&wake_tick)
-                    .and_then(|bucket| bucket.get(membership.bucket_index))
-                    == Some(&tid)
-            {
-                return;
-            }
-        }
-
         self.remove_task_from_sleep_queue(tid);
 
         let idx = {
@@ -343,6 +335,9 @@ impl SchedState {
             let remove_idx = if bucket.get(membership.bucket_index) == Some(&tid) {
                 Some(membership.bucket_index)
             } else {
+                // Metadata can become stale when tests or transitional code
+                // manipulate buckets directly; constrain fallback to this bucket
+                // (never a global map scan).
                 bucket.iter().position(|&id| id == tid)
             };
 
@@ -360,6 +355,8 @@ impl SchedState {
             self.sleep_queue.remove(&membership.wake_tick);
         }
 
+        self.sleep_membership.remove(&tid);
+
         if let Some((moved_tid, moved_idx)) = moved {
             self.sleep_membership.insert(
                 moved_tid,
@@ -369,8 +366,6 @@ impl SchedState {
                 },
             );
         }
-
-        self.sleep_membership.remove(&tid);
         removed
     }
 
@@ -524,8 +519,8 @@ mod tests {
         state.add_task_to_sleep_queue(31, 12);
 
         assert!(
-            state.sleep_queue.get(&11).map(|v| v.is_empty()).unwrap_or(true),
-            "old bucket should be empty after moving sleep membership"
+            state.sleep_queue.get(&11).map_or(true, |v| v.is_empty()),
+            "old bucket should be absent or empty after moving sleep membership"
         );
         assert_eq!(state.sleep_queue.get(&12).cloned(), Some(alloc::vec![31]));
         assert_eq!(
