@@ -595,8 +595,60 @@ pub(crate) fn record_sched_lock_wait<R: BootRuntime>(
 /// was already set, then unconditionally set it.  Returns `true` if the flag
 /// was already set (i.e. the request was coalesced).
 #[inline]
+fn global_need_resched_slot(cpu: usize) -> Option<&'static AtomicBool> {
+    GLOBAL_NEED_RESCHED.get(cpu)
+}
+
+#[inline]
+fn global_need_resched_bool_with_fallback(
+    cpu: usize,
+    op: &'static str,
+    f: impl FnOnce(&AtomicBool) -> bool,
+) -> bool {
+    if let Some(slot) = global_need_resched_slot(cpu) {
+        f(slot)
+    } else {
+        crate::kerror!(
+            "Sched: GLOBAL_NEED_RESCHED {} ignored for invalid CPU {} (MAX={})",
+            op,
+            cpu,
+            types::MAX_CPUS
+        );
+        // Conservative fallback: assume reschedule is already/still needed.
+        true
+    }
+}
+
+#[inline]
+fn global_need_resched_load(cpu: usize, ordering: Ordering) -> bool {
+    global_need_resched_bool_with_fallback(cpu, "load", |slot| slot.load(ordering))
+}
+
+#[inline]
+fn global_need_resched_swap(cpu: usize, value: bool, ordering: Ordering) -> bool {
+    global_need_resched_bool_with_fallback(
+        cpu,
+        if value { "swap(true)" } else { "swap(false)" },
+        |slot| slot.swap(value, ordering),
+    )
+}
+
+#[inline]
+fn clear_global_need_resched(cpu: usize, ordering: Ordering) {
+    if let Some(slot) = global_need_resched_slot(cpu) {
+        slot.store(false, ordering);
+    } else {
+        crate::kerror!(
+            "Sched: GLOBAL_NEED_RESCHED store(false) ignored for invalid CPU {} (MAX={})",
+            cpu,
+            types::MAX_CPUS
+        );
+    }
+}
+
+#[inline]
 pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
-    let was_set = GLOBAL_NEED_RESCHED[cpu].swap(true, Ordering::Release);
+    let was_set = global_need_resched_swap(cpu, true, Ordering::Release);
     if was_set {
         PROF_RESCHED_COALESCED.fetch_add(1, Ordering::Relaxed);
     }
@@ -952,7 +1004,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             // schedule_point() clears these flags.
             let resched_requested =
                 sched.state.per_cpu.get(cpu_idx).map_or(false, |pc| pc.need_resched)
-                    || GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire);
+                    || global_need_resched_load(cpu_idx, Ordering::Acquire);
             let switch = sched.schedule_point(ScheduleReason::ReschedIfNeeded);
             // Drain IPIs deferred by wake_sleepers while the SCHEDULER lock is
             // still held, so we can send them after releasing the lock.
@@ -1049,7 +1101,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
     } else {
         PROF_RESCHED_TRYLOCK_MISS.fetch_add(1, Ordering::Relaxed);
         PROF_TRYLOCK_MISS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
-        if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
+        if global_need_resched_load(cpu_idx, Ordering::Acquire) {
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
         }
         // Warn only when misses cross threshold in a 2-second per-CPU window.
@@ -1473,7 +1525,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         reason: ScheduleReason,
     ) -> Option<SwitchDecision> {
         let cpu_idx = current_cpu_index::<R>();
-        let global_requested = GLOBAL_NEED_RESCHED[cpu_idx].swap(false, Ordering::Acquire);
+        let global_requested = global_need_resched_swap(cpu_idx, false, Ordering::Acquire);
 
         if self.state.per_cpu[cpu_idx].preempt_disable_depth > 0 {
             if global_requested {
@@ -1875,7 +1927,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // constitutes evaluation of current runnable state; even if we decide
         // to stay on the same task, the "need" has been satisfied for now.
         // This prevents the busy-yield loop in the idle task and safe-points.
-        GLOBAL_NEED_RESCHED[cpu_idx].store(false, Ordering::Release);
+        clear_global_need_resched(cpu_idx, Ordering::Release);
         self.state.per_cpu[cpu_idx].need_resched = false;
 
         // Sample run-queue depth for this CPU before we start dequeuing.
@@ -3498,7 +3550,7 @@ extern "C" fn idle_task<R: BootRuntime>(_: usize) -> ! {
     let rt = crate::runtime::<R>();
     let cpu_idx = rt.current_cpu_index();
     loop {
-        if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
+        if global_need_resched_load(cpu_idx, Ordering::Acquire) {
             // Use yield_now to trigger a blocking lock acquisition for the
             // scheduler if a reschedule is pending.
             yield_now::<R>();
@@ -7135,7 +7187,7 @@ mod tests {
         let before_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
         let before_pending =
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
-        GLOBAL_NEED_RESCHED[0].store(true, core::sync::atomic::Ordering::Release);
+        let _ = global_need_resched_swap(0, true, core::sync::atomic::Ordering::Release);
 
         // Must run while SCHEDULER lock is held so try_lock path fails.
         try_resched_if_needed::<MockRuntime>();
@@ -7155,5 +7207,27 @@ mod tests {
         drop(lock);
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
+    }
+
+    #[test]
+    fn test_set_global_need_resched_invalid_cpu_returns_conservative_fallback() {
+        let _g = init_test_env();
+        let invalid_cpu = types::MAX_CPUS;
+
+        assert!(
+            set_global_need_resched(invalid_cpu),
+            "invalid cpu should conservatively report an already-pending resched"
+        );
+    }
+
+    #[test]
+    fn test_global_need_resched_load_invalid_cpu_returns_conservative_fallback() {
+        let _g = init_test_env();
+        let invalid_cpu = types::MAX_CPUS;
+
+        assert!(
+            global_need_resched_load(invalid_cpu, core::sync::atomic::Ordering::Acquire),
+            "invalid cpu should conservatively report pending resched"
+        );
     }
 }
