@@ -4808,7 +4808,6 @@ name = "pistil"
 version = "0.1.0"
 dependencies = [
  "abi",
- "bitflags 2.11.1",
  "fontdue",
  "libm",
  "serde",

@@ -1,7 +1,3 @@
-#![no_std]
-use alloc::string::ToString;
-use core::default::Default;
-extern crate alloc;
 use crate::Canvas;
 use abi::syscall::vfs_flags::O_RDONLY;
 use alloc::vec;

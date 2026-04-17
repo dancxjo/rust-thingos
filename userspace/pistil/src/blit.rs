@@ -1,7 +1,3 @@
-#![no_std]
-use alloc::string::ToString;
-use core::default::Default;
-extern crate alloc;
 use crate::geometry::Rect;
 use stem::simd;
 

@@ -81,8 +81,8 @@ impl Texture {
 impl Drop for Texture {
     fn drop(&mut self) {
         let _ = vm_unmap(self.ptr as usize, self.size);
-        // Note: FD leaking might be an issue if we don't close it,
-        // but pistil doesn't own the lifecycle of the FD in all cases.
+        // FD close is intentionally omitted to preserve existing texture/buffer
+        // ownership behavior across call sites that export/import this handle.
     }
 }
 
