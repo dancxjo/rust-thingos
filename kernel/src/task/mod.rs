@@ -852,6 +852,7 @@ pub fn preempt_enable<R: BootRuntime>() {
 
     let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
+        crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.preempt_enable();
@@ -863,6 +864,7 @@ pub fn preempt_enable<R: BootRuntime>() {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         }
     };
+    crate::sched::clear_sched_lock_tracking();
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
@@ -906,6 +908,7 @@ pub fn resched_if_needed<R: BootRuntime>() {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         }
     };
+    crate::sched::clear_sched_lock_tracking();
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 

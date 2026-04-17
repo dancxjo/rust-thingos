@@ -21,6 +21,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
     let (switch_params, has_work, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(cpu_idx);
         super::record_sched_lock_wait::<R>(
             &super::PROF_SCHED_WAIT_YIELD_NOW_CALLS,
             &super::PROF_SCHED_WAIT_YIELD_NOW_US_TOTAL,
@@ -42,6 +43,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             &super::PROF_SCHED_LOCK_YIELD_NOW_HOLD_HIST,
             lock_start,
         );
+        super::clear_sched_lock_tracking();
         (sp, work, deferred_prepare_ipis, deferred_registry_syncs)
     };
     super::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
@@ -85,6 +87,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
     let (switch_params, deferred_state, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(super::current_cpu_index::<R>());
         super::record_sched_lock_wait::<R>(
             &super::PROF_SCHED_WAIT_SLEEP_TICKS_CALLS,
             &super::PROF_SCHED_WAIT_SLEEP_TICKS_US_TOTAL,
@@ -157,6 +160,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_HOLD_HIST,
             lock_start,
         );
+        super::clear_sched_lock_tracking();
         (
             switch,
             (current_id, final_state),

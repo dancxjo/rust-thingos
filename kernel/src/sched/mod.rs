@@ -1184,6 +1184,7 @@ fn set_any_wake_policy_for_tests_with_streak(policy: &str, overload_gap: usize, 
 pub fn init<R: BootRuntime>() {
     crate::kdebug!("  Acquiring scheduler lock...");
     let mut lock = SCHEDULER.lock();
+    set_sched_lock_tracking::<R>(0); // Init runs on boot CPU (0)
     crate::kdebug!("  Lock acquired, checking if initialized...");
     if lock.is_none() {
         crate::kdebug!("  Allocating scheduler...");
@@ -1255,6 +1256,7 @@ pub fn init<R: BootRuntime>() {
         };
         crate::contract!("Scheduler initialized");
     }
+    clear_sched_lock_tracking();
 }
 
 fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
@@ -2776,11 +2778,13 @@ pub fn exit<R: BootRuntime>(code: i32) {
 
     let (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = SCHEDULER.lock();
+        set_sched_lock_tracking::<R>(rt.current_cpu_index());
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         let (switch, waiters) = sched.terminate_current(code);
         let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
+        clear_sched_lock_tracking();
         (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs)
     };
 
@@ -3242,6 +3246,7 @@ pub fn dump_stats<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
     let lock = SCHEDULER.lock();
+    set_sched_lock_tracking::<R>(rt.current_cpu_index());
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
 

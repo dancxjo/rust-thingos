@@ -96,12 +96,14 @@ pub unsafe fn translate_user_page<R: BootRuntime>(addr: u64) -> Option<u64> {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
     let lock = SCHEDULER.lock();
+    super::set_sched_lock_tracking::<R>(rt.current_cpu_index());
     let res = if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
         let cpu = super::current_cpu_index::<R>();
         let current_id = match sched.state.per_cpu.get(cpu).and_then(|pc| pc.current) {
             Some(id) => id,
             None => {
+                super::clear_sched_lock_tracking();
                 rt.irq_restore(_irq);
                 return None;
             }

@@ -472,14 +472,14 @@ pub fn spawn<R: BootRuntime>(
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
-    let lock = SCHEDULER.lock();
+    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
     super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
     let id = sched.spawn(entry, arg, priority, affinity);
     // Capture before releasing the lock so nudge is coherent with placement.
     let in_bringup = sched.bringup_in_progress;
-    drop(lock);
+    super::clear_sched_lock_tracking(); drop(lock);
     // Skip remote wakeup IPIs during early-boot bringup.  Tasks placed on the
     // local CPU will be picked up naturally by the scheduler loop; deferred
     // tasks on remote CPUs will be woken when end_bringup() is called.
@@ -521,7 +521,7 @@ pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
-    let lock = SCHEDULER.lock();
+    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
     super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
@@ -536,7 +536,7 @@ pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
         detached,
     );
     let in_bringup = sched.bringup_in_progress;
-    drop(lock);
+    super::clear_sched_lock_tracking(); drop(lock);
     if !in_bringup {
         nudge_spawned_task::<R>(current_cpu, id);
     }
@@ -554,7 +554,7 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
-    let lock = SCHEDULER.lock();
+    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
     super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
@@ -567,7 +567,7 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
         crate::task::Affinity::Any,
     );
     let in_bringup = sched.bringup_in_progress;
-    drop(lock);
+    super::clear_sched_lock_tracking(); drop(lock);
     if let Some(id) = id {
         if !in_bringup {
             nudge_spawned_task::<R>(current_cpu, id);
@@ -660,7 +660,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         crate::task::Affinity::Any
     };
 
-    let lock = SCHEDULER.lock();
+    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
 
@@ -709,7 +709,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     }
     crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
-    drop(lock);
+    super::clear_sched_lock_tracking(); drop(lock);
     if !in_bringup {
         nudge_spawned_task::<R>(current_cpu, id);
     }
@@ -946,7 +946,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
 
     let _irq = rt.irq_disable();
 
-    let lock = SCHEDULER.lock();
+    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
 
@@ -1125,7 +1125,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     }
     crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
-    drop(lock);
+    super::clear_sched_lock_tracking(); drop(lock);
     if !in_bringup {
         nudge_spawned_task::<R>(current_cpu, id);
     }
@@ -1266,7 +1266,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // Step 4: Create the scheduler task for the new process's initial thread.
     let _irq = rt.irq_disable();
 
-    let lock = SCHEDULER.lock();
+    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
 
@@ -1422,7 +1422,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // `inherited_handles` is reserved for future fd-inheritance; not yet wired.
     let _ = inherited_handles;
 
-    drop(lock);
+    super::clear_sched_lock_tracking(); drop(lock);
     nudge_spawned_task::<R>(current_cpu, id);
     rt.irq_restore(_irq);
 
