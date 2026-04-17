@@ -162,10 +162,31 @@ impl BootFbDriver {
 
 fn find_framebuffer() -> Option<Framebuffer> {
     use abi::display_driver_protocol::FbInfoPayload;
+    use abi::errors::Errno;
     use abi::syscall::vfs_flags::O_RDONLY;
 
     info!("display_bootfb: probing /dev/fb0...");
-    let fd = vfs_open("/dev/fb0", O_RDONLY).ok()?;
+    let fd = match vfs_open("/dev/fb0", O_RDONLY) {
+        Ok(fd) => fd,
+        Err(Errno::EACCES) => {
+            stem::warn!(
+                "[BOOTFB] display_bootfb: EACCES opening /dev/fb0 — \
+                 driver process does not have read permission for the boot framebuffer device"
+            );
+            return None;
+        }
+        Err(Errno::ENOENT) => {
+            stem::warn!(
+                "[BOOTFB] display_bootfb: /dev/fb0 not found — \
+                 boot framebuffer not registered in VFS"
+            );
+            return None;
+        }
+        Err(e) => {
+            stem::warn!("[BOOTFB] display_bootfb: failed to open /dev/fb0: {:?}", e);
+            return None;
+        }
+    };
 
     let mut payload = FbInfoPayload {
         device_thing: 0,
@@ -181,8 +202,19 @@ fn find_framebuffer() -> Option<Framebuffer> {
         core::slice::from_raw_parts_mut(&mut payload as *mut _ as *mut u8, FB_INFO_PAYLOAD_SIZE)
     };
 
-    let n = vfs_read(fd, slice).ok()?;
+    let n = match vfs_read(fd, slice) {
+        Ok(n) => n,
+        Err(e) => {
+            stem::warn!("[BOOTFB] display_bootfb: failed to read /dev/fb0 info: {:?}", e);
+            let _ = vfs_close(fd);
+            return None;
+        }
+    };
     if n < FB_INFO_PAYLOAD_SIZE {
+        stem::warn!(
+            "[BOOTFB] display_bootfb: /dev/fb0 info read too short: got {} bytes, need {}",
+            n, FB_INFO_PAYLOAD_SIZE
+        );
         let _ = vfs_close(fd);
         return None;
     }

@@ -704,6 +704,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         // Zero means no PT_TLS segment was found; FS_BASE starts at its default state.
         task.user_fs_base = aux_info.tls_tp;
     }
+    crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
     drop(lock);
     if !in_bringup {
@@ -1119,6 +1120,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         // Apply initial TLS base (FS_BASE on x86_64) for the new process's main thread.
         task.user_fs_base = aux_info.tls_tp;
     }
+    crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
     drop(lock);
     if !in_bringup {

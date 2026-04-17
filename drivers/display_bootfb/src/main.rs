@@ -51,7 +51,9 @@ unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> St
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
-    stem::info!("display_bootfb: Starting VFS-native bootfb driver (v0.4.1)...");
+    let self_tid = stem::syscall::get_tid().unwrap_or(0);
+    let self_pid = stem::syscall::getpid();
+    stem::info!("display_bootfb: Starting VFS-native bootfb driver (v0.4.1) TID={} PID={}", self_tid, self_pid);
     stem::info!("display_bootfb: boot_arg={}", boot_fd);
 
     // 1. Map bootstrap memfd to get handles
@@ -134,17 +136,13 @@ fn main(boot_fd: usize) -> ! {
         }
     } else {
         stem::info!("display_bootfb: ERROR: No bootstrap memfd arg provided (boot_arg is 0)");
-        loop {
-            stem::yield_now();
-        }
+        stem::syscall::exit(1);
     }
 
     if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {
         stem::debug!("display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
             drv_req_read, drv_resp_write, supervisor_port, bind_instance_id);
-        loop {
-            stem::yield_now();
-        }
+        stem::syscall::exit(1);
     }
 
     let mut driver = match BootFbDriver::new() {
@@ -161,9 +159,7 @@ fn main(boot_fd: usize) -> ! {
         }
         None => {
             stem::error!("display_bootfb: ERROR: Failed to acquire hardware framebuffer (find_framebuffer returned None)");
-            loop {
-                stem::yield_now();
-            }
+            stem::syscall::exit(1);
         }
     };
 
@@ -175,9 +171,7 @@ fn main(boot_fd: usize) -> ! {
                 "display_bootfb: ERROR: Failed to create provider port: {:?}",
                 e
             );
-            loop {
-                stem::yield_now();
-            }
+            stem::syscall::exit(1);
         }
     };
 
@@ -246,10 +240,8 @@ fn main(boot_fd: usize) -> ! {
                             let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
                             let reason =
                                 core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
-                            warn!("display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Halting.", failed.error_code, reason);
-                            loop {
-                                stem::syscall::yield_now();
-                            }
+                            warn!("display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Exiting.", failed.error_code, reason);
+                            stem::syscall::exit(1);
                         }
                     }
                 }
@@ -300,8 +292,6 @@ fn main(boot_fd: usize) -> ! {
         lp.send_response(req.resp_port, resp).ok();
     }
 
-    info!("display_bootfb: VFS provider channel closed — halting");
-    loop {
-        stem::syscall::yield_now();
-    }
+    info!("display_bootfb: VFS provider channel closed — exiting");
+    stem::syscall::exit(0);
 }

@@ -88,6 +88,13 @@ pub struct ThreadSchedFields {
     /// that the hot `wake_pending` check no longer re-enters the REGISTRY lock
     /// while the SCHEDULER lock is held.
     pub wake_pending: bool,
+    /// Count of voluntary yields this task has performed via `prepare_yield`.
+    ///
+    /// Incremented by the scheduler each time `CooperativeYield` causes this
+    /// task to be pushed back onto the run queue.  Useful for diagnosing
+    /// spin-yield anti-patterns (e.g. a task that never truly blocks will show
+    /// a rapidly-growing counter here).
+    pub voluntary_yields: u64,
 }
 /// Backward-compatible alias — prefer `ThreadSchedFields` in new code.
 pub type TaskSchedFields = ThreadSchedFields;
@@ -447,6 +454,7 @@ mod tests {
             timeslice_remaining: 0,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         }
     }
 
