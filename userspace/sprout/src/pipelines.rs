@@ -268,8 +268,12 @@ pub fn setup_display_pipeline(
     shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
     supervisor_port: stem::syscall::ChannelThing,
     bind_instance_id: u64,
+    force_bootfb: bool,
 ) -> Option<DisplayHandles> {
-    debug!("SPROUT: setup_display_pipeline start (bind_id={})", bind_instance_id);
+    debug!(
+        "SPROUT: setup_display_pipeline start (bind_id={}, force_bootfb={})",
+        bind_instance_id, force_bootfb
+    );
 
     let mut display_width = 0u32;
     let mut display_height = 0u32;
@@ -278,43 +282,67 @@ pub fn setup_display_pipeline(
     let mut driver_name: Option<&'static str> = None;
     let mut backend_name: &'static str = "unknown";
 
-    // virtio-gpu: class 0x030000, vendor 0x1af4
-    if let Some(gpu_path) = find_sys_device_with_vendor("0x0300", "0x1af4") {
+    if force_bootfb {
         if let Some((w, h, stride, format)) = probe_bootfb_vfs() {
             display_width = w;
             display_height = h;
             display_stride = stride;
             display_format = format;
-        } else {
-            // Keep the pipeline alive even if firmware framebuffer metadata is unavailable.
-            display_width = 1024;
-            display_height = 768;
-            display_stride = 1024 * 4;
-            display_format = 1;
-            warn!(
-                "SPROUT: VirtIO GPU detected at {} but /dev/fb0 info unavailable; using {}x{} defaults",
-                gpu_path, display_width, display_height
+            driver_name = Some("/drivers/display_bootfb");
+            backend_name = "BootFB (Forced)";
+            debug!(
+                "SPROUT: FORCED BootFB via command line ({}x{} stride={})",
+                display_width, display_height, display_stride
             );
         }
-        driver_name = Some("/drivers/display_virtio_gpu");
-        backend_name = "VirtIO-GPU";
-        debug!(
-            "SPROUT: Using VirtIO GPU at {} ({}x{} stride={})",
-            gpu_path, display_width, display_height, display_stride
-        );
     }
+
+    // virtio-gpu: class 0x030000, vendor 0x1af4
+    if driver_name.is_none() {
+        let gpu_found = find_sys_device_with_vendor("0x0300", "0x1af4");
+        info!("SPROUT: GPU discovery (0x0300/0x1af4): {:?}", gpu_found);
+        if let Some(gpu_path) = gpu_found {
+            if let Some((w, h, stride, format)) = probe_bootfb_vfs() {
+                display_width = w;
+                display_height = h;
+                display_stride = stride;
+                display_format = format;
+            } else {
+                // Keep the pipeline alive even if firmware framebuffer metadata is unavailable.
+                display_width = 1024;
+                display_height = 768;
+                display_stride = 1024 * 4;
+                display_format = 1;
+                warn!(
+                    "SPROUT: VirtIO GPU detected at {} but /dev/fb0 info unavailable; using {}x{} defaults",
+                    gpu_path, display_width, display_height
+                );
+            }
+            driver_name = Some("/drivers/display_virtio_gpu");
+            backend_name = "VirtIO-GPU";
+            debug!(
+                "SPROUT: Using VirtIO GPU at {} ({}x{} stride={})",
+                gpu_path, display_width, display_height, display_stride
+            );
+        }
+    }
+
     // Fall back to the boot framebuffer only when no real display backend was found.
-    else if let Some((w, h, stride, format)) = probe_bootfb_vfs() {
-        display_width = w;
-        display_height = h;
-        display_stride = stride;
-        display_format = format;
-        driver_name = Some("/drivers/display_bootfb");
-        backend_name = "BootFB";
-        debug!(
-            "SPROUT: Using /dev/fb0 boot framebuffer ({}x{} stride={})",
-            display_width, display_height, display_stride
-        );
+    if driver_name.is_none() {
+        let fb_probe = probe_bootfb_vfs();
+        info!("SPROUT: BootFB probe (/dev/fb0): {:?}", fb_probe);
+        if let Some((w, h, stride, format)) = fb_probe {
+            display_width = w;
+            display_height = h;
+            display_stride = stride;
+            display_format = format;
+            driver_name = Some("/drivers/display_bootfb");
+            backend_name = "BootFB";
+            debug!(
+                "SPROUT: Fallback to /dev/fb0 boot framebuffer ({}x{} stride={})",
+                display_width, display_height, display_stride
+            );
+        }
     }
 
     // Fallback to BootFB already handled by probe_bootfb_vfs() at start of function
@@ -420,7 +448,7 @@ pub fn setup_display_pipeline(
 
         if let Ok(resp) = spawn_res {
             let pid = resp.child_tid;
-            debug!("SPROUT: Spawned display driver '{}' (PID={})", driver_name, pid);
+            info!("SPROUT: Spawned display driver '{}' (PID={})", driver_name, pid);
             let _ = stem::thread::set_priority(pid, 3);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {

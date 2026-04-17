@@ -455,6 +455,9 @@ impl<A: ArchRuntime + 'static> BootRuntime for Runtime<A> {
     fn framebuffer(&self) -> Option<FramebufferInfo> {
         self.limine.framebuffer()
     }
+    fn get_kernel_cmdline(&self) -> &'static str {
+        crate::requests::get_kernel_cmdline()
+    }
 
     fn cpu_ids(&self) -> &'static [CpuId] {
         self.arch.cpu_ids()

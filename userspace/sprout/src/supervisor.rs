@@ -32,19 +32,72 @@ use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
 
+pub struct Config {
+    pub force_bootfb: bool,
+}
+
 pub struct Supervisor {
     pub tasks: Arc<Mutex<Vec<ManagedTask>>>,
     pub ledger: Arc<Mutex<DeviceLedger>>,
     pub registry_ptr: usize,
+    pub config: Config,
 }
 
 impl Supervisor {
     pub fn new(registry_ptr: usize) -> Self {
+        let config = Self::parse_cmdline();
         Self {
             tasks: Arc::new(Mutex::new(Vec::new())),
             ledger: Arc::new(Mutex::new(DeviceLedger::new())),
             registry_ptr,
+            config,
         }
+    }
+
+    fn parse_cmdline() -> Config {
+        let mut force_bootfb = false;
+        let mut buf = [0u8; 1024];
+
+        let mut cmdline_str: Option<alloc::string::String> = None;
+
+        // Try standard argv_get first
+        if let Ok(needed) = stem::syscall::argv_get(&mut buf) {
+            let limit = needed.min(buf.len());
+            if limit > 0 {
+                if let Ok(cmdline) = core::str::from_utf8(&buf[..limit]) {
+                    cmdline_str = Some(cmdline.to_string());
+                }
+            }
+        }
+
+        // Fallback to /dev/cmdline if needed
+        if cmdline_str.is_none() {
+            if let Ok(fd) =
+                stem::syscall::vfs::vfs_open("/dev/cmdline", abi::syscall::vfs_flags::O_RDONLY)
+            {
+                if let Ok(n) = stem::syscall::vfs::vfs_read(fd, &mut buf) {
+                    if let Ok(cmdline) = core::str::from_utf8(&buf[..n]) {
+                        cmdline_str = Some(cmdline.to_string());
+                    }
+                }
+                let _ = stem::syscall::vfs::vfs_close(fd);
+            }
+        }
+
+        if let Some(cmdline) = cmdline_str {
+            info!("SPROUT: Parsed command line: '{}'", cmdline);
+            for part in cmdline.split(|c| c == ' ' || c == '\n' || c == '\r') {
+                if part == "display=bootfb" {
+                    force_bootfb = true;
+                    info!("SPROUT: Detected 'display=bootfb' command line argument");
+                }
+            }
+        }
+        
+        info!("SPROUT: FORCING display=bootfb for diagnostic test!");
+        force_bootfb = true;
+
+        Config { force_bootfb }
     }
 
     pub fn run_forever(&mut self) -> ! {
@@ -80,7 +133,12 @@ impl Supervisor {
 
         // Stage 5: Graphics Stack Bring-up
         info!("SPROUT: Bringing up graphics stack...");
-        let display_handles = setup_display_pipeline(self.tasks.clone(), supervisor_write, 0);
+        let display_handles = setup_display_pipeline(
+            self.tasks.clone(),
+            supervisor_write,
+            0,
+            self.config.force_bootfb
+        );
 
         // Stage 6: Wait for Display Driver to register its VFS provider
         self.wait_for_display();

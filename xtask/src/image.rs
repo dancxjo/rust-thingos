@@ -39,7 +39,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         },
         ProgramConfig { name: "bristle", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "rtc_cmos", is_init: true, boot_module: true, features: vec![] },
-        ProgramConfig { name: "ps2_kbd", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "ps2_kbd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "sh", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ls", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ln", is_init: true, boot_module: true, features: vec![] },
@@ -74,7 +74,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "true", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "false", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "input_echo", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "ps2_mouse", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "ps2_mouse", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
             name: "display_bootfb",
             is_init: false,
@@ -98,10 +98,10 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "nslookup", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ahci_disk", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "iso9660d", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "virtio_sound", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "virtio_sound", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "hdaudio", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "pci_stubd", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "chime", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "chime", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "vfs_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "show_args", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
@@ -121,7 +121,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "terminal", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "xargs", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "placed", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "placed", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "bloom", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "clear", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "loglevel", is_init: false, boot_module: true, features: vec![] },
@@ -245,11 +245,26 @@ fn generate_limine_config(
     common_modules.push_str("    module_path: boot():/etc/profile\n");
     common_modules.push_str("    module_path: boot():/etc/motd\n");
 
-    // Standard entry
-    conf.push_str("/ThingOS\n");
+    // Standard entries
+    conf.push_str("/ThingOS (BootFB Fallback)\n");
     conf.push_str("    protocol: limine\n");
     conf.push_str(&format!("    resolution: {res}\n"));
     conf.push_str("    kernel_path: boot():/boot/kernel\n");
+    conf.push_str("    kernel_cmdline: loglevel=info display=bootfb\n");
+    conf.push_str(&common_modules);
+
+    conf.push_str("\n/ThingOS\n");
+    conf.push_str("    protocol: limine\n");
+    conf.push_str(&format!("    resolution: {res}\n"));
+    conf.push_str("    kernel_path: boot():/boot/kernel\n");
+    conf.push_str("    kernel_cmdline: loglevel=info\n");
+    conf.push_str(&common_modules);
+
+    conf.push_str("\n/ThingOS (Debug Mode)\n");
+    conf.push_str("    protocol: limine\n");
+    conf.push_str(&format!("    resolution: {res}\n"));
+    conf.push_str("    kernel_path: boot():/boot/kernel\n");
+    conf.push_str("    kernel_cmdline: loglevel=debug\n");
     conf.push_str(&common_modules);
     conf.push('\n');
 

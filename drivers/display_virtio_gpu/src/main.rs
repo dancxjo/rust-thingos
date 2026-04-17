@@ -240,8 +240,14 @@ fn send_msg(handle: ChannelThing, msg_type: u16, payload: &[u8]) {
 fn find_gpu() -> Option<alloc::string::String> {
     use abi::syscall::vfs_flags::O_RDONLY;
     use stem::syscall::vfs::{vfs_close, vfs_open, vfs_readdir};
-
-    let fd = vfs_open("/sys/devices", O_RDONLY).ok()?;
+    stem::trace!("display_virtio_gpu: Scanning /sys/devices for PCI GPU...");
+    let fd = match vfs_open("/sys/devices", O_RDONLY) {
+        Ok(fd) => fd,
+        Err(e) => {
+            stem::error!("display_virtio_gpu: Failed to open /sys/devices: {:?}", e);
+            return None;
+        }
+    };
     let mut buf = [0u8; 4096];
     let n = vfs_readdir(fd, &mut buf).ok()?;
     let _ = vfs_close(fd);
@@ -331,29 +337,32 @@ fn get_display_dimensions() -> (u32, u32, u32, u32) {
 }
 
 #[stem::main]
-fn main(boot_fd: usize) -> ! {
-    // 1. Map bootstrap memfd
+fn main(boot_arg: usize) -> ! {
+    stem::info!("display_virtio_gpu: starting v0.4.1 (boot_arg={})", boot_arg);
+
+    if boot_arg == 0 {
+        stem::error!("display_virtio_gpu: No boot argument provided! Standard driver entry required.");
+        stem::syscall::exit(1);
+    }
+
+    let mut supervisor_port = 0;
+    let mut bind_instance_id = 0;
     let mut drv_req_read = 0;
     let mut drv_resp_write = 0;
-    let mut supervisor_port = 0;
-    let mut bind_instance_id = 0u64;
 
-    if boot_fd != 0 {
-        use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-        let req = VmMapReq {
-            addr_hint: 0,
-            len: 4096,
-            prot: VmProt::READ | VmProt::USER,
-            flags: VmMapFlags::empty(),
-            backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
-        };
-        if let Ok(resp) = stem::syscall::vm_map(&req) {
+    use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
+    let req = VmMapReq {
+        addr_hint: 0,
+        len: 4096,
+        prot: VmProt::READ | VmProt::USER,
+        flags: VmMapFlags::empty(),
+        backing: VmBacking::File { thing: boot_arg as u32, offset: 0 },
+    };
+
+    stem::info!("display_virtio_gpu: Mapping boot_fd={}...", boot_arg);
+    match stem::syscall::vm_map(&req) {
+        Ok(resp) => {
             let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
-
-            // Layout from sprout/src/pipelines.rs:
-            // slice[0]: drv_req_read
-            // slice[1]: drv_resp_write
-            // slice[2]: supervisor_port
             // slice[3..5]: bind_instance_id (u64)
 
             drv_req_read = slice[0];
@@ -371,11 +380,10 @@ fn main(boot_fd: usize) -> ! {
                 supervisor_port,
                 bind_instance_id
             );
-        } else {
-            stem::info!("DISP: ERROR: Failed to vm_map bootstrap memfd {}", boot_fd);
         }
-    } else {
-        stem::info!("DISP: ERROR: No bootstrap memfd arg provided");
+        Err(e) => {
+            stem::info!("DISP: ERROR: Failed to vm_map bootstrap memfd {}: {:?}", boot_arg, e);
+        }
     }
 
     if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {

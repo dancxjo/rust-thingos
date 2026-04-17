@@ -51,8 +51,8 @@ unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> St
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
-    debug!("display_bootfb: Starting VFS-native bootfb driver...");
-    debug!("display_bootfb: Liveness check: driver is alive.");
+    info!("display_bootfb: Starting VFS-native bootfb driver (v0.4.1)...");
+    debug!("display_bootfb: boot_arg={}", boot_fd);
 
     // 1. Map bootstrap memfd to get handles
     let mut drv_req_read = 0;
@@ -200,14 +200,14 @@ fn main(boot_fd: usize) -> ! {
             supervisor_protocol::MSG_BIND_READY,
             &ready_bytes[..len],
         ) {
-            debug!("display_bootfb: Sending MSG_BIND_READY handshake...");
+            debug!("display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x})...", ready.class_mask);
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let _ = stem::syscall::socket::sendmsg(
+            let res = stem::syscall::socket::sendmsg(
                 drv_resp_write_fd,
                 &buf[..total_len],
                 &[vfs_write],
             );
-            debug!("display_bootfb: Sent MSG_BIND_READY, waiting for MSG_BIND_ASSIGNED...");
+            debug!("display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...", res);
         }
     }
 

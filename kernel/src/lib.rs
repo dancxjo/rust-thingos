@@ -33,6 +33,8 @@ pub mod time;
 pub mod trace;
 pub mod virtio;
 
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use abi::errors::Errno;
 use abi::vm::{VmBackingKind, VmMapFlags, VmProt, VmRegionInfo};
 
@@ -533,6 +535,7 @@ pub trait BootRuntime: BootRuntimeBase + Sized + 'static {
     fn phys_memory_map(&self) -> &'static [PhysRange];
     fn modules(&self) -> &'static [BootModuleDesc];
     fn framebuffer(&self) -> Option<FramebufferInfo>;
+    fn get_kernel_cmdline(&self) -> &'static str;
 
     fn page_size(&self) -> usize {
         4096
@@ -861,6 +864,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     crate::task::init::<R>();
 
     contract!("Initializing VFS...");
+    crate::vfs::devfs::set_cmdline(runtime.get_kernel_cmdline().to_string());
     crate::vfs::init(runtime.modules());
 
     kdebug!("Scanning PCI bus...");

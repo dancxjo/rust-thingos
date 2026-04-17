@@ -44,6 +44,7 @@ use super::{VfsDriver, VfsNode, VfsStat};
 /// can still be overridden if needed.
 static DEVICE_REGISTRY: Mutex<BTreeMap<String, Arc<dyn VfsNode>>> = Mutex::new(BTreeMap::new());
 static BOOT_FB_INFO: Mutex<Option<(crate::FramebufferInfo, u64)>> = Mutex::new(None);
+static KERNEL_CMDLINE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Register a device node under the name `name` in `/dev`.
 ///
@@ -76,6 +77,10 @@ pub fn set_boot_fb(fb: crate::FramebufferInfo, resource_id: u64) {
         resource_id
     );
     *BOOT_FB_INFO.lock() = Some((fb, resource_id));
+}
+
+pub fn set_cmdline(cmdline: String) {
+    *KERNEL_CMDLINE.lock() = Some(cmdline);
 }
 
 // ── DevFs driver ─────────────────────────────────────────────────────────────
@@ -148,6 +153,7 @@ impl VfsDriver for DevFs {
             "random" => Ok(Arc::new(RandomNode)),
             "urandom" => Ok(Arc::new(UrandomNode)),
             "kmsg" => Ok(Arc::new(KmsgNode)),
+            "cmdline" => Ok(Arc::new(CmdlineNode)),
             _ => Err(Errno::ENOENT),
         }
     }
@@ -792,6 +798,46 @@ impl VfsNode for NullNode {
             ino: 2,
             nlink: 1,
             rdev: VfsStat::makedev(1, 3),
+            ..Default::default()
+        })
+    }
+}
+
+// ── CmdlineNode ─────────────────────────────────────────────────────────────
+
+struct CmdlineNode;
+
+impl VfsNode for CmdlineNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let cmdline = KERNEL_CMDLINE.lock();
+        if let Some(cmdline) = cmdline.as_ref() {
+            crate::kdebug!("devfs: cmdline read offset={} len={}", offset, buf.len());
+            let bytes = cmdline.as_bytes();
+            if offset >= bytes.len() as u64 {
+                return Ok(0);
+            }
+            let n = core::cmp::min(buf.len(), bytes.len() - offset as usize);
+            buf[..n].copy_from_slice(&bytes[offset as usize..offset as usize + n]);
+            Ok(n)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EPERM)
+    }
+
+    fn stat(&self) -> SysResult<VfsStat> {
+        let size = KERNEL_CMDLINE.lock().as_ref().map(|s| s.len()).unwrap_or(0);
+        Ok(VfsStat {
+            mode: VfsStat::S_IFCHR | 0o444,
+            size: size as u64,
+            ino: 102, // arbitrary
+            nlink: 1,
+            uid: 0,
+            gid: 0,
+            rdev: VfsStat::makedev(1, 10), // arbitrary major/minor
             ..Default::default()
         })
     }

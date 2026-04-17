@@ -212,6 +212,15 @@ fn reconcile_devices(
             device.device_id,
             device.class_code,
         ) {
+            // SPROUT-DRIVEN ORCHESTRATION: Display drivers are managed explicitly
+            // by sprout via the Sovereign Display Protocol to coordinate boot
+            // graphics. devd must ignore them to avoid duplicate spawns.
+            use abi::driver_interface::DriverClass;
+            if entry.driver_class == DriverClass::Display {
+                debug!("DEVD: ignoring display device at {} (managed by sprout)", device.slot);
+                continue;
+            }
+
             let managed = drivers
                 .entry(device.slot.clone())
                 .or_insert_with(|| {
