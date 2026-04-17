@@ -10,6 +10,7 @@ use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_readdir, vfs_stat, 
 const S_IFDIR: u32 = 0o040000;
 const S_IFMT: u32 = 0o170000;
 const READDIR_BUF_SIZE: usize = 4096;
+const O_RDONLY: u32 = 0;
 
 fn get_args() -> Vec<String> {
     let mut len = 0;
@@ -52,7 +53,7 @@ fn path_join(parent: &str, name: &str) -> String {
 }
 
 fn walk(path: &str, has_error: &mut bool) {
-    let fd = match vfs_open(path, 0) {
+    let fd = match vfs_open(path, O_RDONLY) {
         Ok(fd) => fd,
         Err(e) => {
             write_to_fd(2, &alloc::format!("find: cannot open '{}': {:?}\n", path, e));
@@ -79,7 +80,7 @@ fn walk(path: &str, has_error: &mut bool) {
     }
 
     let mut entries = Vec::new();
-    let mut buf = [0u8; READDIR_BUF_SIZE];
+    let mut buf = alloc::vec![0u8; READDIR_BUF_SIZE];
     loop {
         match vfs_readdir(fd, &mut buf) {
             Ok(0) => break,
