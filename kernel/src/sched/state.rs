@@ -169,6 +169,10 @@ pub struct SchedState {
     pub sleep_queue: BTreeMap<u64, Vec<ThreadId>>,
     pub sleep_membership: BTreeMap<ThreadId, SleepMembership>,
     pub wait_queue: VecDeque<ThreadId>,
+    /// Per-task migration count (incremented when a task runs on a different CPU than its previous run).
+    pub task_migrations: BTreeMap<ThreadId, u64>,
+    /// Tick when a task was most recently made runnable by a wake path.
+    pub wake_enqueued_at_tick: BTreeMap<ThreadId, u64>,
     pub online_cpu_count: usize,
     pub online_cpus: Vec<usize>,
 }
@@ -184,6 +188,8 @@ impl SchedState {
             sleep_queue: BTreeMap::new(),
             sleep_membership: BTreeMap::new(),
             wait_queue: VecDeque::with_capacity(1024),
+            task_migrations: BTreeMap::new(),
+            wake_enqueued_at_tick: BTreeMap::new(),
             online_cpu_count: 1,
             online_cpus: Vec::with_capacity(32),
         }
@@ -253,6 +259,7 @@ impl SchedState {
             });
         self.threads.insert(tid, fields);
         self.thread_slot_by_tid.insert(tid, slot);
+        self.task_migrations.entry(tid).or_insert(0);
     }
 
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
@@ -310,6 +317,8 @@ impl SchedState {
     pub fn remove_thread(&mut self, tid: ThreadId) -> bool {
         // Best-effort cleanup: thread may not be sleeping.
         let _ = self.remove_task_from_sleep_queue(tid);
+        self.wake_enqueued_at_tick.remove(&tid);
+        self.task_migrations.remove(&tid);
         if self.threads.remove(&tid).is_none() {
             return false;
         }
@@ -317,6 +326,17 @@ impl SchedState {
             self.free_thread_slots.push(slot);
         }
         true
+    }
+
+    #[inline]
+    pub fn record_task_migration(&mut self, tid: ThreadId) {
+        let entry = self.task_migrations.entry(tid).or_insert(0);
+        *entry = entry.saturating_add(1);
+    }
+
+    #[inline]
+    pub fn task_migration_count(&self, tid: ThreadId) -> u64 {
+        self.task_migrations.get(&tid).copied().unwrap_or(0)
     }
 
     pub fn refresh_sleep_bucket_membership(&mut self, wake_tick: u64) {

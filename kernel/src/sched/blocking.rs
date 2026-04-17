@@ -204,6 +204,7 @@ pub fn wake_task_locked<R: BootRuntime>(
             sf.state = TaskState::Runnable;
             sf.enqueued_at_tick = tick;
         }
+        sched.state.wake_enqueued_at_tick.insert(id, tick);
 
         // Defer the canonical REGISTRY writes to the caller (outside SCHEDULER lock).
         Some(DeferredWakeUpdate {

@@ -128,6 +128,18 @@ pub static PROF_RUNQ_SAMPLE_TOTAL: [AtomicU64; types::MAX_CPUS] = {
     const ZERO: AtomicU64 = AtomicU64::new(0);
     [ZERO; types::MAX_CPUS]
 };
+pub static PROF_IDLE_TICKS_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+pub static PROF_WAKE_TO_RUN_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static PROF_WAKE_TO_RUN_TICKS_TOTAL: AtomicU64 = AtomicU64::new(0);
+pub static PROF_WAKE_TO_RUN_TICKS_MAX: AtomicU64 = AtomicU64::new(0);
+pub static PROF_RUNQ_DEPTH_VARIANCE_LAST: AtomicU64 = AtomicU64::new(0);
+pub static PROF_RUNQ_DEPTH_VARIANCE_MAX: AtomicU64 = AtomicU64::new(0);
+pub static PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static PROF_RUNQ_DEPTH_VARIANCE_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// Number of histogram buckets used for hold/wait time distributions.
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
@@ -190,6 +202,16 @@ pub struct SchedLockSiteMetrics {
     /// Per-CPU last / max run-queue depths at the most recent sample point.
     pub runq_len_last: [u64; types::MAX_CPUS],
     pub runq_len_max: [u64; types::MAX_CPUS],
+    /// Per-CPU idle ticks observed at timer interrupts.
+    pub idle_ticks_per_cpu: [u64; types::MAX_CPUS],
+    /// Cross-CPU run-queue depth variance (population variance, in depth²).
+    pub runq_depth_variance_last: u64,
+    pub runq_depth_variance_max: u64,
+    pub runq_depth_variance_avg: u64,
+    /// Wake-to-run latency (ticks) aggregated over tasks that were woken from Blocked.
+    pub wake_to_run_count: u64,
+    pub wake_to_run_ticks_total: u64,
+    pub wake_to_run_ticks_max: u64,
     /// Number of `task_status` polls since the last snapshot.
     pub task_status_polls: u64,
     /// Number of Blocked → Runnable transitions since the last snapshot.
@@ -522,6 +544,33 @@ pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cp
             update_max_u64(&PROF_RUNQ_LEN_MAX[cpu], len64);
         }
     }
+    let online = &sched.state.online_cpus;
+    if !online.is_empty() {
+        let mut sum = 0u64;
+        let mut count = 0u64;
+        for &idx in online {
+            if let Some(pc) = sched.state.per_cpu.get(idx) {
+                sum = sum.saturating_add(pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64);
+                count = count.saturating_add(1);
+            }
+        }
+        if count > 0 {
+            let mean = sum / count;
+            let mut variance_sum = 0u64;
+            for &idx in online {
+                if let Some(pc) = sched.state.per_cpu.get(idx) {
+                    let len = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
+                    let diff = len.abs_diff(mean);
+                    variance_sum = variance_sum.saturating_add(diff.saturating_mul(diff));
+                }
+            }
+            let variance = variance_sum / count;
+            PROF_RUNQ_DEPTH_VARIANCE_LAST.store(variance, Ordering::Relaxed);
+            update_max_u64(&PROF_RUNQ_DEPTH_VARIANCE_MAX, variance);
+            PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT.fetch_add(1, Ordering::Relaxed);
+            PROF_RUNQ_DEPTH_VARIANCE_TOTAL.fetch_add(variance, Ordering::Relaxed);
+        }
+    }
     #[cfg(not(feature = "sched_telemetry"))]
     let _ = (sched, cpu);
 }
@@ -530,10 +579,20 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
     // Collect per-CPU run-queue snapshots (non-destructive read for last; swap max)
     let mut runq_len_last = [0u64; types::MAX_CPUS];
     let mut runq_len_max = [0u64; types::MAX_CPUS];
+    let mut idle_ticks_per_cpu = [0u64; types::MAX_CPUS];
     for i in 0..types::MAX_CPUS {
         runq_len_last[i] = PROF_RUNQ_LEN_LAST[i].load(Ordering::Relaxed);
         runq_len_max[i] = PROF_RUNQ_LEN_MAX[i].swap(0, Ordering::Relaxed);
+        idle_ticks_per_cpu[i] = PROF_IDLE_TICKS_PER_CPU[i].swap(0, Ordering::Relaxed);
     }
+    let runq_depth_variance_sample_count =
+        PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT.swap(0, Ordering::Relaxed);
+    let runq_depth_variance_total = PROF_RUNQ_DEPTH_VARIANCE_TOTAL.swap(0, Ordering::Relaxed);
+    let runq_depth_variance_avg = if runq_depth_variance_sample_count == 0 {
+        0
+    } else {
+        runq_depth_variance_total / runq_depth_variance_sample_count
+    };
     SchedLockSiteMetrics {
         block_current: snapshot_sched_lock_metric(
             &PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
@@ -595,6 +654,13 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
         ipi_sent_prepare_schedule: DIAG_IPI_SENT_PREPARE_SCHEDULE.swap(0, Ordering::Relaxed),
         runq_len_last,
         runq_len_max,
+        idle_ticks_per_cpu,
+        runq_depth_variance_last: PROF_RUNQ_DEPTH_VARIANCE_LAST.load(Ordering::Relaxed),
+        runq_depth_variance_max: PROF_RUNQ_DEPTH_VARIANCE_MAX.swap(0, Ordering::Relaxed),
+        runq_depth_variance_avg,
+        wake_to_run_count: PROF_WAKE_TO_RUN_COUNT.swap(0, Ordering::Relaxed),
+        wake_to_run_ticks_total: PROF_WAKE_TO_RUN_TICKS_TOTAL.swap(0, Ordering::Relaxed),
+        wake_to_run_ticks_max: PROF_WAKE_TO_RUN_TICKS_MAX.swap(0, Ordering::Relaxed),
         task_status_polls: PROF_TASK_STATUS_POLLS.swap(0, Ordering::Relaxed),
         runnable_transitions: PROF_RUNNABLE_TRANSITIONS.swap(0, Ordering::Relaxed),
         wake_task_fastpath_already_pending: PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING
@@ -611,6 +677,9 @@ pub fn on_tick<R: BootRuntime>() {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
             if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
                 pc.stats.timer_interrupts = pc.stats.timer_interrupts.saturating_add(1);
+                if cpu_idx < types::MAX_CPUS && pc.current == pc.idle_task {
+                    PROF_IDLE_TICKS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }
@@ -1358,6 +1427,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 sf.enqueued_at_tick = now;
                 sf.wake_cpu = Some(target_cpu);
             }
+            self.state.wake_enqueued_at_tick.insert(tid, now);
 
             let actual_cpu = if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
             self.state.enqueue_task(actual_cpu, priority, tid);
@@ -1782,13 +1852,30 @@ impl<R: BootRuntime> types::Scheduler<R> {
         old_sched.last_cpu = Some(cpu_idx);
         self.pending_registry_syncs.push(old_registry_sync);
 
-        let Some(new_sched) = self.state.get_task_mut(next_id) else {
-            crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
-            panic!("failed to find next_id {} in scheduler state", next_id);
-        };
-        new_sched.state = TaskState::Running;
-        new_sched.last_cpu = Some(cpu_idx);
-        new_sched.run_cpu = Some(cpu_idx);
+        let mut migrated = false;
+        {
+            let Some(new_sched) = self.state.get_task_mut(next_id) else {
+                crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
+                panic!("failed to find next_id {} in scheduler state", next_id);
+            };
+            if let Some(prev_cpu) = new_sched.last_cpu {
+                if prev_cpu != cpu_idx {
+                    migrated = true;
+                }
+            }
+            new_sched.state = TaskState::Running;
+            new_sched.last_cpu = Some(cpu_idx);
+            new_sched.run_cpu = Some(cpu_idx);
+        }
+        if migrated {
+            self.state.record_task_migration(next_id);
+        }
+        if let Some(wake_tick) = self.state.wake_enqueued_at_tick.remove(&next_id) {
+            let wake_to_run = now.saturating_sub(wake_tick);
+            PROF_WAKE_TO_RUN_COUNT.fetch_add(1, Ordering::Relaxed);
+            PROF_WAKE_TO_RUN_TICKS_TOTAL.fetch_add(wake_to_run, Ordering::Relaxed);
+            update_max_u64(&PROF_WAKE_TO_RUN_TICKS_MAX, wake_to_run);
+        }
         if next_id == 6 {
             crate::kdebug!("SCHED[TID6]: → Running (cpu={})", cpu_idx);
         }
@@ -2954,15 +3041,16 @@ pub fn dump_stats<R: BootRuntime>() {
         sched.state.online_cpu_count,
         sched.total_cpu_count
     );
-    // Columns: TID, STATE, PRI, LAST, WAKE, RUN, USER, SLICE, KSTK, AFFIN, NAME.
+    // Columns: TID, STATE, PRI, LAST, WAKE, RUN, MIGS, USER, SLICE, KSTK, AFFIN, NAME.
     crate::kprint!(
-        " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
+        " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
         "TID",
         "STATE",
         "PRI",
         "LAST",
         "WAKE",
         "RUN",
+        "MIGS",
         "USER",
         "SLICE",
         "KSTK",
@@ -2993,6 +3081,7 @@ pub fn dump_stats<R: BootRuntime>() {
         };
         let (cpu_str, wake_cpu_str, run_cpu_str) =
             task_cpu_trace_strings(task.last_cpu, sched.state.get_task(task.id));
+        let migrations = sched.state.task_migration_count(task.id);
         let user_str = if task.is_user { "Y" } else { "N" };
         let aff_str: alloc::string::String = match task.affinity {
             crate::task::Affinity::Any => alloc::string::String::from("Any"),
@@ -3004,13 +3093,14 @@ pub fn dump_stats<R: BootRuntime>() {
             "-"
         };
         crate::kprint!(
-            " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>3}/{:<3}  {:>5}K  {:>6}  {}\n",
+            " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>4}  {:>3}/{:<3}  {:>5}K  {:>6}  {}\n",
             task.id,
             state_str,
             pri_str,
             cpu_str,
             wake_cpu_str,
             run_cpu_str,
+            migrations,
             user_str,
             task.timeslice_remaining,
             types::DEFAULT_TIMESLICE,
@@ -3028,12 +3118,13 @@ pub fn dump_stats<R: BootRuntime>() {
         let sample_total = pc.stats.runq_sample_total;
         let avg_runq = if sample_count == 0 { 0 } else { sample_total / sample_count };
         crate::kprint!(
-            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",
+            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} idle_ticks={} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",
             i,
             pc.current,
             total,
             avg_runq,
             pc.idle_task,
+            PROF_IDLE_TICKS_PER_CPU[i].load(Ordering::Relaxed),
             pc.stats.context_switches,
             pc.stats.idle_to_nonidle,
             pc.stats.timer_interrupts,
@@ -3046,6 +3137,24 @@ pub fn dump_stats<R: BootRuntime>() {
             pc.stats.lock_blocked_dispatch
         );
     }
+    let wake_to_run_count = PROF_WAKE_TO_RUN_COUNT.load(Ordering::Relaxed);
+    let wake_to_run_total = PROF_WAKE_TO_RUN_TICKS_TOTAL.load(Ordering::Relaxed);
+    let wake_to_run_avg = if wake_to_run_count == 0 {
+        0
+    } else {
+        wake_to_run_total / wake_to_run_count
+    };
+    crate::kprint!(
+        "  Wake→run latency: count={} avg_ticks={} max_ticks={}\n",
+        wake_to_run_count,
+        wake_to_run_avg,
+        PROF_WAKE_TO_RUN_TICKS_MAX.load(Ordering::Relaxed)
+    );
+    crate::kprint!(
+        "  Runq depth variance: last={} max={}\n",
+        PROF_RUNQ_DEPTH_VARIANCE_LAST.load(Ordering::Relaxed),
+        PROF_RUNQ_DEPTH_VARIANCE_MAX.load(Ordering::Relaxed)
+    );
 
     crate::kprint!("Sleep queue: {} tasks\n", sched.state.sleep_queue.len());
     crate::kprint!(
