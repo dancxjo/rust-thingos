@@ -19,9 +19,9 @@ def check() -> list[str]:
     errors: list[str] = []
 
     numbers = read("library/std/src/sys/thingos_syscall_numbers.rs")
-    if 'include!("../../../../abi/src/numbers.rs");' not in numbers:
+    if 'include!("../../../../thingos/abi/src/numbers.rs");' not in numbers:
         errors.append(
-            "thingos syscall numbers are no longer sourced from abi/src/numbers.rs"
+            "thingos syscall numbers are no longer sourced from thingos/abi/src/numbers.rs"
         )
 
     for rel in (

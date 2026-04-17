@@ -1,11 +1,6 @@
-//! Generated Kind schema types and identifiers.
+//! Re-exported Kind schema types and identifiers.
 //!
-//! This module is produced by `kindc` and checked in-tree so workspace crates
-//! can consume schema output directly during normal builds.
+//! Canonical `kindc` output now lives in the `stem` package at
+//! `thingos/stem/src/kinds/mod.rs`.
 
-#![allow(missing_docs)]
-
-#[path = "generated/mod.rs"]
-mod generated;
-
-pub use generated::*;
+pub use stem::kinds::*;

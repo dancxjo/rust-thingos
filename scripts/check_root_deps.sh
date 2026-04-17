@@ -14,11 +14,11 @@
 #   1 — one or more violations found
 #
 # To add a permanent exemption, append the file path (relative to
-# kernel/src/) to the ALLOWED array below.
+# thingos/kernel/src/) to the ALLOWED array below.
 
 set -euo pipefail
 
-KERNEL_SRC="kernel/src"
+KERNEL_SRC="thingos/kernel/src"
 
 # Files that are explicitly permitted to use crate::root.
 # Keep this list minimal and well-justified.
@@ -51,7 +51,7 @@ ALLOWED=(
 VIOLATIONS=0
 
 while IFS= read -r -d '' file; do
-    # Compute path relative to kernel/src/
+    # Compute path relative to thingos/kernel/src/
     rel="${file#$KERNEL_SRC/}"
 
     # Check if this file is in the allowed list.
@@ -78,7 +78,7 @@ done < <(find "$KERNEL_SRC" -name '*.rs' -print0)
 
 if [[ $VIOLATIONS -gt 0 ]]; then
     echo "ERROR: $VIOLATIONS file(s) introduce new Root dependencies."
-    echo "See kernel/src/root/mod.rs for the allowed caller list."
+    echo "See thingos/kernel/src/root/mod.rs for the allowed caller list."
     echo "To add a permanent exemption, edit scripts/check_root_deps.sh."
     exit 1
 fi

@@ -45,7 +45,7 @@ cargo run -p kindc -- <INPUT_DIR_OR_FILE> -o <OUTPUT_DIR>
 ### Just Recipes
 
 - `just kindc <args>`: Run the compiler.
-- `just kindc-gen`: Regenerate the canonical system schema Rust output in `thingos/src/kinds/generated`.
+- `just kindc-gen`: Regenerate the canonical system schema Rust output in `thingos/stem/src/kinds`.
 
 ## Pipeline
 

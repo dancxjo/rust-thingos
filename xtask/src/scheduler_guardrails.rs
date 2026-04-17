@@ -63,11 +63,11 @@ fn thread_sched_fields_block(state_rs: &str) -> &str {
 #[test]
 fn scheduler_hot_paths_do_not_read_semantic_process_fields_directly() {
     let hot_scheduler_files = [
-        "kernel/src/sched/blocking.rs",
-        "kernel/src/sched/sleep.rs",
-        "kernel/src/sched/wait_queue.rs",
-        "kernel/src/sched/state.rs",
-        "kernel/src/sched/vm.rs",
+        "thingos/kernel/src/sched/blocking.rs",
+        "thingos/kernel/src/sched/sleep.rs",
+        "thingos/kernel/src/sched/wait_queue.rs",
+        "thingos/kernel/src/sched/state.rs",
+        "thingos/kernel/src/sched/vm.rs",
     ];
     let forbidden = [
         "process_info",
@@ -94,11 +94,11 @@ fn scheduler_hot_paths_do_not_read_semantic_process_fields_directly() {
 #[test]
 fn scheduler_hot_paths_do_not_depend_on_compatibility_structs() {
     let hot_scheduler_files = [
-        "kernel/src/sched/blocking.rs",
-        "kernel/src/sched/sleep.rs",
-        "kernel/src/sched/wait_queue.rs",
-        "kernel/src/sched/state.rs",
-        "kernel/src/sched/vm.rs",
+        "thingos/kernel/src/sched/blocking.rs",
+        "thingos/kernel/src/sched/sleep.rs",
+        "thingos/kernel/src/sched/wait_queue.rs",
+        "thingos/kernel/src/sched/state.rs",
+        "thingos/kernel/src/sched/vm.rs",
     ];
     let forbidden = [
         "ProcessInfo",
@@ -116,7 +116,7 @@ fn scheduler_hot_paths_do_not_depend_on_compatibility_structs() {
 
 #[test]
 fn thread_sched_fields_do_not_duplicate_lifecycle_or_identity_ownership() {
-    let state_rs = read_repo_file("kernel/src/sched/state.rs");
+    let state_rs = read_repo_file("thingos/kernel/src/sched/state.rs");
     let fields = thread_sched_fields_block(&state_rs);
     let forbidden_field_decls = [
         "pub pid:",

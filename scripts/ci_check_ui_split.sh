@@ -8,14 +8,14 @@ FORBIDDEN=("usvg" "tiny-skia" "fontdue" "resvg")
 EXIT_CODE=0
 
 for dep in "${FORBIDDEN[@]}"; do
-    if grep -q "$dep" bloom/Cargo.toml; then
+    if grep -q "$dep" thingos/bloom/Cargo.toml; then
         echo "FAIL: Bloom depends on $dep"
         EXIT_CODE=1
     fi
 done
 
 # 2. Bloom Forbidden Modules
-if [ -d "bloom/src/svg" ]; then
+if [ -d "thingos/bloom/src/svg" ]; then
     echo "FAIL: Bloom still has src/svg directory"
     EXIT_CODE=1
 fi
@@ -23,7 +23,7 @@ fi
 # 3. Only Blossom writes UI_PRESENT_EPOCH
 # Heuristic: look for prop_set calls with UI_PRESENT_EPOCH
 # exclude target directory
-FOUND_WRITES=$(grep -r "prop_set.*keys::UI_PRESENT_EPOCH" utils/ bloom/ bristle/ pistil/ sprout/ | grep -v "utils/blossom/" | grep -v "target/" || true)
+FOUND_WRITES=$(grep -r "prop_set.*keys::UI_PRESENT_EPOCH" thingos/utils/ thingos/bloom/ thingos/bristle/ thingos/pistil/ thingos/sprout/ | grep -v "thingos/utils/blossom/" | grep -v "target/" || true)
 
 if [ ! -z "$FOUND_WRITES" ]; then
     echo "FAIL: Forbidden writes to UI_PRESENT_EPOCH found outside Blossom:"

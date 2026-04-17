@@ -55,7 +55,7 @@ that enforce the above:
    from the canonical type becomes a compile error.
 
 2. **`kind_ids_match_kindc_generated_constants`** — imports the generated
-   `thingos::kinds` module (`thingos/src/kinds/generated/mod.rs`) and asserts that
+   `thingos::kinds` module (`thingos/stem/src/kinds/mod.rs`) and asserts that
    every `KIND_ID_THINGOS_*` constant in the `thingos` crate matches the value
    produced by the schema compiler.  Schema drift between kindc output and the
    hand-maintained constants becomes a test failure.
@@ -143,7 +143,7 @@ pointers into a canonical `thingos::message::Message`.
 ## 6. Structural Divergence Notes
 
 Several `thingos` crate types intentionally diverge from the kindc-generated
-versions in `thingos/src/kinds/generated/mod.rs`.  This is expected during
+versions in `thingos/stem/src/kinds/mod.rs`.  This is expected during
 the transitional migration period.
 
 | Type | thingos crate shape | Generated shape | Reason for divergence |

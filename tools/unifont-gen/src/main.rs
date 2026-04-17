@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let project_root = Path::new(&manifest_dir).parent().unwrap().parent().unwrap();
     let unifont_hex_path = project_root.join("assets/fonts/unifont.hex");
-    let output_path = project_root.join("bloom/src/unifont_subset.hex");
+    let output_path = project_root.join("thingos/bloom/src/unifont_subset.hex");
 
     // Target codepoints from the original script
     let mut targets = Vec::new();

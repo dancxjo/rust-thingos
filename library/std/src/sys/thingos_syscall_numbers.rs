@@ -4,7 +4,7 @@
 //! syscall IDs stay in lockstep with kernel/stem/ABI.
 
 mod abi_numbers {
-    include!("../../../../abi/src/numbers.rs");
+    include!("../../../../thingos/abi/src/numbers.rs");
 }
 
 pub(crate) use abi_numbers::*;

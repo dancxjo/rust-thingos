@@ -22,10 +22,10 @@ pub fn clean(sh: &Shell) -> Result<()> {
         }
     }
 
-    sh.remove_path("bran/bin-x86_64")?;
-    sh.remove_path("bran/bin-aarch64")?;
-    sh.remove_path("bran/bin-riscv64")?;
-    sh.remove_path("bran/bin-loongarch64")?;
+    sh.remove_path("thingos/bran/bin-x86_64")?;
+    sh.remove_path("thingos/bran/bin-aarch64")?;
+    sh.remove_path("thingos/bran/bin-riscv64")?;
+    sh.remove_path("thingos/bran/bin-loongarch64")?;
 
     println!("Cleaning fetched vendor trees...");
     sh.remove_path("vendor/limine")?;

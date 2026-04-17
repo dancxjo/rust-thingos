@@ -394,7 +394,7 @@ pub fn build_iso_with_config(
         }
     });
 
-    let kernel_src = format!("bran/bin-{arch}/kernel");
+    let kernel_src = format!("thingos/bran/bin-{arch}/kernel");
     sh.copy_file(&kernel_src, iso_root.join("boot/kernel"))?;
     sh.copy_file("assets/fonts/unifont.hex", iso_root.join("share/fonts/unifont.hex"))?;
 
@@ -736,7 +736,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
         }
     }
 
-    let kernel_src = format!("bran/bin-{arch}/kernel");
+    let kernel_src = format!("thingos/bran/bin-{arch}/kernel");
     cmd!(sh, "mcopy -i {hdd}@@1M {kernel_src} ::/boot").run()?;
 
     let cwd = std::env::current_dir().unwrap();
