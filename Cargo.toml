@@ -98,6 +98,7 @@ members = [
   "userspace/env_roundtrip",
   "userspace/false",
   "userspace/fetchd",
+  "userspace/find",
   "userspace/file",
   "userspace/pistil",
   "userspace/pistil-shared",
