@@ -2261,6 +2261,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Queues 1-4 correspond to TaskPriority::Idle+1 through Realtime (see
         // types::RUNQ_COUNT = 5 with queue 0 reserved for idle-priority tasks).
         for p in (1..5).rev() {
+            // Bound the lookahead so idle-path steal attempts stay predictable.
             let scan_limit =
                 self.state.per_cpu[busiest_cpu].runq[p].len().min(STEAL_SCAN_DEPTH_PER_PRIORITY);
             let mut candidate_index = None;
@@ -2271,7 +2272,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let stealable = match self.state.get_thread(tid) {
                     Some(sf) => {
                         // Require canonical queue-placement metadata to match so
-                        // we do not steal stale lazy-invalidated entries.
+                        // we do not steal stale lazy-invalidated entries (see
+                        // `SchedState::dequeue_thread_front` comment).
                         let is_stealable = sf.state != TaskState::Dead
                             && sf.runq_location == Some((busiest_cpu, p))
                             && matches!(sf.affinity, crate::task::Affinity::Any);

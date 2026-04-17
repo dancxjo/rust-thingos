@@ -401,6 +401,15 @@ impl SchedState {
         None
     }
 
+    /// Remove and return the queue entry at a specific run-queue index.
+    ///
+    /// This validates that the candidate thread's canonical `runq_location`
+    /// still points at `(cpu, prio)` before removing it, matching the same
+    /// lazy-invalidation safety model used by `dequeue_thread_front`.
+    ///
+    /// Prefer `dequeue_thread_front` for FIFO consumption; use this only for
+    /// bounded lookahead paths (e.g. steal) that intentionally target a
+    /// non-front candidate.
     pub fn dequeue_thread_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
         let SchedState {
             threads,
@@ -418,13 +427,13 @@ impl SchedState {
             return None;
         }
 
-        let removed = pc.runq[prio].remove(idx)?;
+        pc.runq[prio].remove(idx)?;
         pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
         pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
-        if let Some(thread) = threads.get_mut(&removed) {
+        if let Some(thread) = threads.get_mut(&tid) {
             thread.runq_location = None;
         }
-        Some(removed)
+        Some(tid)
     }
 
     pub fn remove_thread_from_runq(&mut self, tid: ThreadId) -> bool {
