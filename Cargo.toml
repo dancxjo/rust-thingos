@@ -39,7 +39,6 @@ members = [
   "src/rustdoc-json-types",
   "thingos",
   "xtask",
-  "vendor/runa",
   "src/tools/build-manifest",
   "src/tools/bump-stage0",
   "src/tools/cargotest",

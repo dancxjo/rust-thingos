@@ -37,6 +37,8 @@ fn mapped_enqueue(prod: &mut MappedProducer, src: &[u8]) -> usize {
     let hdr = prod.map_addr as *mut AudioMappedRingHeader;
     let w = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).write_index)) } as usize;
     let r = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).read_index)) } as usize;
+    core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+    
     let cap = prod.capacity;
     if cap == 0 {
         return 0;
@@ -62,6 +64,7 @@ fn mapped_enqueue(prod: &mut MappedProducer, src: &[u8]) -> usize {
     }
 
     let new_w = (w + n) % cap;
+    core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
     unsafe {
         core::ptr::write_volatile(core::ptr::addr_of_mut!((*hdr).write_index), new_w as u32);
     }
