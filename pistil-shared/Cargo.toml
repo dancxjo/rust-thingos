@@ -9,4 +9,4 @@ crate-type = ["dylib"]
 
 [dependencies]
 pistil = { path = "../pistil" }
-stem = { path = "../../stem", features = ["rt", "global-alloc"] }
+stem = { path = "../stem", features = ["rt", "global-alloc"] }

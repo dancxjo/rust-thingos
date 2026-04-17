@@ -8,8 +8,8 @@ name = "pistil"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-stem = { path = "../../stem", features = ["global-alloc"] }
-abi = { path = "../../abi" }
+stem = { path = "../stem", features = ["global-alloc"] }
+abi = { path = "../abi" }
 fontdue = { version = "0.7", default-features = false }
 libm = "0.2"
 serde = { version = "1.0", default-features = false, features = ["derive"] }

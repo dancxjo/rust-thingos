@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_URL="https://github.com/loganintech/smallsh.git"
 UPSTREAM_COMMIT="8715f2d29ebaf05bdd3d136e36417da6141c15c3"
-DEST_DIR="$ROOT_DIR/userspace/smallsh/upstream"
+DEST_DIR="$ROOT_DIR/utils/smallsh/upstream"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
