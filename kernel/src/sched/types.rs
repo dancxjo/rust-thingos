@@ -129,6 +129,14 @@ pub struct Scheduler<R: BootRuntime> {
     /// REGISTRY lock coupling. Callers must drain/apply after releasing
     /// SCHEDULER.
     pub(crate) pending_registry_syncs: alloc::vec::Vec<DeferredRegistrySync>,
+    /// When true imbalance condition became active (any idle CPU while another CPU has depth >1).
+    pub(crate) imbalance_active_since_mono: Option<u64>,
+    /// Total time spent in imbalance condition (mono ticks converted to µs for reporting).
+    pub(crate) imbalance_total_us: u64,
+    /// Number of imbalance episodes observed.
+    pub(crate) imbalance_episodes: u64,
+    /// Longest single imbalance episode (µs).
+    pub(crate) imbalance_longest_us: u64,
     _phantom: core::marker::PhantomData<R>,
 }
 
@@ -161,6 +169,10 @@ impl<R: BootRuntime> Scheduler<R> {
             pending_prepare_schedule_ipis_bitmap: 0,
             pending_misrouted_requeues: alloc::vec::Vec::new(),
             pending_registry_syncs: alloc::vec::Vec::new(),
+            imbalance_active_since_mono: None,
+            imbalance_total_us: 0,
+            imbalance_episodes: 0,
+            imbalance_longest_us: 0,
             _phantom: PhantomData,
         }
     }

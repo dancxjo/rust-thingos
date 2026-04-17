@@ -192,6 +192,7 @@ pub fn wake_task_locked<R: BootRuntime>(
 
     let deferred = if wake_info.is_some() {
         let tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        let wake_mono = crate::runtime::<R>().mono_ticks();
         // Increment the profiling counter before updating the hot-field cache.
         // The counter tracks Runnable transitions regardless of whether the
         // cache update succeeds, so ordering relative to the cache write does
@@ -204,7 +205,10 @@ pub fn wake_task_locked<R: BootRuntime>(
             sf.state = TaskState::Runnable;
             sf.enqueued_at_tick = tick;
         }
-        sched.state.wake_enqueued_at_tick.insert(id, tick);
+        sched.state.wake_enqueued_at_mono.insert(id, wake_mono);
+        sched
+            .state
+            .note_enqueue_cause(id, crate::sched::state::EnqueueCause::Wake);
 
         // Defer the canonical REGISTRY writes to the caller (outside SCHEDULER lock).
         Some(DeferredWakeUpdate {

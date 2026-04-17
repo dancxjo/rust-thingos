@@ -136,10 +136,18 @@ pub static PROF_IDLE_TICKS_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
 pub static PROF_WAKE_TO_RUN_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static PROF_WAKE_TO_RUN_TICKS_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub static PROF_WAKE_TO_RUN_TICKS_MAX: AtomicU64 = AtomicU64::new(0);
+pub static PROF_WAKE_TO_RUN_HIST: [AtomicU64; state::WAKE_LATENCY_HIST_BUCKETS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; state::WAKE_LATENCY_HIST_BUCKETS]
+};
 pub static PROF_RUNQ_DEPTH_VARIANCE_LAST: AtomicU64 = AtomicU64::new(0);
 pub static PROF_RUNQ_DEPTH_VARIANCE_MAX: AtomicU64 = AtomicU64::new(0);
 pub static PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static PROF_RUNQ_DEPTH_VARIANCE_TOTAL: AtomicU64 = AtomicU64::new(0);
+pub static PROF_IMBALANCE_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+pub static PROF_IMBALANCE_EPISODES: AtomicU64 = AtomicU64::new(0);
+pub static PROF_IMBALANCE_LONGEST_US: AtomicU64 = AtomicU64::new(0);
 
 /// Number of histogram buckets used for hold/wait time distributions.
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
@@ -161,6 +169,27 @@ pub fn hist_bucket(us: u64) -> usize {
         10..=99 => 2,
         100..=999 => 3,
         _ => 4,
+    }
+}
+
+#[inline]
+fn wake_latency_hist_bucket(us: u64) -> usize {
+    match us {
+        0..=4 => 0,
+        5..=19 => 1,
+        20..=99 => 2,
+        100..=499 => 3,
+        _ => 4,
+    }
+}
+
+#[inline]
+fn idle_episode_hist_bucket(us: u64) -> usize {
+    match us {
+        0..=4 => 0,
+        5..=49 => 1,
+        50..=499 => 2,
+        _ => 3,
     }
 }
 
@@ -212,6 +241,10 @@ pub struct SchedLockSiteMetrics {
     pub wake_to_run_count: u64,
     pub wake_to_run_ticks_total: u64,
     pub wake_to_run_ticks_max: u64,
+    pub wake_to_run_hist: [u64; state::WAKE_LATENCY_HIST_BUCKETS],
+    pub imbalance_total_us: u64,
+    pub imbalance_episodes: u64,
+    pub imbalance_longest_us: u64,
     /// Number of `task_status` polls since the last snapshot.
     pub task_status_polls: u64,
     /// Number of Blocked → Runnable transitions since the last snapshot.
@@ -531,7 +564,7 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
 /// This is a no-op when the `sched_telemetry` feature is disabled so that
 /// the per-schedule-point iteration incurs zero overhead in normal builds.
 #[inline]
-pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cpu: usize) {
+pub(crate) fn sample_runq_len<R: BootRuntime>(sched: &mut types::Scheduler<R>, cpu: usize) {
     if let Some(pc) = sched.state.per_cpu.get_mut(cpu) {
         let len64 = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
         PROF_RUNQ_SAMPLE_COUNT[cpu].fetch_add(1, Ordering::Relaxed);
@@ -548,10 +581,19 @@ pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cp
     if !online.is_empty() {
         let mut sum = 0u64;
         let mut count = 0u64;
+        let mut any_idle_cpu = false;
+        let mut any_loaded_cpu = false;
         for &idx in online {
             if let Some(pc) = sched.state.per_cpu.get(idx) {
-                sum = sum.saturating_add(pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64);
+                let depth = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
+                sum = sum.saturating_add(depth);
                 count = count.saturating_add(1);
+                if pc.current == pc.idle_task {
+                    any_idle_cpu = true;
+                }
+                if depth > 1 {
+                    any_loaded_cpu = true;
+                }
             }
         }
         if count > 0 {
@@ -569,6 +611,24 @@ pub(crate) fn sample_runq_len(sched: &mut types::Scheduler<impl BootRuntime>, cp
             update_max_u64(&PROF_RUNQ_DEPTH_VARIANCE_MAX, variance);
             PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT.fetch_add(1, Ordering::Relaxed);
             PROF_RUNQ_DEPTH_VARIANCE_TOTAL.fetch_add(variance, Ordering::Relaxed);
+        }
+        let imbalance_active = any_idle_cpu && any_loaded_cpu;
+        let now_mono = crate::runtime::<R>().mono_ticks();
+        match (imbalance_active, sched.imbalance_active_since_mono) {
+            (true, None) => {
+                sched.imbalance_active_since_mono = Some(now_mono);
+                sched.imbalance_episodes = sched.imbalance_episodes.saturating_add(1);
+                PROF_IMBALANCE_EPISODES.fetch_add(1, Ordering::Relaxed);
+            }
+            (false, Some(start)) => {
+                let elapsed_us = ticks_to_us::<R>(now_mono.wrapping_sub(start));
+                sched.imbalance_total_us = sched.imbalance_total_us.saturating_add(elapsed_us);
+                sched.imbalance_longest_us = sched.imbalance_longest_us.max(elapsed_us);
+                PROF_IMBALANCE_TOTAL_US.fetch_add(elapsed_us, Ordering::Relaxed);
+                update_max_u64(&PROF_IMBALANCE_LONGEST_US, elapsed_us);
+                sched.imbalance_active_since_mono = None;
+            }
+            _ => {}
         }
     }
     #[cfg(not(feature = "sched_telemetry"))]
@@ -593,6 +653,10 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
     } else {
         runq_depth_variance_total / runq_depth_variance_sample_count
     };
+    let mut wake_to_run_hist = [0u64; state::WAKE_LATENCY_HIST_BUCKETS];
+    for (idx, slot) in wake_to_run_hist.iter_mut().enumerate() {
+        *slot = PROF_WAKE_TO_RUN_HIST[idx].swap(0, Ordering::Relaxed);
+    }
     SchedLockSiteMetrics {
         block_current: snapshot_sched_lock_metric(
             &PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
@@ -661,6 +725,10 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
         wake_to_run_count: PROF_WAKE_TO_RUN_COUNT.swap(0, Ordering::Relaxed),
         wake_to_run_ticks_total: PROF_WAKE_TO_RUN_TICKS_TOTAL.swap(0, Ordering::Relaxed),
         wake_to_run_ticks_max: PROF_WAKE_TO_RUN_TICKS_MAX.swap(0, Ordering::Relaxed),
+        wake_to_run_hist,
+        imbalance_total_us: PROF_IMBALANCE_TOTAL_US.swap(0, Ordering::Relaxed),
+        imbalance_episodes: PROF_IMBALANCE_EPISODES.swap(0, Ordering::Relaxed),
+        imbalance_longest_us: PROF_IMBALANCE_LONGEST_US.swap(0, Ordering::Relaxed),
         task_status_polls: PROF_TASK_STATUS_POLLS.swap(0, Ordering::Relaxed),
         runnable_transitions: PROF_RUNNABLE_TRANSITIONS.swap(0, Ordering::Relaxed),
         wake_task_fastpath_already_pending: PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING
@@ -1420,6 +1488,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Now that the REGISTRY lock is released, update the hot-field cache and
         // enqueue confirmed tasks into the run queues.
+        let wake_mono = crate::runtime::<R>().mono_ticks();
         for (tid, priority, target_cpu) in confirmed {
             // Update the scheduler-side cache to match the REGISTRY write above.
             if let Some(sf) = self.state.get_thread_mut(tid) {
@@ -1427,7 +1496,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 sf.enqueued_at_tick = now;
                 sf.wake_cpu = Some(target_cpu);
             }
-            self.state.wake_enqueued_at_tick.insert(tid, now);
+            self.state.wake_enqueued_at_mono.insert(tid, wake_mono);
+            self.state
+                .note_enqueue_cause(tid, crate::sched::state::EnqueueCause::Wake);
 
             let actual_cpu = if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
             self.state.enqueue_task(actual_cpu, priority, tid);
@@ -1585,6 +1656,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     let priority = t.priority;
                     // Push to LOCAL runq (we are yielding on this CPU)
                     self.state.enqueue_task(cpu_idx, priority as usize, current_id);
+                    self.state
+                        .note_enqueue_cause(current_id, crate::sched::state::EnqueueCause::YieldRequeue);
                     self.metrics.pushes += 1;
                 }
             }
@@ -1615,6 +1688,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 break;
             };
             self.state.enqueue_task(target_cpu, prio, id);
+            self.state
+                .note_enqueue_cause(id, crate::sched::state::EnqueueCause::AffinityRepair);
             self.queue_prepare_schedule_ipi_dedup(target_cpu);
         }
     }
@@ -1633,6 +1708,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Backlog safety valve: avoid unbounded memory growth if misroute intake
         // outpaces the bounded per-call repair budget.
         self.state.enqueue_task(target_cpu, prio, id);
+        self.state
+            .note_enqueue_cause(id, crate::sched::state::EnqueueCause::AffinityRepair);
         self.queue_prepare_schedule_ipi_dedup(target_cpu);
     }
 
@@ -1813,12 +1890,30 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         let current_was_idle = Some(current_id) == self.state.per_cpu[cpu_idx].idle_task;
         let next_is_nonidle = Some(next_id) != self.state.per_cpu[cpu_idx].idle_task;
+        let now_mono = rt.mono_ticks();
+        if !current_was_idle && !next_is_nonidle {
+            if self.state.per_cpu[cpu_idx].idle_enter_mono_ticks.is_none() {
+                self.state.per_cpu[cpu_idx].idle_enter_mono_ticks = Some(now_mono);
+                self.state.per_cpu[cpu_idx].stats.idle_episodes =
+                    self.state.per_cpu[cpu_idx].stats.idle_episodes.saturating_add(1);
+            }
+        }
         if current_was_idle && next_is_nonidle {
             self.state.per_cpu[cpu_idx].stats.idle_to_nonidle =
                 self.state.per_cpu[cpu_idx].stats.idle_to_nonidle.saturating_add(1);
+            if let Some(idle_enter) = self.state.per_cpu[cpu_idx].idle_enter_mono_ticks.take() {
+                let idle_us = ticks_to_us::<R>(now_mono.wrapping_sub(idle_enter));
+                let stats = &mut self.state.per_cpu[cpu_idx].stats;
+                stats.idle_total_us = stats.idle_total_us.saturating_add(idle_us);
+                stats.idle_longest_us = stats.idle_longest_us.max(idle_us);
+                let bucket = idle_episode_hist_bucket(idle_us);
+                stats.idle_episode_hist[bucket] = stats.idle_episode_hist[bucket].saturating_add(1);
+            }
         }
         self.state.per_cpu[cpu_idx].stats.context_switches =
             self.state.per_cpu[cpu_idx].stats.context_switches.saturating_add(1);
+        self.state.per_cpu[cpu_idx].stats.dispatch_count =
+            self.state.per_cpu[cpu_idx].stats.dispatch_count.saturating_add(1);
 
         self.state.per_cpu[cpu_idx].current = Some(next_id);
 
@@ -1868,13 +1963,49 @@ impl<R: BootRuntime> types::Scheduler<R> {
             new_sched.run_cpu = Some(cpu_idx);
         }
         if migrated {
-            self.state.record_task_migration(next_id);
+            let enqueue_cause = self.state.last_enqueue_cause(next_id);
+            let stats = self.state.task_runtime_stats_mut(next_id);
+            stats.migration_count = stats.migration_count.saturating_add(1);
+            match enqueue_cause {
+                crate::sched::state::EnqueueCause::Wake => {
+                    stats.migration_wake = stats.migration_wake.saturating_add(1)
+                }
+                crate::sched::state::EnqueueCause::Steal => {
+                    stats.migration_steal = stats.migration_steal.saturating_add(1)
+                }
+                crate::sched::state::EnqueueCause::AffinityRepair => {
+                    stats.migration_affinity = stats.migration_affinity.saturating_add(1)
+                }
+                crate::sched::state::EnqueueCause::YieldRequeue => {
+                    stats.migration_yield_requeue =
+                        stats.migration_yield_requeue.saturating_add(1)
+                }
+                _ => stats.migration_other = stats.migration_other.saturating_add(1),
+            }
+            let runs_before = stats.runs_since_last_migration;
+            stats.runs_between_migrations_total =
+                stats.runs_between_migrations_total.saturating_add(runs_before);
+            stats.min_runs_between_migrations = stats.min_runs_between_migrations.min(runs_before);
+            stats.max_runs_between_migrations = stats.max_runs_between_migrations.max(runs_before);
+            stats.runs_since_last_migration = 0;
         }
-        if let Some(wake_tick) = self.state.wake_enqueued_at_tick.remove(&next_id) {
-            let wake_to_run = now.saturating_sub(wake_tick);
+        {
+            let stats = self.state.task_runtime_stats_mut(next_id);
+            stats.run_count = stats.run_count.saturating_add(1);
+            stats.runs_since_last_migration = stats.runs_since_last_migration.saturating_add(1);
+        }
+        if let Some(wake_mono) = self.state.wake_enqueued_at_mono.remove(&next_id) {
+            let wake_to_run_us = ticks_to_us::<R>(now_mono.wrapping_sub(wake_mono));
             PROF_WAKE_TO_RUN_COUNT.fetch_add(1, Ordering::Relaxed);
-            PROF_WAKE_TO_RUN_TICKS_TOTAL.fetch_add(wake_to_run, Ordering::Relaxed);
-            update_max_u64(&PROF_WAKE_TO_RUN_TICKS_MAX, wake_to_run);
+            PROF_WAKE_TO_RUN_TICKS_TOTAL.fetch_add(wake_to_run_us, Ordering::Relaxed);
+            update_max_u64(&PROF_WAKE_TO_RUN_TICKS_MAX, wake_to_run_us);
+            let bucket = wake_latency_hist_bucket(wake_to_run_us);
+            PROF_WAKE_TO_RUN_HIST[bucket].fetch_add(1, Ordering::Relaxed);
+            let stats = self.state.task_runtime_stats_mut(next_id);
+            stats.wake_to_run_count = stats.wake_to_run_count.saturating_add(1);
+            stats.wake_to_run_ticks_total = stats.wake_to_run_ticks_total.saturating_add(wake_to_run_us);
+            stats.wake_to_run_ticks_max = stats.wake_to_run_ticks_max.max(wake_to_run_us);
+            stats.wake_to_run_hist[bucket] = stats.wake_to_run_hist[bucket].saturating_add(1);
         }
         if next_id == 6 {
             crate::kdebug!("SCHED[TID6]: → Running (cpu={})", cpu_idx);
@@ -1974,9 +2105,17 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 };
                 if stealable {
                     if let Some(stolen_id) = self.state.dequeue_task_front(busiest_cpu, p) {
+                        if let Some(pc) = self.state.per_cpu.get_mut(busiest_cpu) {
+                            pc.stats.steals_out = pc.stats.steals_out.saturating_add(1);
+                        }
+                        if let Some(pc) = self.state.per_cpu.get_mut(local_cpu) {
+                            pc.stats.steals_in = pc.stats.steals_in.saturating_add(1);
+                        }
                         if let Some(sf) = self.state.get_task_mut(stolen_id) {
                             sf.wake_cpu = Some(local_cpu);
                         }
+                        self.state
+                            .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
                         self.metrics.steals += 1;
                         crate::kdebug!(
                             "SCHED: CPU {} stole task {} (prio {}) from CPU {} (depth {})",
@@ -3041,9 +3180,9 @@ pub fn dump_stats<R: BootRuntime>() {
         sched.state.online_cpu_count,
         sched.total_cpu_count
     );
-    // Columns: TID, STATE, PRI, LAST, WAKE, RUN, MIGS, USER, SLICE, KSTK, AFFIN, NAME.
+    // Columns: TID, STATE, PRI, LAST, WAKE, RUN, MIGS, RUNS, USER, SLICE, KSTK, AFFIN, NAME.
     crate::kprint!(
-        " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
+        " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>6}  {:>4}  {:>7}  {:>6}  {:>6}  {}\n",
         "TID",
         "STATE",
         "PRI",
@@ -3051,6 +3190,7 @@ pub fn dump_stats<R: BootRuntime>() {
         "WAKE",
         "RUN",
         "MIGS",
+        "RUNS",
         "USER",
         "SLICE",
         "KSTK",
@@ -3059,6 +3199,8 @@ pub fn dump_stats<R: BootRuntime>() {
     );
 
     let mut runnable_count = 0u32;
+    let mut total_runs = 0u64;
+    let mut total_migrations = 0u64;
     for task in crate::task::registry::get_registry::<R>().threads.iter() {
         let state_str = match task.state {
             TaskState::Runnable => {
@@ -3081,7 +3223,11 @@ pub fn dump_stats<R: BootRuntime>() {
         };
         let (cpu_str, wake_cpu_str, run_cpu_str) =
             task_cpu_trace_strings(task.last_cpu, sched.state.get_task(task.id));
-        let migrations = sched.state.task_migration_count(task.id);
+        let runtime_stats = sched.state.task_runtime_stats(task.id);
+        let migrations = runtime_stats.migration_count;
+        let run_count = runtime_stats.run_count;
+        total_runs = total_runs.saturating_add(run_count);
+        total_migrations = total_migrations.saturating_add(migrations);
         let user_str = if task.is_user { "Y" } else { "N" };
         let aff_str: alloc::string::String = match task.affinity {
             crate::task::Affinity::Any => alloc::string::String::from("Any"),
@@ -3093,7 +3239,7 @@ pub fn dump_stats<R: BootRuntime>() {
             "-"
         };
         crate::kprint!(
-            " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>4}  {:>3}/{:<3}  {:>5}K  {:>6}  {}\n",
+            " {:>5}  {:>10}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>6}  {:>4}  {:>3}/{:<3}  {:>5}K  {:>6}  {}\n",
             task.id,
             state_str,
             pri_str,
@@ -3101,6 +3247,7 @@ pub fn dump_stats<R: BootRuntime>() {
             wake_cpu_str,
             run_cpu_str,
             migrations,
+            run_count,
             user_str,
             task.timeslice_remaining,
             types::DEFAULT_TIMESLICE,
@@ -3109,6 +3256,17 @@ pub fn dump_stats<R: BootRuntime>() {
             name_str
         );
     }
+    let migrations_per_1k_runs = if total_runs == 0 {
+        0
+    } else {
+        total_migrations.saturating_mul(1000) / total_runs
+    };
+    crate::kprint!(
+        "  Locality damage: migrations={} runs={} migrations_per_1k_runs={}\n",
+        total_migrations,
+        total_runs,
+        migrations_per_1k_runs
+    );
 
     // Per-CPU run-queue summary
     for &i in &sched.state.online_cpus {
@@ -3117,20 +3275,32 @@ pub fn dump_stats<R: BootRuntime>() {
         let sample_count = pc.stats.runq_sample_count;
         let sample_total = pc.stats.runq_sample_total;
         let avg_runq = if sample_count == 0 { 0 } else { sample_total / sample_count };
+        let idle_hist = pc.stats.idle_episode_hist;
         crate::kprint!(
-            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} idle_ticks={} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",
+            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} idle_ticks={} idle_total_us={} idle_eps={} idle_longest_us={} idle_hist=[{},{},{},{}] dispatch={} steals_in={} steals_out={} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} rqchg={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",
             i,
             pc.current,
             total,
             avg_runq,
             pc.idle_task,
             PROF_IDLE_TICKS_PER_CPU[i].load(Ordering::Relaxed),
+            pc.stats.idle_total_us,
+            pc.stats.idle_episodes,
+            pc.stats.idle_longest_us,
+            idle_hist[0],
+            idle_hist[1],
+            idle_hist[2],
+            idle_hist[3],
+            pc.stats.dispatch_count,
+            pc.stats.steals_in,
+            pc.stats.steals_out,
             pc.stats.context_switches,
             pc.stats.idle_to_nonidle,
             pc.stats.timer_interrupts,
             pc.stats.resched_ipi_received,
             pc.stats.runnable_enqueues,
             pc.stats.runnable_dequeues,
+            pc.stats.runq_depth_change_events,
             pc.stats.wakeups,
             PROF_TRYLOCK_MISS_PER_CPU[i].load(Ordering::Relaxed),
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[i].load(Ordering::Relaxed),
@@ -3145,15 +3315,23 @@ pub fn dump_stats<R: BootRuntime>() {
         wake_to_run_total / wake_to_run_count
     };
     crate::kprint!(
-        "  Wake→run latency: count={} avg_ticks={} max_ticks={}\n",
+        "  Wake→run latency(µs): count={} avg={} max={} hist=[0-5:{},5-20:{},20-100:{},100-500:{},>500:{}]\n",
         wake_to_run_count,
         wake_to_run_avg,
-        PROF_WAKE_TO_RUN_TICKS_MAX.load(Ordering::Relaxed)
+        PROF_WAKE_TO_RUN_TICKS_MAX.load(Ordering::Relaxed),
+        PROF_WAKE_TO_RUN_HIST[0].load(Ordering::Relaxed),
+        PROF_WAKE_TO_RUN_HIST[1].load(Ordering::Relaxed),
+        PROF_WAKE_TO_RUN_HIST[2].load(Ordering::Relaxed),
+        PROF_WAKE_TO_RUN_HIST[3].load(Ordering::Relaxed),
+        PROF_WAKE_TO_RUN_HIST[4].load(Ordering::Relaxed)
     );
     crate::kprint!(
-        "  Runq depth variance: last={} max={}\n",
+        "  Runq depth variance: last={} max={} imbalance(total_us={}, episodes={}, longest_us={})\n",
         PROF_RUNQ_DEPTH_VARIANCE_LAST.load(Ordering::Relaxed),
-        PROF_RUNQ_DEPTH_VARIANCE_MAX.load(Ordering::Relaxed)
+        PROF_RUNQ_DEPTH_VARIANCE_MAX.load(Ordering::Relaxed),
+        PROF_IMBALANCE_TOTAL_US.load(Ordering::Relaxed),
+        PROF_IMBALANCE_EPISODES.load(Ordering::Relaxed),
+        PROF_IMBALANCE_LONGEST_US.load(Ordering::Relaxed)
     );
 
     crate::kprint!("Sleep queue: {} tasks\n", sched.state.sleep_queue.len());
