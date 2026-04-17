@@ -476,6 +476,12 @@ pub fn build_iso_with_config(
         )?;
     }
 
+    // Ensure /lib/ld.so exists for dynamic executables.
+    let ld_so_src = iso_root.join("bin/ld_so");
+    if ld_so_src.exists() {
+        sh.copy_file(&ld_so_src, iso_root.join("lib/ld.so"))?;
+    }
+
     // Stage libstd.so from bootstrap artifacts.
     // Note: rustc-thingos/bootstrap build puts artifacts under build/
     if arch == "x86_64" {

@@ -157,6 +157,7 @@ const S_IFREG: u32 = 0o100_000;
 // ── Poll bits ─────────────────────────────────────────────────────────────────
 
 const POLLOUT: u16 = abi::syscall::poll_flags::POLLOUT;
+const POLLIN: u16 = abi::syscall::poll_flags::POLLIN;
 const POLLHUP: u16 = abi::syscall::poll_flags::POLLHUP;
 const POLLERR: u16 = abi::syscall::poll_flags::POLLERR;
 
@@ -993,17 +994,35 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         // 1. Accept new mapped ring connections.
         if let Some(listener_fd) = mapped_listener {
             if mapped_pending_fd.is_none() {
-                match stem::syscall::socket::accept(listener_fd) {
-                    Ok(fd) => {
-                        use abi::syscall::fcntl_cmd::F_SETFL;
-                        use abi::syscall::vfs_flags::O_NONBLOCK;
-                        let _ = stem::syscall::vfs::vfs_fcntl(fd, F_SETFL, O_NONBLOCK);
-                        mapped_pending_fd = Some(fd);
+                // Guard accept() with poll so a blocking socket backend cannot
+                // stall the entire provider/event loop.
+                let mut pollfds = [abi::syscall::PollThing {
+                    thing: listener_fd as i32,
+                    events: POLLIN | POLLERR | POLLHUP,
+                    revents: 0,
+                }];
+                match stem::syscall::vfs::vfs_poll(&mut pollfds, 0) {
+                    Ok(n) if n > 0 => {
+                        let revents = pollfds[0].revents;
+                        if (revents & POLLIN) != 0 {
+                            match stem::syscall::socket::accept(listener_fd) {
+                                Ok(fd) => {
+                                    use abi::syscall::fcntl_cmd::F_SETFL;
+                                    use abi::syscall::vfs_flags::O_NONBLOCK;
+                                    let _ = stem::syscall::vfs::vfs_fcntl(fd, F_SETFL, O_NONBLOCK);
+                                    mapped_pending_fd = Some(fd);
+                                }
+                                Err(Errno::EAGAIN) => {}
+                                Err(e) => {
+                                    warn!("SND: mapped ring accept failed: {:?}", e);
+                                }
+                            }
+                        } else if (revents & (POLLERR | POLLHUP)) != 0 {
+                            warn!("SND: mapped ring listener poll revents=0x{:x}", revents);
+                        }
                     }
-                    Err(Errno::EAGAIN) => {}
-                    Err(e) => {
-                        warn!("SND: mapped ring accept failed: {:?}", e);
-                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("SND: mapped ring listener poll failed: {:?}", e),
                 }
             }
 
@@ -1158,12 +1177,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
 
             if configured {
                 card.hw_config_dirty = false;
-                if send_pcm_command(
-                    &mut driver,
-                    &control_dma,
-                    VIRTIO_SND_R_PCM_START,
-                    stream_id,
-                ) {
+                if send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_START, stream_id) {
                     card.hw_started = true;
                     info!("SND: Hardware playback started");
                     progress = true;
@@ -1480,11 +1494,7 @@ fn send_pcm_command(
     cmd: u32,
     stream_id: u32,
 ) -> bool {
-    info!(
-        "SND: control {} begin for stream {}",
-        pcm_cmd_name(cmd),
-        stream_id
-    );
+    info!("SND: control {} begin for stream {}", pcm_cmd_name(cmd), stream_id);
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmHdr) =
             VirtioSndPcmHdr { hdr: VirtioSndHdr { code: cmd }, stream_id };
@@ -1497,11 +1507,7 @@ fn send_pcm_command(
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
         if q.add_buffer(&bufs).is_none() {
-            warn!(
-                "SND: control {} queue full for stream {}",
-                pcm_cmd_name(cmd),
-                stream_id
-            );
+            warn!("SND: control {} queue full for stream {}", pcm_cmd_name(cmd), stream_id);
             return false;
         }
     }
@@ -1523,11 +1529,7 @@ fn send_pcm_command(
                 );
                 return false;
             }
-            info!(
-                "SND: control {} complete for stream {}",
-                pcm_cmd_name(cmd),
-                stream_id
-            );
+            info!("SND: control {} complete for stream {}", pcm_cmd_name(cmd), stream_id);
             return true;
         }
         if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
@@ -1584,10 +1586,8 @@ fn configure_stream(
         .bytes_per_sample() as u32
         * params.channels.max(1);
     let period_bytes = params.period_frames.max(64).saturating_mul(bytes_per_frame);
-    let buffer_bytes = params
-        .buffer_frames
-        .max(params.period_frames.max(64))
-        .saturating_mul(bytes_per_frame);
+    let buffer_bytes =
+        params.buffer_frames.max(params.period_frames.max(64)).saturating_mul(bytes_per_frame);
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {
             hdr: VirtioSndPcmHdr {

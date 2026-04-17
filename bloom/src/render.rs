@@ -30,7 +30,20 @@ struct ServerBuffer {
 impl CompositorVisuals {
     pub fn new() -> Self {
         let handle = dlopen_str("/lib/libpistil.so", RTLD_NOW);
-        let pistil = if !handle.is_null() {
+        if handle.is_null() {
+            let err_ptr = unsafe { libdl::dlerror() };
+            let err_msg = if !err_ptr.is_null() {
+                let mut len = 0;
+                while unsafe { *err_ptr.add(len) } != 0 { len += 1; }
+                let slice = unsafe { core::slice::from_raw_parts(err_ptr as *const u8, len) };
+                core::str::from_utf8(slice).unwrap_or("non-utf8 error")
+            } else {
+                "unknown error"
+            };
+            stem::error!("bloom: failed to load /lib/libpistil.so: {} (falling back to periwinkle)", err_msg);
+            return Self { background: None, pistil: None };
+        }
+        let pistil = {
             let sym = dlsym_bytes(handle, b"pistil_prepare_background");
             if !sym.is_null() {
                 Some(PistilLib {
@@ -41,9 +54,6 @@ impl CompositorVisuals {
                 stem::error!("bloom: failed to find pistil_prepare_background");
                 None
             }
-        } else {
-            stem::error!("bloom: failed to load /lib/libpistil.so");
-            None
         };
 
         Self {
@@ -77,7 +87,8 @@ impl CompositorVisuals {
         };
 
         if !success {
-            texture.as_slice_mut().fill(0xFF333333);
+            stem::info!("bloom: using periwinkle fallback background");
+            texture.as_slice_mut().fill(0xFFCCCCFF);
         }
 
         let Some(buffer_id) = display.import_buffer(

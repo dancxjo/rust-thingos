@@ -63,6 +63,7 @@ fn main(arg: usize) -> ! {
         primary.width, primary.height, primary.refresh_mhz
     );
 
+    info!("bloom: creating service channel...");
     let (service_write, service_read) = match channel_create(65536) {
         Ok(pair) => pair,
         Err(e) => {

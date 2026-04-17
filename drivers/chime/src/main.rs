@@ -305,6 +305,37 @@ fn read_piped_stdin() -> Option<Vec<u8>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
+fn interrupted_while_waiting_for_audio() -> bool {
+    use abi::errors::Errno;
+    use abi::syscall::PollThing;
+    use abi::syscall::poll_flags::POLLIN;
+    use stem::syscall::vfs::{vfs_isatty, vfs_poll, vfs_read};
+
+    // Only interactive runs should watch for Ctrl-C from stdin.
+    if !matches!(vfs_isatty(0), Ok(true)) {
+        return false;
+    }
+
+    let mut pollfds = [PollThing { thing: 0, events: POLLIN, revents: 0 }];
+    match vfs_poll(&mut pollfds, 0) {
+        Ok(0) => false,
+        Ok(_) => {
+            if (pollfds[0].revents & POLLIN) == 0 {
+                return false;
+            }
+            let mut byte = [0u8; 1];
+            match vfs_read(0, &mut byte) {
+                Ok(1) => byte[0] == 0x03,
+                // ISIG-enabled ttys can convert Ctrl-C into EINTR instead of a byte.
+                Err(Errno::EINTR) => true,
+                _ => false,
+            }
+        }
+        Err(Errno::EINTR) => true,
+        Err(_) => false,
+    }
+}
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let tone_freq: Option<f64> = None;
@@ -324,9 +355,12 @@ fn main(_arg: usize) -> ! {
                 if open_attempts == 1 || open_attempts % 20 == 0 {
                     info!(
                         "chime: open /dev/audio/card0/out0 attempt {} failed: {:?}",
-                        open_attempts,
-                        err
+                        open_attempts, err
                     );
+                }
+                if interrupted_while_waiting_for_audio() {
+                    info!("chime: interrupted while waiting for /dev/audio/card0/out0");
+                    stem::syscall::exit(130);
                 }
                 stem::time::sleep_ms(100);
             }

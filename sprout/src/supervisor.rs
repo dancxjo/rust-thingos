@@ -172,10 +172,10 @@ impl Supervisor {
             self.monitor();
 
             if step % 20 == 0 {
-                stem::debug!("SPROUT: Still waiting for display (step {})...", step);
+                stem::info!("SPROUT: Still waiting for display (step {})...", step);
             }
             if step % 100 == 0 {
-                stem::debug!(
+                stem::info!(
                     "SPROUT: Health check: Loop still running, tasks={}",
                     self.tasks.lock().len()
                 );
@@ -427,6 +427,7 @@ impl Supervisor {
             while let Ok((n, n_fds)) =
                 stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds)
             {
+                stem::debug!("SPROUT: Received {} bytes ({} FDs) from {}", n, n_fds, task_name);
                 if n == 0 && n_fds == 0 {
                     break;
                 }

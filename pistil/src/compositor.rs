@@ -172,12 +172,15 @@ pub extern "C" fn pistil_prepare_background(
         return -2;
     };
 
-    let Some(mut wallpaper) = crate::bmp::load_bmp(path_str) else {
-        return -3;
-    };
-
     let dst = unsafe {
         core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize)
+    };
+
+    // Paint periwinkle first as diagnostic baseline
+    dst.fill(0xFFCCCCFF);
+
+    let Some(mut wallpaper) = crate::bmp::load_bmp(path_str) else {
+        return -3;
     };
 
     let src_w = wallpaper.width as usize;
