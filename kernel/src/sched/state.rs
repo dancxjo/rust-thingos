@@ -232,11 +232,11 @@ impl SchedState {
                 // `remove_thread_from_runq` marks them not-enqueued.
                 // Only return the entry if it still matches the task's canonical
                 // runq placement metadata.
-                if self
+                let valid_location = self
                     .get_thread(tid)
                     .and_then(|t| t.runq_location)
-                    != Some((cpu, prio))
-                {
+                    == Some((cpu, prio));
+                if !valid_location {
                     continue;
                 }
                 pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
