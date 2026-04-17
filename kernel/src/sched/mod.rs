@@ -1636,7 +1636,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
 
             if let Some(p) = best_q {
-                let id = self.state.dequeue_task_front(cpu_idx, p).unwrap();
+                let Some(id) = self.state.dequeue_task_front(cpu_idx, p) else {
+                    // Dequeue returned None despite the peek succeeding; the entry
+                    // must have been concurrently removed (e.g., by a misroute
+                    // repair). Skip and retry the priority scan.
+                    break;
+                };
                 pick_attempts += 1;
                 self.metrics.pops += 1;
 
@@ -1863,6 +1868,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
             return None;
         }
         // Steal the highest-priority non-pinned task.
+        // Queues 1-4 correspond to TaskPriority::Idle+1 through Realtime (see
+        // types::RUNQ_COUNT = 5 with queue 0 reserved for idle-priority tasks).
         for p in (1..5).rev() {
             let candidate = self.state.per_cpu[busiest_cpu].runq[p].front().copied();
             if let Some(tid) = candidate {

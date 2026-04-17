@@ -171,7 +171,7 @@ fn find_framebuffer() -> Option<Framebuffer> {
         Err(Errno::EACCES) => {
             stem::warn!(
                 "[BOOTFB] display_bootfb: EACCES opening /dev/fb0 — \
-                 driver lacks permission or device is not yet exposed by the kernel"
+                 driver process does not have read permission for the boot framebuffer device"
             );
             return None;
         }
