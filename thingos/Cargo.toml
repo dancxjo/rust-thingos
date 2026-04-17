@@ -10,4 +10,4 @@ license = "MIT OR Apache-2.0"
 path = "src/lib.rs"
 
 [dependencies]
-stem = { path = "stem" }
+stem = { path = "stem", default-features = false }

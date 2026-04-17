@@ -18,7 +18,7 @@ libm = "0.2"
 pciids = { path = "../../tools/pciids" }
 
 [features]
-default = ["global-alloc", "simd"]
+default = ["global-alloc"]
 rt = ["stem-macros"]
 alloc = []
 global-alloc = []
