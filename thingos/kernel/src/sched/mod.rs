@@ -2873,10 +2873,7 @@ fn mark_task_exited<R: BootRuntime>(
 
 fn purge_task_from_scheduler_queues<R: BootRuntime>(sched: &mut types::Scheduler<R>, tid: TaskId) {
     sched.state.remove_task_from_runq(tid);
-
-    if let Some(pos) = sched.state.wait_queue.iter().position(|&wid| wid == tid) {
-        sched.state.wait_queue.remove(pos);
-    }
+    sched.state.unregister_waiter(tid);
 
     let _ = sched.state.remove_task_from_sleep_queue(tid);
 }
@@ -4878,7 +4875,9 @@ mod tests {
         if let Some(mut task) = crate::task::registry::get_task_mut::<MockRuntime>(5001) {
             task.state = TaskState::Blocked;
         }
-        sched.state.wait_queue.push_back(5001);
+        sched
+            .state
+            .register_waiter(5001, crate::sched::state::WaitReason::BlockCurrent);
 
         // Verify task is stuck blocked
         assert_eq!(
@@ -4897,9 +4896,7 @@ mod tests {
         // So we just directly call the core logic we care about: the wake sleeper unblock logic.
 
         // Remove from wait queue if present
-        if let Some(pos) = sched.state.wait_queue.iter().position(|&wid| wid == 5001) {
-            sched.state.wait_queue.remove(pos);
-        }
+        sched.state.unregister_waiter(5001);
 
         // Update state to Runnable and add to runq
         if let Some(mut task) = crate::task::registry::get_task_mut::<MockRuntime>(5001) {
@@ -5258,7 +5255,9 @@ mod tests {
             .insert(alloc::boxed::Box::new(current_task));
         crate::task::registry::get_registry::<MockRuntime>()
             .insert(alloc::boxed::Box::new(blocked_task));
-        sched.state.wait_queue.push_back(7001);
+        sched
+            .state
+            .register_waiter(7001, crate::sched::state::WaitReason::BlockCurrent);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
@@ -5586,7 +5585,9 @@ mod tests {
         // runnable task exists so terminate_current can produce a switch.
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8303);
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8304);
-        sched.state.wait_queue.push_back(8303);
+        sched
+            .state
+            .register_waiter(8303, crate::sched::state::WaitReason::BlockCurrent);
         sched.state.add_task_to_sleep_queue(8303, 55);
         sched.state.add_task_to_sleep_queue(9999, 55);
 
@@ -5608,7 +5609,7 @@ mod tests {
             "dead current task must be removed from the run queue"
         );
         assert!(
-            !sched.state.wait_queue.iter().any(|&tid| tid == 8303),
+            !sched.state.wait_queue.contains(&8303),
             "dead current task must be removed from the wait queue"
         );
         assert_eq!(sched.state.sleep_queue.get(&55).cloned(), Some(alloc::vec![9999]));
@@ -5686,7 +5687,9 @@ mod tests {
         });
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);
-        sched.state.wait_queue.push_back(8305);
+        sched
+            .state
+            .register_waiter(8305, crate::sched::state::WaitReason::BlockCurrent);
         sched.state.add_task_to_sleep_queue(8305, 77);
 
         let mut sched_lock = SCHEDULER.lock();
@@ -5704,7 +5707,7 @@ mod tests {
             "reaped task must be removed from the run queue"
         );
         assert!(
-            !sched.state.wait_queue.iter().any(|&tid| tid == 8305),
+            !sched.state.wait_queue.contains(&8305),
             "reaped task must be removed from the wait queue"
         );
         assert!(!sched.state.sleep_queue.contains_key(&77));
