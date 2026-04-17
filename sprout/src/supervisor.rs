@@ -401,7 +401,11 @@ impl Supervisor {
 
         if !pollfds.is_empty() {
             match stem::syscall::vfs::vfs_poll(&mut pollfds, 0) {
-                Ok(_) => {}
+                Ok(n) => {
+                    if n > 0 {
+                        stem::debug!("SPROUT: poll yielded {} ready events", n);
+                    }
+                }
                 Err(e) => {
                     warn!("SPROUT: registration poll failed: {:?}", e);
                     return;
@@ -410,12 +414,17 @@ impl Supervisor {
         }
 
         for ((resp_fd, drv_req_write, task_name), pollfd) in tasks_to_poll.into_iter().zip(pollfds.iter()) {
-            if pollfd.revents
-                & (abi::syscall::poll_flags::POLLIN
-                    | abi::syscall::poll_flags::POLLHUP
-                    | abi::syscall::poll_flags::POLLERR)
-                == 0
-            {
+            if pollfd.revents == 0 {
+                continue;
+            }
+
+            stem::info!("SPROUT: Events for '{}' (FD {}): 0x{:x}", task_name, resp_fd, pollfd.revents);
+
+            if pollfd.revents & (abi::syscall::poll_flags::POLLHUP | abi::syscall::poll_flags::POLLERR) != 0 {
+                stem::warn!("SPROUT: Task '{}' (FD {}) hung up or error: 0x{:x}", task_name, resp_fd, pollfd.revents);
+            }
+
+            if pollfd.revents & abi::syscall::poll_flags::POLLIN == 0 {
                 continue;
             }
 
@@ -424,64 +433,49 @@ impl Supervisor {
             let mut process_count = 0;
 
             // Drain the channel using the cached FD.
-            while let Ok((n, n_fds)) =
-                stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds)
-            {
-                stem::debug!("SPROUT: Received {} bytes ({} FDs) from {}", n, n_fds, task_name);
-                if n == 0 && n_fds == 0 {
-                    break;
-                }
-
-                process_count += 1;
-                if process_count > 32 {
-                    stem::warn!(
-                        "SPROUT: Throttling registration processing for task '{}'",
-                        task_name
-                    );
-                    break;
-                }
-                let bundled_fd = if n_fds > 0 { msg_fds[0] } else { 0 };
-
-                if let Some((header, payload)) =
-                    abi::display_driver_protocol::parse_message(&msg_data[..n])
-                {
-                    if header.msg_type == abi::supervisor_protocol::MSG_BIND_READY {
-                        info!("SPROUT: BIND_READY from {} (bundle_fd={})", task_name, bundled_fd);
-                        self.handle_bind_ready(&task_name, drv_req_write, payload, bundled_fd);
-                    } else if header.msg_type == abi::supervisor_protocol::MSG_SERVICE_READY {
-                        if let Some(svc) =
-                            abi::supervisor_protocol::decode_service_ready_le(payload)
-                        {
-                            stem::debug!(
-                                "SPROUT: SERVICE_READY from {} (ID: {})",
-                                task_name,
-                                svc.bind_instance_id
-                            );
-                            info!("SPROUT: Service '{}' is fully operational.", task_name);
+            loop {
+                let recv_res = stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds);
+                match recv_res {
+                    Ok((n, n_fds)) => {
+                        stem::info!("SPROUT: Received {} bytes ({} FDs) from '{}'", n, n_fds, task_name);
+                        if n == 0 && n_fds == 0 {
+                            stem::debug!("SPROUT: EOF from '{}'", task_name);
+                            break;
                         }
-                    } else if header.msg_type == abi::supervisor_protocol::MSG_SERVICE_EXITING {
-                        if let Some(svc) =
-                            abi::supervisor_protocol::decode_service_exiting_le(payload)
-                        {
-                            if svc.exit_code == 0 {
-                                info!(
-                                    "SPROUT: Service '{}' exiting cleanly (ID: {}).",
-                                    task_name, svc.bind_instance_id
-                                );
+
+                        process_count += 1;
+                        if process_count > 32 {
+                            stem::warn!("SPROUT: Throttling registration for '{}'", task_name);
+                            break;
+                        }
+
+                        let bundled_fd = if n_fds > 0 { msg_fds[0] } else { 0 };
+                        let parsed = abi::display_driver_protocol::parse_message(&msg_data[..n]);
+                        
+                        if let Some((header, payload)) = parsed {
+                            stem::info!("SPROUT: Decoded message type {} from '{}'", header.msg_type, task_name);
+                            if header.msg_type == abi::supervisor_protocol::MSG_BIND_READY {
+                                info!("SPROUT: BIND_READY from {} (bundle_fd={})", task_name, bundled_fd);
+                                self.handle_bind_ready(&task_name, drv_req_write, payload, bundled_fd);
+                            } else if header.msg_type == abi::supervisor_protocol::MSG_SERVICE_READY {
+                                info!("SPROUT: Service '{}' is fully operational.", task_name);
+                            } else if header.msg_type == abi::supervisor_protocol::MSG_SERVICE_EXITING {
+                                info!("SPROUT: Service '{}' exiting.", task_name);
                             } else {
-                                warn!(
-                                    "SPROUT: Service '{}' exiting with error code {} (ID: {}).",
-                                    task_name, svc.exit_code, svc.bind_instance_id
-                                );
+                                stem::warn!("SPROUT: Unhandled message type {} from '{}'", header.msg_type, task_name);
                             }
+                        } else {
+                            stem::error!("SPROUT: Failed to parse protocol message ({} bytes) from '{}'", n, task_name);
                         }
                     }
+                    Err(abi::errors::Errno::EAGAIN) => {
+                        break;
+                    }
+                    Err(e) => {
+                        stem::error!("SPROUT: recvmsg error for '{}': {:?}", task_name, e);
+                        break;
+                    }
                 }
-
-                // If we received an FD but didn't use it for a BIND_READY (or even if we did),
-                // it might need closing if handle_bind_ready didn't take ownership.
-                // In our protocol, sprout ONLY uses the FD during handle_bind_ready's vfs_mount.
-                // Wait! handle_bind_ready should close it. I'll check that.
             }
         }
     }
