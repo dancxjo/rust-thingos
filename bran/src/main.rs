@@ -24,9 +24,16 @@ unsafe extern "C" fn kmain() -> ! {
     // Architecture-specific early initialization (e.g., stack mode switching on AArch64)
     unsafe {
         RUNTIME.early_init();
+        kernel::logging::init(&RUNTIME);
     }
 
     assert!(BASE_REVISION.is_supported());
+
+    if FRAMEBUFFER_REQUEST.get_response().is_none() {
+        kernel::kwarn!("Limine: FRAMEBUFFER_REQUEST not fulfilled!");
+    } else {
+        kernel::kinfo!("Limine: FRAMEBUFFER_REQUEST fulfilled.");
+    }
 
     // Initialize architecture-specific paging (HHDM offset, etc.)
     arch::init_paging();

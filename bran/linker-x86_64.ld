@@ -38,9 +38,11 @@ SECTIONS
 
     .data : {
         *(.data .data.*)
+    } :data
 
-        /* Place the sections that contain the Limine requests as part of the .data */
-        /* output section. */
+    .limine_reqs : {
+        KEEP(*(.limine_reqs*))
+        KEEP(*(.limine_requests*))
         KEEP(*(.requests_start_marker))
         KEEP(*(.requests))
         KEEP(*(.requests_end_marker))
