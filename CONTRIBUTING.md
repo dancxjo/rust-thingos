@@ -19,7 +19,7 @@ ThingOS is migrating from a Unix/Linux Process+Thread model toward a set of
 first-class concepts: **Task**, **Job**, **Space**, **Authority**, **Place**,
 and **Group**.  Before writing or reviewing code that touches `kernel/`, `abi/`,
 `bran/`, `stem/`, `utils/`, or top-level userspace crates (`bloom/`, `bristle/`,
-`pistil/`, `pistil-shared/`, `sprout/`), consult:
+`pistil/`, `sprout/`), consult:
 
 - [`docs/migration/concept-mapping.md`](docs/migration/concept-mapping.md) —
   canonical mapping between legacy Unix concepts and ThingOS concepts,

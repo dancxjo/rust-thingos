@@ -23,7 +23,7 @@ fi
 # 3. Only Blossom writes UI_PRESENT_EPOCH
 # Heuristic: look for prop_set calls with UI_PRESENT_EPOCH
 # exclude target directory
-FOUND_WRITES=$(grep -r "prop_set.*keys::UI_PRESENT_EPOCH" utils/ bloom/ bristle/ pistil/ pistil-shared/ sprout/ | grep -v "utils/blossom/" | grep -v "target/" || true)
+FOUND_WRITES=$(grep -r "prop_set.*keys::UI_PRESENT_EPOCH" utils/ bloom/ bristle/ pistil/ sprout/ | grep -v "utils/blossom/" | grep -v "target/" || true)
 
 if [ ! -z "$FOUND_WRITES" ]; then
     echo "FAIL: Forbidden writes to UI_PRESENT_EPOCH found outside Blossom:"

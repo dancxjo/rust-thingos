@@ -101,7 +101,6 @@ members = [
   "utils/find",
   "utils/file",
   "pistil",
-  "pistil-shared",
   "utils/grep",
   "utils/head",
   "utils/hello_stdio",

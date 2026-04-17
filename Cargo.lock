@@ -4815,14 +4815,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pistil-shared"
-version = "0.1.0"
-dependencies = [
- "pistil",
- "stem",
-]
-
-[[package]]
 name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
