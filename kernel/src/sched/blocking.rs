@@ -94,13 +94,13 @@ pub fn block_current<R: BootRuntime>() {
                 lock_start,
             );
             // Return None (no context switch); deferred REGISTRY clear handled below.
-            let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             (None, deferred_prepare_ipis)
         } else {
             // Add to wait queue and pick next task to run.
             sched.state.wait_queue.push_back(current_id);
             let switch = sched.prepare_schedule();
-            let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             super::record_sched_lock_hold::<R>(
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
