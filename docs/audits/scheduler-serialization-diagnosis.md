@@ -165,3 +165,51 @@
   - Startup traces should show overlapping `flytrap` + `blossom` spawn work instead of
     a single serialized UI chain, improving effective multi-CPU utilization during
     userspace bring-up.
+
+## 7) Scheduler perf tracking issue (de-centralization + hot-path reductions)
+
+- Tracking issue: [#311](https://github.com/dancxjo/thingos/issues/311)
+
+### Child issue checklist (linked)
+
+- [x] [#303](https://github.com/dancxjo/thingos/issues/303) — shrink `prepare_schedule()` lock-held work
+- [x] [#304](https://github.com/dancxjo/thingos/issues/304) — remove O(n) runqueue removals in wake/block paths
+- [x] [#305](https://github.com/dancxjo/thingos/issues/305) — de-centralize sleeper wakeups from CPU 0
+- [x] [#306](https://github.com/dancxjo/thingos/issues/306) — simplify Any-affinity wake policy
+- [ ] [#307](https://github.com/dancxjo/thingos/issues/307) — convert pending IPI dedup to bitmap
+- [x] [#308](https://github.com/dancxjo/thingos/issues/308) — remove global sleep-queue scan on targeted wake
+- [x] [#309](https://github.com/dancxjo/thingos/issues/309) — reduce registry coupling in picker path
+- [ ] [#310](https://github.com/dancxjo/thingos/issues/310) — address sorted-thread-vector churn costs
+- [x] [#312](https://github.com/dancxjo/thingos/issues/312) — follow-up closure for targeted wake sleep-queue scan removal
+- [ ] [#313](https://github.com/dancxjo/thingos/issues/313) — remaining global scheduler lock contention reduction
+
+### Phased rollout plan
+
+- **Wave 1 (completed hot-path reductions):** #303, #304, #305, #306, #308/#312, #309
+- **Wave 2 (open scalability reductions):** #307, #310
+- **Wave 3 (de-centralization continuation):** #313 + follow-up per lock-contention data
+
+### Benchmark record (SMP-heavy scenario)
+
+Scenario: `x86_64` QEMU with `-smp 6`, scheduler telemetry enabled (`SCHED_TELEMETRY=1`), startup/orchestration-heavy boot path.
+
+| Metric | Baseline capture | After capture | Status |
+|---|---|---|---|
+| Scheduler lock hold time (hist/max) | `sched_lock_metrics_snapshot_and_reset` (`prepare/yield/wake/sleep`) | same counters after each wave | Wave 1 captured in linked child issues; Wave 2/3 pending |
+| Wake latency | scheduler wait/hold telemetry histograms (`wake_task`, `wake_sleepers`) | same counters after each wave | Wave 1 captured in linked child issues; Wave 2/3 pending |
+| Throughput | runnable transitions + per-CPU runq depth and dispatch stats | same counters after each wave | Wave 1 captured in linked child issues; Wave 2/3 pending |
+
+### Risk + correctness checklist (per change)
+
+- [x] Wakeup correctness preserved (no duplicate runnable enqueue, no lost wake) in wake/block paths
+- [x] Affinity routing correctness preserved (`Pinned` remains strict, `Any` keeps locality-default behavior)
+- [x] Deferred IPI behavior preserves dedup/no-drop semantics
+- [x] Scheduler/registry state synchronization remains coherent after picker-path decoupling
+- [ ] Open-wave changes validated against stale-runq entries and task lifecycle churn (#307, #310)
+- [ ] Re-check lock-contention regressions after Wave 2/3 with the same SMP-heavy scenario
+
+### Remaining blockers and follow-up work
+
+- `pending_prepare_schedule_ipis` still uses vector-style dedup in open path (#307).
+- Sorted-thread storage churn remains open for spawn/exit-heavy workloads (#310).
+- A broader global-lock contention reduction remains open (#313).

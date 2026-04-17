@@ -2,6 +2,7 @@
 
 use crate::BootRuntime;
 use crate::task::TaskId;
+use crate::task::TaskState;
 use core::marker::PhantomData;
 
 /// Default time slice in ticks (~100ms at 100Hz timer)
@@ -72,6 +73,25 @@ pub struct SwitchParams<Ctx, AS> {
     pub to_user_fs_base: u64,
 }
 
+/// Deferred REGISTRY synchronization for one task.
+///
+/// `prepare_schedule` records scheduling-side state transitions in the
+/// scheduler hot cache first, then emits one or more of these updates so the
+/// canonical REGISTRY record can be synchronized after the SCHEDULER lock is
+/// released. Lock-owning scheduler call sites are responsible for draining and
+/// applying these updates once they drop `SCHEDULER` (see
+/// `apply_deferred_registry_syncs` users in `sched`/`task` modules).
+pub(crate) struct DeferredRegistrySync {
+    /// Task being synchronized.
+    pub tid: TaskId,
+    /// New lifecycle state to write when a transition happened.
+    pub new_state: Option<TaskState>,
+    /// New enqueue tick when transitioning back to Runnable.
+    pub new_enqueued_at_tick: Option<u64>,
+    /// Last CPU the task was observed running or switching on.
+    pub new_last_cpu: Option<usize>,
+}
+
 pub(crate) struct SchedulerMetrics {
     pub yields: u64,
     pub pops: u64,
@@ -103,6 +123,11 @@ pub struct Scheduler<R: BootRuntime> {
     /// Repaired in bounded batches so the picker path does not janitor the
     /// entire backlog under the global scheduler lock in a single call.
     pub(crate) pending_misrouted_requeues: alloc::vec::Vec<(usize, usize, TaskId)>,
+    /// REGISTRY synchronization work deferred out of `prepare_schedule` so the
+    /// hot selection path can update scheduler cache fields without immediate
+    /// REGISTRY lock coupling. Callers must drain/apply after releasing
+    /// SCHEDULER.
+    pub(crate) pending_registry_syncs: alloc::vec::Vec<DeferredRegistrySync>,
     _phantom: core::marker::PhantomData<R>,
 }
 
@@ -133,6 +158,7 @@ impl<R: BootRuntime> Scheduler<R> {
             wake_sleepers_budget_carry: 0,
             pending_prepare_schedule_ipis_bitmap: 0,
             pending_misrouted_requeues: alloc::vec::Vec::new(),
+            pending_registry_syncs: alloc::vec::Vec::new(),
             _phantom: PhantomData,
         }
     }

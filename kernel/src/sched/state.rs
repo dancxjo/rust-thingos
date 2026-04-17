@@ -100,6 +100,12 @@ pub struct SleepEntry {
     pub wake_tick: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SleepMembership {
+    pub wake_tick: u64,
+    pub bucket_index: usize,
+}
+
 pub struct PerCpu {
     pub runq: [VecDeque<ThreadId>; 5],
     pub idle_task: Option<ThreadId>,
@@ -148,6 +154,7 @@ pub struct SchedState {
     pub threads: Vec<ThreadSchedFields>,
     pub per_cpu: Vec<PerCpu>,
     pub sleep_queue: BTreeMap<u64, Vec<ThreadId>>,
+    pub sleep_membership: BTreeMap<ThreadId, SleepMembership>,
     pub wait_queue: VecDeque<ThreadId>,
     pub online_cpu_count: usize,
     pub online_cpus: Vec<usize>,
@@ -159,6 +166,7 @@ impl SchedState {
             threads: Vec::with_capacity(1024),
             per_cpu: Vec::with_capacity(32),
             sleep_queue: BTreeMap::new(),
+            sleep_membership: BTreeMap::new(),
             wait_queue: VecDeque::with_capacity(1024),
             online_cpu_count: 1,
             online_cpus: Vec::with_capacity(32),
@@ -269,12 +277,96 @@ impl SchedState {
     }
 
     pub fn remove_thread(&mut self, tid: ThreadId) -> bool {
+        // Best-effort cleanup: thread may not be sleeping.
+        let _ = self.remove_task_from_sleep_queue(tid);
         if let Ok(idx) = self.threads.binary_search_by_key(&tid, |t| t.tid) {
             self.threads.remove(idx);
             true
         } else {
             false
         }
+    }
+
+    pub fn refresh_sleep_bucket_membership(&mut self, wake_tick: u64) {
+        // Callers must clear membership for tids removed from this bucket before
+        // invoking refresh. This helper only rebuilds indices for tids that are
+        // still present in `sleep_queue[wake_tick]`.
+        let Some(bucket) = self.sleep_queue.get(&wake_tick) else {
+            return;
+        };
+        for (idx, tid) in bucket.iter().copied().enumerate() {
+            self.sleep_membership.insert(
+                tid,
+                SleepMembership {
+                    wake_tick,
+                    bucket_index: idx,
+                },
+            );
+        }
+    }
+
+    pub fn add_task_to_sleep_queue(&mut self, tid: ThreadId, wake_tick: u64) {
+        self.remove_task_from_sleep_queue(tid);
+
+        let idx = {
+            let bucket = self.sleep_queue.entry(wake_tick).or_default();
+            bucket.push(tid);
+            bucket.len() - 1
+        };
+        self.sleep_membership.insert(
+            tid,
+            SleepMembership {
+                wake_tick,
+                bucket_index: idx,
+            },
+        );
+    }
+
+    pub fn remove_task_from_sleep_queue(&mut self, tid: ThreadId) -> bool {
+        let Some(membership) = self.sleep_membership.get(&tid).copied() else {
+            return false;
+        };
+
+        let mut removed = false;
+        let mut remove_bucket = false;
+        let mut moved: Option<(ThreadId, usize)> = None;
+
+        if let Some(bucket) = self.sleep_queue.get_mut(&membership.wake_tick) {
+            let remove_idx = if bucket.get(membership.bucket_index) == Some(&tid) {
+                Some(membership.bucket_index)
+            } else {
+                // Metadata can become stale when tests or transitional code
+                // manipulate buckets directly; constrain fallback to this bucket
+                // (never a global map scan).
+                bucket.iter().position(|&id| id == tid)
+            };
+
+            if let Some(idx) = remove_idx {
+                bucket.swap_remove(idx);
+                if idx < bucket.len() {
+                    moved = Some((bucket[idx], idx));
+                }
+                remove_bucket = bucket.is_empty();
+                removed = true;
+            }
+        }
+
+        if remove_bucket {
+            self.sleep_queue.remove(&membership.wake_tick);
+        }
+
+        self.sleep_membership.remove(&tid);
+
+        if let Some((moved_tid, moved_idx)) = moved {
+            self.sleep_membership.insert(
+                moved_tid,
+                SleepMembership {
+                    wake_tick: membership.wake_tick,
+                    bucket_index: moved_idx,
+                },
+            );
+        }
+        removed
     }
 
     // ── Backward-compatible forwarding methods ────────────────────────────────
@@ -396,6 +488,47 @@ mod tests {
             state.per_cpu[0].stats.runnable_dequeues,
             1,
             "valid dequeue should increment runnable_dequeues"
+        );
+    }
+
+    #[test]
+    fn sleep_membership_remove_updates_moved_index_and_cleans_empty_bucket() {
+        let mut state = SchedState::new();
+        state.add_task_to_sleep_queue(21, 100);
+        state.add_task_to_sleep_queue(22, 100);
+
+        assert!(state.remove_task_from_sleep_queue(21));
+        assert_eq!(state.sleep_queue.get(&100).cloned(), Some(alloc::vec![22]));
+        assert_eq!(
+            state.sleep_membership.get(&22).copied(),
+            Some(SleepMembership {
+                wake_tick: 100,
+                bucket_index: 0
+            })
+        );
+
+        assert!(state.remove_task_from_sleep_queue(22));
+        assert!(!state.sleep_queue.contains_key(&100));
+        assert!(!state.sleep_membership.contains_key(&22));
+    }
+
+    #[test]
+    fn add_task_to_sleep_queue_moves_existing_membership_between_buckets() {
+        let mut state = SchedState::new();
+        state.add_task_to_sleep_queue(31, 11);
+        state.add_task_to_sleep_queue(31, 12);
+
+        assert!(
+            state.sleep_queue.get(&11).map_or(true, |v| v.is_empty()),
+            "old bucket should be absent or empty after moving sleep membership"
+        );
+        assert_eq!(state.sleep_queue.get(&12).cloned(), Some(alloc::vec![31]));
+        assert_eq!(
+            state.sleep_membership.get(&31).copied(),
+            Some(SleepMembership {
+                wake_tick: 12,
+                bucket_index: 0
+            })
         );
     }
 }

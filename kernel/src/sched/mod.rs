@@ -101,6 +101,10 @@ pub static PROF_TASK_STATUS_POLLS: AtomicU64 = AtomicU64::new(0);
 /// Count of task transitions into the Runnable state (runnable transitions).
 pub static PROF_RUNNABLE_TRANSITIONS: AtomicU64 = AtomicU64::new(0);
 
+/// Count of wake calls that skipped the scheduler lock because the target task
+/// already had `wake_pending = true`.
+pub static PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING: AtomicU64 = AtomicU64::new(0);
+
 /// Per-CPU last-sampled run-queue length.
 pub static PROF_RUNQ_LEN_LAST: [AtomicU64; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
@@ -190,6 +194,9 @@ pub struct SchedLockSiteMetrics {
     pub task_status_polls: u64,
     /// Number of Blocked → Runnable transitions since the last snapshot.
     pub runnable_transitions: u64,
+    /// Wake calls that avoided the SCHEDULER lock because a wake was already
+    /// pending for the target task.
+    pub wake_task_fastpath_already_pending: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +300,14 @@ enum AnyWakeOverloadPolicy {
 static ANY_WAKE_POLICY_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Off as u8);
 static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
+// The streak counter storage is AtomicU8, but clamp APIs operate on usize.
+const ANY_WAKE_OVERLOAD_STREAK_MAX: usize = u8::MAX as usize;
+static ANY_WAKE_OVERLOAD_STREAK_REQUIRED: AtomicUsize = AtomicUsize::new(3);
+static ANY_WAKE_OVERLOAD_STREAK: [AtomicU8; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_ZERO: AtomicU8 = AtomicU8::new(0);
+    [ATOMIC_ZERO; types::MAX_CPUS]
+};
 
 fn any_wake_overload_policy_from_u8(v: u8) -> AnyWakeOverloadPolicy {
     match v {
@@ -324,6 +339,12 @@ fn init_any_wake_policy_from_env_once() {
         if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_OVERLOAD_GAP") {
             if let Ok(gap) = v.parse::<usize>() {
                 ANY_WAKE_OVERLOAD_GAP.store(gap.max(1), Ordering::Release);
+            }
+        }
+        if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_OVERLOAD_STREAK") {
+            if let Ok(streak) = v.parse::<usize>() {
+                ANY_WAKE_OVERLOAD_STREAK_REQUIRED
+                    .store(streak.clamp(1, ANY_WAKE_OVERLOAD_STREAK_MAX), Ordering::Release);
             }
         }
     }
@@ -576,6 +597,8 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
         runq_len_max,
         task_status_polls: PROF_TASK_STATUS_POLLS.swap(0, Ordering::Relaxed),
         runnable_transitions: PROF_RUNNABLE_TRANSITIONS.swap(0, Ordering::Relaxed),
+        wake_task_fastpath_already_pending: PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING
+            .swap(0, Ordering::Relaxed),
     }
 }
 
@@ -716,6 +739,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             // Drain IPIs deferred by prepare_schedule misroute handling while
             // the lock is still held, so we can send them after unlock.
             let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
+            let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             if let Some(switch) = switch {
                 // Must drop lock before context switch!
                 drop(lock);
@@ -727,6 +751,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     rt.send_ipi(cpu, 0x30);
                 }
                 send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
+                apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
 
                 rt.tasking().activate_address_space(switch.to_aspace);
 
@@ -788,6 +813,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     rt.send_ipi(cpu, 0x30);
                 }
                 send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
+                apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
             }
         }
     } else {
@@ -863,6 +889,24 @@ pub(crate) fn send_deferred_prepare_schedule_ipis<R: BootRuntime>(
     }
 }
 
+pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
+    deferred_updates: alloc::vec::Vec<types::DeferredRegistrySync>,
+) {
+    for update in deferred_updates {
+        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(update.tid) {
+            if let Some(state) = update.new_state {
+                task.state = state;
+            }
+            if let Some(enqueued_at_tick) = update.new_enqueued_at_tick {
+                task.enqueued_at_tick = enqueued_at_tick;
+            }
+            if let Some(last_cpu) = update.new_last_cpu {
+                task.last_cpu = Some(last_cpu);
+            }
+        }
+    }
+}
+
 pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     sched: &types::Scheduler<R>,
     preferred_cpu: usize,
@@ -885,15 +929,37 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
         return preferred;
     }
 
+    let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
+    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
+    let overloaded = preferred_depth >= overload_gap;
+    let Some(streak_cell) = ANY_WAKE_OVERLOAD_STREAK.get(preferred) else {
+        return preferred;
+    };
+    if !overloaded {
+        streak_cell.store(0, Ordering::Release);
+        return preferred;
+    }
+
+    let streak_required = ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire) as u8;
+    let prior_streak = streak_cell.load(Ordering::Acquire);
+    let next_streak = prior_streak.saturating_add(1);
+    streak_cell.store(next_streak, Ordering::Release);
+    if next_streak < streak_required {
+        return preferred;
+    }
+
     let Some((least_cpu, least_depth)) = least_loaded_online_cpu(&sched.state) else {
         return preferred;
     };
-    let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
-    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
     // Run-queue depth is a bounded queue-length sum; use saturating subtraction
     // so "depth delta >= gap" cannot wrap.
-    let overloaded = preferred_depth.saturating_sub(least_depth) >= overload_gap;
-    if overloaded && least_cpu != preferred { least_cpu } else { preferred }
+    let overloaded_vs_least = preferred_depth.saturating_sub(least_depth) >= overload_gap;
+    if overloaded_vs_least && least_cpu != preferred {
+        streak_cell.store(0, Ordering::Release);
+        least_cpu
+    } else {
+        preferred
+    }
 }
 
 #[cfg(test)]
@@ -901,13 +967,29 @@ fn reset_any_wake_policy_for_tests() {
     ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
     ANY_WAKE_OVERLOAD_POLICY.store(AnyWakeOverloadPolicy::Off as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(4, Ordering::Release);
+    ANY_WAKE_OVERLOAD_STREAK_REQUIRED.store(3, Ordering::Release);
+    for streak in &ANY_WAKE_OVERLOAD_STREAK {
+        streak.store(0, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
 fn set_any_wake_policy_for_tests(policy: &str, overload_gap: usize) {
+    set_any_wake_policy_for_tests_with_streak(policy, overload_gap, 1);
+}
+
+#[cfg(test)]
+fn set_any_wake_policy_for_tests_with_streak(policy: &str, overload_gap: usize, overload_streak: usize) {
     ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
     ANY_WAKE_OVERLOAD_POLICY.store(parse_any_wake_overload_policy(policy) as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(overload_gap.max(1), Ordering::Release);
+    ANY_WAKE_OVERLOAD_STREAK_REQUIRED.store(
+        overload_streak.clamp(1, ANY_WAKE_OVERLOAD_STREAK_MAX),
+        Ordering::Release,
+    );
+    for streak in &ANY_WAKE_OVERLOAD_STREAK {
+        streak.store(0, Ordering::Release);
+    }
 }
 
 pub fn init<R: BootRuntime>() {
@@ -1205,6 +1287,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let to_take = core::cmp::min(wake_budget, tids.len());
 
                 for tid in tids.drain(..to_take) {
+                    // This task left the sleep queue (woken or dropped if task
+                    // record vanished), so clear direct membership now.
+                    self.state.sleep_membership.remove(&tid);
                     // Read scheduling fields from the hot-field cache only.
                     // REGISTRY is not accessed in this inner loop.
                     if let Some(sf) = self.state.get_thread(tid) {
@@ -1225,6 +1310,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 wake_budget = wake_budget.saturating_sub(to_take);
                 if !tids.is_empty() {
                     self.state.sleep_queue.insert(wake_tick, tids);
+                    // Remaining tids stayed in this bucket after budget limiting;
+                    // refresh their direct membership indices in one pass.
+                    self.state.refresh_sleep_bucket_membership(wake_tick);
                     break;
                 }
             } else {
@@ -1619,12 +1707,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 );
                 panic!("failed to find current_id {} in get_task_index", current_id)
             });
-            let mut reg = crate::task::registry::get_registry::<R>();
-            reg.threads[idx].state = TaskState::Running;
-            // Keep the scheduler-side cache in sync.  Only `state` is updated
-            // here because `enqueued_at_tick` and `timeslice_remaining` are
-            // unchanged in the same-task (no-switch) case: the current task
-            // simply continues running without re-enqueueing.
+            // Keep scheduler cache fields in sync. No REGISTRY write is needed
+            // in the same-task (no-switch) case: this task remains running and
+            // no lifecycle transition occurred.
             self.state.threads[idx].state = TaskState::Running;
             self.state.threads[idx].run_cpu = Some(cpu_idx);
             return None;
@@ -1656,6 +1741,42 @@ impl<R: BootRuntime> types::Scheduler<R> {
             panic!("failed to find next_id {} in get_task_index", next_id)
         });
 
+        // Drive transition decisions from the scheduler hot-cache and defer
+        // REGISTRY synchronization for these state fields until after the
+        // SCHEDULER lock is released.
+        let old_was_running = self.state.threads[old_idx].state == TaskState::Running;
+        let mut old_registry_sync = types::DeferredRegistrySync {
+            tid: current_id,
+            new_state: None,
+            new_enqueued_at_tick: None,
+            new_last_cpu: Some(cpu_idx),
+        };
+        if old_was_running {
+            self.state.threads[old_idx].state = TaskState::Runnable;
+            self.state.threads[old_idx].enqueued_at_tick = now;
+            old_registry_sync.new_state = Some(TaskState::Runnable);
+            old_registry_sync.new_enqueued_at_tick = Some(now);
+        }
+        self.state.threads[old_idx].last_cpu = Some(cpu_idx);
+        self.pending_registry_syncs.push(old_registry_sync);
+        self.state.threads[new_idx].state = TaskState::Running;
+        self.state.threads[new_idx].last_cpu = Some(cpu_idx);
+        self.state.threads[new_idx].run_cpu = Some(cpu_idx);
+        self.pending_registry_syncs
+            .push(types::DeferredRegistrySync {
+                tid: next_id,
+                new_state: Some(TaskState::Running),
+                new_enqueued_at_tick: None,
+                new_last_cpu: Some(cpu_idx),
+            });
+        // Only timeslice_remaining is intentionally managed exclusively via the
+        // hot-field cache:
+        // schedule_point decrements it without touching REGISTRY. The REGISTRY
+        // copy may therefore be stale between context switches; this is
+        // intentional and acceptable because no correctness-critical path reads
+        // it from REGISTRY (dump_stats shows it for diagnostics only), unlike
+        // lifecycle/placement fields which are now deferred-synced above.
+
         let mut reg = crate::task::registry::get_registry::<R>();
         let (old_task, new_task) = if old_idx < new_idx {
             let (left, right) = reg.threads.split_at_mut(new_idx);
@@ -1664,34 +1785,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
             let (left, right) = reg.threads.split_at_mut(old_idx);
             (&mut right[0], &mut left[new_idx])
         };
-
-        // Drive transition decisions from the scheduler hot-cache instead of
-        // reading lifecycle state back from the large runtime Thread record.
-        if self.state.threads[old_idx].state == TaskState::Running {
-            old_task.state = TaskState::Runnable;
-            old_task.enqueued_at_tick = now;
-        }
-        new_task.state = TaskState::Running;
-        new_task.last_cpu = Some(cpu_idx);
-
-        // Keep the scheduler-side hot-field cache in sync with the registry
-        // state transitions that just happened above.
-        if self.state.threads[old_idx].state == TaskState::Running {
-            self.state.threads[old_idx].state = TaskState::Runnable;
-            // Copy enqueued_at_tick from old_task, which was just set to
-            // TICK_COUNT in the REGISTRY update at line 1335 above, so that
-            // future aging calculations in prepare_schedule use the correct tick.
-            self.state.threads[old_idx].enqueued_at_tick = old_task.enqueued_at_tick;
-        }
-        self.state.threads[old_idx].last_cpu = Some(cpu_idx);
-        self.state.threads[new_idx].state = TaskState::Running;
-        self.state.threads[new_idx].last_cpu = Some(cpu_idx);
-        self.state.threads[new_idx].run_cpu = Some(cpu_idx);
-        // timeslice_remaining is managed exclusively via the hot-field cache:
-        // schedule_point decrements it without touching REGISTRY. The REGISTRY
-        // copy may therefore be stale between context switches; this is
-        // intentional and acceptable because no correctness-critical path reads
-        // it from REGISTRY (dump_stats shows it for diagnostics only).
 
         // Update the lock-free mapping cache for this CPU so check_user_mapping is fast
         crate::sched::vm::CURRENT_MAPPINGS[cpu_idx].store(
@@ -2268,10 +2361,7 @@ fn purge_task_from_scheduler_queues<R: BootRuntime>(sched: &mut types::Scheduler
         sched.state.wait_queue.remove(pos);
     }
 
-    sched.state.sleep_queue.retain(|_, tids| {
-        tids.retain(|&queued_tid| queued_tid != tid);
-        !tids.is_empty()
-    });
+    let _ = sched.state.remove_task_from_sleep_queue(tid);
 }
 
 fn wake_waiters(waiters: &[u64]) {
@@ -2290,16 +2380,18 @@ pub fn exit<R: BootRuntime>(code: i32) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    let (switch, waiters, deferred_prepare_ipis) = {
+    let (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = SCHEDULER.lock();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         let (switch, waiters) = sched.terminate_current(code);
         let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
-        (switch, waiters, deferred_prepare_ipis)
+        let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
+        (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs)
     };
 
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
+    apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     wake_waiters(&waiters);
 
     unsafe {
@@ -2680,10 +2772,7 @@ pub fn register_timeout_wake<R: BootRuntime>(tid: TaskId, wake_tick: u64) {
     let lock = SCHEDULER.lock();
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        let sleepers = sched.state.sleep_queue.entry(wake_tick).or_default();
-        if !sleepers.contains(&tid) {
-            sleepers.push(tid);
-        }
+        sched.state.add_task_to_sleep_queue(tid, wake_tick);
     }
     rt.irq_restore(_irq);
 }
@@ -2694,10 +2783,7 @@ pub fn unregister_timeout_wake<R: BootRuntime>(tid: TaskId) {
     let lock = SCHEDULER.lock();
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        sched.state.sleep_queue.retain(|_, tids| {
-            tids.retain(|&sleep_tid| sleep_tid != tid);
-            !tids.is_empty()
-        });
+        let _ = sched.state.remove_task_from_sleep_queue(tid);
     }
     rt.irq_restore(_irq);
 }
@@ -3428,6 +3514,19 @@ mod tests {
         // Trigger a timer tick to cause preemption
         let switch = sched.prepare_yield().expect("Should preempt to task2");
         assert_eq!(switch.to_tid, 2002);
+        let t1_before_sync = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
+        assert_eq!(
+            t1_before_sync.enqueued_at_tick, 0,
+            "prepare_yield should defer REGISTRY sync out of prepare_schedule hot path"
+        );
+        assert_eq!(
+            t1_before_sync.state,
+            TaskState::Running,
+            "REGISTRY state should remain unchanged until deferred sync is applied"
+        );
+        apply_deferred_registry_syncs::<MockRuntime>(core::mem::take(
+            &mut sched.pending_registry_syncs,
+        ));
 
         // Verify task1 was placed back in runq and its enqueued_at_tick was updated to TICK_COUNT
         let t1 = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
@@ -3545,7 +3644,7 @@ mod tests {
 
         // Put RT task in sleep queue with wake_tick in the past
         TICK_COUNT.store(100, Ordering::Relaxed);
-        sched.state.sleep_queue.entry(50).or_default().push(3002);
+        sched.state.add_task_to_sleep_queue(3002, 50);
 
         // Before: need_resched should be false
         assert!(!sched.state.per_cpu[0].need_resched, "need_resched should start false");
@@ -3635,7 +3734,7 @@ mod tests {
 
         // Put the sleeping task in the sleep queue with a wake_tick in the past.
         TICK_COUNT.store(100, Ordering::Relaxed);
-        sched.state.sleep_queue.entry(50).or_default().push(9002);
+        sched.state.add_task_to_sleep_queue(9002, 50);
 
         // `pending_wake_ipis` should be empty before wake_sleepers runs.
         assert!(
@@ -3689,7 +3788,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
             });
-            sched.state.sleep_queue.entry(50).or_default().push(tid);
+            sched.state.add_task_to_sleep_queue(tid, 50);
         }
         TICK_COUNT.store(100, Ordering::Relaxed);
 
@@ -4179,7 +4278,7 @@ mod tests {
             wake_pending: false,
         });
 
-        sched.state.sleep_queue.entry(10).or_default().push(6001);
+        sched.state.add_task_to_sleep_queue(6001, 10);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
@@ -4193,6 +4292,138 @@ mod tests {
         assert!(
             sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].iter().any(|&id| id == 6001)
         );
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+    }
+
+    #[test]
+    fn test_wake_task_fastpath_skips_scheduler_lock_when_wake_already_pending() {
+        let _g = init_test_env();
+        crate::task::registry::init::<MockRuntime>();
+
+        let task = crate::task::Task {
+            id: 6101,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            base_priority: TaskPriority::Normal,
+            enqueued_at_tick: 0,
+            exit_code: None,
+            exit_waiters: crate::sched::WaitQueue::new(),
+            is_user: false,
+            wake_pending: true,
+            pending_interrupt: false,
+            affinity: Affinity::Any,
+            kstack_base: core::ptr::null_mut(),
+            kstack_size: 0,
+            kstack_top: 0,
+            ctx: Default::default(),
+            aspace: MockAddressSpace(0),
+            simd: crate::simd::SimdState::new(&MOCK_RUNTIME),
+            stack_info: None,
+            mappings: alloc::sync::Arc::new(spin::Mutex::new(
+                crate::memory::mappings::MappingList::new(),
+            )),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            last_cpu: Some(0),
+            name: [0; 32],
+            name_len: 0,
+            process_info: None,
+            user_fs_base: 0,
+            detached: false,
+            signals: crate::signal::ThreadSignals::new(),
+        };
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+        drop(sched_lock);
+        let _ = sched_lock_metrics_snapshot_and_reset();
+
+        crate::sched::blocking::wake_task::<MockRuntime>(6101);
+
+        let task = crate::task::registry::get_task::<MockRuntime>(6101).unwrap();
+        assert_eq!(task.state, TaskState::Running);
+        assert!(task.wake_pending);
+
+        let metrics = sched_lock_metrics_snapshot_and_reset();
+        assert_eq!(
+            metrics.wake_task_fastpath_already_pending, 1,
+            "wake_task should take the already-pending fast path"
+        );
+        assert_eq!(
+            metrics.wake_task.wait_calls, 0,
+            "wake_task fast path should avoid scheduler lock wait tracking"
+        );
+    }
+
+    #[test]
+    fn test_wake_task_without_pending_wake_uses_scheduler_path() {
+        let _g = init_test_env();
+        crate::task::registry::init::<MockRuntime>();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6102,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        let task = crate::task::Task {
+            id: 6102,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            base_priority: TaskPriority::Normal,
+            enqueued_at_tick: 0,
+            exit_code: None,
+            exit_waiters: crate::sched::WaitQueue::new(),
+            is_user: false,
+            wake_pending: false,
+            pending_interrupt: false,
+            affinity: Affinity::Any,
+            kstack_base: core::ptr::null_mut(),
+            kstack_size: 0,
+            kstack_top: 0,
+            ctx: Default::default(),
+            aspace: MockAddressSpace(0),
+            simd: crate::simd::SimdState::new(&MOCK_RUNTIME),
+            stack_info: None,
+            mappings: alloc::sync::Arc::new(spin::Mutex::new(
+                crate::memory::mappings::MappingList::new(),
+            )),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            last_cpu: Some(0),
+            name: [0; 32],
+            name_len: 0,
+            process_info: None,
+            user_fs_base: 0,
+            detached: false,
+            signals: crate::signal::ThreadSignals::new(),
+        };
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+        drop(sched_lock);
+        let _ = sched_lock_metrics_snapshot_and_reset();
+
+        crate::sched::blocking::wake_task::<MockRuntime>(6102);
+
+        let task = crate::task::registry::get_task::<MockRuntime>(6102).unwrap();
+        assert!(task.wake_pending);
+        let metrics = sched_lock_metrics_snapshot_and_reset();
+        assert_eq!(metrics.wake_task_fastpath_already_pending, 0);
+        assert_eq!(metrics.wake_task.wait_calls, 1);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
@@ -4604,7 +4835,8 @@ mod tests {
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8303);
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8304);
         sched.state.wait_queue.push_back(8303);
-        sched.state.sleep_queue.insert(55, alloc::vec![8303, 9999]);
+        sched.state.add_task_to_sleep_queue(8303, 55);
+        sched.state.add_task_to_sleep_queue(9999, 55);
 
         let (switch, _waiters) = sched.terminate_current(101);
 
@@ -4673,7 +4905,7 @@ mod tests {
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);
         sched.state.wait_queue.push_back(8305);
-        sched.state.sleep_queue.insert(77, alloc::vec![8305]);
+        sched.state.add_task_to_sleep_queue(8305, 77);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
@@ -4738,14 +4970,16 @@ mod tests {
     }
 
     #[test]
-    fn test_unregister_timeout_wake_removes_task_from_all_buckets() {
+    fn test_unregister_timeout_wake_removes_task_and_updates_membership() {
         let _g = init_test_env();
 
         let mut sched = types::Scheduler::<MockRuntime>::new();
         sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
         sched.state.per_cpu[0].current = Some(8600);
-        sched.state.sleep_queue.insert(11, alloc::vec![8601, 8602]);
-        sched.state.sleep_queue.insert(12, alloc::vec![8602, 8603]);
+        sched.state.add_task_to_sleep_queue(8601, 11);
+        sched.state.add_task_to_sleep_queue(8602, 11);
+        sched.state.add_task_to_sleep_queue(8602, 12);
+        sched.state.add_task_to_sleep_queue(8603, 12);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
@@ -4755,6 +4989,14 @@ mod tests {
 
         assert_eq!(sched.state.sleep_queue.get(&11).cloned().unwrap(), alloc::vec![8601]);
         assert_eq!(sched.state.sleep_queue.get(&12).cloned().unwrap(), alloc::vec![8603]);
+        assert!(!sched.state.sleep_membership.contains_key(&8602));
+        assert_eq!(
+            sched.state.sleep_membership.get(&8603).copied(),
+            Some(crate::sched::state::SleepMembership {
+                wake_tick: 12,
+                bucket_index: 0,
+            })
+        );
 
         unregister_timeout_wake::<MockRuntime>(8603);
         assert!(!sched.state.sleep_queue.contains_key(&12));
@@ -5971,6 +6213,55 @@ mod tests {
     }
 
     #[test]
+    fn test_any_wake_hysteresis_requires_persistent_overload_before_rebalance() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests_with_streak("redirect", 2, 3);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        for tid in 20_000..20_003 {
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, tid);
+        }
+
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 1);
+    }
+
+    #[test]
+    fn test_any_wake_hysteresis_resets_when_overload_clears() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests_with_streak("redirect", 2, 3);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        for tid in 21_000..21_003 {
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, tid);
+        }
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+
+        sched.state.per_cpu[0].runq[TaskPriority::Low as usize].clear();
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+
+        for tid in 21_003..21_006 {
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, tid);
+        }
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 1);
+    }
+
+    #[test]
     fn test_wake_sleepers_redirects_any_affinity_when_last_cpu_overloaded() {
         let _g = init_test_env();
         set_any_wake_policy_for_tests("redirect", 2);
@@ -6040,7 +6331,7 @@ mod tests {
         }
 
         TICK_COUNT.store(100, Ordering::Relaxed);
-        sched.state.sleep_queue.entry(50).or_default().push(9921);
+        sched.state.add_task_to_sleep_queue(9921, 50);
         sched.wake_sleepers();
 
         assert!(
