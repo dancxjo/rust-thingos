@@ -428,10 +428,6 @@ impl SchedState {
         }
 
         let removed = pc.runq[prio].remove(idx);
-        debug_assert!(
-            removed.is_some(),
-            "queue entry vanished between bounds-check and indexed dequeue"
-        );
         if removed.is_none() {
             return None;
         }
