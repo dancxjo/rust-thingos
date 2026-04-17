@@ -887,7 +887,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
         // Only log when we have a real owner and a non-trivial hold time, to
         // avoid flooding the log with CPU -1 / held-for-0 noise.
         if owner >= 0 && held_duration > 0 {
-            crate::kdebug!(
+            crate::ktrace!(
                 "SCHED: try_resched_if_needed failed to acquire lock on CPU {} after {} attempts (is_idle={}) - current owner: CPU {}, held for {} ticks",
                 cpu_idx,
                 attempts,
