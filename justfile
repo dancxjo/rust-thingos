@@ -335,3 +335,30 @@ kindc-check:
         exit 1
     fi
     echo "kindc-check: generated output is up to date."
+
+# Build a vendored busybox-compatible shell and run ThingOS with it as default shell.
+busybox arch=karch *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ARCH="{{arch}}"
+    ARGS_ARRAY=({{args}})
+    BUSYBOX_DIR="vendor/busybox"
+    if [[ ! -d "$BUSYBOX_DIR/.git" ]]; then
+        mkdir -p vendor
+        git clone --depth=1 https://github.com/pegasusheavy/armybox "$BUSYBOX_DIR"
+    fi
+    if [[ "$ARCH" == "riscv64" ]]; then
+        TARGET_JSON="targets/riscv64gc-unknown-thingos.json"
+    else
+        TARGET_JSON="targets/${ARCH}-unknown-thingos.json"
+    fi
+    CARGO_TARGET_DIR="$(pwd)/target/busybox" \
+    cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec \
+        build --manifest-path "$BUSYBOX_DIR/Cargo.toml" --target "$TARGET_JSON" --profile release
+    TARGET_NAME="$(basename "$TARGET_JSON" .json)"
+    BUSYBOX_BIN="$(pwd)/target/busybox/$TARGET_NAME/release/armybox"
+    if [[ ! -f "$BUSYBOX_BIN" ]]; then
+        echo "busybox build failed or output path changed; expected $BUSYBOX_BIN" >&2
+        exit 1
+    fi
+    THINGOS_BUSYBOX_BIN="$BUSYBOX_BIN" THINGOS_DEFAULT_SHELL="/bin/ash" just run "$ARCH" "${ARGS_ARRAY[@]}"

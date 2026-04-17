@@ -189,6 +189,8 @@ fn generate_limine_config(
     programs: &[ProgramConfig],
     assets: &[PathBuf],
     resolution: Option<&str>,
+    include_busybox: bool,
+    include_default_shell: bool,
 ) -> String {
     let res = resolution.unwrap_or("1920x1080");
     let mut conf = String::new();
@@ -244,6 +246,13 @@ fn generate_limine_config(
     common_modules.push_str("    module_path: boot():/etc/locale.conf\n");
     common_modules.push_str("    module_path: boot():/etc/profile\n");
     common_modules.push_str("    module_path: boot():/etc/motd\n");
+    if include_default_shell {
+        common_modules.push_str("    module_path: boot():/etc/default/shell\n");
+    }
+    if include_busybox {
+        common_modules.push_str("    module_path: boot():/bin/busybox\n");
+        common_modules.push_str("    module_path: boot():/bin/ash\n");
+    }
 
     // Standard entries
     conf.push_str("/ThingOS (BootFB Fallback)\n");
@@ -414,6 +423,36 @@ pub fn build_iso_with_config(
 
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
 
+    let mut include_default_shell = false;
+    if let Ok(default_shell) = std::env::var("THINGOS_DEFAULT_SHELL") {
+        let shell = default_shell.trim();
+        if !shell.is_empty() {
+            let default_dir = iso_root.join("etc/default");
+            if !sh.path_exists(&default_dir) {
+                sh.create_dir(&default_dir)?;
+            }
+            sh.write_file(iso_root.join("etc/default/shell"), format!("{shell}\n"))?;
+            include_default_shell = true;
+        }
+    }
+
+    let mut include_busybox = false;
+    if let Ok(busybox_bin) = std::env::var("THINGOS_BUSYBOX_BIN") {
+        let busybox_path = PathBuf::from(busybox_bin.trim());
+        let meta = std::fs::metadata(&busybox_path).map_err(|_| {
+            anyhow::anyhow!("THINGOS_BUSYBOX_BIN does not exist: {}", busybox_path.display())
+        })?;
+        if !meta.is_file() || meta.len() == 0 {
+            return Err(anyhow::anyhow!(
+                "THINGOS_BUSYBOX_BIN is not a valid non-empty file: {}",
+                busybox_path.display()
+            ));
+        }
+        sh.copy_file(&busybox_path, iso_root.join("bin/busybox"))?;
+        sh.copy_file(&busybox_path, iso_root.join("bin/ash"))?;
+        include_busybox = true;
+    }
+
     println!("Building userspace programs...");
 
     let cwd = std::env::current_dir().unwrap();
@@ -463,7 +502,14 @@ pub fn build_iso_with_config(
 
     stage_rustc_for_iso(sh, iso_root)?;
 
-    let limine_conf_content = generate_limine_config(sh, programs, &asset_files, config.resolution);
+    let limine_conf_content = generate_limine_config(
+        sh,
+        programs,
+        &asset_files,
+        config.resolution,
+        include_busybox,
+        include_default_shell,
+    );
     println!("--- DEBUG: Generated limine.conf ---\n{}\n--- END DEBUG ---", limine_conf_content);
     sh.write_file(iso_root.join("boot/limine/limine.conf"), limine_conf_content)?;
 
@@ -745,7 +791,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     sh.remove_path("profile")?;
     sh.remove_path("motd")?;
 
-    let limine_conf_content = generate_limine_config(sh, programs, &asset_files, None);
+    let limine_conf_content = generate_limine_config(sh, programs, &asset_files, None, false, false);
     let limine_cfg = "limine.generated.conf";
     sh.write_file(limine_cfg, limine_conf_content)?;
     cmd!(sh, "mcopy -i {hdd}@@1M {limine_cfg} ::/boot/limine/limine.conf").run()?;
