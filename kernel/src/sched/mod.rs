@@ -294,6 +294,7 @@ enum AnyWakeOverloadPolicy {
 static ANY_WAKE_POLICY_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Off as u8);
 static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
+// The streak counter storage is AtomicU8, but clamp APIs operate on usize.
 const ANY_WAKE_OVERLOAD_STREAK_MAX: usize = u8::MAX as usize;
 static ANY_WAKE_OVERLOAD_STREAK_REQUIRED: AtomicUsize = AtomicUsize::new(3);
 static ANY_WAKE_OVERLOAD_STREAK: [AtomicU8; types::MAX_CPUS] = {
@@ -912,7 +913,9 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
         return preferred;
     }
 
-    let streak_required = ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire) as u8;
+    let streak_required =
+        ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire).min(ANY_WAKE_OVERLOAD_STREAK_MAX)
+            as u8;
     let prior_streak = streak_cell.load(Ordering::Acquire);
     let next_streak = prior_streak.saturating_add(1);
     streak_cell.store(next_streak, Ordering::Release);
