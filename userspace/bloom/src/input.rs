@@ -85,11 +85,7 @@ impl InputState {
                             header: msg_header(EVT_POINTER_BUTTON),
                             surface_id,
                             button: btn.button,
-                            pressed: if header.event_type == EventType::PointerButtonDown as u16 {
-                                1
-                            } else {
-                                0
-                            },
+                            pressed: event_type_to_pressed(header.event_type, EventType::PointerButtonDown),
                             _pad: [0; 2],
                             timestamp_ns: header.timestamp_ns,
                         };
@@ -111,7 +107,7 @@ impl InputState {
                             header: msg_header(EVT_KEYBOARD_KEY),
                             surface_id,
                             key: key.key,
-                            pressed: if header.event_type == EventType::KeyDown as u16 { 1 } else { 0 },
+                            pressed: event_type_to_pressed(header.event_type, EventType::KeyDown),
                             modifiers: key.mods,
                             repeat: if key.is_repeat() { 1 } else { 0 },
                             _pad: [0; 3],
@@ -197,4 +193,9 @@ impl InputState {
             }
         }
     }
+}
+
+#[inline]
+fn event_type_to_pressed(event_type: u16, down_type: EventType) -> u8 {
+    if event_type == down_type as u16 { 1 } else { 0 }
 }
