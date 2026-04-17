@@ -1280,6 +1280,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let to_take = core::cmp::min(wake_budget, tids.len());
 
                 for tid in tids.drain(..to_take) {
+                    // This task left the sleep queue (woken or dropped if task
+                    // record vanished), so clear direct membership now.
+                    self.state.sleep_membership.remove(&tid);
                     // Read scheduling fields from the hot-field cache only.
                     // REGISTRY is not accessed in this inner loop.
                     if let Some(sf) = self.state.get_thread(tid) {
@@ -1300,6 +1303,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 wake_budget = wake_budget.saturating_sub(to_take);
                 if !tids.is_empty() {
                     self.state.sleep_queue.insert(wake_tick, tids);
+                    // Remaining tids stayed in this bucket after budget limiting;
+                    // refresh their direct membership indices in one pass.
+                    self.state.refresh_sleep_bucket_membership(wake_tick);
                     break;
                 }
             } else {
@@ -2349,10 +2355,7 @@ fn purge_task_from_scheduler_queues<R: BootRuntime>(sched: &mut types::Scheduler
         sched.state.wait_queue.remove(pos);
     }
 
-    sched.state.sleep_queue.retain(|_, tids| {
-        tids.retain(|&queued_tid| queued_tid != tid);
-        !tids.is_empty()
-    });
+    let _ = sched.state.remove_task_from_sleep_queue(tid);
 }
 
 fn wake_waiters(waiters: &[u64]) {
@@ -2763,10 +2766,7 @@ pub fn register_timeout_wake<R: BootRuntime>(tid: TaskId, wake_tick: u64) {
     let lock = SCHEDULER.lock();
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        let sleepers = sched.state.sleep_queue.entry(wake_tick).or_default();
-        if !sleepers.contains(&tid) {
-            sleepers.push(tid);
-        }
+        sched.state.add_task_to_sleep_queue(tid, wake_tick);
     }
     rt.irq_restore(_irq);
 }
@@ -2777,10 +2777,7 @@ pub fn unregister_timeout_wake<R: BootRuntime>(tid: TaskId) {
     let lock = SCHEDULER.lock();
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        sched.state.sleep_queue.retain(|_, tids| {
-            tids.retain(|&sleep_tid| sleep_tid != tid);
-            !tids.is_empty()
-        });
+        let _ = sched.state.remove_task_from_sleep_queue(tid);
     }
     rt.irq_restore(_irq);
 }
@@ -3641,7 +3638,7 @@ mod tests {
 
         // Put RT task in sleep queue with wake_tick in the past
         TICK_COUNT.store(100, Ordering::Relaxed);
-        sched.state.sleep_queue.entry(50).or_default().push(3002);
+        sched.state.add_task_to_sleep_queue(3002, 50);
 
         // Before: need_resched should be false
         assert!(!sched.state.per_cpu[0].need_resched, "need_resched should start false");
@@ -3731,7 +3728,7 @@ mod tests {
 
         // Put the sleeping task in the sleep queue with a wake_tick in the past.
         TICK_COUNT.store(100, Ordering::Relaxed);
-        sched.state.sleep_queue.entry(50).or_default().push(9002);
+        sched.state.add_task_to_sleep_queue(9002, 50);
 
         // `pending_wake_ipis` should be empty before wake_sleepers runs.
         assert!(
@@ -3785,7 +3782,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
             });
-            sched.state.sleep_queue.entry(50).or_default().push(tid);
+            sched.state.add_task_to_sleep_queue(tid, 50);
         }
         TICK_COUNT.store(100, Ordering::Relaxed);
 
@@ -4251,7 +4248,7 @@ mod tests {
             wake_pending: false,
         });
 
-        sched.state.sleep_queue.entry(10).or_default().push(6001);
+        sched.state.add_task_to_sleep_queue(6001, 10);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
@@ -4676,7 +4673,8 @@ mod tests {
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8303);
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8304);
         sched.state.wait_queue.push_back(8303);
-        sched.state.sleep_queue.insert(55, alloc::vec![8303, 9999]);
+        sched.state.add_task_to_sleep_queue(8303, 55);
+        sched.state.add_task_to_sleep_queue(9999, 55);
 
         let (switch, _waiters) = sched.terminate_current(101);
 
@@ -4745,7 +4743,7 @@ mod tests {
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);
         sched.state.wait_queue.push_back(8305);
-        sched.state.sleep_queue.insert(77, alloc::vec![8305]);
+        sched.state.add_task_to_sleep_queue(8305, 77);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
@@ -4810,14 +4808,16 @@ mod tests {
     }
 
     #[test]
-    fn test_unregister_timeout_wake_removes_task_from_all_buckets() {
+    fn test_unregister_timeout_wake_removes_task_and_updates_membership() {
         let _g = init_test_env();
 
         let mut sched = types::Scheduler::<MockRuntime>::new();
         sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
         sched.state.per_cpu[0].current = Some(8600);
-        sched.state.sleep_queue.insert(11, alloc::vec![8601, 8602]);
-        sched.state.sleep_queue.insert(12, alloc::vec![8602, 8603]);
+        sched.state.add_task_to_sleep_queue(8601, 11);
+        sched.state.add_task_to_sleep_queue(8602, 11);
+        sched.state.add_task_to_sleep_queue(8602, 12);
+        sched.state.add_task_to_sleep_queue(8603, 12);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
@@ -4827,6 +4827,14 @@ mod tests {
 
         assert_eq!(sched.state.sleep_queue.get(&11).cloned().unwrap(), alloc::vec![8601]);
         assert_eq!(sched.state.sleep_queue.get(&12).cloned().unwrap(), alloc::vec![8603]);
+        assert!(!sched.state.sleep_membership.contains_key(&8602));
+        assert_eq!(
+            sched.state.sleep_membership.get(&8603).copied(),
+            Some(crate::sched::state::SleepMembership {
+                wake_tick: 12,
+                bucket_index: 0,
+            })
+        );
 
         unregister_timeout_wake::<MockRuntime>(8603);
         assert!(!sched.state.sleep_queue.contains_key(&12));
@@ -6161,7 +6169,7 @@ mod tests {
         }
 
         TICK_COUNT.store(100, Ordering::Relaxed);
-        sched.state.sleep_queue.entry(50).or_default().push(9921);
+        sched.state.add_task_to_sleep_queue(9921, 50);
         sched.wake_sleepers();
 
         assert!(
