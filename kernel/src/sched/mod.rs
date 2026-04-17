@@ -129,6 +129,8 @@ pub static PROF_RUNQ_SAMPLE_TOTAL: [AtomicU64; types::MAX_CPUS] = {
 /// Number of histogram buckets used for hold/wait time distributions.
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
 pub const SCHED_HIST_BUCKETS: usize = 5;
+const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
+const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 
 /// Map a microsecond duration to a histogram bucket index.
 ///
@@ -1414,6 +1416,24 @@ impl<R: BootRuntime> types::Scheduler<R> {
         self.prepare_schedule()
     }
 
+    #[inline]
+    fn flush_pending_misrouted_requeues_bounded(&mut self, max_to_flush: usize) {
+        for _ in 0..max_to_flush {
+            let Some((prio, target_cpu, id)) = self.pending_misrouted_requeues.pop() else {
+                break;
+            };
+            self.state.enqueue_task(target_cpu, prio, id);
+            let already_pending = set_global_need_resched(target_cpu);
+            if !already_pending {
+                if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
+                    self.pending_prepare_schedule_ipis.push(target_cpu);
+                }
+            } else {
+                PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
     pub(crate) fn prepare_schedule(
         &mut self,
     ) -> Option<
@@ -1442,14 +1462,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Sample run-queue depth for this CPU before we start dequeuing.
         sample_runq_len(self, cpu_idx);
 
-        // Collect tasks pinned to a different CPU so we can requeue them after scanning.
-        const MAX_MISROUTED: usize = 32;
-        let mut misrouted: [(usize, usize, TaskId); MAX_MISROUTED] = [(0, 0, 0); MAX_MISROUTED];
-        let mut misrouted_count = 0;
+        // Snapshot tick count once per scheduling decision so aging calculations
+        // do not repeatedly read the global counter under lock.
+        let now = TICK_COUNT.load(Ordering::Relaxed);
 
         let mut next_id = None;
+        let mut pick_attempts = 0usize;
         // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick
-        loop {
+        while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
             let mut best_q = None;
             let mut best_eff = 0;
 
@@ -1460,7 +1480,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         // aging only applies up to High
                         // Use the hot-field cache to avoid a nested REGISTRY lock.
                         if let Some(sf) = self.state.get_thread(id) {
-                            let now = TICK_COUNT.load(Ordering::Relaxed);
                             let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
                             let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
                             let boost = boost.min(types::MAX_PRIORITY_BOOST);
@@ -1481,6 +1500,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
             if let Some(p) = best_q {
                 let id = self.state.dequeue_task_front(cpu_idx, p).unwrap();
+                pick_attempts = pick_attempts.saturating_add(1);
                 self.metrics.pops += 1;
 
                 // Use the hot-field cache for dead/affinity checks to avoid a
@@ -1491,10 +1511,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     Some(sf) => {
                         if let crate::task::Affinity::Pinned(target) = sf.affinity {
                             if target != cpu_idx && target < per_cpu_len {
-                                if misrouted_count < MAX_MISROUTED {
-                                    misrouted[misrouted_count] = (sf.priority as usize, target, id);
-                                    misrouted_count += 1;
-                                }
+                                self.pending_misrouted_requeues
+                                    .push((sf.priority as usize, target, id));
                                 continue;
                             }
                         }
@@ -1508,11 +1526,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
         }
 
         let next_id = match next_id {
-            Some(id) => id,
+            Some(id) => Some(id),
             None => {
                 // Check Idle queue — skip dead and misrouted tasks
                 let mut found_idle_q = None;
-                while let Some(id) = self.state.dequeue_task_front(cpu_idx, 0) {
+                while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
+                    let Some(id) = self.state.dequeue_task_front(cpu_idx, 0) else {
+                        break;
+                    };
+                    pick_attempts = pick_attempts.saturating_add(1);
                     self.metrics.pops += 1;
                     // Use the hot-field cache for dead/affinity checks.
                     match self.state.get_thread(id) {
@@ -1521,11 +1543,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         Some(sf) => {
                             if let crate::task::Affinity::Pinned(target) = sf.affinity {
                                 if target != cpu_idx && target < per_cpu_len {
-                                    if misrouted_count < MAX_MISROUTED {
-                                        misrouted[misrouted_count] =
-                                            (sf.priority as usize, target, id);
-                                        misrouted_count += 1;
-                                    }
+                                    self.pending_misrouted_requeues.push((
+                                        sf.priority as usize,
+                                        target,
+                                        id,
+                                    ));
                                     continue;
                                 }
                             }
@@ -1535,47 +1557,21 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     break;
                 }
                 if let Some(id) = found_idle_q {
-                    id
+                    Some(id)
                 } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
                     self.metrics.idle_picks += 1;
-                    idle
+                    Some(idle)
                 } else {
-                    // Flush misrouted tasks before returning; notify their CPUs
-                    // so they wake from HLT and pick up the newly-queued work.
-                    for &(prio, target_cpu, id) in &misrouted[..misrouted_count] {
-                        self.state.enqueue_task(target_cpu, prio, id);
-                        let already_pending = set_global_need_resched(target_cpu);
-                        if !already_pending {
-                            // Keep this de-dup cheap and bounded in practice:
-                            // `misrouted_count` is capped at MAX_MISROUTED (32),
-                            // and online CPU counts are small.
-                            if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
-                                self.pending_prepare_schedule_ipis.push(target_cpu);
-                            }
-                        } else {
-                            PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    return None;
+                    None
                 }
             }
         };
 
-        // Flush misrouted tasks to their correct CPU queues and wake those CPUs.
-        for &(prio, target_cpu, id) in &misrouted[..misrouted_count] {
-            self.state.enqueue_task(target_cpu, prio, id);
-            let already_pending = set_global_need_resched(target_cpu);
-            if !already_pending {
-                // Keep this de-dup cheap and bounded in practice:
-                // `misrouted_count` is capped at MAX_MISROUTED (32),
-                // and online CPU counts are small.
-                if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
-                    self.pending_prepare_schedule_ipis.push(target_cpu);
-                }
-            } else {
-                PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        // Keep cleanup bounded so the picker path remains short under heavy
+        // misroute pressure.
+        self.flush_pending_misrouted_requeues_bounded(PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET);
+
+        let next_id = next_id?;
 
         let current_id = self.state.per_cpu[cpu_idx]
             .current
@@ -1639,7 +1635,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // reading lifecycle state back from the large runtime Thread record.
         if self.state.threads[old_idx].state == TaskState::Running {
             old_task.state = TaskState::Runnable;
-            old_task.enqueued_at_tick = TICK_COUNT.load(Ordering::Relaxed);
+            old_task.enqueued_at_tick = now;
         }
         new_task.state = TaskState::Running;
         new_task.last_cpu = Some(cpu_idx);
@@ -3701,6 +3697,70 @@ mod tests {
                 .iter()
                 .any(|&tid| tid == 9102),
             "misrouted task should be moved to target CPU runq"
+        );
+    }
+
+    #[test]
+    fn test_prepare_schedule_bounds_misroute_repair_work_per_call() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.mark_cpu_online(1);
+
+        // Current task on CPU 0.
+        let current_task = make_task(9200, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current_task));
+        sched.state.per_cpu[0].current = Some(9200);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9200,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        // Fill CPU 0's normal queue with misrouted tasks pinned to CPU 1.
+        let misrouted_total = PREPARE_SCHEDULE_PICK_BUDGET + 4;
+        for i in 0..misrouted_total {
+            let tid = 9201 + i as u64;
+            let task = make_task(tid, TaskState::Runnable, TaskPriority::Normal);
+            crate::task::registry::get_registry::<MockRuntime>()
+                .insert(alloc::boxed::Box::new(task));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Pinned(1),
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(0, TaskPriority::Normal as usize, tid);
+        }
+
+        let switch = sched.prepare_schedule();
+        assert!(switch.is_none());
+        assert!(
+            !sched.pending_misrouted_requeues.is_empty(),
+            "misroute repairs should be deferred when work exceeds per-call repair budget"
+        );
+        assert!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len()
+                <= PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET,
+            "prepare_schedule should only repair up to PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET misroutes per call"
         );
     }
 
