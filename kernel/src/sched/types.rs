@@ -97,6 +97,7 @@ pub(crate) struct SchedulerMetrics {
     pub pops: u64,
     pub pushes: u64,
     pub idle_picks: u64,
+    pub steals: u64,
     pub last_flush: u64,
 }
 
@@ -138,6 +139,7 @@ impl SchedulerMetrics {
             pops: 0,
             pushes: 0,
             idle_picks: 0,
+            steals: 0,
             last_flush: 0,
         }
     }

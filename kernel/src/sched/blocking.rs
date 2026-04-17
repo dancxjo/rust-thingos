@@ -82,6 +82,9 @@ pub fn block_current<R: BootRuntime>() {
                 was_wake_pending = true;
             } else {
                 sf.state = TaskState::Blocked;
+                if current_id == 6 {
+                    crate::kdebug!("SCHED[TID6]: blocked");
+                }
             }
         }
 
@@ -180,6 +183,9 @@ pub fn wake_task_locked<R: BootRuntime>(
                     super::select_any_affinity_wake_cpu::<R>(sched, preferred)
                 }
             };
+            if id == 6 {
+                crate::kdebug!("SCHED[TID6]: woken → Runnable (target_cpu={})", target_cpu);
+            }
             wake_info = Some((target_cpu, task_priority));
         }
     }

@@ -298,11 +298,11 @@ enum AnyWakeOverloadPolicy {
 }
 
 static ANY_WAKE_POLICY_INIT_DONE: AtomicBool = AtomicBool::new(false);
-static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Off as u8);
-static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
+static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Steal as u8);
+static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(2);
 // The streak counter storage is AtomicU8, but clamp APIs operate on usize.
 const ANY_WAKE_OVERLOAD_STREAK_MAX: usize = u8::MAX as usize;
-static ANY_WAKE_OVERLOAD_STREAK_REQUIRED: AtomicUsize = AtomicUsize::new(3);
+static ANY_WAKE_OVERLOAD_STREAK_REQUIRED: AtomicUsize = AtomicUsize::new(1);
 static ANY_WAKE_OVERLOAD_STREAK: [AtomicU8; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const ATOMIC_ZERO: AtomicU8 = AtomicU8::new(0);
@@ -1690,11 +1690,19 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 }
                 if let Some(id) = found_idle_q {
                     Some(id)
-                } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
-                    self.metrics.idle_picks += 1;
-                    Some(idle)
                 } else {
-                    None
+                    // Attempt to steal a task from the most-loaded peer CPU before
+                    // falling back to the idle task.  This prevents the scheduler from
+                    // going idle on a CPU while other CPUs have run queues backed up.
+                    let stolen = self.steal_task_for(cpu_idx);
+                    if stolen.is_some() {
+                        stolen
+                    } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
+                        self.metrics.idle_picks += 1;
+                        Some(idle)
+                    } else {
+                        None
+                    }
                 }
             }
         };
@@ -1756,6 +1764,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             old_sched.enqueued_at_tick = now;
             old_registry_sync.new_state = Some(TaskState::Runnable);
             old_registry_sync.new_enqueued_at_tick = Some(now);
+            if current_id == 6 {
+                crate::kdebug!("SCHED[TID6]: Running → Runnable (cpu={}, next={})", cpu_idx, next_id);
+            }
         }
         old_sched.last_cpu = Some(cpu_idx);
         self.pending_registry_syncs.push(old_registry_sync);
@@ -1767,6 +1778,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         new_sched.state = TaskState::Running;
         new_sched.last_cpu = Some(cpu_idx);
         new_sched.run_cpu = Some(cpu_idx);
+        if next_id == 6 {
+            crate::kdebug!("SCHED[TID6]: → Running (cpu={})", cpu_idx);
+        }
         self.pending_registry_syncs
             .push(types::DeferredRegistrySync {
                 tid: next_id,
@@ -1828,6 +1842,52 @@ impl<R: BootRuntime> types::Scheduler<R> {
             from_user_fs_base: &mut old_task.user_fs_base as *mut u64,
             to_user_fs_base: new_task.user_fs_base,
         })
+    }
+
+    /// Steal the highest-priority `Affinity::Any` task from the most-loaded
+    /// peer CPU that has at least 2 runnable tasks.
+    ///
+    /// Called when the local run queue is empty before falling back to the
+    /// idle task.  Only moves tasks whose affinity allows placement on any
+    /// CPU; pinned tasks are never stolen.
+    fn steal_task_for(&mut self, local_cpu: usize) -> Option<types::TaskId> {
+        let per_cpu_len = self.state.per_cpu.len();
+        // Find the peer CPU with the most queued work.
+        let (busiest_cpu, busiest_depth) = (0..per_cpu_len)
+            .filter(|&cpu| cpu != local_cpu && self.state.online_cpus.contains(&cpu))
+            .map(|cpu| (cpu, runq_depth_for_cpu(&self.state, cpu)))
+            .max_by_key(|&(_, depth)| depth)?;
+        // Require at least 2 tasks on the busiest CPU so we only steal when
+        // there is genuine imbalance (1 task is already being consumed there).
+        if busiest_depth < 2 {
+            return None;
+        }
+        // Steal the highest-priority non-pinned task.
+        for p in (1..5).rev() {
+            let candidate = self.state.per_cpu[busiest_cpu].runq[p].front().copied();
+            if let Some(tid) = candidate {
+                let stealable = match self.state.get_thread(tid) {
+                    Some(sf) if sf.state != TaskState::Dead => {
+                        matches!(sf.affinity, crate::task::Affinity::Any)
+                    }
+                    _ => false,
+                };
+                if stealable {
+                    if let Some(stolen_id) = self.state.dequeue_task_front(busiest_cpu, p) {
+                        if let Some(sf) = self.state.get_task_mut(stolen_id) {
+                            sf.wake_cpu = Some(local_cpu);
+                        }
+                        self.metrics.steals += 1;
+                        crate::kdebug!(
+                            "SCHED: CPU {} stole task {} (prio {}) from CPU {} (depth {})",
+                            local_cpu, stolen_id, p, busiest_cpu, busiest_depth
+                        );
+                        return Some(stolen_id);
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn terminate_current(
@@ -2298,6 +2358,9 @@ fn mark_task_exited<R: BootRuntime>(
     tid: TaskId,
     code: i32,
 ) -> alloc::vec::Vec<u64> {
+    if tid == 6 {
+        crate::kdebug!("SCHED[TID6]: exited (code={})", code);
+    }
     // Collect exit waiters and mark the task dead.
     let mut waiters = if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
         task.state = TaskState::Dead;
