@@ -604,8 +604,7 @@ fn global_need_resched_slot(cpu: usize) -> Option<&'static AtomicBool> {
 /// bounds checks and a conservative fallback on invalid indices.
 ///
 /// Returning `true` on invalid indices intentionally errs toward preserving
-/// pending-reschedule semantics (coalesce/suppress duplicate actions) instead
-/// of under-reporting demand.
+/// pending-reschedule demand instead of under-reporting it.
 fn checked_global_need_resched_bool(
     cpu: usize,
     op: &'static str,
@@ -7194,6 +7193,10 @@ mod tests {
         let before_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
         let before_pending =
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        assert!(
+            global_need_resched_slot(0).is_some(),
+            "test requires CPU 0 GLOBAL_NEED_RESCHED slot"
+        );
         clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
         assert!(
             !global_need_resched_swap(0, true, core::sync::atomic::Ordering::Release),
