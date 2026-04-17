@@ -160,7 +160,7 @@ fn main(boot_fd: usize) -> ! {
             d
         }
         None => {
-            debug!("display_bootfb: ERROR: Failed to acquire hardware framebuffer");
+            stem::error!("display_bootfb: ERROR: Failed to acquire hardware framebuffer (find_framebuffer returned None)");
             loop {
                 stem::yield_now();
             }
@@ -203,14 +203,14 @@ fn main(boot_fd: usize) -> ! {
             supervisor_protocol::MSG_BIND_READY,
             &ready_bytes[..len],
         ) {
-            debug!("display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x})...", ready.class_mask);
+            info!("display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x})...", ready.class_mask);
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
             let res = stem::syscall::socket::sendmsg(
                 drv_resp_write_fd,
                 &buf[..total_len],
                 &[vfs_write],
             );
-            debug!("display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...", res);
+            info!("display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...", res);
         }
     }
 

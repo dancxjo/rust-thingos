@@ -372,7 +372,7 @@ impl Supervisor {
                     if t.resp_fd.is_none() {
                         if let Ok(fd) = stem::syscall::vfs::vfs_thing_from_channel(t.drv_resp_read) {
                             t.resp_fd = Some(fd);
-                            stem::debug!("SPROUT: Bridged resp_channel {} -> FD {} for task '{}'",
+                            stem::info!("SPROUT: Bridged resp_channel {} -> FD {} for task '{}'",
                                 t.drv_resp_read, fd, t.name);
                         }
                     }
@@ -412,6 +412,7 @@ impl Supervisor {
                     abi::display_driver_protocol::parse_message(&msg_data[..n])
                 {
                     if header.msg_type == abi::supervisor_protocol::MSG_BIND_READY {
+                        info!("SPROUT: BIND_READY from {} (bundle_fd={})", task_name, bundled_fd);
                         self.handle_bind_ready(&task_name, drv_req_write, payload, bundled_fd);
                     } else if header.msg_type == abi::supervisor_protocol::MSG_SERVICE_READY {
                         if let Some(svc) =

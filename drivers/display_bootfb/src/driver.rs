@@ -164,7 +164,7 @@ fn find_framebuffer() -> Option<Framebuffer> {
     use abi::display_driver_protocol::FbInfoPayload;
     use abi::syscall::vfs_flags::O_RDONLY;
 
-    debug!("display_bootfb: probing /dev/fb0...");
+    info!("display_bootfb: probing /dev/fb0...");
     let fd = vfs_open("/dev/fb0", O_RDONLY).ok()?;
 
     let mut payload = FbInfoPayload {
