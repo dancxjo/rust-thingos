@@ -45,8 +45,9 @@ Build-time (compile-time) environment knobs:
 
 - `THINGOS_SCHED_ANY_WAKE_POLICY=off|redirect|steal` (default: `off`)
 - `THINGOS_SCHED_ANY_WAKE_OVERLOAD_GAP=<N>` (default: `4`)
+- `THINGOS_SCHED_ANY_WAKE_OVERLOAD_STREAK=<N>` (default: `3`)
 
-When policy is `redirect` or `steal`, wakeups whose preferred CPU is overloaded by at least `N` runnable entries are routed to the least-loaded online CPU. IPI signaling remains deduped via the existing pending-resched gate. These knobs are compile-time only today (via `option_env!`), not runtime-toggled.
+When policy is `redirect` or `steal`, wakeups stay on their preferred CPU by default and only enter least-loaded rebalance after `N` consecutive overload hits. This keeps the Any-affinity wake hot path local while still allowing optional rebalance on persistent overload. IPI signaling remains deduped via the existing pending-resched gate. These knobs are compile-time only today (via `option_env!`), not runtime-toggled.
 
 ## 2) Global serialization points and contention paths
 

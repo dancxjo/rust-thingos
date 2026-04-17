@@ -294,6 +294,12 @@ enum AnyWakeOverloadPolicy {
 static ANY_WAKE_POLICY_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Off as u8);
 static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
+static ANY_WAKE_OVERLOAD_STREAK_REQUIRED: AtomicUsize = AtomicUsize::new(3);
+static ANY_WAKE_OVERLOAD_STREAK: [AtomicU8; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_ZERO: AtomicU8 = AtomicU8::new(0);
+    [ATOMIC_ZERO; types::MAX_CPUS]
+};
 
 fn any_wake_overload_policy_from_u8(v: u8) -> AnyWakeOverloadPolicy {
     match v {
@@ -325,6 +331,11 @@ fn init_any_wake_policy_from_env_once() {
         if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_OVERLOAD_GAP") {
             if let Ok(gap) = v.parse::<usize>() {
                 ANY_WAKE_OVERLOAD_GAP.store(gap.max(1), Ordering::Release);
+            }
+        }
+        if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_OVERLOAD_STREAK") {
+            if let Ok(streak) = v.parse::<usize>() {
+                ANY_WAKE_OVERLOAD_STREAK_REQUIRED.store(streak.clamp(1, u8::MAX as usize), Ordering::Release);
             }
         }
     }
@@ -886,15 +897,35 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
         return preferred;
     }
 
+    let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
+    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
+    let overloaded = preferred_depth >= overload_gap;
+    let streak_idx = preferred.min(types::MAX_CPUS.saturating_sub(1));
+    if !overloaded {
+        ANY_WAKE_OVERLOAD_STREAK[streak_idx].store(0, Ordering::Release);
+        return preferred;
+    }
+
+    let streak_required = ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire).max(1);
+    let prior_streak = ANY_WAKE_OVERLOAD_STREAK[streak_idx].load(Ordering::Acquire);
+    let next_streak = prior_streak.saturating_add(1);
+    ANY_WAKE_OVERLOAD_STREAK[streak_idx].store(next_streak, Ordering::Release);
+    if (next_streak as usize) < streak_required {
+        return preferred;
+    }
+
     let Some((least_cpu, least_depth)) = least_loaded_online_cpu(&sched.state) else {
         return preferred;
     };
-    let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
-    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
     // Run-queue depth is a bounded queue-length sum; use saturating subtraction
     // so "depth delta >= gap" cannot wrap.
-    let overloaded = preferred_depth.saturating_sub(least_depth) >= overload_gap;
-    if overloaded && least_cpu != preferred { least_cpu } else { preferred }
+    let overloaded_vs_least = preferred_depth.saturating_sub(least_depth) >= overload_gap;
+    if overloaded_vs_least && least_cpu != preferred {
+        ANY_WAKE_OVERLOAD_STREAK[streak_idx].store(0, Ordering::Release);
+        least_cpu
+    } else {
+        preferred
+    }
 }
 
 #[cfg(test)]
@@ -902,13 +933,27 @@ fn reset_any_wake_policy_for_tests() {
     ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
     ANY_WAKE_OVERLOAD_POLICY.store(AnyWakeOverloadPolicy::Off as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(4, Ordering::Release);
+    ANY_WAKE_OVERLOAD_STREAK_REQUIRED.store(3, Ordering::Release);
+    for streak in &ANY_WAKE_OVERLOAD_STREAK {
+        streak.store(0, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
 fn set_any_wake_policy_for_tests(policy: &str, overload_gap: usize) {
+    set_any_wake_policy_for_tests_with_streak(policy, overload_gap, 1);
+}
+
+#[cfg(test)]
+fn set_any_wake_policy_for_tests_with_streak(policy: &str, overload_gap: usize, overload_streak: usize) {
     ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
     ANY_WAKE_OVERLOAD_POLICY.store(parse_any_wake_overload_policy(policy) as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(overload_gap.max(1), Ordering::Release);
+    ANY_WAKE_OVERLOAD_STREAK_REQUIRED
+        .store(overload_streak.clamp(1, u8::MAX as usize), Ordering::Release);
+    for streak in &ANY_WAKE_OVERLOAD_STREAK {
+        streak.store(0, Ordering::Release);
+    }
 }
 
 pub fn init<R: BootRuntime>() {
@@ -5947,6 +5992,55 @@ mod tests {
             Some(1),
             "[policy] wake_cpu should track redirected Any-affinity wakeup target"
         );
+    }
+
+    #[test]
+    fn test_any_wake_hysteresis_requires_persistent_overload_before_rebalance() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests_with_streak("redirect", 2, 3);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        for tid in 20_000..20_003 {
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, tid);
+        }
+
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 1);
+    }
+
+    #[test]
+    fn test_any_wake_hysteresis_resets_when_overload_clears() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests_with_streak("redirect", 2, 3);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        for tid in 21_000..21_003 {
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, tid);
+        }
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+
+        sched.state.per_cpu[0].runq[TaskPriority::Low as usize].clear();
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+
+        for tid in 21_003..21_006 {
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, tid);
+        }
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
+        assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 1);
     }
 
     #[test]
