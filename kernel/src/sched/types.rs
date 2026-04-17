@@ -72,10 +72,20 @@ pub struct SwitchParams<Ctx, AS> {
     pub to_user_fs_base: u64,
 }
 
+/// Deferred REGISTRY synchronization for one task.
+///
+/// `prepare_schedule` records scheduling-side state transitions in the
+/// scheduler hot cache first, then emits one or more of these updates so the
+/// canonical REGISTRY record can be synchronized after the SCHEDULER lock is
+/// released.
 pub(crate) struct DeferredRegistrySync {
+    /// Task being synchronized.
     pub tid: TaskId,
+    /// New lifecycle state to write when a transition happened.
     pub new_state: Option<TaskState>,
+    /// New enqueue tick when transitioning back to Runnable.
     pub new_enqueued_at_tick: Option<u64>,
+    /// Last CPU the task was observed running or switching on.
     pub new_last_cpu: Option<usize>,
 }
 
