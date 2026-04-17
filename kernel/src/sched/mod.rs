@@ -1663,9 +1663,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                                 continue;
                             }
                         }
+                        next_id = Some(id);
+                        break;
                     }
-                    next_id = Some(id);
-                    break;
                 }
             } else {
                 break;
@@ -1861,7 +1861,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// Called when the local run queue is empty before falling back to the
     /// idle task.  Only moves tasks whose affinity allows placement on any
     /// CPU; pinned tasks are never stolen.
-    fn steal_task_for(&mut self, local_cpu: usize) -> Option<types::TaskId> {
+    fn steal_task_for(&mut self, local_cpu: usize) -> Option<TaskId> {
         let per_cpu_len = self.state.per_cpu.len();
         // Find the peer CPU with the most queued work.
         let (busiest_cpu, busiest_depth) = (0..per_cpu_len)
