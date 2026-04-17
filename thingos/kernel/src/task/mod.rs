@@ -986,6 +986,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
         }
     }
     crate::sched::clear_sched_lock_tracking::<R>();
+    drop(lock);
     rt.irq_restore(_irq);
 }
 
