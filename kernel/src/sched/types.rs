@@ -15,6 +15,7 @@ pub const WAKE_SLEEPERS_BUDGET_CARRY_CAP: usize = WAKE_SLEEPERS_BUDGET_PER_TICK 
 
 /// Maximum number of CPUs supported
 pub const MAX_CPUS: usize = 32;
+pub(crate) const PENDING_IPI_BITMAP_BITS: usize = u64::BITS as usize;
 
 /// Anti-starvation: ticks to wait before boosting priority by one level
 /// At 100Hz, 500 ticks = ~5 seconds
@@ -175,7 +176,7 @@ impl<R: BootRuntime> Scheduler<R> {
 
     #[inline]
     pub(crate) fn queue_pending_prepare_schedule_ipi(&mut self, target_cpu: usize) {
-        if target_cpu >= MAX_CPUS || target_cpu >= 64 {
+        if target_cpu >= MAX_CPUS || target_cpu >= PENDING_IPI_BITMAP_BITS {
             return;
         }
         self.pending_prepare_schedule_ipis_bitmap |= 1u64 << target_cpu;
@@ -187,7 +188,12 @@ impl<R: BootRuntime> Scheduler<R> {
             return alloc::vec::Vec::new();
         }
 
-        let cpu_limit = self.state.per_cpu.len().min(MAX_CPUS).min(64);
+        let cpu_limit = self
+            .state
+            .per_cpu
+            .len()
+            .min(MAX_CPUS)
+            .min(PENDING_IPI_BITMAP_BITS);
         let mut deferred = alloc::vec::Vec::new();
         for cpu in 0..cpu_limit {
             if (bitmap & (1u64 << cpu)) != 0 {

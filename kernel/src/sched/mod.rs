@@ -1299,7 +1299,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         tid,
                         priority
                     );
-                    if actual_cpu < types::MAX_CPUS && actual_cpu < 64 {
+                    if actual_cpu < types::MAX_CPUS && actual_cpu < types::PENDING_IPI_BITMAP_BITS {
                         pending_ipi_bitmap |= 1u64 << actual_cpu;
                     }
                 } else {
@@ -1320,7 +1320,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Lock-owning call sites drain `self.pending_wake_ipis` and send them
         // after dropping the lock, so `send_ipi` is never called while
         // SCHEDULER is held.
-        for cpu in 0..self.state.per_cpu.len().min(types::MAX_CPUS).min(64) {
+        for cpu in 0..self
+            .state
+            .per_cpu
+            .len()
+            .min(types::MAX_CPUS)
+            .min(types::PENDING_IPI_BITMAP_BITS)
+        {
             if (pending_ipi_bitmap & (1u64 << cpu)) != 0 {
                 self.pending_wake_ipis.push(cpu);
             }
