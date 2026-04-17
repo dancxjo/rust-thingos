@@ -21,7 +21,7 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 - `kernel/`: kernel crate and core kernel logic.
 - `drivers/`: hardware driver crates.
 - `utils/`: most user programs and demos (each subdir is a crate).
-- `bloom/`, `bristle/`, `pistil/`, `pistil-shared/`, `sprout/`: top-level UI/runtime userspace crates.
+- `bloom/`, `bristle/`, `pistil/`, `sprout/`: top-level UI/runtime userspace crates.
 - `bloom/`, `blossom/`, `display/`: graphics/compositor-related crates.
 - `stem/`, `stem-macros/`: internal libs and proc-macros.
 - `targets/`: custom JSON target specs for bare metal builds.
@@ -33,7 +33,7 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 ## Where to start when changing behavior
 - Kernel interfaces: `abi/` and `kernel/`
 - Syscall surface: `abi/src/syscall.rs`
-- User apps: `utils/` plus top-level userspace crates (`bloom/`, `bristle/`, `pistil/`, `pistil-shared/`, `sprout/`)
+- User apps: `utils/` plus top-level userspace crates (`bloom/`, `bristle/`, `pistil/`, `sprout/`)
 - Build/config: `justfile`, `xtask/`, `targets/`
 
 ## UI / Display Contract

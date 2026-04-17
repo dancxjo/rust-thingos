@@ -22,7 +22,7 @@ fi
 
 # Only Blossom should write snapshot keys.
 if rg -n "prop_set\([^\)]*(UI_SNAPSHOT_BYTESPACE|UI_SNAPSHOT_WIDTH|UI_SNAPSHOT_HEIGHT|UI_SNAPSHOT_STRIDE|UI_SNAPSHOT_FORMAT|UI_PRESENT_EPOCH)" \
-  utils bloom bristle pistil pistil-shared sprout --glob '*.rs' --glob '!utils/blossom/**' >/dev/null; then
+  utils bloom bristle pistil sprout --glob '*.rs' --glob '!utils/blossom/**' >/dev/null; then
   echo "ui-split: snapshot keys written outside Blossom" >&2
   fail=1
 fi

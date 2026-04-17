@@ -19,7 +19,7 @@ const ALLOWED_STD_CRATES: &[&str] = &[
 
 const REQUIRED_NOSTD_CRATES: &[&str] =
     &["kernel", "stem", "stem-macros", "abi", "abi-macros", "bran"];
-const ROOT_USERSPACE_CRATES: &[&str] = &["bloom", "bristle", "pistil", "pistil-shared", "sprout"];
+const ROOT_USERSPACE_CRATES: &[&str] = &["bloom", "bristle", "pistil", "sprout"];
 
 pub fn audit() -> Result<()> {
     println!("Platform Boundary Audit");
