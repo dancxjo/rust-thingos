@@ -52,8 +52,6 @@ fn path_join(parent: &str, name: &str) -> String {
 }
 
 fn walk(path: &str, has_error: &mut bool) {
-    write_to_fd(1, &alloc::format!("{}\n", path));
-
     let fd = match vfs_open(path, 0) {
         Ok(fd) => fd,
         Err(e) => {
@@ -72,6 +70,8 @@ fn walk(path: &str, has_error: &mut bool) {
             return;
         }
     };
+
+    write_to_fd(1, &alloc::format!("{}\n", path));
 
     if (stat.mode & S_IFMT) != S_IFDIR {
         let _ = vfs_close(fd);
