@@ -1,7 +1,3 @@
-#![no_std]
-use alloc::string::ToString;
-use core::default::Default;
-extern crate alloc;
 use crate::blit::PixelBuffer;
 use crate::geometry::{FillRule, Path2D, PathVerb, PointF, Rect, Transform2D};
 use alloc::vec;
@@ -184,7 +180,6 @@ fn build_edges(path: &Path2D, transform: &Transform2D, scale: i32) -> Vec<Edge> 
                 }
                 last_p = start_p;
             }
-            _ => {} // Quad/Cubic would need flattening
         }
     }
     edges

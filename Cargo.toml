@@ -125,7 +125,6 @@ members = [
   "userspace/mv",
   "userspace/netd",
   "userspace/nslookup",
-  "userspace/petals",
   "userspace/ping",
   "userspace/placed",
   "userspace/poll_mux",

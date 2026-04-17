@@ -1,5 +1,5 @@
 use abi::pixel::PixelFormat;
-use petals::Texture;
+use pistil::Texture;
 use libdl::{dlopen_str, dlsym_bytes, RTLD_NOW};
 
 use crate::display::DisplayBackend;
