@@ -51,8 +51,8 @@ unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> St
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
-    info!("display_bootfb: Starting VFS-native bootfb driver (v0.4.1)...");
-    debug!("display_bootfb: boot_arg={}", boot_fd);
+    stem::info!("display_bootfb: Starting VFS-native bootfb driver (v0.4.1)...");
+    stem::info!("display_bootfb: boot_arg={}", boot_fd);
 
     // 1. Map bootstrap memfd to get handles
     let mut drv_req_read = 0;
@@ -97,43 +97,46 @@ fn main(boot_fd: usize) -> ! {
     }
 
     if boot_fd != 0 {
-        use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-        let req = VmMapReq {
+        let boot_size = 4096;
+        let req = abi::vm::VmMapReq {
             addr_hint: 0,
-            len: 4096,
-            prot: VmProt::READ | VmProt::USER,
-            flags: VmMapFlags::empty(),
-            backing: VmBacking::File {
-                thing: boot_fd as u32,
-                offset: 0,
-            },
+            len: boot_size,
+            prot: abi::vm::VmProt::READ | abi::vm::VmProt::USER,
+            flags: abi::vm::VmMapFlags::empty(),
+            backing: abi::vm::VmBacking::File { thing: boot_fd as u32, offset: 0 },
         };
-        if let Ok(resp) = stem::syscall::vm_map(&req) {
-            let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
 
-            // Layout from sprout/src/pipelines.rs:
-            // slice[0]: drv_req_read
-            // slice[1]: drv_resp_write
-            // slice[2]: supervisor_port
-            // slice[3..5]: bind_instance_id (u64)
+        stem::info!("display_bootfb: Mapping bootstrap memfd {} size={}...", boot_fd, boot_size);
+        match stem::syscall::vm_map(&req) {
+            Ok(resp) => {
+                stem::info!("display_bootfb: vm_map success at 0x{:x}", resp.addr);
+                let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
 
-            drv_req_read = slice[0];
-            drv_resp_write = slice[1];
-            supervisor_port = slice[2];
+                drv_req_read = slice[0];
+                drv_resp_write = slice[1];
+                supervisor_port = slice[2];
 
-            let id_low = slice[3] as u64;
-            let id_high = slice[4] as u64;
-            bind_instance_id = id_low | (id_high << 32);
+                let id_low = slice[3] as u64;
+                let id_high = slice[4] as u64;
+                bind_instance_id = id_low | (id_high << 32);
 
-            debug!(
-                "display_bootfb: Bootstrap handles: req_read={}, resp_write={}, svc={}, id={}",
-                drv_req_read, drv_resp_write, supervisor_port, bind_instance_id
-            );
-        } else {
-            warn!("display_bootfb: Failed to map bootstrap memfd!");
+                stem::info!(
+                    "display_bootfb: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
+                    drv_req_read,
+                    drv_resp_write,
+                    supervisor_port,
+                    bind_instance_id
+                );
+            }
+            Err(e) => {
+                stem::info!("display_bootfb: ERROR: Failed to vm_map bootstrap memfd {}: {:?}", boot_fd, e);
+            }
         }
     } else {
-        stem::debug!("display_bootfb: ERROR: No bootstrap memfd arg provided");
+        stem::info!("display_bootfb: ERROR: No bootstrap memfd arg provided (boot_arg is 0)");
+        loop {
+            stem::yield_now();
+        }
     }
 
     if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {

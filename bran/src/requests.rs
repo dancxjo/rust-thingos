@@ -1,8 +1,8 @@
 use kernel::{BootModuleDesc, BootModuleKind};
 use limine::BaseRevision;
 use limine::request::{
-    DeviceTreeBlobRequest, ExecutableFileRequest, FramebufferRequest, HhdmRequest,
-    MemoryMapRequest, ModuleRequest, RsdpRequest,
+    DeviceTreeBlobRequest, FramebufferRequest, HhdmRequest, ExecutableFileRequest, MemoryMapRequest,
+    ModuleRequest, RsdpRequest,
 };
 
 pub static BASE_REVISION: BaseRevision = BaseRevision::new();
@@ -88,7 +88,9 @@ pub fn get_modules() -> &'static [BootModuleDesc] {
 pub fn get_kernel_cmdline() -> &'static str {
     EXECUTABLE_FILE_REQUEST
         .get_response()
-        .and_then(|r| r.file().string().to_str().ok())
+        .and_then(|r: &limine::response::ExecutableFileResponse| {
+            core::str::from_utf8(r.file().cmdline()).ok()
+        })
         .unwrap_or("")
 }
 

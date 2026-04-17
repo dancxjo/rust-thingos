@@ -286,7 +286,7 @@ impl LimineRuntimeData {
     pub fn dtb_ptr(&self) -> Option<u64> {
         crate::requests::DTB_REQUEST
             .get_response()
-            .map(|r| r.dtb_ptr() as u64)
+            .map(|r: &limine::response::DeviceTreeBlobResponse| r.dtb_ptr() as u64)
     }
 }
 

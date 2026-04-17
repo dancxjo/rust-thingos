@@ -14,8 +14,8 @@ use abi::driver_interface::{
     BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
     DRIVER_DESCRIPTOR_ABI_VERSION,
 };
-use abi::driver_frame::FrameReader;
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader};
+use abi::driver_frame::FrameReader;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::syscall::{ChannelThing, channel_create, channel_send};
 use stem::{info, warn};
@@ -343,25 +343,27 @@ fn main(boot_arg: usize) -> ! {
     if boot_arg == 0 {
         stem::error!("display_virtio_gpu: No boot argument provided! Standard driver entry required.");
         stem::syscall::exit(1);
-    }
+    }    stem::info!("display_virtio_gpu: Starting VFS-native VirtIO GPU driver...");
+    stem::info!("display_virtio_gpu: boot_arg={}", boot_arg);
 
-    let mut supervisor_port = 0;
-    let mut bind_instance_id = 0;
     let mut drv_req_read = 0;
     let mut drv_resp_write = 0;
+    let mut supervisor_port = 0;
+    let mut bind_instance_id = 0;
 
-    use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-    let req = VmMapReq {
+    let boot_size = 4096;
+    let req = abi::vm::VmMapReq {
         addr_hint: 0,
-        len: 4096,
-        prot: VmProt::READ | VmProt::USER,
-        flags: VmMapFlags::empty(),
-        backing: VmBacking::File { thing: boot_arg as u32, offset: 0 },
+        len: boot_size,
+        prot: abi::vm::VmProt::READ | abi::vm::VmProt::USER,
+        flags: abi::vm::VmMapFlags::empty(),
+        backing: abi::vm::VmBacking::File { thing: boot_arg as u32, offset: 0 },
     };
 
-    stem::info!("display_virtio_gpu: Mapping boot_fd={}...", boot_arg);
+    stem::info!("display_virtio_gpu: Mapping bootstrap memfd {} size={}...", boot_arg, boot_size);
     match stem::syscall::vm_map(&req) {
         Ok(resp) => {
+            stem::info!("display_virtio_gpu: vm_map success at 0x{:x}", resp.addr);
             let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
             // slice[3..5]: bind_instance_id (u64)
 
@@ -374,7 +376,7 @@ fn main(boot_arg: usize) -> ! {
             bind_instance_id = id_low | (id_high << 32);
 
             stem::info!(
-                "DISP: Bootstrap handles: req_read={}, resp_write={}, svc={}, id={}",
+                "display_virtio_gpu: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
                 drv_req_read,
                 drv_resp_write,
                 supervisor_port,
@@ -382,7 +384,7 @@ fn main(boot_arg: usize) -> ! {
             );
         }
         Err(e) => {
-            stem::info!("DISP: ERROR: Failed to vm_map bootstrap memfd {}: {:?}", boot_arg, e);
+            stem::info!("display_virtio_gpu: ERROR: Failed to vm_map bootstrap memfd {}: {:?}", boot_arg, e);
         }
     }
 

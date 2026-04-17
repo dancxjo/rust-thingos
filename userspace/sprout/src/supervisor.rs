@@ -229,6 +229,7 @@ impl Supervisor {
                     drv_resp_read: read,
                     boot_req_read: 0,
                     boot_resp_write: 0,
+                    resp_fd: None,
                 });
             }
             Err(e) => warn!("SPROUT: Failed to spawn devd: {:?}", e),
@@ -359,25 +360,37 @@ impl Supervisor {
     }
 
     fn process_registrations(&mut self) {
-        // Collect tasks that need polling
-        let poll_set: Vec<(u32, u32, alloc::string::String)> = {
-            let tasks = self.tasks.lock();
-            tasks
-                .iter()
-                .filter(|t| t.drv_resp_read != 0 && t.pid.is_some())
-                .map(|t| (t.drv_resp_read, t.drv_req_write, t.name.clone()))
-                .collect()
+        // Collect tasks that need polling. We only poll tasks that have a response
+        // channel and are currently alive.
+        let tasks_to_poll: Vec<(u32, u32, alloc::string::String)> = {
+            let mut tasks = self.tasks.lock();
+            let mut poll_set = Vec::new();
+
+            for t in tasks.iter_mut() {
+                if t.drv_resp_read != 0 && t.pid.is_some() {
+                    // Initialize the cached FD if we haven't already.
+                    if t.resp_fd.is_none() {
+                        if let Ok(fd) = stem::syscall::vfs::vfs_thing_from_channel(t.drv_resp_read) {
+                            t.resp_fd = Some(fd);
+                            stem::debug!("SPROUT: Bridged resp_channel {} -> FD {} for task '{}'",
+                                t.drv_resp_read, fd, t.name);
+                        }
+                    }
+
+                    if let Some(fd) = t.resp_fd {
+                        poll_set.push((fd, t.drv_req_write, t.name.clone()));
+                    }
+                }
+            }
+            poll_set
         };
 
-        for (drv_resp_read, drv_req_write, task_name) in poll_set {
+        for (resp_fd, drv_req_write, task_name) in tasks_to_poll {
             let mut msg_data = [0u8; 1024];
             let mut msg_fds = [0u32; 1];
             let mut process_count = 0;
 
-            // Convert the response channel handle to a VFS FD for recvmsg.
-            let resp_fd =
-                stem::syscall::vfs::vfs_thing_from_channel(drv_resp_read).unwrap_or(drv_resp_read);
-
+            // Drain the channel using the cached FD.
             while let Ok((n, n_fds)) =
                 stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds)
             {
@@ -429,6 +442,11 @@ impl Supervisor {
                         }
                     }
                 }
+
+                // If we received an FD but didn't use it for a BIND_READY (or even if we did),
+                // it might need closing if handle_bind_ready didn't take ownership.
+                // In our protocol, sprout ONLY uses the FD during handle_bind_ready's vfs_mount.
+                // Wait! handle_bind_ready should close it. I'll check that.
             }
         }
     }
@@ -441,7 +459,7 @@ impl Supervisor {
         bundled_fd: u32,
     ) {
         use abi::supervisor_protocol::{self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, classes};
-        use stem::syscall::{channel_send_all, vfs_mount};
+        use stem::syscall::{channel_send_all, vfs_mount, vfs::vfs_close};
 
         // Helper: send MSG_BIND_FAILED back to the driver.
         let send_failed = |req_write: u32, id: u64, code: u32, msg: &[u8]| {
@@ -509,6 +527,7 @@ impl Supervisor {
                         supervisor_protocol::errors::ERR_UNKNOWN_CLASS,
                         b"class_mask is zero or unrecognised",
                     );
+                    let _ = vfs_close(provider_port);
                     return;
                 }
             };
@@ -516,7 +535,7 @@ impl Supervisor {
             let mut ledger = self.ledger.lock();
             let unit = ledger.get(class_name).cloned().unwrap_or(0);
             ledger.insert(class_name.to_string(), unit + 1);
-            let path = alloc::format!("{}{}", root, unit);
+            let path = alloc::format!("{root}{unit}"); 
             drop(ledger); // Release ledger lock before mounting
 
             match vfs_mount(provider_port, &path) {
@@ -557,6 +576,10 @@ impl Supervisor {
                     );
                 }
             }
+
+            // ALWAYS close the provider handle in Sprout's own table after use.
+            // The kernel keeps the provider Arc alive in the mount table.
+            let _ = vfs_close(provider_port);
         } else {
             warn!("SPROUT: Received malformed BIND_READY from {} — rejecting", task_name);
             send_failed(
@@ -565,6 +588,9 @@ impl Supervisor {
                 supervisor_protocol::errors::ERR_INVALID_MESSAGE,
                 b"BIND_READY payload is malformed",
             );
+            if bundled_fd != 0 {
+                let _ = vfs_close(bundled_fd);
+            }
         }
     }
 }

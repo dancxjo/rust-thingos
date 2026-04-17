@@ -32,6 +32,8 @@ pub struct ManagedTask {
     pub boot_req_read: stem::syscall::ChannelThing,
     /// Bootstrap handle: Write end of resp channel (for driver consumption)
     pub boot_resp_write: stem::syscall::ChannelThing,
+    /// Cached VFS FD for the response channel (bridged via vfs_thing_from_channel)
+    pub resp_fd: Option<u32>,
 }
 
 impl ManagedTask {
@@ -39,6 +41,7 @@ impl ManagedTask {
         Self {
             name,
             kind,
+            resp_fd: None,
             ..Default::default()
         }
     }

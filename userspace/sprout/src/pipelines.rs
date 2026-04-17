@@ -463,6 +463,7 @@ pub fn setup_display_pipeline(
                 drv_resp_read: drv_resp.1,
                 boot_req_read: drv_req.1,
                 boot_resp_write: drv_resp.0,
+                resp_fd: None,
             });
         }
 
@@ -539,6 +540,7 @@ pub fn setup_terminal(
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -615,6 +617,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -640,6 +643,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -670,6 +674,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -704,6 +709,7 @@ fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -732,6 +738,7 @@ pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -756,6 +763,7 @@ pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -808,6 +816,7 @@ fn spawn_ui_service(
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -867,6 +876,7 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -914,6 +924,7 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -950,6 +961,7 @@ pub fn setup_graphics_stack(
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
@@ -997,6 +1009,7 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 drv_resp_read: 0,
                 boot_req_read: 0,
                 boot_resp_write: 0,
+                resp_fd: None,
             });
         }
         Err(e) => {
