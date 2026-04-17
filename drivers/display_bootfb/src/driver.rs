@@ -195,11 +195,10 @@ fn find_framebuffer() -> Option<Framebuffer> {
         flags: VmMapFlags::empty(),
         backing: VmBacking::File { thing: fd, offset: 0 },
     };
-
     let resp = match vm_map(&req) {
         Ok(resp) => resp,
         Err(e) => {
-            debug!("display_bootfb: failed to map /dev/fb0: {:?}", e);
+            stem::warn!("[BOOTFB] display_bootfb: failed to map /dev/fb0: {:?}", e);
             let _ = vfs_close(fd);
             return None;
         }

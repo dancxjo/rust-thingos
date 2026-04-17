@@ -848,18 +848,20 @@ pub fn preempt_enable<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
 
-    let (switch_params, deferred_prepare_ipis) = {
+    let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.preempt_enable();
             let deferred_prepare_ipis =
                 core::mem::take(&mut sched.pending_prepare_schedule_ipis);
-            (switch, deferred_prepare_ipis)
+            let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
+            (switch, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
-            (None, alloc::vec::Vec::new())
+            (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         }
     };
+    crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(switch) = switch_params {
@@ -889,18 +891,20 @@ pub fn resched_if_needed<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
 
-    let (switch_params, deferred_prepare_ipis) = {
+    let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.schedule_point(crate::sched::ScheduleReason::ReschedIfNeeded);
             let deferred_prepare_ipis =
                 core::mem::take(&mut sched.pending_prepare_schedule_ipis);
-            (switch, deferred_prepare_ipis)
+            let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
+            (switch, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
-            (None, alloc::vec::Vec::new())
+            (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         }
     };
+    crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(switch) = switch_params {

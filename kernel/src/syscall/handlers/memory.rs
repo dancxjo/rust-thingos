@@ -101,6 +101,9 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                     if offset as usize >= total_size || total_size - (offset as usize) < len {
                         return Err(Errno::EINVAL);
                     }
+                    if total_size > 1024 * 1024 {
+                        crate::kinfo!("sys_vm_map: large backing file mapping offset={} len={} total_size={}", offset, len, total_size);
+                    }
                     Some((phys_base, total_size))
                 } else {
                     None
@@ -124,7 +127,7 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                     // 0-copy path
                     let current_offset = *file_offset + (virt - addr as u64);
                     if current_offset >= *total_size as u64 {
-                        // Out of bounds for the region
+                        crate::kwarn!("sys_vm_map: offset out of bounds: {} >= {}", current_offset, total_size);
                         return Err(Errno::EINVAL);
                     }
                     phys_base + current_offset
@@ -170,8 +173,9 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                     allocated_phys
                 };
 
-            unsafe {
-                crate::memory::map_user_page_with_perms(virt, phys, perms)?;
+            if let Err(e) = unsafe { crate::memory::map_user_page_with_perms(virt, phys, perms) } {
+                crate::kwarn!("sys_vm_map: failed to map page virt=0x{:x} phys=0x{:x}: {:?}", virt, phys, e);
+                return Err(e);
             }
             virt += page_size as u64;
         }

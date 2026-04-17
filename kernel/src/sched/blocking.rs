@@ -41,7 +41,7 @@ pub fn block_current<R: BootRuntime>() {
     // false → task is blocking; write Blocked state to REGISTRY.
     let mut was_wake_pending = false;
 
-    let (switch_params, deferred_prepare_ipis) = {
+    let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::record_sched_lock_wait::<R>(
@@ -95,12 +95,14 @@ pub fn block_current<R: BootRuntime>() {
             );
             // Return None (no context switch); deferred REGISTRY clear handled below.
             let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
-            (None, deferred_prepare_ipis)
+            let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
+            (None, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
             // Add to wait queue and pick next task to run.
             sched.state.wait_queue.push_back(current_id);
             let switch = sched.prepare_schedule();
             let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             super::record_sched_lock_hold::<R>(
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
@@ -108,10 +110,11 @@ pub fn block_current<R: BootRuntime>() {
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                 lock_start,
             );
-            (switch, deferred_prepare_ipis)
+            (switch, deferred_prepare_ipis, deferred_registry_syncs)
         }
     };
     // SCHEDULER lock is released here.
+    super::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
 
     // Apply deferred REGISTRY write outside SCHEDULER lock to avoid nesting.
     if let Some(tid) = deferred_tid {
@@ -226,10 +229,8 @@ pub fn wake_task_locked<R: BootRuntime>(
             sched.state.wait_queue.remove(pos);
         }
 
-        sched.state.sleep_queue.retain(|_, tids| {
-            tids.retain(|&sleep_tid| sleep_tid != id);
-            !tids.is_empty()
-        });
+        // Best-effort cleanup: the target may be blocked on non-timeout paths.
+        let _ = sched.state.remove_task_from_sleep_queue(id);
 
         if safe_cpu >= sched.state.per_cpu.len() {
             safe_cpu = 0;
@@ -280,6 +281,20 @@ pub fn wake_task_locked<R: BootRuntime>(
 pub fn wake_task<R: BootRuntime>(id: u64) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
+
+    // Fast path: if wake is already pending, there is no additional scheduler
+    // work to do and we can avoid taking SCHEDULER.
+    // `wake_pending` is level-triggered; a concurrent clear means a blocker has
+    // consumed the wake and therefore does not require another enqueue here.
+    let already_pending = crate::task::registry::get_task::<R>(id)
+        .map(|task| task.wake_pending)
+        .unwrap_or(false);
+    if already_pending {
+        super::PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        rt.irq_restore(_irq);
+        return;
+    }
 
     let wait_start = rt.mono_ticks();
 
