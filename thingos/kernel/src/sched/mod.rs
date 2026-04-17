@@ -1163,6 +1163,9 @@ pub(crate) fn resolve_switch_params<R: BootRuntime>(
         (&mut right[0], &mut left[to_idx])
     };
 
+    // CURRENT_MAPPINGS is currently typed as a mutable raw pointer for
+    // historical compatibility, but the stored Arc target is treated as
+    // read-only by mapping-check fast paths unless they take the mapping lock.
     crate::sched::vm::CURRENT_MAPPINGS[decision.cpu_idx].store(
         alloc::sync::Arc::as_ptr(&to_task.mappings) as *mut _,
         Ordering::Release,
@@ -2255,17 +2258,19 @@ impl<R: BootRuntime> types::Scheduler<R> {
         }
     }
 
+    /// Update only scheduler hot-cache/run-queue priority state.
+    ///
+    /// This intentionally avoids touching REGISTRY so callers can hold
+    /// SCHEDULER without creating a nested `SCHEDULER -> REGISTRY` lock edge.
+    /// Returns `true` when the task existed in scheduler state.
     fn set_priority_hot_cache(&mut self, id: TaskId, priority: TaskPriority) -> bool {
-        if self.state.get_task(id).is_none() {
-            return false;
-        }
-
         let mut requeue_cpu = None;
-        if let Some(task) = self.state.get_task_mut(id) {
-            task.priority = priority;
-            if task.state == TaskState::Runnable {
-                requeue_cpu = task.runq_location.map(|(cpu, _)| cpu);
-            }
+        let Some(task) = self.state.get_task_mut(id) else {
+            return false;
+        };
+        task.priority = priority;
+        if task.state == TaskState::Runnable {
+            requeue_cpu = task.runq_location.map(|(cpu, _)| cpu);
         }
 
         if let Some(cpu) = requeue_cpu {
@@ -2825,8 +2830,12 @@ pub fn exit<R: BootRuntime>(code: i32) {
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
     apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     wake_waiters(&waiters);
-    let switch = resolve_switch_params::<R>(switch_decision)
-        .expect("terminate_current produced switch for missing registry tasks");
+    let switch = resolve_switch_params::<R>(switch_decision).unwrap_or_else(|| {
+        panic!(
+            "terminate_current produced switch decision (from={}, to={}) but registry lookup failed",
+            switch_decision.from_tid, switch_decision.to_tid
+        )
+    });
 
     unsafe {
         rt.tasking().activate_address_space(switch.to_aspace);
@@ -3755,6 +3764,55 @@ mod tests {
             sched.state.per_cpu[0].runq[TaskPriority::High as usize].front().copied(),
             Some(42)
         );
+    }
+
+    #[test]
+    fn public_set_priority_syncs_registry_after_scheduler_unlock() {
+        let _g = init_test_env();
+
+        let mut sched = alloc::boxed::Box::new(types::Scheduler::<MockRuntime>::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        let task = make_task(43, TaskState::Runnable, TaskPriority::Low);
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 43,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Low,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Low as usize, 43);
+
+        let sched_ptr = alloc::boxed::Box::into_raw(sched);
+        *SCHEDULER.lock() = Some(sched_ptr as usize);
+
+        set_priority::<MockRuntime>(43, TaskPriority::High);
+
+        let sched_ref = unsafe { &mut *(sched_ptr as *mut types::Scheduler<MockRuntime>) };
+        assert_eq!(sched_ref.state.get_task(43).unwrap().priority, TaskPriority::High);
+        assert!(sched_ref.state.per_cpu[0].runq[TaskPriority::Low as usize].is_empty());
+        assert_eq!(
+            sched_ref.state.per_cpu[0].runq[TaskPriority::High as usize].front().copied(),
+            Some(43)
+        );
+        assert_eq!(
+            crate::task::registry::get_registry::<MockRuntime>().threads[0].priority,
+            TaskPriority::High,
+            "public set_priority should sync REGISTRY outside scheduler lock"
+        );
+
+        *SCHEDULER.lock() = None;
+        unsafe {
+            drop(alloc::boxed::Box::from_raw(sched_ptr));
+        }
     }
 
     #[test]
