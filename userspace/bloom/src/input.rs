@@ -163,18 +163,20 @@ impl InputState {
         old_focus: Option<u32>,
         new_focus: Option<u32>,
     ) {
-        if old_focus != new_focus {
-            if let Some(old_surface) = old_focus {
-                if let Some(ch) = scene
-                    .surface_client(old_surface)
-                    .and_then(|client| scene.client_event_channel(client))
-                {
-                    let ev = KeyboardLeaveEvent {
-                        header: msg_header(EVT_KEYBOARD_LEAVE),
-                        surface_id: old_surface,
-                    };
-                    let _ = channel_send_all(ch, &to_vec(&ev));
-                }
+        if old_focus == new_focus {
+            return;
+        }
+
+        if let Some(old_surface) = old_focus {
+            if let Some(ch) = scene
+                .surface_client(old_surface)
+                .and_then(|client| scene.client_event_channel(client))
+            {
+                let ev = KeyboardLeaveEvent {
+                    header: msg_header(EVT_KEYBOARD_LEAVE),
+                    surface_id: old_surface,
+                };
+                let _ = channel_send_all(ch, &to_vec(&ev));
             }
         }
 

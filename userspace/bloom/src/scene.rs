@@ -220,14 +220,16 @@ impl Scene {
 
         let mut released = Vec::new();
         let mut changed = false;
+        let pending_dest = surface.pending.dest_rect.take();
 
         if let Some(pending_buf) = surface.pending.buffer.take() {
+            let had_current = surface.current.buffer.is_some();
             if let Some(current_buf) = surface.current.buffer.take() {
                 if current_buf.buffer_id != pending_buf.buffer_id {
                     released.push(current_buf.buffer_id);
                 }
             }
-            if surface.current.dest_rect.w == 0 || surface.current.dest_rect.h == 0 {
+            if pending_dest.is_none() && !had_current {
                 surface.current.dest_rect = Rect {
                     x: 0,
                     y: 0,
@@ -240,7 +242,7 @@ impl Scene {
             changed = true;
         }
 
-        if let Some(dest) = surface.pending.dest_rect.take() {
+        if let Some(dest) = pending_dest {
             surface.current.dest_rect = dest;
             changed = true;
         }
