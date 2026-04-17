@@ -1,87 +1,49 @@
 # ThingOS
 
-ThingOS is a typed-world operating system project.
+ThingOS is a Rust OS workspace and Rust fork focused on bringing up a practical
+system with a custom target, growing `std` support, and a path toward
+self-hosting.
 
-Its architecture is organized in two layers:
+## Current status (April 2026)
 
-1. **Typed-world ontology (truth layer)** — canonical system meaning
-2. **Unix compatibility (projection layer)** — adaptation for existing software and conventions
+- **Serial terminal is up**: `sprout` launches an early serial shell on
+  `/dev/console`.
+- **Shell and utility set are up**: the image includes many `/bin` tools
+  (`sh`, `ls`, `cat`, `grep`, `ps`, `top`, `cp`, `mv`, `rm`, `mkdir`, etc.)
+  plus additional demo/test utilities under `thingos/utils/`.
+- **Custom Rust targets are in use**: build flows target
+  `targets/*-unknown-thingos.json` (including `x86_64-unknown-thingos`).
+- **Large portion of `std` is implemented for ThingOS**: we are building with
+  `-Z build-std=core,alloc,std,panic_abort` and exercising that surface through
+  in-tree programs/tests.
+- **Std programs compile and run on target**: e.g. `hello_std`,
+  `hello_stdio`, and thread/std tests are part of the workspace.
+- **Ecosystem std crate experiments are in progress**: including `runa`-style
+  terminal/TUI bring-up work.
+- **Rust bootstrap works today as host-cross**:
+  `cargo xtask rustc-thingos` builds a Linux-hosted stage-1 compiler that
+  targets ThingOS.
+- **Self-hosting is the goal**: we are actively working toward compiling and
+  running `rustc` and `cargo` inside ThingOS itself.
+- **Busybox-style shell experiment added**: `just busybox` builds and stages a
+  tiny busybox-compatible shell (`armybox` as `/bin/busybox` and `/bin/ash`) to
+  validate that workflow.
 
-Unix is a projection surface in ThingOS, **not** the ontology.
+## Useful commands
 
----
+- `just iso` — build ISO
+- `just run` — boot in QEMU
+- `just rustc-thingos` — build/cache the current cross compiler
+- `just busybox` — build and boot with the tiny busybox-compatible shell
 
-## 1) Typed-world ontology
+## Architecture direction
 
-In ThingOS, first-class system meaning is defined in typed concepts.
+ThingOS keeps a typed-world architecture as the long-term canonical model, with
+Unix-compatible surfaces treated as projection/compatibility layers.
 
-Core concepts include:
-
-- **Thing**
-- **Kind**
-- **Form**
-- **Place**
-- **Person**
-- **Authority**
-- **Presence**
-- **Task**
-- **Job**
-- **Group**
-- **Space**
-- **Message**
-
-These concepts are canonical: design and review decisions are anchored to them first.
-
-Reference: [`docs/architecture/ontology.md`](docs/architecture/ontology.md)
-
----
-
-## 2) Canonical concepts in practice
-
-At a high level:
-
-- A **Thing** is a first-class object.
-- A **Kind** defines structure and meaning.
-- A **Form** is how a Kind is represented.
-- A **Person** acts through **Authority**, inhabits a **Place** via **Presence**, and manipulates **Things**.
-- Execution decomposes into **Task** (runs), **Job** (lifecycle), and **Group** (coordination).
-
-The goal is typed-first ownership of meaning, not ad-hoc Unix-shaped state.
-
----
-
-## 3) Unix projection model
-
-ThingOS still exposes Unix-visible surfaces (pathnames, file descriptors, processes, signals, sessions, etc.) for compatibility.
-
-Those surfaces are treated as **projections** derived from canonical typed-world concepts. They are implementation bridges, not architectural truth.
-
-Reference: [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md)
-
----
-
-## 4) Current implementation status (honest snapshot)
-
-Current kernel/userspace code still contains substantial Unix-shaped compatibility structures and naming (for example, process/fd/path/session surfaces).
-
-That does **not** mean Unix is the model; it means the project is in an active transition where compatibility bridges exist while canonical typed ownership is being tightened.
-
-The architecture docs are the source of truth for intended direction and review standards:
+References:
 
 - [`docs/architecture/ontology.md`](docs/architecture/ontology.md)
 - [`docs/architecture/unix-projection.md`](docs/architecture/unix-projection.md)
 - [`docs/architecture/concept-classification.md`](docs/architecture/concept-classification.md)
 - [`docs/concepts/thingos-guardrails.md`](docs/concepts/thingos-guardrails.md)
-
----
-
-## 5) Near-term direction
-
-Near-term work continues to:
-
-- keep new capability design typed-first
-- confine Unix semantics to explicit projection/compatibility layers
-- reduce compatibility-bridge surface area as canonical concepts mature
-- make subsystem ownership clearer against canonical concepts
-
-In short: **typed-world ontology remains canonical; Unix remains projection.**
