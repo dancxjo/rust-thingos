@@ -352,7 +352,6 @@ busybox arch=karch *args:
     else
         TARGET_JSON="targets/${ARCH}-unknown-thingos.json"
     fi
-    export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
     CARGO_TARGET_DIR="$(pwd)/target/busybox" \
     cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec \
         build --manifest-path "$BUSYBOX_DIR/Cargo.toml" --target "$TARGET_JSON" --profile release
