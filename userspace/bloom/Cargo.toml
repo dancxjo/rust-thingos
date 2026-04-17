@@ -7,6 +7,7 @@ edition = "2021"
 stem = { path = "../../stem", features = ["rt"] }
 abi = { path = "../../abi" }
 petals = { path = "../petals" }
+pistil = { path = "../pistil" }
 
 [[bin]]
 name = "bloom"

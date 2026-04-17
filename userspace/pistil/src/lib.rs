@@ -5,6 +5,7 @@ extern crate alloc;
 use abi::seed::{SEED_ABI_VERSION, Seed, SeedInterface};
 
 pub mod typography;
+pub mod compositor;
 
 const SEED_NAME: &[u8] = b"pistil";
 

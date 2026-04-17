@@ -1,0 +1,281 @@
+#![allow(dead_code)]
+
+use abi::display_protocol::Rect;
+use abi::pixel::PixelFormat;
+use alloc::vec::Vec;
+
+pub const BLOOM_PROTOCOL_MAGIC: u32 = 0x424C_4F4F; // "BLOO"
+pub const BLOOM_PROTOCOL_VERSION: u16 = 1;
+
+pub const MSG_CONNECT: u16 = 1;
+pub const MSG_CREATE_SURFACE: u16 = 2;
+pub const MSG_DESTROY_SURFACE: u16 = 3;
+pub const MSG_ATTACH_BUFFER: u16 = 4;
+pub const MSG_DAMAGE: u16 = 5;
+pub const MSG_SET_INPUT_REGION: u16 = 6;
+pub const MSG_SET_OPAQUE_REGION: u16 = 7;
+pub const MSG_SET_DEST_RECT: u16 = 8;
+pub const MSG_SET_Z_ORDER: u16 = 9;
+pub const MSG_COMMIT: u16 = 10;
+
+pub const EVT_ACK: u16 = 0x8001;
+pub const EVT_FRAME_DONE: u16 = 0x8002;
+pub const EVT_POINTER_ENTER: u16 = 0x8101;
+pub const EVT_POINTER_LEAVE: u16 = 0x8102;
+pub const EVT_POINTER_MOTION: u16 = 0x8103;
+pub const EVT_POINTER_BUTTON: u16 = 0x8104;
+pub const EVT_KEYBOARD_ENTER: u16 = 0x8201;
+pub const EVT_KEYBOARD_LEAVE: u16 = 0x8202;
+pub const EVT_KEYBOARD_KEY: u16 = 0x8203;
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct MessageHeader {
+    pub magic: u32,
+    pub version: u16,
+    pub msg_type: u16,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct ConnectRequest {
+    pub header: MessageHeader,
+    pub reply_channel: u32,
+    pub event_channel: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct CreateSurfaceRequest {
+    pub header: MessageHeader,
+    pub reply_channel: u32,
+    pub client_id: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct DestroySurfaceRequest {
+    pub header: MessageHeader,
+    pub reply_channel: u32,
+    pub client_id: u32,
+    pub surface_id: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct AttachBufferRequest {
+    pub header: MessageHeader,
+    pub reply_channel: u32,
+    pub client_id: u32,
+    pub surface_id: u32,
+    pub handle_thing: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub format: PixelFormat,
+    pub modifier: u64,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct RectRequest {
+    pub header: MessageHeader,
+    pub reply_channel: u32,
+    pub client_id: u32,
+    pub surface_id: u32,
+    pub rect: Rect,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct SetZOrderRequest {
+    pub header: MessageHeader,
+    pub reply_channel: u32,
+    pub client_id: u32,
+    pub surface_id: u32,
+    pub z_order: i32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct CommitRequest {
+    pub header: MessageHeader,
+    pub reply_channel: u32,
+    pub client_id: u32,
+    pub surface_id: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ClientRequest {
+    Connect(ConnectRequest),
+    CreateSurface(CreateSurfaceRequest),
+    DestroySurface(DestroySurfaceRequest),
+    AttachBuffer(AttachBufferRequest),
+    Damage(RectRequest),
+    SetInputRegion(RectRequest),
+    SetOpaqueRegion(RectRequest),
+    SetDestRect(RectRequest),
+    SetZOrder(SetZOrderRequest),
+    Commit(CommitRequest),
+}
+
+pub fn parse_request(raw: &[u8]) -> Option<ClientRequest> {
+    if raw.len() < core::mem::size_of::<MessageHeader>() {
+        return None;
+    }
+
+    let header = unsafe { *(raw.as_ptr() as *const MessageHeader) };
+    if header.magic != BLOOM_PROTOCOL_MAGIC || header.version != BLOOM_PROTOCOL_VERSION {
+        return None;
+    }
+
+    match header.msg_type {
+        MSG_CONNECT if raw.len() >= core::mem::size_of::<ConnectRequest>() => {
+            Some(ClientRequest::Connect(unsafe { *(raw.as_ptr() as *const ConnectRequest) }))
+        }
+        MSG_CREATE_SURFACE if raw.len() >= core::mem::size_of::<CreateSurfaceRequest>() => {
+            Some(ClientRequest::CreateSurface(unsafe {
+                *(raw.as_ptr() as *const CreateSurfaceRequest)
+            }))
+        }
+        MSG_DESTROY_SURFACE if raw.len() >= core::mem::size_of::<DestroySurfaceRequest>() => {
+            Some(ClientRequest::DestroySurface(unsafe {
+                *(raw.as_ptr() as *const DestroySurfaceRequest)
+            }))
+        }
+        MSG_ATTACH_BUFFER if raw.len() >= core::mem::size_of::<AttachBufferRequest>() => {
+            Some(ClientRequest::AttachBuffer(unsafe {
+                *(raw.as_ptr() as *const AttachBufferRequest)
+            }))
+        }
+        MSG_DAMAGE if raw.len() >= core::mem::size_of::<RectRequest>() => {
+            Some(ClientRequest::Damage(unsafe { *(raw.as_ptr() as *const RectRequest) }))
+        }
+        MSG_SET_INPUT_REGION if raw.len() >= core::mem::size_of::<RectRequest>() => {
+            Some(ClientRequest::SetInputRegion(unsafe {
+                *(raw.as_ptr() as *const RectRequest)
+            }))
+        }
+        MSG_SET_OPAQUE_REGION if raw.len() >= core::mem::size_of::<RectRequest>() => {
+            Some(ClientRequest::SetOpaqueRegion(unsafe {
+                *(raw.as_ptr() as *const RectRequest)
+            }))
+        }
+        MSG_SET_DEST_RECT if raw.len() >= core::mem::size_of::<RectRequest>() => {
+            Some(ClientRequest::SetDestRect(unsafe {
+                *(raw.as_ptr() as *const RectRequest)
+            }))
+        }
+        MSG_SET_Z_ORDER if raw.len() >= core::mem::size_of::<SetZOrderRequest>() => {
+            Some(ClientRequest::SetZOrder(unsafe {
+                *(raw.as_ptr() as *const SetZOrderRequest)
+            }))
+        }
+        MSG_COMMIT if raw.len() >= core::mem::size_of::<CommitRequest>() => {
+            Some(ClientRequest::Commit(unsafe { *(raw.as_ptr() as *const CommitRequest) }))
+        }
+        _ => None,
+    }
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct AckEvent {
+    pub header: MessageHeader,
+    pub status: u32,
+    pub value: u32,
+    pub serial: u64,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct FrameDoneEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+    pub serial: u64,
+    pub timestamp_ns: u64,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct PointerEnterEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct PointerLeaveEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct PointerMotionEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+    pub x: i32,
+    pub y: i32,
+    pub timestamp_ns: u64,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct PointerButtonEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+    pub button: u8,
+    pub pressed: u8,
+    pub _pad: [u8; 2],
+    pub timestamp_ns: u64,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct KeyboardEnterEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+    pub modifiers: u8,
+    pub _pad: [u8; 3],
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct KeyboardLeaveEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct KeyboardKeyEvent {
+    pub header: MessageHeader,
+    pub surface_id: u32,
+    pub key: u16,
+    pub pressed: u8,
+    pub modifiers: u8,
+    pub repeat: u8,
+    pub _pad: [u8; 3],
+    pub timestamp_ns: u64,
+}
+
+pub fn msg_header(msg_type: u16) -> MessageHeader {
+    MessageHeader {
+        magic: BLOOM_PROTOCOL_MAGIC,
+        version: BLOOM_PROTOCOL_VERSION,
+        msg_type,
+    }
+}
+
+pub fn as_bytes<T>(value: &T) -> &[u8] {
+    unsafe {
+        core::slice::from_raw_parts(value as *const T as *const u8, core::mem::size_of::<T>())
+    }
+}
+
+pub fn to_vec<T>(value: &T) -> Vec<u8> {
+    as_bytes(value).to_vec()
+}
