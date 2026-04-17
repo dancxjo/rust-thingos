@@ -225,6 +225,9 @@ struct AudioCard {
     hw_frame: u64,
     app_frame: u64,
     xruns: u32,
+    hw_config_dirty: bool,
+    hw_started: bool,
+    hw_faulted: bool,
     /// True when at least one SubscribeReady request has been received for out0
     /// and no matching UnsubscribeReady has been received.
     out0_subscribed: bool,
@@ -365,6 +368,9 @@ impl AudioCard {
             hw_frame: 0,
             app_frame: 0,
             xruns: 0,
+            hw_config_dirty: true,
+            hw_started: false,
+            hw_faulted: false,
             out0_subscribed: false,
         }
     }
@@ -478,6 +484,7 @@ fn dispatch_rpc(
     payload: &[u8],
     card: &mut AudioCard,
 ) -> (ProviderResponse, bool /* ring_changed */) {
+    debug_log_rpc(op, payload);
     match op {
         VfsRpcOp::Lookup => {
             if payload.len() < 4 {
@@ -597,6 +604,70 @@ fn dispatch_rpc(
     }
 }
 
+fn debug_log_rpc(op: VfsRpcOp, payload: &[u8]) {
+    match op {
+        VfsRpcOp::Lookup => {
+            if payload.len() >= 4 {
+                let path_len =
+                    u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+                if payload.len() >= 4 + path_len {
+                    if let Ok(path) = core::str::from_utf8(&payload[4..4 + path_len]) {
+                        info!("SND: rpc Lookup '{}'", path);
+                        return;
+                    }
+                }
+            }
+            info!("SND: rpc Lookup <malformed>");
+        }
+        VfsRpcOp::Stat => {
+            if payload.len() >= 8 {
+                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                info!("SND: rpc Stat handle={}", handle);
+            }
+        }
+        VfsRpcOp::DeviceCall => {
+            if payload.len() >= 8 + size_of::<abi::device::DeviceCall>() {
+                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                let dc: abi::device::DeviceCall = unsafe {
+                    core::ptr::read_unaligned(
+                        payload[8..].as_ptr() as *const abi::device::DeviceCall
+                    )
+                };
+                info!("SND: rpc DeviceCall handle={} op={}", handle, dc.op);
+            }
+        }
+        VfsRpcOp::Write => {
+            if payload.len() >= 20 {
+                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                let data_len =
+                    u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
+                info!("SND: rpc Write handle={} len={}", handle, data_len);
+            }
+        }
+        VfsRpcOp::Poll => {
+            if payload.len() >= 8 {
+                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                info!("SND: rpc Poll handle={}", handle);
+            }
+        }
+        VfsRpcOp::SubscribeReady => {
+            if payload.len() >= 8 {
+                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                info!("SND: rpc SubscribeReady handle={}", handle);
+            }
+        }
+        VfsRpcOp::UnsubscribeReady => {
+            if payload.len() >= 8 {
+                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                info!("SND: rpc UnsubscribeReady handle={}", handle);
+            }
+        }
+        _ => {
+            info!("SND: rpc {:?}", op as u8);
+        }
+    }
+}
+
 fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderResponse, bool) {
     let dc_size = size_of::<abi::device::DeviceCall>();
     if payload.len() < 8 + dc_size {
@@ -637,6 +708,9 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
                     buffer_frames: req.buffer_frames.max(256),
                     _reserved: [0; 3],
                 };
+                card.hw_config_dirty = true;
+                card.hw_started = false;
+                card.hw_faulted = false;
             }
             let bytes = unsafe {
                 core::slice::from_raw_parts(
@@ -713,6 +787,7 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
 
         AUDIO_START => {
             card.state = AudioState::Running as u32;
+            card.hw_faulted = false;
             (ok_device_call(0, &[]), false)
         }
 
@@ -720,6 +795,8 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
             card.state = AudioState::Stopped as u32;
             card.ring = RingBuf::new(64 * 1024);
             teardown_mapped_ring(card);
+            card.hw_started = false;
+            card.hw_faulted = false;
             (ok_device_call(0, &[]), false)
         }
 
@@ -872,10 +949,6 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
             warn!("SND: vfs_mount failed: {:?} — continuing without VFS interface", e);
         }
     }
-
-    configure_stream(&mut driver, &control_dma, stream_id);
-    send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_START, stream_id);
-    info!("SND: Hardware playback started");
 
     // Pre-allocate a reusable TX DMA staging buffer. Reallocating per-chunk
     // eventually exhausts per-task DMA slots during sustained playback.
@@ -1071,8 +1144,46 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
             }
         }
 
+        // 4a. Lazily configure and start the hardware only once the provider is
+        // already alive and a client has actually requested playback.
+        if (card.state == AudioState::Running as u32 || card.state == AudioState::Draining as u32)
+            && !card.hw_started
+            && !card.hw_faulted
+        {
+            let configured = if card.hw_config_dirty {
+                configure_stream(&mut driver, &control_dma, stream_id, &card.params)
+            } else {
+                true
+            };
+
+            if configured {
+                card.hw_config_dirty = false;
+                if send_pcm_command(
+                    &mut driver,
+                    &control_dma,
+                    VIRTIO_SND_R_PCM_START,
+                    stream_id,
+                ) {
+                    card.hw_started = true;
+                    info!("SND: Hardware playback started");
+                    progress = true;
+                } else {
+                    warn!("SND: Hardware playback start did not complete cleanly");
+                    card.hw_faulted = true;
+                    card.state = AudioState::Stopped as u32;
+                }
+            } else {
+                warn!("SND: stream {} configuration did not complete cleanly", stream_id);
+                card.hw_faulted = true;
+                card.state = AudioState::Stopped as u32;
+            }
+        }
+
         // 5. Feed hardware from ring if running.
-        if card.state == AudioState::Running as u32 || card.state == AudioState::Draining as u32 {
+        if card.hw_started
+            && (card.state == AudioState::Running as u32
+                || card.state == AudioState::Draining as u32)
+        {
             while let Some(slot_idx) = (0..tx_in_flight.len()).find(|&i| tx_in_flight[i].is_none())
             {
                 let slot_ptr = unsafe { tx_dma_ptr.add(slot_idx * slot_size) };
@@ -1137,7 +1248,17 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
             );
         }
 
-        // 7. Stop if draining and ring is now empty and all HW buffers finished.
+        // 7. Honour stop requests once in-flight DMA has drained.
+        if card.state == AudioState::Stopped as u32
+            && card.hw_started
+            && tx_in_flight.iter().all(|s| s.is_none())
+        {
+            let _ = send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_STOP, stream_id);
+            card.hw_started = false;
+            progress = true;
+        }
+
+        // 8. Stop if draining and ring is now empty and all HW buffers finished.
         if card.state == AudioState::Draining as u32
             && card
                 .mapped
@@ -1148,7 +1269,11 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
             && tx_in_flight.iter().all(|s| s.is_none())
         {
             card.state = AudioState::Stopped as u32;
-            send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_STOP, stream_id);
+            if card.hw_started {
+                let _ =
+                    send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_STOP, stream_id);
+                card.hw_started = false;
+            }
             progress = true;
         }
 
@@ -1338,7 +1463,28 @@ fn process_event_queue(driver: &mut VirtioDevice, state: &mut EventQueueState) -
     xrun_seen
 }
 
-fn send_pcm_command(driver: &mut VirtioDevice, control_dma: &ControlDma, cmd: u32, stream_id: u32) {
+fn pcm_cmd_name(cmd: u32) -> &'static str {
+    match cmd {
+        VIRTIO_SND_R_PCM_SET_PARAMS => "SET_PARAMS",
+        VIRTIO_SND_R_PCM_PREPARE => "PREPARE",
+        VIRTIO_SND_R_PCM_START => "START",
+        VIRTIO_SND_R_PCM_STOP => "STOP",
+        VIRTIO_SND_R_PCM_RELEASE => "RELEASE",
+        _ => "UNKNOWN",
+    }
+}
+
+fn send_pcm_command(
+    driver: &mut VirtioDevice,
+    control_dma: &ControlDma,
+    cmd: u32,
+    stream_id: u32,
+) -> bool {
+    info!(
+        "SND: control {} begin for stream {}",
+        pcm_cmd_name(cmd),
+        stream_id
+    );
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmHdr) =
             VirtioSndPcmHdr { hdr: VirtioSndHdr { code: cmd }, stream_id };
@@ -1351,8 +1497,12 @@ fn send_pcm_command(driver: &mut VirtioDevice, control_dma: &ControlDma, cmd: u3
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
         if q.add_buffer(&bufs).is_none() {
-            warn!("SND: control queue full for command {:x}", cmd);
-            return;
+            warn!(
+                "SND: control {} queue full for stream {}",
+                pcm_cmd_name(cmd),
+                stream_id
+            );
+            return false;
         }
     }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
@@ -1366,37 +1516,90 @@ fn send_pcm_command(driver: &mut VirtioDevice, control_dma: &ControlDma, cmd: u3
             let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
             if resp.code != VIRTIO_SND_S_OK {
                 warn!(
-                    "SND: control command {:x} for stream {} completed with status {:x}",
-                    cmd, stream_id, resp.code
+                    "SND: control {} for stream {} completed with status {:x}",
+                    pcm_cmd_name(cmd),
+                    stream_id,
+                    resp.code
                 );
+                return false;
             }
-            break;
+            info!(
+                "SND: control {} complete for stream {}",
+                pcm_cmd_name(cmd),
+                stream_id
+            );
+            return true;
         }
         if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
             let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
             warn!(
-                "SND: control command {:x} for stream {} timed out (resp={:x})",
-                cmd, stream_id, resp.code
+                "SND: control {} for stream {} timed out (resp={:x})",
+                pcm_cmd_name(cmd),
+                stream_id,
+                resp.code
             );
-            break;
+            return false;
         }
         stem::time::sleep_ms(1);
     }
 }
 
-fn configure_stream(driver: &mut VirtioDevice, control_dma: &ControlDma, stream_id: u32) {
+fn map_audio_format(sample_format: u32) -> u8 {
+    match AudioSampleFormat::from_u32(sample_format).unwrap_or(AudioSampleFormat::S16LE) {
+        AudioSampleFormat::U8 => VIRTIO_SND_PCM_FMT_U8,
+        AudioSampleFormat::S16LE => VIRTIO_SND_PCM_FMT_S16,
+        _ => VIRTIO_SND_PCM_FMT_S16,
+    }
+}
+
+fn map_audio_rate(rate: u32) -> u8 {
+    match rate {
+        5512 => VIRTIO_SND_PCM_RATE_5512,
+        8000 => VIRTIO_SND_PCM_RATE_8000,
+        11025 => VIRTIO_SND_PCM_RATE_11025,
+        16000 => VIRTIO_SND_PCM_RATE_16000,
+        22050 => VIRTIO_SND_PCM_RATE_22050,
+        32000 => VIRTIO_SND_PCM_RATE_32000,
+        44100 => VIRTIO_SND_PCM_RATE_44100,
+        48000 => VIRTIO_SND_PCM_RATE_48000,
+        64000 => VIRTIO_SND_PCM_RATE_64000,
+        88200 => VIRTIO_SND_PCM_RATE_88200,
+        96000 => VIRTIO_SND_PCM_RATE_96000,
+        176400 => VIRTIO_SND_PCM_RATE_176400,
+        192000 => VIRTIO_SND_PCM_RATE_192000,
+        384000 => VIRTIO_SND_PCM_RATE_384000,
+        _ => VIRTIO_SND_PCM_RATE_44100,
+    }
+}
+
+fn configure_stream(
+    driver: &mut VirtioDevice,
+    control_dma: &ControlDma,
+    stream_id: u32,
+    params: &AudioParams,
+) -> bool {
+    info!("SND: control SET_PARAMS begin for stream {}", stream_id);
+    let bytes_per_frame = AudioSampleFormat::from_u32(params.sample_format)
+        .unwrap_or(AudioSampleFormat::S16LE)
+        .bytes_per_sample() as u32
+        * params.channels.max(1);
+    let period_bytes = params.period_frames.max(64).saturating_mul(bytes_per_frame);
+    let buffer_bytes = params
+        .buffer_frames
+        .max(params.period_frames.max(64))
+        .saturating_mul(bytes_per_frame);
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {
             hdr: VirtioSndPcmHdr {
                 hdr: VirtioSndHdr { code: VIRTIO_SND_R_PCM_SET_PARAMS },
                 stream_id,
             },
-            buffer_bytes: 65536,
-            period_bytes: 4096,
+            buffer_bytes,
+            period_bytes,
             features: 0,
-            channels: 2,
-            format: VIRTIO_SND_PCM_FMT_S16,
-            rate: VIRTIO_SND_PCM_RATE_44100,
+            channels: params.channels.clamp(1, 2) as u8,
+            format: map_audio_format(params.sample_format),
+            rate: map_audio_rate(params.rate),
             padding: 0,
         };
     }
@@ -1408,7 +1611,7 @@ fn configure_stream(driver: &mut VirtioDevice, control_dma: &ControlDma, stream_
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
         if q.add_buffer(&bufs).is_none() {
             warn!("SND: control queue full for set_params");
-            return;
+            return false;
         }
     }
     driver.notify_queue(VIRTIO_SND_VQ_CONTROL);
@@ -1425,17 +1628,19 @@ fn configure_stream(driver: &mut VirtioDevice, control_dma: &ControlDma, stream_
                     "SND: set_params for stream {} completed with status {:x}",
                     stream_id, resp.code
                 );
+                return false;
             }
+            info!("SND: control SET_PARAMS complete for stream {}", stream_id);
             break;
         }
         if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
             let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
             warn!("SND: set_params for stream {} timed out (resp={:x})", stream_id, resp.code);
-            return;
+            return false;
         }
         stem::time::sleep_ms(1);
     }
-    send_pcm_command(driver, control_dma, VIRTIO_SND_R_PCM_PREPARE, stream_id);
+    send_pcm_command(driver, control_dma, VIRTIO_SND_R_PCM_PREPARE, stream_id)
 }
 
 fn find_output_stream(_driver: &mut VirtioDevice) -> Option<u32> {

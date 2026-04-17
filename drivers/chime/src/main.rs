@@ -313,12 +313,23 @@ fn main(_arg: usize) -> ! {
     info!("chime: Waiting for /dev/audio/card0/out0 ...");
 
     // Wait for the audio driver to mount its VFS tree.
+    let mut open_attempts: u32 = 0;
     let out_fd = loop {
         use abi::syscall::vfs_flags::O_RDWR;
         use stem::syscall::vfs::vfs_open;
         match vfs_open("/dev/audio/card0/out0", O_RDWR) {
             Ok(fd) => break fd,
-            Err(_) => stem::time::sleep_ms(100),
+            Err(err) => {
+                open_attempts = open_attempts.saturating_add(1);
+                if open_attempts == 1 || open_attempts % 20 == 0 {
+                    info!(
+                        "chime: open /dev/audio/card0/out0 attempt {} failed: {:?}",
+                        open_attempts,
+                        err
+                    );
+                }
+                stem::time::sleep_ms(100);
+            }
         }
     };
 
