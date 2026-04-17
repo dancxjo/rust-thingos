@@ -907,15 +907,11 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
         return preferred;
     };
     if !overloaded {
-        if streak_cell.load(Ordering::Acquire) != 0 {
-            streak_cell.store(0, Ordering::Release);
-        }
+        streak_cell.store(0, Ordering::Release);
         return preferred;
     }
 
-    let streak_required =
-        ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire).min(ANY_WAKE_OVERLOAD_STREAK_MAX)
-            as u8;
+    let streak_required = ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire) as u8;
     let prior_streak = streak_cell.load(Ordering::Acquire);
     let next_streak = prior_streak.saturating_add(1);
     streak_cell.store(next_streak, Ordering::Release);
