@@ -22,7 +22,7 @@ pub struct Handle(pub u32);
 pub enum HandleKind {
     File,
     Pipe,
-    Channel,
+    Port,
 }
 
 /// Resolved handle target across compatibility tables.
@@ -32,7 +32,7 @@ pub enum ResolvedHandle {
         kind: HandleKind,
         node: Arc<dyn crate::vfs::VfsNode>,
     },
-    Channel {
+    Port {
         port: Arc<crate::ipc::Port>,
         mode: crate::ipc::IpcThingMode,
     },
@@ -42,7 +42,7 @@ impl ResolvedHandle {
     pub fn kind(&self) -> HandleKind {
         match self {
             Self::FileLike { kind, .. } => *kind,
-            Self::Channel { .. } => HandleKind::Channel,
+            Self::Port { .. } => HandleKind::Port,
         }
     }
 }
@@ -101,7 +101,7 @@ pub fn resolve_handle(
 
     let entry = lookup_ipc_entry_any(handle)?;
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
-    Ok(ResolvedHandle::Channel {
+    Ok(ResolvedHandle::Port {
         port,
         mode: entry.mode,
     })
@@ -114,15 +114,15 @@ pub fn resolve_io_node_compat(
 ) -> SysResult<Arc<dyn crate::vfs::VfsNode>> {
     match resolve_handle(pinfo_arc, handle)? {
         ResolvedHandle::FileLike { node, .. } => Ok(node),
-        ResolvedHandle::Channel { port, mode } => {
+        ResolvedHandle::Port { port, mode } => {
             Ok(Arc::new(crate::vfs::port_node::PortNode::new(port, mode)))
         }
     }
 }
 
-/// Explicit fd compatibility boundary: project an IPC channel handle into a
+/// Explicit fd compatibility boundary: project an IPC port handle into a
 /// process `thing_table` slot so fd-based APIs can consume it.
-pub fn install_fd_compat_for_channel_handle(
+pub fn install_fd_compat_for_port_handle(
     pinfo_arc: &Arc<Mutex<crate::task::ProcessInfo>>,
     handle: Handle,
 ) -> SysResult<u32> {
@@ -141,7 +141,15 @@ pub fn install_fd_compat_for_channel_handle(
     )
 }
 
-/// Resolve a write-capable channel endpoint from a compat token (fd or handle).
+#[inline]
+pub fn install_fd_compat_for_channel_handle(
+    pinfo_arc: &Arc<Mutex<crate::task::ProcessInfo>>,
+    handle: Handle,
+) -> SysResult<u32> {
+    install_fd_compat_for_port_handle(pinfo_arc, handle)
+}
+
+/// Resolve a write-capable port endpoint from a compat token (fd or handle).
 ///
 /// Used where migration still accepts either token shape at syscall boundaries.
 pub fn resolve_write_port_compat(
@@ -229,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn test_install_fd_compat_for_channel_handle_creates_port_backed_fd() {
+    fn test_install_fd_compat_for_port_handle_creates_port_backed_fd() {
         let port_id = crate::ipc::create_port(8);
         let handle = {
             let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
@@ -239,11 +247,11 @@ mod tests {
         };
 
         let pinfo = make_test_process_with_thing_table(&[]);
-        let fd = install_fd_compat_for_channel_handle(&pinfo, Handle(handle.0)).expect("fd");
+        let fd = install_fd_compat_for_port_handle(&pinfo, Handle(handle.0)).expect("fd");
 
         let lock = pinfo.lock();
         let open = lock.thing_table.get(fd).expect("fd entry");
-        assert!(open.node.as_port().is_some(), "fd must wrap a channel port");
+        assert!(open.node.as_port().is_some(), "fd must wrap a port");
 
         drop(lock);
         {

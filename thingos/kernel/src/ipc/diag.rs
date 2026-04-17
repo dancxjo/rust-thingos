@@ -1,7 +1,7 @@
-//! IPC diagnostics — global counters for channels, pipes, and VFS RPC.
+//! IPC diagnostics — global counters for ports, pipes, and VFS RPC.
 //!
 //! All counters are `AtomicU64` incremented at the hot path (no locking).
-//! Expose them via `/proc/ipc/channels` and `/proc/ipc/pipes`.
+//! Expose them via `/proc/ipc/ports` and `/proc/ipc/pipes`.
 //!
 //! # Usage
 //!
@@ -12,12 +12,12 @@
 //!
 //! Read for display:
 //! ```ignore
-//! let s = crate::ipc::diag::channels_text();
+//! let s = crate::ipc::diag::ports_text();
 //! ```
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ── Channel counters ──────────────────────────────────────────────────────────
+// ── Port counters ─────────────────────────────────────────────────────────────
 
 /// Total `channel_send` calls that wrote ≥1 byte.
 pub static CHANNEL_SENDS: AtomicU64 = AtomicU64::new(0);
@@ -69,8 +69,8 @@ pub fn record_dead_provider_error() {
     VFS_RPC_DEAD_PROVIDER.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Render channel counters as a human-readable text block (for `/proc/ipc/channels`).
-pub fn channels_text() -> alloc::string::String {
+/// Render port counters as a human-readable text block (for `/proc/ipc/ports`).
+pub fn ports_text() -> alloc::string::String {
     alloc::format!(
         "sends:         {}\n\
          recvs:         {}\n\
@@ -89,6 +89,11 @@ pub fn channels_text() -> alloc::string::String {
         CHANNEL_FULL_EVENTS.load(Ordering::Relaxed),
         CHANNEL_PEER_DEATHS.load(Ordering::Relaxed),
     )
+}
+
+#[inline]
+pub fn channels_text() -> alloc::string::String {
+    ports_text()
 }
 
 /// Render pipe counters as a human-readable text block (for `/proc/ipc/pipes`).
@@ -124,8 +129,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn channels_text_contains_expected_keys() {
-        let t = channels_text();
+    fn ports_text_contains_expected_keys() {
+        let t = ports_text();
         assert!(t.contains("sends:"));
         assert!(t.contains("bytes_sent:"));
         assert!(t.contains("handles_sent:"));
