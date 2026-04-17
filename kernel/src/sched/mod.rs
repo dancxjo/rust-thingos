@@ -103,7 +103,7 @@ pub static PROF_TASK_STATUS_POLLS: AtomicU64 = AtomicU64::new(0);
 pub static PROF_RUNNABLE_TRANSITIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Count of wake calls that skipped the scheduler lock because the target task
-/// already had `wake_pending = true` while not blocked.
+/// already had `wake_pending = true`.
 pub static PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING: AtomicU64 = AtomicU64::new(0);
 
 /// Per-CPU last-sampled run-queue length.
@@ -196,7 +196,7 @@ pub struct SchedLockSiteMetrics {
     /// Number of Blocked → Runnable transitions since the last snapshot.
     pub runnable_transitions: u64,
     /// Wake calls that avoided the SCHEDULER lock because a wake was already
-    /// pending for a non-blocked target task.
+    /// pending for the target task.
     pub wake_task_fastpath_already_pending: u64,
 }
 
@@ -4335,6 +4335,77 @@ mod tests {
             metrics.wake_task.wait_calls, 0,
             "wake_task fast path should avoid scheduler lock wait tracking"
         );
+    }
+
+    #[test]
+    fn test_wake_task_without_pending_wake_uses_scheduler_path() {
+        let _g = init_test_env();
+        crate::task::registry::init::<MockRuntime>();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6102,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        let task = crate::task::Task {
+            id: 6102,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            base_priority: TaskPriority::Normal,
+            enqueued_at_tick: 0,
+            exit_code: None,
+            exit_waiters: crate::sched::WaitQueue::new(),
+            is_user: false,
+            wake_pending: false,
+            pending_interrupt: false,
+            affinity: Affinity::Any,
+            kstack_base: core::ptr::null_mut(),
+            kstack_size: 0,
+            kstack_top: 0,
+            ctx: Default::default(),
+            aspace: MockAddressSpace(0),
+            simd: crate::simd::SimdState::new(&MOCK_RUNTIME),
+            stack_info: None,
+            mappings: alloc::sync::Arc::new(spin::Mutex::new(
+                crate::memory::mappings::MappingList::new(),
+            )),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            last_cpu: Some(0),
+            name: [0; 32],
+            name_len: 0,
+            process_info: None,
+            user_fs_base: 0,
+            detached: false,
+            signals: crate::signal::ThreadSignals::new(),
+        };
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+        drop(sched_lock);
+        let _ = sched_lock_metrics_snapshot_and_reset();
+
+        crate::sched::blocking::wake_task::<MockRuntime>(6102);
+
+        let task = crate::task::registry::get_task::<MockRuntime>(6102).unwrap();
+        assert!(task.wake_pending);
+        let metrics = sched_lock_metrics_snapshot_and_reset();
+        assert_eq!(metrics.wake_task_fastpath_already_pending, 0);
+        assert_eq!(metrics.wake_task.wait_calls, 1);
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
     }
 
     #[test]
