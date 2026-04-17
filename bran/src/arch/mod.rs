@@ -29,17 +29,16 @@ pub type CurrentRuntime = crate::runtime::Runtime<riscv64::RISCV64Runtime>;
 pub type CurrentRuntime = crate::runtime::Runtime<loongarch64::LoongArch64Runtime>;
 
 pub const fn create_runtime() -> CurrentRuntime {
-    crate::runtime::Runtime {
+    crate::runtime::Runtime::new(
         #[cfg(target_arch = "x86_64")]
-        arch: x86_64::X86_64Runtime::new(),
+        x86_64::X86_64Runtime::new(),
         #[cfg(target_arch = "aarch64")]
-        arch: aarch64::AArch64Runtime::new(),
+        aarch64::AArch64Runtime::new(),
         #[cfg(target_arch = "riscv64")]
-        arch: riscv64::RISCV64Runtime::new(),
+        riscv64::RISCV64Runtime::new(),
         #[cfg(target_arch = "loongarch64")]
-        arch: loongarch64::LoongArch64Runtime::new(),
-        limine: crate::runtime::LimineRuntimeData::new(),
-    }
+        loongarch64::LoongArch64Runtime::new(),
+    )
 }
 
 pub fn init_paging() {
