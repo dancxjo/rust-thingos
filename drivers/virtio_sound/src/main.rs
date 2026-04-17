@@ -1384,8 +1384,10 @@ fn send_pcm_command(driver: &mut VirtioDevice, control_dma: &ControlDma, cmd: u3
 fn configure_stream(driver: &mut VirtioDevice, control_dma: &ControlDma, stream_id: u32) {
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmSetParams) = VirtioSndPcmSetParams {
-            hdr: VirtioSndHdr { code: VIRTIO_SND_R_PCM_SET_PARAMS },
-            stream_id,
+            hdr: VirtioSndPcmHdr {
+                hdr: VirtioSndHdr { code: VIRTIO_SND_R_PCM_SET_PARAMS },
+                stream_id,
+            },
             buffer_bytes: 65536,
             period_bytes: 4096,
             features: 0,
