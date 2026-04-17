@@ -160,6 +160,7 @@ members = [
   "userspace/tests/test_vm_shared",
   "userspace/time_test",
   "userspace/touch",
+  "userspace/top",
   "userspace/uname",
   "userspace/true",
   "userspace/vfs_hello",
