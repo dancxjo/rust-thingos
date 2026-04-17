@@ -1416,6 +1416,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
         self.prepare_schedule()
     }
 
+    /// Drain up to `max_to_flush` deferred misrouted tasks, requeue each task on
+    /// its target CPU, and schedule a deduplicated remote reschedule nudge.
+    ///
+    /// This keeps misroute cleanup incremental so `prepare_schedule` can keep a
+    /// short picker fast path even when a large misroute backlog exists.
     #[inline]
     fn flush_pending_misrouted_requeues_bounded(&mut self, max_to_flush: usize) {
         for _ in 0..max_to_flush {
@@ -1462,8 +1467,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Sample run-queue depth for this CPU before we start dequeuing.
         sample_runq_len(self, cpu_idx);
 
-        // Snapshot tick count once per scheduling decision so aging calculations
-        // do not repeatedly read the global counter under lock.
+        // Snapshot tick count once per scheduling decision so aging is both
+        // consistent across this pick and free of repeated tick loads.
         let now = TICK_COUNT.load(Ordering::Relaxed);
 
         let mut next_id = None;
@@ -1500,7 +1505,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
             if let Some(p) = best_q {
                 let id = self.state.dequeue_task_front(cpu_idx, p).unwrap();
-                pick_attempts = pick_attempts.saturating_add(1);
+                pick_attempts += 1;
                 self.metrics.pops += 1;
 
                 // Use the hot-field cache for dead/affinity checks to avoid a
@@ -1534,7 +1539,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     let Some(id) = self.state.dequeue_task_front(cpu_idx, 0) else {
                         break;
                     };
-                    pick_attempts = pick_attempts.saturating_add(1);
+                    pick_attempts += 1;
                     self.metrics.pops += 1;
                     // Use the hot-field cache for dead/affinity checks.
                     match self.state.get_thread(id) {
