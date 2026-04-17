@@ -196,6 +196,7 @@ pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
+const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 16;
 
 /// Map a microsecond duration to a histogram bucket index.
@@ -2254,11 +2255,35 @@ impl<R: BootRuntime> types::Scheduler<R> {
             crate::kinfo!("DEVICE: released {} claims for task {}", released, current_id);
         }
 
-        loop {
+        for _ in 0..TERMINATE_CURRENT_SWITCH_RETRY_BUDGET {
             if let Some(switch) = self.prepare_schedule() {
                 return (switch, waiters);
             }
         }
+
+        let local_runq_depth = self
+            .state
+            .per_cpu
+            .get(cpu_idx)
+            .map(|pc| pc.runq.iter().map(|q| q.len()).sum::<usize>())
+            .unwrap_or(0);
+        let idle_tid = self.state.per_cpu.get(cpu_idx).and_then(|pc| pc.idle_task);
+        crate::kerror!(
+            "SCHED: terminate_current exhausted retries (cpu={}, current_tid={}, idle_tid={:?}, local_runq_depth={}, pending_misroutes={}, online_cpus={:?})",
+            cpu_idx,
+            current_id,
+            idle_tid,
+            local_runq_depth,
+            self.pending_misrouted_requeues.len(),
+            self.state.online_cpus
+        );
+        crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
+        panic!(
+            "scheduler invariant violated: terminate_current could not find a switch after {} attempts (cpu={}, current_tid={})",
+            TERMINATE_CURRENT_SWITCH_RETRY_BUDGET,
+            cpu_idx,
+            current_id
+        );
     }
 
     /// Update only scheduler hot-cache/run-queue priority state.
@@ -5528,6 +5553,50 @@ mod tests {
             "dead current task must be removed from the wait queue"
         );
         assert_eq!(sched.state.sleep_queue.get(&55).cloned(), Some(alloc::vec![9999]));
+    }
+
+    #[test]
+    fn test_terminate_current_panics_when_no_switch_candidate_exists() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(8306);
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(8306, TaskState::Running, TaskPriority::Normal),
+        ));
+
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 8306,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = sched.terminate_current(202);
+        }))
+        .expect_err("terminate_current should panic when no switch candidate exists");
+
+        let panic_message = if let Some(msg) = panic_payload.downcast_ref::<&'static str>() {
+            *msg
+        } else if let Some(msg) = panic_payload.downcast_ref::<alloc::string::String>() {
+            msg.as_str()
+        } else {
+            ""
+        };
+        assert!(
+            panic_message.contains("terminate_current could not find a switch"),
+            "panic message should explain bounded terminate_current exhaustion"
+        );
     }
 
     #[test]
