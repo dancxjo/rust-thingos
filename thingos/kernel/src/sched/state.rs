@@ -401,6 +401,32 @@ impl SchedState {
         None
     }
 
+    pub fn dequeue_thread_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
+        let SchedState {
+            threads,
+            per_cpu,
+            ..
+        } = self;
+
+        let pc = per_cpu.get_mut(cpu)?;
+        let tid = pc.runq[prio].get(idx).copied()?;
+        let valid_location = threads
+            .get(&tid)
+            .and_then(|thread| thread.runq_location)
+            == Some((cpu, prio));
+        if !valid_location {
+            return None;
+        }
+
+        let removed = pc.runq[prio].remove(idx)?;
+        pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
+        pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
+        if let Some(thread) = threads.get_mut(&removed) {
+            thread.runq_location = None;
+        }
+        Some(removed)
+    }
+
     pub fn remove_thread_from_runq(&mut self, tid: ThreadId) -> bool {
         if let Some(t) = self.get_thread_mut(tid) {
             if t.runq_location.is_some() {
@@ -556,6 +582,10 @@ impl SchedState {
     #[inline]
     pub fn dequeue_task_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
         self.dequeue_thread_front(cpu, prio)
+    }
+    #[inline]
+    pub fn dequeue_task_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
+        self.dequeue_thread_at(cpu, prio, idx)
     }
     #[inline]
     pub fn remove_task_from_runq(&mut self, tid: ThreadId) -> bool {

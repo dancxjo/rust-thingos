@@ -196,6 +196,8 @@ pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
+// Keep steal scans bounded to limit idle-path latency while still peeking past
+// a small pinned/unstealable head segment.
 const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
 const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 16;
@@ -2268,6 +2270,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 };
                 let stealable = match self.state.get_thread(tid) {
                     Some(sf) => {
+                        // Require canonical queue-placement metadata to match so
+                        // we do not steal stale lazy-invalidated entries.
                         let is_stealable = sf.state != TaskState::Dead
                             && sf.runq_location == Some((busiest_cpu, p))
                             && matches!(sf.affinity, crate::task::Affinity::Any);
@@ -2281,16 +2285,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 }
             }
             if let Some(idx) = candidate_index {
-                let stolen_id = {
-                    let pc = &mut self.state.per_cpu[busiest_cpu];
-                    let removed = pc.runq[p].remove(idx);
-                    if removed.is_some() {
-                        pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
-                        pc.stats.runq_depth_change_events =
-                            pc.stats.runq_depth_change_events.saturating_add(1);
-                    }
-                    removed
-                };
+                let stolen_id = self.state.dequeue_task_at(busiest_cpu, p, idx);
                 if let Some(stolen_id) = stolen_id {
                     if let Some(pc) = self.state.per_cpu.get_mut(busiest_cpu) {
                         pc.stats.steals_out = pc.stats.steals_out.saturating_add(1);
@@ -2299,7 +2294,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         pc.stats.steals_in = pc.stats.steals_in.saturating_add(1);
                     }
                     if let Some(sf) = self.state.get_task_mut(stolen_id) {
-                        sf.runq_location = None;
                         sf.wake_cpu = Some(local_cpu);
                     }
                     self.state
