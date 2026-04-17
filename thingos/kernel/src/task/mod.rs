@@ -827,13 +827,11 @@ pub fn preempt_disable<R: BootRuntime>() {
     let irq = rt.irq_disable();
     {
         let lock = crate::sched::SCHEDULER.lock();
-        crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
+        let _lock_tracking = crate::sched::sched_lock_tracking_guard::<R>(rt.current_cpu_index());
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             sched.preempt_disable();
         }
-        crate::sched::clear_sched_lock_tracking::<R>();
-        drop(lock);
     }
     rt.irq_restore(irq);
 }
@@ -844,7 +842,7 @@ pub fn preempt_enable<R: BootRuntime>() {
 
     let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
-        crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
+        let _lock_tracking = crate::sched::sched_lock_tracking_guard::<R>(rt.current_cpu_index());
         let result = if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.preempt_enable();
@@ -854,8 +852,6 @@ pub fn preempt_enable<R: BootRuntime>() {
         } else {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         };
-        crate::sched::clear_sched_lock_tracking::<R>();
-        drop(lock);
         result
     };
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
@@ -894,7 +890,7 @@ pub fn resched_if_needed<R: BootRuntime>() {
 
     let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
-        crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
+        let _lock_tracking = crate::sched::sched_lock_tracking_guard::<R>(rt.current_cpu_index());
         let result = if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.schedule_point(crate::sched::ScheduleReason::ReschedIfNeeded);
@@ -904,8 +900,6 @@ pub fn resched_if_needed<R: BootRuntime>() {
         } else {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         };
-        crate::sched::clear_sched_lock_tracking::<R>();
-        drop(lock);
         result
     };
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
@@ -952,7 +946,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
     crate::kinfo!("SMP: bootstrap_cpu start on CPU {}", cpu_idx);
 
     let lock = crate::sched::SCHEDULER.lock();
-    crate::sched::set_sched_lock_tracking::<R>(cpu_idx);
+    let _lock_tracking = crate::sched::sched_lock_tracking_guard::<R>(cpu_idx);
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
 
@@ -985,7 +979,6 @@ fn bootstrap_cpu<R: BootRuntime>() {
             }
         }
     }
-    crate::sched::clear_sched_lock_tracking::<R>();
     rt.irq_restore(_irq);
 }
 

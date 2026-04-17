@@ -22,6 +22,7 @@ mod vm;
 pub(crate) mod wait_queue;
 
 // Re-export all public items
+use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 pub use blocking::{
@@ -65,6 +66,21 @@ pub static SCHEDULER: Mutex<Option<usize>> = Mutex::new(None);
 pub static SCHEDULER_LOCK_OWNER: AtomicIsize = AtomicIsize::new(-1);
 pub static SCHEDULER_LOCK_ACQUIRED_AT: AtomicU64 = AtomicU64::new(0);
 
+pub struct SchedLockTrackingGuard<R: BootRuntime> {
+    owner_cpu: isize,
+    _phantom: PhantomData<R>,
+}
+
+#[inline]
+fn clear_sched_lock_tracking_owner(owner_cpu: isize) {
+    if SCHEDULER_LOCK_OWNER
+        .compare_exchange(owner_cpu, -1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Release);
+    }
+}
+
 #[inline]
 pub fn set_sched_lock_tracking<R: BootRuntime>(cpu_idx: usize) {
     SCHEDULER_LOCK_OWNER.store(cpu_idx as isize, Ordering::Release);
@@ -72,13 +88,23 @@ pub fn set_sched_lock_tracking<R: BootRuntime>(cpu_idx: usize) {
 }
 
 #[inline]
+pub fn sched_lock_tracking_guard<R: BootRuntime>(cpu_idx: usize) -> SchedLockTrackingGuard<R> {
+    set_sched_lock_tracking::<R>(cpu_idx);
+    SchedLockTrackingGuard {
+        owner_cpu: cpu_idx as isize,
+        _phantom: PhantomData,
+    }
+}
+
+#[inline]
 pub fn clear_sched_lock_tracking<R: BootRuntime>() {
     let cpu_owner = crate::runtime::<R>().current_cpu_index() as isize;
-    if SCHEDULER_LOCK_OWNER
-        .compare_exchange(cpu_owner, -1, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-    {
-        SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Release);
+    clear_sched_lock_tracking_owner(cpu_owner);
+}
+
+impl<R: BootRuntime> Drop for SchedLockTrackingGuard<R> {
+    fn drop(&mut self) {
+        clear_sched_lock_tracking_owner(self.owner_cpu);
     }
 }
 
@@ -3965,6 +3991,19 @@ mod tests {
 
         set_sched_lock_tracking::<MockRuntime>(0);
         clear_sched_lock_tracking::<MockRuntime>();
+        assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), -1);
+        assert_eq!(SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn sched_lock_tracking_guard_clears_on_drop() {
+        let _g = init_test_env();
+
+        {
+            let _tracking = sched_lock_tracking_guard::<MockRuntime>(0);
+            assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), 0);
+        }
+
         assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), -1);
         assert_eq!(SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire), 0);
     }
