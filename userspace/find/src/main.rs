@@ -52,8 +52,7 @@ fn path_join(parent: &str, name: &str) -> String {
 }
 
 fn walk(path: &str, has_error: &mut bool) {
-    write_to_fd(1, path);
-    write_to_fd(1, "\n");
+    write_to_fd(1, &alloc::format!("{}\n", path));
 
     let fd = match vfs_open(path, 0) {
         Ok(fd) => fd,
