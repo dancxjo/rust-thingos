@@ -213,7 +213,7 @@ impl Supervisor {
         };
         // We could pass the registrar port to cambium if it needs to register things,
         // but for now cambium just spawns drivers.
-        match stem::syscall::spawn_process("/drivers/cambium", 0) {
+        match stem::syscall::spawn_process("/bin/cambium", 0) {
             Ok(pid) => {
                 info!("SPROUT: Spawned cambium (PID={})", pid);
                 let mut tasks = self.tasks.lock();
