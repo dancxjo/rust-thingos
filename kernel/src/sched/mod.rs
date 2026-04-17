@@ -862,11 +862,12 @@ fn try_resched_if_needed<R: BootRuntime>() {
     let cpu_idx = rt.current_cpu_index();
 
     // Use try_lock to avoid deadlock if SCHEDULER is held by main code on this CPU.
-    // If we are currently on the idle task, we can afford a bounded spin to avoid
-    // being starved by high-frequency mainline lock acquisitions on other CPUs.
+    // A single attempt is sufficient: if the lock is not immediately available,
+    // GLOBAL_NEED_RESCHED is set so the next safe preemption point will retry.
+    // Spinning in the idle task only increases contention on the global lock.
     let mut lock = None;
     let mut attempts = 0;
-    let max_attempts = if rt.is_idle_task_current() { 128 } else { 1 };
+    let max_attempts = 1;
 
     while attempts < max_attempts {
         if let Some(l) = SCHEDULER.try_lock() {
@@ -877,20 +878,24 @@ fn try_resched_if_needed<R: BootRuntime>() {
         core::hint::spin_loop();
     }
 
-    if lock.is_none() && attempts >= max_attempts {
+    if lock.is_none() {
         let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
         let acquired_at = SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire);
         let now = rt.mono_ticks();
         let held_duration = if acquired_at > 0 { now.saturating_sub(acquired_at) } else { 0 };
 
-        crate::kdebug!(
-            "SCHED: try_resched_if_needed failed to acquire lock on CPU {} after {} attempts (is_idle={}) - current owner: CPU {}, held for {} ticks",
-            cpu_idx,
-            attempts,
-            rt.is_idle_task_current(),
-            owner,
-            held_duration
-        );
+        // Only log when we have a real owner and a non-trivial hold time, to
+        // avoid flooding the log with CPU -1 / held-for-0 noise.
+        if owner >= 0 && held_duration > 0 {
+            crate::kdebug!(
+                "SCHED: try_resched_if_needed failed to acquire lock on CPU {} after {} attempts (is_idle={}) - current owner: CPU {}, held for {} ticks",
+                cpu_idx,
+                attempts,
+                rt.is_idle_task_current(),
+                owner,
+                held_duration
+            );
+        }
     }
 
     if let Some(mut lock) = lock {
@@ -1010,20 +1015,6 @@ fn try_resched_if_needed<R: BootRuntime>() {
         PROF_TRYLOCK_MISS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
         if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
-        }
-        if let Some(lock) = SCHEDULER.try_lock() {
-            if let Some(ptr) = *lock {
-                let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-                if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
-                    pc.stats.lock_trylock_misses = pc.stats.lock_trylock_misses.saturating_add(1);
-                    if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
-                        pc.stats.lock_trylock_misses_with_pending_resched =
-                            pc.stats.lock_trylock_misses_with_pending_resched.saturating_add(1);
-                        pc.stats.lock_blocked_dispatch =
-                            pc.stats.lock_blocked_dispatch.saturating_add(1);
-                    }
-                }
-            }
         }
         // Warn only when misses cross threshold in a 2-second per-CPU window.
         let now = rt.mono_ticks();

@@ -454,10 +454,98 @@ impl<R: BootRuntime> Scheduler<R> {
         // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
         // handled post-lock by nudge_spawned_task.
 
-        let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
+        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
         // Link affinity and initial location
-        if let Affinity::Pinned(cpu) = affinity {}
+        let _ = affinity; // affinity is captured in the task; no additional bookkeeping needed
         // Initial location matches target runq
+
+        Some(id)
+    }
+
+    /// Create a new user task in the `Blocked` state without enqueuing it.
+    ///
+    /// Used by spawn functions that need to complete post-spawn setup
+    /// (process_info, name, inherited FDs) outside the SCHEDULER lock before
+    /// making the task runnable.  The caller MUST call `wake_task(id)` after
+    /// setup is complete.
+    ///
+    /// Unlike [`spawn_user_task`], this variant:
+    /// - Does not call `current_parent_pid` (avoids nested REGISTRY lock)
+    /// - Creates the task with `process_info: None` (caller sets it outside lock)
+    /// - Does not enqueue the task or set `need_resched`
+    pub fn spawn_user_task_deferred(
+        &mut self,
+        entry: crate::UserEntry,
+        aspace: <R::Tasking as BootTasking>::AddressSpace,
+        stack_info: abi::types::StackInfo,
+        regions: alloc::vec::Vec<abi::vm::VmRegionInfo>,
+        priority: crate::task::TaskPriority,
+        affinity: Affinity,
+    ) -> Option<TaskId> {
+        let rt = crate::runtime::<R>();
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let layout = alloc::alloc::Layout::from_size_align(KERNEL_STACK_SIZE, 8).unwrap();
+        let stack_base = unsafe { alloc::alloc::alloc(layout) };
+        if stack_base.is_null() {
+            return None;
+        }
+        let stack_top = (stack_base as u64) + KERNEL_STACK_SIZE as u64;
+
+        let user_entry = alloc::boxed::Box::new(entry);
+        let entry_ptr = alloc::boxed::Box::into_raw(user_entry) as usize;
+
+        let ctx =
+            rt.tasking().init_kernel_context(user_thread_trampoline::<R>, stack_top, entry_ptr);
+
+        let mapping_list = crate::memory::mappings::MappingList { regions };
+        let mappings_arc = alloc::sync::Arc::new(spin::Mutex::new(mapping_list));
+
+        let target_cpu = self.pick_cpu_and_bringup(affinity, true);
+        let cpu_count = self.state.per_cpu.len();
+        let safe_cpu = if target_cpu < cpu_count { target_cpu } else { 0 };
+
+        let task: Task<R> = Task {
+            id,
+            // Start blocked so the caller can finish setup before the task runs.
+            state: TaskState::Blocked,
+            priority,
+            kstack_base: stack_base,
+            kstack_size: KERNEL_STACK_SIZE,
+            kstack_top: stack_top,
+            ctx,
+            aspace,
+            simd: crate::simd::SimdState::new(rt),
+            exit_code: None,
+            exit_waiters: crate::sched::WaitQueue::new(),
+            is_user: true,
+            wake_pending: false,
+            pending_interrupt: false,
+            stack_info: Some(stack_info),
+            mappings: mappings_arc,
+            timeslice_remaining: DEFAULT_TIMESLICE,
+            affinity,
+            last_cpu: Some(safe_cpu),
+            name: [0; 32],
+            name_len: 0,
+            // process_info is None; the caller sets it outside the SCHEDULER lock.
+            process_info: None,
+            enqueued_at_tick: super::TICK_COUNT.load(Ordering::Relaxed),
+            base_priority: priority,
+            user_fs_base: 0,
+            detached: false,
+            signals: crate::signal::ThreadSignals::new(),
+        };
+
+        let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
+            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .into_sched_fields(task.id);
+        self.state.insert_task(sched_fields);
+        // Insert into the registry so the task can be looked up by TID.
+        // The task is Blocked and not in any runqueue; it cannot be scheduled
+        // until the caller calls wake_task(id).
+        crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
 
         Some(id)
     }
@@ -660,15 +748,32 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         crate::task::Affinity::Any
     };
 
-    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
-    let ptr = lock.expect("Scheduler not initialized");
-    let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
+    // Phase 1: minimal SCHEDULER critical section — allocate TID, register
+    // scheduler-internal state, insert into REGISTRY as Blocked.  All
+    // post-spawn setup (process_info, name, FDs) happens outside the lock to
+    // avoid long SCHEDULER hold times under SMP contention.
+    let id = {
+        let lock = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(current_cpu);
+        let ptr = lock.expect("Scheduler not initialized");
+        let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
+        let id = sched.spawn_user_task_deferred(entry, aspace, stack_info, regions, priority, affinity)?;
+        super::clear_sched_lock_tracking();
+        drop(lock);
+        id
+    };
 
-    let id = sched.spawn_user_task(entry, aspace, stack_info, regions, priority, affinity)?;
-    let in_bringup = sched.bringup_in_progress;
+    // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
+    // The task is Blocked and cannot be scheduled until wake_task(id) is called.
 
-    // Determine parent PID from the current task's ProcessInfo
-    let ppid = current_parent_pid::<R>(sched);
+    // Determine parent PID from the current task's ProcessInfo.
+    let ppid = {
+        let tid = rt.current_tid();
+        crate::task::registry::get_task::<R>(tid)
+            .and_then(|t| t.process_info.clone())
+            .map(|pi| pi.lock().pid)
+            .unwrap_or(0)
+    };
 
     // Retrieve the mappings Arc from the task that was just created so the
     // Process and Thread share the same underlying MappingList.
@@ -680,7 +785,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     // Derive the process-owned address-space token (raw u64) from the handle.
     let aspace_raw = rt.tasking().aspace_to_raw(aspace);
 
-    // Create per-process identity
+    // Create per-process identity.
     let pinfo = inherit_process_info::<R>(
         id as u32,
         ppid,
@@ -709,10 +814,11 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     }
     crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
-    super::clear_sched_lock_tracking(); drop(lock);
-    if !in_bringup {
-        nudge_spawned_task::<R>(current_cpu, id);
-    }
+    // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
+    // to transition Blocked → Runnable and enqueue the task.  During bringup
+    // the nudge IPI is harmless; wake_task handles it correctly.
+    crate::sched::blocking::wake_task::<R>(id);
+
     rt.irq_restore(_irq);
     Some(id)
 }
@@ -946,33 +1052,39 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
 
     let _irq = rt.irq_disable();
 
-    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
-    let ptr = lock.expect("Scheduler not initialized");
-    let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
+    // Phase 1: minimal SCHEDULER critical section — allocate TID, register
+    // scheduler-internal state, insert into REGISTRY as Blocked.
+    let id = {
+        let lock = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(current_cpu);
+        let ptr = lock.expect("Scheduler not initialized");
+        let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
+        let id = sched
+            .spawn_user_task_deferred(
+                entry,
+                aspace,
+                stack_info,
+                regions,
+                crate::task::TaskPriority::Normal,
+                crate::task::Affinity::Any,
+            )
+            .ok_or(abi::errors::Errno::EAGAIN)?;
+        super::clear_sched_lock_tracking();
+        drop(lock);
+        id
+    };
 
-    let id = sched
-        .spawn_user_task(
-            entry,
-            aspace,
-            stack_info,
-            regions,
-            crate::task::TaskPriority::Normal,
-            crate::task::Affinity::Any,
-        )
-        .ok_or(abi::errors::Errno::EAGAIN)?;
-    let in_bringup = sched.bringup_in_progress;
+    // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
+    // The task is Blocked and cannot be scheduled until wake_task(id) is called.
 
-    // Determine parent PID
-    let cpu_idx = super::current_cpu_index::<R>();
-    let ppid = sched
-        .state
-        .per_cpu
-        .get(cpu_idx)
-        .and_then(|pc| pc.current)
-        .and_then(|ctid| crate::task::registry::get_task::<R>(ctid))
-        .and_then(|t| t.process_info.clone())
-        .map(|pi| pi.lock().pid)
-        .unwrap_or(0);
+    // Determine parent PID.
+    let ppid = {
+        let tid = rt.current_tid();
+        crate::task::registry::get_task::<R>(tid)
+            .and_then(|t| t.process_info.clone())
+            .map(|pi| pi.lock().pid)
+            .unwrap_or(0)
+    };
 
     // Use provided argv, or fall back to module name
     let final_argv =
@@ -1125,10 +1237,10 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     }
     crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
-    super::clear_sched_lock_tracking(); drop(lock);
-    if !in_bringup {
-        nudge_spawned_task::<R>(current_cpu, id);
-    }
+    // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
+    // to transition Blocked → Runnable and enqueue the task.
+    crate::sched::blocking::wake_task::<R>(id);
+
     rt.irq_restore(_irq);
 
     Ok(SpawnExResult {
@@ -1264,25 +1376,41 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     }
 
     // Step 4: Create the scheduler task for the new process's initial thread.
+    // Phase 1: minimal SCHEDULER critical section — allocate TID, register
+    // scheduler-internal state, insert into REGISTRY as Blocked.
     let _irq = rt.irq_disable();
 
-    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
-    let ptr = lock.expect("Scheduler not initialized");
-    let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
+    let id = {
+        let lock = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(current_cpu);
+        let ptr = lock.expect("Scheduler not initialized");
+        let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
+        let id = sched
+            .spawn_user_task_deferred(
+                entry,
+                aspace,
+                stack_info,
+                regions,
+                crate::task::TaskPriority::Normal,
+                crate::task::Affinity::Any,
+            )
+            .ok_or(abi::errors::Errno::EAGAIN)?;
+        super::clear_sched_lock_tracking();
+        drop(lock);
+        id
+    };
 
-    let id = sched
-        .spawn_user_task(
-            entry,
-            aspace,
-            stack_info,
-            regions,
-            crate::task::TaskPriority::Normal,
-            crate::task::Affinity::Any,
-        )
-        .ok_or(abi::errors::Errno::EAGAIN)?;
+    // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
+    // The task is Blocked and cannot be scheduled until wake_task(id) is called.
 
     // Determine parent PID from the running task.
-    let ppid = current_parent_pid::<R>(sched);
+    let ppid = {
+        let tid = rt.current_tid();
+        crate::task::registry::get_task::<R>(tid)
+            .and_then(|t| t.process_info.clone())
+            .map(|pi| pi.lock().pid)
+            .unwrap_or(0)
+    };
 
     // Step 5: Resolve argv — fall back to the executable basename.
     let final_argv = if argv.is_empty() { alloc::vec![basename.as_bytes().to_vec()] } else { argv };
@@ -1422,8 +1550,9 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // `inherited_handles` is reserved for future fd-inheritance; not yet wired.
     let _ = inherited_handles;
 
-    super::clear_sched_lock_tracking(); drop(lock);
-    nudge_spawned_task::<R>(current_cpu, id);
+    // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
+    // to transition Blocked → Runnable and enqueue the task.
+    crate::sched::blocking::wake_task::<R>(id);
     rt.irq_restore(_irq);
 
     Ok(SpawnExResult {
