@@ -17,6 +17,11 @@ pub struct ProgramConfig {
     pub features: Vec<&'static str>,
 }
 
+pub struct SharedLibraryConfig {
+    pub package: &'static str,
+    pub file_name: &'static str,
+}
+
 /// Configuration for ISO builds.
 #[derive(Default)]
 pub struct IsoConfig<'a> {
@@ -114,7 +119,6 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "terminal", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "xargs", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "fontd", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "placed", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "bloom", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "clear", is_init: false, boot_module: true, features: vec![] },
@@ -175,6 +179,10 @@ pub fn default_programs() -> Vec<ProgramConfig> {
     ]
 }
 
+pub fn default_shared_libraries() -> Vec<SharedLibraryConfig> {
+    vec![SharedLibraryConfig { package: "pistil", file_name: "libpistil.so" }]
+}
+
 fn generate_limine_config(
     _sh: &Shell,
     programs: &[ProgramConfig],
@@ -206,6 +214,10 @@ fn generate_limine_config(
         if prog.is_init {
             common_modules.push_str("    module_cmdline: init\n");
         }
+    }
+
+    for lib in default_shared_libraries() {
+        common_modules.push_str(&format!("    module_path: boot():/lib/{}\n", lib.file_name));
     }
 
     for asset in assets {
@@ -410,6 +422,18 @@ pub fn build_iso_with_config(
         )?;
     }
 
+    for lib in default_shared_libraries() {
+        build_shared_library(sh, lib.package, target, "release")?;
+        copy_shared_library(
+            sh,
+            lib.package,
+            lib.file_name,
+            target,
+            "release",
+            iso_root.join(format!("lib/{}", lib.file_name)).to_str().unwrap(),
+        )?;
+    }
+
     stage_rustc_for_iso(sh, iso_root)?;
 
     let limine_conf_content = generate_limine_config(sh, programs, &asset_files, config.resolution);
@@ -572,6 +596,52 @@ fn copy_userspace_binary(
     Ok(())
 }
 
+fn build_shared_library(
+    sh: &Shell,
+    package: &str,
+    target: &str,
+    profile: &str,
+) -> Result<()> {
+    build_userspace_app_with_features(sh, package, target, profile, &[])
+}
+
+fn copy_shared_library(
+    sh: &Shell,
+    package: &str,
+    file_name: &str,
+    target: &str,
+    profile_dir: &str,
+    dst: &str,
+) -> Result<()> {
+    let target_name =
+        std::path::Path::new(target).file_stem().and_then(|s| s.to_str()).unwrap_or(target);
+    let profile_root = Path::new("target").join(target_name).join(profile_dir);
+    let mut candidates = Vec::new();
+
+    if profile_root.exists() {
+        for entry in WalkDir::new(&profile_root) {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy();
+            if name == file_name {
+                candidates.push(entry.path().to_path_buf());
+            }
+        }
+    }
+
+    // Stable deterministic selection when multiple build directories contain
+    // the same SONAME (e.g. release root + deps copies).
+    candidates.sort();
+    let src = candidates
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("shared library artifact not found for package '{package}'"))?;
+
+    cmd!(sh, "cp {src} {dst}").run()?;
+    Ok(())
+}
+
 pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<PathBuf> {
     let name = image_name(arch);
     let hdd = format!("{name}.hdd");
@@ -604,6 +674,28 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
 
     let kernel_src = format!("bran/bin-{arch}/kernel");
     cmd!(sh, "mcopy -i {hdd}@@1M {kernel_src} ::/boot").run()?;
+
+    let cwd = std::env::current_dir().unwrap();
+    let target_json = if arch == "x86_64" {
+        cwd.join("targets/x86_64-unknown-thingos.json")
+    } else if arch == "riscv64" {
+        cwd.join("targets/riscv64gc-unknown-thingos.json")
+    } else {
+        cwd.join(format!("targets/{arch}-unknown-thingos.json"))
+    };
+    let target = target_json.to_str().unwrap();
+
+    for lib in default_shared_libraries() {
+        build_shared_library(sh, lib.package, target, "release")?;
+        let staged_lib = std::env::temp_dir()
+            .join(format!("thingos_{}_{}", arch, lib.file_name))
+            .to_string_lossy()
+            .to_string();
+        let lib_dst = format!("::/lib/{}", lib.file_name);
+        copy_shared_library(sh, lib.package, lib.file_name, target, "release", &staged_lib)?;
+        cmd!(sh, "mcopy -i {hdd}@@1M {staged_lib} {lib_dst}").run()?;
+        sh.remove_path(&staged_lib)?;
+    }
 
     sh.write_file(
         "locale.conf",

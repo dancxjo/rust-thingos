@@ -25,7 +25,7 @@ extern crate alloc;
 
 
 
-use libdl::{RTLD_DEFAULT, RTLD_LAZY, dlclose, dlerror, dlopen_str, dlsym_bytes};
+use libdl::{RTLD_DEFAULT, RTLD_LAZY, RTLD_NOW, dlclose, dlerror, dlopen_str, dlsym_bytes};
 use stem::println;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -159,6 +159,45 @@ fn test_dlclose_double_close() {
     println!("[test_dlopen] test_dlclose_double_close: PASS");
 }
 
+/// End-to-end shared-library load + symbol call for pistil.
+fn test_dlopen_pistil_shared_library() {
+    println!("[test_dlopen] test_dlopen_pistil_shared_library: starting");
+
+    let handle = dlopen_str("/lib/libpistil.so", RTLD_NOW);
+    assert!(
+        !handle.is_null(),
+        "expected /lib/libpistil.so to load successfully; dynamic library pipeline is broken"
+    );
+
+    let sym = dlsym_bytes(handle, b"pistil_typography_abi_version");
+    assert!(
+        !sym.is_null(),
+        "expected exported symbol pistil_typography_abi_version in libpistil.so"
+    );
+
+    let version_fn: extern "C" fn() -> u32 = unsafe { core::mem::transmute(sym) };
+    let abi_version = version_fn();
+    assert_eq!(abi_version, 1, "unexpected pistil typography ABI version");
+
+    let pack_sym = dlsym_bytes(handle, b"pistil_pack_rgba8");
+    assert!(!pack_sym.is_null(), "expected exported symbol pistil_pack_rgba8");
+    let pack_fn: extern "C" fn(u8, u8, u8, u8) -> u32 =
+        unsafe { core::mem::transmute(pack_sym) };
+    let packed = pack_fn(0x12, 0x34, 0x56, 0x78);
+    // `pistil_pack_rgba8` returns 0xAARRGGBB.
+    assert_eq!(packed, 0x78123456, "unexpected RGBA packing result");
+
+    let area_sym = dlsym_bytes(handle, b"pistil_rect_area");
+    assert!(!area_sym.is_null(), "expected exported symbol pistil_rect_area");
+    let area_fn: extern "C" fn(u32, u32) -> u64 = unsafe { core::mem::transmute(area_sym) };
+    assert_eq!(area_fn(9, 7), 63, "unexpected rectangle area result");
+
+    let rc = dlclose(handle);
+    assert_eq!(rc, 0, "dlclose should succeed for valid pistil handle");
+
+    println!("[test_dlopen] test_dlopen_pistil_shared_library: PASS");
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[stem::main]
@@ -173,6 +212,7 @@ fn main(_arg: usize) -> ! {
     test_dlclose_rtld_default();
     test_dlclose_invalid_handle();
     test_dlclose_double_close();
+    test_dlopen_pistil_shared_library();
 
     println!("--- test_dlopen: all tests PASSED ---");
     stem::syscall::exit(0);

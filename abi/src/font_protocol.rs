@@ -1,4 +1,4 @@
-//! Font IPC Protocol - Control-plane messages for fontd service.
+//! Font IPC Protocol - control-plane messages for legacy font atlas services.
 //!
 //! This module defines the atlas-based, batched IPC protocol for font requests.
 //! Glyph pixels are transferred via Bytespace, not inline in IPC messages.
