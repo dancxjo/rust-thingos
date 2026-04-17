@@ -823,6 +823,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             fb.bpp,
             fb.format
         );
+        paint_bootfb_probe(fb);
     }
 
     contract!("thing-os kernel starting...");
