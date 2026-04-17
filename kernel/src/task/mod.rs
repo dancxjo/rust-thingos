@@ -962,6 +962,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
 
                     if let Some(mut t) = crate::task::registry::get_thread_mut::<R>(idle_id) {
                         t.state = ThreadState::Running;
+                        rt.set_idle_task_current(true);
                     }
                 } else {
                     crate::kerror!("SMP: CPU {} has no idle thread!", cpu_idx);

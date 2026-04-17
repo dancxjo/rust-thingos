@@ -1878,6 +1878,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 if let Some(id) = found_idle_q {
                     Some(id)
                 } else {
+                    if pick_attempts >= PREPARE_SCHEDULE_PICK_BUDGET {
+                        crate::kwarn!("SCHED: CPU {} Priority 0 pick budget exhausted!", cpu_idx);
+                    }
                     // Attempt to steal a task from the most-loaded peer CPU before
                     // falling back to the idle task.  This prevents the scheduler from
                     // going idle on a CPU while other CPUs have run queues backed up.
@@ -1914,6 +1917,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // no lifecycle transition occurred.
             current_sched.state = TaskState::Running;
             current_sched.run_cpu = Some(cpu_idx);
+
+            let next_is_idle = Some(next_id) == self.state.per_cpu[cpu_idx].idle_task;
+            rt.set_idle_task_current(next_is_idle);
+
             return None;
         }
 
@@ -2089,9 +2096,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         });
 
         let next_is_idle = Some(next_id) == self.state.per_cpu[cpu_idx].idle_task;
-        if current_was_idle != next_is_idle {
-            rt.set_idle_task_current(next_is_idle);
-        }
+        rt.set_idle_task_current(next_is_idle);
 
         Some(SwitchParams {
             from_ctx: &mut old_task.ctx as *mut _,
