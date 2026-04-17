@@ -18,7 +18,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
 
     let cpu_idx = super::current_cpu_index::<R>();
 
-    let (switch_params, has_work, deferred_prepare_ipis) = {
+    let (switch_params, has_work, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::record_sched_lock_wait::<R>(
@@ -34,6 +34,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
         let sp = sched.schedule_point(ScheduleReason::CooperativeYield);
         let work = sched.has_runnable_work(cpu_idx);
         let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+        let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
         super::record_sched_lock_hold::<R>(
             &super::PROF_SCHED_LOCK_YIELD_NOW_CALLS,
             &super::PROF_SCHED_LOCK_YIELD_NOW_US_TOTAL,
@@ -41,8 +42,9 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             &super::PROF_SCHED_LOCK_YIELD_NOW_HOLD_HIST,
             lock_start,
         );
-        (sp, work, deferred_prepare_ipis)
+        (sp, work, deferred_prepare_ipis, deferred_registry_syncs)
     };
+    super::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     super::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(switch) = switch_params {
@@ -80,7 +82,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
     // Both switch_params and the deferred REGISTRY state update are returned
     // from the SCHEDULER lock scope so that REGISTRY is written outside the
     // lock, avoiding the nested SCHEDULER → REGISTRY lock ordering.
-    let (switch_params, deferred_state, deferred_prepare_ipis) = {
+    let (switch_params, deferred_state, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
         super::record_sched_lock_wait::<R>(
@@ -135,6 +137,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
         // Just call prepare_schedule to pick next task
         let switch = sched.prepare_schedule();
         let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+        let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
 
         // Determine the final REGISTRY state to write after the lock is released.
         let final_state = if switch.is_none() {
@@ -170,9 +173,15 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_HOLD_HIST,
             lock_start,
         );
-        (switch, (current_id, final_state), deferred_prepare_ipis)
+        (
+            switch,
+            (current_id, final_state),
+            deferred_prepare_ipis,
+            deferred_registry_syncs,
+        )
     };
     // SCHEDULER lock released here.
+    super::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     super::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     // Apply the deferred REGISTRY write outside the SCHEDULER lock.

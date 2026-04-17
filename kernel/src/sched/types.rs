@@ -2,6 +2,7 @@
 
 use crate::BootRuntime;
 use crate::task::TaskId;
+use crate::task::TaskState;
 use core::marker::PhantomData;
 
 /// Default time slice in ticks (~100ms at 100Hz timer)
@@ -71,6 +72,13 @@ pub struct SwitchParams<Ctx, AS> {
     pub to_user_fs_base: u64,
 }
 
+pub(crate) struct DeferredRegistrySync {
+    pub tid: TaskId,
+    pub new_state: Option<TaskState>,
+    pub new_enqueued_at_tick: Option<u64>,
+    pub new_last_cpu: Option<usize>,
+}
+
 pub(crate) struct SchedulerMetrics {
     pub yields: u64,
     pub pops: u64,
@@ -102,6 +110,11 @@ pub struct Scheduler<R: BootRuntime> {
     /// Repaired in bounded batches so the picker path does not janitor the
     /// entire backlog under the global scheduler lock in a single call.
     pub(crate) pending_misrouted_requeues: alloc::vec::Vec<(usize, usize, TaskId)>,
+    /// REGISTRY synchronization work deferred out of `prepare_schedule` so the
+    /// hot selection path can update scheduler cache fields without immediate
+    /// REGISTRY lock coupling. Callers must drain/apply after releasing
+    /// SCHEDULER.
+    pub(crate) pending_registry_syncs: alloc::vec::Vec<DeferredRegistrySync>,
     _phantom: core::marker::PhantomData<R>,
 }
 
@@ -132,6 +145,7 @@ impl<R: BootRuntime> Scheduler<R> {
             wake_sleepers_budget_carry: 0,
             pending_prepare_schedule_ipis: alloc::vec::Vec::new(),
             pending_misrouted_requeues: alloc::vec::Vec::new(),
+            pending_registry_syncs: alloc::vec::Vec::new(),
             _phantom: PhantomData,
         }
     }
