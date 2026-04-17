@@ -90,6 +90,10 @@ pub struct Scheduler<R: BootRuntime> {
     /// Populated under the SCHEDULER lock and drained after the lock is
     /// released so remote nudges never run in the scheduler critical section.
     pub(crate) pending_prepare_schedule_ipis: alloc::vec::Vec<usize>,
+    /// Misrouted tasks deferred by `prepare_schedule`.
+    /// Repaired in bounded batches so the picker path does not janitor the
+    /// entire backlog under the global scheduler lock in a single call.
+    pub(crate) pending_misrouted_requeues: alloc::vec::Vec<(usize, usize, TaskId)>,
     _phantom: core::marker::PhantomData<R>,
 }
 
@@ -118,6 +122,7 @@ impl<R: BootRuntime> Scheduler<R> {
             metrics: SchedulerMetrics::new(),
             pending_wake_ipis: alloc::vec::Vec::new(),
             pending_prepare_schedule_ipis: alloc::vec::Vec::new(),
+            pending_misrouted_requeues: alloc::vec::Vec::new(),
             _phantom: PhantomData,
         }
     }
