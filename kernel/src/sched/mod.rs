@@ -1513,6 +1513,16 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     self.metrics.pushes += 1;
                 }
             }
+            // Increment the per-task voluntary-yield counter in the hot-field cache.
+            if let Some(t) = self.state.get_thread_mut(current_id) {
+                t.voluntary_yields = t.voluntary_yields.saturating_add(1);
+                if current_id == 6 {
+                    crate::kdebug!(
+                        "SCHED[TID6]: yielded (voluntary_yields={})",
+                        t.voluntary_yields
+                    );
+                }
+            }
         }
 
         self.prepare_schedule()

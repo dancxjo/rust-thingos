@@ -159,6 +159,7 @@ impl TaskSchedCache {
             timeslice_remaining: self.timeslice_remaining,
             enqueued_at_tick: self.enqueued_at_tick,
             wake_pending: self.wake_pending,
+            voluntary_yields: 0,
         }
     }
 }
