@@ -9,7 +9,7 @@
     "linker": "rust-lld",
     "pre-link-args": {
         "ld.lld": [
-            "-Tlink/user/riscv64.ld"
+            "-Tthingos/link/user/riscv64.ld"
         ]
     },
     "panic-strategy": "abort",

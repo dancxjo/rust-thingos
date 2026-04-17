@@ -8,7 +8,7 @@
     "linker": "rust-lld",
     "pre-link-args": {
         "ld.lld": [
-            "-Tlink/user/x86_64.ld"
+            "-Tthingos/link/user/x86_64.ld"
         ]
     },
     "panic-strategy": "abort",
