@@ -2287,8 +2287,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 }
             }
             if let Some(idx) = candidate_index {
-                let stolen_id = self.state.dequeue_task_at(busiest_cpu, p, idx);
-                if let Some(stolen_id) = stolen_id {
+                if let Some(stolen_id) = self.state.dequeue_task_at(busiest_cpu, p, idx) {
                     if let Some(pc) = self.state.per_cpu.get_mut(busiest_cpu) {
                         pc.stats.steals_out = pc.stats.steals_out.saturating_add(1);
                     }

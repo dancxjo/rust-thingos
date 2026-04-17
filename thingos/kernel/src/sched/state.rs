@@ -427,7 +427,9 @@ impl SchedState {
             return None;
         }
 
-        pc.runq[prio].remove(idx)?;
+        if pc.runq[prio].remove(idx).is_none() {
+            return None;
+        }
         pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
         pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         if let Some(thread) = threads.get_mut(&tid) {
