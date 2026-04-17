@@ -114,7 +114,7 @@ pub fn block_current<R: BootRuntime>() {
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                 lock_start,
             );
-            super::clear_sched_lock_tracking();
+            super::clear_sched_lock_tracking::<R>();
             (switch, deferred_prepare_ipis, deferred_registry_syncs)
         }
     };
@@ -337,7 +337,7 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
             &super::PROF_SCHED_LOCK_WAKE_TASK_HOLD_HIST,
             lock_start,
         );
-        super::clear_sched_lock_tracking();
+        super::clear_sched_lock_tracking::<R>();
 
         result
     };

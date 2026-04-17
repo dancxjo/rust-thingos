@@ -567,7 +567,7 @@ pub fn spawn<R: BootRuntime>(
     let id = sched.spawn(entry, arg, priority, affinity);
     // Capture before releasing the lock so nudge is coherent with placement.
     let in_bringup = sched.bringup_in_progress;
-    super::clear_sched_lock_tracking(); drop(lock);
+    super::clear_sched_lock_tracking::<R>(); drop(lock);
     // Skip remote wakeup IPIs during early-boot bringup.  Tasks placed on the
     // local CPU will be picked up naturally by the scheduler loop; deferred
     // tasks on remote CPUs will be woken when end_bringup() is called.
@@ -624,7 +624,7 @@ pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
         detached,
     );
     let in_bringup = sched.bringup_in_progress;
-    super::clear_sched_lock_tracking(); drop(lock);
+    super::clear_sched_lock_tracking::<R>(); drop(lock);
     if !in_bringup {
         nudge_spawned_task::<R>(current_cpu, id);
     }
@@ -655,7 +655,7 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
         crate::task::Affinity::Any,
     );
     let in_bringup = sched.bringup_in_progress;
-    super::clear_sched_lock_tracking(); drop(lock);
+    super::clear_sched_lock_tracking::<R>(); drop(lock);
     if let Some(id) = id {
         if !in_bringup {
             nudge_spawned_task::<R>(current_cpu, id);
@@ -761,7 +761,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
         let id = sched.spawn_user_task_deferred(entry, aspace, stack_info, regions, priority, affinity)?;
-        super::clear_sched_lock_tracking();
+        super::clear_sched_lock_tracking::<R>();
         drop(lock);
         id
     };
@@ -1072,7 +1072,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
                 crate::task::Affinity::Any,
             )
             .ok_or(abi::errors::Errno::EAGAIN)?;
-        super::clear_sched_lock_tracking();
+        super::clear_sched_lock_tracking::<R>();
         drop(lock);
         id
     };
@@ -1398,7 +1398,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
                 crate::task::Affinity::Any,
             )
             .ok_or(abi::errors::Errno::EAGAIN)?;
-        super::clear_sched_lock_tracking();
+        super::clear_sched_lock_tracking::<R>();
         drop(lock);
         id
     };
