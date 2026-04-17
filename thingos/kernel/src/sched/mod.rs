@@ -2259,6 +2259,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             if let Some(switch) = self.prepare_schedule() {
                 return (switch, waiters);
             }
+            core::hint::spin_loop();
         }
 
         let local_runq_depth = self
@@ -2277,7 +2278,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             self.pending_misrouted_requeues.len(),
             self.state.online_cpus
         );
-        crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
+        crate::kerror!("SCHED: known thread IDs in scheduler state: {:?}", self.state.thread_ids());
         panic!(
             "scheduler invariant violated: terminate_current could not find a switch after {} attempts (cpu={}, current_tid={})",
             TERMINATE_CURRENT_SWITCH_RETRY_BUDGET,
@@ -5556,6 +5557,7 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "terminate_current could not find a switch")]
     fn test_terminate_current_panics_when_no_switch_candidate_exists() {
         let _g = init_test_env();
 
@@ -5581,22 +5583,7 @@ mod tests {
             wake_pending: false,
         });
 
-        let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = sched.terminate_current(202);
-        }))
-        .expect_err("terminate_current should panic when no switch candidate exists");
-
-        let panic_message = if let Some(msg) = panic_payload.downcast_ref::<&'static str>() {
-            *msg
-        } else if let Some(msg) = panic_payload.downcast_ref::<alloc::string::String>() {
-            msg.as_str()
-        } else {
-            ""
-        };
-        assert!(
-            panic_message.contains("terminate_current could not find a switch"),
-            "panic message should explain bounded terminate_current exhaustion"
-        );
+        let _ = sched.terminate_current(202);
     }
 
     #[test]
