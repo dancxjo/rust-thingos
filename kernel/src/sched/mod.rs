@@ -1615,21 +1615,36 @@ impl<R: BootRuntime> types::Scheduler<R> {
             .expect("prepare_schedule called without current task");
 
         if next_id == current_id {
-            let idx = self.state.get_task_index(current_id).unwrap_or_else(|| {
+            let mut reg = crate::task::registry::get_registry::<R>();
+            let Some(current) = reg.get_mut(current_id) else {
                 crate::kerror!(
                     "SchedTasks: {:?}",
-                    self.state.threads.iter().map(|f| f.tid).collect::<alloc::vec::Vec<_>>()
+                    self.state
+                        .threads
+                        .values()
+                        .map(|f| f.tid)
+                        .collect::<alloc::vec::Vec<_>>()
                 );
-                panic!("failed to find current_id {} in get_task_index", current_id)
-            });
-            let mut reg = crate::task::registry::get_registry::<R>();
-            reg.threads[idx].state = TaskState::Running;
+                panic!("failed to find current_id {} in scheduler registry", current_id);
+            };
+            current.state = TaskState::Running;
             // Keep the scheduler-side cache in sync.  Only `state` is updated
             // here because `enqueued_at_tick` and `timeslice_remaining` are
             // unchanged in the same-task (no-switch) case: the current task
             // simply continues running without re-enqueueing.
-            self.state.threads[idx].state = TaskState::Running;
-            self.state.threads[idx].run_cpu = Some(cpu_idx);
+            let Some(current_sched) = self.state.get_task_mut(current_id) else {
+                crate::kerror!(
+                    "SchedTasks: {:?}",
+                    self.state
+                        .threads
+                        .values()
+                        .map(|f| f.tid)
+                        .collect::<alloc::vec::Vec<_>>()
+                );
+                panic!("failed to find current_id {} in scheduler state", current_id);
+            };
+            current_sched.state = TaskState::Running;
+            current_sched.run_cpu = Some(cpu_idx);
             return None;
         }
 
@@ -1644,22 +1659,32 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         self.state.per_cpu[cpu_idx].current = Some(next_id);
 
-        let old_idx = self.state.get_task_index(current_id).unwrap_or_else(|| {
-            crate::kerror!(
-                "SchedTasks: {:?}",
-                self.state.threads.iter().map(|f| f.tid).collect::<alloc::vec::Vec<_>>()
-            );
-            panic!("failed to find current_id {} in get_task_index", current_id)
-        });
-        let new_idx = self.state.get_task_index(next_id).unwrap_or_else(|| {
-            crate::kerror!(
-                "SchedTasks: {:?}",
-                self.state.threads.iter().map(|f| f.tid).collect::<alloc::vec::Vec<_>>()
-            );
-            panic!("failed to find next_id {} in get_task_index", next_id)
-        });
-
         let mut reg = crate::task::registry::get_registry::<R>();
+        let old_idx = reg
+            .threads
+            .binary_search_by_key(&current_id, |t| t.id)
+            .unwrap_or_else(|_| {
+                crate::kerror!(
+                    "SchedTasks: {:?}",
+                    self.state
+                        .threads
+                        .values()
+                        .map(|f| f.tid)
+                        .collect::<alloc::vec::Vec<_>>()
+                );
+                panic!("failed to find current_id {} in scheduler registry", current_id)
+            });
+        let new_idx = reg.threads.binary_search_by_key(&next_id, |t| t.id).unwrap_or_else(|_| {
+            crate::kerror!(
+                "SchedTasks: {:?}",
+                self.state
+                    .threads
+                    .values()
+                    .map(|f| f.tid)
+                    .collect::<alloc::vec::Vec<_>>()
+            );
+            panic!("failed to find next_id {} in scheduler registry", next_id)
+        });
         let (old_task, new_task) = if old_idx < new_idx {
             let (left, right) = reg.threads.split_at_mut(new_idx);
             (&mut left[old_idx], &mut right[0])
@@ -1670,7 +1695,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Drive transition decisions from the scheduler hot-cache instead of
         // reading lifecycle state back from the large runtime Thread record.
-        if self.state.threads[old_idx].state == TaskState::Running {
+        let old_was_running = self
+            .state
+            .get_task(current_id)
+            .map(|task| task.state == TaskState::Running)
+            .unwrap_or(false);
+        if old_was_running {
             old_task.state = TaskState::Runnable;
             old_task.enqueued_at_tick = now;
         }
@@ -1679,17 +1709,23 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Keep the scheduler-side hot-field cache in sync with the registry
         // state transitions that just happened above.
-        if self.state.threads[old_idx].state == TaskState::Running {
-            self.state.threads[old_idx].state = TaskState::Runnable;
-            // Copy enqueued_at_tick from old_task, which was just set to
-            // TICK_COUNT in the REGISTRY update at line 1335 above, so that
-            // future aging calculations in prepare_schedule use the correct tick.
-            self.state.threads[old_idx].enqueued_at_tick = old_task.enqueued_at_tick;
+        if old_was_running {
+            if let Some(old_sched) = self.state.get_task_mut(current_id) {
+                old_sched.state = TaskState::Runnable;
+                // Copy enqueued_at_tick from old_task, which was just set to
+                // TICK_COUNT in the REGISTRY update at line 1335 above, so that
+                // future aging calculations in prepare_schedule use the correct tick.
+                old_sched.enqueued_at_tick = old_task.enqueued_at_tick;
+            }
         }
-        self.state.threads[old_idx].last_cpu = Some(cpu_idx);
-        self.state.threads[new_idx].state = TaskState::Running;
-        self.state.threads[new_idx].last_cpu = Some(cpu_idx);
-        self.state.threads[new_idx].run_cpu = Some(cpu_idx);
+        if let Some(old_sched) = self.state.get_task_mut(current_id) {
+            old_sched.last_cpu = Some(cpu_idx);
+        }
+        if let Some(new_sched) = self.state.get_task_mut(next_id) {
+            new_sched.state = TaskState::Running;
+            new_sched.last_cpu = Some(cpu_idx);
+            new_sched.run_cpu = Some(cpu_idx);
+        }
         // timeslice_remaining is managed exclusively via the hot-field cache:
         // schedule_point decrements it without touching REGISTRY. The REGISTRY
         // copy may therefore be stale between context switches; this is
@@ -1760,21 +1796,27 @@ impl<R: BootRuntime> types::Scheduler<R> {
     }
 
     pub fn set_priority(&mut self, id: TaskId, priority: TaskPriority) {
-        if let Some(idx) = self.state.get_task_index(id) {
-            let old_priority = crate::task::registry::get_registry::<R>().threads[idx].priority;
-            crate::task::registry::get_registry::<R>().threads[idx].priority = priority;
-            crate::task::registry::get_registry::<R>().threads[idx].base_priority = priority; // Update base priority for anti-starvation
+        if self.state.get_task(id).is_some() {
+            if let Some(task) = crate::task::registry::get_registry::<R>().get_mut(id) {
+                task.priority = priority;
+                task.base_priority = priority; // Update base priority for anti-starvation
+            } else {
+                return;
+            }
 
             // Keep the scheduler-side priority cache in sync.
-            self.state.threads[idx].priority = priority;
+            let mut requeue_cpu = None;
+            if let Some(task) = self.state.get_task_mut(id) {
+                task.priority = priority;
+                if task.state == TaskState::Runnable {
+                    requeue_cpu = task.runq_location.map(|(cpu, _)| cpu);
+                }
+            }
 
             // If it's runnable and in a runq, move it to the new runq
-            if self.state.threads[idx].state == TaskState::Runnable {
-                let loc = self.state.get_task(id).and_then(|t| t.runq_location);
-                if let Some((cpu, _)) = loc {
-                    self.state.remove_task_from_runq(id);
-                    self.state.enqueue_task(cpu, priority as usize, id);
-                }
+            if let Some(cpu) = requeue_cpu {
+                self.state.remove_task_from_runq(id);
+                self.state.enqueue_task(cpu, priority as usize, id);
             }
         }
     }

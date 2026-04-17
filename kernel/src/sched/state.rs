@@ -44,9 +44,7 @@ pub type TaskState = ThreadState;
 /// convoy behaviour under SMP).
 ///
 /// # Canonical fields (no equivalent in `Thread<R>`)
-/// - `tid` — needed to keep the scheduler's sorted `Vec` indexed in the same
-///   order as `ThreadRegistry::threads` so that a single binary-search index
-///   addresses both collections.
+/// - `tid` — stable key for `SchedState::threads` lookups.
 /// - `runq_location` — tracks which `(cpu, priority)` run-queue slot currently
 ///   holds this thread; there is no corresponding field in `Thread<R>`.
 ///
@@ -145,7 +143,12 @@ pub struct PerCpuSchedStats {
 }
 
 pub struct SchedState {
-    pub threads: Vec<ThreadSchedFields>,
+    /// TID-keyed scheduler cache.
+    ///
+    /// A map avoids the O(n) element shifts that came from keeping this in a
+    /// sorted `Vec` during spawn/exit churn. We keep ordered iteration by TID
+    /// via `BTreeMap` without positional coupling to registry storage.
+    pub threads: BTreeMap<ThreadId, ThreadSchedFields>,
     pub per_cpu: Vec<PerCpu>,
     pub sleep_queue: BTreeMap<u64, Vec<ThreadId>>,
     pub wait_queue: VecDeque<ThreadId>,
@@ -156,7 +159,7 @@ pub struct SchedState {
 impl SchedState {
     pub fn new() -> Self {
         SchedState {
-            threads: Vec::with_capacity(1024),
+            threads: BTreeMap::new(),
             per_cpu: Vec::with_capacity(32),
             sleep_queue: BTreeMap::new(),
             wait_queue: VecDeque::with_capacity(1024),
@@ -196,22 +199,21 @@ impl SchedState {
     }
 
     pub fn get_thread_index(&self, tid: ThreadId) -> Option<usize> {
-        self.threads.binary_search_by_key(&tid, |t| t.tid).ok()
+        self.threads.keys().position(|id| *id == tid)
     }
 
     pub fn get_thread(&self, tid: ThreadId) -> Option<&ThreadSchedFields> {
-        self.get_thread_index(tid).map(|idx| &self.threads[idx])
+        self.threads.get(&tid)
     }
 
     pub fn get_thread_mut(&mut self, tid: ThreadId) -> Option<&mut ThreadSchedFields> {
-        self.get_thread_index(tid)
-            .map(move |idx| &mut self.threads[idx])
+        self.threads.get_mut(&tid)
     }
 
     pub fn insert_thread(&mut self, fields: ThreadSchedFields) {
-        match self.threads.binary_search_by_key(&fields.tid, |t| t.tid) {
-            Ok(_) => panic!("Thread ID {} already exists in sched", fields.tid),
-            Err(idx) => self.threads.insert(idx, fields),
+        let tid = fields.tid;
+        if self.threads.insert(tid, fields).is_some() {
+            panic!("Thread ID {} already exists in sched", tid);
         }
     }
 
@@ -239,9 +241,8 @@ impl SchedState {
                 // Only return the entry if it still matches the task's canonical
                 // runq placement metadata.
                 let valid_location = threads
-                    .binary_search_by_key(&tid, |t| t.tid)
-                    .ok()
-                    .and_then(|idx| threads[idx].runq_location)
+                    .get(&tid)
+                    .and_then(|thread| thread.runq_location)
                     == Some((cpu, prio));
 
                 if !valid_location {
@@ -249,8 +250,8 @@ impl SchedState {
                 }
 
                 pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
-                if let Ok(idx) = threads.binary_search_by_key(&tid, |t| t.tid) {
-                    threads[idx].runq_location = None;
+                if let Some(thread) = threads.get_mut(&tid) {
+                    thread.runq_location = None;
                 }
                 return Some(tid);
             }
@@ -269,12 +270,7 @@ impl SchedState {
     }
 
     pub fn remove_thread(&mut self, tid: ThreadId) -> bool {
-        if let Ok(idx) = self.threads.binary_search_by_key(&tid, |t| t.tid) {
-            self.threads.remove(idx);
-            true
-        } else {
-            false
-        }
+        self.threads.remove(&tid).is_some()
     }
 
     // ── Backward-compatible forwarding methods ────────────────────────────────
@@ -397,5 +393,24 @@ mod tests {
             1,
             "valid dequeue should increment runnable_dequeues"
         );
+    }
+
+    #[test]
+    fn insert_remove_churn_preserves_tid_lookups() {
+        let mut state = SchedState::new();
+        for tid in 1..=128 {
+            state.insert_thread(sched_fields(tid, TaskState::Runnable, TaskPriority::Normal));
+        }
+
+        for i in 0..2048 {
+            let tid = 1 + (i % 128) as u64;
+            assert!(state.remove_thread(tid));
+            state.insert_thread(sched_fields(tid, TaskState::Runnable, TaskPriority::Normal));
+        }
+
+        assert_eq!(state.threads.len(), 128);
+        for tid in 1..=128 {
+            assert_eq!(state.get_thread(tid).map(|t| t.tid), Some(tid));
+        }
     }
 }
