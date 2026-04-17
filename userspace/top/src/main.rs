@@ -6,6 +6,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use stem::syscall::{argv_get, exit, sleep_ns, vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_write};
 
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
+const MAX_DELAY_SECS: u64 = 86_400;
+
 #[derive(Clone)]
 struct ProcRow {
     pid: u32,
@@ -27,11 +30,14 @@ fn read_file(path: &str) -> Option<String> {
     let mut out = Vec::new();
     let mut buf = [0u8; 1024];
     loop {
-        let n = vfs_read(fd, &mut buf).ok()?;
-        if n == 0 {
-            break;
+        match vfs_read(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(_) => {
+                let _ = vfs_close(fd).ok();
+                return None;
+            }
         }
-        out.extend_from_slice(&buf[..n]);
     }
     let _ = vfs_close(fd).ok();
     Some(String::from_utf8_lossy(&out).into_owned())
@@ -41,8 +47,6 @@ fn parse_status(status: &str) -> (String, String, String) {
     let mut pid = String::new();
     let mut ppid = String::new();
     let mut state = String::new();
-    let mut name = String::new();
-
     for line in status.lines() {
         if let Some(v) = line.strip_prefix("Pid:\t") {
             pid = v.trim().to_string();
@@ -50,12 +54,11 @@ fn parse_status(status: &str) -> (String, String, String) {
             ppid = v.trim().to_string();
         } else if let Some(v) = line.strip_prefix("State:\t") {
             state = v.trim().to_string();
-        } else if let Some(v) = line.strip_prefix("Name:\t") {
-            name = v.trim().to_string();
         }
     }
 
-    (pid, ppid, if state.is_empty() { "?".to_string() } else { state })
+    let state = if state.is_empty() { "?".to_string() } else { state };
+    (pid, ppid, state)
 }
 
 fn collect_processes() -> Vec<ProcRow> {
@@ -85,7 +88,17 @@ fn collect_processes() -> Vec<ProcRow> {
                                 if let Ok(pid) = pid_str.parse::<u32>() {
                                     let cmdline_path = alloc::format!("/proc/{name}/cmdline");
                                     let cmd = if let Some(cmdline) = read_file(&cmdline_path) {
-                                        let normalized = cmdline.replace('\0', " ").trim().to_string();
+                                        let mut normalized = String::new();
+                                        for part in cmdline.split('\0') {
+                                            let part = part.trim();
+                                            if part.is_empty() {
+                                                continue;
+                                            }
+                                            if !normalized.is_empty() {
+                                                normalized.push(' ');
+                                            }
+                                            normalized.push_str(part);
+                                        }
                                         if normalized.is_empty() { name.to_string() } else { normalized }
                                     } else {
                                         name.to_string()
@@ -98,7 +111,10 @@ fn collect_processes() -> Vec<ProcRow> {
                     offset = end + 1;
                 }
             }
-            Err(_) => break,
+            Err(_) => {
+                let _ = vfs_close(fd).ok();
+                return rows;
+            }
         }
     }
 
@@ -109,8 +125,9 @@ fn collect_processes() -> Vec<ProcRow> {
 
 fn read_uptime() -> String {
     if let Some(text) = read_file("/proc/uptime") {
-        let v = text.split_whitespace().next().unwrap_or("0");
-        return v.to_string();
+        if let Some(uptime_value) = text.split_whitespace().next() {
+            return uptime_value.to_string();
+        }
     }
     "0".to_string()
 }
@@ -138,7 +155,7 @@ fn parse_args() -> Result<(u64, u64), ()> {
         len = l;
     }
     if len == 0 {
-        return Ok((0, 1_000_000_000));
+        return Ok((0, NANOS_PER_SECOND));
     }
 
     let mut buf = alloc::vec![0u8; len];
@@ -148,7 +165,7 @@ fn parse_args() -> Result<(u64, u64), ()> {
 
     let args = stem::utils::parse_argv(&buf);
     let mut iterations = 0u64;
-    let mut delay_ns = 1_000_000_000u64;
+    let mut delay_ns = NANOS_PER_SECOND;
     let mut i = 1usize;
 
     while i < args.len() {
@@ -167,7 +184,10 @@ fn parse_args() -> Result<(u64, u64), ()> {
             }
             let v = core::str::from_utf8(args[i]).map_err(|_| ())?;
             let secs = v.parse::<u64>().map_err(|_| ())?;
-            delay_ns = secs.saturating_mul(1_000_000_000);
+            if secs > MAX_DELAY_SECS {
+                return Err(());
+            }
+            delay_ns = secs.checked_mul(NANOS_PER_SECOND).ok_or(())?;
         } else if arg == "-h" || arg == "--help" {
             return Err(());
         } else {
@@ -180,7 +200,7 @@ fn parse_args() -> Result<(u64, u64), ()> {
 }
 
 #[stem::main]
-fn main(_arg: usize) -> ! {
+fn main(_argc: usize) -> ! {
     let (iterations, delay_ns) = match parse_args() {
         Ok(v) => v,
         Err(_) => {
@@ -191,7 +211,7 @@ fn main(_arg: usize) -> ! {
         }
     };
 
-    let mut ticks = 0u64;
+    let mut refresh_count = 0u64;
     loop {
         let rows = collect_processes();
         let uptime = read_uptime();
@@ -214,8 +234,8 @@ fn main(_arg: usize) -> ! {
             ));
         }
 
-        ticks = ticks.saturating_add(1);
-        if iterations != 0 && ticks >= iterations {
+        refresh_count = refresh_count.saturating_add(1);
+        if iterations != 0 && refresh_count >= iterations {
             break;
         }
         sleep_ns(delay_ns);
