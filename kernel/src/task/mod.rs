@@ -854,7 +854,7 @@ pub fn preempt_enable<R: BootRuntime>() {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.preempt_enable();
             let deferred_prepare_ipis =
-                core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+                sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             (switch, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
@@ -897,7 +897,7 @@ pub fn resched_if_needed<R: BootRuntime>() {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.schedule_point(crate::sched::ScheduleReason::ReschedIfNeeded);
             let deferred_prepare_ipis =
-                core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+                sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             (switch, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
