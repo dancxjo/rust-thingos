@@ -144,7 +144,7 @@ fn parse_supervisor_bootstrap(arg: usize) -> (Option<String>, Option<SupervisorB
             backing: VmBacking::File { thing: arg as u32, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
-            // New devd path: boot arg contains DriverEntryCtx bytes.
+            // New cambium path: boot arg contains DriverEntryCtx bytes.
             let entry_ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
             if entry_ctx.version == 1 {
                 let s = entry_ctx.device_path_str();

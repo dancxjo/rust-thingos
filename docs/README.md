@@ -54,7 +54,7 @@ One document per major crate/binary:
 | [`root.md`](components/root.md) | Root — graph/layout engine |
 | [`sprout.md`](components/sprout.md) | Sprout — init/process launcher |
 | [`stem.md`](components/stem.md) | Stem — platform library (`stem` = our `std`) |
-| [`virtio_sound.md`](components/virtio_sound.md) | VirtIO Sound — `devd` marker/export and VFS PCM path |
+| [`virtio_sound.md`](components/virtio_sound.md) | VirtIO Sound — `cambium` marker/export and VFS PCM path |
 
 ### `concepts/` — Design Concepts and Doctrine
 

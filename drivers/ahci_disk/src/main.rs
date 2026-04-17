@@ -803,7 +803,7 @@ fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<alloc::string::Str
         backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
     };
     if let Ok(resp) = stem::syscall::vm_map(&req) {
-        // New devd path: DriverEntryCtx in boot memfd.
+        // New cambium path: DriverEntryCtx in boot memfd.
         let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
         if ctx.version == 1 {
             let s = ctx.device_path_str();

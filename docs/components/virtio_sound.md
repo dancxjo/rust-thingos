@@ -1,12 +1,12 @@
 # VirtIO Sound Driver (`virtio_sound`)
 
-This document explains how the VirtIO sound driver is discovered by `devd`,
+This document explains how the VirtIO sound driver is discovered by `cambium`,
 how it exposes a PCM device through VFS, and how `chime` can stream piped PCM
 data into that device.
 
-## Driver Discovery (`devd` + `THINGOS_DRIVER`)
+## Driver Discovery (`cambium` + `THINGOS_DRIVER`)
 
-`devd` catalog/manual mode only treats a binary as driver-capable if the ELF
+`cambium` catalog/manual mode only treats a binary as driver-capable if the ELF
 exports a global symbol named `THINGOS_DRIVER` with type
 `DriverDescriptor`.
 
@@ -18,7 +18,7 @@ exports a global symbol named `THINGOS_DRIVER` with type
   - `start(ctx)` long-lived service body
 - (compatibility) legacy `THING_DRIVER_V1` / `thing_driver_entry_v1` exports
 
-At spawn time, `devd` resolves the descriptor start entrypoint symbol and
+At spawn time, `cambium` resolves the descriptor start entrypoint symbol and
 launches that service for the selected device.
 
 ## Runtime VFS Contract
@@ -54,10 +54,10 @@ Implementation behavior:
 
 ## Quick Usage
 
-Start the driver through `devd`:
+Start the driver through `cambium`:
 
 ```sh
-devd virtio_sound
+cambium virtio_sound
 ```
 
 Play generated chime:
@@ -77,4 +77,4 @@ cat sample.raw | chime
 - `drivers/virtio_sound/src/main.rs`
 - `drivers/chime/src/main.rs`
 - `abi/src/driver_interface.rs`
-- `drivers/devd/src/catalog.rs`
+- `drivers/cambium/src/catalog.rs`

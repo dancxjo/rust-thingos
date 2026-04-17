@@ -1,7 +1,7 @@
 //! sysfs — read-only kernel device discovery metadata mounted at `/sys`.
 //!
 //! The initial implementation exposes claimable PCI devices from the kernel
-//! device registry under `/sys/devices`. This is enough for `devd` to discover
+//! device registry under `/sys/devices`. This is enough for `cambium` to discover
 //! hardware, match a userspace driver, and decide whether a restart is valid.
 
 use abi::errors::{Errno, SysResult};

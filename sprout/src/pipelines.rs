@@ -262,7 +262,7 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
     Some((payload.width, payload.height, payload.stride, payload.format))
 }
 
-// Storage, Network, and Audio are now handled by devd
+// Storage, Network, and Audio are now handled by cambium
 
 pub fn setup_display_pipeline(
     shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
@@ -688,7 +688,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
 }
 
 /// Set up network pipeline - spawn virtio_netd (driver) then netd (stack)
-// Network and Audio are now handled by devd
+// Network and Audio are now handled by cambium
 
 fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     debug!("SPROUT: spawn_netd start");

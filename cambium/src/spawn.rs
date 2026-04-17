@@ -1,4 +1,3 @@
-#![no_std]
 extern crate alloc;
 use abi::driver_interface::DriverEntryCtx;
 use abi::types::TaskStatus;
@@ -127,13 +126,13 @@ impl ManagedDriver {
         match spawn_res {
             Ok(resp) => {
                 debug!(
-                    "DEVD: launched driver {} for {} (legacy, boot_fd={}, pid={})",
+                    "CAMBIUM: launched driver {} for {} (legacy, boot_fd={}, pid={})",
                     driver, self.slot, boot_fd, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
             }
             Err(err) => {
-                warn!("DEVD: failed to launch {} for {}: {:?}", driver, self.slot, err);
+                warn!("CAMBIUM: failed to launch {} for {}: {:?}", driver, self.slot, err);
                 self.schedule_restart();
                 if boot_fd != 0 {
                     let _ = stem::syscall::vfs::vfs_close(boot_fd);
@@ -174,14 +173,14 @@ impl ManagedDriver {
         match spawn_res {
             Ok(resp) => {
                 debug!(
-                    "DEVD: launched driver {} for {} (entry='{}', pid={})",
+                    "CAMBIUM: launched driver {} for {} (entry='{}', pid={})",
                     driver_path, self.slot, entry_symbol, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
             }
             Err(err) => {
                 warn!(
-                    "DEVD: failed to launch {} for {} via '{}': {:?}",
+                    "CAMBIUM: failed to launch {} for {} via '{}': {:?}",
                     driver_path, self.slot, entry_symbol, err
                 );
                 self.schedule_restart();
@@ -217,7 +216,7 @@ impl ManagedDriver {
         match task_poll(pid) {
             Ok((TaskStatus::Dead, code)) => {
                 warn!(
-                    "DEVD: driver for {} exited with code {}",
+                    "CAMBIUM: driver for {} exited with code {}",
                     self.slot, code
                 );
                 self.pid = None;
@@ -230,7 +229,7 @@ impl ManagedDriver {
             Ok(_) => {}
             Err(err) => {
                 warn!(
-                    "DEVD: lost pid {} for {}: {:?}",
+                    "CAMBIUM: lost pid {} for {}: {:?}",
                     pid, self.slot, err
                 );
                 self.pid = None;

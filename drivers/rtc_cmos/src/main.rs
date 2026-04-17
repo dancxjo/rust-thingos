@@ -42,7 +42,7 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     let out = &mut *out;
 
     // Check for "Other" class or specifically System/RTC (0x080001) if we ever use it.
-    // For now, if devd matched us via device_kind, it will spawn us.
+    // For now, if cambium matched us via device_kind, it will spawn us.
     // If we are here via a probe scan, we check if the device looks like an RTC.
 
     // Match if class is Other (0x00) and it's a legacy/platform device.

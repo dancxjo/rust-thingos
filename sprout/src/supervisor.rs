@@ -117,9 +117,9 @@ impl Supervisor {
             setup_serial_shell(tasks_cloned);
         });
 
-        // Stage 4: Launch devd
-        info!("SPROUT: Launching devd...");
-        self.spawn_devd();
+        // Stage 4: Launch cambium
+        info!("SPROUT: Launching cambium...");
+        self.spawn_cambium();
 
         // Stage 8: Optional readiness model verification test.
         // Keep this opt-in so early-boot diagnosis is not perturbed by extra
@@ -203,24 +203,24 @@ impl Supervisor {
     fn discover(&mut self) {
         // We no longer auto-spawn everything in /bin.
         // We only scan to keep the registry metadata if needed.
-        stem::debug!("SPROUT: Discovery loop disabled in favor of devd.");
+        stem::debug!("SPROUT: Discovery loop disabled in favor of cambium.");
     }
 
-    fn spawn_devd(&mut self) {
+    fn spawn_cambium(&mut self) {
         let (write, read) = match stem::syscall::channel_create(4096) {
             Ok(h) => h,
             Err(_) => return,
         };
-        // We could pass the registrar port to devd if it needs to register things,
-        // but for now devd just spawns drivers.
-        match stem::syscall::spawn_process("/drivers/devd", 0) {
+        // We could pass the registrar port to cambium if it needs to register things,
+        // but for now cambium just spawns drivers.
+        match stem::syscall::spawn_process("/drivers/cambium", 0) {
             Ok(pid) => {
-                info!("SPROUT: Spawned devd (PID={})", pid);
+                info!("SPROUT: Spawned cambium (PID={})", pid);
                 let mut tasks = self.tasks.lock();
                 tasks.push(ManagedTask {
-                    name: "devd".to_string(),
-                    kind: TaskKind::Service("svc.devd".to_string()),
-                    module_path: "/bin/devd".to_string(),
+                    name: "cambium".to_string(),
+                    kind: TaskKind::Service("svc.cambium".to_string()),
+                    module_path: "/bin/cambium".to_string(),
                     pid: Some(pid),
                     restarts: 0,
                     spawn_arg: 0,
@@ -232,7 +232,7 @@ impl Supervisor {
                     resp_fd: None,
                 });
             }
-            Err(e) => warn!("SPROUT: Failed to spawn devd: {:?}", e),
+            Err(e) => warn!("SPROUT: Failed to spawn cambium: {:?}", e),
         }
     }
 

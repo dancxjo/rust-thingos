@@ -28,7 +28,7 @@ fn main(_arg: usize) -> ! {
     let args = get_args();
 
     if args.len() >= 2 {
-        // Manual mode: `devd <driver-path> [<device-slot>]`
+        // Manual mode: `cambium <driver-path> [<device-slot>]`
         //
         // Reads the named binary, verifies it exports THING_DRIVER_V1, finds
         // all matching devices in /sys/devices (or the explicitly named slot),
@@ -44,7 +44,7 @@ fn main(_arg: usize) -> ! {
 
 // ── Manual mode ─────────────────────────────────────────────────────────────
 
-/// `devd <driver-path> [slot]`
+/// `cambium <driver-path> [slot]`
 ///
 /// 1. Inspect the binary at `driver_path` for the `THING_DRIVER_V1` marker.
 /// 2. Enumerate `/sys/devices` and find devices that match the driver's hints
@@ -53,7 +53,7 @@ fn main(_arg: usize) -> ! {
 ///    matching device and monitor it — restarting on exit while the device is
 ///    still present.
 fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
-    debug!("DEVD: manual mode, driver={}", driver_path);
+    debug!("CAMBIUM: manual mode, driver={}", driver_path);
 
     // Resolve to an absolute path if needed.
     let abs_path: String = if driver_path.starts_with('/') {
@@ -73,7 +73,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         Some(e) => e.clone(),
         None => {
             error!(
-                "DEVD: '{}' does not export THING_DRIVER_V1 or could not be read",
+                "CAMBIUM: '{}' does not export THING_DRIVER_V1 or could not be read",
                 abs_path
             );
             stem::syscall::exit(1);
@@ -81,7 +81,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
     };
 
     debug!(
-        "DEVD: driver '{}' name='{}' class={:?} vendor=0x{:04x} device=0x{:04x} class_code=0x{:06x} start='{}'",
+        "CAMBIUM: driver '{}' name='{}' class={:?} vendor=0x{:04x} device=0x{:04x} class_code=0x{:06x} start='{}'",
         abs_path,
         entry.driver_name,
         entry.driver_class,
@@ -95,7 +95,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
     let devices = match scan_devices() {
         Ok(d) => d,
         Err(e) => {
-            error!("DEVD: failed to scan /sys/devices: {:?}", e);
+            error!("CAMBIUM: failed to scan /sys/devices: {:?}", e);
             stem::syscall::exit(1);
         }
     };
@@ -116,7 +116,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         if let Some(slot) = slot_filter {
             // If an explicit slot was given, try to run the driver for it
             // regardless of the marker's match hints — the user said to do it.
-            debug!("DEVD: no match by hints for slot '{}'; spawning anyway (explicit override)", slot);
+            debug!("CAMBIUM: no match by hints for slot '{}'; spawning anyway (explicit override)", slot);
             // Create a synthetic device record from what we know.
             let fake_device = SysDevice {
                 slot: slot.to_string(),
@@ -133,7 +133,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
                 None,
             ));
         } else {
-            warn!("DEVD: no matching devices found for driver '{}'", abs_path);
+            warn!("CAMBIUM: no matching devices found for driver '{}'", abs_path);
             stem::syscall::exit(0);
         }
     }
@@ -165,7 +165,7 @@ fn path_exists(path: &str) -> bool {
 // ── Daemon mode ──────────────────────────────────────────────────────────────
 
 fn run_daemon_mode() -> ! {
-    debug!("DEVD: starting device discovery manager (daemon mode)");
+    debug!("CAMBIUM: starting device discovery manager (daemon mode)");
 
     let mut drivers: BTreeMap<String, ManagedDriver> = BTreeMap::new();
     let mut catalog = Catalog::new();
@@ -177,7 +177,7 @@ fn run_daemon_mode() -> ! {
     loop {
         match scan_devices() {
             Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
-            Err(err) => warn!("DEVD: scan of /sys/devices failed: {:?}", err),
+            Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
         }
 
         for managed in drivers.values_mut() {
@@ -186,7 +186,7 @@ fn run_daemon_mode() -> ! {
 
         tick = tick.wrapping_add(1);
         if tick % CATALOG_RESCAN_TICKS == 0 {
-            debug!("DEVD: rescanning driver catalog");
+            debug!("CAMBIUM: rescanning driver catalog");
             catalog.scan();
         }
 
@@ -222,7 +222,7 @@ fn reconcile_devices(
             // graphics. devd must ignore them to avoid duplicate spawns.
             use abi::driver_interface::DriverClass;
             if entry.driver_class == DriverClass::Display {
-                debug!("DEVD: ignoring display device at {} (managed by sprout)", device.slot);
+                debug!("CAMBIUM: ignoring display device at {} (managed by sprout)", device.slot);
                 continue;
             }
 
@@ -259,7 +259,7 @@ fn reconcile_devices(
 
     for slot in stale_slots {
         if let Some(mut managed) = drivers.remove(&slot) {
-            warn!("DEVD: device {} disappeared", slot);
+            warn!("CAMBIUM: device {} disappeared", slot);
             managed.mark_removed();
         }
     }

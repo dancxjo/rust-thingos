@@ -760,7 +760,7 @@ pub fn spawn_process_ex_cwd(
 ///
 /// When `entry_sym` is `Some(sym)`, the kernel will resolve `sym` in the
 /// loaded ELF image and enter the process at that symbol rather than the
-/// default `e_entry`.  Used by `devd` to invoke `thing_driver_entry_v1`
+/// default `e_entry`.  Used by `cambium` to invoke `thing_driver_entry_v1`
 /// directly without going through `main`.
 pub fn spawn_driver_ex(
     name: &str,

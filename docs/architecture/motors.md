@@ -94,7 +94,7 @@ Represents a Seed that can be probed and bound as a driver.
 
 ## Runtime discovery
 
-The driver orchestrator (`devd`) prefers the canonical Seed path:
+The driver orchestrator (`cambium`) prefers the canonical Seed path:
 
 1. Read ELF symbol table; look for `THINGOS_SEED` (= `SEED_SYMBOL`).
 2. Parse embedded `Seed` descriptor; verify `abi_version == SEED_ABI_VERSION`.
@@ -111,7 +111,7 @@ keeps plain `main`-based programs working without any change.
 Legacy binary formats continue to work while the codebase migrates:
 
 - **Legacy driver path** (`THING_DRIVER_V1`, `THINGOS_DRIVER`): explicitly
-  supported and labelled `// Transitional compatibility path` in `devd` catalog.
+  supported and labelled `// Transitional compatibility path` in `cambium` catalog.
 - **Legacy program path** (plain ELF entry, no Seed descriptor): still launched
   normally; the Seed descriptor is additive.
 - **Canonical path**: binaries that export `THINGOS_SEED` are handled via the

@@ -9,7 +9,7 @@ members = [
   "drivers/ahci_disk",
   "drivers/ata_disk",
   "drivers/chime",
-  "drivers/devd",
+  "cambium",
   "drivers/display_bootfb",
   "drivers/display_fake",
   "drivers/display_virtio_gpu",

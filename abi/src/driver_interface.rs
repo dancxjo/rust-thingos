@@ -2,7 +2,7 @@
 ///
 /// A binary is classified as a driver-capable image by the system if it
 /// exports a globally-visible symbol named `THING_DRIVER_V1` whose type is
-/// [`DriverInterfaceV1`].  `devd` scans candidate binaries for this symbol,
+/// [`DriverInterfaceV1`].  `cambium` scans candidate binaries for this symbol,
 /// reads the metadata, and uses it to match devices and locate the driver
 /// entrypoint.
 ///
@@ -33,10 +33,10 @@
 /// # Lifecycle
 ///
 /// - Normal process execution (`main`) and driver entry (`thing_driver_entry_v1`)
-///   are independent: `devd` spawns a **new process instance** that enters the
+///   are independent: `cambium` spawns a **new process instance** that enters the
 ///   driver entrypoint directly; `main` is not called.
 /// - Driver logic runs as a normal kernel-scheduled task; there is no
-///   in-process function jump from `devd`.
+///   in-process function jump from `cambium`.
 /// - Arguments are passed via the stable [`DriverEntryCtx`] payload whose
 ///   address is passed in `ctx_ptr`.
 
@@ -52,7 +52,7 @@ pub const DRIVER_MARKER_SYMBOL: &str = "THING_DRIVER_V1";
 /// Name of the stable descriptor symbol exported by v2-style drivers.
 pub const DRIVER_DESCRIPTOR_SYMBOL: &str = "THINGOS_DRIVER";
 
-/// Name of the default driver entrypoint invoked by `devd`.
+/// Name of the default driver entrypoint invoked by `cambium`.
 pub const DRIVER_ENTRY_SYMBOL: &str = "thing_driver_entry_v1";
 
 /// Match-any sentinel for `vendor_id` and `device_id`.
@@ -275,7 +275,7 @@ unsafe impl Send for DriverDescriptor {}
 
 /// Marker struct exported as `THING_DRIVER_V1` by driver-capable binaries.
 ///
-/// `devd` locates this symbol by walking the ELF symbol table of each binary
+/// `cambium` locates this symbol by walking the ELF symbol table of each binary
 /// in `/bin` (and `/drivers` when present).  The presence of the symbol alone
 /// is sufficient to classify the binary as a driver; the fields are used only
 /// for device matching and entrypoint resolution.
@@ -283,7 +283,7 @@ unsafe impl Send for DriverDescriptor {}
 /// ## ABI stability
 ///
 /// This struct is `#[repr(C)]` and its size/layout is part of the v1 ABI.
-/// Fields marked `_reserved` must be zeroed by the declaring binary; `devd`
+/// Fields marked `_reserved` must be zeroed by the declaring binary; `cambium`
 /// ignores them.  New fields will be added in a v2 struct.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -310,7 +310,7 @@ pub struct DriverInterfaceV1 {
     pub class_mask: u32,
 
     /// Null-terminated name of the driver entrypoint symbol, padded to 32
-    /// bytes.  When the first byte is NUL `devd` falls back to the default
+    /// bytes.  When the first byte is NUL `cambium` falls back to the default
     /// symbol name [`DRIVER_ENTRY_SYMBOL`].
     pub entry_symbol: [u8; 32],
 }
@@ -353,7 +353,7 @@ impl DriverInterfaceV1 {
 
 /// Context block passed to a driver entrypoint (`thing_driver_entry_v1`).
 ///
-/// `devd` serialises this struct into a memfd page, then passes its address
+/// `cambium` serialises this struct into a memfd page, then passes its address
 /// as `ctx_ptr` and its size as `ctx_len` when spawning the driver task via
 /// `SYS_SPAWN_PROCESS_EX`.  The driver maps the memfd and reads its context
 /// from there.

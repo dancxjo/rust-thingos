@@ -1160,7 +1160,7 @@ fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<String> {
         return None;
     }
 
-    // New devd path: boot arg contains a DriverEntryCtx payload.
+    // New cambium path: boot arg contains a DriverEntryCtx payload.
     use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
     let req = VmMapReq {
         addr_hint: 0,

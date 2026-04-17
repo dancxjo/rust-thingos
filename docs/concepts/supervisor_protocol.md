@@ -8,7 +8,7 @@ their VFS provider into the device namespace.
 
 ## Overview
 
-When a driver is launched by sprout (or by `devd`), it receives a pair of
+When a driver is launched by sprout (or by `cambium`), it receives a pair of
 private channel things as part of its bootstrap data:
 
 | Thing           | Direction         | Purpose                                 |

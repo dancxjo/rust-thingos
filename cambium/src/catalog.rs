@@ -3,7 +3,7 @@
 //!
 //! # Discovery model
 //!
-//! On each scan pass `devd` reads every regular file from the known search
+//! On each scan pass `cambium` reads every regular file from the known search
 //! paths.  For each candidate binary the catalog:
 //!
 //! 1. Checks for the `THINGOS_SEED` ELF symbol and confirms `DriverV1`.
@@ -11,7 +11,7 @@
 //! 3. Caches a [`DriverEntry`] record keyed by binary path.
 //!
 //! The catalog is rescanned periodically so that newly installed driver
-//! binaries are picked up without restarting `devd`.
+//! binaries are picked up without restarting `cambium`.
 
 #![allow(dead_code)]
 
