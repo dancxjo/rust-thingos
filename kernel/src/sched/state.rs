@@ -227,7 +227,18 @@ impl SchedState {
 
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
-            if let Some(tid) = pc.runq[prio].pop_front() {
+            while let Some(tid) = pc.runq[prio].pop_front() {
+                // Lazy-invalidation model: entries may stay in the VecDeque after
+                // `remove_thread_from_runq` marks them not-enqueued.
+                // Only return the entry if it still matches the task's canonical
+                // runq placement metadata.
+                if self
+                    .get_thread(tid)
+                    .and_then(|t| t.runq_location)
+                    != Some((cpu, prio))
+                {
+                    continue;
+                }
                 pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
                 if let Some(t) = self.get_thread_mut(tid) {
                     t.runq_location = None;
@@ -239,17 +250,9 @@ impl SchedState {
     }
 
     pub fn remove_thread_from_runq(&mut self, tid: ThreadId) -> bool {
-        let (cpu, prio) = match self.get_thread(tid) {
-            Some(t) if t.runq_location.is_some() => t.runq_location.unwrap(),
-            _ => return false,
-        };
-
-        if let Some(pc) = self.per_cpu.get_mut(cpu) {
-            if let Some(pos) = pc.runq[prio].iter().position(|&id| id == tid) {
-                pc.runq[prio].remove(pos);
-                if let Some(t) = self.get_thread_mut(tid) {
-                    t.runq_location = None;
-                }
+        if let Some(t) = self.get_thread_mut(tid) {
+            if t.runq_location.is_some() {
+                t.runq_location = None;
                 return true;
             }
         }
@@ -298,5 +301,67 @@ impl SchedState {
     #[inline]
     pub fn remove_task(&mut self, tid: ThreadId) -> bool {
         self.remove_thread(tid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sched_fields(tid: ThreadId, state: TaskState, priority: TaskPriority) -> ThreadSchedFields {
+        ThreadSchedFields {
+            tid,
+            runq_location: None,
+            state,
+            priority,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: 0,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        }
+    }
+
+    #[test]
+    fn remove_thread_from_runq_uses_lazy_invalidation() {
+        let mut state = SchedState::new();
+        state.per_cpu.push(PerCpu::new());
+        state.insert_thread(sched_fields(11, TaskState::Runnable, TaskPriority::Normal));
+        state.enqueue_thread(0, TaskPriority::Normal as usize, 11);
+
+        assert!(state.remove_thread_from_runq(11));
+        assert_eq!(state.get_thread(11).and_then(|t| t.runq_location), None);
+        assert!(
+            state.per_cpu[0].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 11),
+            "lazy invalidation keeps stale entry in queue until dequeue"
+        );
+        assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), None);
+        assert!(state.per_cpu[0].runq[TaskPriority::Normal as usize].is_empty());
+    }
+
+    #[test]
+    fn stale_entry_is_skipped_after_requeueing_same_task() {
+        let mut state = SchedState::new();
+        state.per_cpu.push(PerCpu::new());
+        state.insert_thread(sched_fields(12, TaskState::Runnable, TaskPriority::Normal));
+        state.enqueue_thread(0, TaskPriority::Low as usize, 12);
+
+        assert!(state.remove_thread_from_runq(12));
+        state.enqueue_thread(0, TaskPriority::High as usize, 12);
+
+        assert_eq!(
+            state.dequeue_thread_front(0, TaskPriority::High as usize),
+            Some(12),
+            "valid re-enqueued entry should run"
+        );
+        assert_eq!(
+            state.dequeue_thread_front(0, TaskPriority::Low as usize),
+            None,
+            "stale older queue entry must be skipped"
+        );
     }
 }
