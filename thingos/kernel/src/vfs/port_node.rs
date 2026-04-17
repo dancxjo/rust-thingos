@@ -58,12 +58,15 @@ impl VfsNode for PortNode {
         let mut revents = 0;
         match self.mode {
             IpcThingMode::Read => {
-                if !self.port.is_empty() || !self.port.has_writers() {
+                let empty = self.port.is_empty();
+                let has_writers = self.port.has_writers();
+                if !empty || !has_writers {
                     revents |= POLLIN;
                 }
-                if !self.port.has_writers() {
+                if !has_writers {
                     revents |= POLLHUP;
                 }
+                crate::kinfo!("PORTNODE: poll(Read) -> revents=0x{:x} (empty={}, has_writers={}, port={:p})", revents, empty, has_writers, Arc::as_ptr(&self.port));
             }
             IpcThingMode::Write => {
                 if !self.port.has_readers() {
@@ -71,6 +74,7 @@ impl VfsNode for PortNode {
                 } else if !self.port.is_full() {
                     revents |= POLLOUT;
                 }
+                crate::kinfo!("PORTNODE: poll(Write) -> revents=0x{:x}", revents);
             }
         }
         revents

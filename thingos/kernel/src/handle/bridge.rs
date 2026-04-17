@@ -128,17 +128,19 @@ pub fn install_fd_compat_for_channel_handle(
 ) -> SysResult<u32> {
     let entry = lookup_ipc_entry_any(handle)?;
     let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
-    let node = Arc::new(crate::vfs::port_node::PortNode::new(port, entry.mode));
+    let node = Arc::new(crate::vfs::port_node::PortNode::new(port.clone(), entry.mode));
 
     let mut lock = pinfo_arc.lock();
-    lock.thing_table.open(
-        node,
+    let fd = lock.thing_table.open(
+        node.clone(),
         match entry.mode {
             crate::ipc::IpcThingMode::Read => crate::vfs::OpenFlags::read_only(),
             crate::ipc::IpcThingMode::Write => crate::vfs::OpenFlags::write_only(),
         },
         alloc::format!("handle:{}", handle.0),
-    )
+    )?;
+    crate::kinfo!("BRIDGE: handle={} -> fd={} node={:p} port={:p}", handle.0, fd, Arc::as_ptr(&node), Arc::as_ptr(&port));
+    Ok(fd)
 }
 
 /// Resolve a write-capable channel endpoint from a compat token (fd or handle).

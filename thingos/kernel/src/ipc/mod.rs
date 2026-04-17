@@ -56,19 +56,23 @@ pub static GLOBAL_THING_TABLE: Mutex<IpcThingTable> = Mutex::new(IpcThingTable::
 pub fn create_port(capacity: usize) -> PortId {
     let port = Arc::new(Port::new(capacity));
     let mut ports = PORTS.lock();
+    crate::kinfo!("CREATE_PORT: capacity={} port={:p}", capacity, Arc::as_ptr(&port));
 
     // Find a free slot or append
     for (i, slot) in ports.iter_mut().enumerate() {
         if slot.is_none() {
             *slot = Some(port);
-            return PortId(i as u32);
+            let id = PortId(i as u32);
+            crate::kinfo!("CREATE_PORT: slot={} id={:?}", i, id);
+            return id;
         }
     }
 
     // No free slot, append
-    let id = ports.len() as u32;
+    let id = PortId(ports.len() as u32);
     ports.push(Some(port));
-    PortId(id)
+    crate::kinfo!("CREATE_PORT: appended id={:?}", id);
+    id
 }
 
 /// Get a port by ID

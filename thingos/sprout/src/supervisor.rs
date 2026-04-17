@@ -400,10 +400,17 @@ impl Supervisor {
             .collect::<Vec<_>>();
 
         if !pollfds.is_empty() {
-            match stem::syscall::vfs::vfs_poll(&mut pollfds, 0) {
+            let mut poll_trace = alloc::string::String::new();
+            for t in &tasks_to_poll {
+                use core::fmt::Write;
+                let _ = write!(&mut poll_trace, " {}:{}", t.2, t.0);
+            }
+            stem::info!("SPROUT: Polling FDs:{}", poll_trace);
+
+            match stem::syscall::vfs::vfs_poll(&mut pollfds, 100) {
                 Ok(n) => {
                     if n > 0 {
-                        stem::debug!("SPROUT: poll yielded {} ready events", n);
+                        stem::info!("SPROUT: poll yielded {} ready events", n);
                     }
                 }
                 Err(e) => {
@@ -413,66 +420,30 @@ impl Supervisor {
             }
         }
 
+        // DRAIN MESSAGES
         for ((resp_fd, drv_req_write, task_name), pollfd) in tasks_to_poll.into_iter().zip(pollfds.iter()) {
-            if pollfd.revents == 0 {
-                continue;
-            }
-
-            stem::info!("SPROUT: Events for '{}' (FD {}): 0x{:x}", task_name, resp_fd, pollfd.revents);
-
-            if pollfd.revents & (abi::syscall::poll_flags::POLLHUP | abi::syscall::poll_flags::POLLERR) != 0 {
-                stem::warn!("SPROUT: Task '{}' (FD {}) hung up or error: 0x{:x}", task_name, resp_fd, pollfd.revents);
-            }
-
-            if pollfd.revents & abi::syscall::poll_flags::POLLIN == 0 {
-                continue;
-            }
-
             let mut msg_data = [0u8; 1024];
             let mut msg_fds = [0u32; 1];
-            let mut process_count = 0;
-
-            // Drain the channel using the cached FD.
+            
             loop {
-                let recv_res = stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds);
-                match recv_res {
+                // info!("SPROUT: Calling recvmsg for {}...", task_name);
+                match stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds) {
                     Ok((n, n_fds)) => {
-                        stem::info!("SPROUT: Received {} bytes ({} FDs) from '{}'", n, n_fds, task_name);
-                        if n == 0 && n_fds == 0 {
-                            stem::debug!("SPROUT: EOF from '{}'", task_name);
-                            break;
-                        }
-
-                        process_count += 1;
-                        if process_count > 32 {
-                            stem::warn!("SPROUT: Throttling registration for '{}'", task_name);
-                            break;
-                        }
-
+                        info!("SPROUT: Recvmsg SUCCESS from {}: n={}, nfds={}", task_name, n, n_fds);
+                        if n == 0 && n_fds == 0 { break; }
+                        
                         let bundled_fd = if n_fds > 0 { msg_fds[0] } else { 0 };
                         let parsed = abi::display_driver_protocol::parse_message(&msg_data[..n]);
-                        
                         if let Some((header, payload)) = parsed {
-                            stem::info!("SPROUT: Decoded message type {} from '{}'", header.msg_type, task_name);
                             if header.msg_type == abi::supervisor_protocol::MSG_BIND_READY {
                                 info!("SPROUT: BIND_READY from {} (bundle_fd={})", task_name, bundled_fd);
                                 self.handle_bind_ready(&task_name, drv_req_write, payload, bundled_fd);
-                            } else if header.msg_type == abi::supervisor_protocol::MSG_SERVICE_READY {
-                                info!("SPROUT: Service '{}' is fully operational.", task_name);
-                            } else if header.msg_type == abi::supervisor_protocol::MSG_SERVICE_EXITING {
-                                info!("SPROUT: Service '{}' exiting.", task_name);
-                            } else {
-                                stem::warn!("SPROUT: Unhandled message type {} from '{}'", header.msg_type, task_name);
                             }
-                        } else {
-                            stem::error!("SPROUT: Failed to parse protocol message ({} bytes) from '{}'", n, task_name);
                         }
                     }
-                    Err(abi::errors::Errno::EAGAIN) => {
-                        break;
-                    }
+                    Err(abi::errors::Errno::EAGAIN) => break,
                     Err(e) => {
-                        stem::error!("SPROUT: recvmsg error for '{}': {:?}", task_name, e);
+                        warn!("SPROUT: recvmsg error from {}: {:?}", task_name, e);
                         break;
                     }
                 }

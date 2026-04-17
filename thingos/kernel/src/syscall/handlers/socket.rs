@@ -278,6 +278,7 @@ pub fn sys_sendmsg(
         let lock = pinfo_arc.lock();
         lock.thing_table.get(thing as u32)?.node.clone()
     };
+    crate::kinfo!("SENDMSG: thing={} data_len={} node={:p}", thing, data_len, Arc::as_ptr(&node));
     node.sock_sendmsg(&data_buf, caps)?;
     Ok(0)
 }

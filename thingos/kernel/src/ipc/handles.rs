@@ -49,7 +49,9 @@ impl IpcThingTable {
         for (i, slot) in self.entries.iter_mut().enumerate().skip(1) {
             if slot.is_none() {
                 *slot = Some(IpcThingEntry { port_id, mode });
-                return Some(IpcThing(i as u32));
+                let h = IpcThing(i as u32);
+                crate::kinfo!("ALLOC_HANDLE: handle={} port_id={:?} mode={:?}", h.0, port_id, mode);
+                return Some(h);
             }
         }
         None // No free slots
