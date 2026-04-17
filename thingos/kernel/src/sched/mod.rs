@@ -196,6 +196,7 @@ pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
+const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
 const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 16;
 
@@ -2258,34 +2259,58 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Queues 1-4 correspond to TaskPriority::Idle+1 through Realtime (see
         // types::RUNQ_COUNT = 5 with queue 0 reserved for idle-priority tasks).
         for p in (1..5).rev() {
-            let candidate = self.state.per_cpu[busiest_cpu].runq[p].front().copied();
-            if let Some(tid) = candidate {
+            let scan_limit =
+                self.state.per_cpu[busiest_cpu].runq[p].len().min(STEAL_SCAN_DEPTH_PER_PRIORITY);
+            let mut candidate_index = None;
+            for idx in 0..scan_limit {
+                let Some(tid) = self.state.per_cpu[busiest_cpu].runq[p].get(idx).copied() else {
+                    break;
+                };
                 let stealable = match self.state.get_thread(tid) {
-                    Some(sf) if sf.state != TaskState::Dead => {
-                        matches!(sf.affinity, crate::task::Affinity::Any)
+                    Some(sf)
+                        if sf.state != TaskState::Dead
+                            && sf.runq_location == Some((busiest_cpu, p))
+                            && matches!(sf.affinity, crate::task::Affinity::Any) =>
+                    {
+                        true
                     }
                     _ => false,
                 };
                 if stealable {
-                    if let Some(stolen_id) = self.state.dequeue_task_front(busiest_cpu, p) {
-                        if let Some(pc) = self.state.per_cpu.get_mut(busiest_cpu) {
-                            pc.stats.steals_out = pc.stats.steals_out.saturating_add(1);
-                        }
-                        if let Some(pc) = self.state.per_cpu.get_mut(local_cpu) {
-                            pc.stats.steals_in = pc.stats.steals_in.saturating_add(1);
-                        }
-                        if let Some(sf) = self.state.get_task_mut(stolen_id) {
-                            sf.wake_cpu = Some(local_cpu);
-                        }
-                        self.state
-                            .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
-                        self.metrics.steals += 1;
-                        crate::kdebug!(
-                            "SCHED: CPU {} stole task {} (prio {}) from CPU {} (depth {})",
-                            local_cpu, stolen_id, p, busiest_cpu, busiest_depth
-                        );
-                        return Some(stolen_id);
+                    candidate_index = Some(idx);
+                    break;
+                }
+            }
+            if let Some(idx) = candidate_index {
+                let stolen_id = {
+                    let pc = &mut self.state.per_cpu[busiest_cpu];
+                    let removed = pc.runq[p].remove(idx);
+                    if removed.is_some() {
+                        pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
+                        pc.stats.runq_depth_change_events =
+                            pc.stats.runq_depth_change_events.saturating_add(1);
                     }
+                    removed
+                };
+                if let Some(stolen_id) = stolen_id {
+                    if let Some(pc) = self.state.per_cpu.get_mut(busiest_cpu) {
+                        pc.stats.steals_out = pc.stats.steals_out.saturating_add(1);
+                    }
+                    if let Some(pc) = self.state.per_cpu.get_mut(local_cpu) {
+                        pc.stats.steals_in = pc.stats.steals_in.saturating_add(1);
+                    }
+                    if let Some(sf) = self.state.get_task_mut(stolen_id) {
+                        sf.runq_location = None;
+                        sf.wake_cpu = Some(local_cpu);
+                    }
+                    self.state
+                        .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
+                    self.metrics.steals += 1;
+                    crate::kdebug!(
+                        "SCHED: CPU {} stole task {} (prio {}) from CPU {} (depth {})",
+                        local_cpu, stolen_id, p, busiest_cpu, busiest_depth
+                    );
+                    return Some(stolen_id);
                 }
             }
         }
@@ -7129,6 +7154,78 @@ mod tests {
             sched.state.get_task(9921).and_then(|sf| sf.wake_cpu),
             Some(1),
             "[policy] wake_sleepers should record redirected wake_cpu for Any-affinity task"
+        );
+    }
+
+    #[test]
+    fn test_steal_task_scans_bounded_depth_per_priority() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(9930, TaskState::Runnable, TaskPriority::Normal),
+        ));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(9931, TaskState::Runnable, TaskPriority::Normal),
+        ));
+
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9930,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(1),
+            last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9931,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9930);
+        sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9931);
+
+        let stolen = sched.steal_task_for(0);
+        assert_eq!(
+            stolen,
+            Some(9931),
+            "bounded scan should skip unstealable head and steal stealable follower"
+        );
+        assert_eq!(
+            sched.state.get_task(9931).and_then(|sf| sf.wake_cpu),
+            Some(0),
+            "stolen task wake_cpu should track destination CPU"
+        );
+        assert_eq!(
+            sched.state.get_task(9931).and_then(|sf| sf.runq_location),
+            None,
+            "stolen task should no longer be tracked in donor runq"
+        );
+        assert!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 9930),
+            "unstealable pinned head should remain queued on donor CPU"
         );
     }
 

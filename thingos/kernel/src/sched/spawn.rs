@@ -236,7 +236,7 @@ impl<R: BootRuntime> Scheduler<R> {
         };
 
         let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
-            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -353,7 +353,7 @@ impl<R: BootRuntime> Scheduler<R> {
         register_thread_in_process(&task.process_info, id);
 
         let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
-            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -442,7 +442,7 @@ impl<R: BootRuntime> Scheduler<R> {
         };
 
         let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
-            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
         crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
@@ -539,7 +539,7 @@ impl<R: BootRuntime> Scheduler<R> {
         };
 
         let sched_fields = super::bridge::TaskSchedCache::from_thread(&task)
-            .with_wake_cpu(Some(super::current_cpu_index::<R>()))
+            .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
         // Insert into the registry so the task can be looked up by TID.
