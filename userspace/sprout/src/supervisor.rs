@@ -78,8 +78,18 @@ impl Supervisor {
             info!("SPROUT: poll_mux verification test disabled");
         }
 
-        // Stage 4: Busy Stage - Wait for Display Driver to register its VFS provider
-        // self.wait_for_display();
+        // Stage 5: Graphics Stack Bring-up
+        info!("SPROUT: Bringing up graphics stack...");
+        let display_handles = setup_display_pipeline(self.tasks.clone(), supervisor_write, 0);
+
+        // Stage 6: Wait for Display Driver to register its VFS provider
+        self.wait_for_display();
+
+        // Stage 7: High-level UI Services
+        info!("SPROUT: Launching UI services...");
+        let input_handles = setup_input_broker(self.tasks.clone());
+        setup_graphics_stack(self.tasks.clone(), display_handles, input_handles);
+        setup_ui_services(self.tasks.clone());
 
         loop {
             stem::trace!(

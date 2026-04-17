@@ -37,8 +37,28 @@ impl Drop for DisplayBackend {
 impl DisplayBackend {
     pub fn connect(path: &str) -> Option<Self> {
         let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDWR).ok()?;
-        let info = get_display_info(fd)?;
-        Some(Self { fd, info })
+        let mut backend = Self {
+            fd,
+            info: DisplayInfo {
+                card_id: 0,
+                preferred_mode: abi::display::DisplayMode {
+                    width: 0,
+                    height: 0,
+                    refresh_mhz: 0,
+                },
+                plane_count: 0,
+                max_buffers: 0,
+                supported_formats: 0,
+                caps: abi::display::DisplayCaps::empty(),
+            },
+        };
+        backend.refresh_info()?;
+        Some(backend)
+    }
+
+    pub fn refresh_info(&mut self) -> Option<()> {
+        self.info = get_display_info(self.fd)?;
+        Some(())
     }
 
     pub fn enumerate_outputs(&self) -> Vec<OutputInfo> {

@@ -894,13 +894,20 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     }
 }
 
-pub fn setup_graphics_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+pub fn setup_graphics_stack(
+    shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
+    _display: Option<DisplayHandles>,
+    input: InputHandles,
+) {
     debug!("SPROUT: Setting up Graphics Stack (Bloom + shared pistil dylib)...");
 
+    // Pass the input echo handle to bloom so it can receive input events.
+    let spawn_arg = input.bloom_evt_read as usize;
+
     // Setup Bloom (Compositor)
-    match stem::syscall::spawn_process("/bin/bloom", 0) {
+    match stem::syscall::spawn_process("/bin/bloom", spawn_arg) {
         Ok(pid) => {
-            debug!("SPROUT: Spawned bloom (PID={})", pid);
+            debug!("SPROUT: Spawned bloom (PID={}, input_fd={})", pid, spawn_arg);
             let _ = stem::thread::set_priority(pid, 3); // High priority for compositor
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
@@ -909,7 +916,7 @@ pub fn setup_graphics_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 module_path: "/bin/bloom".to_string(),
                 pid: Some(pid),
                 restarts: 0,
-                spawn_arg: 0,
+                spawn_arg,
                 bind_instance_id: 0,
                 drv_req_write: 0,
                 drv_resp_read: 0,

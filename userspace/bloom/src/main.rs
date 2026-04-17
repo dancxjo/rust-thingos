@@ -42,7 +42,9 @@ fn main(arg: usize) -> ! {
         stem::sleep_ms(100);
     }
 
-    let Some(display) = display_opt else {
+    let mut display = if let Some(d) = display_opt {
+        d
+    } else {
         error!("bloom: failed to connect to /dev/display/card0 after retries");
         loop {
             stem::sleep_ms(1000);
@@ -55,7 +57,7 @@ fn main(arg: usize) -> ! {
             stem::sleep_ms(1000);
         }
     }
-    let primary = outputs[0];
+    let mut primary = outputs[0];
     info!(
         "bloom: output0 {}x{} @ {}mHz",
         primary.width, primary.height, primary.refresh_mhz
@@ -186,12 +188,25 @@ fn main(arg: usize) -> ! {
                     let mut dump = [0u8; 1024];
                     let _ = vfs_read(fd, &mut dump);
                 }
-                
+
                 info!("bloom: reacting to environment change (wallpaper or resolution)");
+                
+                if Some(ev.token()) == disp_watch_token {
+                    if display.refresh_info().is_some() {
+                        let outputs = display.enumerate_outputs();
+                        if !outputs.is_empty() {
+                            primary = outputs[0];
+                            input.update_dimensions(primary.width, primary.height);
+                            info!("bloom: resolution updated to {}x{}", primary.width, primary.height);
+                        }
+                    }
+                }
+
                 visuals.prepare_background(&display, wp_path);
                 if visuals.fallback_buffer_id().is_none() {
                     visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
                 }
+                
                 damage.mark_full(primary.width, primary.height);
                 needs_redraw = true;
             }

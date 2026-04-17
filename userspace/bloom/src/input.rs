@@ -28,6 +28,11 @@ impl InputState {
         }
     }
 
+    pub fn update_dimensions(&mut self, output_w: u32, output_h: u32) {
+        self.output_w = output_w as i32;
+        self.output_h = output_h as i32;
+    }
+
     pub fn handle_bristle_event(&mut self, bytes: &[u8], scene: &mut Scene, damage: &mut DamageTracker) {
         if bytes.len() < BristleEventHeader::SIZE {
             return;
