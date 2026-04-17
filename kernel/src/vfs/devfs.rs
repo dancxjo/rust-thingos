@@ -137,7 +137,7 @@ impl VfsDriver for DevFs {
             "zero" => Ok(Arc::new(ZeroNode)),
             "fb0" => {
                 if let Some((fb, resource_id)) = *BOOT_FB_INFO.lock() {
-                    crate::kdebug!(
+                    crate::kinfo!(
                         "devfs: lookup fb0 -> hit ({}x{} stride={})",
                         fb.width,
                         fb.height,
@@ -937,7 +937,7 @@ impl VfsNode for FbNode {
 
         let avail = &slice[off..];
         let n = avail.len().min(buf.len());
-        crate::kdebug!(
+        crate::kinfo!(
             "FbNode::read: off={} n={} buf_len={} total={}",
             off,
             n,
