@@ -1217,6 +1217,7 @@ pub(crate) fn should_send_remote_resched_ipi(target_cpu: usize) -> bool {
 pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
     deferred_updates: alloc::vec::Vec<types::DeferredRegistrySync>,
 ) {
+    debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_syncs");
     for update in deferred_updates {
         if let Some(mut task) = crate::task::registry::get_task_mut::<R>(update.tid) {
             if let Some(state) = update.new_state {
@@ -2525,8 +2526,8 @@ pub fn current_priority<R: BootRuntime>() -> TaskPriority {
                 .per_cpu
                 .get(cpu)
                 .and_then(|pc| pc.current)
-                .and_then(|tid| crate::task::registry::get_task::<R>(tid))
-                .map(|t| bridge::SchedulableRuntime::from_thread(&*t).priority)
+                .and_then(|tid| sched.state.get_thread(tid))
+                .map(|sf| sf.priority)
                 .unwrap_or(TaskPriority::Normal)
         } else {
             TaskPriority::Normal
@@ -2657,9 +2658,10 @@ pub fn process_info<R: BootRuntime>()
     // Prefer the runtime's current TID. During syscall/trap handling this stays
     // authoritative even if the scheduler's per-CPU `current` view is transiently stale.
     let runtime_tid = rt.current_tid();
-    let result = crate::task::registry::get_task::<R>(runtime_tid)
-        .and_then(|t| t.process_info.clone())
-        .or_else(|| {
+    let mut maybe_process_info = crate::task::registry::get_task::<R>(runtime_tid)
+        .and_then(|t| t.process_info.clone());
+    if maybe_process_info.is_none() {
+        let scheduler_current_tid = {
             let lock = SCHEDULER.lock();
             if let Some(ptr) = *lock {
                 let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
@@ -2669,15 +2671,17 @@ pub fn process_info<R: BootRuntime>()
                     .per_cpu
                     .get(cpu_idx)
                     .and_then(|pc| pc.current)
-                    .and_then(|tid| crate::task::registry::get_task::<R>(tid))
-                    .and_then(|t| t.process_info.clone())
             } else {
                 None
             }
-        });
+        };
+        maybe_process_info = scheduler_current_tid
+            .and_then(|tid| crate::task::registry::get_task::<R>(tid))
+            .and_then(|t| t.process_info.clone());
+    }
 
     rt.irq_restore(_irq);
-    result
+    maybe_process_info
 }
 
 pub fn process_info_for_tid<R: BootRuntime>(
@@ -3007,11 +3011,13 @@ pub fn kill_by_tid<R: BootRuntime>(tid: u64) -> bool {
                 if current_id == tid {
                     (false, alloc::vec::Vec::new())
                 } else {
-                    let task_killed = crate::task::registry::get_task::<R>(tid)
-                        .map(|task| task.state != TaskState::Dead)
-                        .unwrap_or(false);
+                    let task_is_dead = sched
+                        .state
+                        .get_thread(tid)
+                        .map(|task| task.state == TaskState::Dead)
+                        .unwrap_or(true);
 
-                    if !task_killed {
+                    if task_is_dead {
                         (false, alloc::vec::Vec::new())
                     } else {
                         let waiters = mark_task_exited::<R>(sched, tid, -9);
@@ -3944,6 +3950,74 @@ mod tests {
             TaskPriority::High,
             "public set_priority should sync REGISTRY outside scheduler lock"
         );
+
+        *SCHEDULER.lock() = None;
+        unsafe {
+            drop(alloc::boxed::Box::from_raw(sched_ptr));
+        }
+    }
+
+    #[test]
+    fn current_priority_reads_scheduler_hot_cache() {
+        let _g = init_test_env();
+
+        let mut sched = alloc::boxed::Box::new(types::Scheduler::<MockRuntime>::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(44);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 44,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::High,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+
+        let sched_ptr = alloc::boxed::Box::into_raw(sched);
+        *SCHEDULER.lock() = Some(sched_ptr as usize);
+
+        assert_eq!(current_priority::<MockRuntime>(), TaskPriority::High);
+
+        *SCHEDULER.lock() = None;
+        unsafe {
+            drop(alloc::boxed::Box::from_raw(sched_ptr));
+        }
+    }
+
+    #[test]
+    fn current_priority_defaults_when_no_current_task() {
+        let _g = init_test_env();
+
+        let mut sched = alloc::boxed::Box::new(types::Scheduler::<MockRuntime>::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        let sched_ptr = alloc::boxed::Box::into_raw(sched);
+        *SCHEDULER.lock() = Some(sched_ptr as usize);
+
+        assert_eq!(current_priority::<MockRuntime>(), TaskPriority::Normal);
+
+        *SCHEDULER.lock() = None;
+        unsafe {
+            drop(alloc::boxed::Box::from_raw(sched_ptr));
+        }
+    }
+
+    #[test]
+    fn current_priority_defaults_when_current_task_missing_from_hot_cache() {
+        let _g = init_test_env();
+
+        let mut sched = alloc::boxed::Box::new(types::Scheduler::<MockRuntime>::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(99);
+        let sched_ptr = alloc::boxed::Box::into_raw(sched);
+        *SCHEDULER.lock() = Some(sched_ptr as usize);
+
+        assert_eq!(current_priority::<MockRuntime>(), TaskPriority::Normal);
 
         *SCHEDULER.lock() = None;
         unsafe {
