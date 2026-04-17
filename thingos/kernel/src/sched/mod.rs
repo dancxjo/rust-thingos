@@ -3765,12 +3765,14 @@ mod tests {
     }
 
     #[test]
-    fn clear_sched_lock_tracking_only_clears_matching_cpu_owner() {
+    fn clear_sched_lock_tracking_only_clears_when_called_by_owner_cpu() {
         let _g = init_test_env();
 
         set_sched_lock_tracking::<MockRuntime>(1);
+        SCHEDULER_LOCK_ACQUIRED_AT.store(123, Ordering::Release);
         clear_sched_lock_tracking::<MockRuntime>();
         assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), 1);
+        assert_eq!(SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire), 123);
 
         set_sched_lock_tracking::<MockRuntime>(0);
         clear_sched_lock_tracking::<MockRuntime>();

@@ -842,6 +842,7 @@ pub fn preempt_disable<R: BootRuntime>() {
             sched.preempt_disable();
         }
         crate::sched::clear_sched_lock_tracking::<R>();
+        drop(lock);
     }
     rt.irq_restore(irq);
 }
@@ -863,9 +864,8 @@ pub fn preempt_enable<R: BootRuntime>() {
         } else {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         }
-        // Ensure lock-owner diagnostics are cleared by the same CPU while this
-        // lock scope is still active.
         crate::sched::clear_sched_lock_tracking::<R>();
+        drop(lock);
     };
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
@@ -911,6 +911,7 @@ pub fn resched_if_needed<R: BootRuntime>() {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
         }
         crate::sched::clear_sched_lock_tracking::<R>();
+        drop(lock);
     };
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
