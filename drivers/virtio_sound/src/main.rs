@@ -852,6 +852,27 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     };
     info!("SND: Using stream {}", stream_id);
 
+    // ── Mount VFS provider at /dev/audio/card0/ ───────────────────────────────
+    // Mount early — before configure_stream/PCM_START/DMA alloc — so that
+    // clients (e.g. chime) can open /dev/audio/card0/out0 without waiting for
+    // potentially-blocking hardware initialisation steps.
+    let (req_write, req_read) = match channel_create(VFS_RPC_MAX_REQ * 16) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("SND: channel_create failed: {:?}", e);
+            loop {
+                stem::time::sleep_ms(1000);
+            }
+        }
+    };
+
+    match vfs_mount(req_write, "/dev/audio/card0") {
+        Ok(()) => info!("SND: Mounted at /dev/audio/card0"),
+        Err(e) => {
+            warn!("SND: vfs_mount failed: {:?} — continuing without VFS interface", e);
+        }
+    }
+
     configure_stream(&mut driver, &control_dma, stream_id);
     send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_START, stream_id);
     info!("SND: Hardware playback started");
@@ -878,24 +899,6 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         }
     };
     let tx_dma_ptr = tx_dma as *mut u8;
-
-    // ── Mount VFS provider at /dev/audio/card0/ ───────────────────────────────
-    let (req_write, req_read) = match channel_create(VFS_RPC_MAX_REQ * 16) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("SND: channel_create failed: {:?}", e);
-            loop {
-                stem::time::sleep_ms(1000);
-            }
-        }
-    };
-
-    match vfs_mount(req_write, "/dev/audio/card0") {
-        Ok(()) => info!("SND: Mounted at /dev/audio/card0"),
-        Err(e) => {
-            warn!("SND: vfs_mount failed: {:?} — continuing without VFS interface", e);
-        }
-    }
 
     // ── Main event loop ───────────────────────────────────────────────────────
     let mut card = AudioCard::new();
