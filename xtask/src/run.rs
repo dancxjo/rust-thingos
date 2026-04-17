@@ -74,6 +74,31 @@ fn default_audiodev_arg() -> Option<String> {
     }
 }
 
+fn push_stdio_serial_args(final_args: &mut Vec<String>, interactive: bool, monitor: bool) {
+    if !interactive {
+        final_args.push("-nographic".to_string());
+        return;
+    }
+
+    if monitor {
+        final_args.extend([
+            "-chardev".to_string(),
+            "stdio,mux=on,id=char0,signal=off".to_string(),
+            "-mon".to_string(),
+            "chardev=char0,mode=readline".to_string(),
+            "-serial".to_string(),
+            "chardev:char0".to_string(),
+        ]);
+    } else {
+        final_args.extend([
+            "-chardev".to_string(),
+            "stdio,id=char0,signal=off".to_string(),
+            "-serial".to_string(),
+            "chardev:char0".to_string(),
+        ]);
+    }
+}
+
 pub fn run(
     sh: &Shell,
     arch: &str,
@@ -91,18 +116,7 @@ pub fn run(
 
     let qemu_args: Vec<&str> = qemu_flags.split_whitespace().collect();
     let mut final_args = Vec::new();
-
-    if !interactive {
-        final_args.push("-nographic");
-    } else if monitor {
-        final_args.extend(["-serial", "mon:stdio"]);
-    } else {
-        final_args.extend(["-serial", "stdio"]);
-    }
-
-    if monitor && interactive {
-        final_args.extend(["-monitor", "stdio"]);
-    }
+    push_stdio_serial_args(&mut final_args, interactive, monitor);
 
     let netdev = user_netdev_arg();
     match arch {
@@ -174,7 +188,7 @@ pub fn run(
                 }
             }
 
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-x86_64", &args, &qemu_args)?;
         }
         "aarch64" => {
@@ -205,7 +219,7 @@ pub fn run(
                     "usb-mouse",
                 ]);
             }
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-aarch64", &args, &qemu_args)?;
         }
         "riscv64" => {
@@ -241,7 +255,7 @@ pub fn run(
                     "usb-mouse",
                 ]);
             }
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-riscv64", &args, &qemu_args)?;
         }
         "loongarch64" => {
@@ -263,7 +277,7 @@ pub fn run(
                     "usb-mouse",
                 ]);
             }
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-loongarch64", &args, &qemu_args)?;
         }
         _ => return Err(anyhow::anyhow!("Unsupported architecture: {arch}")),
@@ -284,14 +298,7 @@ pub fn run_bios(
     let netdev = user_netdev_arg();
 
     let mut final_args = Vec::new();
-    if !interactive {
-        final_args.push("-nographic");
-    } else {
-        final_args.extend(["-serial", "mon:stdio"]);
-        if monitor {
-            final_args.extend(["-monitor", "stdio"]);
-        }
-    }
+    push_stdio_serial_args(&mut final_args, interactive, monitor);
 
     println!("Running in QEMU BIOS mode...");
     let mut args = vec![
@@ -325,7 +332,7 @@ pub fn run_bios(
         args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,usb=off,vmport=off,i8042=on"]);
     }
 
-    args.extend(&final_args);
+    args.extend(final_args.iter().map(String::as_str));
     run_qemu(sh, "qemu-system-x86_64", &args, &qemu_args)?;
     Ok(())
 }
@@ -346,14 +353,7 @@ pub fn run_hdd(
     println!("Running {name} HDD in QEMU...");
 
     let mut final_args = Vec::new();
-    if !interactive {
-        final_args.push("-nographic");
-    } else {
-        final_args.extend(["-serial", "mon:stdio"]);
-        if monitor {
-            final_args.extend(["-monitor", "stdio"]);
-        }
-    }
+    push_stdio_serial_args(&mut final_args, interactive, monitor);
 
     let qemu_args: Vec<&str> = qemu_flags.split_whitespace().collect();
     let netdev = user_netdev_arg();
@@ -400,7 +400,7 @@ pub fn run_hdd(
                 }
             }
 
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-x86_64", &args, &qemu_args)?;
         }
         "aarch64" => {
@@ -430,7 +430,7 @@ pub fn run_hdd(
                     "usb-mouse",
                 ]);
             }
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-aarch64", &args, &qemu_args)?;
         }
         "riscv64" => {
@@ -466,7 +466,7 @@ pub fn run_hdd(
                     "usb-mouse",
                 ]);
             }
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-riscv64", &args, &qemu_args)?;
         }
         "loongarch64" => {
@@ -487,7 +487,7 @@ pub fn run_hdd(
                     "usb-mouse",
                 ]);
             }
-            args.extend(&final_args);
+            args.extend(final_args.iter().map(String::as_str));
             run_qemu(sh, "qemu-system-loongarch64", &args, &qemu_args)?;
         }
         _ => return Err(anyhow::anyhow!("Unsupported architecture: {arch}")),

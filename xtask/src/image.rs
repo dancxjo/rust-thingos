@@ -254,49 +254,36 @@ fn generate_limine_config(
         common_modules.push_str("    module_path: boot():/bin/ash\n");
     }
 
-    // Standard entries
-    conf.push_str("/ThingOS (BootFB Fallback)\n");
-    conf.push_str("    protocol: limine\n");
-    conf.push_str(&format!("    resolution: {res}\n"));
-    conf.push_str("    kernel_path: boot():/boot/kernel\n");
-    conf.push_str("    kernel_cmdline: loglevel=info display=bootfb\n");
-    conf.push_str(&common_modules);
+    struct LimineEntry<'a> {
+        title: &'a str,
+        kernel_cmdline: &'a str,
+    }
 
-    conf.push_str("\n/ThingOS\n");
-    conf.push_str("    protocol: limine\n");
-    conf.push_str(&format!("    resolution: {res}\n"));
-    conf.push_str("    kernel_path: boot():/boot/kernel\n");
-    conf.push_str("    kernel_cmdline: loglevel=info\n");
-    conf.push_str(&common_modules);
+    let entries = [
+        LimineEntry { title: "ThingOS", kernel_cmdline: "loglevel=info" },
+        LimineEntry {
+            title: "ThingOS (BootFB Fallback)",
+            kernel_cmdline: "loglevel=info display=bootfb",
+        },
+        LimineEntry { title: "ThingOS (Debug)", kernel_cmdline: "loglevel=debug" },
+        LimineEntry { title: "ThingOS (Trace)", kernel_cmdline: "loglevel=5" },
+    ];
 
-    conf.push_str("\n/ThingOS (Debug Mode)\n");
-    conf.push_str("    protocol: limine\n");
-    conf.push_str(&format!("    resolution: {res}\n"));
-    conf.push_str("    kernel_path: boot():/boot/kernel\n");
-    conf.push_str("    kernel_cmdline: loglevel=debug\n");
-    conf.push_str(&common_modules);
-    conf.push('\n');
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            conf.push('\n');
+        }
 
-    // Debug entry
-    conf.push_str("/ThingOS (Debug)\n");
-    conf.push_str("    protocol: limine\n");
-    conf.push_str(&format!("    resolution: {res}\n"));
-    conf.push_str("    kernel_path: boot():/boot/kernel\n");
-    conf.push_str("    kernel_cmdline: loglevel=4\n");
-    conf.push_str(&common_modules);
-    conf.push('\n');
-
-    // Trace entry
-    conf.push_str("/ThingOS (Trace)\n");
-    conf.push_str("    protocol: limine\n");
-    conf.push_str(&format!("    resolution: {res}\n"));
-    conf.push_str("    kernel_path: boot():/boot/kernel\n");
-    conf.push_str("    kernel_cmdline: loglevel=5\n");
-    conf.push_str(&common_modules);
+        conf.push_str(&format!("/{}\n", entry.title));
+        conf.push_str("    protocol: limine\n");
+        conf.push_str(&format!("    resolution: {res}\n"));
+        conf.push_str("    kernel_path: boot():/boot/kernel\n");
+        conf.push_str(&format!("    kernel_cmdline: {}\n", entry.kernel_cmdline));
+        conf.push_str(&common_modules);
+    }
 
     conf
 }
-
 
 fn generate_motd() -> String {
     const WIDTH: usize = 60;
@@ -492,7 +479,9 @@ pub fn build_iso_with_config(
     // Stage libstd.so from bootstrap artifacts.
     // Note: rustc-thingos/bootstrap build puts artifacts under build/
     if arch == "x86_64" {
-        let std_src = cwd.join("build/x86_64-unknown-linux-gnu/stage1-std/x86_64-unknown-thingos/release/libstd.so");
+        let std_src = cwd.join(
+            "build/x86_64-unknown-linux-gnu/stage1-std/x86_64-unknown-thingos/release/libstd.so",
+        );
         if std_src.exists() {
             let std_dst = iso_root.join("lib/libstd.so");
             sh.create_dir(std_dst.parent().unwrap())?;
@@ -669,12 +658,7 @@ fn copy_userspace_binary(
     Ok(())
 }
 
-fn build_shared_library(
-    sh: &Shell,
-    package: &str,
-    target: &str,
-    profile: &str,
-) -> Result<()> {
+fn build_shared_library(sh: &Shell, package: &str, target: &str, profile: &str) -> Result<()> {
     build_userspace_app_with_features(sh, package, target, profile, &[])
 }
 
@@ -707,9 +691,9 @@ fn copy_shared_library(
     // Stable deterministic selection when multiple build directories contain
     // the same SONAME (e.g. release root + deps copies).
     candidates.sort();
-    let src = candidates
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("shared library artifact not found for package '{package}'"))?;
+    let src = candidates.first().ok_or_else(|| {
+        anyhow::anyhow!("shared library artifact not found for package '{package}'")
+    })?;
 
     cmd!(sh, "cp {src} {dst}").run()?;
     Ok(())
@@ -730,7 +714,8 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     }
 
     cmd!(sh, "mformat -i {hdd}@@1M").run()?;
-    cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/drivers ::/bin ::/lib").run()?;
+    cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/drivers ::/bin ::/lib")
+        .run()?;
     cmd!(sh, "mcopy -i {hdd}@@1M -s assets ::").run()?;
 
     let mut asset_files = Vec::new();
@@ -791,7 +776,8 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     sh.remove_path("profile")?;
     sh.remove_path("motd")?;
 
-    let limine_conf_content = generate_limine_config(sh, programs, &asset_files, None, false, false);
+    let limine_conf_content =
+        generate_limine_config(sh, programs, &asset_files, None, false, false);
     let limine_cfg = "limine.generated.conf";
     sh.write_file(limine_cfg, limine_conf_content)?;
     cmd!(sh, "mcopy -i {hdd}@@1M {limine_cfg} ::/boot/limine/limine.conf").run()?;
@@ -817,8 +803,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
                 if thingos_rustlib.exists() {
                     cmd!(sh, "mmd -i {hdd}@@1M ::/lib/rustlib").run().ok();
                     let src = THINGOS_RUSTLIB_CACHE_DIR;
-                    cmd!(sh, "bash -c \"mcopy -i {hdd}@@1M -s {src}/* ::/lib/rustlib\"")
-                        .run()?;
+                    cmd!(sh, "bash -c \"mcopy -i {hdd}@@1M -s {src}/* ::/lib/rustlib\"").run()?;
                 }
             }
         }
