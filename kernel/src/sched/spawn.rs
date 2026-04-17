@@ -454,9 +454,9 @@ impl<R: BootRuntime> Scheduler<R> {
         // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
         // handled post-lock by nudge_spawned_task.
 
-        let parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
+        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
         // Link affinity and initial location
-        if let Affinity::Pinned(_cpu) = affinity {}
+        let _ = affinity; // affinity is captured in the task; no additional bookkeeping needed
         // Initial location matches target runq
 
         Some(id)
@@ -752,16 +752,15 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     // scheduler-internal state, insert into REGISTRY as Blocked.  All
     // post-spawn setup (process_info, name, FDs) happens outside the lock to
     // avoid long SCHEDULER hold times under SMP contention.
-    let (id, in_bringup) = {
+    let id = {
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
         let id = sched.spawn_user_task_deferred(entry, aspace, stack_info, regions, priority, affinity)?;
-        let in_bringup = sched.bringup_in_progress;
         super::clear_sched_lock_tracking();
         drop(lock);
-        (id, in_bringup)
+        id
     };
 
     // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
@@ -816,12 +815,9 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
-    // to transition Blocked → Runnable and enqueue the task.
+    // to transition Blocked → Runnable and enqueue the task.  During bringup
+    // the nudge IPI is harmless; wake_task handles it correctly.
     crate::sched::blocking::wake_task::<R>(id);
-    // During bringup the nudge IPI is not needed (secondary CPUs are not yet
-    // running the scheduler loop); outside bringup wake_task already sends the
-    // IPI internally when needed.
-    let _ = in_bringup; // used only for documentation clarity
 
     rt.irq_restore(_irq);
     Some(id)
@@ -1058,7 +1054,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
 
     // Phase 1: minimal SCHEDULER critical section — allocate TID, register
     // scheduler-internal state, insert into REGISTRY as Blocked.
-    let (id, in_bringup) = {
+    let id = {
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
@@ -1073,10 +1069,9 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
                 crate::task::Affinity::Any,
             )
             .ok_or(abi::errors::Errno::EAGAIN)?;
-        let in_bringup = sched.bringup_in_progress;
         super::clear_sched_lock_tracking();
         drop(lock);
-        (id, in_bringup)
+        id
     };
 
     // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
@@ -1245,7 +1240,6 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.
     crate::sched::blocking::wake_task::<R>(id);
-    let _ = in_bringup; // used only for documentation clarity
 
     rt.irq_restore(_irq);
 
