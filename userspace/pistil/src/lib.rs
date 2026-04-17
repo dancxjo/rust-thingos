@@ -20,9 +20,9 @@ pub static THINGOS_SEED: Seed = Seed {
     name_ptr: SEED_NAME.as_ptr(),
     name_len: SEED_NAME.len(),
     interfaces: [
-        SeedInterface::default(),
-        SeedInterface::default(),
-        SeedInterface::default(),
-        SeedInterface::default(),
+        SeedInterface::zero(),
+        SeedInterface::zero(),
+        SeedInterface::zero(),
+        SeedInterface::zero(),
     ],
 };

@@ -72,6 +72,20 @@ pub struct SeedInterface {
     pub entry_symbol_len: usize,
 }
 
+impl SeedInterface {
+    /// Returns a zeroed interface descriptor suitable for static initialization.
+    pub const fn zero() -> Self {
+        Self {
+            interface_id: 0,
+            interface_version: 0,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: core::ptr::null(),
+            entry_symbol_len: 0,
+        }
+    }
+}
+
 /// Immutable descriptor for a compiled Seed binary.
 ///
 /// Every Seed binary must export this as a `#[used] #[unsafe(no_mangle)]`
@@ -154,8 +168,8 @@ mod tests {
                     entry_symbol_ptr: core::ptr::null(),
                     entry_symbol_len: 0,
                 },
-                SeedInterface::default(),
-                SeedInterface::default(),
+                SeedInterface::zero(),
+                SeedInterface::zero(),
             ],
         };
 

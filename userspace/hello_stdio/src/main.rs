@@ -35,9 +35,9 @@ pub static THINGOS_SEED: Seed = Seed {
             entry_symbol_ptr: core::ptr::null(),
             entry_symbol_len: 0,
         },
-        SeedInterface::default(),
-        SeedInterface::default(),
-        SeedInterface::default(),
+        SeedInterface::zero(),
+        SeedInterface::zero(),
+        SeedInterface::zero(),
     ],
 };
 
