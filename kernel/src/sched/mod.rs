@@ -31,18 +31,17 @@ pub use hooks::{
     ProcessSnapshot, add_user_mapping_current, alloc_user_stack_current,
     available_parallelism_current, check_user_mapping_current, current_priority_current,
     current_task_name_current, current_task_resource_id, current_tid_current,
-    current_user_fs_base_current, dump_stats_current,
-    exit_current, get_signal_mask_current, get_thread_pending_current, get_user_mapping_at_current,
-    handle_user_stack_fault_current, interrupt_task_current, kill_by_tid_current,
-    list_processes_current, poll_task_exit_current, process_info_current,
-    process_info_for_pid_current, process_info_for_tid_current, register_task_exit_waiter_current,
-    register_timeout_wake_current, remove_user_mappings_current, set_current_task_name_current,
-    set_current_user_fs_base_current, set_priority_current, set_signal_mask_current,
-    set_thread_pending_current, sleep_ticks_current, spawn_process_current,
-    spawn_process_ex_current, spawn_process_from_path_current, spawn_user_thread_current,
-    take_pending_interrupt_current, task_exec_current, task_status_current, task_wait_current,
-    unregister_task_exit_waiter_current, unregister_timeout_wake_current, waitpid_current,
-    yield_now_current,
+    current_user_fs_base_current, dump_stats_current, exit_current, get_signal_mask_current,
+    get_thread_pending_current, get_user_mapping_at_current, handle_user_stack_fault_current,
+    interrupt_task_current, kill_by_tid_current, list_processes_current, poll_task_exit_current,
+    process_info_current, process_info_for_pid_current, process_info_for_tid_current,
+    register_task_exit_waiter_current, register_timeout_wake_current, remove_user_mappings_current,
+    set_current_task_name_current, set_current_user_fs_base_current, set_priority_current,
+    set_signal_mask_current, set_thread_pending_current, sleep_ticks_current,
+    spawn_process_current, spawn_process_ex_current, spawn_process_from_path_current,
+    spawn_user_thread_current, take_pending_interrupt_current, task_exec_current,
+    task_status_current, task_wait_current, unregister_task_exit_waiter_current,
+    unregister_timeout_wake_current, waitpid_current, yield_now_current,
 };
 pub use sleep::{sleep_ms, sleep_ticks, sleep_until, yield_now};
 pub use spawn::{
@@ -739,7 +738,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             let deferred_ipis = core::mem::take(&mut sched.pending_wake_ipis);
             // Drain IPIs deferred by prepare_schedule misroute handling while
             // the lock is still held, so we can send them after unlock.
-            let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             if let Some(switch) = switch {
                 // Must drop lock before context switch!
@@ -1270,9 +1269,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Collect pending IPIs and send them *after* this function returns (i.e.
         // after the caller drops the SCHEDULER lock) to reduce IPI-while-locked
-        // contention on SMP.  We accumulate at most one IPI per remote CPU; in
-        // practice the number of CPUs is small so a fixed-size stack buffer is used.
-        let mut pending_ipis: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+        // contention on SMP. Bitmap dedup keeps enqueue O(1) per wake.
+        let mut pending_ipi_bitmap = 0u64;
 
         // Collect all (tid, priority, target_cpu) from the hot-field cache first.
         // We then do a single REGISTRY lock acquisition for the batch of REGISTRY
@@ -1389,9 +1387,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         tid,
                         priority
                     );
-                    // De-dup: only queue once per CPU during this pass.
-                    if !pending_ipis.contains(&actual_cpu) {
-                        pending_ipis.push(actual_cpu);
+                    if actual_cpu < types::MAX_CPUS {
+                        pending_ipi_bitmap |= 1u64 << actual_cpu;
                     }
                 } else {
                     PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
@@ -1411,8 +1408,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Lock-owning call sites drain `self.pending_wake_ipis` and send them
         // after dropping the lock, so `send_ipi` is never called while
         // SCHEDULER is held.
-        for cpu in pending_ipis {
-            self.pending_wake_ipis.push(cpu);
+        for cpu in 0..self.state.per_cpu.len().min(types::MAX_CPUS) {
+            if (pending_ipi_bitmap & (1u64 << cpu)) != 0 {
+                self.pending_wake_ipis.push(cpu);
+            }
         }
     }
 
@@ -1556,9 +1555,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
     fn queue_prepare_schedule_ipi_dedup(&mut self, target_cpu: usize) {
         let already_pending = set_global_need_resched(target_cpu);
         if !already_pending {
-            if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
-                self.pending_prepare_schedule_ipis.push(target_cpu);
-            }
+            self.queue_pending_prepare_schedule_ipi(target_cpu);
         } else {
             PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
         }
@@ -2399,7 +2396,7 @@ pub fn exit<R: BootRuntime>(code: i32) {
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         let (switch, waiters) = sched.terminate_current(code);
-        let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+        let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
         (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs)
     };
@@ -3894,7 +3891,7 @@ mod tests {
             "prepare_schedule should return None when only misrouted work exists and no idle task"
         );
         assert_eq!(
-            sched.pending_prepare_schedule_ipis,
+            sched.drain_pending_prepare_schedule_ipis(),
             alloc::vec![1usize],
             "prepare_schedule should defer misroute nudge to pending_prepare_schedule_ipis"
         );
@@ -3907,6 +3904,30 @@ mod tests {
                 .iter()
                 .any(|&tid| tid == 9102),
             "misrouted task should be moved to target CPU runq"
+        );
+    }
+
+    #[test]
+    fn test_pending_prepare_schedule_ipi_bitmap_dedups_targets() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        sched.queue_pending_prepare_schedule_ipi(1);
+        sched.queue_pending_prepare_schedule_ipi(1);
+        sched.queue_pending_prepare_schedule_ipi(2);
+
+        assert_eq!(
+            sched.drain_pending_prepare_schedule_ipis(),
+            alloc::vec![1usize, 2usize],
+            "bitmap-backed pending_prepare_schedule_ipis should dedup repeated CPU targets"
+        );
+        assert!(
+            sched.drain_pending_prepare_schedule_ipis().is_empty(),
+            "drain should clear the bitmap-backed pending queue"
         );
     }
 

@@ -33,7 +33,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
         let sp = sched.schedule_point(ScheduleReason::CooperativeYield);
         let work = sched.has_runnable_work(cpu_idx);
-        let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+        let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
         super::record_sched_lock_hold::<R>(
             &super::PROF_SCHED_LOCK_YIELD_NOW_CALLS,
@@ -131,7 +131,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
         // Do NOT push current task to runq - it's now sleeping
         // Just call prepare_schedule to pick next task
         let switch = sched.prepare_schedule();
-        let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+        let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
 
         // Determine the final REGISTRY state to write after the lock is released.

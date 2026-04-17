@@ -16,6 +16,7 @@ pub const WAKE_SLEEPERS_BUDGET_CARRY_CAP: usize = WAKE_SLEEPERS_BUDGET_PER_TICK 
 
 /// Maximum number of CPUs supported
 pub const MAX_CPUS: usize = 32;
+const _ASSERT_MAX_CPUS_FITS_IN_U64: [(); 1] = [(); (MAX_CPUS <= u64::BITS as usize) as usize];
 
 /// Anti-starvation: ticks to wait before boosting priority by one level
 /// At 100Hz, 500 ticks = ~5 seconds
@@ -114,10 +115,10 @@ pub struct Scheduler<R: BootRuntime> {
     pub(crate) pending_wake_ipis: alloc::vec::Vec<usize>,
     /// Unused wake budget carried forward to future ticks.
     pub(crate) wake_sleepers_budget_carry: usize,
-    /// IPIs deferred by `prepare_schedule` misroute requeue handling.
+    /// Bitmap of CPUs with deferred `prepare_schedule` misroute IPIs.
     /// Populated under the SCHEDULER lock and drained after the lock is
     /// released so remote nudges never run in the scheduler critical section.
-    pub(crate) pending_prepare_schedule_ipis: alloc::vec::Vec<usize>,
+    pub(crate) pending_prepare_schedule_ipis_bitmap: u64,
     /// Misrouted tasks deferred by `prepare_schedule`.
     /// Repaired in bounded batches so the picker path does not janitor the
     /// entire backlog under the global scheduler lock in a single call.
@@ -155,7 +156,7 @@ impl<R: BootRuntime> Scheduler<R> {
             metrics: SchedulerMetrics::new(),
             pending_wake_ipis: alloc::vec::Vec::new(),
             wake_sleepers_budget_carry: 0,
-            pending_prepare_schedule_ipis: alloc::vec::Vec::new(),
+            pending_prepare_schedule_ipis_bitmap: 0,
             pending_misrouted_requeues: alloc::vec::Vec::new(),
             pending_registry_syncs: alloc::vec::Vec::new(),
             _phantom: PhantomData,
@@ -197,5 +198,29 @@ impl<R: BootRuntime> Scheduler<R> {
         } else {
             false
         }
+    }
+
+    #[inline]
+    pub(crate) fn queue_pending_prepare_schedule_ipi(&mut self, target_cpu: usize) {
+        if target_cpu >= MAX_CPUS {
+            return;
+        }
+        self.pending_prepare_schedule_ipis_bitmap |= 1u64 << target_cpu;
+    }
+
+    pub(crate) fn drain_pending_prepare_schedule_ipis(&mut self) -> alloc::vec::Vec<usize> {
+        let bitmap = core::mem::replace(&mut self.pending_prepare_schedule_ipis_bitmap, 0);
+        if bitmap == 0 {
+            return alloc::vec::Vec::new();
+        }
+
+        let cpu_limit = self.state.per_cpu.len().min(MAX_CPUS);
+        let mut deferred = alloc::vec::Vec::with_capacity(bitmap.count_ones() as usize);
+        for cpu in 0..cpu_limit {
+            if (bitmap & (1u64 << cpu)) != 0 {
+                deferred.push(cpu);
+            }
+        }
+        deferred
     }
 }
