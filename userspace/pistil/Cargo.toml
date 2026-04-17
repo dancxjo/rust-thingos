@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "pistil"
-crate-type = ["rlib", "dylib"]
+crate-type = ["rlib"]
 
 [dependencies]
 abi = { path = "../../abi" }

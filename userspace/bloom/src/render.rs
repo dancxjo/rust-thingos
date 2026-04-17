@@ -32,7 +32,7 @@ impl CompositorVisuals {
             pixels.fill(0xFF000000);
         }
 
-        if let Ok(mut wallpaper) = load_bmp(wallpaper_path) {
+        if let Some(mut wallpaper) = load_bmp(wallpaper_path) {
             let src_stride = (wallpaper.stride / 4) as usize;
             let src_w = wallpaper.width as usize;
             let src_h = wallpaper.height as usize;

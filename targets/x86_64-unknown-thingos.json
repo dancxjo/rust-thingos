@@ -12,8 +12,8 @@
         ]
     },
     "panic-strategy": "abort",
-    "position-independent-executables": false,
-    "static-position-independent-executables": false,
+    "position-independent-executables": true,
+    "static-position-independent-executables": true,
     "relocation-model": "pic",
     "dynamic-linking": true,
     "features": "-mmx",

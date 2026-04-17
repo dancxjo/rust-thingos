@@ -179,7 +179,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
 }
 
 pub fn default_shared_libraries() -> Vec<SharedLibraryConfig> {
-    vec![SharedLibraryConfig { package: "pistil", file_name: "libpistil.so" }]
+    vec![SharedLibraryConfig { package: "pistil-shared", file_name: "libpistil.so" }]
 }
 
 fn generate_limine_config(

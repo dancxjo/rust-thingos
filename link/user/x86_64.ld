@@ -12,7 +12,7 @@ PHDRS {
 }
 
 SECTIONS {
-    . = ALIGN(0x1000);
+    . = 0x200000;
 
     .entry : {
         KEEP(*(.text.entry))

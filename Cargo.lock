@@ -570,6 +570,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "petals",
+ "pistil",
  "stem",
 ]
 
@@ -4812,6 +4813,14 @@ name = "pistil"
 version = "0.1.0"
 dependencies = [
  "abi",
+]
+
+[[package]]
+name = "pistil-shared"
+version = "0.1.0"
+dependencies = [
+ "pistil",
+ "stem",
 ]
 
 [[package]]
