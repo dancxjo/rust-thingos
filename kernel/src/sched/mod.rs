@@ -862,6 +862,17 @@ fn try_resched_if_needed<R: BootRuntime>() {
         core::hint::spin_loop();
     }
 
+    if lock.is_none() && attempts >= max_attempts {
+        // Log if we failed to get the lock, especially on an idle CPU.
+        // This indicates another CPU is holding the lock for a long time.
+        crate::kdebug!(
+            "SCHED: try_resched_if_needed failed to acquire lock on CPU {} after {} attempts (is_idle={})",
+            cpu_idx,
+            attempts,
+            rt.is_idle_task_current()
+        );
+    }
+
     if let Some(lock) = lock {
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
@@ -884,7 +895,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             let resched_requested =
                 sched.state.per_cpu.get(cpu_idx).map_or(false, |pc| pc.need_resched)
                     || GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire);
-            let switch = sched.schedule_point(ScheduleReason::PreemptTick);
+            let switch = sched.schedule_point(ScheduleReason::ReschedIfNeeded);
             // Drain IPIs deferred by wake_sleepers while the SCHEDULER lock is
             // still held, so we can send them after releasing the lock.
             let deferred_ipis = core::mem::take(&mut sched.pending_wake_ipis);
@@ -1828,9 +1839,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         // Skip non-runnable tasks.  A Blocked task found in the runq is
                         // likely a stale entry (e.g. from a previous yield or preemption
                         // that occurred just before the task blocked).
+                        if id == 12 {
+                            crate::kdebug!("SCHED: CPU {} skipping Task 12 in priority loop (state={:?})", cpu_idx, sf.state);
+                        }
                         continue;
                     }
                     Some(sf) => {
+                        if id == 12 {
+                            crate::kdebug!("SCHED: CPU {} picked Task 12 in priority loop (state={:?}, affinity={:?})", cpu_idx, sf.state, sf.affinity);
+                        }
                         if let crate::task::Affinity::Pinned(target) = sf.affinity {
                             if target != cpu_idx && target < per_cpu_len {
                                 self.defer_or_repair_misroute(sf.priority as usize, target, id);
@@ -1861,9 +1878,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     match self.state.get_thread(id) {
                         None => continue, // stale runq entry — skip
                         Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
+                            if id == 12 {
+                                crate::kdebug!("SCHED: CPU {} skipping Task 12 in idle loop (state={:?})", cpu_idx, sf.state);
+                            }
                             continue;
                         }
                         Some(sf) => {
+                            if id == 12 {
+                                crate::kdebug!("SCHED: CPU {} picked Task 12 in idle loop (state={:?}, affinity={:?})", cpu_idx, sf.state, sf.affinity);
+                            }
                             if let crate::task::Affinity::Pinned(target) = sf.affinity {
                                 if target != cpu_idx && target < per_cpu_len {
                                     self.defer_or_repair_misroute(sf.priority as usize, target, id);
