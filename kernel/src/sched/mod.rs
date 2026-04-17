@@ -1710,7 +1710,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // schedule_point decrements it without touching REGISTRY. The REGISTRY
         // copy may therefore be stale between context switches; this is
         // intentional and acceptable because no correctness-critical path reads
-        // it from REGISTRY (dump_stats shows it for diagnostics only).
+        // it from REGISTRY (dump_stats shows it for diagnostics only), unlike
+        // lifecycle/placement fields which are now deferred-synced above.
 
         let mut reg = crate::task::registry::get_registry::<R>();
         let (old_task, new_task) = if old_idx < new_idx {

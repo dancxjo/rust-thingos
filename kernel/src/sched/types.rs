@@ -77,7 +77,9 @@ pub struct SwitchParams<Ctx, AS> {
 /// `prepare_schedule` records scheduling-side state transitions in the
 /// scheduler hot cache first, then emits one or more of these updates so the
 /// canonical REGISTRY record can be synchronized after the SCHEDULER lock is
-/// released.
+/// released. Lock-owning scheduler call sites are responsible for draining and
+/// applying these updates once they drop `SCHEDULER` (see
+/// `apply_deferred_registry_syncs` users in `sched`/`task` modules).
 pub(crate) struct DeferredRegistrySync {
     /// Task being synchronized.
     pub tid: TaskId,
