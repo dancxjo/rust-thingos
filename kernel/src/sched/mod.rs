@@ -731,6 +731,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             // Drain IPIs deferred by prepare_schedule misroute handling while
             // the lock is still held, so we can send them after unlock.
             let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
+            let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             if let Some(switch) = switch {
                 // Must drop lock before context switch!
                 drop(lock);
@@ -742,6 +743,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     rt.send_ipi(cpu, 0x30);
                 }
                 send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
+                apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
 
                 rt.tasking().activate_address_space(switch.to_aspace);
 
@@ -803,6 +805,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     rt.send_ipi(cpu, 0x30);
                 }
                 send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
+                apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
             }
         }
     } else {
@@ -875,6 +878,24 @@ pub(crate) fn send_deferred_prepare_schedule_ipis<R: BootRuntime>(
         DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
         DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
         rt.send_ipi(cpu, 0x30);
+    }
+}
+
+pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
+    deferred_updates: alloc::vec::Vec<types::DeferredRegistrySync>,
+) {
+    for update in deferred_updates {
+        if let Some(mut task) = crate::task::registry::get_task_mut::<R>(update.tid) {
+            if let Some(state) = update.new_state {
+                task.state = state;
+            }
+            if let Some(enqueued_at_tick) = update.new_enqueued_at_tick {
+                task.enqueued_at_tick = enqueued_at_tick;
+            }
+            if let Some(last_cpu) = update.new_last_cpu {
+                task.last_cpu = Some(last_cpu);
+            }
+        }
     }
 }
 
@@ -1674,12 +1695,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 );
                 panic!("failed to find current_id {} in get_task_index", current_id)
             });
-            let mut reg = crate::task::registry::get_registry::<R>();
-            reg.threads[idx].state = TaskState::Running;
-            // Keep the scheduler-side cache in sync.  Only `state` is updated
-            // here because `enqueued_at_tick` and `timeslice_remaining` are
-            // unchanged in the same-task (no-switch) case: the current task
-            // simply continues running without re-enqueueing.
+            // Keep scheduler cache fields in sync. No REGISTRY write is needed
+            // in the same-task (no-switch) case: this task remains running and
+            // no lifecycle transition occurred.
             self.state.threads[idx].state = TaskState::Running;
             self.state.threads[idx].run_cpu = Some(cpu_idx);
             return None;
@@ -1711,6 +1729,42 @@ impl<R: BootRuntime> types::Scheduler<R> {
             panic!("failed to find next_id {} in get_task_index", next_id)
         });
 
+        // Drive transition decisions from the scheduler hot-cache and defer
+        // REGISTRY synchronization for these state fields until after the
+        // SCHEDULER lock is released.
+        let old_was_running = self.state.threads[old_idx].state == TaskState::Running;
+        let mut old_registry_sync = types::DeferredRegistrySync {
+            tid: current_id,
+            new_state: None,
+            new_enqueued_at_tick: None,
+            new_last_cpu: Some(cpu_idx),
+        };
+        if old_was_running {
+            self.state.threads[old_idx].state = TaskState::Runnable;
+            self.state.threads[old_idx].enqueued_at_tick = now;
+            old_registry_sync.new_state = Some(TaskState::Runnable);
+            old_registry_sync.new_enqueued_at_tick = Some(now);
+        }
+        self.state.threads[old_idx].last_cpu = Some(cpu_idx);
+        self.pending_registry_syncs.push(old_registry_sync);
+        self.state.threads[new_idx].state = TaskState::Running;
+        self.state.threads[new_idx].last_cpu = Some(cpu_idx);
+        self.state.threads[new_idx].run_cpu = Some(cpu_idx);
+        self.pending_registry_syncs
+            .push(types::DeferredRegistrySync {
+                tid: next_id,
+                new_state: Some(TaskState::Running),
+                new_enqueued_at_tick: None,
+                new_last_cpu: Some(cpu_idx),
+            });
+        // Only timeslice_remaining is intentionally managed exclusively via the
+        // hot-field cache:
+        // schedule_point decrements it without touching REGISTRY. The REGISTRY
+        // copy may therefore be stale between context switches; this is
+        // intentional and acceptable because no correctness-critical path reads
+        // it from REGISTRY (dump_stats shows it for diagnostics only), unlike
+        // lifecycle/placement fields which are now deferred-synced above.
+
         let mut reg = crate::task::registry::get_registry::<R>();
         let (old_task, new_task) = if old_idx < new_idx {
             let (left, right) = reg.threads.split_at_mut(new_idx);
@@ -1719,34 +1773,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
             let (left, right) = reg.threads.split_at_mut(old_idx);
             (&mut right[0], &mut left[new_idx])
         };
-
-        // Drive transition decisions from the scheduler hot-cache instead of
-        // reading lifecycle state back from the large runtime Thread record.
-        if self.state.threads[old_idx].state == TaskState::Running {
-            old_task.state = TaskState::Runnable;
-            old_task.enqueued_at_tick = now;
-        }
-        new_task.state = TaskState::Running;
-        new_task.last_cpu = Some(cpu_idx);
-
-        // Keep the scheduler-side hot-field cache in sync with the registry
-        // state transitions that just happened above.
-        if self.state.threads[old_idx].state == TaskState::Running {
-            self.state.threads[old_idx].state = TaskState::Runnable;
-            // Copy enqueued_at_tick from old_task, which was just set to
-            // TICK_COUNT in the REGISTRY update at line 1335 above, so that
-            // future aging calculations in prepare_schedule use the correct tick.
-            self.state.threads[old_idx].enqueued_at_tick = old_task.enqueued_at_tick;
-        }
-        self.state.threads[old_idx].last_cpu = Some(cpu_idx);
-        self.state.threads[new_idx].state = TaskState::Running;
-        self.state.threads[new_idx].last_cpu = Some(cpu_idx);
-        self.state.threads[new_idx].run_cpu = Some(cpu_idx);
-        // timeslice_remaining is managed exclusively via the hot-field cache:
-        // schedule_point decrements it without touching REGISTRY. The REGISTRY
-        // copy may therefore be stale between context switches; this is
-        // intentional and acceptable because no correctness-critical path reads
-        // it from REGISTRY (dump_stats shows it for diagnostics only).
 
         // Update the lock-free mapping cache for this CPU so check_user_mapping is fast
         crate::sched::vm::CURRENT_MAPPINGS[cpu_idx].store(
@@ -2345,16 +2371,18 @@ pub fn exit<R: BootRuntime>(code: i32) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
-    let (switch, waiters, deferred_prepare_ipis) = {
+    let (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = SCHEDULER.lock();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         let (switch, waiters) = sched.terminate_current(code);
         let deferred_prepare_ipis = core::mem::take(&mut sched.pending_prepare_schedule_ipis);
-        (switch, waiters, deferred_prepare_ipis)
+        let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
+        (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs)
     };
 
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
+    apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     wake_waiters(&waiters);
 
     unsafe {
@@ -3483,6 +3511,19 @@ mod tests {
         // Trigger a timer tick to cause preemption
         let switch = sched.prepare_yield().expect("Should preempt to task2");
         assert_eq!(switch.to_tid, 2002);
+        let t1_before_sync = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
+        assert_eq!(
+            t1_before_sync.enqueued_at_tick, 0,
+            "prepare_yield should defer REGISTRY sync out of prepare_schedule hot path"
+        );
+        assert_eq!(
+            t1_before_sync.state,
+            TaskState::Running,
+            "REGISTRY state should remain unchanged until deferred sync is applied"
+        );
+        apply_deferred_registry_syncs::<MockRuntime>(core::mem::take(
+            &mut sched.pending_registry_syncs,
+        ));
 
         // Verify task1 was placed back in runq and its enqueued_at_tick was updated to TICK_COUNT
         let t1 = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
