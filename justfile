@@ -353,30 +353,27 @@ busybox arch=karch *args:
         TARGET_JSON="targets/${ARCH}-unknown-thingos.json"
     fi
     BUILD_STD_CRATES="core,alloc,panic_abort"
-    CARGO_BUILD_ARGS=(
-        -Z "build-std=${BUILD_STD_CRATES}"
-        -Z build-std-features=compiler-builtins-mem
-        -Z json-target-spec
-        build
-        --manifest-path "$BUSYBOX_DIR/Cargo.toml"
-        --target "$TARGET_JSON"
-        --profile release
-        --no-default-features
-        --features alloc,minimal
-    )
+    EXTRA_CARGO_CONFIG_ARGS=()
     STAGE1_WRAPPER="$(pwd)/target/rustc-thingos/rustc-wrapper"
     if [[ -f "$STAGE1_WRAPPER" && "${SKIP_RUSTC_THINGOS:-}" != "1" ]]; then
         export RUSTC="$STAGE1_WRAPPER"
         export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
         export RUST_TARGET_PATH="$(pwd)/targets"
         BUILD_STD_CRATES="core,alloc,std,panic_abort"
-        CARGO_BUILD_ARGS[1]="build-std=${BUILD_STD_CRATES}"
     fi
     if [[ -d "$(pwd)/vendor/libc" ]]; then
-        CARGO_BUILD_ARGS+=(--config "patch.crates-io.libc.path=\"$(pwd)/vendor/libc\"")
+        LIBC_PATCH_PATH="$(pwd)/vendor/libc"
+        EXTRA_CARGO_CONFIG_ARGS+=(--config "patch.crates-io.libc.path=$LIBC_PATCH_PATH")
     fi
+    # Keep this shell-focused until more applets are validated on ThingOS.
     CARGO_TARGET_DIR="$(pwd)/target/busybox" \
-    cargo "${CARGO_BUILD_ARGS[@]}"
+    cargo \
+        -Z "build-std=${BUILD_STD_CRATES}" \
+        -Z build-std-features=compiler-builtins-mem \
+        -Z json-target-spec \
+        build --manifest-path "$BUSYBOX_DIR/Cargo.toml" --target "$TARGET_JSON" --profile release \
+        --no-default-features --features alloc,minimal \
+        "${EXTRA_CARGO_CONFIG_ARGS[@]}"
     TARGET_NAME="$(basename "$TARGET_JSON" .json)"
     BUSYBOX_BIN="$(pwd)/target/busybox/$TARGET_NAME/release/armybox"
     if [[ ! -f "$BUSYBOX_BIN" ]]; then
