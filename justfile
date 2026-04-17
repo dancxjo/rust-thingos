@@ -358,7 +358,7 @@ busybox arch=karch *args:
     TARGET_NAME="$(basename "$TARGET_JSON" .json)"
     BUSYBOX_BIN="$(pwd)/target/busybox/$TARGET_NAME/release/armybox"
     if [[ ! -f "$BUSYBOX_BIN" ]]; then
-        echo "busybox build output not found at $BUSYBOX_BIN" >&2
+        echo "busybox build failed or output path changed; expected $BUSYBOX_BIN" >&2
         exit 1
     fi
     THINGOS_BUSYBOX_BIN="$BUSYBOX_BIN" THINGOS_DEFAULT_SHELL="/bin/ash" just run "$ARCH" "${ARGS_ARRAY[@]}"

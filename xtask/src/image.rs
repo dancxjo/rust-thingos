@@ -439,9 +439,12 @@ pub fn build_iso_with_config(
     let mut include_busybox = false;
     if let Ok(busybox_bin) = std::env::var("THINGOS_BUSYBOX_BIN") {
         let busybox_path = PathBuf::from(busybox_bin.trim());
-        if !busybox_path.exists() {
+        let meta = std::fs::metadata(&busybox_path).map_err(|_| {
+            anyhow::anyhow!("THINGOS_BUSYBOX_BIN does not exist: {}", busybox_path.display())
+        })?;
+        if !meta.is_file() || meta.len() == 0 {
             return Err(anyhow::anyhow!(
-                "THINGOS_BUSYBOX_BIN does not exist: {}",
+                "THINGOS_BUSYBOX_BIN is not a valid non-empty file: {}",
                 busybox_path.display()
             ));
         }
