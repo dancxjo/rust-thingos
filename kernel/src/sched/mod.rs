@@ -1283,7 +1283,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 break;
             };
             if wake_tick <= now {
-                let (_, mut tids) = self.state.sleep_queue.pop_first().unwrap();
+                let Some((_, mut tids)) = self.state.sleep_queue.pop_first() else {
+                    // Safety: In an SMP environment, even if we just checked first_key_value,
+                    // a concurrent removal (e.g. via task death) could have emptied the slot.
+                    // Skip and continue to maintain system liveness.
+                    break;
+                };
                 let to_take = core::cmp::min(wake_budget, tids.len());
 
                 for tid in tids.drain(..to_take) {
@@ -1581,7 +1586,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 cpu_idx
             );
         }
-        if cpu_idx >= self.state.per_cpu.len() {
+        if cpu_idx >= self.state.per_cpu.len() || cpu_idx >= types::MAX_CPUS {
+            crate::kerror!("Sched: CPU index {} out of bounds (per_cpu={}, MAX={})", cpu_idx, self.state.per_cpu.len(), types::MAX_CPUS);
             return None;
         }
         let per_cpu_len = self.state.per_cpu.len();
