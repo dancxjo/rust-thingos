@@ -427,7 +427,12 @@ impl SchedState {
             return None;
         }
 
-        if pc.runq[prio].remove(idx).is_none() {
+        let removed = pc.runq[prio].remove(idx);
+        debug_assert!(
+            removed.is_some(),
+            "queue entry vanished between bounds-check and indexed dequeue"
+        );
+        if removed.is_none() {
             return None;
         }
         pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);

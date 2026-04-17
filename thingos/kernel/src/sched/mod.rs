@@ -2266,6 +2266,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 self.state.per_cpu[busiest_cpu].runq[p].len().min(STEAL_SCAN_DEPTH_PER_PRIORITY);
             let mut candidate_index = None;
             for idx in 0..scan_limit {
+                // Re-read by index each step; if the queue has changed and this
+                // index no longer exists, stop this priority scan attempt.
                 let Some(tid) = self.state.per_cpu[busiest_cpu].runq[p].get(idx).copied() else {
                     break;
                 };
@@ -2275,6 +2277,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         // we do not steal stale lazy-invalidated entries (see
                         // `SchedState::dequeue_thread_front` comment).
                         let is_stealable = sf.state != TaskState::Dead
+                            // Validate canonical placement before steal.
                             && sf.runq_location == Some((busiest_cpu, p))
                             && matches!(sf.affinity, crate::task::Affinity::Any);
                         is_stealable
