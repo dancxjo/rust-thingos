@@ -363,7 +363,7 @@ busybox arch=karch *args:
     fi
     if [[ -d "$(pwd)/vendor/libc" ]]; then
         LIBC_PATCH_PATH="$(pwd)/vendor/libc"
-        EXTRA_CARGO_CONFIG_ARGS+=(--config "patch.crates-io.libc.path=$LIBC_PATCH_PATH")
+        EXTRA_CARGO_CONFIG_ARGS+=(--config "patch.crates-io.libc.path=\"$LIBC_PATCH_PATH\"")
     fi
     # Keep this shell-focused until more applets are validated on ThingOS.
     CARGO_TARGET_DIR="$(pwd)/target/busybox" \

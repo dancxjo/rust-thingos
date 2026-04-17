@@ -148,9 +148,7 @@ impl ProcessAddressSpace {
     }
 
     /// Borrow the shared mappings list for lock-based access.
-    pub fn mappings(
-        &self,
-    ) -> &alloc::sync::Arc<spin::Mutex<crate::memory::mappings::MappingList>> {
+    pub fn mappings(&self) -> &alloc::sync::Arc<spin::Mutex<crate::memory::mappings::MappingList>> {
         &self.space_obj.mappings
     }
 
@@ -292,7 +290,6 @@ pub struct ProcessUnixCompat {
     ///
     /// FUTURE: → Place / Authority context propagation
     pub env: BTreeMap<Vec<u8>, Vec<u8>>,
-
     // `argv` and `auxv` are intentionally no longer stored as standalone
     // mutable blobs; they are represented by `spawn_record`.
 }
@@ -558,11 +555,7 @@ pub struct ProcessAuthority {
 impl ProcessAuthority {
     /// Privileged bootstrap/default authority.
     pub const fn root() -> Self {
-        Self {
-            uid: 0,
-            gid: 0,
-            capability_mask: u64::MAX,
-        }
+        Self { uid: 0, gid: 0, capability_mask: u64::MAX }
     }
 
     /// Inherit principal and capability bits from parent.
@@ -583,7 +576,10 @@ impl Process {
     }
 
     /// Explicit identity layering for one runtime task belonging to this process.
-    pub fn identity_layers_for_tid(&self, tid: TaskId) -> crate::task::identity::TaskIdentityLayers {
+    pub fn identity_layers_for_tid(
+        &self,
+        tid: TaskId,
+    ) -> crate::task::identity::TaskIdentityLayers {
         crate::task::identity::TaskIdentityLayers::for_process_task(
             tid,
             crate::task::identity::CompatibilityIds {
@@ -620,11 +616,7 @@ impl Process {
         &self,
         tid_state: &alloc::collections::BTreeMap<TaskId, TaskState>,
     ) -> Vec<TaskState> {
-        self.job
-            .thread_ids
-            .iter()
-            .filter_map(|&tid| tid_state.get(&tid).copied())
-            .collect()
+        self.job.thread_ids.iter().filter_map(|&tid| tid_state.get(&tid).copied()).collect()
     }
 
     /// Effective exit code for one runtime thread in this job.
@@ -714,7 +706,6 @@ impl Process {
             space_sharing_count: space.sharing_count,
         }
     }
-
 }
 
 /// Kernel representation of a single thread of execution.
@@ -854,18 +845,18 @@ pub fn preempt_enable<R: BootRuntime>() {
     let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
         crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
-        if let Some(ptr) = *lock {
+        let result = if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.preempt_enable();
-            let deferred_prepare_ipis =
-                sched.drain_pending_prepare_schedule_ipis();
+            let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             (switch, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
-        }
+        };
         crate::sched::clear_sched_lock_tracking::<R>();
         drop(lock);
+        result
     };
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
@@ -904,18 +895,18 @@ pub fn resched_if_needed<R: BootRuntime>() {
     let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
         let lock = crate::sched::SCHEDULER.lock();
         crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
-        if let Some(ptr) = *lock {
+        let result = if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let switch = sched.schedule_point(crate::sched::ScheduleReason::ReschedIfNeeded);
-            let deferred_prepare_ipis =
-                sched.drain_pending_prepare_schedule_ipis();
+            let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             (switch, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
             (None, alloc::vec::Vec::new(), alloc::vec::Vec::new())
-        }
+        };
         crate::sched::clear_sched_lock_tracking::<R>();
         drop(lock);
+        result
     };
     crate::sched::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     crate::sched::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
