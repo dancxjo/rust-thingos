@@ -19,6 +19,7 @@ const ALLOWED_STD_CRATES: &[&str] = &[
 
 const REQUIRED_NOSTD_CRATES: &[&str] =
     &["kernel", "stem", "stem-macros", "abi", "abi-macros", "bran"];
+const ROOT_USERSPACE_CRATES: &[&str] = &["bloom", "bristle", "pistil", "pistil-shared", "sprout"];
 
 pub fn audit() -> Result<()> {
     println!("Platform Boundary Audit");
@@ -49,7 +50,8 @@ pub fn audit() -> Result<()> {
         let manifest_path = package.manifest_path.as_std_path();
         let is_userspace = manifest_path
             .components()
-            .any(|component| component.as_os_str() == "userspace");
+            .any(|component| component.as_os_str() == "utils")
+            || ROOT_USERSPACE_CRATES.contains(&name);
         let is_kernel_or_core = required_nostd.contains(name);
 
         if is_userspace || is_kernel_or_core {

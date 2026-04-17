@@ -14,5 +14,5 @@ path = "src/lib.rs"
 diagnostic-apps = []
 
 [dependencies]
-stem = { path = "../../stem", features = ["rt"] }
-abi = { path = "../../abi" }
+stem = { path = "../stem", features = ["rt"] }
+abi = { path = "../abi" }
