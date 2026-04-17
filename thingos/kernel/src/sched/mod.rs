@@ -200,7 +200,8 @@ const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
 // a small pinned/unstealable head segment.
 const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
 const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
-const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 16;
+const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 64;
+const RESCHED_IPI_MIN_TICK_DELTA: u64 = 2;
 
 /// Map a microsecond duration to a histogram bucket index.
 ///
@@ -1176,7 +1177,9 @@ pub(crate) fn should_send_remote_resched_ipi(target_cpu: usize) -> bool {
     }
     let now_tick = TICK_COUNT.load(Ordering::Relaxed);
     let last_tick = LAST_RESCHED_IPI_SENT_AT_TICK[target_cpu].load(Ordering::Relaxed);
-    if last_tick == now_tick {
+    if last_tick != u64::MAX
+        && now_tick.saturating_sub(last_tick) < RESCHED_IPI_MIN_TICK_DELTA
+    {
         PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
         return false;
     }
@@ -4747,6 +4750,25 @@ mod tests {
         assert_eq!(DIAG_IPI_SENT.load(Ordering::Relaxed), 1);
         assert_eq!(DIAG_IPI_SENT_PREPARE_SCHEDULE.load(Ordering::Relaxed), 1);
         assert_eq!(PROF_IPI_SUPPRESSED.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_should_send_remote_resched_ipi_suppresses_adjacent_tick_ping_pong() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        PROF_IPI_SUPPRESSED.store(0, Ordering::Relaxed);
+        LAST_RESCHED_IPI_SENT_AT_TICK[1].store(u64::MAX, Ordering::Relaxed);
+
+        TICK_COUNT.store(100, Ordering::Relaxed);
+        assert!(should_send_remote_resched_ipi(1));
+
+        TICK_COUNT.store(101, Ordering::Relaxed);
+        assert!(!should_send_remote_resched_ipi(1));
+        assert_eq!(PROF_IPI_SUPPRESSED.load(Ordering::Relaxed), 1);
+
+        TICK_COUNT.store(102, Ordering::Relaxed);
+        assert!(should_send_remote_resched_ipi(1));
     }
 
     #[test]
