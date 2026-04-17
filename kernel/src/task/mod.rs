@@ -836,11 +836,13 @@ pub fn preempt_disable<R: BootRuntime>() {
     let irq = rt.irq_disable();
     {
         let lock = crate::sched::SCHEDULER.lock();
+        crate::sched::set_sched_lock_tracking::<R>(rt.current_cpu_index());
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             sched.preempt_disable();
         }
     }
+    crate::sched::clear_sched_lock_tracking();
     rt.irq_restore(irq);
 }
 
@@ -944,6 +946,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
     crate::kinfo!("SMP: bootstrap_cpu start on CPU {}", cpu_idx);
 
     let lock = crate::sched::SCHEDULER.lock();
+    crate::sched::set_sched_lock_tracking::<R>(cpu_idx);
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
 
@@ -976,7 +979,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
             }
         }
     }
-
+    crate::sched::clear_sched_lock_tracking();
     rt.irq_restore(_irq);
 }
 

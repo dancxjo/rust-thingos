@@ -22,7 +22,7 @@ mod vm;
 pub(crate) mod wait_queue;
 
 // Re-export all public items
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 pub use blocking::{
     block_current, block_current_erased, init_blocking_hooks, wake_task, wake_task_erased,
@@ -60,6 +60,21 @@ use crate::{BootRuntime, BootTasking};
 static SWITCH_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub static SCHEDULER: Mutex<Option<usize>> = Mutex::new(None);
+pub static SCHEDULER_LOCK_OWNER: AtomicIsize = AtomicIsize::new(-1);
+pub static SCHEDULER_LOCK_ACQUIRED_AT: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub fn set_sched_lock_tracking<R: BootRuntime>(cpu_idx: usize) {
+    SCHEDULER_LOCK_OWNER.store(cpu_idx as isize, Ordering::Release);
+    SCHEDULER_LOCK_ACQUIRED_AT.store(crate::runtime::<R>().mono_ticks(), Ordering::Release);
+}
+
+#[inline]
+pub fn clear_sched_lock_tracking() {
+    SCHEDULER_LOCK_OWNER.store(-1, Ordering::Release);
+    SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Release);
+}
+
 
 /// Global tick counter for debugging scheduler health
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -851,7 +866,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
     // being starved by high-frequency mainline lock acquisitions on other CPUs.
     let mut lock = None;
     let mut attempts = 0;
-    let max_attempts = if rt.is_idle_task_current() { 1024 } else { 1 };
+    let max_attempts = if rt.is_idle_task_current() { 128 } else { 1 };
 
     while attempts < max_attempts {
         if let Some(l) = SCHEDULER.try_lock() {
@@ -863,17 +878,23 @@ fn try_resched_if_needed<R: BootRuntime>() {
     }
 
     if lock.is_none() && attempts >= max_attempts {
-        // Log if we failed to get the lock, especially on an idle CPU.
-        // This indicates another CPU is holding the lock for a long time.
+        let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
+        let acquired_at = SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire);
+        let now = rt.mono_ticks();
+        let held_duration = if acquired_at > 0 { now.saturating_sub(acquired_at) } else { 0 };
+
         crate::kdebug!(
-            "SCHED: try_resched_if_needed failed to acquire lock on CPU {} after {} attempts (is_idle={})",
+            "SCHED: try_resched_if_needed failed to acquire lock on CPU {} after {} attempts (is_idle={}) - current owner: CPU {}, held for {} ticks",
             cpu_idx,
             attempts,
-            rt.is_idle_task_current()
+            rt.is_idle_task_current(),
+            owner,
+            held_duration
         );
     }
 
-    if let Some(lock) = lock {
+    if let Some(mut lock) = lock {
+        set_sched_lock_tracking::<R>(cpu_idx);
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
             let current = sched.state.per_cpu.get(cpu_idx).and_then(|pc| pc.current);
@@ -905,6 +926,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             if let Some(switch) = switch {
                 // Must drop lock before context switch!
+                clear_sched_lock_tracking();
                 drop(lock);
 
                 // Send deferred wake-sleeper IPIs now that the lock is released.
@@ -968,6 +990,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     }
                 }
                 // Release the lock before sending any deferred IPIs.
+                clear_sched_lock_tracking();
                 drop(lock);
                 // Send deferred wake-sleeper IPIs after the SCHEDULER lock is released.
                 for cpu in deferred_ipis {
@@ -978,6 +1001,9 @@ fn try_resched_if_needed<R: BootRuntime>() {
                 send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
                 apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
             }
+        } else {
+            clear_sched_lock_tracking();
+            drop(lock);
         }
     } else {
         PROF_RESCHED_TRYLOCK_MISS.fetch_add(1, Ordering::Relaxed);
@@ -1690,12 +1716,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // Increment the per-task voluntary-yield counter in the hot-field cache.
             if let Some(t) = self.state.get_thread_mut(current_id) {
                 t.voluntary_yields = t.voluntary_yields.saturating_add(1);
-                if current_id == 6 {
-                    crate::kdebug!(
-                        "SCHED[TID6]: yielded (voluntary_yields={})",
-                        t.voluntary_yields
-                    );
-                }
             }
         }
 
@@ -1836,17 +1856,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 match self.state.get_thread(id) {
                     None => continue, // stale runq entry — skip
                     Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
-                        // Skip non-runnable tasks.  A Blocked task found in the runq is
-                        // likely a stale entry (e.g. from a previous yield or preemption
-                        // that occurred just before the task blocked).
-                        if id == 12 {
-                            crate::kdebug!("SCHED: CPU {} skipping Task 12 in priority loop (state={:?})", cpu_idx, sf.state);
-                        }
+                        // Skip non-runnable tasks.
                         continue;
                     }
                     Some(sf) => {
-                        if id == 12 {
-                            crate::kdebug!("SCHED: CPU {} picked Task 12 in priority loop (state={:?}, affinity={:?})", cpu_idx, sf.state, sf.affinity);
+                        if id == 16 {
+                            crate::kdebug!("SCHED[CHIME]: picked on CPU {} (state={:?}, affinity={:?})", cpu_idx, sf.state, sf.affinity);
                         }
                         if let crate::task::Affinity::Pinned(target) = sf.affinity {
                             if target != cpu_idx && target < per_cpu_len {
@@ -1878,14 +1893,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     match self.state.get_thread(id) {
                         None => continue, // stale runq entry — skip
                         Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
-                            if id == 12 {
-                                crate::kdebug!("SCHED: CPU {} skipping Task 12 in idle loop (state={:?})", cpu_idx, sf.state);
-                            }
                             continue;
                         }
                         Some(sf) => {
-                            if id == 12 {
-                                crate::kdebug!("SCHED: CPU {} picked Task 12 in idle loop (state={:?}, affinity={:?})", cpu_idx, sf.state, sf.affinity);
+                            if id == 16 {
+                                crate::kdebug!("SCHED[CHIME]: picked (idle-q) on CPU {} (state={:?}, affinity={:?})", cpu_idx, sf.state, sf.affinity);
                             }
                             if let crate::task::Affinity::Pinned(target) = sf.affinity {
                                 if target != cpu_idx && target < per_cpu_len {
@@ -2065,9 +2077,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
             stats.wake_to_run_ticks_total = stats.wake_to_run_ticks_total.saturating_add(wake_to_run_us);
             stats.wake_to_run_ticks_max = stats.wake_to_run_ticks_max.max(wake_to_run_us);
             stats.wake_to_run_hist[bucket] = stats.wake_to_run_hist[bucket].saturating_add(1);
-        }
-        if next_id == 6 {
-            crate::kdebug!("SCHED[TID6]: → Running (cpu={})", cpu_idx);
         }
         self.pending_registry_syncs
             .push(types::DeferredRegistrySync {

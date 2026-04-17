@@ -44,6 +44,7 @@ pub fn block_current<R: BootRuntime>() {
     let (switch_params, deferred_prepare_ipis, deferred_registry_syncs) = {
         let wait_start = rt.mono_ticks();
         let lock = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(rt.current_cpu_index());
         super::record_sched_lock_wait::<R>(
             &super::PROF_SCHED_WAIT_BLOCK_CURRENT_CALLS,
             &super::PROF_SCHED_WAIT_BLOCK_CURRENT_US_TOTAL,
@@ -113,6 +114,7 @@ pub fn block_current<R: BootRuntime>() {
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                 lock_start,
             );
+            super::clear_sched_lock_tracking();
             (switch, deferred_prepare_ipis, deferred_registry_syncs)
         }
     };
@@ -183,9 +185,6 @@ pub fn wake_task_locked<R: BootRuntime>(
                     super::select_any_affinity_wake_cpu::<R>(sched, preferred)
                 }
             };
-            if id == 6 {
-                crate::kdebug!("SCHED[TID6]: woken → Runnable (target_cpu={})", target_cpu);
-            }
             wake_info = Some((target_cpu, task_priority));
         }
     }
@@ -314,6 +313,7 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     // SCHEDULER during IPI delivery and to eliminate the nested REGISTRY lock.
     let (ipi_cpu, deferred) = {
         let lock_sched = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(rt.current_cpu_index());
         super::record_sched_lock_wait::<R>(
             &super::PROF_SCHED_WAIT_WAKE_TASK_CALLS,
             &super::PROF_SCHED_WAIT_WAKE_TASK_US_TOTAL,
@@ -337,6 +337,7 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
             &super::PROF_SCHED_LOCK_WAKE_TASK_HOLD_HIST,
             lock_start,
         );
+        super::clear_sched_lock_tracking();
 
         result
     };

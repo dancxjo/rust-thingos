@@ -473,6 +473,7 @@ pub fn spawn<R: BootRuntime>(
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
     let lock = SCHEDULER.lock();
+    super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
     let id = sched.spawn(entry, arg, priority, affinity);
@@ -521,6 +522,7 @@ pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
     let lock = SCHEDULER.lock();
+    super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
     let id = sched.spawn_user_thread(
@@ -553,6 +555,7 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
     let lock = SCHEDULER.lock();
+    super::set_sched_lock_tracking::<R>(current_cpu);
     let ptr = lock.expect("Scheduler not initialized");
     let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
     let id = sched.spawn_user_task(
