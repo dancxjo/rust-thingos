@@ -131,6 +131,7 @@ pub static PROF_RUNQ_SAMPLE_TOTAL: [AtomicU64; types::MAX_CPUS] = {
 pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
+const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
 
 /// Map a microsecond duration to a histogram bucket index.
 ///
@@ -1428,14 +1429,36 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 break;
             };
             self.state.enqueue_task(target_cpu, prio, id);
-            let already_pending = set_global_need_resched(target_cpu);
-            if !already_pending {
-                if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
-                    self.pending_prepare_schedule_ipis.push(target_cpu);
-                }
-            } else {
-                PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+            self.queue_prepare_schedule_ipi_dedup(target_cpu);
+        }
+    }
+
+    /// Queue a misrouted task for bounded repair when backlog allows.
+    ///
+    /// If the deferred backlog cap is reached, fall back to synchronous repair
+    /// of this one task so tasks are never dropped and the deferred queue
+    /// remains memory-bounded.
+    #[inline]
+    fn defer_or_repair_misroute(&mut self, prio: usize, target_cpu: usize, id: TaskId) {
+        if self.pending_misrouted_requeues.len() < PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP {
+            self.pending_misrouted_requeues.push((prio, target_cpu, id));
+            return;
+        }
+        // Backlog safety valve: avoid unbounded memory growth if misroute intake
+        // outpaces the bounded per-call repair budget.
+        self.state.enqueue_task(target_cpu, prio, id);
+        self.queue_prepare_schedule_ipi_dedup(target_cpu);
+    }
+
+    #[inline]
+    fn queue_prepare_schedule_ipi_dedup(&mut self, target_cpu: usize) {
+        let already_pending = set_global_need_resched(target_cpu);
+        if !already_pending {
+            if !self.pending_prepare_schedule_ipis.contains(&target_cpu) {
+                self.pending_prepare_schedule_ipis.push(target_cpu);
             }
+        } else {
+            PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1516,8 +1539,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     Some(sf) => {
                         if let crate::task::Affinity::Pinned(target) = sf.affinity {
                             if target != cpu_idx && target < per_cpu_len {
-                                self.pending_misrouted_requeues
-                                    .push((sf.priority as usize, target, id));
+                                self.defer_or_repair_misroute(sf.priority as usize, target, id);
                                 continue;
                             }
                         }
@@ -1548,11 +1570,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         Some(sf) => {
                             if let crate::task::Affinity::Pinned(target) = sf.affinity {
                                 if target != cpu_idx && target < per_cpu_len {
-                                    self.pending_misrouted_requeues.push((
-                                        sf.priority as usize,
-                                        target,
-                                        id,
-                                    ));
+                                    self.defer_or_repair_misroute(sf.priority as usize, target, id);
                                     continue;
                                 }
                             }
@@ -3766,6 +3784,15 @@ mod tests {
             sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len()
                 <= PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET,
             "prepare_schedule should only repair up to PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET misroutes per call"
+        );
+
+        // Repeated calls should drain deferred work.
+        for _ in 0..4 {
+            let _ = sched.prepare_schedule();
+        }
+        assert!(
+            sched.pending_misrouted_requeues.is_empty(),
+            "deferred misroute backlog should drain across subsequent prepare_schedule calls"
         );
     }
 
