@@ -73,6 +73,17 @@ pub struct SwitchParams<Ctx, AS> {
     pub to_user_fs_base: u64,
 }
 
+/// Scheduler pick/commit decision produced under the SCHEDULER lock.
+///
+/// The expensive context materialization (`REGISTRY` lookup, SIMD save/restore,
+/// mapping-cache update) is performed later, after dropping SCHEDULER.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwitchDecision {
+    pub cpu_idx: usize,
+    pub from_tid: TaskId,
+    pub to_tid: TaskId,
+}
+
 /// Deferred REGISTRY synchronization for one task.
 ///
 /// `prepare_schedule` records scheduling-side state transitions in the
