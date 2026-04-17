@@ -7,7 +7,7 @@
 //!
 //! Increment from the relevant hot path:
 //! ```ignore
-//! crate::ipc::diag::CHANNEL_SENDS.fetch_add(1, Ordering::Relaxed);
+//! crate::ipc::diag::PORT_SENDS.fetch_add(1, Ordering::Relaxed);
 //! ```
 //!
 //! Read for display:
@@ -19,22 +19,22 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 // ── Port counters ─────────────────────────────────────────────────────────────
 
-/// Total `channel_send` calls that wrote ≥1 byte.
-pub static CHANNEL_SENDS: AtomicU64 = AtomicU64::new(0);
-/// Total `channel_recv` calls that read ≥1 byte.
-pub static CHANNEL_RECVS: AtomicU64 = AtomicU64::new(0);
-/// Cumulative bytes written via `channel_send`.
-pub static CHANNEL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
-/// Cumulative bytes read via `channel_recv`.
-pub static CHANNEL_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
+/// Total `sys_port_send` calls that wrote ≥1 byte.
+pub static PORT_SENDS: AtomicU64 = AtomicU64::new(0);
+/// Total `sys_port_recv` calls that read ≥1 byte.
+pub static PORT_RECVS: AtomicU64 = AtomicU64::new(0);
+/// Cumulative bytes written via port send.
+pub static PORT_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
+/// Cumulative bytes read via port receive.
+pub static PORT_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
 /// Total capability handles enqueued via `sendmsg`.
-pub static CHANNEL_HANDLES_SENT: AtomicU64 = AtomicU64::new(0);
+pub static PORT_HANDLES_SENT: AtomicU64 = AtomicU64::new(0);
 /// Total capability handles dequeued via `recvmsg`.
-pub static CHANNEL_HANDLES_RECV: AtomicU64 = AtomicU64::new(0);
-/// Times `channel_send_all` returned `EAGAIN` because the ring was full.
-pub static CHANNEL_FULL_EVENTS: AtomicU64 = AtomicU64::new(0);
+pub static PORT_HANDLES_RECV: AtomicU64 = AtomicU64::new(0);
+/// Times a send returned `EAGAIN` because the ring was full.
+pub static PORT_FULL_EVENTS: AtomicU64 = AtomicU64::new(0);
 /// Times a peer closure was observed (writer or reader).
-pub static CHANNEL_PEER_DEATHS: AtomicU64 = AtomicU64::new(0);
+pub static PORT_PEER_DEATHS: AtomicU64 = AtomicU64::new(0);
 
 // ── Pipe counters ─────────────────────────────────────────────────────────────
 
@@ -80,14 +80,14 @@ pub fn ports_text() -> alloc::string::String {
          handles_recv:  {}\n\
          full_events:   {}\n\
          peer_deaths:   {}\n",
-        CHANNEL_SENDS.load(Ordering::Relaxed),
-        CHANNEL_RECVS.load(Ordering::Relaxed),
-        CHANNEL_BYTES_SENT.load(Ordering::Relaxed),
-        CHANNEL_BYTES_RECV.load(Ordering::Relaxed),
-        CHANNEL_HANDLES_SENT.load(Ordering::Relaxed),
-        CHANNEL_HANDLES_RECV.load(Ordering::Relaxed),
-        CHANNEL_FULL_EVENTS.load(Ordering::Relaxed),
-        CHANNEL_PEER_DEATHS.load(Ordering::Relaxed),
+        PORT_SENDS.load(Ordering::Relaxed),
+        PORT_RECVS.load(Ordering::Relaxed),
+        PORT_BYTES_SENT.load(Ordering::Relaxed),
+        PORT_BYTES_RECV.load(Ordering::Relaxed),
+        PORT_HANDLES_SENT.load(Ordering::Relaxed),
+        PORT_HANDLES_RECV.load(Ordering::Relaxed),
+        PORT_FULL_EVENTS.load(Ordering::Relaxed),
+        PORT_PEER_DEATHS.load(Ordering::Relaxed),
     )
 }
 
