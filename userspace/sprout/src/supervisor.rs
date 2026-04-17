@@ -136,7 +136,7 @@ impl Supervisor {
         let display_handles = setup_display_pipeline(
             self.tasks.clone(),
             supervisor_write,
-            0,
+            0xB001,
             self.config.force_bootfb
         );
 
@@ -263,6 +263,9 @@ impl Supervisor {
                             task.name, child_pid, exit_code
                         );
                         task.pid = None;
+                        if let Some(fd) = task.resp_fd.take() {
+                            let _ = stem::syscall::vfs::vfs_close(fd);
+                        }
                         task.restarts += 1;
                     } else {
                         info!(
@@ -577,10 +580,6 @@ impl Supervisor {
                     );
                 }
             }
-
-            // ALWAYS close the provider handle in Sprout's own table after use.
-            // The kernel keeps the provider Arc alive in the mount table.
-            let _ = vfs_close(provider_port);
         } else {
             warn!("SPROUT: Received malformed BIND_READY from {} — rejecting", task_name);
             send_failed(
