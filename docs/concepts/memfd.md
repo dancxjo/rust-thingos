@@ -182,6 +182,6 @@ with `width`, `height`, `stride`, `format`, and `modifier` fields.
 |---|---|
 | `display_bootfb` | Bootstrap memfd passed as argv thing to deliver channel things |
 | `display_virtio_gpu` | Frame-pool memfd created at startup; textures uploaded via per-frame memfds |
-| `petals` | `Texture` type wraps a memfd + `vm_map` pointer for CPU-side pixel writes |
+| `pistil` | `Texture` type wraps a memfd + `vm_map` pointer for CPU-side pixel writes |
 | `sprout` | Bootstrap memfd used to deliver driver channel things at spawn time |
 | `blossom` SVG | `SvgSource::MemFd(thing)` transfers SVG bytes without copying into the IPC ring |

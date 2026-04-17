@@ -570,7 +570,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "libdl",
- "petals",
+ "pistil",
  "stem",
 ]
 
@@ -4714,18 +4714,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "petals"
-version = "0.1.0"
-dependencies = [
- "abi",
- "bitflags 2.11.1",
- "fontdue",
- "libm",
- "serde",
- "stem",
-]
-
-[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4820,7 +4808,10 @@ name = "pistil"
 version = "0.1.0"
 dependencies = [
  "abi",
- "petals",
+ "bitflags 2.11.1",
+ "fontdue",
+ "libm",
+ "serde",
  "stem",
 ]
 

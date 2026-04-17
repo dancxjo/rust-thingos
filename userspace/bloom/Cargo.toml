@@ -7,7 +7,7 @@ edition = "2021"
 stem = { path = "../../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../../abi" }
 libdl = { path = "../libdl" }
-petals = { path = "../petals" }
+pistil = { path = "../pistil" }
 
 [profile.release]
 panic = "abort"

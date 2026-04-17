@@ -172,7 +172,7 @@ pub extern "C" fn pistil_prepare_background(
         return -2;
     };
 
-    let Some(mut wallpaper) = petals::bmp::load_bmp(path_str) else {
+    let Some(mut wallpaper) = crate::bmp::load_bmp(path_str) else {
         return -3;
     };
 
