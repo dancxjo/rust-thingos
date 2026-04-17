@@ -678,6 +678,12 @@ pub fn sys_fs_mount(
 
     let req_port_id = crate::ipc::find_port_id(&req_port).ok_or(Errno::EBADF)?;
 
+    // The kernel mount takes a writer reference on the provider port.  This keeps
+    // `channel_recv` in the provider's service loop from returning EPIPE while the
+    // mount is live.  The reference is released in `ProviderFs::drop` when the
+    // mount is torn down via `sys_fs_umount`.
+    req_port.open_writer();
+
     // Build and mount the provider filesystem.
     let provider_fs =
         vfs::provider::ProviderFs::new(req_port, resp_port, resp_write_handle.0, req_port_id.0);

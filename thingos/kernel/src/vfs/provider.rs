@@ -177,6 +177,19 @@ impl VfsDriver for ProviderFs {
     }
 }
 
+impl Drop for ProviderFs {
+    fn drop(&mut self) {
+        // Release the kernel's write reference on the provider request port.
+        //
+        // `sys_fs_mount` called `open_writer()` when the mount was established.
+        // Releasing it here (when the `Arc<ProviderFs>` stored in the mount table
+        // is dropped on `umount`) causes `channel_recv` in the provider's service
+        // loop to return `EPIPE`, which is the clean shutdown signal for the
+        // provider process.
+        self.channel.lock().req.close_writer();
+    }
+}
+
 fn parse_response_handle(resp: &[u8]) -> SysResult<u64> {
     if resp.is_empty() {
         return Err(Errno::EIO);

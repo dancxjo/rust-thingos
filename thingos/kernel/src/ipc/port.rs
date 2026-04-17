@@ -342,6 +342,16 @@ impl Port {
         destroy
     }
 
+    /// Increment the writer reference count.
+    ///
+    /// Call this when the kernel takes a long-lived write reference to the port
+    /// (e.g. when `sys_fs_mount` registers the port with a `ProviderFs`).  The
+    /// matching [`close_writer`](Self::close_writer) call must happen when that
+    /// reference is released (e.g. in `ProviderFs::drop`).
+    pub fn open_writer(&self) {
+        self.endpoints.lock().writers += 1;
+    }
+
     pub fn close_writer(&self) -> bool {
         let mut endpoints = self.endpoints.lock();
         if endpoints.writers == 0 {
