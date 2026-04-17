@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+default = ["smp"]
 boot-terminal = []  # Full scrolling terminal console
 diagnostic-apps = ["kernel/diagnostic-apps"]
 sched-telemetry = ["kernel/sched_telemetry"]
