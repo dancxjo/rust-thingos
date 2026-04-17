@@ -35,6 +35,60 @@ pub enum ThreadState {
 /// Backward-compatible alias — prefer `ThreadState` in new code.
 pub type TaskState = ThreadState;
 
+pub const WAKE_LATENCY_HIST_BUCKETS: usize = 5;
+pub const IDLE_EPISODE_HIST_BUCKETS: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnqueueCause {
+    Unknown,
+    Spawn,
+    Wake,
+    Steal,
+    AffinityRepair,
+    YieldRequeue,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TaskRuntimeStats {
+    pub run_count: u64,
+    pub migration_count: u64,
+    pub migration_wake: u64,
+    pub migration_steal: u64,
+    pub migration_affinity: u64,
+    pub migration_yield_requeue: u64,
+    pub migration_other: u64,
+    pub runs_since_last_migration: u64,
+    pub runs_between_migrations_total: u64,
+    pub min_runs_between_migrations: u64,
+    pub max_runs_between_migrations: u64,
+    pub wake_to_run_count: u64,
+    pub wake_to_run_ticks_total: u64,
+    pub wake_to_run_ticks_max: u64,
+    pub wake_to_run_hist: [u64; WAKE_LATENCY_HIST_BUCKETS],
+}
+
+impl Default for TaskRuntimeStats {
+    fn default() -> Self {
+        TaskRuntimeStats {
+            run_count: 0,
+            migration_count: 0,
+            migration_wake: 0,
+            migration_steal: 0,
+            migration_affinity: 0,
+            migration_yield_requeue: 0,
+            migration_other: 0,
+            runs_since_last_migration: 0,
+            runs_between_migrations_total: 0,
+            min_runs_between_migrations: u64::MAX,
+            max_runs_between_migrations: 0,
+            wake_to_run_count: 0,
+            wake_to_run_ticks_total: 0,
+            wake_to_run_ticks_max: 0,
+            wake_to_run_hist: [0; WAKE_LATENCY_HIST_BUCKETS],
+        }
+    }
+}
+
 /// Scheduler-side metadata for a single kernel thread.
 ///
 /// This struct carries scheduler-internal queue tracking state plus a
@@ -117,6 +171,7 @@ pub struct PerCpu {
     pub current: Option<ThreadId>,
     pub last_switch: u64,
     pub need_resched: bool,
+    pub idle_enter_mono_ticks: Option<u64>,
     pub stats: PerCpuSchedStats,
 }
 
@@ -134,6 +189,7 @@ impl PerCpu {
             current: None,
             last_switch: 0,
             need_resched: false,
+            idle_enter_mono_ticks: None,
             stats: PerCpuSchedStats::default(),
         }
     }
@@ -142,17 +198,25 @@ impl PerCpu {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PerCpuSchedStats {
     pub context_switches: u64,
+    pub dispatch_count: u64,
     pub idle_to_nonidle: u64,
+    pub steals_in: u64,
+    pub steals_out: u64,
     pub timer_interrupts: u64,
     pub resched_ipi_received: u64,
     pub runnable_enqueues: u64,
     pub runnable_dequeues: u64,
+    pub runq_depth_change_events: u64,
     pub wakeups: u64,
     pub lock_trylock_misses: u64,
     pub lock_trylock_misses_with_pending_resched: u64,
     pub lock_blocked_dispatch: u64,
     pub runq_sample_count: u64,
     pub runq_sample_total: u64,
+    pub idle_total_us: u64,
+    pub idle_episodes: u64,
+    pub idle_longest_us: u64,
+    pub idle_episode_hist: [u64; IDLE_EPISODE_HIST_BUCKETS],
 }
 
 pub struct SchedState {
@@ -169,6 +233,12 @@ pub struct SchedState {
     pub sleep_queue: BTreeMap<u64, Vec<ThreadId>>,
     pub sleep_membership: BTreeMap<ThreadId, SleepMembership>,
     pub wait_queue: VecDeque<ThreadId>,
+    /// Per-task runtime/migration/latency statistics.
+    pub task_runtime_stats: BTreeMap<ThreadId, TaskRuntimeStats>,
+    /// Monotonic timestamp when a task was most recently made runnable by a wake path.
+    pub wake_enqueued_at_mono: BTreeMap<ThreadId, u64>,
+    /// Last enqueue cause tag for each task.
+    pub last_enqueue_cause: BTreeMap<ThreadId, EnqueueCause>,
     pub online_cpu_count: usize,
     pub online_cpus: Vec<usize>,
 }
@@ -184,6 +254,9 @@ impl SchedState {
             sleep_queue: BTreeMap::new(),
             sleep_membership: BTreeMap::new(),
             wait_queue: VecDeque::with_capacity(1024),
+            task_runtime_stats: BTreeMap::new(),
+            wake_enqueued_at_mono: BTreeMap::new(),
+            last_enqueue_cause: BTreeMap::new(),
             online_cpu_count: 1,
             online_cpus: Vec::with_capacity(32),
         }
@@ -253,12 +326,15 @@ impl SchedState {
             });
         self.threads.insert(tid, fields);
         self.thread_slot_by_tid.insert(tid, slot);
+        self.task_runtime_stats.entry(tid).or_default();
+        self.last_enqueue_cause.insert(tid, EnqueueCause::Spawn);
     }
 
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
             pc.runq[prio].push_back(tid);
             pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
+            pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         }
         if let Some(t) = self.get_thread_mut(tid) {
             t.runq_location = Some((cpu, prio));
@@ -288,6 +364,8 @@ impl SchedState {
                 }
 
                 pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
+                pc.stats.runq_depth_change_events =
+                    pc.stats.runq_depth_change_events.saturating_add(1);
                 if let Some(thread) = threads.get_mut(&tid) {
                     thread.runq_location = None;
                 }
@@ -310,6 +388,9 @@ impl SchedState {
     pub fn remove_thread(&mut self, tid: ThreadId) -> bool {
         // Best-effort cleanup: thread may not be sleeping.
         let _ = self.remove_task_from_sleep_queue(tid);
+        self.wake_enqueued_at_mono.remove(&tid);
+        self.task_runtime_stats.remove(&tid);
+        self.last_enqueue_cause.remove(&tid);
         if self.threads.remove(&tid).is_none() {
             return false;
         }
@@ -317,6 +398,29 @@ impl SchedState {
             self.free_thread_slots.push(slot);
         }
         true
+    }
+
+    #[inline]
+    pub fn task_runtime_stats_mut(&mut self, tid: ThreadId) -> &mut TaskRuntimeStats {
+        self.task_runtime_stats.entry(tid).or_default()
+    }
+
+    #[inline]
+    pub fn task_runtime_stats(&self, tid: ThreadId) -> TaskRuntimeStats {
+        self.task_runtime_stats.get(&tid).copied().unwrap_or_default()
+    }
+
+    #[inline]
+    pub fn note_enqueue_cause(&mut self, tid: ThreadId, cause: EnqueueCause) {
+        self.last_enqueue_cause.insert(tid, cause);
+    }
+
+    #[inline]
+    pub fn last_enqueue_cause(&self, tid: ThreadId) -> EnqueueCause {
+        self.last_enqueue_cause
+            .get(&tid)
+            .copied()
+            .unwrap_or(EnqueueCause::Unknown)
     }
 
     pub fn refresh_sleep_bucket_membership(&mut self, wake_tick: u64) {
