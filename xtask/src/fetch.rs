@@ -1,8 +1,8 @@
-use anyhow::{Context, Result, ensure};
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{env, fs};
+
+use anyhow::{Context, Result, ensure};
 
 pub fn fetch() -> Result<()> {
     let root = project_root();
@@ -55,13 +55,7 @@ fn ensure_vendor_repo(vendor: &Path, name: &str, url: &str) -> Result<()> {
     }
 
     println!("    Cloning {name}...");
-    run_cmd(
-        Command::new("git")
-            .arg("clone")
-            .arg("--depth=1")
-            .arg(url)
-            .arg(&repo_dir),
-    )?;
+    run_cmd(Command::new("git").arg("clone").arg("--depth=1").arg(url).arg(&repo_dir))?;
 
     Ok(())
 }
@@ -176,14 +170,8 @@ fn fetch_ovmf(vendor: &Path) -> Result<()> {
     fs::create_dir_all(&extract_dir)?;
 
     println!("    Extracting OVMF...");
-    run_cmd(
-        Command::new("tar")
-            .arg("-xJf")
-            .arg(&archive_path)
-            .arg("-C")
-            .arg(&extract_dir),
-    )
-    .context("Failed to unpack OVMF archive")?;
+    run_cmd(Command::new("tar").arg("-xJf").arg(&archive_path).arg("-C").arg(&extract_dir))
+        .context("Failed to unpack OVMF archive")?;
 
     let base = extract_dir.join(format!("{release}-bin"));
     for (src_rel, dest_name) in mappings {
@@ -225,17 +213,10 @@ fn fetch_fonts(assets: &Path) -> Result<()> {
             &zip_path,
         )?;
 
-        run_cmd(
-            Command::new("unzip")
-                .arg("-o")
-                .arg(&zip_path)
-                .current_dir(&fonts_dir),
-        )?;
+        run_cmd(Command::new("unzip").arg("-o").arg(&zip_path).current_dir(&fonts_dir))?;
 
-        let candidates = [
-            fonts_dir.join("ttf/Hack-Regular.ttf"),
-            fonts_dir.join("Hack-Regular.ttf"),
-        ];
+        let candidates =
+            [fonts_dir.join("ttf/Hack-Regular.ttf"), fonts_dir.join("Hack-Regular.ttf")];
 
         let mut found = false;
         for c in candidates {
@@ -343,12 +324,7 @@ fn fetch_icons(assets: &Path) -> Result<()> {
     )?;
 
     println!("    Extracting full Tango icon set...");
-    run_cmd(
-        Command::new("tar")
-            .arg("-xzf")
-            .arg(&tango_tar)
-            .current_dir(&temp_dir),
-    )?;
+    run_cmd(Command::new("tar").arg("-xzf").arg(&tango_tar).current_dir(&temp_dir))?;
 
     let extracted = temp_dir.join("tango-icon-theme-0.8.90");
     if extracted.exists() {
@@ -380,13 +356,7 @@ fn fetch_cursors(assets: &Path) -> Result<()> {
         if download_file(url, &zip_path).is_ok() {
             println!("    Extracting Plain Cursors...");
             fs::create_dir_all(&plain_dir)?;
-            run_cmd(
-                Command::new("unzip")
-                    .arg("-o")
-                    .arg(&zip_path)
-                    .arg("-d")
-                    .arg(&plain_dir),
-            )?;
+            run_cmd(Command::new("unzip").arg("-o").arg(&zip_path).arg("-d").arg(&plain_dir))?;
             let _ = fs::remove_file(&zip_path);
         } else {
             eprintln!("    [WARNING] Failed to download Plain Cursors.");
@@ -459,20 +429,11 @@ fn require_tool(tool: &str) -> Result<()> {
 }
 
 fn download_file(url: &str, dest: &Path) -> Result<()> {
-    run_cmd(
-        Command::new("curl")
-            .arg("-f")
-            .arg("-L")
-            .arg("-o")
-            .arg(dest)
-            .arg(url),
-    )
+    run_cmd(Command::new("curl").arg("-f").arg("-L").arg("-o").arg(dest).arg(url))
 }
 
 fn run_cmd(cmd: &mut Command) -> Result<()> {
-    let status = cmd
-        .status()
-        .with_context(|| format!("Failed to run {:?}", cmd))?;
+    let status = cmd.status().with_context(|| format!("Failed to run {:?}", cmd))?;
     ensure!(status.success(), "Command failed: {:?}", cmd);
     Ok(())
 }
