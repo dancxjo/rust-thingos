@@ -427,7 +427,10 @@ pub fn build_iso_with_config(
     if let Ok(default_shell) = std::env::var("THINGOS_DEFAULT_SHELL") {
         let shell = default_shell.trim();
         if !shell.is_empty() {
-            sh.create_dir(iso_root.join("etc/default"))?;
+            let default_dir = iso_root.join("etc/default");
+            if !sh.path_exists(&default_dir) {
+                sh.create_dir(&default_dir)?;
+            }
             sh.write_file(iso_root.join("etc/default/shell"), format!("{shell}\n"))?;
             include_default_shell = true;
         }
