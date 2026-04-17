@@ -1626,26 +1626,27 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
 
             if let Some(p) = best_q {
-                let id = self.state.dequeue_task_front(cpu_idx, p).unwrap();
-                pick_attempts += 1;
-                self.metrics.pops += 1;
+                if let Some(id) = self.state.dequeue_task_front(cpu_idx, p) {
+                    pick_attempts += 1;
+                    self.metrics.pops += 1;
 
-                // Use the hot-field cache for dead/affinity checks to avoid a
-                // nested REGISTRY lock on every task dequeue.
-                match self.state.get_thread(id) {
-                    None => continue, // stale runq entry — skip
-                    Some(sf) if sf.state == TaskState::Dead => continue,
-                    Some(sf) => {
-                        if let crate::task::Affinity::Pinned(target) = sf.affinity {
-                            if target != cpu_idx && target < per_cpu_len {
-                                self.defer_or_repair_misroute(sf.priority as usize, target, id);
-                                continue;
+                    // Use the hot-field cache for dead/affinity checks to avoid a
+                    // nested REGISTRY lock on every task dequeue.
+                    match self.state.get_thread(id) {
+                        None => continue, // stale runq entry — skip
+                        Some(sf) if sf.state == TaskState::Dead => continue,
+                        Some(sf) => {
+                            if let crate::task::Affinity::Pinned(target) = sf.affinity {
+                                if target != cpu_idx && target < per_cpu_len {
+                                    self.defer_or_repair_misroute(sf.priority as usize, target, id);
+                                    continue;
+                                }
                             }
                         }
                     }
+                    next_id = Some(id);
+                    break;
                 }
-                next_id = Some(id);
-                break;
             } else {
                 break;
             }
