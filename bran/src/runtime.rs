@@ -93,6 +93,13 @@ pub trait ArchRuntime {
     // Wait for interrupt - low-power idle until next IRQ
     fn wait_for_interrupt(&self) {}
 
+    /// Returns `true` if this CPU is executing the idle task.
+    fn is_idle_task_current(&self) -> bool {
+        false
+    }
+    /// Sets the idle task state for this CPU.
+    fn set_idle_task_current(&self, _idle: bool) {}
+
 
     // Tasking - defaults
     fn init_kernel_context(
@@ -409,6 +416,14 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
 
     fn set_user_tls_base_dyn(&self, base: u64) {
         self.arch.set_user_tls_base(base)
+    }
+
+    fn is_idle_task_current(&self) -> bool {
+        self.arch.is_idle_task_current()
+    }
+
+    fn set_idle_task_current(&self, idle: bool) {
+        self.arch.set_idle_task_current(idle)
     }
 }
 

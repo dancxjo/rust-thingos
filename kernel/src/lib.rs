@@ -503,6 +503,14 @@ pub trait BootRuntimeBase: 'static {
     /// Write a new user TLS base to hardware immediately (FS_BASE on x86_64).
     /// No-op on architectures without a dedicated user TLS register.
     fn set_user_tls_base_dyn(&self, _base: u64) {}
+
+    /// Returns `true` if the current CPU is executing the idle task.
+    fn is_idle_task_current(&self) -> bool {
+        false
+    }
+
+    /// Sets the idle task state for the current CPU.
+    fn set_idle_task_current(&self, _idle: bool) {}
 }
 
 pub trait BootRuntime: BootRuntimeBase + Sized + 'static {

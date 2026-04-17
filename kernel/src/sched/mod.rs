@@ -846,8 +846,23 @@ fn try_resched_if_needed<R: BootRuntime>() {
     let irq = rt.irq_disable();
     let cpu_idx = rt.current_cpu_index();
 
-    // Use try_lock to avoid deadlock if SCHEDULER is held by main code
-    if let Some(lock) = SCHEDULER.try_lock() {
+    // Use try_lock to avoid deadlock if SCHEDULER is held by main code on this CPU.
+    // If we are currently on the idle task, we can afford a bounded spin to avoid
+    // being starved by high-frequency mainline lock acquisitions on other CPUs.
+    let mut lock = None;
+    let mut attempts = 0;
+    let max_attempts = if rt.is_idle_task_current() { 1024 } else { 1 };
+
+    while attempts < max_attempts {
+        if let Some(l) = SCHEDULER.try_lock() {
+            lock = Some(l);
+            break;
+        }
+        attempts += 1;
+        core::hint::spin_loop();
+    }
+
+    if let Some(lock) = lock {
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
             let current = sched.state.per_cpu.get(cpu_idx).and_then(|pc| pc.current);
@@ -1749,6 +1764,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
         }
         let per_cpu_len = self.state.per_cpu.len();
 
+        // Clear the need-resched flag immediately. Any entry into the picker
+        // constitutes evaluation of current runnable state; even if we decide
+        // to stay on the same task, the "need" has been satisfied for now.
+        // This prevents the busy-yield loop in the idle task and safe-points.
+        GLOBAL_NEED_RESCHED[cpu_idx].store(false, Ordering::Release);
+        self.state.per_cpu[cpu_idx].need_resched = false;
+
         // Sample run-queue depth for this CPU before we start dequeuing.
         sample_runq_len(self, cpu_idx);
 
@@ -1802,7 +1824,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 // nested REGISTRY lock on every task dequeue.
                 match self.state.get_thread(id) {
                     None => continue, // stale runq entry — skip
-                    Some(sf) if sf.state == TaskState::Dead => continue,
+                    Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
+                        // Skip non-runnable tasks.  A Blocked task found in the runq is
+                        // likely a stale entry (e.g. from a previous yield or preemption
+                        // that occurred just before the task blocked).
+                        continue;
+                    }
                     Some(sf) => {
                         if let crate::task::Affinity::Pinned(target) = sf.affinity {
                             if target != cpu_idx && target < per_cpu_len {
@@ -1833,7 +1860,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     // Use the hot-field cache for dead/affinity checks.
                     match self.state.get_thread(id) {
                         None => continue, // stale runq entry — skip
-                        Some(sf) if sf.state == TaskState::Dead => continue,
+                        Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
+                            continue;
+                        }
                         Some(sf) => {
                             if let crate::task::Affinity::Pinned(target) = sf.affinity {
                                 if target != cpu_idx && target < per_cpu_len {
@@ -2058,6 +2087,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
             to: new_task.id,
             timestamp: crate::trace::now(),
         });
+
+        let next_is_idle = Some(next_id) == self.state.per_cpu[cpu_idx].idle_task;
+        if current_was_idle != next_is_idle {
+            rt.set_idle_task_current(next_is_idle);
+        }
 
         Some(SwitchParams {
             from_ctx: &mut old_task.ctx as *mut _,
@@ -3346,7 +3380,13 @@ pub fn dump_stats<R: BootRuntime>() {
 
 extern "C" fn idle_task<R: BootRuntime>(_: usize) -> ! {
     let rt = crate::runtime::<R>();
+    let cpu_idx = rt.current_cpu_index();
     loop {
+        if GLOBAL_NEED_RESCHED[cpu_idx].load(Ordering::Acquire) {
+            // Use yield_now to trigger a blocking lock acquisition for the
+            // scheduler if a reschedule is pending.
+            yield_now::<R>();
+        }
         rt.wait_for_interrupt();
     }
 }

@@ -794,6 +794,29 @@ impl ArchRuntime for X86_64Runtime {
         }
     }
 
+    fn is_idle_task_current(&self) -> bool {
+        let is_idle: u64;
+        unsafe {
+            core::arch::asm!(
+                "mov {}, gs:[32]",
+                out(reg) is_idle,
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+        is_idle != 0
+    }
+
+    fn set_idle_task_current(&self, idle: bool) {
+        let val: u64 = if idle { 1 } else { 0 };
+        unsafe {
+            core::arch::asm!(
+                "mov gs:[32], {}",
+                in(reg) val,
+                options(nostack, preserves_flags)
+            );
+        }
+    }
+
     fn init_secondary_cpu(&self, cpu_index: usize) {
         // Load the kernel's GDT and IDT on this secondary CPU
 

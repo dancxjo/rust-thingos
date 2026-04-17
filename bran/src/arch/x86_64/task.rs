@@ -152,3 +152,26 @@ pub unsafe fn switch(from: &mut X86_64Context, to: &X86_64Context, to_tid: u64) 
         context_switch(&mut from.sp, &to.sp as *const usize);
     }
 }
+
+pub fn is_idle_task_current() -> bool {
+    let is_idle: u64;
+    unsafe {
+        core::arch::asm!(
+            "mov {}, gs:[32]",
+            out(reg) is_idle,
+            options(nostack, preserves_flags, readonly)
+        );
+    }
+    is_idle != 0
+}
+
+pub fn set_idle_task_current(idle: bool) {
+    let val: u64 = if idle { 1 } else { 0 };
+    unsafe {
+        core::arch::asm!(
+            "mov gs:[32], {}",
+            in(reg) val,
+            options(nostack, preserves_flags)
+        );
+    }
+}
