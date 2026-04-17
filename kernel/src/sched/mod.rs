@@ -1617,14 +1617,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if next_id == current_id {
             let mut reg = crate::task::registry::get_registry::<R>();
             let Some(current) = reg.get_mut(current_id) else {
-                crate::kerror!(
-                    "SchedTasks: {:?}",
-                    self.state
-                        .threads
-                        .values()
-                        .map(|f| f.tid)
-                        .collect::<alloc::vec::Vec<_>>()
-                );
+                crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
                 panic!("failed to find current_id {} in scheduler registry", current_id);
             };
             current.state = TaskState::Running;
@@ -1633,14 +1626,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // unchanged in the same-task (no-switch) case: the current task
             // simply continues running without re-enqueueing.
             let Some(current_sched) = self.state.get_task_mut(current_id) else {
-                crate::kerror!(
-                    "SchedTasks: {:?}",
-                    self.state
-                        .threads
-                        .values()
-                        .map(|f| f.tid)
-                        .collect::<alloc::vec::Vec<_>>()
-                );
+                crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
                 panic!("failed to find current_id {} in scheduler state", current_id);
             };
             current_sched.state = TaskState::Running;
@@ -1664,25 +1650,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
             .threads
             .binary_search_by_key(&current_id, |t| t.id)
             .unwrap_or_else(|_| {
-                crate::kerror!(
-                    "SchedTasks: {:?}",
-                    self.state
-                        .threads
-                        .values()
-                        .map(|f| f.tid)
-                        .collect::<alloc::vec::Vec<_>>()
-                );
+                crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
                 panic!("failed to find current_id {} in scheduler registry", current_id)
             });
         let new_idx = reg.threads.binary_search_by_key(&next_id, |t| t.id).unwrap_or_else(|_| {
-            crate::kerror!(
-                "SchedTasks: {:?}",
-                self.state
-                    .threads
-                    .values()
-                    .map(|f| f.tid)
-                    .collect::<alloc::vec::Vec<_>>()
-            );
+            crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
             panic!("failed to find next_id {} in scheduler registry", next_id)
         });
         let (old_task, new_task) = if old_idx < new_idx {
@@ -1712,9 +1684,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if old_was_running {
             if let Some(old_sched) = self.state.get_task_mut(current_id) {
                 old_sched.state = TaskState::Runnable;
-                // Copy enqueued_at_tick from old_task, which was just set to
-                // TICK_COUNT in the REGISTRY update at line 1335 above, so that
-                // future aging calculations in prepare_schedule use the correct tick.
+                // Copy enqueued_at_tick from old_task, which was just set in
+                // the REGISTRY update above, so that future aging calculations
+                // in prepare_schedule use the correct tick.
                 old_sched.enqueued_at_tick = old_task.enqueued_at_tick;
             }
         }
