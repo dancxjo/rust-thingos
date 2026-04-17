@@ -12,9 +12,10 @@
         ]
     },
     "panic-strategy": "abort",
-    "position-independent-executables": true,
-    "static-position-independent-executables": true,
+    "position-independent-executables": false,
+    "static-position-independent-executables": false,
     "relocation-model": "pic",
+    "code-model": "small",
     "dynamic-linking": true,
     "features": "-mmx",
     "disable-redzone": true,

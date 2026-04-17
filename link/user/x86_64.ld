@@ -1,7 +1,3 @@
-EXTERN(__main_void);
-EXTERN(main);
-PROVIDE(_start = __main_void);
-PROVIDE(_start = main);
 ENTRY(_start)
 
 PHDRS {
