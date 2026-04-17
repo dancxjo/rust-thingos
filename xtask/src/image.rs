@@ -175,8 +175,8 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "test_dlopen", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "reboot", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "shutdown", is_init: false, boot_module: true, features: vec![] },
-        #[cfg(feature = "lsv")]
         ProgramConfig { name: "lsv", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "rn", is_init: false, boot_module: true, features: vec![] },
     ]
 }
 
@@ -214,6 +214,11 @@ fn generate_limine_config(
             format!("boot():/bin/{}", prog.name)
         };
         common_modules.push_str(&format!("    module_path: {}\n", bin_path));
+        if !is_driver(prog.name) {
+            for alias in userspace_aliases(prog.name) {
+                common_modules.push_str(&format!("    module_path: boot():/bin/{alias}\n"));
+            }
+        }
         if prog.is_init {
             common_modules.push_str("    module_cmdline: init\n");
         }
@@ -455,13 +460,13 @@ pub fn build_iso_with_config(
     for prog in programs {
         build_userspace_app_with_features(sh, prog.name, target, "release", &prog.features)?;
         let dest_subdir = if is_driver(prog.name) { "drivers" } else { "bin" };
-        copy_userspace_binary(
-            sh,
-            prog.name,
-            target,
-            "release",
-            iso_root.join(format!("{}/{}", dest_subdir, prog.name)).to_str().unwrap(),
-        )?;
+        let dest_path = iso_root.join(format!("{}/{}", dest_subdir, prog.name));
+        copy_userspace_binary(sh, prog.name, target, "release", dest_path.to_str().unwrap())?;
+        if !is_driver(prog.name) {
+            for alias in userspace_aliases(prog.name) {
+                sh.copy_file(&dest_path, iso_root.join(format!("{}/{}", dest_subdir, alias)))?;
+            }
+        }
     }
 
     for lib in default_shared_libraries() {
@@ -851,4 +856,12 @@ fn is_driver(name: &str) -> bool {
         "virtio_sound",
     ];
     drivers.contains(&name)
+}
+
+fn userspace_aliases(name: &str) -> &'static [&'static str] {
+    match name {
+        "lsv" => &["lvs"],
+        "rn" => &["runa"],
+        _ => &[],
+    }
 }

@@ -169,6 +169,7 @@ members = [
   "thingos/utils/xargs",
   "tools/kindc",
   "vendor/lsv",
+  "vendor/runa",
   # tidy-alphabetical-end
 ]
 
