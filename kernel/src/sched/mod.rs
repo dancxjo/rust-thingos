@@ -294,6 +294,7 @@ enum AnyWakeOverloadPolicy {
 static ANY_WAKE_POLICY_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Off as u8);
 static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(4);
+const ANY_WAKE_OVERLOAD_STREAK_MAX: usize = u8::MAX as usize;
 static ANY_WAKE_OVERLOAD_STREAK_REQUIRED: AtomicUsize = AtomicUsize::new(3);
 static ANY_WAKE_OVERLOAD_STREAK: [AtomicU8; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
@@ -335,7 +336,8 @@ fn init_any_wake_policy_from_env_once() {
         }
         if let Some(v) = option_env!("THINGOS_SCHED_ANY_WAKE_OVERLOAD_STREAK") {
             if let Ok(streak) = v.parse::<usize>() {
-                ANY_WAKE_OVERLOAD_STREAK_REQUIRED.store(streak.clamp(1, u8::MAX as usize), Ordering::Release);
+                ANY_WAKE_OVERLOAD_STREAK_REQUIRED
+                    .store(streak.clamp(1, ANY_WAKE_OVERLOAD_STREAK_MAX), Ordering::Release);
             }
         }
     }
@@ -900,16 +902,18 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
     let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
     let overloaded = preferred_depth >= overload_gap;
-    let streak_idx = preferred.min(types::MAX_CPUS.saturating_sub(1));
+    let Some(streak_cell) = ANY_WAKE_OVERLOAD_STREAK.get(preferred) else {
+        return preferred;
+    };
     if !overloaded {
-        ANY_WAKE_OVERLOAD_STREAK[streak_idx].store(0, Ordering::Release);
+        streak_cell.store(0, Ordering::Release);
         return preferred;
     }
 
-    let streak_required = ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire).max(1);
-    let prior_streak = ANY_WAKE_OVERLOAD_STREAK[streak_idx].load(Ordering::Acquire);
+    let streak_required = ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire);
+    let prior_streak = streak_cell.load(Ordering::Acquire);
     let next_streak = prior_streak.saturating_add(1);
-    ANY_WAKE_OVERLOAD_STREAK[streak_idx].store(next_streak, Ordering::Release);
+    streak_cell.store(next_streak, Ordering::Release);
     if (next_streak as usize) < streak_required {
         return preferred;
     }
@@ -921,7 +925,7 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     // so "depth delta >= gap" cannot wrap.
     let overloaded_vs_least = preferred_depth.saturating_sub(least_depth) >= overload_gap;
     if overloaded_vs_least && least_cpu != preferred {
-        ANY_WAKE_OVERLOAD_STREAK[streak_idx].store(0, Ordering::Release);
+        streak_cell.store(0, Ordering::Release);
         least_cpu
     } else {
         preferred
@@ -949,8 +953,10 @@ fn set_any_wake_policy_for_tests_with_streak(policy: &str, overload_gap: usize, 
     ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
     ANY_WAKE_OVERLOAD_POLICY.store(parse_any_wake_overload_policy(policy) as u8, Ordering::Release);
     ANY_WAKE_OVERLOAD_GAP.store(overload_gap.max(1), Ordering::Release);
-    ANY_WAKE_OVERLOAD_STREAK_REQUIRED
-        .store(overload_streak.clamp(1, u8::MAX as usize), Ordering::Release);
+    ANY_WAKE_OVERLOAD_STREAK_REQUIRED.store(
+        overload_streak.clamp(1, ANY_WAKE_OVERLOAD_STREAK_MAX),
+        Ordering::Release,
+    );
     for streak in &ANY_WAKE_OVERLOAD_STREAK {
         streak.store(0, Ordering::Release);
     }
