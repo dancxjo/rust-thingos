@@ -77,4 +77,4 @@ cat sample.raw | chime
 - `drivers/virtio_sound/src/main.rs`
 - `drivers/chime/src/main.rs`
 - `abi/src/driver_interface.rs`
-- `drivers/cambium/src/catalog.rs`
+- `cambium/src/catalog.rs`

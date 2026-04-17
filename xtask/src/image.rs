@@ -834,7 +834,6 @@ fn is_driver(name: &str) -> bool {
         "ahci_disk",
         "ata_disk",
         "chime",
-        "cambium",
         "display_bootfb",
         "display_fake",
         "display_virtio_gpu",
