@@ -15,7 +15,7 @@ htmlparser = { version = "0.2", default-features = false }
 libm = "0.2"
 
 [build-dependencies]
-pciids = { path = "../tools/pciids" }
+pciids = { path = "../../tools/pciids" }
 
 [features]
 default = ["global-alloc", "simd"]

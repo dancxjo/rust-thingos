@@ -4,17 +4,17 @@ set -euo pipefail
 fail=0
 
 # Bloom must not link SVG/font/text raster modules.
-if rg -n "fontdue|serde|libm|spin" bloom/Cargo.toml >/dev/null; then
+if rg -n "fontdue|serde|libm|spin" thingos/bloom/Cargo.toml >/dev/null; then
   echo "ui-split: Bloom Cargo.toml contains forbidden deps" >&2
   fail=1
 fi
 
-if rg -n "\bmod\s+(svg|raster|drawlist|lowered|font_graph|ui)\b" bloom/src/main.rs >/dev/null; then
+if rg -n "\bmod\s+(svg|raster|drawlist|lowered|font_graph|ui)\b" thingos/bloom/src/main.rs >/dev/null; then
   echo "ui-split: Bloom main.rs still declares paint modules" >&2
   fail=1
 fi
 
-if rg -n "SVG|svg::|raster::|DrawCmd|PaintObject|font_graph" bloom/src \
+if rg -n "SVG|svg::|raster::|DrawCmd|PaintObject|font_graph" thingos/bloom/src \
   --glob '!*.svg' >/dev/null; then
   echo "ui-split: Bloom sources reference paint/svg/text modules" >&2
   fail=1
@@ -22,7 +22,7 @@ fi
 
 # Only Blossom should write snapshot keys.
 if rg -n "prop_set\([^\)]*(UI_SNAPSHOT_BYTESPACE|UI_SNAPSHOT_WIDTH|UI_SNAPSHOT_HEIGHT|UI_SNAPSHOT_STRIDE|UI_SNAPSHOT_FORMAT|UI_PRESENT_EPOCH)" \
-  utils bloom bristle pistil sprout --glob '*.rs' --glob '!utils/blossom/**' >/dev/null; then
+  thingos/utils thingos/bloom thingos/bristle thingos/pistil thingos/sprout --glob '*.rs' --glob '!thingos/utils/blossom/**' >/dev/null; then
   echo "ui-split: snapshot keys written outside Blossom" >&2
   fail=1
 fi

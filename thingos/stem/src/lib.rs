@@ -20,6 +20,7 @@ pub mod fs;
 #[cfg(feature = "global-alloc")]
 pub mod heap;
 pub mod i18n;
+pub mod kinds;
 #[cfg(feature = "rt")]
 pub mod memory;
 

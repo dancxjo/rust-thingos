@@ -29,7 +29,7 @@ pub fn build(sh: &Shell, arch: &str, profile: &str) -> Result<()> {
     )
     .run()?;
 
-    let bin_dir = format!("bran/bin-{}", arch);
+    let bin_dir = format!("thingos/bran/bin-{}", arch);
     sh.create_dir(&bin_dir)?;
 
     let src = format!("target/{}/{}/bran", target, subdir);
