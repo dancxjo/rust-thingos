@@ -124,12 +124,12 @@ fn main(_arg: usize) -> ! {
         args.push(String::from("."));
     }
 
-    let mut had_error = false;
+    let mut has_error = false;
     for path in &args {
-        walk(path, &mut had_error);
+        walk(path, &mut has_error);
     }
 
-    if had_error {
+    if has_error {
         exit(1)
     }
     exit(0)
