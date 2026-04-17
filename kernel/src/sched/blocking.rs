@@ -282,6 +282,20 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
 
+    // Fast path: if wake is already pending, there is no additional scheduler
+    // work to do and we can avoid taking SCHEDULER.
+    // `wake_pending` is level-triggered; a concurrent clear means a blocker has
+    // consumed the wake and therefore does not require another enqueue here.
+    let already_pending = crate::task::registry::get_task::<R>(id)
+        .map(|task| task.wake_pending)
+        .unwrap_or(false);
+    if already_pending {
+        super::PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        rt.irq_restore(_irq);
+        return;
+    }
+
     let wait_start = rt.mono_ticks();
 
     // Collect any pending IPI target and deferred REGISTRY update inside the
