@@ -1149,17 +1149,20 @@ pub(crate) fn resolve_switch_params<R: BootRuntime>(
     >,
 > {
     debug_assert_scheduler_not_held_by_this_cpu::<R>("resolve_switch_params");
-    let mut reg = crate::task::registry::get_registry::<R>();
-    let from_idx = reg
+    let mut registry = crate::task::registry::get_registry::<R>();
+    let from_idx = registry
         .threads
         .binary_search_by_key(&decision.from_tid, |t| t.id)
         .ok()?;
-    let to_idx = reg.threads.binary_search_by_key(&decision.to_tid, |t| t.id).ok()?;
+    let to_idx = registry
+        .threads
+        .binary_search_by_key(&decision.to_tid, |t| t.id)
+        .ok()?;
     let (from_task, to_task) = if from_idx < to_idx {
-        let (left, right) = reg.threads.split_at_mut(to_idx);
+        let (left, right) = registry.threads.split_at_mut(to_idx);
         (&mut left[from_idx], &mut right[0])
     } else {
-        let (left, right) = reg.threads.split_at_mut(from_idx);
+        let (left, right) = registry.threads.split_at_mut(from_idx);
         (&mut right[0], &mut left[to_idx])
     };
 
@@ -2832,7 +2835,7 @@ pub fn exit<R: BootRuntime>(code: i32) {
     wake_waiters(&waiters);
     let switch = resolve_switch_params::<R>(switch_decision).unwrap_or_else(|| {
         panic!(
-            "terminate_current produced switch decision (from={}, to={}) but registry lookup failed",
+            "scheduler invariant violated: terminate_current produced switch decision (from={}, to={}) but registry lookup failed",
             switch_decision.from_tid, switch_decision.to_tid
         )
     });
