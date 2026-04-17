@@ -1115,10 +1115,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         match reason {
             ScheduleReason::PreemptTick => {
-                // Wake any sleeping tasks whose time has expired (Timekeeper only)
-                if cpu_idx == 0 {
-                    self.wake_sleepers();
-                }
+                // Wake any sleeping tasks whose time has expired.
+                self.wake_sleepers();
 
                 // Check preemption watchdog
                 self.check_preempt_watchdog();
@@ -1183,6 +1181,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
     fn wake_sleepers(&mut self) {
         let now = TICK_COUNT.load(Ordering::Relaxed);
         let lock_start = crate::runtime::<R>().mono_ticks();
+        let mut wake_budget = self
+            .wake_sleepers_budget_carry
+            .saturating_add(types::WAKE_SLEEPERS_BUDGET_PER_TICK)
+            .min(types::WAKE_SLEEPERS_BUDGET_CARRY_CAP);
 
         // Collect pending IPIs and send them *after* this function returns (i.e.
         // after the caller drops the SCHEDULER lock) to reduce IPI-while-locked
@@ -1196,11 +1198,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // nested SCHEDULER → REGISTRY lock cycles from N to 1.
         let mut to_wake: alloc::vec::Vec<(u64, usize, usize)> = alloc::vec::Vec::new();
 
-        while let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() {
+        while wake_budget > 0 {
+            let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() else {
+                break;
+            };
             if wake_tick <= now {
-                let (_, tids) = self.state.sleep_queue.pop_first().unwrap();
+                let (_, mut tids) = self.state.sleep_queue.pop_first().unwrap();
+                let to_take = core::cmp::min(wake_budget, tids.len());
 
-                for tid in tids {
+                for tid in tids.drain(..to_take) {
                     // Read scheduling fields from the hot-field cache only.
                     // REGISTRY is not accessed in this inner loop.
                     if let Some(sf) = self.state.get_thread(tid) {
@@ -1217,10 +1223,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     }
                     // If not in hot-field cache, skip (task was already removed).
                 }
+
+                wake_budget = wake_budget.saturating_sub(to_take);
+                if !tids.is_empty() {
+                    self.state.sleep_queue.insert(wake_tick, tids);
+                    break;
+                }
             } else {
                 break;
             }
         }
+
+        self.wake_sleepers_budget_carry = wake_budget;
 
         // Single REGISTRY lock acquisition for all waking tasks.
         // This replaces the previous per-task `get_task_mut` calls, reducing
@@ -3649,6 +3663,69 @@ mod tests {
         assert!(
             sched.pending_wake_ipis.is_empty(),
             "pending_wake_ipis should be empty after drain"
+        );
+    }
+
+    #[test]
+    fn test_wake_sleepers_enforces_budget_and_carries_remainder() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        let total_sleepers = types::WAKE_SLEEPERS_BUDGET_PER_TICK + 5;
+        for tid in 10_000..(10_000 + total_sleepers as u64) {
+            let sleeping_task = make_task(tid, TaskState::Blocked, TaskPriority::Normal);
+            crate::task::registry::get_registry::<MockRuntime>()
+                .insert(alloc::boxed::Box::new(sleeping_task));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Blocked,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Pinned(0),
+                last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+            });
+            sched.state.sleep_queue.entry(50).or_default().push(tid);
+        }
+        TICK_COUNT.store(100, Ordering::Relaxed);
+
+        sched.wake_sleepers();
+        assert_eq!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].len(),
+            types::WAKE_SLEEPERS_BUDGET_PER_TICK,
+            "wake_sleepers should honor per-tick wake budget"
+        );
+        assert_eq!(
+            sched.state.sleep_queue.get(&50).map(|v| v.len()),
+            Some(5),
+            "sleep queue should retain remaining sleepers after budget is exhausted"
+        );
+        assert_eq!(
+            sched.wake_sleepers_budget_carry, 0,
+            "budget carry should be empty after fully consuming available budget"
+        );
+
+        sched.wake_sleepers();
+        assert_eq!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].len(),
+            total_sleepers,
+            "second wake pass should process remaining sleepers"
+        );
+        assert!(
+            !sched.state.sleep_queue.contains_key(&50),
+            "sleep queue entry should be removed once all sleepers wake"
+        );
+        assert_eq!(
+            sched.wake_sleepers_budget_carry,
+            types::WAKE_SLEEPERS_BUDGET_PER_TICK - 5,
+            "unused budget should carry forward to later ticks"
         );
     }
 

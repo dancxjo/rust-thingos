@@ -7,6 +7,12 @@ use core::marker::PhantomData;
 /// Default time slice in ticks (~100ms at 100Hz timer)
 pub const DEFAULT_TIMESLICE: u32 = 10;
 
+/// Number of sleeper wakeups budgeted per scheduler tick.
+pub const WAKE_SLEEPERS_BUDGET_PER_TICK: usize = 64;
+
+/// Maximum accumulated wake budget carry between ticks.
+pub const WAKE_SLEEPERS_BUDGET_CARRY_CAP: usize = WAKE_SLEEPERS_BUDGET_PER_TICK * 8;
+
 /// Maximum number of CPUs supported
 pub const MAX_CPUS: usize = 32;
 
@@ -86,6 +92,8 @@ pub struct Scheduler<R: BootRuntime> {
     /// drained after the lock is released so that `send_ipi` is never called
     /// while SCHEDULER is held.
     pub(crate) pending_wake_ipis: alloc::vec::Vec<usize>,
+    /// Unused wake budget carried forward to future ticks.
+    pub(crate) wake_sleepers_budget_carry: usize,
     /// IPIs deferred by `prepare_schedule` misroute requeue handling.
     /// Populated under the SCHEDULER lock and drained after the lock is
     /// released so remote nudges never run in the scheduler critical section.
@@ -121,6 +129,7 @@ impl<R: BootRuntime> Scheduler<R> {
             bringup_in_progress: false,
             metrics: SchedulerMetrics::new(),
             pending_wake_ipis: alloc::vec::Vec::new(),
+            wake_sleepers_budget_carry: 0,
             pending_prepare_schedule_ipis: alloc::vec::Vec::new(),
             pending_misrouted_requeues: alloc::vec::Vec::new(),
             _phantom: PhantomData,
