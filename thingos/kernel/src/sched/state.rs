@@ -1,4 +1,4 @@
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec::Vec;
 
 /// Unique identifier for a kernel thread (scheduler task).
@@ -34,6 +34,11 @@ pub enum ThreadState {
 }
 /// Backward-compatible alias — prefer `ThreadState` in new code.
 pub type TaskState = ThreadState;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitReason {
+    BlockCurrent,
+}
 
 pub const WAKE_LATENCY_HIST_BUCKETS: usize = 5;
 pub const IDLE_EPISODE_HIST_BUCKETS: usize = 4;
@@ -238,7 +243,8 @@ pub struct SchedState {
     pub per_cpu: Vec<PerCpu>,
     pub sleep_queue: BTreeMap<u64, Vec<ThreadId>>,
     pub sleep_membership: BTreeMap<ThreadId, SleepMembership>,
-    pub wait_queue: VecDeque<ThreadId>,
+    pub wait_queue: BTreeSet<ThreadId>,
+    pub wait_reasons: BTreeMap<ThreadId, WaitReason>,
     /// Per-task runtime/migration/latency statistics.
     pub task_runtime_stats: BTreeMap<ThreadId, TaskRuntimeStats>,
     /// Monotonic timestamp when a task was most recently made runnable by a wake path.
@@ -259,7 +265,8 @@ impl SchedState {
             per_cpu: Vec::with_capacity(32),
             sleep_queue: BTreeMap::new(),
             sleep_membership: BTreeMap::new(),
-            wait_queue: VecDeque::with_capacity(1024),
+            wait_queue: BTreeSet::new(),
+            wait_reasons: BTreeMap::new(),
             task_runtime_stats: BTreeMap::new(),
             wake_enqueued_at_mono: BTreeMap::new(),
             last_enqueue_cause: BTreeMap::new(),
@@ -272,6 +279,19 @@ impl SchedState {
         self.online_cpus.clear();
         self.online_cpus.push(0);
         self.online_cpu_count = 1;
+    }
+
+    pub fn register_waiter(&mut self, tid: ThreadId, reason: WaitReason) -> bool {
+        let inserted = self.wait_queue.insert(tid);
+        if inserted || self.wait_reasons.get(&tid).copied() != Some(reason) {
+            self.wait_reasons.insert(tid, reason);
+        }
+        inserted
+    }
+
+    pub fn unregister_waiter(&mut self, tid: ThreadId) -> bool {
+        self.wait_reasons.remove(&tid);
+        self.wait_queue.remove(&tid)
     }
 
     pub fn mark_cpu_online(&mut self, cpu: usize) {
@@ -700,5 +720,27 @@ mod tests {
                 bucket_index: 0
             })
         );
+    }
+
+    #[test]
+    fn register_waiter_deduplicates_tid_and_records_reason() {
+        let mut state = SchedState::new();
+
+        assert!(state.register_waiter(41, WaitReason::BlockCurrent));
+        assert!(!state.register_waiter(41, WaitReason::BlockCurrent));
+        assert!(state.wait_queue.contains(&41));
+        assert_eq!(state.wait_queue.len(), 1);
+        assert_eq!(state.wait_reasons.get(&41), Some(&WaitReason::BlockCurrent));
+    }
+
+    #[test]
+    fn unregister_waiter_removes_wait_membership_and_reason() {
+        let mut state = SchedState::new();
+        state.register_waiter(42, WaitReason::BlockCurrent);
+
+        assert!(state.unregister_waiter(42));
+        assert!(!state.wait_queue.contains(&42));
+        assert!(!state.wait_reasons.contains_key(&42));
+        assert!(!state.unregister_waiter(42));
     }
 }

@@ -6,6 +6,7 @@ use crate::task::TaskState;
 
 use super::SCHEDULER;
 
+use super::state::WaitReason;
 use super::types::Scheduler;
 
 pub(crate) static BLOCK_CURRENT_HOOK: core::sync::atomic::AtomicPtr<()> =
@@ -103,7 +104,16 @@ pub fn block_current<R: BootRuntime>() {
             (None, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
             // Add to wait queue and pick next task to run.
-            sched.state.wait_queue.push_back(current_id);
+            let inserted = sched
+                .state
+                .register_waiter(current_id, WaitReason::BlockCurrent);
+            if !inserted {
+                crate::kdebug!(
+                    "SCHED: task {} already registered as waiter ({:?})",
+                    current_id,
+                    WaitReason::BlockCurrent
+                );
+            }
             let switch = sched.prepare_schedule();
             let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
@@ -239,9 +249,7 @@ pub fn wake_task_locked<R: BootRuntime>(
     if let Some((target_cpu, task_priority)) = wake_info {
         let mut safe_cpu = target_cpu;
 
-        if let Some(pos) = sched.state.wait_queue.iter().position(|&wid| wid == id) {
-            sched.state.wait_queue.remove(pos);
-        }
+        sched.state.unregister_waiter(id);
 
         // Best-effort cleanup: the target may be blocked on non-timeout paths.
         let _ = sched.state.remove_task_from_sleep_queue(id);
