@@ -117,12 +117,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
 
         // Calculate wake time and add to sleep queue
         let wake_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) + ticks;
-        sched
-            .state
-            .sleep_queue
-            .entry(wake_tick)
-            .or_default()
-            .push(current_id);
+        sched.state.add_task_to_sleep_queue(current_id, wake_tick);
 
         // Update the scheduler-side hot-field cache immediately; the canonical
         // REGISTRY write is deferred to after the SCHEDULER lock is released to
@@ -143,18 +138,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             // enrollment so the task does not stay Blocked while still running on
             // the CPU.  The caller will wait for the next timer interrupt below
             // instead of spinning on the SCHEDULER lock.
-            let should_remove = sched
-                .state
-                .sleep_queue
-                .get_mut(&wake_tick)
-                .map(|q| {
-                    q.retain(|&id| id != current_id);
-                    q.is_empty()
-                })
-                .unwrap_or(false);
-            if should_remove {
-                sched.state.sleep_queue.remove(&wake_tick);
-            }
+            let _ = sched.state.remove_task_from_sleep_queue(current_id);
             if let Some(sf) = sched.state.get_task_mut(current_id) {
                 sf.state = crate::task::TaskState::Running;
             }

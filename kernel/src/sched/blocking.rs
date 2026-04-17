@@ -226,10 +226,7 @@ pub fn wake_task_locked<R: BootRuntime>(
             sched.state.wait_queue.remove(pos);
         }
 
-        sched.state.sleep_queue.retain(|_, tids| {
-            tids.retain(|&sleep_tid| sleep_tid != id);
-            !tids.is_empty()
-        });
+        sched.state.remove_task_from_sleep_queue(id);
 
         if safe_cpu >= sched.state.per_cpu.len() {
             safe_cpu = 0;
