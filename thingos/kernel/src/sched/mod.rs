@@ -2267,12 +2267,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     break;
                 };
                 let stealable = match self.state.get_thread(tid) {
-                    Some(sf)
-                        if sf.state != TaskState::Dead
+                    Some(sf) => {
+                        let is_stealable = sf.state != TaskState::Dead
                             && sf.runq_location == Some((busiest_cpu, p))
-                            && matches!(sf.affinity, crate::task::Affinity::Any) =>
-                    {
-                        true
+                            && matches!(sf.affinity, crate::task::Affinity::Any);
+                        is_stealable
                     }
                     _ => false,
                 };
