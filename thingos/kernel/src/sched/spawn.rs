@@ -683,6 +683,9 @@ fn nudge_spawned_task<R: BootRuntime>(current_cpu: usize, id: TaskId) {
         // we suppress the duplicate send.
         let already_pending = super::set_global_need_resched(target_cpu);
         if !already_pending {
+            if !super::should_send_remote_resched_ipi(target_cpu) {
+                return;
+            }
             crate::kdebug!(
                 "SCHED: Sending post-unlock Resched IPI to CPU {} for task {}",
                 target_cpu,
