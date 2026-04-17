@@ -1509,38 +1509,26 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         self.wake_sleepers_budget_carry = wake_budget;
 
-        // Single REGISTRY lock acquisition for all waking tasks.
-        // This replaces the previous per-task `get_task_mut` calls, reducing
-        // SCHEDULER → REGISTRY nested-lock cycles from N to 1.
-        let confirmed: alloc::vec::Vec<(u64, usize, usize)> = if !to_wake.is_empty() {
-            let mut reg = crate::task::registry::get_registry::<R>();
-            to_wake
-                .iter()
-                .filter_map(|&(tid, priority, target_cpu)| {
-                    if let Some(task) = reg.get_mut(tid) {
-                        task.state = TaskState::Runnable;
-                        task.enqueued_at_tick = now;
-                        Some((tid, priority, target_cpu))
-                    } else {
-                        None // task removed from REGISTRY; skip enqueue
-                    }
-                })
-                .collect()
-            // REGISTRY lock released here (reg dropped).
-        } else {
-            alloc::vec::Vec::new()
-        };
-
-        // Now that the REGISTRY lock is released, update the hot-field cache and
-        // enqueue confirmed tasks into the run queues.
+        // Keep wake processing entirely within the scheduler-side hot cache and
+        // defer canonical REGISTRY writes until the outer lock-owning call site
+        // drops SCHEDULER. Taking REGISTRY here recreates the exact nested lock
+        // ordering that can wedge CPU 0 under wake-heavy workloads.
         let wake_mono = crate::runtime::<R>().mono_ticks();
-        for (tid, priority, target_cpu) in confirmed {
-            // Update the scheduler-side cache to match the REGISTRY write above.
+        for (tid, priority, target_cpu) in to_wake {
             if let Some(sf) = self.state.get_thread_mut(tid) {
                 sf.state = TaskState::Runnable;
                 sf.enqueued_at_tick = now;
                 sf.wake_cpu = Some(target_cpu);
+            } else {
+                continue;
             }
+            self.pending_registry_syncs
+                .push(types::DeferredRegistrySync {
+                    tid,
+                    new_state: Some(TaskState::Runnable),
+                    new_enqueued_at_tick: Some(now),
+                    new_last_cpu: None,
+                });
             self.state.wake_enqueued_at_mono.insert(tid, wake_mono);
             self.state
                 .note_enqueue_cause(tid, crate::sched::state::EnqueueCause::Wake);

@@ -2,6 +2,7 @@ use kernel::{
     BootModuleDesc, BootRuntime, BootRuntimeBase, BootTasking, CpuId, FrameAllocatorHook,
     FramebufferInfo, IrqState, MapKind, MapPerms, PhysRange, UserEntry, UserTaskSpec,
 };
+use spin::Mutex;
 
 pub trait ArchRuntime {
     type Context: Copy + Default;
@@ -244,9 +245,44 @@ pub trait ArchRuntime {
 
 // --- Generic Runtime ---
 
+struct ConsoleBuffer {
+    data: [u8; 1024],
+    head: usize,
+    tail: usize,
+}
+
+impl ConsoleBuffer {
+    const fn new() -> Self {
+        Self {
+            data: [0; 1024],
+            head: 0,
+            tail: 0,
+        }
+    }
+
+    fn push(&mut self, byte: u8) {
+        let next_head = (self.head + 1) % self.data.len();
+        if next_head == self.tail {
+            return;
+        }
+        self.data[self.head] = byte;
+        self.head = next_head;
+    }
+
+    fn pop(&mut self) -> Option<u8> {
+        if self.head == self.tail {
+            return None;
+        }
+        let byte = self.data[self.tail];
+        self.tail = (self.tail + 1) % self.data.len();
+        Some(byte)
+    }
+}
+
 pub struct Runtime<A: ArchRuntime> {
     pub arch: A,
     pub limine: LimineRuntimeData,
+    console_rx: Mutex<ConsoleBuffer>,
 }
 
 impl<A: ArchRuntime> Runtime<A> {
@@ -254,6 +290,14 @@ impl<A: ArchRuntime> Runtime<A> {
         Self {
             arch,
             limine: LimineRuntimeData::new(),
+            console_rx: Mutex::new(ConsoleBuffer::new()),
+        }
+    }
+
+    fn poll_console_input(&self) {
+        let mut console_rx = self.console_rx.lock();
+        while let Some(byte) = self.arch.getchar() {
+            console_rx.push(byte);
         }
     }
 }
@@ -299,13 +343,17 @@ impl LimineRuntimeData {
 
 impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     fn putchar(&self, c: u8) {
+        // Drain pending RX before writing so bursty boot logs do not starve input polling.
+        self.poll_console_input();
         // Write to serial (arch-specific)
         self.arch.putchar(c);
         // Boot display path disabled; serial remains the early log sink.
         // crate::theme::putchar(c);
+        self.poll_console_input();
     }
     fn getchar(&self) -> Option<u8> {
-        self.arch.getchar()
+        self.poll_console_input();
+        self.console_rx.lock().pop()
     }
     fn mono_ticks(&self) -> u64 {
         self.arch.mono_ticks()
