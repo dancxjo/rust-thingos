@@ -18,23 +18,20 @@ That distinction matters:
 
 ## Build Flow
 
-```bash
-just fetch-rust
-just rust-apply-patches
+just clean
 cargo xtask rustc-thingos
-```
 
 To opt out of this build step in composite flows (`xtask iso/run/run-hdd`), set
 `SKIP_RUSTC_THINGOS=1`.
 
 Inside `cargo xtask rustc-thingos`:
 
-1. Writes `vendor/rust/config.toml`
+1. Writes `config.toml`
 2. Exports `RUST_TARGET_PATH=targets/`
 3. Runs:
 
    ```bash
-   python3 vendor/rust/x.py build --stage 1 library compiler/rustc
+   python3 x.py build --stage 1 library compiler/rustc
    ```
 
 4. Locates the produced stage1 compiler in the current bootstrap layout
@@ -65,7 +62,7 @@ That host/target split is why the resulting compiler is Linux-hosted.
 ## Current Artifact Layout
 
 The current fork/bootstrap writes outputs under the repository-root `build/`
-directory rather than `vendor/rust/build/`.
+directory rather than `build/` (at the root).
 
 Important paths:
 
@@ -142,17 +139,6 @@ As revalidated on April 12, 2026:
 
 See [docs/build/status/rustc_build.md](./status/rustc_build.md) for the current
 status summary.
-
-## Checkout Mode
-
-`vendor/rust` is required to be a git submodule tracked by this repository.
-The submodule is pinned to the `thingos-patched` branch.
-
-If your local checkout has a legacy plain directory instead of a gitlink,
-convert it before bootstrapping:
-
-1. `rm -rf vendor/rust`
-2. `just fetch-rust`
 
 ## Next Step for a True Hosted Compiler
 

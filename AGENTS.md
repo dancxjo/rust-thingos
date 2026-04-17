@@ -13,7 +13,6 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 - Run BDD tests: `just behave` (see `tools/bdd`)
 - Clean: `just clean`
 - Audit platform boundary: `python3 scripts/audit_platform_boundary.py`
-- Rust source checkout: `just fetch-rust`
 
 ## Top-level layout (what's what)
 - `abi/`: shared ABI types and syscalls between kernel/userspace.
@@ -28,6 +27,7 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 - `tools/`: auxiliary tooling (BDD, pciids, etc).
 - `xtask/`: build orchestration used by `just`.
 - `docs/`: documentation and test reports (`docs/behavior/` is generated).
+- `compiler/`, `library/`: Rust compiler and standard library source (this repo is a Rust fork).
 - `vendor/`: vendored dependencies (Limine, OVMF).
 
 ## Where to start when changing behavior
@@ -61,23 +61,16 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 
 ## Rust source of truth
 
-Thing-OS uses a fork of the Rust compiler and standard library to support its custom target triple and VFS-first architecture.
+This repository is itself a fork of the Rust compiler and standard library, customized for Thing-OS.
 
-- **Fork Repository**: [dancxjo/rust-thingos](https://github.com/dancxjo/rust-thingos)
-- **Local Path**: `vendor/rust/` (populated via `just fetch-rust`)
-- **Modifications**: All changes to `core`, `alloc`, `std`, or the compiler must be committed directly to the `rust-thingos` fork. This repository does not use local `.patch` files.
-- **Submodules**: Manual changes to submodules (like LLVM) are documented in `vendor/rust/submodule_patches.md`.
-
-Workflow:
-1. `just fetch-rust` (initializes/syncs the `vendor/rust` submodule and pins it to `thingos-patched`)
-2. Edit `vendor/rust/...`
-3. Commit and push changes to the `rust-thingos` fork repository.
-4. Run `just rust-reset` to hard-reset `vendor/rust` to `origin/thingos-patched`.
+- **Fork Repository**: [dancxjo/thingos](https://github.com/dancxjo/thingos) (unified with [dancxjo/rust-thingos](https://github.com/dancxjo/rust-thingos))
+- **Source Layout**: The Rust `compiler/` and `library/` (standard library) directories are at the root of this workspace.
+- **Modifications**: Edit Rust source files directly in the root (e.g., `library/std/src/sys/pal/thingos/...`). Commit and push changes as part of the main repository history.
 
 Important implications:
-- Fresh checkouts do not have `vendor/rust/`.
-- `git status` in the main repo does not track changes inside `vendor/rust/`.
-- The `xtask` build system hashes the git revision of `vendor/rust/` to detect when the compiler needs to be rebuilt.
+- All Rust source code is tracked directly in this repository.
+- `git status` shows all changes to the compiler and standard library.
+- The `xtask` build system hashes the relevant root directories and configuration files to detect when the compiler needs to be rebuilt.
 
 ## Architecture Guardrails
 

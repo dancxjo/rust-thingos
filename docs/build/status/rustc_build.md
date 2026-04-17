@@ -31,10 +31,10 @@ Two structured patches fix this:
 
 | Patch | Target repo | What it does |
 |---|---|---|
-| `patches/rust/vendor-rust/0001-bootstrap-use-thingos-cmake-system-name.patch` | `vendor/rust` | Changes `llvm.rs` to emit `CMAKE_SYSTEM_NAME=ThingOS` and `LLVM_ON_UNIX=ON` instead of `Generic` |
-| `patches/rust/llvm-project/0001-llvm-classify-thingos-as-unix.patch` | `vendor/rust/src/llvm-project` | Classifies `ThingOS` as a Unix-like platform in `config-ix.cmake` and `HandleLLVMOptions.cmake` |
+| `patches/rust/0001-bootstrap-use-thingos-cmake-system-name.patch` | Root | Changes `llvm.rs` to emit `CMAKE_SYSTEM_NAME=ThingOS` and `LLVM_ON_UNIX=ON` instead of `Generic` |
+| `patches/rust/llvm-project/0001-llvm-classify-thingos-as-unix.patch` | `src/llvm-project` | Classifies `ThingOS` as a Unix-like platform in `config-ix.cmake` and `HandleLLVMOptions.cmake` |
 
-These patches are applied automatically by `just rust-apply-patches`.
+These patches were used to bootstrap the fork and are now integrated or applied via direct commits.
 
 ### #716 — Refine `llvm-target` in target JSON
 
@@ -71,12 +71,12 @@ and the `rustc` binary into the ISO.
 
 ## Patch inventory
 
-### Applied by `just rust-apply-patches`
+### Integrated Patches
 
 | File | Applies to | Description |
 |---|---|---|
-| `patches/rust/vendor-rust/0001-bootstrap-use-thingos-cmake-system-name.patch` | `vendor/rust` | Bootstrap uses `ThingOS` CMake system name |
-| `patches/rust/llvm-project/0001-llvm-classify-thingos-as-unix.patch` | `vendor/rust/src/llvm-project` | Classify ThingOS as Unix in LLVM CMake |
+| `patches/rust/0001-bootstrap-use-thingos-cmake-system-name.patch` | Root | Bootstrap uses `ThingOS` CMake system name |
+| `patches/rust/llvm-project/0001-llvm-classify-thingos-as-unix.patch` | `src/llvm-project` | Classify ThingOS as Unix in LLVM CMake |
 
 ### Legacy flat patches (documentation only — NOT applied automatically)
 
@@ -110,7 +110,7 @@ target/rustc-thingos/.cache-key         ← invalidation hash
 ```
 
 The cache is keyed on `targets/x86_64-unknown-thingos.json`,
-`rust-toolchain.toml`, and the git HEAD of `vendor/rust`.
+`rust-toolchain.toml`, and the git HEAD.
 
 ---
 
@@ -142,8 +142,6 @@ The std build emits `unexpected_cfgs` warnings for `#[cfg(target_os =
 indicate `thingos` is not yet declared in `library/std/build.rs` as a known
 `target_os` value.
 
-**Fix needed**: a new `vendor-rust/` patch that adds a
-`cargo::rustc-check-cfg=cfg(target_os, values("thingos"))` directive to
 `library/std/build.rs` (or equivalent in the compiler's check-cfg list).
 
 ### 2. ThingOS-hosted compiler
@@ -179,13 +177,6 @@ Once a ThingOS-native compiler exists it should:
    linux-gnu sysroot).
 
 ---
-
-## Checkout / vendor/rust note
-
-Some checkouts have `.gitmodules` and `.git/modules/vendor/rust` present
-without a `vendor/rust` gitlink tracked in the main worktree index.  In that
-state `just fetch-rust` falls back to a plain `git clone` of the fork rather
-than a submodule update; both modes are supported.
 
 ---
 

@@ -82,4 +82,4 @@ Demonstrate:
 
 ## Notes
 
-`vendor/rust/` is intentionally not tracked by this repository. Changes to std internals must be committed to the rust fork repository (`dancxjo/rust-thingos`).
+Internal changes to `std` should be committed directly to this repository.
