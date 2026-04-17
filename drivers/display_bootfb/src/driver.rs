@@ -163,10 +163,10 @@ impl BootFbDriver {
 fn find_framebuffer() -> Option<Framebuffer> {
     use abi::display_driver_protocol::FbInfoPayload;
     use abi::errors::Errno;
-    use abi::syscall::vfs_flags::O_RDONLY;
+    use abi::syscall::vfs_flags::O_RDWR;
 
     info!("display_bootfb: probing /dev/fb0...");
-    let fd = match vfs_open("/dev/fb0", O_RDONLY) {
+    let fd = match vfs_open("/dev/fb0", O_RDWR) {
         Ok(fd) => fd,
         Err(Errno::EACCES) => {
             stem::warn!(
