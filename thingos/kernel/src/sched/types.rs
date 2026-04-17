@@ -104,9 +104,6 @@ pub(crate) struct SchedulerMetrics {
 pub struct Scheduler<R: BootRuntime> {
     pub(crate) state: crate::sched::state::SchedState,
     pub(crate) next_id: TaskId,
-    pub(crate) preempt_disable_depth: usize,
-    pub(crate) preempt_disable_since: u64,
-    pub(crate) watchdog_warned: bool,
     pub(crate) total_cpu_count: usize,
     pub(crate) bringup_in_progress: bool,
     pub(crate) metrics: SchedulerMetrics,
@@ -158,9 +155,6 @@ impl<R: BootRuntime> Scheduler<R> {
         Scheduler {
             state: crate::sched::state::SchedState::new(),
             next_id: 1,
-            preempt_disable_depth: 0,
-            preempt_disable_since: 0,
-            watchdog_warned: false,
             total_cpu_count: 1,
             bringup_in_progress: false,
             metrics: SchedulerMetrics::new(),

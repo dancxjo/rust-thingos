@@ -103,7 +103,7 @@ pub unsafe fn translate_user_page<R: BootRuntime>(addr: u64) -> Option<u64> {
         let current_id = match sched.state.per_cpu.get(cpu).and_then(|pc| pc.current) {
             Some(id) => id,
             None => {
-                super::clear_sched_lock_tracking();
+                super::clear_sched_lock_tracking::<R>();
                 rt.irq_restore(_irq);
                 return None;
             }

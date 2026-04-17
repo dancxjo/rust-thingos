@@ -70,9 +70,14 @@ pub fn set_sched_lock_tracking<R: BootRuntime>(cpu_idx: usize) {
 }
 
 #[inline]
-pub fn clear_sched_lock_tracking() {
-    SCHEDULER_LOCK_OWNER.store(-1, Ordering::Release);
-    SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Release);
+pub fn clear_sched_lock_tracking<R: BootRuntime>() {
+    let cpu_owner = crate::runtime::<R>().current_cpu_index() as isize;
+    if SCHEDULER_LOCK_OWNER
+        .compare_exchange(cpu_owner, -1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Release);
+    }
 }
 
 
@@ -941,7 +946,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             if let Some(switch) = switch {
                 // Must drop lock before context switch!
-                clear_sched_lock_tracking();
+                clear_sched_lock_tracking::<R>();
                 drop(lock);
 
                 // Send deferred wake-sleeper IPIs now that the lock is released.
@@ -1005,7 +1010,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                     }
                 }
                 // Release the lock before sending any deferred IPIs.
-                clear_sched_lock_tracking();
+                clear_sched_lock_tracking::<R>();
                 drop(lock);
                 // Send deferred wake-sleeper IPIs after the SCHEDULER lock is released.
                 for cpu in deferred_ipis {
@@ -1017,7 +1022,7 @@ fn try_resched_if_needed<R: BootRuntime>() {
                 apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
             }
         } else {
-            clear_sched_lock_tracking();
+            clear_sched_lock_tracking::<R>();
             drop(lock);
         }
     } else {
@@ -1275,7 +1280,7 @@ pub fn init<R: BootRuntime>() {
         };
         crate::contract!("Scheduler initialized");
     }
-    clear_sched_lock_tracking();
+    clear_sched_lock_tracking::<R>();
 }
 
 fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
@@ -1397,7 +1402,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let cpu_idx = current_cpu_index::<R>();
         let global_requested = GLOBAL_NEED_RESCHED[cpu_idx].swap(false, Ordering::Acquire);
 
-        if self.preempt_disable_depth > 0 {
+        if self.state.per_cpu[cpu_idx].preempt_disable_depth > 0 {
             if global_requested {
                 self.state.per_cpu[cpu_idx].need_resched = true;
             }
@@ -1459,11 +1464,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
     /// Check if preemption has been disabled too long
     fn check_preempt_watchdog(&mut self) {
-        if self.preempt_disable_depth > 0 && !self.watchdog_warned {
+        let cpu_idx = current_cpu_index::<R>();
+        let per_cpu = &mut self.state.per_cpu[cpu_idx];
+        if per_cpu.preempt_disable_depth > 0 && !per_cpu.preempt_watchdog_warned {
             let now = TICK_COUNT.load(Ordering::Relaxed);
-            if now.saturating_sub(self.preempt_disable_since) > 500 {
+            if now.saturating_sub(per_cpu.preempt_disable_since) > 500 {
                 // );
-                self.watchdog_warned = true;
+                per_cpu.preempt_watchdog_warned = true;
             }
         }
     }
@@ -1623,19 +1630,21 @@ impl<R: BootRuntime> types::Scheduler<R> {
     }
 
     pub fn preempt_disable(&mut self) {
-        if self.preempt_disable_depth == 0 {
+        let cpu_idx = current_cpu_index::<R>();
+        let per_cpu = &mut self.state.per_cpu[cpu_idx];
+        if per_cpu.preempt_disable_depth == 0 {
             // Track when we started disabling preemption
-            self.preempt_disable_since = TICK_COUNT.load(Ordering::Relaxed);
-            self.watchdog_warned = false;
+            per_cpu.preempt_disable_since = TICK_COUNT.load(Ordering::Relaxed);
+            per_cpu.preempt_watchdog_warned = false;
         }
-        self.preempt_disable_depth += 1;
-        if self.preempt_disable_depth == 1 {
+        per_cpu.preempt_disable_depth += 1;
+        if per_cpu.preempt_disable_depth == 1 {
             // Only trace on transition to disabled? Or depth change?
             // User task says "Record (..., preempt_disable_depth)".
             // Let's trace all for now, or just 0->1.
             // 0->1 is most important for start of disable region.
             crate::trace::irq_ring::push(abi::trace::TraceEvent::PreemptDisable {
-                depth: self.preempt_disable_depth as u32,
+                depth: per_cpu.preempt_disable_depth as u32,
                 timestamp: crate::trace::now(),
             });
         }
@@ -1683,14 +1692,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
             <R::Tasking as BootTasking>::AddressSpace,
         >,
     > {
-        if self.preempt_disable_depth > 0 {
-            self.preempt_disable_depth -= 1;
+        let cpu_idx = current_cpu_index::<R>();
+        let per_cpu = &mut self.state.per_cpu[cpu_idx];
+        if per_cpu.preempt_disable_depth > 0 {
+            per_cpu.preempt_disable_depth -= 1;
         }
 
-        if self.preempt_disable_depth == 0
-            && self.state.per_cpu[current_cpu_index::<R>()].need_resched
-        {
-            self.state.per_cpu[current_cpu_index::<R>()].need_resched = false;
+        if per_cpu.preempt_disable_depth == 0 && per_cpu.need_resched {
+            per_cpu.need_resched = false;
             return self.schedule_point(ScheduleReason::SafePoint);
         }
         None
@@ -2791,7 +2800,7 @@ pub fn exit<R: BootRuntime>(code: i32) {
         let (switch, waiters) = sched.terminate_current(code);
         let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
-        clear_sched_lock_tracking();
+        clear_sched_lock_tracking::<R>();
         (switch, waiters, deferred_prepare_ipis, deferred_registry_syncs)
     };
 
@@ -3642,6 +3651,8 @@ mod tests {
         init_mock_runtime();
         crate::task::registry::init::<MockRuntime>();
         *SCHEDULER.lock() = None;
+        SCHEDULER_LOCK_OWNER.store(-1, Ordering::Relaxed);
+        SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Relaxed);
         TICK_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
         reset_any_wake_policy_for_tests();
         guard
@@ -3723,6 +3734,50 @@ mod tests {
             sched.state.per_cpu[0].runq[TaskPriority::High as usize].front().copied(),
             Some(42)
         );
+    }
+
+    #[test]
+    fn preempt_disable_depth_is_cpu_local() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        sched.state.per_cpu[1].preempt_disable_depth = 3;
+        sched.state.per_cpu[1].preempt_disable_since = 42;
+        sched.state.per_cpu[1].preempt_watchdog_warned = true;
+
+        TICK_COUNT.store(99, Ordering::Relaxed);
+        sched.preempt_disable();
+        sched.preempt_disable();
+        assert_eq!(sched.state.per_cpu[0].preempt_disable_depth, 2);
+        assert_eq!(sched.state.per_cpu[0].preempt_disable_since, 99);
+        assert!(!sched.state.per_cpu[0].preempt_watchdog_warned);
+
+        sched.preempt_enable();
+        assert_eq!(sched.state.per_cpu[0].preempt_disable_depth, 1);
+        sched.preempt_enable();
+        assert_eq!(sched.state.per_cpu[0].preempt_disable_depth, 0);
+
+        assert_eq!(sched.state.per_cpu[1].preempt_disable_depth, 3);
+        assert_eq!(sched.state.per_cpu[1].preempt_disable_since, 42);
+        assert!(sched.state.per_cpu[1].preempt_watchdog_warned);
+    }
+
+    #[test]
+    fn clear_sched_lock_tracking_only_clears_when_called_by_owner_cpu() {
+        let _g = init_test_env();
+
+        set_sched_lock_tracking::<MockRuntime>(1);
+        SCHEDULER_LOCK_ACQUIRED_AT.store(123, Ordering::Release);
+        clear_sched_lock_tracking::<MockRuntime>();
+        assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), 1);
+        assert_eq!(SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire), 123);
+
+        set_sched_lock_tracking::<MockRuntime>(0);
+        clear_sched_lock_tracking::<MockRuntime>();
+        assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), -1);
+        assert_eq!(SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire), 0);
     }
 
     #[test]

@@ -43,7 +43,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             &super::PROF_SCHED_LOCK_YIELD_NOW_HOLD_HIST,
             lock_start,
         );
-        super::clear_sched_lock_tracking();
+        super::clear_sched_lock_tracking::<R>();
         (sp, work, deferred_prepare_ipis, deferred_registry_syncs)
     };
     super::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
@@ -160,7 +160,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             &super::PROF_SCHED_LOCK_SLEEP_TICKS_HOLD_HIST,
             lock_start,
         );
-        super::clear_sched_lock_tracking();
+        super::clear_sched_lock_tracking::<R>();
         (
             switch,
             (current_id, final_state),
