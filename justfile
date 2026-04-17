@@ -352,10 +352,31 @@ busybox arch=karch *args:
     else
         TARGET_JSON="targets/${ARCH}-unknown-thingos.json"
     fi
-    export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
+    BUILD_STD_CRATES="core,alloc,panic_abort"
+    CARGO_BUILD_ARGS=(
+        -Z "build-std=${BUILD_STD_CRATES}"
+        -Z build-std-features=compiler-builtins-mem
+        -Z json-target-spec
+        build
+        --manifest-path "$BUSYBOX_DIR/Cargo.toml"
+        --target "$TARGET_JSON"
+        --profile release
+        --no-default-features
+        --features alloc,minimal
+    )
+    STAGE1_WRAPPER="$(pwd)/target/rustc-thingos/rustc-wrapper"
+    if [[ -f "$STAGE1_WRAPPER" && "${SKIP_RUSTC_THINGOS:-}" != "1" ]]; then
+        export RUSTC="$STAGE1_WRAPPER"
+        export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
+        export RUST_TARGET_PATH="$(pwd)/targets"
+        BUILD_STD_CRATES="core,alloc,std,panic_abort"
+        CARGO_BUILD_ARGS[1]="build-std=${BUILD_STD_CRATES}"
+    fi
+    if [[ -d "$(pwd)/vendor/libc" ]]; then
+        CARGO_BUILD_ARGS+=(--config "patch.crates-io.libc.path=\"$(pwd)/vendor/libc\"")
+    fi
     CARGO_TARGET_DIR="$(pwd)/target/busybox" \
-    cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec \
-        build --manifest-path "$BUSYBOX_DIR/Cargo.toml" --target "$TARGET_JSON" --profile release
+    cargo "${CARGO_BUILD_ARGS[@]}"
     TARGET_NAME="$(basename "$TARGET_JSON" .json)"
     BUSYBOX_BIN="$(pwd)/target/busybox/$TARGET_NAME/release/armybox"
     if [[ ! -f "$BUSYBOX_BIN" ]]; then
