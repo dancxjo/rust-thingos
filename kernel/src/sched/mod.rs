@@ -1643,9 +1643,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 );
                 panic!("failed to find current_id {} in get_task_index", current_id)
             });
-            // Keep the scheduler-side cache in sync.  No REGISTRY write is
-            // needed in the same-task (no-switch) case: this task remains
-            // running and no lifecycle transition occurred.
+            // Keep scheduler cache fields in sync. No REGISTRY write is needed
+            // in the same-task (no-switch) case: this task remains running and
+            // no lifecycle transition occurred.
             self.state.threads[idx].state = TaskState::Running;
             self.state.threads[idx].run_cpu = Some(cpu_idx);
             return None;
@@ -1680,7 +1680,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Drive transition decisions from the scheduler hot-cache and defer
         // REGISTRY synchronization for these state fields until after the
         // SCHEDULER lock is released.
-        if self.state.threads[old_idx].state == TaskState::Running {
+        let old_was_running = self.state.threads[old_idx].state == TaskState::Running;
+        if old_was_running {
             self.state.threads[old_idx].state = TaskState::Runnable;
             self.state.threads[old_idx].enqueued_at_tick = now;
             self.pending_registry_syncs
@@ -1688,10 +1689,19 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     tid: current_id,
                     new_state: Some(TaskState::Runnable),
                     new_enqueued_at_tick: Some(now),
-                    new_last_cpu: None,
+                    new_last_cpu: Some(cpu_idx),
                 });
         }
         self.state.threads[old_idx].last_cpu = Some(cpu_idx);
+        if !old_was_running {
+            self.pending_registry_syncs
+                .push(types::DeferredRegistrySync {
+                    tid: current_id,
+                    new_state: None,
+                    new_enqueued_at_tick: None,
+                    new_last_cpu: Some(cpu_idx),
+                });
+        }
         self.state.threads[new_idx].state = TaskState::Running;
         self.state.threads[new_idx].last_cpu = Some(cpu_idx);
         self.state.threads[new_idx].run_cpu = Some(cpu_idx);
@@ -1702,7 +1712,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 new_enqueued_at_tick: None,
                 new_last_cpu: Some(cpu_idx),
             });
-        // timeslice_remaining is managed exclusively via the hot-field cache:
+        // Only timeslice_remaining is intentionally managed exclusively via the
+        // hot-field cache:
         // schedule_point decrements it without touching REGISTRY. The REGISTRY
         // copy may therefore be stale between context switches; this is
         // intentional and acceptable because no correctness-critical path reads
