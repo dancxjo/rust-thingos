@@ -364,4 +364,29 @@ mod tests {
             "stale older queue entry must be skipped"
         );
     }
+
+    #[test]
+    fn stale_entries_do_not_increment_dequeue_stats() {
+        let mut state = SchedState::new();
+        state.per_cpu.push(PerCpu::new());
+        state.insert_thread(sched_fields(13, TaskState::Runnable, TaskPriority::Normal));
+        state.enqueue_thread(0, TaskPriority::Normal as usize, 13);
+        assert!(state.remove_thread_from_runq(13));
+
+        assert_eq!(state.per_cpu[0].stats.runnable_dequeues, 0);
+        assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), None);
+        assert_eq!(
+            state.per_cpu[0].stats.runnable_dequeues,
+            0,
+            "stale entries should not count as runnable dequeues"
+        );
+
+        state.enqueue_thread(0, TaskPriority::Normal as usize, 13);
+        assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), Some(13));
+        assert_eq!(
+            state.per_cpu[0].stats.runnable_dequeues,
+            1,
+            "valid dequeue should increment runnable_dequeues"
+        );
+    }
 }
