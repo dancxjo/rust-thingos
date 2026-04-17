@@ -5,8 +5,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_readdir, vfs_write};
-use stem::syscall::vfs::vfs_lstat;
+use stem::syscall::{argv_get, exit, vfs::vfs_lstat, vfs_close, vfs_open, vfs_readdir, vfs_write};
 
 const S_IFDIR: u32 = 0o040000;
 const S_IFMT: u32 = 0o170000;
@@ -156,9 +155,6 @@ fn parse_args(args: &[String]) -> Result<(TypeFilter, Vec<String>), &'static str
         i += 1;
     }
 
-    if paths.is_empty() {
-        paths.push(String::from("."));
-    }
     Ok((filter, paths))
 }
 
@@ -175,8 +171,12 @@ fn main(_arg: usize) -> ! {
     };
 
     let mut has_error = false;
-    for path in &paths {
-        walk(path, filter, &mut has_error);
+    if paths.is_empty() {
+        walk(".", filter, &mut has_error);
+    } else {
+        for path in &paths {
+            walk(path, filter, &mut has_error);
+        }
     }
 
     if has_error {
