@@ -360,6 +360,10 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     }
 
     if let Some(cpu) = ipi_cpu {
+        if !super::should_send_remote_resched_ipi(cpu) {
+            rt.irq_restore(_irq);
+            return;
+        }
         super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         rt.send_ipi(cpu, 0x30);

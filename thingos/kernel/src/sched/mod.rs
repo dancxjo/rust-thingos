@@ -163,6 +163,11 @@ pub static PROF_RUNQ_DEPTH_VARIANCE_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_EPISODES: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_LONGEST_US: AtomicU64 = AtomicU64::new(0);
+static LAST_RESCHED_IPI_SENT_AT_TICK: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_INIT: AtomicU64 = AtomicU64::new(u64::MAX);
+    [ATOMIC_INIT; types::MAX_CPUS]
+};
 
 /// Number of histogram buckets used for hold/wait time distributions.
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
@@ -170,6 +175,7 @@ pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
+const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 16;
 
 /// Map a microsecond duration to a histogram bucket index.
 ///
@@ -580,9 +586,10 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
 /// the per-schedule-point iteration incurs zero overhead in normal builds.
 #[inline]
 pub(crate) fn sample_runq_len<R: BootRuntime>(sched: &mut types::Scheduler<R>, cpu: usize) {
+    let mut sample_seq = 0u64;
     if let Some(pc) = sched.state.per_cpu.get_mut(cpu) {
         let len64 = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
-        PROF_RUNQ_SAMPLE_COUNT[cpu].fetch_add(1, Ordering::Relaxed);
+        sample_seq = PROF_RUNQ_SAMPLE_COUNT[cpu].fetch_add(1, Ordering::Relaxed) + 1;
         PROF_RUNQ_SAMPLE_TOTAL[cpu].fetch_add(len64, Ordering::Relaxed);
         pc.stats.runq_sample_count = pc.stats.runq_sample_count.saturating_add(1);
         pc.stats.runq_sample_total = pc.stats.runq_sample_total.saturating_add(len64);
@@ -591,6 +598,9 @@ pub(crate) fn sample_runq_len<R: BootRuntime>(sched: &mut types::Scheduler<R>, c
             PROF_RUNQ_LEN_LAST[cpu].store(len64, Ordering::Relaxed);
             update_max_u64(&PROF_RUNQ_LEN_MAX[cpu], len64);
         }
+    }
+    if sample_seq == 0 || sample_seq % RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE != 0 {
+        return;
     }
     let online = &sched.state.online_cpus;
     if !online.is_empty() {
@@ -1063,10 +1073,28 @@ pub(crate) fn send_deferred_prepare_schedule_ipis<R: BootRuntime>(
     }
     let rt = crate::runtime::<R>();
     for cpu in deferred_ipis {
+        if !should_send_remote_resched_ipi(cpu) {
+            continue;
+        }
         DIAG_IPI_SENT.fetch_add(1, Ordering::Relaxed);
         DIAG_IPI_SENT_PREPARE_SCHEDULE.fetch_add(1, Ordering::Relaxed);
         rt.send_ipi(cpu, 0x30);
     }
+}
+
+#[inline]
+pub(crate) fn should_send_remote_resched_ipi(target_cpu: usize) -> bool {
+    if target_cpu >= types::MAX_CPUS {
+        return true;
+    }
+    let now_tick = TICK_COUNT.load(Ordering::Relaxed);
+    let last_tick = LAST_RESCHED_IPI_SENT_AT_TICK[target_cpu].load(Ordering::Relaxed);
+    if last_tick == now_tick {
+        PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    LAST_RESCHED_IPI_SENT_AT_TICK[target_cpu].store(now_tick, Ordering::Relaxed);
+    true
 }
 
 pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
@@ -4445,6 +4473,9 @@ mod tests {
 
         DIAG_IPI_SENT.store(0, Ordering::Relaxed);
         DIAG_IPI_SENT_PREPARE_SCHEDULE.store(0, Ordering::Relaxed);
+        LAST_RESCHED_IPI_SENT_AT_TICK[1].store(u64::MAX, Ordering::Relaxed);
+        LAST_RESCHED_IPI_SENT_AT_TICK[2].store(u64::MAX, Ordering::Relaxed);
+        TICK_COUNT.store(1, Ordering::Relaxed);
 
         send_deferred_prepare_schedule_ipis::<MockRuntime>(alloc::vec![1usize, 2usize]);
 
@@ -4457,6 +4488,61 @@ mod tests {
             DIAG_IPI_SENT_PREPARE_SCHEDULE.load(Ordering::Relaxed),
             2,
             "prepare_schedule source counter should increase for each deferred send"
+        );
+    }
+
+    #[test]
+    fn test_send_deferred_prepare_schedule_ipis_suppresses_same_tick_duplicates() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        DIAG_IPI_SENT.store(0, Ordering::Relaxed);
+        DIAG_IPI_SENT_PREPARE_SCHEDULE.store(0, Ordering::Relaxed);
+        PROF_IPI_SUPPRESSED.store(0, Ordering::Relaxed);
+        LAST_RESCHED_IPI_SENT_AT_TICK[1].store(u64::MAX, Ordering::Relaxed);
+        TICK_COUNT.store(42, Ordering::Relaxed);
+
+        send_deferred_prepare_schedule_ipis::<MockRuntime>(alloc::vec![1usize, 1usize]);
+
+        assert_eq!(DIAG_IPI_SENT.load(Ordering::Relaxed), 1);
+        assert_eq!(DIAG_IPI_SENT_PREPARE_SCHEDULE.load(Ordering::Relaxed), 1);
+        assert_eq!(PROF_IPI_SUPPRESSED.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_sample_runq_len_downsamples_global_telemetry_scan() {
+        let _g = init_test_env();
+        use crate::sched::state::PerCpu;
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(PerCpu::new());
+        sched.state.per_cpu.push(PerCpu::new());
+        sched.state.online_cpus = alloc::vec![0, 1];
+        sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].push_back(7001);
+        sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].push_back(7002);
+
+        PROF_RUNQ_SAMPLE_COUNT[0].store(0, Ordering::Relaxed);
+        PROF_RUNQ_SAMPLE_TOTAL[0].store(0, Ordering::Relaxed);
+        PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT.store(0, Ordering::Relaxed);
+        PROF_RUNQ_DEPTH_VARIANCE_TOTAL.store(0, Ordering::Relaxed);
+        PROF_RUNQ_DEPTH_VARIANCE_LAST.store(0, Ordering::Relaxed);
+        PROF_RUNQ_DEPTH_VARIANCE_MAX.store(0, Ordering::Relaxed);
+
+        for _ in 0..(RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE - 1) {
+            sample_runq_len(&mut sched, 0);
+        }
+        assert_eq!(
+            PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT.load(Ordering::Relaxed),
+            0,
+            "global variance scan should be skipped until the configured stride is reached"
+        );
+
+        sample_runq_len(&mut sched, 0);
+        assert_eq!(
+            PROF_RUNQ_DEPTH_VARIANCE_SAMPLE_COUNT.load(Ordering::Relaxed),
+            1,
+            "global variance scan should run when the stride boundary is reached"
         );
     }
 
