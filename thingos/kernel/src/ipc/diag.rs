@@ -91,11 +91,6 @@ pub fn ports_text() -> alloc::string::String {
     )
 }
 
-#[inline]
-pub fn channels_text() -> alloc::string::String {
-    ports_text()
-}
-
 /// Render pipe counters as a human-readable text block (for `/proc/ipc/pipes`).
 pub fn pipes_text() -> alloc::string::String {
     alloc::format!(

@@ -141,14 +141,6 @@ pub fn install_fd_compat_for_port_handle(
     )
 }
 
-#[inline]
-pub fn install_fd_compat_for_channel_handle(
-    pinfo_arc: &Arc<Mutex<crate::task::ProcessInfo>>,
-    handle: Handle,
-) -> SysResult<u32> {
-    install_fd_compat_for_port_handle(pinfo_arc, handle)
-}
-
 /// Resolve a write-capable port endpoint from a compat token (fd or handle).
 ///
 /// Used where migration still accepts either token shape at syscall boundaries.

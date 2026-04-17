@@ -71,7 +71,6 @@ impl VfsDriver for ProcFs {
             // /proc/ipc — IPC diagnostics directory
             "ipc" => Ok(Arc::new(IpcDirNode)),
             "ipc/ports" => Ok(Arc::new(IpcDiagNode::ports())),
-            "ipc/channels" => Ok(Arc::new(IpcDiagNode::ports())), // compat alias
             "ipc/pipes" => Ok(Arc::new(IpcDiagNode::pipes())),
             "ipc/vfs_rpc" => Ok(Arc::new(IpcDiagNode::vfs_rpc())),
             // /proc/self — virtual directory for the calling process
@@ -1207,16 +1206,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_ipc_channels_compat_alias() {
-        let node = lookup("ipc/channels").unwrap();
-        let mut buf = [0u8; 256];
-        let n = node.read(0, &mut buf).unwrap();
-        assert!(n > 0);
-        let s = core::str::from_utf8(&buf[..n]).unwrap();
-        assert!(s.contains("sends:"));
-    }
-
-    #[test]
     fn test_lookup_ipc_pipes() {
         let node = lookup("ipc/pipes").unwrap();
         let mut buf = [0u8; 256];
@@ -1238,7 +1227,7 @@ mod tests {
 
     #[test]
     fn test_ipc_diag_nodes_are_readonly() {
-        for path in &["ipc/ports", "ipc/channels", "ipc/pipes", "ipc/vfs_rpc"] {
+        for path in &["ipc/ports", "ipc/pipes", "ipc/vfs_rpc"] {
             let node = lookup(path).unwrap();
             assert!(matches!(node.write(0, b"x"), Err(Errno::EROFS)));
         }
