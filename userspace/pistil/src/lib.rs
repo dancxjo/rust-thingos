@@ -1,6 +1,4 @@
-#![no_std]
 
-extern crate alloc;
 
 use abi::seed::{SEED_ABI_VERSION, Seed, SeedInterface};
 

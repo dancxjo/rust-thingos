@@ -433,6 +433,17 @@ pub fn build_iso_with_config(
         )?;
     }
 
+    // Stage libstd.so from bootstrap artifacts.
+    // Note: rustc-thingos/bootstrap build puts artifacts under build/
+    if arch == "x86_64" {
+        let std_src = cwd.join("build/x86_64-unknown-linux-gnu/stage1-std/x86_64-unknown-thingos/release/libstd.so");
+        if std_src.exists() {
+            let std_dst = iso_root.join("lib/libstd.so");
+            sh.create_dir(std_dst.parent().unwrap())?;
+            sh.copy_file(&std_src, &std_dst)?;
+        }
+    }
+
     stage_rustc_for_iso(sh, iso_root)?;
 
     let limine_conf_content = generate_limine_config(sh, programs, &asset_files, config.resolution);

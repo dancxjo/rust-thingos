@@ -235,7 +235,7 @@ fn cache_thingos_rustc_tree(sh: &Shell, cwd: &Path, thingos_rustc: &Path, thingo
     Ok(())
 }
 
-fn bootstrap_config(include_thingos_host: bool, local_rebuild: bool) -> String {
+fn bootstrap_config(include_thingos_host: bool, local_rebuild: bool, linker_path: &Path) -> String {
     let host_list = if include_thingos_host {
         "[\"x86_64-unknown-linux-gnu\", \"x86_64-unknown-thingos\"]"
     } else {
@@ -264,12 +264,14 @@ deny-warnings = false
 rpath = false
 
 [target.x86_64-unknown-thingos]
+linker = "{linker_path}"
 sanitizers = false
 profiler = false
 
 [llvm]
 download-ci-llvm = true
-"#
+"#,
+        linker_path = linker_path.display()
     )
 }
 
@@ -330,7 +332,8 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
     let target_dir = cwd.join("targets");
     let target_dir_str = target_dir.to_str().context("non-utf8 target dir")?;
 
-    std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(true, true))?;
+    let linker_path = cwd.join("build/x86_64-unknown-linux-gnu/stage0/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld");
+    std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(true, true, &linker_path))?;
     seed_stage0_thingos_sysroot(cwd)?;
 
     let native_build = cmd!(sh, "python3 x.py build --stage 1 compiler/rustc src/tools/cargo")
@@ -341,7 +344,7 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
         println!(
             "rustc-thingos: warning: native rustc build failed; continuing without ISO rustc: {err}"
         );
-        std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true))?;
+        std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true, &linker_path))?;
         return Ok(false);
     }
 
@@ -354,14 +357,14 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
                 thingos_cargo.is_some(),
                 OUTPUT_DIR
             );
-            std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true))?;
+            std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true, &linker_path))?;
             Ok(true)
         }
         None => {
             println!(
                 "rustc-thingos: warning: native rustc build finished but artifact was not found; ISO will not include a native compiler."
             );
-            std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true))?;
+            std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true, &linker_path))?;
             Ok(false)
         }
     }
@@ -401,7 +404,8 @@ pub fn build_rustc_thingos(sh: &Shell, arch: &str) -> Result<Option<PathBuf>> {
 
     let had_backup = backup_root_config(sh, &cwd)?;
     let build_result = (|| -> Result<Option<PathBuf>> {
-        std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true))?;
+        let linker_path = cwd.join("build/x86_64-unknown-linux-gnu/stage0/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld");
+        std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true, &linker_path))?;
 
         let target_dir = cwd.join("targets");
         let target_dir_str = target_dir.to_str().context("non-utf8 target dir")?;
