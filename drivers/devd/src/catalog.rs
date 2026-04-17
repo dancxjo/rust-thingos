@@ -278,6 +278,7 @@ impl Catalog {
                     class_code: iface.class_code,
                     class_mask: iface.class_mask,
                     start_symbol,
+                    device_kind: "unknown".into(),
                 });
                 return;
             }
