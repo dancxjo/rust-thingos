@@ -600,7 +600,13 @@ fn global_need_resched_slot(cpu: usize) -> Option<&'static AtomicBool> {
 }
 
 #[inline]
-fn global_need_resched_bool_with_fallback(
+/// Run a bool-returning operation against `GLOBAL_NEED_RESCHED[cpu]` with
+/// bounds checks and a conservative fallback on invalid indices.
+///
+/// Returning `true` on invalid indices intentionally errs toward preserving
+/// pending-reschedule semantics (coalesce/suppress duplicate actions) instead
+/// of under-reporting demand.
+fn checked_global_need_resched_bool(
     cpu: usize,
     op: &'static str,
     f: impl FnOnce(&AtomicBool) -> bool,
@@ -621,14 +627,15 @@ fn global_need_resched_bool_with_fallback(
 
 #[inline]
 fn global_need_resched_load(cpu: usize, ordering: Ordering) -> bool {
-    global_need_resched_bool_with_fallback(cpu, "load", |slot| slot.load(ordering))
+    checked_global_need_resched_bool(cpu, "load", |slot| slot.load(ordering))
 }
 
 #[inline]
 fn global_need_resched_swap(cpu: usize, value: bool, ordering: Ordering) -> bool {
-    global_need_resched_bool_with_fallback(
+    let op = if value { "swap(true)" } else { "swap(false)" };
+    checked_global_need_resched_bool(
         cpu,
-        if value { "swap(true)" } else { "swap(false)" },
+        op,
         |slot| slot.swap(value, ordering),
     )
 }
@@ -7187,7 +7194,11 @@ mod tests {
         let before_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
         let before_pending =
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
-        let _ = global_need_resched_swap(0, true, core::sync::atomic::Ordering::Release);
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
+        assert!(
+            !global_need_resched_swap(0, true, core::sync::atomic::Ordering::Release),
+            "setup should mark CPU 0 resched flag from clear->set transition"
+        );
 
         // Must run while SCHEDULER lock is held so try_lock path fails.
         try_resched_if_needed::<MockRuntime>();
