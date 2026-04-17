@@ -70,7 +70,7 @@ impl VfsDriver for ProcFs {
             "uptime" => Ok(Arc::new(UptimeNode)),
             // /proc/ipc — IPC diagnostics directory
             "ipc" => Ok(Arc::new(IpcDirNode)),
-            "ipc/channels" => Ok(Arc::new(IpcDiagNode::channels())),
+            "ipc/ports" => Ok(Arc::new(IpcDiagNode::ports())),
             "ipc/pipes" => Ok(Arc::new(IpcDiagNode::pipes())),
             "ipc/vfs_rpc" => Ok(Arc::new(IpcDiagNode::vfs_rpc())),
             // /proc/self — virtual directory for the calling process
@@ -1000,7 +1000,7 @@ impl VfsNode for IpcDirNode {
         Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 500, ..Default::default() })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let entries = ["channels", "pipes", "vfs_rpc"];
+        let entries = ["ports", "pipes", "vfs_rpc"];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
 }
@@ -1012,14 +1012,14 @@ struct IpcDiagNode {
 }
 
 enum IpcDiagKind {
-    Channels,
+    Ports,
     Pipes,
     VfsRpc,
 }
 
 impl IpcDiagNode {
-    fn channels() -> Self {
-        Self { kind: IpcDiagKind::Channels, ino: 501 }
+    fn ports() -> Self {
+        Self { kind: IpcDiagKind::Ports, ino: 501 }
     }
     fn pipes() -> Self {
         Self { kind: IpcDiagKind::Pipes, ino: 502 }
@@ -1030,7 +1030,7 @@ impl IpcDiagNode {
 
     fn render(&self) -> alloc::string::String {
         match self.kind {
-            IpcDiagKind::Channels => crate::ipc::diag::channels_text(),
+            IpcDiagKind::Ports => crate::ipc::diag::ports_text(),
             IpcDiagKind::Pipes => crate::ipc::diag::pipes_text(),
             IpcDiagKind::VfsRpc => crate::ipc::diag::vfs_rpc_text(),
         }
@@ -1196,8 +1196,8 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_ipc_channels() {
-        let node = lookup("ipc/channels").unwrap();
+    fn test_lookup_ipc_ports() {
+        let node = lookup("ipc/ports").unwrap();
         let mut buf = [0u8; 256];
         let n = node.read(0, &mut buf).unwrap();
         assert!(n > 0);
@@ -1227,7 +1227,7 @@ mod tests {
 
     #[test]
     fn test_ipc_diag_nodes_are_readonly() {
-        for path in &["ipc/channels", "ipc/pipes", "ipc/vfs_rpc"] {
+        for path in &["ipc/ports", "ipc/pipes", "ipc/vfs_rpc"] {
             let node = lookup(path).unwrap();
             assert!(matches!(node.write(0, b"x"), Err(Errno::EROFS)));
         }

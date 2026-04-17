@@ -1,40 +1,40 @@
-//! IPC diagnostics — global counters for channels, pipes, and VFS RPC.
+//! IPC diagnostics — global counters for ports, pipes, and VFS RPC.
 //!
 //! All counters are `AtomicU64` incremented at the hot path (no locking).
-//! Expose them via `/proc/ipc/channels` and `/proc/ipc/pipes`.
+//! Expose them via `/proc/ipc/ports` and `/proc/ipc/pipes`.
 //!
 //! # Usage
 //!
 //! Increment from the relevant hot path:
 //! ```ignore
-//! crate::ipc::diag::CHANNEL_SENDS.fetch_add(1, Ordering::Relaxed);
+//! crate::ipc::diag::PORT_SENDS.fetch_add(1, Ordering::Relaxed);
 //! ```
 //!
 //! Read for display:
 //! ```ignore
-//! let s = crate::ipc::diag::channels_text();
+//! let s = crate::ipc::diag::ports_text();
 //! ```
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ── Channel counters ──────────────────────────────────────────────────────────
+// ── Port counters ─────────────────────────────────────────────────────────────
 
-/// Total `channel_send` calls that wrote ≥1 byte.
-pub static CHANNEL_SENDS: AtomicU64 = AtomicU64::new(0);
-/// Total `channel_recv` calls that read ≥1 byte.
-pub static CHANNEL_RECVS: AtomicU64 = AtomicU64::new(0);
-/// Cumulative bytes written via `channel_send`.
-pub static CHANNEL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
-/// Cumulative bytes read via `channel_recv`.
-pub static CHANNEL_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
+/// Total `sys_port_send` calls that wrote ≥1 byte.
+pub static PORT_SENDS: AtomicU64 = AtomicU64::new(0);
+/// Total `sys_port_recv` calls that read ≥1 byte.
+pub static PORT_RECVS: AtomicU64 = AtomicU64::new(0);
+/// Cumulative bytes written via port send.
+pub static PORT_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
+/// Cumulative bytes read via port receive.
+pub static PORT_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
 /// Total capability handles enqueued via `sendmsg`.
-pub static CHANNEL_HANDLES_SENT: AtomicU64 = AtomicU64::new(0);
+pub static PORT_HANDLES_SENT: AtomicU64 = AtomicU64::new(0);
 /// Total capability handles dequeued via `recvmsg`.
-pub static CHANNEL_HANDLES_RECV: AtomicU64 = AtomicU64::new(0);
-/// Times `channel_send_all` returned `EAGAIN` because the ring was full.
-pub static CHANNEL_FULL_EVENTS: AtomicU64 = AtomicU64::new(0);
+pub static PORT_HANDLES_RECV: AtomicU64 = AtomicU64::new(0);
+/// Times a send returned `EAGAIN` because the ring was full.
+pub static PORT_FULL_EVENTS: AtomicU64 = AtomicU64::new(0);
 /// Times a peer closure was observed (writer or reader).
-pub static CHANNEL_PEER_DEATHS: AtomicU64 = AtomicU64::new(0);
+pub static PORT_PEER_DEATHS: AtomicU64 = AtomicU64::new(0);
 
 // ── Pipe counters ─────────────────────────────────────────────────────────────
 
@@ -69,8 +69,8 @@ pub fn record_dead_provider_error() {
     VFS_RPC_DEAD_PROVIDER.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Render channel counters as a human-readable text block (for `/proc/ipc/channels`).
-pub fn channels_text() -> alloc::string::String {
+/// Render port counters as a human-readable text block (for `/proc/ipc/ports`).
+pub fn ports_text() -> alloc::string::String {
     alloc::format!(
         "sends:         {}\n\
          recvs:         {}\n\
@@ -80,14 +80,14 @@ pub fn channels_text() -> alloc::string::String {
          handles_recv:  {}\n\
          full_events:   {}\n\
          peer_deaths:   {}\n",
-        CHANNEL_SENDS.load(Ordering::Relaxed),
-        CHANNEL_RECVS.load(Ordering::Relaxed),
-        CHANNEL_BYTES_SENT.load(Ordering::Relaxed),
-        CHANNEL_BYTES_RECV.load(Ordering::Relaxed),
-        CHANNEL_HANDLES_SENT.load(Ordering::Relaxed),
-        CHANNEL_HANDLES_RECV.load(Ordering::Relaxed),
-        CHANNEL_FULL_EVENTS.load(Ordering::Relaxed),
-        CHANNEL_PEER_DEATHS.load(Ordering::Relaxed),
+        PORT_SENDS.load(Ordering::Relaxed),
+        PORT_RECVS.load(Ordering::Relaxed),
+        PORT_BYTES_SENT.load(Ordering::Relaxed),
+        PORT_BYTES_RECV.load(Ordering::Relaxed),
+        PORT_HANDLES_SENT.load(Ordering::Relaxed),
+        PORT_HANDLES_RECV.load(Ordering::Relaxed),
+        PORT_FULL_EVENTS.load(Ordering::Relaxed),
+        PORT_PEER_DEATHS.load(Ordering::Relaxed),
     )
 }
 
@@ -124,8 +124,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn channels_text_contains_expected_keys() {
-        let t = channels_text();
+    fn ports_text_contains_expected_keys() {
+        let t = ports_text();
         assert!(t.contains("sends:"));
         assert!(t.contains("bytes_sent:"));
         assert!(t.contains("handles_sent:"));

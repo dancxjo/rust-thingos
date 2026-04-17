@@ -1,7 +1,7 @@
-//! Kernel IPC: channels and pipes
+//! Kernel IPC: ports and pipes
 //!
 //! Provides two distinct IPC primitives:
-//! - **Channels** (`port.rs`): capability-gated, message-oriented queues.
+//! - **Ports** (`port.rs`): capability-gated, message-oriented queues.
 //!   Discrete messages, preserved message boundaries, capability (handle)
 //!   transfer.  Use for commands, events, RPC, capability passing.
 //! - **Pipes** (`pipe.rs`): anonymous byte streams.  No message boundaries,
@@ -9,7 +9,7 @@
 //!
 //! # Key Rule
 //!
-//! Do not use a channel as a byte stream (streaming raw PCM, text output, etc.)
+//! Do not use a port as a byte stream (streaming raw PCM, text output, etc.)
 //! and do not use a pipe for structured message exchange (commands, replies,
 //! capability passing).  See `docs/concepts/channels_vs_pipes.md`.
 //!
@@ -17,17 +17,16 @@
 //!
 //! The kernel-managed reference to an open object is called a **thing** in
 //! Thing-OS — what POSIX calls a "file descriptor" and Win32 calls a
-//! "handle".  Internally the ring-buffer backing a channel is implemented as
-//! a `Port`; that is an implementation detail.  User-facing syscalls and
-//! documentation always say **channel** and **thing**.
+//! "handle".  User-facing docs and APIs should use **port** and **thing**
+//! terminology consistently.
 //!
 //! # Ontology note
 //!
-//! In the ThingOS typed-world ontology a channel or pipe is a **Thing** whose
+//! In the ThingOS typed-world ontology a port or pipe is a **Thing** whose
 //! **Kind** determines its message semantics.  An `IpcThing` is the current
 //! compatibility reference Form for a Thing — the planned replacement is a
 //! typed `Handle` that carries Kind information.  **Message** (see
-//! `thingos::message`) is the canonical typed envelope for channel payloads.
+//! `thingos::message`) is the canonical typed envelope for port payloads.
 //!
 //! See `docs/architecture/ontology.md` §1.1 (Thing), §1.2 (Kind), and §1.3
 //! (Form) for the full definitions.

@@ -620,11 +620,11 @@ pub fn sys_pipe(pipefd_ptr: usize) -> SysResult<usize> {
 
 /// Explicitly bridge an IPC handle into the VFS world as a file descriptor.
 ///
-/// This allows standard `poll()` to be used across both files and channels.
+/// This allows standard `poll()` to be used across both files and ports.
 pub fn sys_fd_from_handle(handle_val: usize) -> SysResult<usize> {
     let handle = crate::handle::bridge::Handle(handle_val as u32);
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
-    Ok(crate::handle::bridge::install_fd_compat_for_channel_handle(&pinfo_arc, handle)? as usize)
+    Ok(crate::handle::bridge::install_fd_compat_for_port_handle(&pinfo_arc, handle)? as usize)
 }
 
 // ── mount ───────────────────────────────────────────────────────────────────
