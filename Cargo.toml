@@ -183,6 +183,15 @@ exclude = [
   "obj",
 ]
 
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[profile.bench]
+debug = true
+
 [profile.release.package.rustc_thread_pool]
 # The rustc fork of Rayon has deadlock detection code which intermittently
 # causes overflows in the CI (see https://github.com/rust-lang/rust/issues/90227)
@@ -219,9 +228,7 @@ codegen-units = 1
 crossterm = { path = "vendor/crossterm" }
 libc = { path = "vendor/libc" }
 which = { path = "vendor/which" }
-trash = { path = "vendor/trash" }
 dirs = { path = "vendor/dirs" }
 dirs-sys = { path = "vendor/dirs-sys" }
 errno = { path = "vendor/errno" }
 mio = { path = "vendor/mio" }
-filedescriptor = { path = "vendor/filedescriptor" }

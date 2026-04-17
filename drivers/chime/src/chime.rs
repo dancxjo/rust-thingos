@@ -69,11 +69,7 @@ pub fn generate_chime(sample_rate: u32) -> Vec<u8> {
         signal *= env * breath * 0.15; // Master gain
 
         // Soft Clipping / Saturation to warm it up
-        let signal = if signal > 0.8 {
-            0.8 + (signal - 0.8) * 0.5
-        } else {
-            signal
-        };
+        let signal = if signal > 0.8 { 0.8 + (signal - 0.8) * 0.5 } else { signal };
 
         let sample_l = signal;
         // Stereo widener: Phase shift the right channel slightly

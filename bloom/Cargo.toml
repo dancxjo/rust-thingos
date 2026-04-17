@@ -9,12 +9,6 @@ abi = { path = "../abi" }
 libdl = { path = "../utils/libdl" }
 pistil = { path = "../pistil" }
 
-[profile.release]
-panic = "abort"
-
-[profile.dev]
-panic = "abort"
-
 [[bin]]
 name = "bloom"
 path = "src/main.rs"

@@ -12,11 +12,7 @@ pub struct ToneGenerator {
 
 impl ToneGenerator {
     pub fn new(frequency: f64, sample_rate: f64) -> Self {
-        Self {
-            frequency,
-            sample_rate,
-            phase: 0.0,
-        }
+        Self { frequency, sample_rate, phase: 0.0 }
     }
 
     pub fn next_sample(&mut self) -> i16 {

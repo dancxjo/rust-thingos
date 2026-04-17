@@ -18,9 +18,10 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use abi::sound::{
-    AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS,
-    AUDIO_START, AudioMappedRingHeader, AudioMappedRingInfo, AudioMappedRingSetup, AudioParams,
-    AudioSampleFormat, AudioStreamInfo,
+    AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_GET_STATUS,
+    AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS, AUDIO_START, AudioMappedRingHeader,
+    AudioMappedRingInfo, AudioMappedRingSetup, AudioParams, AudioSampleFormat, AudioState,
+    AudioStatus, AudioStreamInfo,
 };
 use stem::info;
 const THINGOS_DRIVER_NAME: &[u8] = b"chime";
@@ -38,7 +39,7 @@ fn mapped_enqueue(prod: &mut MappedProducer, src: &[u8]) -> usize {
     let w = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).write_index)) } as usize;
     let r = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hdr).read_index)) } as usize;
     core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
-    
+
     let cap = prod.capacity;
     if cap == 0 {
         return 0;
@@ -155,6 +156,60 @@ fn try_setup_mapped_ring(out_fd: u32) -> Option<MappedProducer> {
         map_len: map.len,
         capacity: cap,
     })
+}
+
+fn get_audio_status(out_fd: u32) -> Option<AudioStatus> {
+    let mut status = AudioStatus::default();
+    let call = abi::device::DeviceCall {
+        kind: DeviceKind::Audio,
+        op: AUDIO_GET_STATUS,
+        in_ptr: 0,
+        in_len: 0,
+        out_ptr: &mut status as *mut AudioStatus as u64,
+        out_len: core::mem::size_of::<AudioStatus>() as u32,
+    };
+    stem::syscall::vfs::vfs_device_call_raw(out_fd, &call).ok()?;
+    Some(status)
+}
+
+fn request_audio_drain(out_fd: u32) {
+    let call = abi::device::DeviceCall {
+        kind: DeviceKind::Audio,
+        op: AUDIO_DRAIN,
+        in_ptr: 0,
+        in_len: 0,
+        out_ptr: 0,
+        out_len: 0,
+    };
+    let _ = stem::syscall::vfs::vfs_device_call_raw(out_fd, &call);
+}
+
+fn wait_for_playback_completion(out_fd: u32, sample_bytes: usize, params: &AudioParams) {
+    let fmt = AudioSampleFormat::from_u32(params.sample_format).unwrap_or(AudioSampleFormat::S16LE);
+    let bytes_per_frame =
+        (fmt.bytes_per_sample() as usize).saturating_mul(params.channels as usize).max(1);
+    let queued_frames = sample_bytes / bytes_per_frame;
+    let playback_ms = if params.rate > 0 {
+        ((queued_frames as u64) * 1000).div_ceil(params.rate as u64)
+    } else {
+        0
+    };
+    let deadline_ms = playback_ms.saturating_add(500).clamp(250, 10_000);
+    let start_ns = stem::time::monotonic_ns();
+
+    loop {
+        if let Some(status) = get_audio_status(out_fd) {
+            if status.state == AudioState::Stopped as u32 {
+                break;
+            }
+        }
+
+        let elapsed_ms = stem::time::monotonic_ns().saturating_sub(start_ns) / 1_000_000;
+        if elapsed_ms >= deadline_ms {
+            break;
+        }
+        stem::time::sleep_ms(10);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -347,8 +402,9 @@ fn main(_arg: usize) -> ! {
 
     info!("chime: Playback started ({} bytes)", samples.len());
 
-    if let Some(mut mapped) = try_setup_mapped_ring(out_fd) {
+    if let Some(mapped) = try_setup_mapped_ring(out_fd) {
         info!("chime: Using mapped audio ring");
+        let mut mapped = mapped;
         let mut offset = 0usize;
         while offset < samples.len() {
             let n = mapped_enqueue(&mut mapped, &samples[offset..]);
@@ -358,13 +414,14 @@ fn main(_arg: usize) -> ! {
                 offset += n;
             }
         }
+        request_audio_drain(out_fd);
+        wait_for_playback_completion(out_fd, samples.len(), &accepted);
         let _ = stem::syscall::vm_unmap(mapped.map_addr, mapped.map_len);
         let _ = stem::syscall::vfs::vfs_close(mapped.ring_fd);
         let _ = stem::syscall::vfs::vfs_close(mapped.control_fd);
+        let _ = stem::syscall::vfs::vfs_close(out_fd);
         info!("chime: Finished (mapped ring).");
-        loop {
-            stem::time::sleep_ms(1000);
-        }
+        stem::syscall::exit(0);
     }
 
     let chunk_size = 4096usize;
@@ -395,8 +452,9 @@ fn main(_arg: usize) -> ! {
         offset += to_write;
     }
 
+    request_audio_drain(out_fd);
+    wait_for_playback_completion(out_fd, samples.len(), &accepted);
+    let _ = stem::syscall::vfs::vfs_close(out_fd);
     info!("chime: Finished.");
-    loop {
-        stem::time::sleep_ms(1000);
-    }
+    stem::syscall::exit(0);
 }

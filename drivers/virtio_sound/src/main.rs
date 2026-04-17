@@ -44,8 +44,8 @@ use abi::sound::{
     AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_GET_MAPPED_RING_STATS,
     AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS, AUDIO_START,
     AUDIO_STOP, AudioMappedRingHeader, AudioMappedRingInfo, AudioMappedRingSetup,
-    AudioMappedRingStats, AudioParams, AudioSampleFormat, AudioState, AudioStatus,
-    AudioStreamInfo, format_bit,
+    AudioMappedRingStats, AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo,
+    format_bit,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
@@ -157,6 +157,7 @@ const S_IFREG: u32 = 0o100_000;
 // ── Poll bits ─────────────────────────────────────────────────────────────────
 
 const POLLOUT: u16 = abi::syscall::poll_flags::POLLOUT;
+const POLLHUP: u16 = abi::syscall::poll_flags::POLLHUP;
 const POLLERR: u16 = abi::syscall::poll_flags::POLLERR;
 
 // ── Internal ring buffer ──────────────────────────────────────────────────────
@@ -306,6 +307,18 @@ fn teardown_mapped_ring(card: &mut AudioCard) {
         let _ = stem::syscall::vfs_close(mapped.control_fd);
         card.mapped_detach_count = card.mapped_detach_count.saturating_add(1);
         card.mapped_was_empty = false;
+    }
+}
+
+fn mapped_ring_session_dead(mapped: &MappedRing) -> bool {
+    let mut pollfds = [abi::syscall::PollThing {
+        thing: mapped.control_fd as i32,
+        events: POLLHUP | POLLERR,
+        revents: 0,
+    }];
+    match stem::syscall::vfs::vfs_poll(&mut pollfds, 0) {
+        Ok(_) => (pollfds[0].revents & (POLLHUP | POLLERR)) != 0,
+        Err(_) => true,
     }
 }
 
@@ -958,10 +971,13 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                                         let cap =
                                             mapped.map_len.saturating_sub(core::mem::size_of::<
                                                 AudioMappedRingHeader,
-                                            >());
+                                            >(
+                                            ));
                                         let hdr = mapped_header_mut(&mut mapped);
                                         unsafe {
-                                            let current_cap = core::ptr::read_volatile(core::ptr::addr_of!((*hdr).capacity_bytes));
+                                            let current_cap = core::ptr::read_volatile(
+                                                core::ptr::addr_of!((*hdr).capacity_bytes),
+                                            );
                                             if current_cap == 0 {
                                                 core::ptr::write_volatile(
                                                     &raw mut (*hdr).capacity_bytes,
@@ -970,7 +986,8 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                                             }
                                         }
                                         card.mapped = Some(mapped);
-                                        card.mapped_attach_count = card.mapped_attach_count.saturating_add(1);
+                                        card.mapped_attach_count =
+                                            card.mapped_attach_count.saturating_add(1);
                                         card.mapped_was_empty = false;
                                         mapped_pending_fd = None;
                                         info!("SND: mapped ring attached ({} bytes)", resp.len);
@@ -1006,10 +1023,11 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                     let (resp, ring_changed) = dispatch_rpc(req.op, &req.payload, &mut card);
                     let _ = provider_loop.send_response(req.resp_port, resp);
 
-                    if card.out0_subscribed && (ring_changed || card.ring.free_space() > prev_free) {
+                    if card.out0_subscribed && (ring_changed || card.ring.free_space() > prev_free)
+                    {
                         let _ = stem::syscall::vfs::vfs_notify(
                             req_write,
-                            0, // HANDLE_OUT0
+                            HANDLE_OUT0,
                             abi::syscall::poll_flags::POLLOUT,
                         );
                     }
@@ -1026,6 +1044,12 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         if process_event_queue(&mut driver, &mut event_queue) {
             card.xruns += 1;
             warn!("SND: PCM xrun");
+            progress = true;
+        }
+
+        // 3a. Drop stale mapped-ring sessions once the producer exits.
+        if card.mapped.as_ref().is_some_and(mapped_ring_session_dead) {
+            teardown_mapped_ring(&mut card);
             progress = true;
         }
 
@@ -1046,7 +1070,8 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
 
         // 5. Feed hardware from ring if running.
         if card.state == AudioState::Running as u32 || card.state == AudioState::Draining as u32 {
-            while let Some(slot_idx) = (0..tx_in_flight.len()).find(|&i| tx_in_flight[i].is_none()) {
+            while let Some(slot_idx) = (0..tx_in_flight.len()).find(|&i| tx_in_flight[i].is_none())
+            {
                 let slot_ptr = unsafe { tx_dma_ptr.add(slot_idx * slot_size) };
                 let slot_phys = tx_dma_phys + (slot_idx * slot_size) as u64;
 
@@ -1054,8 +1079,9 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                 unsafe {
                     *(slot_ptr as *mut VirtioSndPcmXfer) = VirtioSndPcmXfer { stream_id };
                 }
-                let data_slice = unsafe { core::slice::from_raw_parts_mut(slot_ptr.add(hdr_sz), 4096) };
-                
+                let data_slice =
+                    unsafe { core::slice::from_raw_parts_mut(slot_ptr.add(hdr_sz), 4096) };
+
                 let n = if let Some(mapped) = card.mapped.as_mut() {
                     mapped_dequeue(mapped, data_slice)
                 } else {
@@ -1064,7 +1090,8 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
 
                 if n > 0 {
                     if card.mapped.is_some() {
-                        card.mapped_bytes_consumed = card.mapped_bytes_consumed.saturating_add(n as u64);
+                        card.mapped_bytes_consumed =
+                            card.mapped_bytes_consumed.saturating_add(n as u64);
                         card.mapped_was_empty = false;
                     }
                     let bpf = card.bytes_per_frame().max(1);
@@ -1085,7 +1112,8 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                 } else {
                     if card.mapped.is_some() && card.state == AudioState::Running as u32 {
                         if !card.mapped_was_empty {
-                            card.mapped_underrun_events = card.mapped_underrun_events.saturating_add(1);
+                            card.mapped_underrun_events =
+                                card.mapped_underrun_events.saturating_add(1);
                             card.mapped_was_empty = true;
                         }
                     }
@@ -1095,12 +1123,27 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         }
 
         // 6. Notify writers that ring space opened up.
-        if card.mapped.is_none() && card.out0_subscribed && card.ring.free_space() > prev_free_before_tx {
-            let _ = stem::syscall::vfs::vfs_notify(req_write, 0, abi::syscall::poll_flags::POLLOUT);
+        if card.mapped.is_none()
+            && card.out0_subscribed
+            && card.ring.free_space() > prev_free_before_tx
+        {
+            let _ = stem::syscall::vfs::vfs_notify(
+                req_write,
+                HANDLE_OUT0,
+                abi::syscall::poll_flags::POLLOUT,
+            );
         }
 
         // 7. Stop if draining and ring is now empty and all HW buffers finished.
-        if card.state == AudioState::Draining as u32 && card.ring.available() == 0 && tx_in_flight.iter().all(|s| s.is_none()) {
+        if card.state == AudioState::Draining as u32
+            && card
+                .mapped
+                .as_ref()
+                .map(|mapped| mapped_fill_and_capacity(mapped).0 == 0)
+                .unwrap_or(true)
+            && card.ring.available() == 0
+            && tx_in_flight.iter().all(|s| s.is_none())
+        {
             card.state = AudioState::Stopped as u32;
             send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_STOP, stream_id);
             progress = true;

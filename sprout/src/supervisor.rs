@@ -388,7 +388,37 @@ impl Supervisor {
             poll_set
         };
 
-        for (resp_fd, drv_req_write, task_name) in tasks_to_poll {
+        let mut pollfds = tasks_to_poll
+            .iter()
+            .map(|(resp_fd, _, _)| abi::syscall::PollThing {
+                thing: *resp_fd as i32,
+                events: abi::syscall::poll_flags::POLLIN
+                    | abi::syscall::poll_flags::POLLHUP
+                    | abi::syscall::poll_flags::POLLERR,
+                revents: 0,
+            })
+            .collect::<Vec<_>>();
+
+        if !pollfds.is_empty() {
+            match stem::syscall::vfs::vfs_poll(&mut pollfds, 0) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("SPROUT: registration poll failed: {:?}", e);
+                    return;
+                }
+            }
+        }
+
+        for ((resp_fd, drv_req_write, task_name), pollfd) in tasks_to_poll.into_iter().zip(pollfds.iter()) {
+            if pollfd.revents
+                & (abi::syscall::poll_flags::POLLIN
+                    | abi::syscall::poll_flags::POLLHUP
+                    | abi::syscall::poll_flags::POLLERR)
+                == 0
+            {
+                continue;
+            }
+
             let mut msg_data = [0u8; 1024];
             let mut msg_fds = [0u32; 1];
             let mut process_count = 0;
