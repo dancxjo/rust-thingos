@@ -3604,6 +3604,8 @@ pub fn dump_stats<R: BootRuntime>() {
         runnable_count
     );
 
+    clear_sched_lock_tracking::<R>();
+    drop(lock);
     rt.irq_restore(_irq);
 }
 
@@ -4080,6 +4082,21 @@ mod tests {
 
         assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), -1);
         assert_eq!(SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn dump_stats_clears_sched_lock_tracking() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        let sched_ptr = &mut sched as *mut types::Scheduler<MockRuntime> as usize;
+        *SCHEDULER.lock() = Some(sched_ptr);
+        dump_stats::<MockRuntime>();
+
+        assert_eq!(SCHEDULER_LOCK_OWNER.load(Ordering::Acquire), -1);
+        assert_eq!(SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire), 0);
+        *SCHEDULER.lock() = None;
     }
 
     #[test]
