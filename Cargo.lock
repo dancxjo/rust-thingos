@@ -569,8 +569,8 @@ name = "bloom"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "libdl",
  "petals",
- "pistil",
  "stem",
 ]
 
@@ -4813,6 +4813,8 @@ name = "pistil"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "petals",
+ "stem",
 ]
 
 [[package]]

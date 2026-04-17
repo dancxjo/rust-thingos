@@ -1,12 +1,25 @@
 use abi::pixel::PixelFormat;
-use petals::bmp::load_bmp;
 use petals::Texture;
-use pistil::compositor::blit_centered_nearest;
+use libdl::{dlopen_str, dlsym_bytes, RTLD_NOW};
 
 use crate::display::DisplayBackend;
 
+type PrepareBackgroundFn = extern "C" fn(
+    path: *const u8,
+    dst: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+) -> i32;
+
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
+    pistil: Option<PistilLib>,
+}
+
+struct PistilLib {
+    _handle: *mut core::ffi::c_void,
+    prepare_bg: PrepareBackgroundFn,
 }
 
 struct ServerBuffer {
@@ -16,40 +29,55 @@ struct ServerBuffer {
 
 impl CompositorVisuals {
     pub fn new() -> Self {
-        Self { background: None }
+        let handle = dlopen_str("/lib/libpistil.so", RTLD_NOW);
+        let pistil = if !handle.is_null() {
+            let sym = dlsym_bytes(handle, b"pistil_prepare_background");
+            if !sym.is_null() {
+                Some(PistilLib {
+                    _handle: handle,
+                    prepare_bg: unsafe { core::mem::transmute(sym) },
+                })
+            } else {
+                stem::error!("bloom: failed to find pistil_prepare_background");
+                None
+            }
+        } else {
+            stem::error!("bloom: failed to load /lib/libpistil.so");
+            None
+        };
+
+        Self {
+            background: None,
+            pistil,
+        }
     }
 
     pub fn prepare_background(&mut self, display: &DisplayBackend, wallpaper_path: &str) {
         let (width, height) = display.output_size();
 
-        let mut texture = match Texture::new("bloom.compositor.background", width, height, 4) {
+        let mut texture: Texture = match Texture::new("bloom.compositor.background", width, height, 4) {
             Some(t) => t,
             None => return,
         };
 
-        {
-            let pixels = texture.as_slice_mut();
-            pixels.fill(0xFF000000);
-        }
+        let success = if let Some(ref lib) = self.pistil {
+            let mut path_c = alloc::vec::Vec::from(wallpaper_path.as_bytes());
+            path_c.push(0);
 
-        if let Some(mut wallpaper) = load_bmp(wallpaper_path) {
-            let src_stride = (wallpaper.stride / 4) as usize;
-            let src_w = wallpaper.width as usize;
-            let src_h = wallpaper.height as usize;
-            let src = wallpaper.as_slice_mut().to_vec();
-
-            let dst_stride = (texture.stride / 4) as usize;
-            let dst = texture.as_slice_mut();
-            blit_centered_nearest(
-                dst,
-                dst_stride,
-                width as usize,
-                height as usize,
-                &src,
-                src_stride,
-                src_w,
-                src_h,
+            let res = (lib.prepare_bg)(
+                path_c.as_ptr(),
+                texture.as_slice_mut().as_mut_ptr(),
+                width,
+                height,
+                width,
             );
+            res == 0
+        } else {
+            false
+        };
+
+        if !success {
+            texture.as_slice_mut().fill(0xFF333333);
         }
 
         let Some(buffer_id) = display.import_buffer(
@@ -62,6 +90,10 @@ impl CompositorVisuals {
         ) else {
             return;
         };
+
+        if let Some(old) = self.background.take() {
+            display.release_buffer(old.buffer_id);
+        }
 
         self.background = Some(ServerBuffer {
             _texture: texture,

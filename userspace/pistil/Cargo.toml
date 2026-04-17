@@ -5,7 +5,15 @@ edition = "2021"
 
 [lib]
 name = "pistil"
-crate-type = ["rlib"]
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+stem = { path = "../../stem", features = ["global-alloc"] }
 abi = { path = "../../abi" }
+petals = { path = "../petals" }
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

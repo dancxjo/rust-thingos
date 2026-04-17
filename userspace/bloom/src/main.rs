@@ -21,7 +21,8 @@ use protocol::{
 use render::CompositorVisuals;
 use scene::{Scene, SurfaceBuffer};
 use stem::syscall::vfs::{
-    vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_thing_from_channel, vfs_write,
+    vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_thing_from_channel, vfs_watch_fd, vfs_watch_path,
+    vfs_write,
 };
 use stem::syscall::{channel_create, channel_send_all};
 use stem::{error, info, warn};
@@ -32,8 +33,17 @@ const SERVICE_PATH: &str = "/services/bloom";
 fn main(arg: usize) -> ! {
     info!("bloom: compositor service starting");
 
-    let Some(display) = DisplayBackend::connect("/dev/display/card0") else {
-        error!("bloom: failed to open /dev/display/card0");
+    let mut display_opt = None;
+    for _ in 0..50 {
+        display_opt = DisplayBackend::connect("/dev/display/card0");
+        if display_opt.is_some() {
+            break;
+        }
+        stem::sleep_ms(100);
+    }
+
+    let Some(display) = display_opt else {
+        error!("bloom: failed to connect to /dev/display/card0 after retries");
         loop {
             stem::sleep_ms(1000);
         }
@@ -62,8 +72,16 @@ fn main(arg: usize) -> ! {
     };
     publish_service_handle(SERVICE_PATH, service_write);
 
+    let _ = vfs_mkdir("/session");
+    let _ = vfs_mkdir("/session/desktop");
+    let wp_path = "/session/desktop/wallpaper";
+
     let mut visuals = CompositorVisuals::new();
-    visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
+    visuals.prepare_background(&display, wp_path);
+    // If first attempt failed (e.g. no wallpaper file), try fallback
+    if visuals.fallback_buffer_id().is_none() {
+        visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
+    }
 
     let mut scene = Scene::new();
     let mut damage = DamageTracker::new();
@@ -87,6 +105,12 @@ fn main(arg: usize) -> ! {
     let mut ws = stem::wait_set::WaitSet::new();
     let service_token = service_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
     let bristle_token = bristle_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
+
+    let wp_watch_fd = vfs_watch_path(wp_path, abi::vfs_watch::mask::ALL_EVENTS, 0).ok();
+    let wp_watch_token = wp_watch_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
+
+    let disp_watch_fd = vfs_watch_path("/dev/display/card0", abi::vfs_watch::mask::MODIFY, 0).ok();
+    let disp_watch_token = disp_watch_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
 
     let mut needs_redraw = true;
     let mut io_buf = [0u8; 512];
@@ -156,6 +180,20 @@ fn main(arg: usize) -> ! {
                         }
                     }
                 }
+            } else if Some(ev.token()) == wp_watch_token || Some(ev.token()) == disp_watch_token {
+                // Drain watch events
+                if let Some(fd) = if Some(ev.token()) == wp_watch_token { wp_watch_fd } else { disp_watch_fd } {
+                    let mut dump = [0u8; 1024];
+                    let _ = vfs_read(fd, &mut dump);
+                }
+                
+                info!("bloom: reacting to environment change (wallpaper or resolution)");
+                visuals.prepare_background(&display, wp_path);
+                if visuals.fallback_buffer_id().is_none() {
+                    visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
+                }
+                damage.mark_full(primary.width, primary.height);
+                needs_redraw = true;
             }
         }
     }

@@ -76,6 +76,43 @@ pub fn blit_centered_nearest(
     }
 }
 
+pub fn blit_cover_nearest(
+    dst: &mut [u32],
+    dst_stride_pixels: usize,
+    dst_w: usize,
+    dst_h: usize,
+    src: &[u32],
+    src_stride_pixels: usize,
+    src_w: usize,
+    src_h: usize,
+) {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return;
+    }
+
+    let scale_x_fp = (dst_w as u64 * 1_000_000) / src_w as u64;
+    let scale_y_fp = (dst_h as u64 * 1_000_000) / src_h as u64;
+    let scale_fp = scale_x_fp.max(scale_y_fp);
+
+    let sw = (src_w as u64 * scale_fp) / 1_000_000;
+    let sh = (src_h as u64 * scale_fp) / 1_000_000;
+    let ox = (dst_w as i64 - sw as i64) / 2;
+    let oy = (dst_h as i64 - sh as i64) / 2;
+
+    for dy in 0..dst_h {
+        let sy_fp = ((dy as i64 - oy) * 1_000_000) / scale_fp as i64;
+        let sy = (sy_fp as usize).min(src_h - 1);
+        let dst_row = dy * dst_stride_pixels;
+        let src_row = sy * src_stride_pixels;
+
+        for dx in 0..dst_w {
+            let sx_fp = ((dx as i64 - ox) * 1_000_000) / scale_fp as i64;
+            let sx = (sx_fp as usize).min(src_w - 1);
+            dst[dst_row + dx] = src[src_row + sx];
+        }
+    }
+}
+
 #[inline(always)]
 pub fn copy_row_u32_fast(dst: &mut [u32], src: &[u32]) {
     debug_assert_eq!(dst.len(), src.len());
@@ -116,4 +153,48 @@ pub fn copy_row_u32_fast(dst: &mut [u32], src: &[u32]) {
 
     #[allow(unreachable_code)]
     dst.copy_from_slice(src);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_prepare_background(
+    path_ptr: *const u8,
+    dst_ptr: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+) -> i32 {
+    let mut len = 0;
+    while unsafe { *path_ptr.add(len) } != 0 {
+        len += 1;
+    }
+    let path = unsafe { core::slice::from_raw_parts(path_ptr, len) };
+    let Ok(path_str) = core::str::from_utf8(path) else {
+        return -2;
+    };
+
+    let Some(mut wallpaper) = petals::bmp::load_bmp(path_str) else {
+        return -3;
+    };
+
+    let dst = unsafe {
+        core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize)
+    };
+
+    let src_w = wallpaper.width as usize;
+    let src_h = wallpaper.height as usize;
+    let src_stride = (wallpaper.stride / 4) as usize;
+    let src = wallpaper.as_slice_mut();
+
+    blit_cover_nearest(
+        dst,
+        dst_stride_pixels as usize,
+        dst_w as usize,
+        dst_h as usize,
+        src,
+        src_stride,
+        src_w,
+        src_h,
+    );
+
+    0
 }
