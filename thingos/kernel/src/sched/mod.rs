@@ -135,7 +135,6 @@ pub(crate) fn scheduler_lock_held_by_this_cpu<R: BootRuntime>() -> bool {
     owner == crate::runtime::<R>().current_cpu_index() as isize
 }
 
-
 /// Global tick counter for debugging scheduler health
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -1045,7 +1044,8 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                         }
                     }
                     DispatchTrigger::ReschedIpi => {
-                        pc.stats.resched_ipi_received = pc.stats.resched_ipi_received.saturating_add(1);
+                        pc.stats.resched_ipi_received =
+                            pc.stats.resched_ipi_received.saturating_add(1);
                     }
                 }
             }
@@ -2443,9 +2443,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if terminating_tid != current_id {
             panic!(
                 "scheduler invariant violated: terminate_current tid mismatch (cpu={}, scheduler_current={}, terminating_tid={})",
-                cpu_idx,
-                current_id,
-                terminating_tid
+                cpu_idx, current_id, terminating_tid
             );
         }
 
@@ -3011,10 +3009,34 @@ fn mark_task_exited_in_registry<R: BootRuntime>(
 
     siblings_to_kill.retain(|&sibling| sibling != tid);
 
-    TerminationRegistryOutcome {
-        waiters,
-        siblings_to_kill,
+    TerminationRegistryOutcome { waiters, siblings_to_kill }
+}
+
+fn mark_task_exited<R: BootRuntime>(
+    sched: &mut types::Scheduler<R>,
+    tid: TaskId,
+    code: i32,
+) -> alloc::vec::Vec<u64> {
+    let termination = mark_task_exited_in_registry::<R>(tid, code);
+
+    if let Some(task) = sched.state.get_task_mut(tid) {
+        task.runq_location = None;
+        task.state = TaskState::Dead;
     }
+    purge_task_from_scheduler_queues::<R>(sched, tid);
+
+    for &sibling in &termination.siblings_to_kill {
+        if sibling == tid {
+            continue;
+        }
+        if let Some(task) = sched.state.get_task_mut(sibling) {
+            task.runq_location = None;
+            task.state = TaskState::Dead;
+        }
+        purge_task_from_scheduler_queues::<R>(sched, sibling);
+    }
+
+    termination.waiters
 }
 
 fn purge_task_from_scheduler_queues<R: BootRuntime>(sched: &mut types::Scheduler<R>, tid: TaskId) {
@@ -3068,12 +3090,7 @@ pub fn exit<R: BootRuntime>(code: i32) {
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
         let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         clear_sched_lock_tracking::<R>();
-        (
-            switch_decision,
-            deferred_prepare_ipis,
-            deferred_registry_syncs,
-            deferred_registry_inserts,
-        )
+        (switch_decision, deferred_prepare_ipis, deferred_registry_syncs, deferred_registry_inserts)
     };
 
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
@@ -3131,8 +3148,6 @@ pub fn kill_by_tid<R: BootRuntime>(tid: u64) -> bool {
                         (false, alloc::vec::Vec::new())
                     } else {
                         let waiters = mark_task_exited::<R>(sched, tid, -9);
-
-                        purge_task_from_scheduler_queues::<R>(sched, tid);
 
                         // Release any claimed devices
                         let released =
@@ -5414,11 +5429,7 @@ mod tests {
         assert_eq!(task.state, TaskState::Running);
         assert!(task.wake_pending);
         assert!(
-            sched
-                .state
-                .get_task(6101)
-                .map(|sf| sf.wake_pending)
-                .unwrap_or(false),
+            sched.state.get_task(6101).map(|sf| sf.wake_pending).unwrap_or(false),
             "wake_task must revalidate scheduler cache even when REGISTRY wake_pending is true"
         );
 
