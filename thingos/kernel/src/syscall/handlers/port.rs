@@ -14,10 +14,17 @@ pub fn sys_channel_create(capacity: usize) -> SysResult<usize> {
     let port_id = crate::ipc::create_port(capacity);
     let port = crate::ipc::get_port(port_id).ok_or(Errno::ENOMEM)?;
 
-    let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+    let pid = {
+        let lock = pinfo_arc.lock();
+        lock.pid
+    };
+    port.set_primary_reader_pid(pid as u64);
+
+    let mut table = pinfo_arc.lock();
     let write_handle =
-        table.alloc(port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?;
-    let read_handle = table.alloc(port, crate::ipc::IpcThingMode::Read).ok_or(Errno::ENOMEM)?;
+        table.ipc_table.alloc(port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?;
+    let read_handle = table.ipc_table.alloc(port, crate::ipc::IpcThingMode::Read).ok_or(Errno::ENOMEM)?;
 
     let packed = ((write_handle.0 as usize) << 16) | (read_handle.0 as usize);
     Ok(packed)
@@ -32,9 +39,10 @@ pub fn sys_channel_send(handle: usize, ptr: usize, len: usize) -> SysResult<usiz
     validate_user_range(ptr, len, false)?;
 
     let handle = crate::ipc::IpcThing(handle as u32);
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let entry = {
-        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.get(handle, crate::ipc::IpcThingMode::Write).cloned().ok_or(Errno::EBADF)?
+        let lock = pinfo_arc.lock();
+        lock.ipc_table.get(handle, crate::ipc::IpcThingMode::Write).cloned().ok_or(Errno::EBADF)?
     };
 
     let port = entry.port.clone();
@@ -64,11 +72,11 @@ pub fn sys_channel_send_all(handle: usize, ptr: usize, len: usize) -> SysResult<
     }
 
     validate_user_range(ptr, len, false)?;
-
     let handle = crate::ipc::IpcThing(handle as u32);
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let entry = {
-        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.get(handle, crate::ipc::IpcThingMode::Write).cloned().ok_or(Errno::EBADF)?
+        let lock = pinfo_arc.lock();
+        lock.ipc_table.get(handle, crate::ipc::IpcThingMode::Write).cloned().ok_or(Errno::EBADF)?
     };
 
     let port = entry.port.clone();
@@ -111,9 +119,10 @@ fn sys_channel_recv_impl(
     validate_user_range(ptr, len, true)?;
 
     let handle = crate::ipc::IpcThing(handle as u32);
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let entry = {
-        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.get(handle, crate::ipc::IpcThingMode::Read).cloned().ok_or(Errno::EBADF)?
+        let table = pinfo_arc.lock();
+        table.ipc_table.get(handle, crate::ipc::IpcThingMode::Read).cloned().ok_or(Errno::EBADF)?
     };
 
     let port = entry.port.clone();
@@ -187,25 +196,26 @@ pub fn sys_channel_try_recv(handle: usize, ptr: usize, len: usize) -> SysResult<
 
 pub fn sys_channel_close(handle: usize) -> SysResult<usize> {
     let handle = crate::ipc::IpcThing(handle as u32);
-    let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    if let Some(entry) = table.close(handle) {
-        drop(table);
-        if entry.port.has_readers() == false && entry.port.has_writers() == false {
-            let port_id = crate::ipc::find_port_id(&entry.port).unwrap();
-            crate::ipc::close_port(port_id);
-        }
-        Ok(0)
-    } else {
-        Err(Errno::EBADF)
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+    let entry = {
+        let mut table = pinfo_arc.lock();
+        table.ipc_table.close(handle).ok_or(Errno::EBADF)?
+    };
+    
+    if entry.port.has_readers() == false && entry.port.has_writers() == false {
+        let port_id = crate::ipc::find_port_id(&entry.port).unwrap();
+        crate::ipc::close_port(port_id);
     }
+    Ok(0)
 }
 
 pub fn sys_channel_info(handle: usize) -> SysResult<usize> {
     let handle = crate::ipc::IpcThing(handle as u32);
-    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    let entry = table
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+    let lock = pinfo_arc.lock();
+    let entry = lock.ipc_table
         .get(handle, crate::ipc::IpcThingMode::Read)
-        .or_else(|| table.get(handle, crate::ipc::IpcThingMode::Write))
+        .or_else(|| lock.ipc_table.get(handle, crate::ipc::IpcThingMode::Write))
         .cloned()
         .ok_or(Errno::EBADF)?;
 

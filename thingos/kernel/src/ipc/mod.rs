@@ -49,7 +49,7 @@ use spin::Mutex;
 static PORTS: Mutex<Vec<Option<Arc<Port>>>> = Mutex::new(Vec::new());
 
 /// Global Handle Table (Single Process Model for v0)
-pub static GLOBAL_THING_TABLE: Mutex<IpcThingTable> = Mutex::new(IpcThingTable::new());
+
 
 /// Create a new port and return its ID
 pub fn create_port(capacity: usize) -> PortId {

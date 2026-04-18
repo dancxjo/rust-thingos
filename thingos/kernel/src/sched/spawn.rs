@@ -73,6 +73,7 @@ fn default_process_info(
         job: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
         unix_compat: crate::task::ProcessUnixCompat::isolated(pid, is_session_leader),
         thing_table,
+        ipc_table: crate::ipc::IpcThingTable::new(),
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: alloc::string::String::from("/"),
         root: alloc::string::String::from("/"),
@@ -99,6 +100,7 @@ fn inherit_process_info<R: BootRuntime>(
             job: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
             unix_compat: crate::task::ProcessUnixCompat::inherit(&parent.unix_compat),
             thing_table: parent.thing_table.clone(),
+            ipc_table: parent.ipc_table.clone(),
             namespace: parent.namespace.clone(),
             cwd: parent.cwd.clone(),
             root: parent.root.clone(),
@@ -1249,6 +1251,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         job: crate::task::ProcessLifecycle::new(ppid, id),
         unix_compat,
         thing_table,
+        ipc_table: crate::ipc::IpcThingTable::new(),
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: if let Some(explicit_cwd) = cwd {
             explicit_cwd
@@ -1464,10 +1467,11 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     let parent_pinfo =
         crate::task::registry::get_task::<R>(parent_tid).and_then(|t| t.process_info.clone());
 
-    let mut thing_table = if let Some(parent_pi) = &parent_pinfo {
-        parent_pi.lock().thing_table.clone()
+    let (mut thing_table, ipc_table) = if let Some(parent_pi) = &parent_pinfo {
+        let parent = parent_pi.lock();
+        (parent.thing_table.clone(), parent.ipc_table.clone())
     } else {
-        crate::vfs::thing_table::ThingTable::new()
+        (crate::vfs::thing_table::ThingTable::new(), crate::ipc::IpcThingTable::new())
     };
 
     let (stdin_pipe_id, stdout_pipe_id, stderr_pipe_id) =
@@ -1564,6 +1568,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         job: crate::task::ProcessLifecycle::new(ppid, id),
         unix_compat,
         thing_table,
+        ipc_table,
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: if let Some(explicit_cwd) = cwd {
             explicit_cwd
@@ -1726,7 +1731,7 @@ mod tests {
                 StartupArg::Raw(raw_arg),
                 stack_info,
                 TaskPriority::Normal,
-                Affinity::Any,
+                crate::task::Affinity::Any,
                 0,     // tls_base
                 false, // detached
             );
@@ -1752,6 +1757,7 @@ mod tests {
             job: crate::task::ProcessLifecycle::new(1, leader),
             unix_compat: crate::task::ProcessUnixCompat::isolated(leader as u32, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),

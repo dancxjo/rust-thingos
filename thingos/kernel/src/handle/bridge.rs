@@ -59,6 +59,7 @@ fn classify_file_like(node: &Arc<dyn crate::vfs::VfsNode>) -> HandleKind {
 /// Shared IPC-table lookup helper that keeps lock hold time minimal by copying
 /// the matched entry out of the table before returning.
 fn lookup_ipc_entry_with(
+    ipc_table: &crate::ipc::IpcThingTable,
     handle: Handle,
     lookup: impl FnOnce(
         &crate::ipc::IpcThingTable,
@@ -66,18 +67,23 @@ fn lookup_ipc_entry_with(
     ) -> Option<&crate::ipc::IpcThingEntry>,
 ) -> SysResult<crate::ipc::IpcThingEntry> {
     let ipc_handle = crate::ipc::IpcThing(handle.0);
-    // Keep this lock scope tiny: copy the entry and drop immediately.
-    // This path is intentionally short because it sits on syscall hot paths.
-    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    lookup(&table, ipc_handle).cloned().ok_or(Errno::EBADF)
+    // Note: the caller (resolve_handle) already holds the Process lock which
+    // protects the ipc_table.
+    lookup(ipc_table, ipc_handle).cloned().ok_or(Errno::EBADF)
 }
 
-fn lookup_ipc_entry_any(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
-    lookup_ipc_entry_with(handle, |table, ipc_handle| table.get_any(ipc_handle))
+fn lookup_ipc_entry_any(
+    ipc_table: &crate::ipc::IpcThingTable,
+    handle: Handle,
+) -> SysResult<crate::ipc::IpcThingEntry> {
+    lookup_ipc_entry_with(ipc_table, handle, |table, ipc_handle| table.get_any(ipc_handle))
 }
 
-fn lookup_ipc_entry_write(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
-    lookup_ipc_entry_with(handle, |table, ipc_handle| {
+fn lookup_ipc_entry_write(
+    ipc_table: &crate::ipc::IpcThingTable,
+    handle: Handle,
+) -> SysResult<crate::ipc::IpcThingEntry> {
+    lookup_ipc_entry_with(ipc_table, handle, |table, ipc_handle| {
         table.get(ipc_handle, crate::ipc::IpcThingMode::Write)
     })
 }
@@ -88,18 +94,16 @@ pub fn resolve_handle(
     pinfo_arc: &Arc<Mutex<crate::task::ProcessInfo>>,
     handle: Handle,
 ) -> SysResult<ResolvedHandle> {
-    {
-        let lock = pinfo_arc.lock();
-        if let Ok(file) = lock.thing_table.get(handle.0) {
-            let node = file.node.clone();
-            return Ok(ResolvedHandle::FileLike {
-                kind: classify_file_like(&node),
-                node,
-            });
-        }
+    let lock = pinfo_arc.lock();
+    if let Ok(file) = lock.thing_table.get(handle.0) {
+        let node = file.node.clone();
+        return Ok(ResolvedHandle::FileLike {
+            kind: classify_file_like(&node),
+            node,
+        });
     }
 
-    let entry = lookup_ipc_entry_any(handle)?;
+    let entry = lookup_ipc_entry_any(&lock.ipc_table, handle)?;
     Ok(ResolvedHandle::Port {
         port: entry.port.clone(),
         mode: entry.mode,
@@ -125,10 +129,10 @@ pub fn install_fd_compat_for_port_handle(
     pinfo_arc: &Arc<Mutex<crate::task::ProcessInfo>>,
     handle: Handle,
 ) -> SysResult<u32> {
-    let entry = lookup_ipc_entry_any(handle)?;
+    let mut lock = pinfo_arc.lock();
+    let entry = lookup_ipc_entry_any(&lock.ipc_table, handle)?;
     let node = Arc::new(crate::vfs::port_node::PortNode::new(entry.port.clone(), entry.mode));
 
-    let mut lock = pinfo_arc.lock();
     let fd = lock.thing_table.open(
         node.clone(),
         match entry.mode {
@@ -148,16 +152,14 @@ pub fn resolve_write_port_compat(
     pinfo_arc: &Arc<Mutex<crate::task::ProcessInfo>>,
     handle: Handle,
 ) -> SysResult<Arc<crate::ipc::Port>> {
-    {
-        let lock = pinfo_arc.lock();
-        if let Ok(file) = lock.thing_table.get(handle.0) {
-            if let Some(port) = file.node.as_port() {
-                return Ok(port);
-            }
+    let lock = pinfo_arc.lock();
+    if let Ok(file) = lock.thing_table.get(handle.0) {
+        if let Some(port) = file.node.as_port() {
+            return Ok(port);
         }
     }
 
-    let entry = lookup_ipc_entry_write(handle)?;
+    let entry = lookup_ipc_entry_write(&lock.ipc_table, handle)?;
     Ok(entry.port.clone())
 }
 
@@ -197,6 +199,7 @@ mod tests {
             job: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
             thing_table,
+            ipc_table: IpcThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -210,22 +213,30 @@ mod tests {
     fn test_resolve_handle_prefers_process_table() {
         let port_id = crate::ipc::create_port(8);
         let port = crate::ipc::get_port(port_id).unwrap();
+
+        let node: Arc<dyn VfsNode> = Arc::new(NullNode);
+        let pinfo = make_test_process_with_thing_table(&[(0, node)]); // Use a placeholder FD
         let handle = {
-            let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            table
+            let mut lock = pinfo.lock();
+            lock.ipc_table
                 .alloc(port, crate::ipc::IpcThingMode::Read)
                 .expect("allocate handle")
         };
 
+        // Re-create pinfo with the handle in thing_table to test preference
         let node: Arc<dyn VfsNode> = Arc::new(NullNode);
         let pinfo = make_test_process_with_thing_table(&[(handle.0, node)]);
+        // The handle must also be in the ipc_table of THIS pinfo for the fallback to work if preference fails
+        // But here we want to test PREFERENCE, so we put it in both.
+        {
+            let port_id2 = crate::ipc::create_port(8);
+            let port2 = crate::ipc::get_port(port_id2).unwrap();
+            pinfo.lock().ipc_table.insert_at(handle.0 as usize, crate::ipc::IpcThingEntry::new(port2, crate::ipc::IpcThingMode::Read)).unwrap();
+        }
         let resolved = resolve_handle(&pinfo, Handle(handle.0)).expect("resolve");
         assert_eq!(resolved.kind(), HandleKind::File);
 
-        {
-            let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let _ = table.close(handle);
-        }
+        pinfo.lock().ipc_table.close(handle);
         crate::ipc::close_port(port_id);
     }
 
@@ -233,14 +244,14 @@ mod tests {
     fn test_install_fd_compat_for_port_handle_creates_port_backed_fd() {
         let port_id = crate::ipc::create_port(8);
         let port = crate::ipc::get_port(port_id).unwrap();
+        let pinfo = make_test_process_with_thing_table(&[]);
         let handle = {
-            let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            table
+            let mut lock = pinfo.lock();
+            lock.ipc_table
                 .alloc(port, crate::ipc::IpcThingMode::Read)
                 .expect("allocate handle")
         };
 
-        let pinfo = make_test_process_with_thing_table(&[]);
         let fd = install_fd_compat_for_port_handle(&pinfo, Handle(handle.0)).expect("fd");
 
         let lock = pinfo.lock();
@@ -248,10 +259,7 @@ mod tests {
         assert!(open.node.as_port().is_some(), "fd must wrap a port");
 
         drop(lock);
-        {
-            let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let _ = table.close(handle);
-        }
+        pinfo.lock().ipc_table.close(handle);
         crate::ipc::close_port(port_id);
     }
 }

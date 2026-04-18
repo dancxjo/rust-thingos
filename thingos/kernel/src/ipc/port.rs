@@ -70,10 +70,9 @@ pub struct Port {
     /// fast or misbehaving sender cannot cause unbounded kernel heap growth.
     msgs: KernelMessageQueue<KernelMessage>,
 
-    #[cfg(debug_assertions)]
     sender_tid: AtomicU64,
-    #[cfg(debug_assertions)]
     receiver_tid: AtomicU64,
+    primary_reader_pid: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -101,10 +100,9 @@ impl Port {
                 writers: 0,
             }),
             msgs: KernelMessageQueue::new(DEFAULT_MSG_CAPACITY),
-            #[cfg(debug_assertions)]
             sender_tid: AtomicU64::new(0),
-            #[cfg(debug_assertions)]
             receiver_tid: AtomicU64::new(0),
+            primary_reader_pid: AtomicU64::new(0),
         }
     }
 
@@ -384,7 +382,14 @@ impl Port {
         destroy
     }
 
-    #[cfg(debug_assertions)]
+    pub fn set_primary_reader_pid(&self, pid: u64) {
+        self.primary_reader_pid.compare_exchange(0, pid, Ordering::SeqCst, Ordering::SeqCst).ok();
+    }
+
+    pub fn primary_reader_pid(&self) -> u64 {
+        self.primary_reader_pid.load(Ordering::Acquire)
+    }
+
     fn check_ownership(&self, is_sender: bool) {
         // We use the erased hook to avoid generic param requirements
         let current = unsafe { crate::sched::current_tid_current() };

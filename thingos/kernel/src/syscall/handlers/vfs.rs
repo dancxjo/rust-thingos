@@ -669,11 +669,24 @@ pub fn sys_fs_mount(
     let resp_port_id = crate::ipc::create_port(abi::vfs_rpc::VFS_RPC_MAX_RESP * 4);
     let resp_port = crate::ipc::get_port(resp_port_id).ok_or(Errno::ENOMEM)?;
 
-    // Register the write end of the response port in the global handle table
-    // so the provider process can call SYS_channel_send on it.
-    let resp_write_handle = {
-        let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.alloc(resp_port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
+    // Identify the provider process (the primary reader of the request port).
+    let provider_pid = req_port.primary_reader_pid();
+    let provider_pinfo = if provider_pid != 0 {
+        crate::sched::process_info_for_pid_current(provider_pid as u32)
+    } else {
+        None
+    };
+
+    // Register the write end of the response port.
+    // We prefer to inject this into the provider process's own handle table
+    // so it can call SYS_channel_send on it directly.
+    let resp_write_handle = if let Some(provider_arc) = provider_pinfo {
+        let mut lock = provider_arc.lock();
+        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
+    } else {
+        // Fallback: use caller's table (legacy/compatibility)
+        let mut lock = pinfo_arc.lock();
+        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
     };
 
     let req_port_id = crate::ipc::find_port_id(&req_port).ok_or(Errno::EBADF)?;
@@ -711,9 +724,10 @@ pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
 /// `req_handle` is the handle to the request port of the provider.
 pub fn sys_fs_notify(req_handle: usize, node_handle: usize, revents: usize) -> SysResult<usize> {
     let handle = crate::ipc::IpcThing(req_handle as u32);
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let entry = {
-        let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.get_any(handle).cloned().ok_or(Errno::EBADF)?
+        let lock = pinfo_arc.lock();
+        lock.ipc_table.get_any(handle).cloned().ok_or(Errno::EBADF)?
     };
 
     let port_id = crate::ipc::find_port_id(&entry.port).ok_or(Errno::EBADF)?;

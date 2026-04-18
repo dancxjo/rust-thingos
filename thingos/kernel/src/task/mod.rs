@@ -477,6 +477,9 @@ pub struct Process {
     /// File descriptor table — fds 0/1/2 pre-populated at spawn time.
     pub thing_table: crate::vfs::thing_table::ThingTable,
 
+    /// Per-process IPC handle table.
+    pub ipc_table: crate::ipc::IpcThingTable,
+
     // ── Place context (Phase 8 — world/visibility boundary) ──────────────────
     // These fields answer "in what world does this execution happen?".
     // They feed `kernel::place::bridge` → `thingos::place::Place`.

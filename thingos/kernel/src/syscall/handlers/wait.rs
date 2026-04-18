@@ -57,9 +57,13 @@ pub fn sys_wait_many(
         Some(crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) + ticks)
     };
 
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     loop {
         let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
-        let ready = collect_ready(specs, &mut results[..results_cap])?;
+        let ready = {
+            let lock = pinfo_arc.lock();
+            collect_ready(&lock, specs, &mut results[..results_cap])?
+        };
         if ready > 0 {
             unsafe {
                 let src = core::slice::from_raw_parts(
@@ -90,13 +94,19 @@ pub fn sys_wait_many(
             return Ok(1);
         }
 
-        let regs = register_all(specs, tid)?;
+        let regs = {
+            let lock = pinfo_arc.lock();
+            register_all(&lock, specs, tid)?
+        };
         if let Some(deadline) = timeout_tick {
             crate::sched::register_timeout_wake_current(tid, deadline);
         }
 
         let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
-        let ready = collect_ready(specs, &mut results[..results_cap])?;
+        let ready = {
+            let lock = pinfo_arc.lock();
+            collect_ready(&lock, specs, &mut results[..results_cap])?
+        };
         if ready > 0 || timeout_expired(timeout_tick) {
             cleanup_all(&regs, tid, timeout_tick)?;
             let count = if ready > 0 {
@@ -138,13 +148,13 @@ fn timeout_expired(timeout_tick: Option<u64>) -> bool {
     }
 }
 
-fn collect_ready(specs: &[WaitSpec], out: &mut [WaitResult]) -> SysResult<usize> {
+fn collect_ready(pinfo: &crate::task::ProcessInfo, specs: &[WaitSpec], out: &mut [WaitResult]) -> SysResult<usize> {
     let mut count = 0usize;
     for spec in specs {
         if count >= out.len() {
             break;
         }
-        if let Some(result) = poll_spec(spec)? {
+        if let Some(result) = poll_spec(pinfo, spec)? {
             out[count] = result;
             count += 1;
         }
@@ -153,10 +163,10 @@ fn collect_ready(specs: &[WaitSpec], out: &mut [WaitResult]) -> SysResult<usize>
 }
 
 #[allow(deprecated)] // handle legacy WaitKind variants that map to ENOSYS
-fn poll_spec(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
+fn poll_spec(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     match WaitKind::from_u32(spec.kind).ok_or(Errno::EINVAL)? {
-        WaitKind::Port => poll_port(spec),
-        WaitKind::Fd => poll_fd(spec),
+        WaitKind::Port => poll_port(pinfo, spec),
+        WaitKind::Fd => poll_fd(pinfo, spec),
         WaitKind::GraphOp => poll_graph_op(spec),
         WaitKind::TaskExit => poll_task_exit(spec),
         WaitKind::Irq => Ok(poll_irq(spec)),
@@ -176,9 +186,9 @@ fn error_result(spec: &WaitSpec, errno: Errno) -> WaitResult {
     }
 }
 
-fn poll_port(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
+fn poll_port(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     let handle = crate::ipc::IpcThing(spec.object as u32);
-    let table = crate::ipc::GLOBAL_THING_TABLE.lock();
+    let table = &pinfo.ipc_table;
     let mut ready_flags = 0u32;
     let mut value = 0i64;
 
@@ -226,11 +236,9 @@ fn poll_port(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     }
 }
 
-fn poll_fd(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
-    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+fn poll_fd(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     let node = {
-        let lock = pinfo_arc.lock();
-        let file = lock.thing_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
+        let file = pinfo.thing_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
         file.node.clone()
     };
 
@@ -306,13 +314,17 @@ fn poll_irq(spec: &WaitSpec) -> Option<WaitResult> {
 }
 
 #[allow(deprecated)] // handle legacy WaitKind variants that map to ENOSYS
-fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Registration>> {
-    let mut regs = alloc::vec::Vec::new();
+fn register_all(
+    pinfo: &crate::task::ProcessInfo,
+    specs: &[WaitSpec],
+    tid: u64,
+) -> SysResult<alloc::vec::Vec<Registration>> {
+    let mut regs = alloc::vec::Vec::with_capacity(specs.len());
     for spec in specs {
         match WaitKind::from_u32(spec.kind).ok_or(Errno::EINVAL)? {
             WaitKind::Port => {
                 let handle = crate::ipc::IpcThing(spec.object as u32);
-                let table = crate::ipc::GLOBAL_THING_TABLE.lock();
+                let table = &pinfo.ipc_table;
                 if (spec.flags & wait::interest::READABLE) != 0 {
                     if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Read).cloned()
                     {
@@ -329,16 +341,12 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
                 }
             }
             WaitKind::Fd => {
-                let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
                 let node = {
-                    let lock = pinfo_arc.lock();
-                    lock.thing_table.get(spec.object as u32).ok().map(|f| f.node.clone())
+                    let file = pinfo.thing_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
+                    file.node.clone()
                 };
-
-                if let Some(node) = node {
-                    node.add_waiter(tid);
-                    regs.push(Registration::Fd(node));
-                }
+                node.add_waiter(tid);
+                regs.push(Registration::Fd(node));
             }
             WaitKind::GraphOp => {
                 return Err(Errno::ENOSYS);
@@ -391,14 +399,14 @@ mod tests {
 
     use super::*;
 
-    fn alloc_port_pair(capacity: usize) -> (u32, u32) {
+    fn alloc_port_pair(pinfo: &Arc<Mutex<crate::task::ProcessInfo>>, capacity: usize) -> (u32, u32) {
         let port_id = crate::ipc::create_port(capacity);
         let port = crate::ipc::get_port(port_id).expect("port");
-        let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        let write = table
+        let mut lock = pinfo.lock();
+        let write = lock.ipc_table
             .alloc(port.clone(), crate::ipc::IpcThingMode::Write)
             .expect("write handle");
-        let read = table.alloc(port, crate::ipc::IpcThingMode::Read).expect("read handle");
+        let read = lock.ipc_table.alloc(port, crate::ipc::IpcThingMode::Read).expect("read handle");
         (write.0, read.0)
     }
 
@@ -433,6 +441,7 @@ mod tests {
             job: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
             thing_table: table,
+            ipc_table: crate::ipc::IpcThingTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -452,8 +461,11 @@ mod tests {
             crate::sched::hooks::CURRENT_TID_HOOK = Some(fd_test_tid);
             crate::sched::hooks::PROCESS_INFO_HOOK = Some(fd_test_process_info_hook);
         }
-        FD_TEST_PINFO.lock().replace(pinfo);
-        let result = poll_spec(spec);
+        FD_TEST_PINFO.lock().replace(pinfo.clone());
+        let result = {
+            let lock = pinfo.lock();
+            poll_spec(&lock, spec)
+        };
         unsafe {
             crate::sched::hooks::PROCESS_INFO_HOOK = None;
             crate::sched::hooks::CURRENT_TID_HOOK = None;
@@ -464,10 +476,11 @@ mod tests {
 
     #[test]
     fn poll_port_reports_readable_and_hangup() {
-        let (write_handle, read_handle) = alloc_port_pair(64);
+        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
+        let (write_handle, read_handle) = alloc_port_pair(&pinfo, 64);
         let port = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let entry = table
+            let lock = pinfo.lock();
+            let entry = lock.ipc_table
                 .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
                 .cloned()
                 .expect("entry");
@@ -475,7 +488,7 @@ mod tests {
         };
 
         assert!(port.send_all(b"abc"));
-        let readable = poll_spec(&WaitSpec {
+        let readable = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
             kind: WaitKind::Port as u32,
             flags: wait::interest::READABLE,
             object: read_handle as u64,
@@ -487,7 +500,7 @@ mod tests {
         assert_eq!(readable.token, 11);
 
         assert!(!port.close_writer());
-        let hangup = poll_spec(&WaitSpec {
+        let hangup = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
             kind: WaitKind::Port as u32,
             flags: wait::interest::READABLE,
             object: read_handle as u64,
@@ -500,7 +513,7 @@ mod tests {
         let mut drain = [0u8; 8];
         assert_eq!(port.try_recv(&mut drain), 3);
 
-        let hangup_only = poll_spec(&WaitSpec {
+        let hangup_only = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
             kind: WaitKind::Port as u32,
             flags: wait::interest::READABLE,
             object: read_handle as u64,
@@ -513,17 +526,18 @@ mod tests {
 
     #[test]
     fn poll_port_reports_writable_capacity_and_write_hangup() {
-        let (write_handle, _read_handle) = alloc_port_pair(4);
+        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
+        let (write_handle, _read_handle) = alloc_port_pair(&pinfo, 4);
         let port = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let entry = table
+            let lock = pinfo.lock();
+            let entry = lock.ipc_table
                 .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
                 .cloned()
                 .expect("entry");
             entry.port
         };
 
-        let writable = poll_spec(&WaitSpec {
+        let writable = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
             kind: WaitKind::Port as u32,
             flags: wait::interest::WRITABLE,
             object: write_handle as u64,
@@ -535,7 +549,7 @@ mod tests {
         assert_eq!(writable.value, 16);
 
         assert!(port.send_all(&[0u8; 16]));
-        let not_writable = poll_spec(&WaitSpec {
+        let not_writable = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
             kind: WaitKind::Port as u32,
             flags: wait::interest::WRITABLE,
             object: write_handle as u64,
@@ -545,7 +559,7 @@ mod tests {
         assert!(not_writable.is_none());
 
         assert!(!port.close_reader());
-        let hangup = poll_spec(&WaitSpec {
+        let hangup = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
             kind: WaitKind::Port as u32,
             flags: wait::interest::WRITABLE,
             object: write_handle as u64,
@@ -558,20 +572,21 @@ mod tests {
 
     #[test]
     fn collect_ready_returns_multiple_ports() {
-        let (write_a, read_a) = alloc_port_pair(64);
-        let (write_b, read_b) = alloc_port_pair(64);
+        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
+        let (write_a, read_a) = alloc_port_pair(&pinfo, 64);
+        let (write_b, read_b) = alloc_port_pair(&pinfo, 64);
 
         let port_a = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let entry = table
+            let lock = pinfo.lock();
+            let entry = lock.ipc_table
                 .get(crate::ipc::IpcThing(write_a), crate::ipc::IpcThingMode::Write)
                 .cloned()
                 .expect("entry a");
             entry.port
         };
         let port_b = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let entry = table
+            let lock = pinfo.lock();
+            let entry = lock.ipc_table
                 .get(crate::ipc::IpcThing(write_b), crate::ipc::IpcThingMode::Write)
                 .cloned()
                 .expect("entry b");
@@ -604,20 +619,21 @@ mod tests {
 
     #[test]
     fn collect_ready_respects_output_capacity() {
-        let (write_a, read_a) = alloc_port_pair(64);
-        let (write_b, read_b) = alloc_port_pair(64);
+        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
+        let (write_a, read_a) = alloc_port_pair(&pinfo, 64);
+        let (write_b, read_b) = alloc_port_pair(&pinfo, 64);
 
         let port_a = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let entry = table
+            let lock = pinfo.lock();
+            let entry = lock.ipc_table
                 .get(crate::ipc::IpcThing(write_a), crate::ipc::IpcThingMode::Write)
                 .cloned()
                 .expect("entry a");
             entry.port
         };
         let port_b = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let entry = table
+            let lock = pinfo.lock();
+            let entry = lock.ipc_table
                 .get(crate::ipc::IpcThing(write_b), crate::ipc::IpcThingMode::Write)
                 .cloned()
                 .expect("entry b");
@@ -642,7 +658,10 @@ mod tests {
             },
         ];
         let mut results = [WaitResult::default(); 1];
-        let ready = collect_ready(&specs, &mut results).expect("collect");
+        let ready = {
+            let lock = pinfo.lock();
+            collect_ready(&lock, &specs, &mut results).expect("collect")
+        };
         assert_eq!(ready, 1);
         assert_eq!(results[0].token, 101);
     }
@@ -654,18 +673,17 @@ mod tests {
         // backward-compatibility shim remains in place so existing binaries that
         // pass WaitKind::GraphOp = 6 receive a clean error rather than EINVAL.
         let spec = WaitSpec { kind: WaitKind::GraphOp as u32, flags: 0, object: 1, token: 41 };
-        assert!(matches!(poll_spec(&spec), Err(Errno::ENOSYS)));
+        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
+        assert!(matches!(poll_spec_with_pinfo(pinfo, &spec), Err(Errno::ENOSYS)));
     }
 
     #[test]
     fn collect_ready_returns_mixed_port_and_fd() {
-        // Verify that collect_ready works across heterogeneous WaitKind values:
-        // one Port entry that is immediately readable and one Fd entry that maps
-        // to a pipe read-end with data available.
-        let (write_handle, read_handle) = alloc_port_pair(64);
+        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
+        let (write_handle, read_handle) = alloc_port_pair(&pinfo, 64);
         let port = {
-            let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-            let entry = table
+            let lock = pinfo.lock();
+            let entry = lock.ipc_table
                 .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
                 .cloned()
                 .expect("entry");
@@ -697,7 +715,7 @@ mod tests {
             object: read_handle as u64,
             token: 10,
         };
-        let port_result = poll_spec(&port_spec).expect("port poll").expect("ready");
+        let port_result = poll_spec_with_pinfo(pinfo.clone(), &port_spec).expect("port poll").expect("ready");
         assert_ne!(port_result.flags & wait::ready::READABLE, 0);
         assert_eq!(port_result.token, 10);
 

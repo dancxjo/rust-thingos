@@ -22,10 +22,20 @@ pub enum IpcThingMode {
 use alloc::sync::Arc;
 
 /// Entry in the handle table
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct IpcThingEntry {
     pub port: Arc<super::Port>,
     pub mode: IpcThingMode,
+}
+
+impl Clone for IpcThingEntry {
+    fn clone(&self) -> Self {
+        match self.mode {
+            IpcThingMode::Read => self.port.open_reader(),
+            IpcThingMode::Write => self.port.open_writer(),
+        }
+        Self { port: Arc::clone(&self.port), mode: self.mode }
+    }
 }
 
 impl IpcThingEntry {
@@ -55,15 +65,18 @@ impl Drop for IpcThingEntry {
 pub const MAX_IPC_THINGS: usize = 1024;
 
 /// Per-process handle table
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IpcThingTable {
-    entries: [Option<IpcThingEntry>; MAX_IPC_THINGS],
+    entries: alloc::vec::Vec<Option<IpcThingEntry>>,
 }
 
 impl IpcThingTable {
-    pub const fn new() -> Self {
-        const NONE: Option<IpcThingEntry> = None;
-        Self { entries: [NONE; MAX_IPC_THINGS] }
+    pub fn new() -> Self {
+        let mut entries = alloc::vec::Vec::with_capacity(MAX_IPC_THINGS);
+        for _ in 0..MAX_IPC_THINGS {
+            entries.push(None);
+        }
+        Self { entries }
     }
 
     /// Allocate a new handle for the given port and mode.
@@ -114,7 +127,20 @@ impl IpcThingTable {
         }
         self.entries[idx].take()
     }
+
+    /// Insert an entry at a specific index. Used for handle translation.
+    pub fn insert_at(&mut self, idx: usize, entry: IpcThingEntry) -> Result<(), ()> {
+        if idx >= MAX_IPC_THINGS {
+            return Err(());
+        }
+        if self.entries[idx].is_some() {
+            return Err(());
+        }
+        self.entries[idx] = Some(entry);
+        Ok(())
+    }
 }
+
 
 impl Default for IpcThingTable {
     fn default() -> Self {
