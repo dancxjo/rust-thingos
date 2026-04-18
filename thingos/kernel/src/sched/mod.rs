@@ -7835,8 +7835,8 @@ mod tests {
 
         let least_scan_calls = TEST_LEAST_LOADED_ONLINE_CPU_CALLS.load(Ordering::Relaxed);
         assert!(
-            least_scan_calls <= 1,
-            "wake batch should avoid repeated full least-loaded scans (calls={})",
+            least_scan_calls == 0,
+            "wake batch should avoid least-loaded queue scans via per-batch snapshots (calls={})",
             least_scan_calls
         );
     }
