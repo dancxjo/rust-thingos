@@ -127,6 +127,7 @@ impl VfsDriver for DevFs {
             "display" => return Ok(Arc::new(DevSubDirNode::new("display/"))),
             "input" => return Ok(Arc::new(DevSubDirNode::new("input/"))),
             "audio" => return Ok(Arc::new(DevSubDirNode::new("audio/"))),
+            "net" => return Ok(Arc::new(DevSubDirNode::new("net/"))),
             _ => {}
         }
 
@@ -239,6 +240,7 @@ impl VfsNode for DevDirNode {
         names.push("display".to_string());
         names.push("input".to_string());
         names.push("audio".to_string());
+        names.push("net".to_string());
         names.push("rtc".to_string());
         names.push("random".to_string());
         names.push("urandom".to_string());
@@ -1336,6 +1338,23 @@ mod tests {
         assert!(s.contains("console"));
         assert!(s.contains("null"));
         assert!(s.contains("zero"));
+    }
+
+    #[test]
+    fn test_lookup_net_is_dir() {
+        let node = lookup("net").unwrap();
+        let stat = node.stat().unwrap();
+        assert!(stat.is_dir());
+    }
+
+    #[test]
+    fn test_readdir_lists_net_directory() {
+        let node = lookup("").unwrap();
+        let mut buf = [0u8; 128];
+        let n = node.readdir(0, &mut buf).unwrap();
+        assert!(n > 0);
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("net"));
     }
 
     #[test]
