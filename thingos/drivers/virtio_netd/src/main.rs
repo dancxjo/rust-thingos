@@ -373,9 +373,38 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         // 3. Service any pending VFS RPC (non-blocking).
         match provider_loop.try_next_request() {
             Ok(Some(req)) => {
+                let op = req.op;
+                let resp_port = req.resp_port;
+                let req_payload_len = req.payload.len();
+                stem::info!(
+                    "VIRTIO_NETD: dispatch begin op={:?} resp_port={} payload_len={}",
+                    op,
+                    resp_port,
+                    req_payload_len
+                );
                 let resp = handle_vfs_rpc(&mut state, &mut driver, &req);
-                if let Err(e) = provider_loop.send_response(req.resp_port, resp) {
+                let resp_status = resp.status;
+                let resp_payload_len = resp.payload.len();
+                stem::info!(
+                    "VIRTIO_NETD: dispatch end op={:?} resp_port={} status={} resp_payload_len={}",
+                    op,
+                    resp_port,
+                    resp_status,
+                    resp_payload_len
+                );
+                stem::info!(
+                    "VIRTIO_NETD: send_response begin op={:?} resp_port={}",
+                    op,
+                    resp_port
+                );
+                if let Err(e) = provider_loop.send_response(resp_port, resp) {
                     warn!("VIRTIO_NETD: send_response failed: {:?}", e);
+                } else {
+                    stem::info!(
+                        "VIRTIO_NETD: send_response end op={:?} resp_port={}",
+                        op,
+                        resp_port
+                    );
                 }
             }
             Ok(None) => {} // no request ready

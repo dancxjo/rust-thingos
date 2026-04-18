@@ -7,8 +7,10 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
+use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
+use alloc::vec::Vec;
 use core::default::Default;
 
 #[macro_use]
@@ -24,6 +26,7 @@ use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
+use stem::syscall::{argv_get, exit};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 use stem::{info, warn};
 use vfs_device::VfsNicDevice;
@@ -34,8 +37,61 @@ const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
 /// Maximum virtioN unit index to probe during startup.
 const MAX_VIRTIO_UNITS: u32 = 16;
 
+#[derive(Default)]
+struct NetdConfig {
+    oneshot: bool,
+    help: bool,
+}
+
+fn get_args() -> Vec<String> {
+    let mut len = 0;
+    if let Ok(l) = argv_get(&mut []) {
+        len = l;
+    }
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let mut buf = alloc::vec![0u8; len];
+    if argv_get(&mut buf).is_err() {
+        return Vec::new();
+    }
+
+    stem::utils::parse_argv(&buf)
+        .into_iter()
+        .skip(1)
+        .filter_map(|arg| core::str::from_utf8(arg).ok().map(String::from))
+        .collect()
+}
+
+fn parse_config() -> NetdConfig {
+    let mut cfg = NetdConfig::default();
+    for arg in get_args() {
+        match arg.as_str() {
+            "--oneshot" | "--once" => cfg.oneshot = true,
+            "-h" | "--help" => cfg.help = true,
+            _ => {}
+        }
+    }
+    cfg
+}
+
+fn print_usage() {
+    let _ = stem::syscall::write(
+        1,
+        b"usage: netd [--oneshot|--once] [--help]\n\
+--oneshot  probe the NIC, run DHCP once, print the result, and exit\n",
+    );
+}
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    let cfg = parse_config();
+    if cfg.help {
+        print_usage();
+        exit(0);
+    }
+
     info!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
 
     info!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
@@ -51,6 +107,20 @@ fn main(_arg: usize) -> ! {
     let mut device = VfsNicDevice::new(rx_fd, tx_fd, events_fd, mac, mtu, initial_link_up);
     let config = Config::new(EthernetAddress(mac).into());
     let mut iface = Interface::new(config, &mut device, VfsNicDevice::now());
+
+    if cfg.oneshot {
+        info!("NETD: oneshot mode enabled — DHCP probe will exit after completion");
+        match dhcp::run_dhcp(&mut iface, &mut device) {
+            Ok(cfg) => {
+                info!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
+                exit(0);
+            }
+            Err(e) => {
+                warn!("NETD: DHCP failed in oneshot mode: {:?}", e);
+                exit(1);
+            }
+        }
+    }
 
     let mut net_provider = loop {
         match NetVfsProvider::new(mac, mtu, initial_link_up) {
