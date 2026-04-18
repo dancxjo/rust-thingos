@@ -5286,9 +5286,25 @@ mod tests {
     }
 
     #[test]
-    fn test_wake_task_fastpath_skips_scheduler_lock_when_wake_already_pending() {
+    fn test_wake_task_revalidates_under_split_authority_window() {
         let _g = init_test_env();
         crate::task::registry::init::<MockRuntime>();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6101,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
 
         let task = crate::task::Task {
             id: 6101,
@@ -5325,25 +5341,30 @@ mod tests {
         crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
 
         let mut sched_lock = SCHEDULER.lock();
-        *sched_lock = None;
+        *sched_lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
         drop(sched_lock);
         let _ = sched_lock_metrics_snapshot_and_reset();
 
         crate::sched::blocking::wake_task::<MockRuntime>(6101);
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+        drop(sched_lock);
 
         let task = crate::task::registry::get_task::<MockRuntime>(6101).unwrap();
         assert_eq!(task.state, TaskState::Running);
         assert!(task.wake_pending);
+        assert!(
+            sched
+                .state
+                .get_task(6101)
+                .map(|sf| sf.wake_pending)
+                .unwrap_or(false),
+            "wake_task must revalidate scheduler cache even when REGISTRY wake_pending is true"
+        );
 
         let metrics = sched_lock_metrics_snapshot_and_reset();
-        assert_eq!(
-            metrics.wake_task_fastpath_already_pending, 1,
-            "wake_task should take the already-pending fast path"
-        );
-        assert_eq!(
-            metrics.wake_task.wait_calls, 0,
-            "wake_task fast path should avoid scheduler lock wait tracking"
-        );
+        assert_eq!(metrics.wake_task_fastpath_already_pending, 0);
+        assert_eq!(metrics.wake_task.wait_calls, 1);
     }
 
     #[test]
