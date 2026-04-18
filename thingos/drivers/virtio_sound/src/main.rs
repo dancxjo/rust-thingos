@@ -991,7 +991,35 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     loop {
         let mut progress = false;
 
-        // 1. Accept new mapped ring connections.
+        // 1. Process VFS requests first so optional mapped-ring housekeeping
+        // cannot stall control-path RPCs such as lookup/stat/readdir on
+        // /dev/audio/card0.
+        loop {
+            match provider_loop.try_next_request() {
+                Ok(Some(req)) => {
+                    progress = true;
+                    let prev_free = card.ring.free_space();
+                    let (resp, ring_changed) = dispatch_rpc(req.op, &req.payload, &mut card);
+                    let _ = provider_loop.send_response(req.resp_port, resp);
+
+                    if card.out0_subscribed && (ring_changed || card.ring.free_space() > prev_free)
+                    {
+                        let _ = stem::syscall::vfs::vfs_notify(
+                            req_write,
+                            HANDLE_OUT0,
+                            abi::syscall::poll_flags::POLLOUT,
+                        );
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    warn!("SND: RPC loop error: {:?}", e);
+                    break;
+                }
+            }
+        }
+
+        // 2. Accept new mapped ring connections.
         if let Some(listener_fd) = mapped_listener {
             if mapped_pending_fd.is_none() {
                 // Guard accept() with poll so a blocking socket backend cannot
@@ -1105,32 +1133,6 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                             mapped_pending_fd = None;
                         }
                     }
-                }
-            }
-        }
-
-        // 2. Process VFS requests.
-        loop {
-            match provider_loop.try_next_request() {
-                Ok(Some(req)) => {
-                    progress = true;
-                    let prev_free = card.ring.free_space();
-                    let (resp, ring_changed) = dispatch_rpc(req.op, &req.payload, &mut card);
-                    let _ = provider_loop.send_response(req.resp_port, resp);
-
-                    if card.out0_subscribed && (ring_changed || card.ring.free_space() > prev_free)
-                    {
-                        let _ = stem::syscall::vfs::vfs_notify(
-                            req_write,
-                            HANDLE_OUT0,
-                            abi::syscall::poll_flags::POLLOUT,
-                        );
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    warn!("SND: RPC loop error: {:?}", e);
-                    break;
                 }
             }
         }
