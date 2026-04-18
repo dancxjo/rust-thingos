@@ -978,6 +978,16 @@ enum DispatchTrigger {
     ReschedIpi,
 }
 
+impl DispatchTrigger {
+    #[inline]
+    fn schedule_reason(self) -> ScheduleReason {
+        match self {
+            DispatchTrigger::TimerTick => ScheduleReason::PreemptTick,
+            DispatchTrigger::ReschedIpi => ScheduleReason::ReschedIfNeeded,
+        }
+    }
+}
+
 /// Interrupt-safe version of resched_if_needed - uses try_lock to avoid deadlock
 /// If SCHEDULER lock is contended, simply skip rescheduling this tick
 fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
@@ -1058,11 +1068,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
             let resched_requested =
                 sched.state.per_cpu.get(cpu_idx).map_or(false, |pc| pc.need_resched)
                     || global_need_resched_load(cpu_idx, Ordering::Acquire);
-            let reason = match trigger {
-                DispatchTrigger::TimerTick => ScheduleReason::PreemptTick,
-                DispatchTrigger::ReschedIpi => ScheduleReason::ReschedIfNeeded,
-            };
-            let switch = sched.schedule_point(reason);
+            let switch = sched.schedule_point(trigger.schedule_reason());
             // Drain IPIs deferred by wake_sleepers while the SCHEDULER lock is
             // still held, so we can send them after releasing the lock.
             let deferred_ipis = core::mem::take(&mut sched.pending_wake_ipis);
