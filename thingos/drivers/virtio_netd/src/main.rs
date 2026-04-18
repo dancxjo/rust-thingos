@@ -376,7 +376,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                 let op = req.op;
                 let resp_port = req.resp_port;
                 let req_payload_len = req.payload.len();
-                stem::info!(
+                stem::debug!(
                     "VIRTIO_NETD: dispatch begin op={:?} resp_port={} payload_len={}",
                     op,
                     resp_port,
@@ -385,14 +385,14 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                 let resp = handle_vfs_rpc(&mut state, &mut driver, &req);
                 let resp_status = resp.status;
                 let resp_payload_len = resp.payload.len();
-                stem::info!(
+                stem::debug!(
                     "VIRTIO_NETD: dispatch end op={:?} resp_port={} status={} resp_payload_len={}",
                     op,
                     resp_port,
                     resp_status,
                     resp_payload_len
                 );
-                stem::info!(
+                stem::trace!(
                     "VIRTIO_NETD: send_response begin op={:?} resp_port={}",
                     op,
                     resp_port
@@ -400,7 +400,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                 if let Err(e) = provider_loop.send_response(resp_port, resp) {
                     warn!("VIRTIO_NETD: send_response failed: {:?}", e);
                 } else {
-                    stem::info!(
+                    stem::trace!(
                         "VIRTIO_NETD: send_response end op={:?} resp_port={}",
                         op,
                         resp_port

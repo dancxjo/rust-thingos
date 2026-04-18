@@ -52,7 +52,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
         if ts >= next_progress_log {
             let elapsed_ms = (ts - start).total_millis();
-            stem::info!("DHCP: Still waiting for lease ({} ms elapsed)", elapsed_ms);
+            stem::debug!("DHCP: Still waiting for lease ({} ms elapsed)", elapsed_ms);
             next_progress_log += Duration::from_secs(5);
         }
 
