@@ -2,32 +2,42 @@
 //!
 //! Provides FIFO waking to avoid thundering herd issues and ensure fairness.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeSet, VecDeque};
 use alloc::vec::Vec;
 use spin::Mutex;
 
 pub struct WaitQueue {
-    waiters: Mutex<VecDeque<u64>>,
+    inner: Mutex<WaitQueueInner>,
+}
+
+struct WaitQueueInner {
+    /// FIFO registration order for wake fairness.
+    waiters: VecDeque<u64>,
+    /// Membership index used for O(log n) insert/remove and dedupe checks.
+    in_queue: BTreeSet<u64>,
 }
 
 impl WaitQueue {
     pub const fn new() -> Self {
         Self {
-            waiters: Mutex::new(VecDeque::new()),
+            inner: Mutex::new(WaitQueueInner {
+                waiters: VecDeque::new(),
+                in_queue: BTreeSet::new(),
+            }),
         }
     }
 
     /// Returns true if there are no waiters.
     pub fn is_empty(&self) -> bool {
-        self.waiters.lock().is_empty()
+        self.inner.lock().in_queue.is_empty()
     }
 
     /// Add a task to the wait queue
     pub fn push_back(&self, tid: u64) {
-        let mut waiters = self.waiters.lock();
-        if !waiters.contains(&tid) {
+        let mut inner = self.inner.lock();
+        if inner.in_queue.insert(tid) {
             crate::kdebug!("WaitQueue::push_back: adding task {}", tid);
-            waiters.push_back(tid);
+            inner.waiters.push_back(tid);
         } else {
             crate::kdebug!("WaitQueue::push_back: task {} already in queue", tid);
         }
@@ -36,8 +46,15 @@ impl WaitQueue {
     /// Wake the first task in the queue
     pub fn wake_one(&self) {
         let tid = {
-            let mut waiters = self.waiters.lock();
-            waiters.pop_front()
+            let mut inner = self.inner.lock();
+            let mut chosen = None;
+            while let Some(candidate) = inner.waiters.pop_front() {
+                if inner.in_queue.remove(&candidate) {
+                    chosen = Some(candidate);
+                    break;
+                }
+            }
+            chosen
         };
 
         if let Some(tid) = tid {
@@ -51,8 +68,14 @@ impl WaitQueue {
     /// Wake all tasks in the queue
     pub fn wake_all(&self) {
         let waiters = {
-            let mut waiters = self.waiters.lock();
-            waiters.drain(..).collect::<Vec<u64>>()
+            let mut inner = self.inner.lock();
+            let mut to_wake = Vec::new();
+            while let Some(candidate) = inner.waiters.pop_front() {
+                if inner.in_queue.remove(&candidate) {
+                    to_wake.push(candidate);
+                }
+            }
+            to_wake
         };
 
         for tid in waiters {
@@ -65,16 +88,19 @@ impl WaitQueue {
 
     /// Remove a task from the wait queue (e.g. on timeout or interrupt)
     pub fn remove(&self, tid: u64) {
-        let mut waiters = self.waiters.lock();
-        if let Some(pos) = waiters.iter().position(|&id| id == tid) {
-            waiters.remove(pos);
-        }
+        self.inner.lock().in_queue.remove(&tid);
     }
 
     /// Drain the queue without waking. Caller decides when waking is safe.
     pub fn drain(&self) -> Vec<u64> {
-        let mut waiters = self.waiters.lock();
-        waiters.drain(..).collect()
+        let mut inner = self.inner.lock();
+        let mut drained = Vec::new();
+        while let Some(candidate) = inner.waiters.pop_front() {
+            if inner.in_queue.remove(&candidate) {
+                drained.push(candidate);
+            }
+        }
+        drained
     }
 }
 
@@ -158,5 +184,22 @@ mod tests {
         q.remove(42);
 
         assert_eq!(q.drain(), alloc::vec![41, 43]);
+    }
+
+    #[test]
+    fn wake_one_skips_removed_waiters() {
+        let q = WaitQueue::new();
+        reset_wakes();
+        WAKE_TASK_HOOK.store(record_wake as *mut (), Ordering::SeqCst);
+
+        q.push_back(51);
+        q.push_back(52);
+        q.push_back(53);
+        q.remove(52);
+        q.wake_one();
+        q.wake_one();
+
+        assert_eq!(wake_log(), alloc::vec![51, 53]);
+        assert!(q.is_empty());
     }
 }
