@@ -195,7 +195,8 @@ pub fn wake_task_locked<R: BootRuntime>(
             let target_cpu = match sf.affinity {
                 crate::task::Affinity::Pinned(cpu) => cpu,
                 crate::task::Affinity::Any => {
-                    let preferred = sf.last_cpu.unwrap_or_else(|| super::current_cpu_index::<R>());
+                    let preferred =
+                        super::select_preferred_any_affinity_wake_cpu::<R>(sched, sf.last_cpu);
                     super::select_any_affinity_wake_cpu::<R>(sched, preferred)
                 }
             };
