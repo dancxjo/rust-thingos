@@ -11,7 +11,6 @@ use alloc::string::ToString;
 use alloc::vec;
 use core::default::Default;
 
-
 #[macro_use]
 extern crate stem;
 
@@ -31,22 +30,22 @@ use vfs_device::VfsNicDevice;
 use vfs_provider::NetVfsProvider;
 
 /// Path prefix for the virtio NIC VFS provider (published by virtio_netd).
-const VIRTIO0_PATH: &str = "/dev/net/virtio0";
+const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
+/// Maximum virtioN unit index to probe during startup.
+const MAX_VIRTIO_UNITS: u32 = 16;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
     info!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
 
-    info!(
-        "NETD: Waiting for virtio_netd VFS provider at {}...",
-        VIRTIO0_PATH
-    );
-    let (rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) = open_nic_device();
+    info!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
+    let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
+        open_nic_device();
     let mtu = iface_mtu as usize;
 
     info!(
-        "NETD: Driver online — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  MTU {}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mtu
+        "NETD: Driver online at {} — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  MTU {}",
+        provider_path, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mtu
     );
 
     let mut device = VfsNicDevice::new(rx_fd, tx_fd, events_fd, mac, mtu, initial_link_up);
@@ -66,10 +65,7 @@ fn main(_arg: usize) -> ! {
     info!("NETD: Running DHCP...");
     let dhcp_config = match dhcp::run_dhcp(&mut iface, &mut device) {
         Ok(cfg) => {
-            info!(
-                "NETD: DHCP — IP: {}, GW: {}, DNS: {}",
-                cfg.ip, cfg.gateway, cfg.dns
-            );
+            info!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
             cfg
         }
         Err(e) => {
@@ -80,7 +76,12 @@ fn main(_arg: usize) -> ! {
         }
     };
 
-    net_provider.set_ip_config(dhcp_config.ip, dhcp_config.prefix_len, dhcp_config.gateway, dhcp_config.dns);
+    net_provider.set_ip_config(
+        dhcp_config.ip,
+        dhcp_config.prefix_len,
+        dhcp_config.gateway,
+        dhcp_config.dns,
+    );
     info!("NETD: Network ready — entering VFS service loop");
 
     let mut socket_api = SocketApi::new();
@@ -89,8 +90,8 @@ fn main(_arg: usize) -> ! {
     let mut last_link_state = device.link_up();
 
     // Bridge the request-read port to an FD for FD-first polling.
-    let req_fd = stem::syscall::vfs::vfs_thing_from_channel(net_provider.req_read_port())
-        .unwrap_or(0);
+    let req_fd =
+        stem::syscall::vfs::vfs_thing_from_channel(net_provider.req_read_port()).unwrap_or(0);
 
     loop {
         let mut did_work = false;
@@ -116,16 +117,14 @@ fn main(_arg: usize) -> ! {
             last_link_state = current_link;
             net_provider.link_up = current_link;
             did_work = true;
-            info!(
-                "NETD: Link state changed → {}",
-                if current_link { "UP" } else { "DOWN" }
-            );
+            info!("NETD: Link state changed → {}", if current_link { "UP" } else { "DOWN" });
         }
 
         socket_api.gc_closed_sockets(&mut socket_set);
 
         if !did_work {
-            let mut pollfds = [abi::syscall::PollThing { thing: req_fd as i32,
+            let mut pollfds = [abi::syscall::PollThing {
+                thing: req_fd as i32,
                 events: abi::syscall::poll_flags::POLLIN,
                 revents: 0,
             }];
@@ -134,58 +133,71 @@ fn main(_arg: usize) -> ! {
     }
 }
 
-/// Open the virtio NIC device files, retrying until the VFS provider is ready.
-fn open_nic_device() -> (u32, u32, u32, [u8; 6], u32, bool) {
-    let rx_path = alloc::format!("{}/rx", VIRTIO0_PATH);
-    let tx_path = alloc::format!("{}/tx", VIRTIO0_PATH);
-    let events_path = alloc::format!("{}/events", VIRTIO0_PATH);
-    let mac_path = alloc::format!("{}/mac", VIRTIO0_PATH);
-    let mtu_path = alloc::format!("{}/mtu", VIRTIO0_PATH);
-    let status_path = alloc::format!("{}/status", VIRTIO0_PATH);
+/// Open a virtio NIC device fileset, retrying until any `/dev/net/virtioN`
+/// provider is ready.
+fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, bool) {
+    let mut probe_round = 0u32;
 
     loop {
-        let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
-            Ok(fd) => fd,
-            Err(_) => {
-                stem::time::sleep_ms(100);
-                continue;
-            }
-        };
+        for unit in 0..MAX_VIRTIO_UNITS {
+            let provider_path = alloc::format!("{}{}", VIRTIO_PATH_PREFIX, unit);
+            let rx_path = alloc::format!("{}/rx", provider_path);
+            let tx_path = alloc::format!("{}/tx", provider_path);
+            let events_path = alloc::format!("{}/events", provider_path);
+            let mac_path = alloc::format!("{}/mac", provider_path);
+            let mtu_path = alloc::format!("{}/mtu", provider_path);
+            let status_path = alloc::format!("{}/status", provider_path);
 
-        let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
-            Ok(fd) => fd,
-            Err(e) => {
-                warn!("NETD: Failed to open {}: {:?}", tx_path, e);
-                let _ = vfs_close(rx_fd);
-                stem::time::sleep_ms(100);
-                continue;
-            }
-        };
+            let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
+                Ok(fd) => fd,
+                Err(_) => continue,
+            };
 
-        let events_fd = match vfs_open(&events_path, O_RDONLY | O_NONBLOCK) {
-            Ok(fd) => fd,
-            Err(e) => {
-                warn!("NETD: Failed to open {}: {:?}", events_path, e);
-                let _ = vfs_close(rx_fd);
-                let _ = vfs_close(tx_fd);
-                stem::time::sleep_ms(100);
-                continue;
-            }
-        };
+            let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
+                Ok(fd) => fd,
+                Err(e) => {
+                    warn!("NETD: Failed to open {}: {:?}", tx_path, e);
+                    let _ = vfs_close(rx_fd);
+                    continue;
+                }
+            };
 
-        let mac = read_mac_file(&mac_path).unwrap_or([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-        let mtu = read_u32_file(&mtu_path).unwrap_or(1500);
-        let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
+            let events_fd = match vfs_open(&events_path, O_RDONLY | O_NONBLOCK) {
+                Ok(fd) => fd,
+                Err(e) => {
+                    warn!("NETD: Failed to open {}: {:?}", events_path, e);
+                    let _ = vfs_close(rx_fd);
+                    let _ = vfs_close(tx_fd);
+                    continue;
+                }
+            };
 
-        info!(
-            "NETD: Opened VFS NIC device (rx={}, tx={}, events={}, mtu={}, link={})",
-            rx_fd,
-            tx_fd,
-            events_fd,
-            mtu,
-            if initial_link_up { "up" } else { "down" }
-        );
-        return (rx_fd, tx_fd, events_fd, mac, mtu, initial_link_up);
+            let mac = read_mac_file(&mac_path).unwrap_or([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+            let mtu = read_u32_file(&mtu_path).unwrap_or(1500);
+            let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
+
+            info!(
+                "NETD: Opened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
+                provider_path,
+                rx_fd,
+                tx_fd,
+                events_fd,
+                mtu,
+                if initial_link_up { "up" } else { "down" }
+            );
+            return (provider_path, rx_fd, tx_fd, events_fd, mac, mtu, initial_link_up);
+        }
+
+        probe_round = probe_round.saturating_add(1);
+        if probe_round == 1 || probe_round % 20 == 0 {
+            warn!(
+                "NETD: No virtio VFS provider ready under {}[0..{}], retrying (round={})",
+                VIRTIO_PATH_PREFIX,
+                MAX_VIRTIO_UNITS.saturating_sub(1),
+                probe_round
+            );
+        }
+        stem::time::sleep_ms(100);
     }
 }
 
