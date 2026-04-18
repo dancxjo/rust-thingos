@@ -92,6 +92,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "rtl8168d", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "netd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "fetchd", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "httpsd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "find", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "iso_reader", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ping", is_init: false, boot_module: true, features: vec![] },
