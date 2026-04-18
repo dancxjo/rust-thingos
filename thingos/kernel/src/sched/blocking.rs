@@ -130,14 +130,7 @@ pub fn block_current<R: BootRuntime>() {
             (None, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
             // Add to wait queue and pick next task to run.
-            let inserted = sched.state.register_waiter(current_id, WaitReason::BlockCurrent);
-            if !inserted {
-                crate::kdebug!(
-                    "SCHED: task {} already registered as waiter ({:?})",
-                    current_id,
-                    WaitReason::BlockCurrent
-                );
-            }
+            let _ = sched.state.register_waiter(current_id, WaitReason::BlockCurrent);
             let switch = sched.prepare_schedule();
             let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);

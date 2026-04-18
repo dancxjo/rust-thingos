@@ -49,10 +49,7 @@ impl WaitQueue {
         let mut inner = self.inner.lock();
         let in_queue = inner.in_queue_mut();
         if in_queue.insert(tid) {
-            crate::kdebug!("WaitQueue::push_back: adding task {}", tid);
             inner.waiters.push_back(tid);
-        } else {
-            crate::kdebug!("WaitQueue::push_back: task {} already in queue", tid);
         }
     }
 
@@ -77,7 +74,6 @@ impl WaitQueue {
         };
 
         if let Some(tid) = tid {
-            crate::kdebug!("WaitQueue::wake_one: waking task {}", tid);
             unsafe {
                 crate::sched::wake_task_erased(tid);
             }
@@ -105,7 +101,6 @@ impl WaitQueue {
 
         for tid in waiters {
             unsafe {
-                crate::kdebug!("WaitQueue::wake_all: waking task {}", tid);
                 crate::sched::wake_task_erased(tid);
             }
         }

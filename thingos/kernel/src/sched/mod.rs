@@ -1004,10 +1004,6 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
 /// Called from IPI handler - triggers reschedule without advancing time
 pub fn on_resched_ipi<R: BootRuntime>() {
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
-    crate::kdebug!(
-        "SCHED: Resched IPI received on CPU {}",
-        crate::runtime::<R>().current_cpu_index()
-    );
     try_resched_if_needed::<R>(DispatchTrigger::ReschedIpi);
 }
 
@@ -1062,18 +1058,6 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
             );
         }
 
-        // Only log when we have a real owner and a non-trivial hold time, to
-        // avoid flooding the log with CPU -1 / held-for-0 noise.
-        if owner >= 0 && held_duration > 0 {
-            crate::ktrace!(
-                "SCHED: try_resched_if_needed failed to acquire lock on CPU {} after {} attempts (is_idle={}) - current owner: CPU {}, held for {} ticks",
-                cpu_idx,
-                attempts,
-                rt.is_idle_task_current(),
-                owner,
-                held_duration
-            );
-        }
     }
 
     if let Some(mut lock) = lock {
@@ -1999,12 +1983,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 // up this task when it is processed.
                 let already_pending = set_global_need_resched(actual_cpu);
                 if !already_pending {
-                    crate::kdebug!(
-                        "SCHED: Nudging CPU {} for task {} (prio {})",
-                        actual_cpu,
-                        tid,
-                        priority
-                    );
                     if actual_cpu < types::MAX_CPUS {
                         pending_ipi_bitmap |= 1u64 << actual_cpu;
                     }
@@ -2266,14 +2244,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         continue;
                     }
                     Some(sf) => {
-                        if id == 16 {
-                            crate::ktrace!(
-                                "SCHED[CHIME]: picked on CPU {} (state={:?}, affinity={:?})",
-                                cpu_idx,
-                                sf.state,
-                                sf.affinity
-                            );
-                        }
                         if let crate::task::Affinity::Pinned(target) = sf.affinity {
                             if target != cpu_idx && target < per_cpu_len {
                                 self.defer_or_repair_misroute(sf.priority as usize, target, id);
@@ -2309,14 +2279,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             continue;
                         }
                         Some(sf) => {
-                            if id == 16 {
-                                crate::ktrace!(
-                                    "SCHED[CHIME]: picked (idle-q) on CPU {} (state={:?}, affinity={:?})",
-                                    cpu_idx,
-                                    sf.state,
-                                    sf.affinity
-                                );
-                            }
                             if let crate::task::Affinity::Pinned(target) = sf.affinity {
                                 if target != cpu_idx && target < per_cpu_len {
                                     self.defer_or_repair_misroute(sf.priority as usize, target, id);
