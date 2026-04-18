@@ -42,6 +42,8 @@ pub enum WaitReason {
 
 pub const WAKE_LATENCY_HIST_BUCKETS: usize = 5;
 pub const IDLE_EPISODE_HIST_BUCKETS: usize = 4;
+const RUNQ_STALE_PURGE_BUDGET: usize = 32;
+const RUNQ_COMPACT_TRIGGER_MIN_LEN: usize = RUNQ_STALE_PURGE_BUDGET * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnqueueCause {
@@ -375,7 +377,10 @@ impl SchedState {
         } = self;
 
         if let Some(pc) = per_cpu.get_mut(cpu) {
-            while let Some(tid) = pc.runq[prio].pop_front() {
+            for _ in 0..RUNQ_STALE_PURGE_BUDGET {
+                let Some(tid) = pc.runq[prio].pop_front() else {
+                    break;
+                };
                 // Lazy-invalidation model: entries may stay in the VecDeque after
                 // `remove_thread_from_runq` marks them not-enqueued.
                 // Only return the entry if it still matches the task's canonical
@@ -440,13 +445,14 @@ impl SchedState {
     }
 
     pub fn remove_thread_from_runq(&mut self, tid: ThreadId) -> bool {
+        let Some((cpu, prio)) = self.get_thread(tid).and_then(|t| t.runq_location) else {
+            return false;
+        };
         if let Some(t) = self.get_thread_mut(tid) {
-            if t.runq_location.is_some() {
-                t.runq_location = None;
-                return true;
-            }
+            t.runq_location = None;
         }
-        false
+        self.opportunistic_compact_runq(cpu, prio);
+        true
     }
 
     pub fn remove_thread(&mut self, tid: ThreadId) -> bool {
@@ -567,6 +573,42 @@ impl SchedState {
             );
         }
         removed
+    }
+
+    fn opportunistic_compact_runq(&mut self, cpu: usize, prio: usize) {
+        let SchedState {
+            threads,
+            per_cpu,
+            ..
+        } = self;
+
+        let Some(pc) = per_cpu.get_mut(cpu) else {
+            return;
+        };
+        let runq = &mut pc.runq[prio];
+        if runq.len() < RUNQ_COMPACT_TRIGGER_MIN_LEN {
+            return;
+        }
+
+        let front_is_stale = runq
+            .iter()
+            .take(RUNQ_STALE_PURGE_BUDGET)
+            .all(|tid| {
+                threads
+                    .get(tid)
+                    .and_then(|thread| thread.runq_location)
+                    != Some((cpu, prio))
+            });
+        if !front_is_stale {
+            return;
+        }
+
+        runq.retain(|tid| {
+            threads
+                .get(tid)
+                .and_then(|thread| thread.runq_location)
+                == Some((cpu, prio))
+        });
     }
 
     // ── Backward-compatible forwarding methods ────────────────────────────────
@@ -693,6 +735,44 @@ mod tests {
             state.per_cpu[0].stats.runnable_dequeues,
             1,
             "valid dequeue should increment runnable_dequeues"
+        );
+    }
+
+    #[test]
+    fn dequeue_front_bounds_stale_cleanup_work_per_call() {
+        let mut state = SchedState::new();
+        state.per_cpu.push(PerCpu::new());
+
+        let stale_count = RUNQ_STALE_PURGE_BUDGET + 2;
+        for tid in 100..(100 + stale_count as u64) {
+            state.insert_thread(sched_fields(tid, TaskState::Runnable, TaskPriority::Normal));
+            state.enqueue_thread(0, TaskPriority::Normal as usize, tid);
+            assert!(state.remove_thread_from_runq(tid));
+        }
+
+        let runnable_tid = 10_000;
+        state.insert_thread(sched_fields(
+            runnable_tid,
+            TaskState::Runnable,
+            TaskPriority::Normal,
+        ));
+        state.enqueue_thread(0, TaskPriority::Normal as usize, runnable_tid);
+
+        assert_eq!(
+            state.dequeue_thread_front(0, TaskPriority::Normal as usize),
+            None,
+            "first dequeue should stop after budgeted stale cleanup"
+        );
+        assert_eq!(
+            state.per_cpu[0].runq[TaskPriority::Normal as usize].len(),
+            3,
+            "queue should still contain stale tail plus runnable task after bounded cleanup"
+        );
+
+        assert_eq!(
+            state.dequeue_thread_front(0, TaskPriority::Normal as usize),
+            Some(runnable_tid),
+            "next dequeue should drain remaining stale entries then return runnable task"
         );
     }
 
