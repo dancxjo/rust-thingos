@@ -993,16 +993,9 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
     let cpu_idx = rt.current_cpu_index();
-
-    // Use try_lock to avoid deadlock if SCHEDULER is held by main code on this CPU.
-    // A single attempt is sufficient: if the lock is not immediately available,
-    // GLOBAL_NEED_RESCHED is set so the next safe preemption point will retry.
-    // Spinning in the idle task only increases contention on the global lock.
     let mut lock = None;
     let mut attempts = 0;
-    let max_attempts = 1;
-
-    while attempts < max_attempts {
+    while attempts < 1 {
         if let Some(l) = SCHEDULER.try_lock() {
             lock = Some(l);
             break;
@@ -1016,6 +1009,18 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         let acquired_at = SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire);
         let now = rt.mono_ticks();
         let held_duration = if acquired_at > 0 { now.saturating_sub(acquired_at) } else { 0 };
+        let freq = rt.mono_freq_hz().max(1);
+
+        // WATCHDOG: Detect if the lock has been held for an implausibly long time.
+        // If it's held > 2 seconds, we likely have a deadlock or a lock leak.
+        if owner != -1 && acquired_at != 0 && held_duration > (freq * 2) {
+             panic!(
+                "SCHEDULER LOCK WATCHDOG: Lock held by CPU {} for {} ticks ({} ms) - potential DEADLOCK",
+                owner,
+                held_duration,
+                (held_duration * 1000) / freq
+            );
+        }
 
         // Only log when we have a real owner and a non-trivial hold time, to
         // avoid flooding the log with CPU -1 / held-for-0 noise.
@@ -1164,6 +1169,24 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     } else {
         PROF_RESCHED_TRYLOCK_MISS.fetch_add(1, Ordering::Relaxed);
         PROF_TRYLOCK_MISS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+
+        // WATCHDOG: Detect if the lock has been held for an implausibly long time.
+        // If it's held > 2 seconds, we likely have a deadlock or a lock leak.
+        let now = rt.mono_ticks();
+        let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
+        let acquired_at = SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire);
+        let freq = rt.mono_freq_hz().max(1);
+        let watchdog_limit_ticks = freq * 2;
+
+        if owner != -1 && acquired_at != 0 && now.saturating_sub(acquired_at) > watchdog_limit_ticks {
+             panic!(
+                "SCHEDULER LOCK WATCHDOG: Lock held by CPU {} for {} ticks ({} ms) - potential DEADLOCK",
+                owner,
+                now.saturating_sub(acquired_at),
+                (now.saturating_sub(acquired_at) * 1000) / freq
+            );
+        }
+
         if global_need_resched_load(cpu_idx, Ordering::Acquire) {
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
         }

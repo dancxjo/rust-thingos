@@ -299,6 +299,12 @@ pub fn task_exec_current<R: BootRuntime>(
     // We must never return to the old state.
     rt.tasking().activate_address_space(new_aspace_actual);
 
+    // CRITICAL: Clear scheduler lock tracking before context switch.
+    // If any part of the exec path (e.g. killing siblings) set the tracking,
+    // we must clear it now because the new context will not drop the RAII
+    // guards from this stack.
+    crate::sched::clear_sched_lock_tracking::<R>();
+
     let mut dummy_ctx = Default::default();
     // Discard the outgoing FS_BASE; switch in with the new image's TLS pointer.
     let mut _discard_tls: u64 = 0;
