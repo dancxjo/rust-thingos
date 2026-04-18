@@ -1294,7 +1294,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         }
 
         if !progress {
-            stem::time::sleep_ms(1);
+            stem::yield_now();
         }
     }
 }

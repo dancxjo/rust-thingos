@@ -384,6 +384,6 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
             }
         }
 
-        stem::time::sleep_ms(1);
+        stem::yield_now();
     }
 }
