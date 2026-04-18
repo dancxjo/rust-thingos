@@ -90,11 +90,13 @@ impl HttpsProvider {
     }
 
     fn resolve_host(&mut self, host: &str) -> bool {
-        if let Some(ok) = self.host_cache.get(host) {
-            return *ok;
+        if let Some(&true) = self.host_cache.get(host) {
+            return true;
         }
         let ok = resolve_host_via_netd(host);
-        self.host_cache.insert(host.to_string(), ok);
+        if ok {
+            self.host_cache.insert(host.to_string(), true);
+        }
         ok
     }
 
@@ -269,7 +271,8 @@ fn resolve_host_via_netd(host: &str) -> bool {
                 let _ = vfs_close(read_fd);
                 return core::str::from_utf8(&buf[..n]).map(|s| s.trim().contains('.')).unwrap_or(false);
             }
-            _ => stem::time::sleep_ms(DNS_RETRY_MS),
+            Err(abi::errors::Errno::EAGAIN) => stem::time::sleep_ms(DNS_RETRY_MS),
+            _ => break, // Fail fast on EIO or other errors
         }
     }
     let _ = vfs_close(read_fd);
