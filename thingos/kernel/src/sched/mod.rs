@@ -225,6 +225,9 @@ const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
 // Keep steal scans bounded to limit idle-path latency while still peeking past
 // a small pinned/unstealable head segment.
 const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
+// Allow local wake routing for Any-affinity tasks when the previous CPU is
+// meaningfully busier, while still preserving cache locality under similar load.
+const ANY_WAKE_LOCAL_DEPTH_BIAS: usize = 1;
 const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 64;
 const RESCHED_IPI_NEVER_SENT: u64 = u64::MAX;
@@ -1345,6 +1348,54 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     }
 }
 
+pub(crate) fn select_preferred_any_affinity_wake_cpu<R: BootRuntime>(
+    sched: &types::Scheduler<R>,
+    last_cpu: Option<usize>,
+) -> usize {
+    let local_cpu = current_cpu_index::<R>();
+    let local_online =
+        local_cpu < sched.state.per_cpu.len() && sched.state.online_cpus.contains(&local_cpu);
+    let fallback = if local_online {
+        local_cpu
+    } else if let Some(cpu) = sched
+        .state
+        .online_cpus
+        .iter()
+        .copied()
+        .find(|&cpu| cpu < sched.state.per_cpu.len())
+    {
+        cpu
+    } else if local_cpu < sched.state.per_cpu.len() {
+        // Defensive fallback for transient test/bootstrap states where online
+        // bookkeeping lags but per-CPU storage is already initialized.
+        local_cpu
+    } else {
+        0
+    };
+
+    let Some(last_cpu) = last_cpu.filter(|&cpu| {
+        cpu < sched.state.per_cpu.len() && sched.state.online_cpus.contains(&cpu)
+    }) else {
+        return fallback;
+    };
+
+    if !local_online || last_cpu == local_cpu {
+        return last_cpu;
+    }
+
+    // Compare total runnable depth across all priority queues on each CPU.
+    let local_depth = runq_depth_for_cpu(&sched.state, local_cpu);
+    let last_depth = runq_depth_for_cpu(&sched.state, last_cpu);
+    // A bias of 1 preserves locality by keeping `last_cpu` unless local CPU has
+    // at least 2 fewer queued tasks.
+    // saturating_add is defensive for pathological queue lengths.
+    if local_depth.saturating_add(ANY_WAKE_LOCAL_DEPTH_BIAS) < last_depth {
+        local_cpu
+    } else {
+        last_cpu
+    }
+}
+
 #[cfg(test)]
 fn reset_any_wake_policy_for_tests() {
     ANY_WAKE_POLICY_INIT_DONE.store(true, Ordering::Release);
@@ -1685,7 +1736,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             crate::task::Affinity::Pinned(cpu) => cpu,
                             crate::task::Affinity::Any => {
                                 let preferred =
-                                    sf.last_cpu.unwrap_or_else(|| current_cpu_index::<R>());
+                                    select_preferred_any_affinity_wake_cpu::<R>(self, sf.last_cpu);
                                 select_any_affinity_wake_cpu::<R>(self, preferred)
                             }
                         };
@@ -4124,6 +4175,7 @@ mod tests {
             run_cpu: Some(0),
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
         let task_normal = crate::task::Task {
@@ -4338,6 +4390,7 @@ mod tests {
             run_cpu: Some(0),
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -4473,6 +4526,7 @@ mod tests {
             run_cpu: Some(0),
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -4486,6 +4540,7 @@ mod tests {
             run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
 
@@ -4576,6 +4631,7 @@ mod tests {
             run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
 
@@ -4633,6 +4689,7 @@ mod tests {
                 run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                voluntary_yields: 0,
                 wake_pending: false,
             });
             sched.state.add_task_to_sleep_queue(tid, 50);
@@ -4715,6 +4772,7 @@ mod tests {
             run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9102);
@@ -4813,6 +4871,7 @@ mod tests {
                 run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                voluntary_yields: 0,
                 wake_pending: false,
             });
             sched.state.enqueue_task(0, TaskPriority::Normal as usize, tid);
@@ -5203,6 +5262,7 @@ mod tests {
             run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
 
@@ -7156,6 +7216,7 @@ mod tests {
                 run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                voluntary_yields: 0,
                 wake_pending: false,
             });
             sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
@@ -7173,6 +7234,90 @@ mod tests {
             sched.state.get_task(9911).and_then(|sf| sf.wake_cpu),
             Some(1),
             "[policy] wake_cpu should track redirected Any-affinity wakeup target"
+        );
+    }
+
+    #[test]
+    fn test_any_affinity_wakeup_prefers_local_cpu_when_last_cpu_is_busier() {
+        let _g = init_test_env();
+        reset_any_wake_policy_for_tests();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..3 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.mark_cpu_online(2);
+        sched.state.per_cpu[0].current = Some(0);
+
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(0, TaskState::Running, TaskPriority::Normal)));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(9916, TaskState::Blocked, TaskPriority::Normal),
+        ));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9916,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(2),
+            wake_cpu: None,
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+
+        for id in 9917..9920 {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(id, TaskState::Runnable, TaskPriority::Low),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid: id,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Low,
+                affinity: Affinity::Any,
+                last_cpu: Some(2),
+                wake_cpu: Some(2),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(2, TaskPriority::Low as usize, id);
+        }
+
+        let (_ipi, _deferred) =
+            crate::sched::blocking::wake_task_locked::<MockRuntime>(&mut sched, 9916);
+        assert!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 9916),
+            "[policy] Any-affinity wakeup should prefer local CPU when last_cpu is busier"
+        );
+        assert_eq!(
+            sched.state.get_task(9916).and_then(|sf| sf.wake_cpu),
+            Some(0),
+            "[policy] wake_cpu should record local routing under local-bias heuristic"
         );
     }
 
@@ -7269,6 +7414,7 @@ mod tests {
             run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
 
@@ -7289,6 +7435,7 @@ mod tests {
                 run_cpu: None,
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
+                voluntary_yields: 0,
                 wake_pending: false,
             });
             sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
@@ -7340,6 +7487,7 @@ mod tests {
             run_cpu: None,
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
+            voluntary_yields: 0,
             wake_pending: false,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -7380,6 +7528,73 @@ mod tests {
                 .iter()
                 .any(|&tid| tid == 9930),
             "unstealable pinned head should remain queued on donor CPU"
+        );
+    }
+
+    #[test]
+    fn test_steal_task_respects_scan_depth_limit() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        for offset in 0..STEAL_SCAN_DEPTH_PER_PRIORITY {
+            let tid = 9940 + offset as u64;
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Pinned(1),
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        let stealable_tid = 9950;
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(stealable_tid, TaskState::Runnable, TaskPriority::Normal),
+        ));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: stealable_tid,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.enqueue_task(1, TaskPriority::Normal as usize, stealable_tid);
+
+        let stolen = sched.steal_task_for(0);
+        assert_eq!(
+            stolen,
+            None,
+            "steal scan must stay bounded and not inspect beyond configured depth"
+        );
+        assert!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == stealable_tid),
+            "stealable task beyond scan-depth cap should remain on donor queue"
         );
     }
 
