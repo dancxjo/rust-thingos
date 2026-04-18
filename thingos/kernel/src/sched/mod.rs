@@ -2444,7 +2444,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             .expect("terminate_current called with no current task");
         if terminating_tid != current_id {
             panic!(
-                "scheduler invariant violated: terminate_current tid mismatch (cpu={}, scheduler_current={}, caller_tid={})",
+                "scheduler invariant violated: terminate_current tid mismatch (cpu={}, scheduler_current={}, terminating_tid={})",
                 cpu_idx,
                 current_id,
                 terminating_tid
