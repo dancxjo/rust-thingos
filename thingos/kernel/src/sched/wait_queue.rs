@@ -14,7 +14,20 @@ struct WaitQueueInner {
     /// FIFO registration order for wake fairness.
     waiters: VecDeque<u64>,
     /// Membership index used for O(log n) insert/remove and dedupe checks.
-    in_queue: BTreeSet<u64>,
+    in_queue: Option<BTreeSet<u64>>,
+}
+
+impl WaitQueueInner {
+    fn in_queue_mut(&mut self) -> &mut BTreeSet<u64> {
+        self.in_queue.get_or_insert_with(BTreeSet::new)
+    }
+
+    fn prune_if_empty(&mut self) {
+        if self.in_queue.as_ref().is_some_and(BTreeSet::is_empty) {
+            self.waiters.clear();
+            self.in_queue = None;
+        }
+    }
 }
 
 impl WaitQueue {
@@ -22,20 +35,25 @@ impl WaitQueue {
         Self {
             inner: Mutex::new(WaitQueueInner {
                 waiters: VecDeque::new(),
-                in_queue: BTreeSet::new(),
+                in_queue: None,
             }),
         }
     }
 
     /// Returns true if there are no waiters.
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().in_queue.is_empty()
+        let inner = self.inner.lock();
+        inner
+            .in_queue
+            .as_ref()
+            .map_or_else(|| inner.waiters.is_empty(), BTreeSet::is_empty)
     }
 
     /// Add a task to the wait queue
     pub fn push_back(&self, tid: u64) {
         let mut inner = self.inner.lock();
-        if inner.in_queue.insert(tid) {
+        let in_queue = inner.in_queue_mut();
+        if in_queue.insert(tid) {
             crate::kdebug!("WaitQueue::push_back: adding task {}", tid);
             inner.waiters.push_back(tid);
         } else {
@@ -47,13 +65,17 @@ impl WaitQueue {
     pub fn wake_one(&self) {
         let tid = {
             let mut inner = self.inner.lock();
+            let Some(in_queue) = inner.in_queue.as_mut() else {
+                return;
+            };
             let mut chosen = None;
             while let Some(candidate) = inner.waiters.pop_front() {
-                if inner.in_queue.remove(&candidate) {
+                if in_queue.remove(&candidate) {
                     chosen = Some(candidate);
                     break;
                 }
             }
+            inner.prune_if_empty();
             chosen
         };
 
@@ -69,12 +91,16 @@ impl WaitQueue {
     pub fn wake_all(&self) {
         let waiters = {
             let mut inner = self.inner.lock();
+            let Some(in_queue) = inner.in_queue.as_mut() else {
+                return;
+            };
             let mut to_wake = Vec::new();
             while let Some(candidate) = inner.waiters.pop_front() {
-                if inner.in_queue.remove(&candidate) {
+                if in_queue.remove(&candidate) {
                     to_wake.push(candidate);
                 }
             }
+            inner.prune_if_empty();
             to_wake
         };
 
@@ -88,18 +114,27 @@ impl WaitQueue {
 
     /// Remove a task from the wait queue (e.g. on timeout or interrupt)
     pub fn remove(&self, tid: u64) {
-        self.inner.lock().in_queue.remove(&tid);
+        let mut inner = self.inner.lock();
+        if let Some(in_queue) = inner.in_queue.as_mut() {
+            // Removal is index-only; stale FIFO entries are lazily skipped on wake/drain.
+            in_queue.remove(&tid);
+            inner.prune_if_empty();
+        }
     }
 
     /// Drain the queue without waking. Caller decides when waking is safe.
     pub fn drain(&self) -> Vec<u64> {
         let mut inner = self.inner.lock();
+        let Some(in_queue) = inner.in_queue.as_mut() else {
+            return Vec::new();
+        };
         let mut drained = Vec::new();
         while let Some(candidate) = inner.waiters.pop_front() {
-            if inner.in_queue.remove(&candidate) {
+            if in_queue.remove(&candidate) {
                 drained.push(candidate);
             }
         }
+        inner.prune_if_empty();
         drained
     }
 }
