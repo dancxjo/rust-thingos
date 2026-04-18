@@ -5,10 +5,13 @@
 extern crate alloc;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
+use smoltcp::socket::icmp::{
+    Endpoint as IcmpEndpoint, PacketBuffer as IcmpPacketBuffer,
+    PacketMetadata as IcmpPacketMetadata, Socket as IcmpSocket,
+};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer, State as TcpState};
 use smoltcp::time::Instant;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address};
@@ -32,6 +35,7 @@ pub const RESP_CLOSED: u16 = 0x0006;
 enum SocketType {
     Tcp,
     Udp,
+    Icmp,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -78,6 +82,8 @@ struct ManagedSocket {
     pub udp_multicast_v4_groups: BTreeSet<([u8; 4], [u8; 4])>,
     /// Tracked UDP IPv6 multicast memberships (`group`, `interface index`).
     pub udp_multicast_v6_groups: BTreeSet<(String, u32)>,
+    /// Bound ICMP echo identifier, if any.
+    pub icmp_ident: Option<u16>,
 }
 
 impl ManagedSocket {
@@ -86,6 +92,7 @@ impl ManagedSocket {
         match self.kind {
             SocketType::Tcp => "tcp",
             SocketType::Udp => "udp",
+            SocketType::Icmp => "icmp",
         }
     }
 }
@@ -186,6 +193,13 @@ impl SocketApi {
                     "created"
                 }
             }
+            SocketType::Icmp => {
+                if managed.icmp_ident.is_some() {
+                    "bound"
+                } else {
+                    "created"
+                }
+            }
             SocketType::Tcp => match tcp_state {
                 Some(TcpState::Closed) => "closed",
                 Some(TcpState::Listen) => "listening",
@@ -247,6 +261,7 @@ impl SocketApi {
             udp_multicast_loop_v6: true,
             udp_multicast_v4_groups: BTreeSet::new(),
             udp_multicast_v6_groups: BTreeSet::new(),
+            icmp_ident: None,
         }
     }
 
@@ -348,6 +363,52 @@ impl SocketApi {
         Some(api_handle)
     }
 
+    /// Create a new ICMP socket and register it. Returns the API handle, or None on error.
+    pub fn alloc_icmp_socket_raw<'a>(
+        &mut self,
+        socket_set: &mut SocketSet<'a>,
+        buf_idx: usize,
+    ) -> Option<u32> {
+        let (rx_meta, rx_payload) = unsafe {
+            let meta_size = core::mem::size_of::<IcmpPacketMetadata>() * 8;
+            let (m, p) = CONN_RX[buf_idx].split_at_mut(meta_size);
+            let meta_ptr = m.as_mut_ptr() as *mut IcmpPacketMetadata;
+            for i in 0..8 {
+                *meta_ptr.add(i) = IcmpPacketMetadata::EMPTY;
+            }
+            (core::slice::from_raw_parts_mut(meta_ptr, 8), p)
+        };
+        let (tx_meta, tx_payload) = unsafe {
+            let meta_size = core::mem::size_of::<IcmpPacketMetadata>() * 8;
+            let (m, p) = CONN_TX[buf_idx].split_at_mut(meta_size);
+            let meta_ptr = m.as_mut_ptr() as *mut IcmpPacketMetadata;
+            for i in 0..8 {
+                *meta_ptr.add(i) = IcmpPacketMetadata::EMPTY;
+            }
+            (core::slice::from_raw_parts_mut(meta_ptr, 8), p)
+        };
+
+        let rx_buf = IcmpPacketBuffer::new(rx_meta, rx_payload);
+        let tx_buf = IcmpPacketBuffer::new(tx_meta, tx_payload);
+        let socket = IcmpSocket::new(rx_buf, tx_buf);
+        let socket_handle = socket_set.add(socket);
+
+        let api_handle = self.alloc_handle();
+        let now_ms = Self::now_ms();
+        let managed = self.new_managed_socket(
+            socket_handle,
+            SocketType::Icmp,
+            false,
+            None,
+            0,
+            api_handle,
+            now_ms,
+            Some(buf_idx),
+        );
+        self.sockets.insert(api_handle, managed);
+        Some(api_handle)
+    }
+
     /// Return the API handles of all active TCP sockets.
     pub fn tcp_socket_ids(&self) -> Vec<u32> {
         self.sockets.iter().filter(|(_, s)| s.kind == SocketType::Tcp).map(|(id, _)| *id).collect()
@@ -356,6 +417,11 @@ impl SocketApi {
     /// Return the API handles of all active UDP sockets.
     pub fn udp_socket_ids(&self) -> Vec<u32> {
         self.sockets.iter().filter(|(_, s)| s.kind == SocketType::Udp).map(|(id, _)| *id).collect()
+    }
+
+    /// Return the API handles of all active ICMP sockets.
+    pub fn icmp_socket_ids(&self) -> Vec<u32> {
+        self.sockets.iter().filter(|(_, s)| s.kind == SocketType::Icmp).map(|(id, _)| *id).collect()
     }
 
     /// Returns `true` if an API handle exists in the socket pool.
@@ -440,6 +506,21 @@ impl SocketApi {
             managed.udp_multicast_ttl_v4,
             managed.udp_multicast_loop_v6
         )
+    }
+
+    /// Return a human-readable status string for an ICMP socket.
+    pub fn icmp_status_text(&self, api_handle: u32, socket_set: &mut SocketSet) -> String {
+        let managed = match self.sockets.get(&api_handle) {
+            Some(s) if s.kind == SocketType::Icmp => s,
+            _ => return "error: unknown\n".into(),
+        };
+        let socket = socket_set.get_mut::<IcmpSocket>(managed.handle);
+        let state = if socket.is_open() { "bound" } else { "created" };
+        let ident = managed
+            .icmp_ident
+            .map(|ident| alloc::format!("{}", ident))
+            .unwrap_or_else(|| "unbound".into());
+        alloc::format!("state: {}\nident: {}\nttl: {}\n", state, ident, managed.ttl)
     }
 
     /// Return the stored remote endpoint for a UDP socket.
@@ -532,6 +613,29 @@ impl SocketApi {
         }
     }
 
+    /// Check poll readiness for an ICMP socket's sub-file.
+    pub fn icmp_poll_ready(&self, api_handle: u32, sf: u8, socket_set: &mut SocketSet) -> u32 {
+        const SF_DATA: u8 = 2;
+        let managed = match self.sockets.get(&api_handle) {
+            Some(s) if s.kind == SocketType::Icmp => s,
+            _ => return 0,
+        };
+        match sf {
+            SF_DATA => {
+                let socket = socket_set.get_mut::<IcmpSocket>(managed.handle);
+                let mut ready = 0u32;
+                if socket.can_recv() {
+                    ready |= 0x0001;
+                }
+                if socket.can_send() {
+                    ready |= 0x0004;
+                }
+                ready
+            }
+            _ => 0x0001,
+        }
+    }
+
     /// Connect an *already-allocated* TCP socket (handle points to a socket in
     /// the pool created via `alloc_socket_raw`).
     pub fn handle_connect_existing<'a>(
@@ -587,6 +691,50 @@ impl SocketApi {
             }
         }
         false
+    }
+
+    pub fn handle_icmp_bind<'a>(
+        &mut self,
+        socket_set: &mut SocketSet<'a>,
+        api_handle: u32,
+        ident: u16,
+    ) -> bool {
+        let socket_handle = match self.sockets.get(&api_handle) {
+            Some(s) if s.kind == SocketType::Icmp => s.handle,
+            _ => return false,
+        };
+
+        let socket = socket_set.get_mut::<IcmpSocket>(socket_handle);
+        if socket.bind(IcmpEndpoint::Ident(ident)).is_err() {
+            return false;
+        }
+
+        if let Some(m) = self.sockets.get_mut(&api_handle) {
+            m.icmp_ident = Some(ident);
+        }
+        true
+    }
+
+    pub fn handle_icmp_set_ttl<'a>(
+        &mut self,
+        socket_set: &mut SocketSet<'a>,
+        api_handle: u32,
+        ttl: u32,
+    ) -> bool {
+        if ttl == 0 || ttl > u8::MAX as u32 {
+            return false;
+        }
+        let socket_handle = match self.sockets.get(&api_handle) {
+            Some(s) if s.kind == SocketType::Icmp => s.handle,
+            _ => return false,
+        };
+        socket_set
+            .get_mut::<IcmpSocket>(socket_handle)
+            .set_hop_limit(Some(ttl as u8));
+        if let Some(m) = self.sockets.get_mut(&api_handle) {
+            m.ttl = ttl;
+        }
+        true
     }
 
     pub fn handle_udp_set_broadcast(&mut self, api_handle: u32, enabled: bool) -> bool {
@@ -1215,6 +1363,42 @@ impl SocketApi {
         result
     }
 
+    pub fn handle_icmp_send_to<'a>(
+        &mut self,
+        socket_set: &mut SocketSet<'a>,
+        handle: u32,
+        remote_ip: Ipv4Address,
+        data: &[u8],
+    ) -> Vec<u8> {
+        let managed = match self.sockets.get(&handle) {
+            Some(s) if s.kind == SocketType::Icmp => s,
+            _ => return encode_error(),
+        };
+
+        let socket = socket_set.get_mut::<IcmpSocket>(managed.handle);
+        if !socket.can_send() {
+            return encode_send_result(0);
+        }
+
+        let result = match socket.send_slice(data, IpAddress::Ipv4(remote_ip)) {
+            Ok(_) => encode_send_result(data.len() as u16),
+            Err(e) => {
+                warn!("SOCKET_API: ICMP_SEND_TO error: {:?}", e);
+                encode_send_result(0)
+            }
+        };
+
+        if let Some(m) = self.sockets.get_mut(&handle) {
+            if result.len() >= 4 && u16::from_le_bytes([result[2], result[3]]) != 0 {
+                m.bytes_tx = m.bytes_tx.saturating_add(data.len() as u64);
+                m.packets_tx = m.packets_tx.saturating_add(1);
+                m.last_seen_ms = Self::now_ms();
+            }
+        }
+
+        result
+    }
+
     /// Handle a UDP_RECV_FROM request
     pub fn handle_udp_recv_from<'a>(
         &mut self,
@@ -1260,6 +1444,40 @@ impl SocketApi {
                 if let Some(m) = self.sockets.get_mut(&handle) {
                     Self::set_last_error(m, &alloc::format!("udp_recv:{:?}", e));
                 }
+                encode_empty()
+            }
+        }
+    }
+
+    pub fn handle_icmp_recv_from<'a>(
+        &mut self,
+        socket_set: &mut SocketSet<'a>,
+        handle: u32,
+    ) -> Vec<u8> {
+        let managed = match self.sockets.get(&handle) {
+            Some(s) if s.kind == SocketType::Icmp => s,
+            _ => return encode_error(),
+        };
+
+        let socket = socket_set.get_mut::<IcmpSocket>(managed.handle);
+        if !socket.can_recv() {
+            return encode_empty();
+        }
+
+        match socket.recv() {
+            Ok((data, endpoint)) => {
+                let IpAddress::Ipv4(remote_ip) = endpoint;
+
+                if let Some(m) = self.sockets.get_mut(&handle) {
+                    m.bytes_rx = m.bytes_rx.saturating_add(data.len() as u64);
+                    m.packets_rx = m.packets_rx.saturating_add(1);
+                    m.last_seen_ms = Self::now_ms();
+                }
+
+                encode_icmp_data(remote_ip, data)
+            }
+            Err(e) => {
+                warn!("SOCKET_API: ICMP_RECV_FROM error: {:?}", e);
                 encode_empty()
             }
         }
@@ -1383,9 +1601,9 @@ impl SocketApi {
                     self.pending_removal.push((pool_handle, Some(pool_idx)));
                 }
             } else {
-                // UDP sockets can be removed immediately
+                // UDP/ICMP sockets can be removed immediately.
                 socket_set.remove(managed.handle);
-                debug!("SOCKET_API: UDP close handle={} (removed)", handle);
+                debug!("SOCKET_API: {:?} close handle={} (removed)", managed.kind, handle);
                 if let Some(bidx) = managed.buf_idx {
                     self.free_buffer(bidx);
                 }
@@ -1483,6 +1701,14 @@ fn encode_udp_data(remote_ip: Ipv4Address, remote_port: u16, data: &[u8]) -> Vec
     v.extend_from_slice(&RESP_DATA.to_le_bytes());
     v.extend_from_slice(remote_ip.as_bytes());
     v.extend_from_slice(&remote_port.to_le_bytes());
+    v.extend_from_slice(data);
+    v
+}
+
+fn encode_icmp_data(remote_ip: Ipv4Address, data: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(2 + 4 + data.len());
+    v.extend_from_slice(&RESP_DATA.to_le_bytes());
+    v.extend_from_slice(remote_ip.as_bytes());
     v.extend_from_slice(data);
     v
 }

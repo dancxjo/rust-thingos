@@ -99,11 +99,14 @@ const HANDLE_UDP_NEW: u64 = 14;
 const HANDLE_DNS_DIR: u64 = 15;
 const HANDLE_DNS_LOOKUP: u64 = 16;
 const HANDLE_DNS_SERVER: u64 = 17;
+const HANDLE_ICMP_DIR: u64 = 18;
+const HANDLE_ICMP_NEW: u64 = 19;
 
 /// Dynamic handle base for TCP socket sub-files.
 /// Handle = TCP_DYN_BASE | ((api_handle as u64) << 8) | subfile_id
 const TCP_DYN_BASE: u64 = 0x0001_0000;
 const UDP_DYN_BASE: u64 = 0x0100_0000;
+const ICMP_DYN_BASE: u64 = 0x0200_0000;
 
 // subfile IDs
 const SF_DIR: u8 = 0;
@@ -478,9 +481,15 @@ impl NetVfsProvider {
             if sf == SF_DIR {
                 let _ = socket_api.handle_close(socket_set, api_handle);
             }
-        } else if handle >= UDP_DYN_BASE {
+        } else if handle >= UDP_DYN_BASE && handle < ICMP_DYN_BASE {
             let sf = (handle & 0xFF) as u8;
             let api_handle = ((handle - UDP_DYN_BASE) >> 8) as u32;
+            if sf == SF_DIR {
+                let _ = socket_api.handle_close(socket_set, api_handle);
+            }
+        } else if handle >= ICMP_DYN_BASE {
+            let sf = (handle & 0xFF) as u8;
+            let api_handle = ((handle - ICMP_DYN_BASE) >> 8) as u32;
             if sf == SF_DIR {
                 let _ = socket_api.handle_close(socket_set, api_handle);
             }
@@ -533,6 +542,8 @@ impl NetVfsProvider {
             "tcp/new" => Some(HANDLE_TCP_NEW),
             "udp" => Some(HANDLE_UDP_DIR),
             "udp/new" => Some(HANDLE_UDP_NEW),
+            "icmp" => Some(HANDLE_ICMP_DIR),
+            "icmp/new" => Some(HANDLE_ICMP_NEW),
             "dns" => Some(HANDLE_DNS_DIR),
             "dns/lookup" => Some(HANDLE_DNS_LOOKUP),
             "dns/server" => Some(HANDLE_DNS_SERVER),
@@ -575,6 +586,23 @@ impl NetVfsProvider {
                 _ => return None,
             };
             return Some(UDP_DYN_BASE | ((id as u64) << 8) | sf as u64);
+        }
+
+        // icmp/<id>[/<subfile>]
+        if let Some(rest) = path.strip_prefix("icmp/") {
+            let (id_str, sub) = match rest.find('/') {
+                Some(pos) => (&rest[..pos], &rest[pos + 1..]),
+                None => (rest, ""),
+            };
+            let id: u32 = id_str.parse().ok()?;
+            let sf: u8 = match sub {
+                "" => SF_DIR,
+                "ctl" => SF_CTL,
+                "data" => SF_DATA,
+                "status" => SF_STATUS,
+                _ => return None,
+            };
+            return Some(ICMP_DYN_BASE | ((id as u64) << 8) | sf as u64);
         }
 
         None
@@ -645,6 +673,19 @@ impl NetVfsProvider {
                     None => ReadResult::Error,
                 }
             }
+            HANDLE_ICMP_NEW => {
+                if offset > 0 {
+                    return ReadResult::EOF;
+                }
+                let Some(buf_idx) = socket_api.alloc_buffer() else {
+                    warn!("NetVfsProvider: out of socket buffers for icmp/new");
+                    return ReadResult::Error;
+                };
+                match socket_api.alloc_icmp_socket_raw(socket_set, buf_idx) {
+                    Some(id) => ReadResult::Data(alloc::format!("{}\n", id).into_bytes()),
+                    None => ReadResult::Error,
+                }
+            }
             // Dynamic TCP data
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
@@ -652,10 +693,15 @@ impl NetVfsProvider {
                 self.read_tcp(api_handle, sf, offset, socket_set, socket_api)
             }
             // Dynamic UDP data
-            h if h >= UDP_DYN_BASE => {
+            h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - UDP_DYN_BASE) >> 8) as u32;
                 self.read_udp(api_handle, sf, offset, socket_set, socket_api)
+            }
+            h if h >= ICMP_DYN_BASE => {
+                let sf = (h & 0xFF) as u8;
+                let api_handle = ((h - ICMP_DYN_BASE) >> 8) as u32;
+                self.read_icmp(api_handle, sf, offset, socket_set, socket_api)
             }
             // Directories are not readable as byte streams
             HANDLE_ROOT
@@ -663,6 +709,7 @@ impl NetVfsProvider {
             | HANDLE_ETH0_DIR
             | HANDLE_TCP_DIR
             | HANDLE_UDP_DIR
+            | HANDLE_ICMP_DIR
             | HANDLE_DNS_DIR => ReadResult::NotSupported,
             // dns/lookup: returns the resolved IP (EAGAIN if not yet resolved)
             HANDLE_DNS_LOOKUP => {
@@ -806,6 +853,48 @@ impl NetVfsProvider {
         }
     }
 
+    fn read_icmp(
+        &mut self,
+        api_handle: u32,
+        sf: u8,
+        offset: u64,
+        socket_set: &mut SocketSet,
+        socket_api: &mut SocketApi,
+    ) -> ReadResult {
+        match sf {
+            SF_DIR => ReadResult::NotSupported,
+            SF_STATUS => {
+                ReadResult::text_offset(&socket_api.icmp_status_text(api_handle, socket_set), offset)
+            }
+            SF_DATA => {
+                let recv = socket_api.handle_icmp_recv_from(socket_set, api_handle);
+                if recv.len() < 2 {
+                    return ReadResult::Error;
+                }
+                let resp_type = u16::from_le_bytes([recv[0], recv[1]]);
+                match resp_type {
+                    crate::socket_api::RESP_DATA => {
+                        if recv.len() < 6 {
+                            return ReadResult::Error;
+                        }
+                        let src_ip = &recv[2..6];
+                        let payload = &recv[6..];
+                        self.rx_bytes += payload.len() as u64;
+                        self.rx_packets += 1;
+                        let mut out = alloc::vec![0u8; 4 + 4 + payload.len()];
+                        out[..4].copy_from_slice(src_ip);
+                        out[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+                        out[8..].copy_from_slice(payload);
+                        ReadResult::Data(out)
+                    }
+                    crate::socket_api::RESP_EMPTY => ReadResult::Again,
+                    _ => ReadResult::Error,
+                }
+            }
+            _ => ReadResult::Error,
+        }
+    }
+
     // ── Handle writes ─────────────────────────────────────────────────────────
 
     fn write_handle<D: smoltcp::phy::Device>(
@@ -855,10 +944,15 @@ impl NetVfsProvider {
                 )
             }
             // Dynamic UDP
-            h if h >= UDP_DYN_BASE => {
+            h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - UDP_DYN_BASE) >> 8) as u32;
                 self.write_udp(api_handle, sf, data, text, socket_set, socket_api)
+            }
+            h if h >= ICMP_DYN_BASE => {
+                let sf = (h & 0xFF) as u8;
+                let api_handle = ((h - ICMP_DYN_BASE) >> 8) as u32;
+                self.write_icmp(api_handle, sf, data, text, socket_set, socket_api)
             }
             _ => WriteResult::NotSupported,
         }
@@ -1164,6 +1258,57 @@ impl NetVfsProvider {
         }
     }
 
+    fn write_icmp(
+        &mut self,
+        api_handle: u32,
+        sf: u8,
+        raw: &[u8],
+        text: &str,
+        socket_set: &mut SocketSet,
+        socket_api: &mut SocketApi,
+    ) -> WriteResult {
+        match sf {
+            SF_CTL => {
+                if let Some(rest) = text.strip_prefix("bind ") {
+                    if let Ok(ident) = rest.trim().parse::<u16>() {
+                        let r = socket_api.handle_icmp_bind(socket_set, api_handle, ident);
+                        return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                    }
+                } else if let Some(rest) = text.strip_prefix("ttl ") {
+                    if let Ok(ttl) = rest.trim().parse::<u32>() {
+                        let r = socket_api.handle_icmp_set_ttl(socket_set, api_handle, ttl);
+                        return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                    }
+                } else if text == "close" {
+                    socket_api.handle_close(socket_set, api_handle);
+                    return WriteResult::Ok(5);
+                }
+                WriteResult::Error
+            }
+            SF_DATA => {
+                if raw.len() < 8 {
+                    return WriteResult::Error;
+                }
+                let dest_ip = Ipv4Address::from_bytes(&raw[..4]);
+                let payload_len = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]) as usize;
+                if raw.len() < 8 + payload_len {
+                    return WriteResult::Error;
+                }
+                let payload = &raw[8..8 + payload_len];
+                let r = socket_api.handle_icmp_send_to(socket_set, api_handle, dest_ip, payload);
+                if r.len() >= 4 {
+                    let sent = u16::from_le_bytes([r[2], r[3]]) as usize;
+                    self.tx_bytes += sent as u64;
+                    self.tx_packets += 1;
+                    WriteResult::Ok(8 + sent)
+                } else {
+                    WriteResult::Error
+                }
+            }
+            _ => WriteResult::ReadOnly,
+        }
+    }
+
     // ── Readdir / stat helpers ────────────────────────────────────────────────
 
     /// List directory entries for a given directory handle.
@@ -1175,6 +1320,7 @@ impl NetVfsProvider {
                 ("routes".into(), HANDLE_ROUTES, 8),
                 ("tcp".into(), HANDLE_TCP_DIR, 4),
                 ("udp".into(), HANDLE_UDP_DIR, 4),
+                ("icmp".into(), HANDLE_ICMP_DIR, 4),
                 ("dns".into(), HANDLE_DNS_DIR, 4),
             ],
             HANDLE_INTERFACES_DIR => vec![("eth0".into(), HANDLE_ETH0_DIR, 4)],
@@ -1202,9 +1348,18 @@ impl NetVfsProvider {
                 }
                 entries
             }
-            HANDLE_DNS_DIR => {
-                vec![("server".into(), HANDLE_DNS_SERVER, 8)]
+            HANDLE_ICMP_DIR => {
+                let mut entries = vec![("new".into(), HANDLE_ICMP_NEW, 8)];
+                for id in socket_api.icmp_socket_ids() {
+                    let dh = ICMP_DYN_BASE | ((id as u64) << 8) | SF_DIR as u64;
+                    entries.push((alloc::format!("{}", id), dh, 4));
+                }
+                entries
             }
+            HANDLE_DNS_DIR => vec![
+                ("lookup".into(), HANDLE_DNS_LOOKUP, 8),
+                ("server".into(), HANDLE_DNS_SERVER, 8),
+            ],
             // Dynamic TCP socket directory
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE && (h & 0xFF) == SF_DIR as u64 => {
                 let bid = TCP_DYN_BASE | (h & !0xFF);
@@ -1217,7 +1372,7 @@ impl NetVfsProvider {
                 ]
             }
             // Dynamic UDP socket directory
-            h if h >= UDP_DYN_BASE && (h & 0xFF) == SF_DIR as u64 => {
+            h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE && (h & 0xFF) == SF_DIR as u64 => {
                 let bid = UDP_DYN_BASE | (h & !0xFF);
                 vec![
                     ("ctl".into(), bid | SF_CTL as u64, 8),
@@ -1225,7 +1380,14 @@ impl NetVfsProvider {
                     ("status".into(), bid | SF_STATUS as u64, 8),
                 ]
             }
-            HANDLE_DNS_DIR => vec![("lookup".into(), HANDLE_DNS_LOOKUP, 8)],
+            h if h >= ICMP_DYN_BASE && (h & 0xFF) == SF_DIR as u64 => {
+                let bid = ICMP_DYN_BASE | (h & !0xFF);
+                vec![
+                    ("ctl".into(), bid | SF_CTL as u64, 8),
+                    ("data".into(), bid | SF_DATA as u64, 8),
+                    ("status".into(), bid | SF_STATUS as u64, 8),
+                ]
+            }
             _ => vec![],
         }
     }
@@ -1237,6 +1399,7 @@ impl NetVfsProvider {
             | HANDLE_ETH0_DIR
             | HANDLE_TCP_DIR
             | HANDLE_UDP_DIR
+            | HANDLE_ICMP_DIR
             | HANDLE_DNS_DIR => (S_IFDIR | 0o555, 0),
             HANDLE_ETH0_STATUS => (S_IFREG | 0o444, self.eth0_status().len()),
             HANDLE_ETH0_ADDR => (S_IFREG | 0o644, self.eth0_addr_text().len()),
@@ -1245,7 +1408,7 @@ impl NetVfsProvider {
             HANDLE_ETH0_STATS => (S_IFREG | 0o444, self.eth0_stats().len()),
             HANDLE_ETH0_EVENTS => (S_IFREG | 0o444, 0),
             HANDLE_ROUTES => (S_IFREG | 0o644, 0),
-            HANDLE_TCP_NEW | HANDLE_UDP_NEW => (S_IFREG | 0o444, 0),
+            HANDLE_TCP_NEW | HANDLE_UDP_NEW | HANDLE_ICMP_NEW => (S_IFREG | 0o444, 0),
             HANDLE_DNS_LOOKUP => (S_IFREG | 0o644, 0),
             HANDLE_DNS_SERVER => (S_IFREG | 0o444, self.dns_server_text().len()),
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE => {
@@ -1261,7 +1424,7 @@ impl NetVfsProvider {
                     (0, 0) // not found
                 }
             }
-            h if h >= UDP_DYN_BASE => {
+            h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - UDP_DYN_BASE) >> 8) as u32;
                 if socket_api.has_socket(api_handle) {
@@ -1274,6 +1437,19 @@ impl NetVfsProvider {
                     (0, 0) // not found
                 }
             }
+            h if h >= ICMP_DYN_BASE => {
+                let sf = (h & 0xFF) as u8;
+                let api_handle = ((h - ICMP_DYN_BASE) >> 8) as u32;
+                if socket_api.has_socket(api_handle) {
+                    if sf == SF_DIR {
+                        (S_IFDIR | 0o555, 0)
+                    } else {
+                        (S_IFREG | 0o644, 0)
+                    }
+                } else {
+                    (0, 0)
+                }
+            }
             _ => (0, 0),
         }
     }
@@ -1282,16 +1458,21 @@ impl NetVfsProvider {
         match handle {
             HANDLE_ETH0_EVENTS => POLLIN,
             HANDLE_ETH0_STATUS | HANDLE_ETH0_ADDR | HANDLE_ETH0_MTU | HANDLE_ETH0_STATS
-            | HANDLE_ROUTES | HANDLE_TCP_NEW | HANDLE_UDP_NEW => POLLIN,
+            | HANDLE_ROUTES | HANDLE_TCP_NEW | HANDLE_UDP_NEW | HANDLE_ICMP_NEW => POLLIN,
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - TCP_DYN_BASE) >> 8) as u32;
                 socket_api.tcp_poll_ready(api_handle, sf, socket_set)
             }
-            h if h >= UDP_DYN_BASE => {
+            h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - UDP_DYN_BASE) >> 8) as u32;
                 socket_api.udp_poll_ready(api_handle, sf, socket_set)
+            }
+            h if h >= ICMP_DYN_BASE => {
+                let sf = (h & 0xFF) as u8;
+                let api_handle = ((h - ICMP_DYN_BASE) >> 8) as u32;
+                socket_api.icmp_poll_ready(api_handle, sf, socket_set)
             }
             // dns/lookup is readable when a result is available
             HANDLE_DNS_LOOKUP => {
