@@ -8,6 +8,12 @@
 //! - `stack`: User stack allocation and fault handling
 //! - `sleep`: Timing and yield functions
 //! - `events`: Lock-free scheduler event types
+//!
+//! Lock-order policy:
+//! - `SCHEDULER` must never take `task::registry::REGISTRY` or
+//!   `device_registry::REGISTRY`.
+//! - Scheduler-owned paths defer registry/device work and apply it after
+//!   releasing `SCHEDULER`.
 
 pub(crate) mod blocking;
 pub mod bridge;
@@ -107,10 +113,14 @@ impl<R: BootRuntime> Drop for SchedLockTrackingGuard<R> {
 
 #[inline]
 fn debug_assert_scheduler_not_held_by_this_cpu<R: BootRuntime>(context: &str) {
+    let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
+    let cpu = crate::runtime::<R>().current_cpu_index() as isize;
+    // Keep lightweight telemetry in all builds; debug builds also assert.
+    if owner == cpu {
+        PROF_LOCK_ORDER_VIOLATIONS.fetch_add(1, Ordering::Relaxed);
+    }
     #[cfg(debug_assertions)]
     {
-        let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
-        let cpu = crate::runtime::<R>().current_cpu_index() as isize;
         debug_assert_ne!(
             owner, cpu,
             "scheduler lock-order violation: {} attempted while SCHEDULER is held on CPU {}",
@@ -118,6 +128,13 @@ fn debug_assert_scheduler_not_held_by_this_cpu<R: BootRuntime>(context: &str) {
         );
     }
 }
+
+#[inline]
+pub(crate) fn scheduler_lock_held_by_this_cpu<R: BootRuntime>() -> bool {
+    let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
+    owner == crate::runtime::<R>().current_cpu_index() as isize
+}
+
 
 /// Global tick counter for debugging scheduler health
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -158,6 +175,8 @@ pub static PROF_TASK_STATUS_POLLS: AtomicU64 = AtomicU64::new(0);
 
 /// Count of task transitions into the Runnable state (runnable transitions).
 pub static PROF_RUNNABLE_TRANSITIONS: AtomicU64 = AtomicU64::new(0);
+/// Count of observed scheduler lock-order violations on this CPU.
+pub static PROF_LOCK_ORDER_VIOLATIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Count of wake calls that skipped the scheduler lock because the target task
 /// already had `wake_pending = true`.
@@ -325,6 +344,8 @@ pub struct SchedLockSiteMetrics {
     /// Wake calls that avoided the SCHEDULER lock because a wake was already
     /// pending for the target task.
     pub wake_task_fastpath_already_pending: u64,
+    /// Observed lock-order violations (`SCHEDULER` held while taking deferred-only locks).
+    pub lock_order_violations: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -864,6 +885,7 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
         runnable_transitions: PROF_RUNNABLE_TRANSITIONS.swap(0, Ordering::Relaxed),
         wake_task_fastpath_already_pending: PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING
             .swap(0, Ordering::Relaxed),
+        lock_order_violations: PROF_LOCK_ORDER_VIOLATIONS.swap(0, Ordering::Relaxed),
     }
 }
 
@@ -1225,6 +1247,19 @@ pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
                 task.last_cpu = Some(last_cpu);
             }
         }
+    }
+}
+
+pub(crate) fn apply_deferred_registry_inserts<R: BootRuntime>(
+    deferred_inserts: alloc::vec::Vec<alloc::boxed::Box<crate::task::Task<R>>>,
+) {
+    if deferred_inserts.is_empty() {
+        return;
+    }
+    debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_inserts");
+    let mut registry = crate::task::registry::get_registry::<R>();
+    for task in deferred_inserts {
+        registry.insert(task);
     }
 }
 
@@ -2384,7 +2419,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
         None
     }
 
-    pub fn terminate_current(&mut self, code: i32) -> (SwitchDecision, alloc::vec::Vec<u64>) {
+    pub fn terminate_current(
+        &mut self,
+        terminating_tid: TaskId,
+        siblings_to_kill: &[TaskId],
+    ) -> SwitchDecision {
         let cpu_idx = current_cpu_index::<R>();
         let current_id = self
             .state
@@ -2392,19 +2431,35 @@ impl<R: BootRuntime> types::Scheduler<R> {
             .get(cpu_idx)
             .and_then(|pc| pc.current)
             .expect("terminate_current called with no current task");
+        if terminating_tid != current_id {
+            panic!(
+                "scheduler invariant violated: terminate_current tid mismatch (cpu={}, scheduler_current={}, terminating_tid={})",
+                cpu_idx,
+                current_id,
+                terminating_tid
+            );
+        }
 
-        let waiters = mark_task_exited::<R>(self, current_id, code);
+        if let Some(task) = self.state.get_task_mut(current_id) {
+            task.runq_location = None;
+            task.state = TaskState::Dead;
+        }
         purge_task_from_scheduler_queues::<R>(self, current_id);
 
-        // Release any claimed devices
-        let released = crate::device_registry::REGISTRY.lock().release_all_for_task(current_id);
-        if released > 0 {
-            crate::kinfo!("DEVICE: released {} claims for task {}", released, current_id);
+        for &sibling in siblings_to_kill {
+            if sibling == current_id {
+                continue;
+            }
+            if let Some(sf) = self.state.get_task_mut(sibling) {
+                sf.runq_location = None;
+                sf.state = TaskState::Dead;
+            }
+            purge_task_from_scheduler_queues::<R>(self, sibling);
         }
 
         for _ in 0..TERMINATE_CURRENT_SWITCH_RETRY_BUDGET {
             if let Some(switch) = self.prepare_schedule() {
-                return (switch, waiters);
+                return switch;
             }
             core::hint::spin_loop();
         }
@@ -2478,10 +2533,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Set as this CPU's idle task
         self.state.per_cpu[i].idle_task = Some(idle_id);
 
-        // Pin idle task to its CPU and keep the cache in sync.
-        if let Some(mut t) = crate::task::registry::get_task_mut::<R>(idle_id) {
-            t.affinity = crate::task::Affinity::Pinned(i);
-        }
+        // Keep scheduler cache affinity pinned for idle tasks. The canonical
+        // registry affinity is already initialized from the spawn call.
         if let Some(sf) = self.state.get_task_mut(idle_id) {
             sf.affinity = crate::task::Affinity::Pinned(i);
         }
@@ -2872,11 +2925,16 @@ pub fn unregister_task_exit_waiter<R: BootRuntime>(
     Ok(())
 }
 
-fn mark_task_exited<R: BootRuntime>(
-    sched: &mut types::Scheduler<R>,
+struct TerminationRegistryOutcome {
+    waiters: alloc::vec::Vec<u64>,
+    siblings_to_kill: alloc::vec::Vec<TaskId>,
+}
+
+fn mark_task_exited_in_registry<R: BootRuntime>(
     tid: TaskId,
     code: i32,
-) -> alloc::vec::Vec<u64> {
+) -> TerminationRegistryOutcome {
+    debug_assert_scheduler_not_held_by_this_cpu::<R>("mark_task_exited_in_registry");
     if tid == 6 {
         crate::kdebug!("SCHED[TID6]: exited (code={})", code);
     }
@@ -2889,11 +2947,6 @@ fn mark_task_exited<R: BootRuntime>(
         alloc::vec::Vec::new()
     };
 
-    if let Some(task) = sched.state.get_task_mut(tid) {
-        task.runq_location = None;
-        task.state = TaskState::Dead;
-    }
-
     // Remove this TID from the process's thread group list.
     // If this is the thread-group leader, drain the remaining siblings in one
     // step to avoid a separate clone + clear pass.
@@ -2903,7 +2956,7 @@ fn mark_task_exited<R: BootRuntime>(
     // Capture the exit observer inbox ID (if set) for canonical JobExit delivery.
     let mut exit_observer_inbox: Option<crate::inbox::InboxId> = None;
 
-    let siblings_to_kill: alloc::vec::Vec<TaskId> = {
+    let mut siblings_to_kill: alloc::vec::Vec<TaskId> = {
         let pinfo_opt =
             crate::task::registry::get_task::<R>(tid).and_then(|t| t.process_info.clone());
         if let Some(pinfo) = pinfo_opt {
@@ -2942,19 +2995,17 @@ fn mark_task_exited<R: BootRuntime>(
                 task.exit_code = Some(code);
                 let sibling_waiters = task.exit_waiters.drain();
                 waiters.extend(sibling_waiters);
-                drop(task);
-
-                if let Some(sf) = sched.state.get_task_mut(sibling) {
-                    sf.runq_location = None;
-                    sf.state = TaskState::Dead;
-                }
-                sched.state.remove_task_from_runq(sibling);
                 crate::kdebug!("SCHED: Killed sibling thread {} (thread-group exit)", sibling);
             }
         }
     }
 
-    waiters
+    siblings_to_kill.retain(|&sibling| sibling != tid);
+
+    TerminationRegistryOutcome {
+        waiters,
+        siblings_to_kill,
+    }
 }
 
 fn purge_task_from_scheduler_queues<R: BootRuntime>(sched: &mut types::Scheduler<R>, tid: TaskId) {
@@ -2972,6 +3023,14 @@ fn wake_waiters(waiters: &[u64]) {
     }
 }
 
+fn release_task_devices<R: BootRuntime>(tid: TaskId) {
+    debug_assert_scheduler_not_held_by_this_cpu::<R>("release_task_devices");
+    let released = crate::device_registry::REGISTRY.lock().release_all_for_task(tid);
+    if released > 0 {
+        crate::kinfo!("DEVICE: released {} claims for task {}", released, tid);
+    }
+}
+
 fn current_task_resource_id_impl<R: BootRuntime>() -> Option<u64> {
     None
 }
@@ -2979,22 +3038,39 @@ fn current_task_resource_id_impl<R: BootRuntime>() -> Option<u64> {
 pub fn exit<R: BootRuntime>(code: i32) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
+    let current_tid = rt.current_tid();
+    // Lock-order policy: perform REGISTRY / DEVICE_REGISTRY exit cleanup before
+    // taking SCHEDULER, then run scheduler-only termination under SCHEDULER.
+    let termination = mark_task_exited_in_registry::<R>(current_tid, code);
+    release_task_devices::<R>(current_tid);
 
-    let (switch_decision, waiters, deferred_prepare_ipis, deferred_registry_syncs) = {
+    let (
+        switch_decision,
+        deferred_prepare_ipis,
+        deferred_registry_syncs,
+        deferred_registry_inserts,
+    ) = {
         let lock = SCHEDULER.lock();
         set_sched_lock_tracking::<R>(rt.current_cpu_index());
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-        let (switch_decision, waiters) = sched.terminate_current(code);
+        let switch_decision = sched.terminate_current(current_tid, &termination.siblings_to_kill);
         let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
+        let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         clear_sched_lock_tracking::<R>();
-        (switch_decision, waiters, deferred_prepare_ipis, deferred_registry_syncs)
+        (
+            switch_decision,
+            deferred_prepare_ipis,
+            deferred_registry_syncs,
+            deferred_registry_inserts,
+        )
     };
 
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
+    apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
-    wake_waiters(&waiters);
+    wake_waiters(&termination.waiters);
     let switch = resolve_switch_params::<R>(switch_decision).unwrap_or_else(|| {
         panic!(
             "scheduler invariant violated: terminate_current produced switch decision (from={}, to={}) but registry lookup failed",
@@ -3400,12 +3476,19 @@ pub fn unregister_timeout_wake<R: BootRuntime>(tid: TaskId) {
 
 pub fn cpu_online<R: BootRuntime>(cpu_index: usize) {
     let rt = crate::runtime::<R>();
+    let current_cpu = rt.current_cpu_index();
     let _irq = rt.irq_disable();
     let lock = SCHEDULER.lock();
+    let mut deferred_registry_inserts = alloc::vec::Vec::new();
+    set_sched_lock_tracking::<R>(current_cpu);
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         sched.cpu_online(cpu_index);
+        deferred_registry_inserts = sched.drain_pending_registry_inserts();
     }
+    clear_sched_lock_tracking::<R>();
+    drop(lock);
+    apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     rt.irq_restore(_irq);
 }
 
@@ -3845,6 +3928,7 @@ mod tests {
         *SCHEDULER.lock() = None;
         SCHEDULER_LOCK_OWNER.store(-1, Ordering::Relaxed);
         SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Relaxed);
+        PROF_LOCK_ORDER_VIOLATIONS.store(0, Ordering::Relaxed);
         TICK_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
         reset_any_wake_policy_for_tests();
         guard
@@ -5814,7 +5898,8 @@ mod tests {
         sched.state.add_task_to_sleep_queue(8303, 55);
         sched.state.add_task_to_sleep_queue(9999, 55);
 
-        let (switch, _waiters) = sched.terminate_current(101);
+        let termination = mark_task_exited_in_registry::<MockRuntime>(8303, 101);
+        let switch = sched.terminate_current(8303, &termination.siblings_to_kill);
 
         assert_eq!(switch.to_tid, 8304, "scheduler should switch to the next runnable task");
         assert_eq!(
@@ -5836,6 +5921,58 @@ mod tests {
             "dead current task must be removed from the wait queue"
         );
         assert_eq!(sched.state.sleep_queue.get(&55).cloned(), Some(alloc::vec![9999]));
+    }
+
+    #[test]
+    fn terminate_current_only_mutates_scheduler_state() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(8310);
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(8310, TaskState::Running, TaskPriority::Normal),
+        ));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(8311, TaskState::Runnable, TaskPriority::Normal),
+        ));
+
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 8310,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 8311,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8311);
+
+        let _ = sched.terminate_current(8310, &[]);
+        assert_eq!(sched.state.get_task(8310).unwrap().state, TaskState::Dead);
+        assert_eq!(
+            crate::task::registry::get_task::<MockRuntime>(8310).unwrap().state,
+            TaskState::Running,
+            "terminate_current should not acquire/mutate REGISTRY directly"
+        );
     }
 
     #[test]
@@ -5865,7 +6002,8 @@ mod tests {
             wake_pending: false,
         });
 
-        let _ = sched.terminate_current(202);
+        let termination = mark_task_exited_in_registry::<MockRuntime>(8306, 202);
+        let _ = sched.terminate_current(8306, &termination.siblings_to_kill);
     }
 
     #[test]
