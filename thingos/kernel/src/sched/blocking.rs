@@ -1,13 +1,10 @@
 //! Blocking primitives for task synchronization.
 
-use crate::BootRuntime;
-use crate::BootTasking;
-use crate::task::TaskState;
-
 use super::SCHEDULER;
-
 use super::state::WaitReason;
 use super::types::Scheduler;
+use crate::task::TaskState;
+use crate::{BootRuntime, BootTasking};
 
 pub(crate) static BLOCK_CURRENT_HOOK: core::sync::atomic::AtomicPtr<()> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
@@ -61,6 +58,7 @@ pub fn block_current<R: BootRuntime>() {
         let current_id = match sched.state.per_cpu.get(cpu).and_then(|pc| pc.current) {
             Some(id) => id,
             None => {
+                super::clear_sched_lock_tracking::<R>();
                 super::record_sched_lock_hold::<R>(
                     &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
                     &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
@@ -98,15 +96,14 @@ pub fn block_current<R: BootRuntime>() {
                 &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                 lock_start,
             );
+            super::clear_sched_lock_tracking::<R>();
             // Return None (no context switch); deferred REGISTRY clear handled below.
             let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             (None, deferred_prepare_ipis, deferred_registry_syncs)
         } else {
             // Add to wait queue and pick next task to run.
-            let inserted = sched
-                .state
-                .register_waiter(current_id, WaitReason::BlockCurrent);
+            let inserted = sched.state.register_waiter(current_id, WaitReason::BlockCurrent);
             if !inserted {
                 crate::kdebug!(
                     "SCHED: task {} already registered as waiter ({:?})",
@@ -220,9 +217,7 @@ pub fn wake_task_locked<R: BootRuntime>(
             sf.enqueued_at_tick = tick;
         }
         sched.state.wake_enqueued_at_mono.insert(id, wake_mono);
-        sched
-            .state
-            .note_enqueue_cause(id, crate::sched::state::EnqueueCause::Wake);
+        sched.state.note_enqueue_cause(id, crate::sched::state::EnqueueCause::Wake);
 
         // Defer the canonical REGISTRY writes to the caller (outside SCHEDULER lock).
         Some(DeferredWakeUpdate {
@@ -291,8 +286,7 @@ pub fn wake_task_locked<R: BootRuntime>(
                 if !already_pending {
                     return (Some(safe_cpu), deferred);
                 } else {
-                    super::PROF_IPI_SUPPRESSED
-                        .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    super::PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 }
             }
         }
@@ -309,9 +303,8 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     // work to do and we can avoid taking SCHEDULER.
     // `wake_pending` is level-triggered; a concurrent clear means a blocker has
     // consumed the wake and therefore does not require another enqueue here.
-    let already_pending = crate::task::registry::get_task::<R>(id)
-        .map(|task| task.wake_pending)
-        .unwrap_or(false);
+    let already_pending =
+        crate::task::registry::get_task::<R>(id).map(|task| task.wake_pending).unwrap_or(false);
     if already_pending {
         super::PROF_WAKE_TASK_FASTPATH_ALREADY_PENDING
             .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -404,12 +397,6 @@ pub unsafe fn wake_task_erased(id: u64) {
 }
 
 pub fn init_blocking_hooks<R: BootRuntime>() {
-    BLOCK_CURRENT_HOOK.store(
-        block_current::<R> as *mut (),
-        core::sync::atomic::Ordering::SeqCst,
-    );
-    WAKE_TASK_HOOK.store(
-        wake_task::<R> as *mut (),
-        core::sync::atomic::Ordering::SeqCst,
-    );
+    BLOCK_CURRENT_HOOK.store(block_current::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
+    WAKE_TASK_HOOK.store(wake_task::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
 }

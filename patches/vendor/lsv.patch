@@ -1,0 +1,150 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 11e6124..40acd30 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -27,17 +27,17 @@ crossterm = "0.29.0"
+ ratatui = { version = "0.30.0", default-features = false, features = [
+   "crossterm",
+ ] }
+-mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
+ chrono = { version = "0.4.44", default-features = false, features = [
+   "clock",
+   "std",
+   "libc",
+ ] }
+ unicode-width = "0.2.2"
+-whoami = "2.1.1"
++
++[target.'cfg(not(target_os = "thingos"))'.dependencies]
++mlua = { version = "0.11.6", features = ["lua54", "vendored"] }
+
+ [dev-dependencies]
+ tempfile = "3.26.0"
+
+-[profile.bench]
+-debug = true
++
+diff --git a/src/lib.rs b/src/lib.rs
+index 3b7e904..164a433 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -5,24 +5,40 @@
+ //! configure an [`App`](crate::app::App), dispatch actions, or inspect state in
+ //! tests. See the documentation under `docs/` for higher-level guides.
+
++#[cfg(not(target_os = "thingos"))]
+ pub mod actions;
++#[cfg(not(target_os = "thingos"))]
+ pub mod app;
++#[cfg(not(target_os = "thingos"))]
+ pub mod commands;
++#[cfg(not(target_os = "thingos"))]
+ pub mod config;
+ // Top-level re-export for convenience in tests and examples
++#[cfg(not(target_os = "thingos"))]
+ pub use crate::config::load_config_from_code;
+ // Keep compatibility: re-export config runtime data as `config_data`
++#[cfg(not(target_os = "thingos"))]
+ pub use crate::config::runtime::data as config_data;
++#[cfg(not(target_os = "thingos"))]
+ pub mod core;
++#[cfg(not(target_os = "thingos"))]
+ pub mod enums;
++#[cfg(not(target_os = "thingos"))]
+ pub mod input;
++#[cfg(not(target_os = "thingos"))]
+ pub mod keymap;
++#[cfg(not(target_os = "thingos"))]
+ pub mod runtime;
++#[cfg(not(target_os = "thingos"))]
+ pub mod trace;
++#[cfg(not(target_os = "thingos"))]
+ pub mod ui;
++#[cfg(not(target_os = "thingos"))]
+ pub mod util;
++#[cfg(not(target_os = "thingos"))]
+ pub use app::App;
+
+ /// Dispatch a command string (single action or `;`-separated sequence)
+ /// against an [`App`](crate::app::App) instance.
++#[cfg(not(target_os = "thingos"))]
+ pub use actions::dispatch_action;
+diff --git a/src/main.rs b/src/main.rs
+index 81ea37f..09ac816 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,17 +1,31 @@
++#[cfg(not(target_os = "thingos"))]
+ mod actions;
++#[cfg(not(target_os = "thingos"))]
+ mod app;
++#[cfg(not(target_os = "thingos"))]
+ mod commands;
++#[cfg(not(target_os = "thingos"))]
+ mod config;
++#[cfg(not(target_os = "thingos"))]
+ mod core;
++#[cfg(not(target_os = "thingos"))]
+ mod embed_examples;
++#[cfg(not(target_os = "thingos"))]
+ mod enums;
++#[cfg(not(target_os = "thingos"))]
+ mod input;
++#[cfg(not(target_os = "thingos"))]
+ mod keymap;
++#[cfg(not(target_os = "thingos"))]
+ mod runtime;
++#[cfg(not(target_os = "thingos"))]
+ mod trace;
++#[cfg(not(target_os = "thingos"))]
+ mod ui;
++#[cfg(not(target_os = "thingos"))]
+ mod util;
+
++#[cfg(not(target_os = "thingos"))]
+ pub use app::App;
+ // helpers moved to dedicated modules
+
+@@ -33,6 +47,7 @@ fn print_help()
+     );
+ }
+
++#[cfg(not(target_os = "thingos"))]
+ fn prompt_yes_no(msg: &str) -> std::io::Result<bool>
+ {
+     use std::io::Write;
+@@ -45,6 +60,7 @@ fn prompt_yes_no(msg: &str) -> std::io::Result<bool>
+     Ok(matches!(ans, "y" | "Y" | "yes" | "YES"))
+ }
+
++#[cfg(not(target_os = "thingos"))]
+ fn find_examples_config() -> Option<std::path::PathBuf>
+ {
+     use std::path::PathBuf;
+@@ -89,6 +105,7 @@ fn find_examples_config() -> Option<std::path::PathBuf>
+     None
+ }
+
++#[cfg(not(target_os = "thingos"))]
+ fn copy_dir_recursive(
+     src: &std::path::Path,
+     dst: &std::path::Path,
+@@ -120,6 +137,7 @@ fn copy_dir_recursive(
+     Ok(())
+ }
+
++#[cfg(not(target_os = "thingos"))]
+ fn main() -> Result<(), Box<dyn std::error::Error>>
+ {
+     use std::env;
+@@ -266,3 +284,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
+     }
+     Ok(())
+ }
++
++#[cfg(target_os = "thingos")]
++fn main() -> Result<(), Box<dyn std::error::Error>>
++{
++    eprintln!("lsv: Lua runtime is not available on ThingOS yet");
++    Ok(())
++}

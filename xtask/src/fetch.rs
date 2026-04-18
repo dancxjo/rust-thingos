@@ -17,7 +17,7 @@ pub fn fetch() -> Result<()> {
         fs::create_dir_all(&vendor)?;
     }
 
-    fetch_vendor_repos(&vendor)?;
+    fetch_vendor_repos(&root, &vendor)?;
     fetch_limine(&vendor)?;
     fetch_ovmf(&vendor)?;
     fetch_fonts(&assets)?;
@@ -32,14 +32,67 @@ pub fn fetch() -> Result<()> {
     Ok(())
 }
 
-fn fetch_vendor_repos(vendor: &Path) -> Result<()> {
+fn fetch_vendor_repos(root: &Path, vendor: &Path) -> Result<()> {
     println!("==> Fetching vendor repositories...");
     require_tool("git")?;
 
     ensure_vendor_repo(vendor, "lsv", "https://github.com/SecretDeveloper/lsv")?;
     ensure_vendor_repo(vendor, "runa", "https://github.com/alexm-dev/runa")?;
 
+    apply_vendor_patch(&vendor.join("lsv"), &root.join("patches/vendor/lsv.patch"))?;
+    apply_vendor_patch(&vendor.join("runa"), &root.join("patches/vendor/runa.patch"))?;
+
     Ok(())
+}
+
+fn apply_vendor_patch(repo_dir: &Path, patch_file: &Path) -> Result<()> {
+    if !patch_file.exists() {
+        return Ok(());
+    }
+
+    let check = Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .arg("apply")
+        .arg("--check")
+        .arg(patch_file)
+        .output()
+        .with_context(|| {
+            format!("Failed to check patch application for {}", patch_file.display())
+        })?;
+
+    if check.status.success() {
+        println!("    Applying vendor patch {} -> {}", patch_file.display(), repo_dir.display());
+        run_cmd(Command::new("git").arg("-C").arg(repo_dir).arg("apply").arg(patch_file))?;
+        return Ok(());
+    }
+
+    let reverse_check = Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .arg("apply")
+        .arg("--reverse")
+        .arg("--check")
+        .arg(patch_file)
+        .output()
+        .with_context(|| {
+            format!("Failed to check reverse patch application for {}", patch_file.display())
+        })?;
+
+    if reverse_check.status.success() {
+        println!(
+            "    Vendor patch already applied {} -> {}",
+            patch_file.display(),
+            repo_dir.display()
+        );
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "Vendor patch {} does not apply cleanly to {}",
+        patch_file.display(),
+        repo_dir.display()
+    );
 }
 
 fn ensure_vendor_repo(vendor: &Path, name: &str, url: &str) -> Result<()> {
