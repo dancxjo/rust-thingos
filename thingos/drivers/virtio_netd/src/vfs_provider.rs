@@ -151,7 +151,7 @@ fn handle_lookup(payload: &[u8]) -> ProviderResponse {
         Err(_) => return ProviderResponse::err(Errno::EINVAL),
     };
     let path = path.trim_matches('/');
-    debug!("VIRTIO_NETD: lookup '{}'", path);
+    stem::debug!("VIRTIO_NETD: lookup '{}'", path);
 
     let handle: u64 = match path {
         "" => HANDLE_ROOT,
@@ -163,9 +163,13 @@ fn handle_lookup(payload: &[u8]) -> ProviderResponse {
         "tx" => HANDLE_TX,
         "features" => HANDLE_FEATURES,
         "events" => HANDLE_EVENTS,
-        _ => return ProviderResponse::err(Errno::ENOENT),
+        _ => {
+            stem::debug!("VIRTIO_NETD: lookup '{}' -> ENOENT", path);
+            return ProviderResponse::err(Errno::ENOENT);
+        }
     };
 
+    stem::debug!("VIRTIO_NETD: lookup '{}' -> handle={}", path, handle);
     ProviderResponse::ok_u64(handle)
 }
 

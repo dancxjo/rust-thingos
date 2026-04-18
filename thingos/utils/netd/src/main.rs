@@ -44,24 +44,29 @@ struct NetdConfig {
 }
 
 fn get_args() -> Vec<String> {
+    stem::debug!("NETD: get_args starting...");
     let mut len = 0;
     if let Ok(l) = argv_get(&mut []) {
         len = l;
     }
+    stem::debug!("NETD: argv_get len={}", len);
     if len == 0 {
         return Vec::new();
     }
 
     let mut buf = alloc::vec![0u8; len];
-    if argv_get(&mut buf).is_err() {
+    if let Err(e) = argv_get(&mut buf) {
+        stem::error!("NETD: argv_get failed: {:?}", e);
         return Vec::new();
     }
 
-    stem::utils::parse_argv(&buf)
+    let args: Vec<String> = stem::utils::parse_argv(&buf)
         .into_iter()
         .skip(1)
         .filter_map(|arg| core::str::from_utf8(arg).ok().map(String::from))
-        .collect()
+        .collect();
+    stem::debug!("NETD: get_args returning {} args", args.len());
+    args
 }
 
 fn parse_config() -> NetdConfig {
@@ -85,7 +90,8 @@ fn print_usage() {
 }
 
 #[stem::main]
-fn main(_arg: usize) -> ! {
+fn main(arg: usize) -> ! {
+    stem::debug!("NETD: main entry point, arg={}", arg);
     let cfg = parse_config();
     if cfg.help {
         print_usage();
@@ -209,6 +215,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
     let mut probe_round = 0u32;
 
     loop {
+        stem::debug!("NETD: NIC probe loop starting (round={})", probe_round);
         for unit in 0..MAX_VIRTIO_UNITS {
             let provider_path = alloc::format!("{}{}", VIRTIO_PATH_PREFIX, unit);
             let rx_path = alloc::format!("{}/rx", provider_path);
@@ -218,11 +225,13 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
             let mtu_path = alloc::format!("{}/mtu", provider_path);
             let status_path = alloc::format!("{}/status", provider_path);
 
+            stem::debug!("NETD: Probing {}...", provider_path);
             let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
                 Ok(fd) => fd,
                 Err(_) => continue,
             };
 
+            stem::debug!("NETD: Found {}/rx, opening others...", provider_path);
             let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
                 Ok(fd) => fd,
                 Err(e) => {
