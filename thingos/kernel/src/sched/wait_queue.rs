@@ -7,10 +7,12 @@ use alloc::vec::Vec;
 
 use spin::Mutex;
 
+#[derive(Debug)]
 pub struct WaitQueue {
     inner: Mutex<WaitQueueInner>,
 }
 
+#[derive(Debug)]
 struct WaitQueueInner {
     /// FIFO registration order for wake fairness.
     waiters: VecDeque<u64>,

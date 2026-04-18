@@ -33,8 +33,17 @@ pub struct PortId(pub u32);
 pub struct KernelMessage {
     /// Payload bytes (may be empty for handle-only messages).
     pub data: alloc::vec::Vec<u8>,
-    /// Attached capability handles transferred with this message.
+    /// Capability handles bundled with the message.
     pub caps: alloc::vec::Vec<Arc<dyn crate::vfs::VfsNode>>,
+}
+
+impl core::fmt::Debug for KernelMessage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("KernelMessage")
+            .field("data_len", &self.data.len())
+            .field("caps_count", &self.caps.len())
+            .finish()
+    }
 }
 
 /// Fixed-size ring buffer port (SPSC for v0)
@@ -42,6 +51,7 @@ pub struct KernelMessage {
 /// This structure contains the shared state and ring buffer.
 /// Access is intended to be via `Sender` and `Receiver` halves
 /// which enforce the SPSC invariant.
+#[derive(Debug)]
 pub struct Port {
     buf: Box<[u8]>,
     capacity: usize,
@@ -87,8 +97,8 @@ impl Port {
             send_lock: Mutex::new(()),
             recv_lock: Mutex::new(()),
             endpoints: Mutex::new(PortEndpoints {
-                readers: 1,
-                writers: 1,
+                readers: 0,
+                writers: 0,
             }),
             msgs: KernelMessageQueue::new(DEFAULT_MSG_CAPACITY),
             #[cfg(debug_assertions)]
@@ -325,6 +335,11 @@ impl Port {
         self.endpoints.lock().writers > 0
     }
 
+    /// Increment the reader reference count.
+    pub fn open_reader(&self) {
+        self.endpoints.lock().readers += 1;
+    }
+
     pub fn close_reader(&self) -> bool {
         let mut endpoints = self.endpoints.lock();
         if endpoints.readers == 0 {
@@ -409,6 +424,7 @@ pub struct Sender {
 
 impl Sender {
     pub fn new(inner: Arc<Port>) -> Self {
+        inner.open_writer();
         Self { inner }
     }
 
@@ -419,6 +435,22 @@ impl Sender {
     pub fn available(&self) -> usize {
         self.inner.available()
     }
+
+    pub fn has_readers(&self) -> bool {
+        self.inner.has_readers()
+    }
+}
+
+impl Drop for Sender {
+    fn drop(&mut self) {
+        self.inner.close_writer();
+    }
+}
+
+impl Clone for Sender {
+    fn clone(&self) -> Self {
+        Self::new(Arc::clone(&self.inner))
+    }
 }
 
 /// Unique handle to the receiving side of a Port
@@ -428,6 +460,7 @@ pub struct Receiver {
 
 impl Receiver {
     pub fn new(inner: Arc<Port>) -> Self {
+        inner.open_reader();
         Self { inner }
     }
 
@@ -435,8 +468,16 @@ impl Receiver {
         self.inner.recv(buf)
     }
 
+    pub fn try_recv(&self, buf: &mut [u8]) -> usize {
+        self.inner.try_recv(buf)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn has_writers(&self) -> bool {
+        self.inner.has_writers()
     }
 
     pub fn len(&self) -> usize {
@@ -449,6 +490,18 @@ impl Receiver {
 
     pub fn remove_waiter(&self, tid: u64) {
         self.inner.remove_waiter_read(tid);
+    }
+}
+
+impl Drop for Receiver {
+    fn drop(&mut self) {
+        self.inner.close_reader();
+    }
+}
+
+impl Clone for Receiver {
+    fn clone(&self) -> Self {
+        Self::new(Arc::clone(&self.inner))
     }
 }
 

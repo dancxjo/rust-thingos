@@ -9,8 +9,8 @@ use crate::syscall::validate::validate_user_range;
 
 #[derive(Clone)]
 enum Registration {
-    PortRead(crate::ipc::PortId),
-    PortWrite(crate::ipc::PortId),
+    PortRead(Arc<crate::ipc::Port>),
+    PortWrite(Arc<crate::ipc::Port>),
     Fd(Arc<dyn crate::vfs::VfsNode>),
     GraphOp(u64),
     TaskExit(u64),
@@ -183,17 +183,14 @@ fn poll_port(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     let mut value = 0i64;
 
     if (spec.flags & wait::interest::READABLE) != 0 {
-        match table.get(handle, crate::ipc::IpcThingMode::Read).copied() {
+        match table.get(handle, crate::ipc::IpcThingMode::Read).cloned() {
             Some(entry) => {
-                if let Some(port) = crate::ipc::get_port(entry.port_id) {
-                    if !port.is_empty() {
-                        ready_flags |= wait::ready::READABLE;
-                        value = port.len() as i64;
-                    } else if !port.has_writers() {
-                        ready_flags |= wait::ready::HANGUP;
-                    }
-                } else {
-                    return Ok(Some(error_result(spec, Errno::EBADF)));
+                let port = entry.port.clone();
+                if !port.is_empty() {
+                    ready_flags |= wait::ready::READABLE;
+                    value = port.len() as i64;
+                } else if !port.has_writers() {
+                    ready_flags |= wait::ready::HANGUP;
                 }
             }
             None => return Ok(Some(error_result(spec, Errno::EBADF))),
@@ -201,17 +198,14 @@ fn poll_port(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     }
 
     if (spec.flags & wait::interest::WRITABLE) != 0 {
-        match table.get(handle, crate::ipc::IpcThingMode::Write).copied() {
+        match table.get(handle, crate::ipc::IpcThingMode::Write).cloned() {
             Some(entry) => {
-                if let Some(port) = crate::ipc::get_port(entry.port_id) {
-                    if !port.is_full() {
-                        ready_flags |= wait::ready::WRITABLE;
-                        value = port.available() as i64;
-                    } else if !port.has_readers() {
-                        ready_flags |= wait::ready::HANGUP;
-                    }
-                } else {
-                    return Ok(Some(error_result(spec, Errno::EBADF)));
+                let port = entry.port.clone();
+                if !port.is_full() {
+                    ready_flags |= wait::ready::WRITABLE;
+                    value = port.available() as i64;
+                } else if !port.has_readers() {
+                    ready_flags |= wait::ready::HANGUP;
                 }
             }
             None => return Ok(Some(error_result(spec, Errno::EBADF))),
@@ -320,21 +314,17 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
                 let handle = crate::ipc::IpcThing(spec.object as u32);
                 let table = crate::ipc::GLOBAL_THING_TABLE.lock();
                 if (spec.flags & wait::interest::READABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Read).copied()
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Read).cloned()
                     {
-                        if let Some(port) = crate::ipc::get_port(entry.port_id) {
-                            port.add_waiter_read(tid);
-                            regs.push(Registration::PortRead(entry.port_id));
-                        }
+                        entry.port.add_waiter_read(tid);
+                        regs.push(Registration::PortRead(entry.port.clone()));
                     }
                 }
                 if (spec.flags & wait::interest::WRITABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Write).copied()
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcThingMode::Write).cloned()
                     {
-                        if let Some(port) = crate::ipc::get_port(entry.port_id) {
-                            port.add_waiter_write(tid);
-                            regs.push(Registration::PortWrite(entry.port_id));
-                        }
+                        entry.port.add_waiter_write(tid);
+                        regs.push(Registration::PortWrite(entry.port.clone()));
                     }
                 }
             }
@@ -370,15 +360,11 @@ fn register_all(specs: &[WaitSpec], tid: u64) -> SysResult<alloc::vec::Vec<Regis
 fn cleanup_all(regs: &[Registration], tid: u64, timeout_tick: Option<u64>) -> SysResult<()> {
     for reg in regs {
         match reg {
-            Registration::PortRead(port_id) => {
-                if let Some(port) = crate::ipc::get_port(*port_id) {
-                    port.remove_waiter_read(tid);
-                }
+            Registration::PortRead(port) => {
+                port.remove_waiter_read(tid);
             }
-            Registration::PortWrite(port_id) => {
-                if let Some(port) = crate::ipc::get_port(*port_id) {
-                    port.remove_waiter_write(tid);
-                }
+            Registration::PortWrite(port) => {
+                port.remove_waiter_write(tid);
             }
             Registration::Fd(node) => {
                 node.remove_waiter(tid);
@@ -407,9 +393,12 @@ mod tests {
 
     fn alloc_port_pair(capacity: usize) -> (u32, u32) {
         let port_id = crate::ipc::create_port(capacity);
+        let port = crate::ipc::get_port(port_id).expect("port");
         let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        let write = table.alloc(port_id, crate::ipc::IpcThingMode::Write).expect("write handle");
-        let read = table.alloc(port_id, crate::ipc::IpcThingMode::Read).expect("read handle");
+        let write = table
+            .alloc(port.clone(), crate::ipc::IpcThingMode::Write)
+            .expect("write handle");
+        let read = table.alloc(port, crate::ipc::IpcThingMode::Read).expect("read handle");
         (write.0, read.0)
     }
 
@@ -480,9 +469,9 @@ mod tests {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
-                .copied()
+                .cloned()
                 .expect("entry");
-            crate::ipc::get_port(entry.port_id).expect("port")
+            entry.port
         };
 
         assert!(port.send_all(b"abc"));
@@ -529,9 +518,9 @@ mod tests {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
-                .copied()
+                .cloned()
                 .expect("entry");
-            crate::ipc::get_port(entry.port_id).expect("port")
+            entry.port
         };
 
         let writable = poll_spec(&WaitSpec {
@@ -576,17 +565,17 @@ mod tests {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(crate::ipc::IpcThing(write_a), crate::ipc::IpcThingMode::Write)
-                .copied()
+                .cloned()
                 .expect("entry a");
-            crate::ipc::get_port(entry.port_id).expect("port a")
+            entry.port
         };
         let port_b = {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(crate::ipc::IpcThing(write_b), crate::ipc::IpcThingMode::Write)
-                .copied()
+                .cloned()
                 .expect("entry b");
-            crate::ipc::get_port(entry.port_id).expect("port b")
+            entry.port
         };
 
         assert!(port_a.send_all(b"a"));
@@ -622,17 +611,17 @@ mod tests {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(crate::ipc::IpcThing(write_a), crate::ipc::IpcThingMode::Write)
-                .copied()
+                .cloned()
                 .expect("entry a");
-            crate::ipc::get_port(entry.port_id).expect("port a")
+            entry.port
         };
         let port_b = {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(crate::ipc::IpcThing(write_b), crate::ipc::IpcThingMode::Write)
-                .copied()
+                .cloned()
                 .expect("entry b");
-            crate::ipc::get_port(entry.port_id).expect("port b")
+            entry.port
         };
 
         assert!(port_a.send_all(b"a"));
@@ -678,9 +667,9 @@ mod tests {
             let table = crate::ipc::GLOBAL_THING_TABLE.lock();
             let entry = table
                 .get(crate::ipc::IpcThing(write_handle), crate::ipc::IpcThingMode::Write)
-                .copied()
+                .cloned()
                 .expect("entry");
-            crate::ipc::get_port(entry.port_id).expect("port")
+            entry.port
         };
         assert!(port.send_all(b"hello"));
 

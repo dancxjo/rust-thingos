@@ -70,6 +70,7 @@ pub enum MqRecvError {
 // Internal state
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 struct Inner<M> {
     queue: VecDeque<M>,
     capacity: usize,
@@ -110,6 +111,7 @@ impl<M> Inner<M> {
 /// on `waiters` before attempting [`try_dequeue`](Self::try_dequeue) and park
 /// after seeing `Ok(None)`.  This matches the `Inbox` and `Port` blocking
 /// patterns and intentionally avoids baking scheduler policy into the queue.
+#[derive(Debug)]
 pub struct KernelMessageQueue<M> {
     inner: Mutex<Inner<M>>,
     /// Wait queue for tasks blocked waiting for a message.

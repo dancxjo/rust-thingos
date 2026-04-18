@@ -19,11 +19,36 @@ pub enum IpcThingMode {
     Write,
 }
 
+use alloc::sync::Arc;
+
 /// Entry in the handle table
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct IpcThingEntry {
-    pub port_id: PortId,
+    pub port: Arc<super::Port>,
     pub mode: IpcThingMode,
+}
+
+impl IpcThingEntry {
+    pub fn new(port: Arc<super::Port>, mode: IpcThingMode) -> Self {
+        match mode {
+            IpcThingMode::Read => port.open_reader(),
+            IpcThingMode::Write => port.open_writer(),
+        }
+        Self { port, mode }
+    }
+}
+
+impl Drop for IpcThingEntry {
+    fn drop(&mut self) {
+        match self.mode {
+            IpcThingMode::Read => {
+                self.port.close_reader();
+            }
+            IpcThingMode::Write => {
+                self.port.close_writer();
+            }
+        }
+    }
 }
 
 /// Maximum handles per process (v0 limit)
@@ -36,21 +61,25 @@ pub struct IpcThingTable {
 }
 
 impl IpcThingTable {
-    /// Create a new empty handle table
     pub const fn new() -> Self {
-        Self {
-            entries: [None; MAX_IPC_THINGS],
-        }
+        const NONE: Option<IpcThingEntry> = None;
+        Self { entries: [NONE; MAX_IPC_THINGS] }
     }
 
     /// Allocate a new handle for the given port and mode.
     /// Handle 0 is reserved as "invalid" for userspace conventions.
-    pub fn alloc(&mut self, port_id: PortId, mode: IpcThingMode) -> Option<IpcThing> {
+    pub fn alloc(&mut self, port: Arc<super::Port>, mode: IpcThingMode) -> Option<IpcThing> {
         for (i, slot) in self.entries.iter_mut().enumerate().skip(1) {
             if slot.is_none() {
-                *slot = Some(IpcThingEntry { port_id, mode });
+                let port_id = super::find_port_id(&port).unwrap();
+                *slot = Some(IpcThingEntry::new(port, mode));
                 let h = IpcThing(i as u32);
-                crate::kinfo!("ALLOC_HANDLE: handle={} port_id={:?} mode={:?}", h.0, port_id, mode);
+                crate::kinfo!(
+                    "ALLOC_HANDLE: handle={} port_id={:?} mode={:?}",
+                    h.0,
+                    port_id,
+                    mode
+                );
                 return Some(h);
             }
         }

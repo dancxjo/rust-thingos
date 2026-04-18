@@ -69,7 +69,7 @@ fn lookup_ipc_entry_with(
     // Keep this lock scope tiny: copy the entry and drop immediately.
     // This path is intentionally short because it sits on syscall hot paths.
     let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-    lookup(&table, ipc_handle).copied().ok_or(Errno::EBADF)
+    lookup(&table, ipc_handle).cloned().ok_or(Errno::EBADF)
 }
 
 fn lookup_ipc_entry_any(handle: Handle) -> SysResult<crate::ipc::IpcThingEntry> {
@@ -100,9 +100,8 @@ pub fn resolve_handle(
     }
 
     let entry = lookup_ipc_entry_any(handle)?;
-    let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
     Ok(ResolvedHandle::Port {
-        port,
+        port: entry.port.clone(),
         mode: entry.mode,
     })
 }
@@ -127,8 +126,7 @@ pub fn install_fd_compat_for_port_handle(
     handle: Handle,
 ) -> SysResult<u32> {
     let entry = lookup_ipc_entry_any(handle)?;
-    let port = crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)?;
-    let node = Arc::new(crate::vfs::port_node::PortNode::new(port.clone(), entry.mode));
+    let node = Arc::new(crate::vfs::port_node::PortNode::new(entry.port.clone(), entry.mode));
 
     let mut lock = pinfo_arc.lock();
     let fd = lock.thing_table.open(
@@ -139,7 +137,7 @@ pub fn install_fd_compat_for_port_handle(
         },
         alloc::format!("handle:{}", handle.0),
     )?;
-    crate::kinfo!("BRIDGE: handle={} -> fd={} node={:p} port={:p}", handle.0, fd, Arc::as_ptr(&node), Arc::as_ptr(&port));
+    crate::kinfo!("BRIDGE: handle={} -> fd={} node={:p} port={:p}", handle.0, fd, Arc::as_ptr(&node), Arc::as_ptr(&entry.port));
     Ok(fd)
 }
 
@@ -160,7 +158,7 @@ pub fn resolve_write_port_compat(
     }
 
     let entry = lookup_ipc_entry_write(handle)?;
-    crate::ipc::get_port(entry.port_id).ok_or(Errno::EBADF)
+    Ok(entry.port.clone())
 }
 
 #[cfg(test)]
@@ -211,10 +209,11 @@ mod tests {
     #[test]
     fn test_resolve_handle_prefers_process_table() {
         let port_id = crate::ipc::create_port(8);
+        let port = crate::ipc::get_port(port_id).unwrap();
         let handle = {
             let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
             table
-                .alloc(port_id, crate::ipc::IpcThingMode::Read)
+                .alloc(port, crate::ipc::IpcThingMode::Read)
                 .expect("allocate handle")
         };
 
@@ -233,10 +232,11 @@ mod tests {
     #[test]
     fn test_install_fd_compat_for_port_handle_creates_port_backed_fd() {
         let port_id = crate::ipc::create_port(8);
+        let port = crate::ipc::get_port(port_id).unwrap();
         let handle = {
             let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
             table
-                .alloc(port_id, crate::ipc::IpcThingMode::Read)
+                .alloc(port, crate::ipc::IpcThingMode::Read)
                 .expect("allocate handle")
         };
 

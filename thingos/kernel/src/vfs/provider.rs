@@ -23,9 +23,9 @@ use crate::syscall::validate::{copyin, copyout};
 /// Inner state protected by the serialisation lock.
 struct ProviderChannel {
     /// The provider's request port (kernel → provider).
-    req: Arc<crate::ipc::Port>,
+    req: crate::ipc::Sender,
     /// The kernel's private response port (provider → kernel).
-    resp: Arc<crate::ipc::Port>,
+    resp: crate::ipc::Receiver,
     /// Write handle for the response port.  Sent to the provider in every
     /// request header so the provider knows where to send its reply.
     resp_write_handle: u32,
@@ -73,21 +73,21 @@ impl ProviderChannel {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
-            self.resp.add_waiter_read(tid);
+            self.resp.add_waiter(tid);
             let n = self.resp.try_recv(buf);
             if n > 0 {
-                self.resp.remove_waiter_read(tid);
+                self.resp.remove_waiter(tid);
                 return Ok(n);
             }
             if !self.resp.has_writers() {
-                self.resp.remove_waiter_read(tid);
+                self.resp.remove_waiter(tid);
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
             unsafe {
                 crate::sched::block_current_erased();
             }
-            self.resp.remove_waiter_read(tid);
+            self.resp.remove_waiter(tid);
         }
     }
 
@@ -114,14 +114,14 @@ impl ProviderFs {
         req_port_id: u32,
     ) -> Arc<Self> {
         let rpc = Arc::new(Mutex::new(ProviderChannelRef {
-            req: req_port.clone(),
-            resp: resp_port.clone(),
+            req: crate::ipc::Sender::new(req_port.clone()),
+            resp: crate::ipc::Receiver::new(resp_port.clone()),
             resp_write_handle,
         }));
         let this = Arc::new(Self {
             channel: Mutex::new(ProviderChannel {
-                req: req_port,
-                resp: resp_port,
+                req: crate::ipc::Sender::new(req_port),
+                resp: crate::ipc::Receiver::new(resp_port),
                 resp_write_handle,
                 waiters: BTreeMap::new(),
             }),
@@ -179,14 +179,9 @@ impl VfsDriver for ProviderFs {
 
 impl Drop for ProviderFs {
     fn drop(&mut self) {
-        // Release the kernel's write reference on the provider request port.
-        //
-        // `sys_fs_mount` called `open_writer()` when the mount was established.
-        // Releasing it here (when the `Arc<ProviderFs>` stored in the mount table
-        // is dropped on `umount`) causes `channel_recv` in the provider's service
-        // loop to return `EPIPE`, which is the clean shutdown signal for the
-        // provider process.
-        self.channel.lock().req.close_writer();
+        // All Sender/Receiver handles held by this ProviderFs (via channel
+        // and rpc fields) will be dropped, automatically releasing the
+        // kernel's reference counts on the IPC ports.
     }
 }
 
@@ -206,8 +201,8 @@ fn parse_response_handle(resp: &[u8]) -> SysResult<u64> {
 // ── ProviderChannelRef ────────────────────────────────────────────────────────
 
 struct ProviderChannelRef {
-    req: Arc<crate::ipc::Port>,
-    resp: Arc<crate::ipc::Port>,
+    req: crate::ipc::Sender,
+    resp: crate::ipc::Receiver,
     resp_write_handle: u32,
 }
 
@@ -250,21 +245,21 @@ impl ProviderChannelRef {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
-            self.resp.add_waiter_read(tid);
+            self.resp.add_waiter(tid);
             let n = self.resp.try_recv(buf);
             if n > 0 {
-                self.resp.remove_waiter_read(tid);
+                self.resp.remove_waiter(tid);
                 return Ok(n);
             }
             if !self.resp.has_writers() {
-                self.resp.remove_waiter_read(tid);
+                self.resp.remove_waiter(tid);
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
             unsafe {
                 crate::sched::block_current_erased();
             }
-            self.resp.remove_waiter_read(tid);
+            self.resp.remove_waiter(tid);
         }
     }
 }

@@ -673,16 +673,10 @@ pub fn sys_fs_mount(
     // so the provider process can call SYS_channel_send on it.
     let resp_write_handle = {
         let mut table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.alloc(resp_port_id, crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
+        table.alloc(resp_port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
     };
 
     let req_port_id = crate::ipc::find_port_id(&req_port).ok_or(Errno::EBADF)?;
-
-    // The kernel mount takes a writer reference on the provider port.  This keeps
-    // `channel_recv` in the provider's service loop from returning EPIPE while the
-    // mount is live.  The reference is released in `ProviderFs::drop` when the
-    // mount is torn down via `sys_fs_umount`.
-    req_port.open_writer();
 
     // Build and mount the provider filesystem.
     let provider_fs =
@@ -719,10 +713,11 @@ pub fn sys_fs_notify(req_handle: usize, node_handle: usize, revents: usize) -> S
     let handle = crate::ipc::IpcThing(req_handle as u32);
     let entry = {
         let table = crate::ipc::GLOBAL_THING_TABLE.lock();
-        table.get_any(handle).copied().ok_or(Errno::EBADF)?
+        table.get_any(handle).cloned().ok_or(Errno::EBADF)?
     };
 
-    vfs::provider::notify_by_port(entry.port_id.0, node_handle as u64, revents as u16)?;
+    let port_id = crate::ipc::find_port_id(&entry.port).ok_or(Errno::EBADF)?;
+    vfs::provider::notify_by_port(port_id.0, node_handle as u64, revents as u16)?;
     Ok(0)
 }
 

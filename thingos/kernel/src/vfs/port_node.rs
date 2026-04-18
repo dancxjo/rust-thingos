@@ -12,11 +12,20 @@ use alloc::sync::Arc;
 pub struct PortNode {
     port: Arc<Port>,
     mode: IpcThingMode,
+    closed: core::sync::atomic::AtomicBool,
 }
 
 impl PortNode {
     pub fn new(port: Arc<Port>, mode: IpcThingMode) -> Self {
-        Self { port, mode }
+        match mode {
+            IpcThingMode::Read => port.open_reader(),
+            IpcThingMode::Write => port.open_writer(),
+        }
+        Self {
+            port,
+            mode,
+            closed: core::sync::atomic::AtomicBool::new(false),
+        }
     }
 
     pub fn port(&self) -> &Arc<Port> {
@@ -81,6 +90,9 @@ impl VfsNode for PortNode {
     }
 
     fn close(&self) {
+        if self.closed.swap(true, core::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         match self.mode {
             IpcThingMode::Read => {
                 self.port.close_reader();
@@ -145,6 +157,12 @@ impl VfsNode for PortNode {
             }
             None => Ok(None),
         }
+    }
+}
+
+impl Drop for PortNode {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
