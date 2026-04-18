@@ -117,6 +117,8 @@ impl VfsNode for PortNode {
         if self.mode != IpcThingMode::Write {
             return Err(abi::errors::Errno::EBADF);
         }
+        let caps_len = fds.len();
+        crate::ktrace!("PORT_NODE: sock_sendmsg caps_len={} port={:p}", caps_len, Arc::as_ptr(&self.port));
         self.port.send_msg(data.to_vec(), fds).map_err(|e| match e {
             crate::ipc::msgqueue::MqSendError::Full { capacity } => {
                 crate::ktrace!(
@@ -137,7 +139,10 @@ impl VfsNode for PortNode {
             return Err(abi::errors::Errno::EBADF);
         }
         match self.port.try_recv_msg() {
-            Some(msg) => Ok(Some((msg.data, msg.caps))),
+            Some(msg) => {
+                crate::ktrace!("PORT_NODE: sock_recvmsg caps_len={} port={:p}", msg.caps.len(), Arc::as_ptr(&self.port));
+                Ok(Some((msg.data, msg.caps)))
+            }
             None => Ok(None),
         }
     }

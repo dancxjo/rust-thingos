@@ -278,7 +278,11 @@ pub fn sys_sendmsg(
         let lock = pinfo_arc.lock();
         lock.thing_table.get(thing as u32)?.node.clone()
     };
-    crate::kinfo!("SENDMSG: thing={} data_len={} node={:p}", thing, data_len, Arc::as_ptr(&node));
+    
+    let caps_len = caps.len();
+    crate::ktrace!("SENDMSG: thing={} data_len={} caps_len={} node={:p}", 
+        thing, data_len, caps_len, Arc::as_ptr(&node));
+    
     node.sock_sendmsg(&data_buf, caps)?;
     Ok(0)
 }
@@ -323,6 +327,8 @@ pub fn sys_recvmsg(
 
     let msg = node.sock_recvmsg()?.ok_or(Errno::EAGAIN)?;
     let (data, fds) = msg;
+    crate::ktrace!("RECVMSG: thing={} data_len={} caps_len={} node={:p}", 
+        thing, data.len(), fds.len(), Arc::as_ptr(&node));
 
     // Copy data bytes to userspace (truncate if necessary).
     let copy_len = data.len().min(data_cap);
