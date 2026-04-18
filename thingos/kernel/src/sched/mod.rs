@@ -2442,16 +2442,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
             .get(cpu_idx)
             .and_then(|pc| pc.current)
             .expect("terminate_current called with no current task");
-        let current_id = if terminating_tid == current_id {
-            current_id
-        } else {
+        if terminating_tid != current_id {
             panic!(
                 "scheduler invariant violated: terminate_current tid mismatch (cpu={}, scheduler_current={}, caller_tid={})",
                 cpu_idx,
                 current_id,
                 terminating_tid
             );
-        };
+        }
 
         if let Some(task) = self.state.get_task_mut(current_id) {
             task.runq_location = None;
@@ -5995,6 +5993,7 @@ mod tests {
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8311);
 
         let _ = sched.terminate_current(8310, &[]);
+        assert_eq!(sched.state.get_task(8310).unwrap().state, TaskState::Dead);
         assert_eq!(
             crate::task::registry::get_task::<MockRuntime>(8310).unwrap().state,
             TaskState::Running,
