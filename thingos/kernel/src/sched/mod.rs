@@ -456,6 +456,8 @@ static ANY_WAKE_OVERLOAD_STREAK: [AtomicU8; types::MAX_CPUS] = {
     const ATOMIC_ZERO: AtomicU8 = AtomicU8::new(0);
     [ATOMIC_ZERO; types::MAX_CPUS]
 };
+#[cfg(test)]
+static TEST_LEAST_LOADED_ONLINE_CPU_CALLS: AtomicU64 = AtomicU64::new(0);
 
 fn any_wake_overload_policy_from_u8(v: u8) -> AnyWakeOverloadPolicy {
     match v {
@@ -503,6 +505,8 @@ fn runq_depth_for_cpu(state: &crate::sched::state::SchedState, cpu: usize) -> us
 }
 
 fn least_loaded_online_cpu(state: &crate::sched::state::SchedState) -> Option<(usize, usize)> {
+    #[cfg(test)]
+    TEST_LEAST_LOADED_ONLINE_CPU_CALLS.fetch_add(1, Ordering::Relaxed);
     state
         .online_cpus
         .iter()
@@ -510,6 +514,42 @@ fn least_loaded_online_cpu(state: &crate::sched::state::SchedState) -> Option<(u
         .filter(|&cpu| cpu < state.per_cpu.len())
         .map(|cpu| (cpu, runq_depth_for_cpu(state, cpu)))
         .min_by_key(|&(_, depth)| depth)
+}
+
+struct WakeBatchLoadSnapshot {
+    per_cpu_depths: alloc::vec::Vec<usize>,
+}
+
+impl WakeBatchLoadSnapshot {
+    fn new(state: &crate::sched::state::SchedState) -> Self {
+        let mut per_cpu_depths = alloc::vec::Vec::with_capacity(state.per_cpu.len());
+        for cpu in 0..state.per_cpu.len() {
+            per_cpu_depths.push(runq_depth_for_cpu(state, cpu));
+        }
+        Self { per_cpu_depths }
+    }
+
+    #[inline]
+    fn depth_for_cpu(&self, cpu: usize) -> usize {
+        self.per_cpu_depths.get(cpu).copied().unwrap_or(0)
+    }
+
+    fn least_loaded_online_cpu(&self, state: &crate::sched::state::SchedState) -> Option<(usize, usize)> {
+        state
+            .online_cpus
+            .iter()
+            .copied()
+            .filter(|&cpu| cpu < self.per_cpu_depths.len())
+            .map(|cpu| (cpu, self.depth_for_cpu(cpu)))
+            .min_by_key(|&(_, depth)| depth)
+    }
+
+    #[inline]
+    fn note_enqueue(&mut self, cpu: usize) {
+        if let Some(depth) = self.per_cpu_depths.get_mut(cpu) {
+            *depth = depth.saturating_add(1);
+        }
+    }
 }
 
 /// Per-CPU start tick for the current try-lock miss warning window.
@@ -1396,6 +1436,60 @@ pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
     }
 }
 
+fn select_any_affinity_wake_cpu_from_snapshot<R: BootRuntime>(
+    sched: &types::Scheduler<R>,
+    preferred_cpu: usize,
+    load_snapshot: &WakeBatchLoadSnapshot,
+) -> usize {
+    init_any_wake_policy_from_env_once();
+
+    let local_cpu = current_cpu_index::<R>();
+    let preferred = if preferred_cpu < sched.state.per_cpu.len()
+        && sched.state.online_cpus.contains(&preferred_cpu)
+    {
+        preferred_cpu
+    } else if local_cpu < sched.state.per_cpu.len() {
+        local_cpu
+    } else {
+        0
+    };
+
+    let policy = any_wake_overload_policy_from_u8(ANY_WAKE_OVERLOAD_POLICY.load(Ordering::Acquire));
+    if policy == AnyWakeOverloadPolicy::Off {
+        return preferred;
+    }
+
+    let preferred_depth = load_snapshot.depth_for_cpu(preferred);
+    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
+    let overloaded = preferred_depth >= overload_gap;
+    let Some(streak_cell) = ANY_WAKE_OVERLOAD_STREAK.get(preferred) else {
+        return preferred;
+    };
+    if !overloaded {
+        streak_cell.store(0, Ordering::Release);
+        return preferred;
+    }
+
+    let streak_required = ANY_WAKE_OVERLOAD_STREAK_REQUIRED.load(Ordering::Acquire) as u8;
+    let prior_streak = streak_cell.load(Ordering::Acquire);
+    let next_streak = prior_streak.saturating_add(1);
+    streak_cell.store(next_streak, Ordering::Release);
+    if next_streak < streak_required {
+        return preferred;
+    }
+
+    let Some((least_cpu, least_depth)) = load_snapshot.least_loaded_online_cpu(&sched.state) else {
+        return preferred;
+    };
+    let overloaded_vs_least = preferred_depth.saturating_sub(least_depth) >= overload_gap;
+    if overloaded_vs_least && least_cpu != preferred {
+        streak_cell.store(0, Ordering::Release);
+        least_cpu
+    } else {
+        preferred
+    }
+}
+
 pub(crate) fn select_preferred_any_affinity_wake_cpu<R: BootRuntime>(
     sched: &types::Scheduler<R>,
     last_cpu: Option<usize>,
@@ -1433,6 +1527,45 @@ pub(crate) fn select_preferred_any_affinity_wake_cpu<R: BootRuntime>(
     // A bias of 1 preserves locality by keeping `last_cpu` unless local CPU has
     // at least 2 fewer queued tasks.
     // saturating_add is defensive for pathological queue lengths.
+    if local_depth.saturating_add(ANY_WAKE_LOCAL_DEPTH_BIAS) < last_depth {
+        local_cpu
+    } else {
+        last_cpu
+    }
+}
+
+fn select_preferred_any_affinity_wake_cpu_from_snapshot<R: BootRuntime>(
+    sched: &types::Scheduler<R>,
+    last_cpu: Option<usize>,
+    load_snapshot: &WakeBatchLoadSnapshot,
+) -> usize {
+    let local_cpu = current_cpu_index::<R>();
+    let local_online =
+        local_cpu < sched.state.per_cpu.len() && sched.state.online_cpus.contains(&local_cpu);
+    let fallback = if local_online {
+        local_cpu
+    } else if let Some(cpu) =
+        sched.state.online_cpus.iter().copied().find(|&cpu| cpu < sched.state.per_cpu.len())
+    {
+        cpu
+    } else if local_cpu < sched.state.per_cpu.len() {
+        local_cpu
+    } else {
+        0
+    };
+
+    let Some(last_cpu) = last_cpu
+        .filter(|&cpu| cpu < sched.state.per_cpu.len() && sched.state.online_cpus.contains(&cpu))
+    else {
+        return fallback;
+    };
+
+    if !local_online || last_cpu == local_cpu {
+        return last_cpu;
+    }
+
+    let local_depth = load_snapshot.depth_for_cpu(local_cpu);
+    let last_depth = load_snapshot.depth_for_cpu(last_cpu);
     if local_depth.saturating_add(ANY_WAKE_LOCAL_DEPTH_BIAS) < last_depth {
         local_cpu
     } else {
@@ -1753,6 +1886,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // writes rather than one acquisition per task, reducing the number of
         // nested SCHEDULER → REGISTRY lock cycles from N to 1.
         let mut to_wake: alloc::vec::Vec<(u64, usize, usize)> = alloc::vec::Vec::new();
+        // Snapshot run-queue depths once for this wake batch so Any-affinity
+        // placement can reuse the same balancing view without re-scanning all
+        // per-CPU queues for each task.
+        let mut wake_batch_loads = WakeBatchLoadSnapshot::new(&self.state);
 
         while wake_budget > 0 {
             let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() else {
@@ -1776,11 +1913,21 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     if let Some(sf) = self.state.get_thread(tid) {
                         let priority = sf.priority as usize;
                         let target_cpu = match sf.affinity {
-                            crate::task::Affinity::Pinned(cpu) => cpu,
+                            crate::task::Affinity::Pinned(cpu) => {
+                                wake_batch_loads.note_enqueue(cpu);
+                                cpu
+                            }
                             crate::task::Affinity::Any => {
-                                let preferred =
-                                    select_preferred_any_affinity_wake_cpu::<R>(self, sf.last_cpu);
-                                select_any_affinity_wake_cpu::<R>(self, preferred)
+                                let preferred = select_preferred_any_affinity_wake_cpu_from_snapshot::<
+                                    R,
+                                >(self, sf.last_cpu, &wake_batch_loads);
+                                let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
+                                    self,
+                                    preferred,
+                                    &wake_batch_loads,
+                                );
+                                wake_batch_loads.note_enqueue(target);
+                                target
                             }
                         };
                         to_wake.push((tid, priority, target_cpu));
@@ -7615,6 +7762,105 @@ mod tests {
             sched.state.get_task(9921).and_then(|sf| sf.wake_cpu),
             Some(1),
             "[policy] wake_sleepers should record redirected wake_cpu for Any-affinity task"
+        );
+    }
+
+    #[test]
+    fn test_wake_sleepers_batches_any_affinity_load_scans() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests("redirect", 2);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        let current_task = make_task(9926, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current_task));
+        sched.state.per_cpu[0].current = Some(9926);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9926,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+        });
+
+        // Keep CPU 0 overloaded for Any-affinity wake routing.
+        for id in 9927..9930 {
+            let runnable = make_task(id, TaskState::Runnable, TaskPriority::Low);
+            crate::task::registry::get_registry::<MockRuntime>()
+                .insert(alloc::boxed::Box::new(runnable));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid: id,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Low,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
+        }
+
+        for id in 9930..9933 {
+            let sleeping = make_task(id, TaskState::Blocked, TaskPriority::Normal);
+            crate::task::registry::get_registry::<MockRuntime>()
+                .insert(alloc::boxed::Box::new(sleeping));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid: id,
+                runq_location: None,
+                state: TaskState::Blocked,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+                wake_cpu: None,
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.add_task_to_sleep_queue(id, 50);
+        }
+
+        TEST_LEAST_LOADED_ONLINE_CPU_CALLS.store(0, Ordering::Relaxed);
+        TICK_COUNT.store(100, Ordering::Relaxed);
+        sched.wake_sleepers();
+
+        let cpu0_wakes = sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].len();
+        let cpu1_wakes = sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len();
+        assert_eq!(
+            cpu0_wakes + cpu1_wakes,
+            3,
+            "all Any-affinity sleepers should wake in this batch"
+        );
+        assert!(
+            cpu0_wakes > 0 && cpu1_wakes > 0,
+            "batch load snapshot should spread wakeups after redirecting early tasks (cpu0={}, cpu1={})",
+            cpu0_wakes,
+            cpu1_wakes
+        );
+
+        let least_scan_calls = TEST_LEAST_LOADED_ONLINE_CPU_CALLS.load(Ordering::Relaxed);
+        assert!(
+            least_scan_calls == 0,
+            "wake batch should avoid least-loaded queue scans via per-batch snapshots (calls={})",
+            least_scan_calls
         );
     }
 
