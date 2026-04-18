@@ -750,4 +750,45 @@ mod tests {
         assert_eq!(stat.mode, 0o040755);
         assert_eq!(stat.ino, 1);
     }
+
+    #[test]
+    fn provider_node_add_waiter_does_not_send_subscribe_rpc() {
+        let req_port = make_port(4096);
+        let resp_port = make_port(4096);
+        let node = ProviderNode {
+            handle: 7,
+            channel: Arc::new(Mutex::new(ProviderChannelRef {
+                req: req_port.clone(),
+                resp: resp_port,
+                resp_write_handle: 0,
+            })),
+            wait_queue: Arc::new(WaitQueue::new()),
+        };
+
+        node.add_waiter(42);
+
+        let mut buf = [0u8; 64];
+        assert_eq!(req_port.try_recv(&mut buf), 0);
+    }
+
+    #[test]
+    fn provider_node_remove_waiter_does_not_send_unsubscribe_rpc() {
+        let req_port = make_port(4096);
+        let resp_port = make_port(4096);
+        let node = ProviderNode {
+            handle: 9,
+            channel: Arc::new(Mutex::new(ProviderChannelRef {
+                req: req_port.clone(),
+                resp: resp_port,
+                resp_write_handle: 0,
+            })),
+            wait_queue: Arc::new(WaitQueue::new()),
+        };
+
+        node.add_waiter(100);
+        node.remove_waiter(100);
+
+        let mut buf = [0u8; 64];
+        assert_eq!(req_port.try_recv(&mut buf), 0);
+    }
 }
