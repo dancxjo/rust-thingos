@@ -4,6 +4,7 @@
 
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::vec::Vec;
+
 use spin::Mutex;
 
 pub struct WaitQueue {
@@ -32,21 +33,13 @@ impl WaitQueueInner {
 
 impl WaitQueue {
     pub const fn new() -> Self {
-        Self {
-            inner: Mutex::new(WaitQueueInner {
-                waiters: VecDeque::new(),
-                in_queue: None,
-            }),
-        }
+        Self { inner: Mutex::new(WaitQueueInner { waiters: VecDeque::new(), in_queue: None }) }
     }
 
     /// Returns true if there are no waiters.
     pub fn is_empty(&self) -> bool {
         let inner = self.inner.lock();
-        inner
-            .in_queue
-            .as_ref()
-            .map_or_else(|| inner.waiters.is_empty(), BTreeSet::is_empty)
+        inner.in_queue.as_ref().map_or_else(|| inner.waiters.is_empty(), BTreeSet::is_empty)
     }
 
     /// Add a task to the wait queue
@@ -65,12 +58,14 @@ impl WaitQueue {
     pub fn wake_one(&self) {
         let tid = {
             let mut inner = self.inner.lock();
-            let Some(in_queue) = inner.in_queue.as_mut() else {
+            if inner.in_queue.is_none() {
                 return;
-            };
+            }
             let mut chosen = None;
             while let Some(candidate) = inner.waiters.pop_front() {
-                if in_queue.remove(&candidate) {
+                let removed =
+                    inner.in_queue.as_mut().is_some_and(|in_queue| in_queue.remove(&candidate));
+                if removed {
                     chosen = Some(candidate);
                     break;
                 }
@@ -91,12 +86,14 @@ impl WaitQueue {
     pub fn wake_all(&self) {
         let waiters = {
             let mut inner = self.inner.lock();
-            let Some(in_queue) = inner.in_queue.as_mut() else {
+            if inner.in_queue.is_none() {
                 return;
-            };
+            }
             let mut to_wake = Vec::new();
             while let Some(candidate) = inner.waiters.pop_front() {
-                if in_queue.remove(&candidate) {
+                let removed =
+                    inner.in_queue.as_mut().is_some_and(|in_queue| in_queue.remove(&candidate));
+                if removed {
                     to_wake.push(candidate);
                 }
             }
@@ -125,12 +122,14 @@ impl WaitQueue {
     /// Drain the queue without waking. Caller decides when waking is safe.
     pub fn drain(&self) -> Vec<u64> {
         let mut inner = self.inner.lock();
-        let Some(in_queue) = inner.in_queue.as_mut() else {
+        if inner.in_queue.is_none() {
             return Vec::new();
-        };
+        }
         let mut drained = Vec::new();
         while let Some(candidate) = inner.waiters.pop_front() {
-            if in_queue.remove(&candidate) {
+            let removed =
+                inner.in_queue.as_mut().is_some_and(|in_queue| in_queue.remove(&candidate));
+            if removed {
                 drained.push(candidate);
             }
         }
@@ -141,9 +140,10 @@ impl WaitQueue {
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
     use super::*;
     use crate::sched::blocking::WAKE_TASK_HOOK;
-    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     static WOKEN_IDS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
     static WOKEN_LEN: AtomicUsize = AtomicUsize::new(0);
@@ -164,9 +164,7 @@ mod tests {
 
     fn wake_log() -> alloc::vec::Vec<u64> {
         let len = WOKEN_LEN.load(Ordering::SeqCst).min(WOKEN_IDS.len());
-        (0..len)
-            .map(|idx| WOKEN_IDS[idx].load(Ordering::SeqCst))
-            .collect()
+        (0..len).map(|idx| WOKEN_IDS[idx].load(Ordering::SeqCst)).collect()
     }
 
     #[test]
