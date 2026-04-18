@@ -385,19 +385,10 @@ impl VfsNode for ProviderNode {
 
     fn add_waiter(&self, tid: u64) {
         self.wait_queue.push_back(tid);
-        let mut payload = [0u8; 12];
-        payload[..8].copy_from_slice(&self.handle.to_le_bytes());
-        let events = abi::syscall::poll_flags::POLLIN | abi::syscall::poll_flags::POLLOUT;
-        payload[8..12].copy_from_slice(&(events as u32).to_le_bytes());
-        let _ = self.channel.lock().rpc(VfsRpcOp::SubscribeReady, &payload);
     }
 
     fn remove_waiter(&self, tid: u64) {
         self.wait_queue.remove(tid);
-        if self.wait_queue.is_empty() {
-            let payload = self.handle.to_le_bytes();
-            let _ = self.channel.lock().rpc(VfsRpcOp::UnsubscribeReady, &payload);
-        }
     }
 }
 
