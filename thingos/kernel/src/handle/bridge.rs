@@ -4,7 +4,7 @@
 //!
 //! This module is the explicit compatibility boundary between:
 //! - canonical kernel `Handle` semantics, and
-//! - transitional raw-fd / `thing_table` / `IpcThingTable` backing.
+//! - transitional raw-fd / `thing_table` / `IpcHandleTable` backing.
 //!
 //! New code should resolve resources through this bridge rather than manually
 //! probing `thing_table` and global IPC handle tables in syscall handlers.
@@ -34,7 +34,7 @@ pub enum ResolvedHandle {
     },
     Port {
         port: Arc<crate::ipc::Port>,
-        mode: crate::ipc::IpcThingMode,
+        mode: crate::ipc::IpcHandleMode,
     },
 }
 
@@ -59,32 +59,32 @@ fn classify_file_like(node: &Arc<dyn crate::vfs::VfsNode>) -> HandleKind {
 /// Shared IPC-table lookup helper that keeps lock hold time minimal by copying
 /// the matched entry out of the table before returning.
 fn lookup_ipc_entry_with(
-    ipc_table: &crate::ipc::IpcThingTable,
+    ipc_table: &crate::ipc::IpcHandleTable,
     handle: Handle,
     lookup: impl FnOnce(
-        &crate::ipc::IpcThingTable,
-        crate::ipc::IpcThing,
-    ) -> Option<&crate::ipc::IpcThingEntry>,
-) -> SysResult<crate::ipc::IpcThingEntry> {
-    let ipc_handle = crate::ipc::IpcThing(handle.0);
+        &crate::ipc::IpcHandleTable,
+        crate::ipc::IpcHandle,
+    ) -> Option<&crate::ipc::IpcHandleEntry>,
+) -> SysResult<crate::ipc::IpcHandleEntry> {
+    let ipc_handle = crate::ipc::IpcHandle(handle.0);
     // Note: the caller (resolve_handle) already holds the Process lock which
     // protects the ipc_table.
     lookup(ipc_table, ipc_handle).cloned().ok_or(Errno::EBADF)
 }
 
 fn lookup_ipc_entry_any(
-    ipc_table: &crate::ipc::IpcThingTable,
+    ipc_table: &crate::ipc::IpcHandleTable,
     handle: Handle,
-) -> SysResult<crate::ipc::IpcThingEntry> {
+) -> SysResult<crate::ipc::IpcHandleEntry> {
     lookup_ipc_entry_with(ipc_table, handle, |table, ipc_handle| table.get_any(ipc_handle))
 }
 
 fn lookup_ipc_entry_write(
-    ipc_table: &crate::ipc::IpcThingTable,
+    ipc_table: &crate::ipc::IpcHandleTable,
     handle: Handle,
-) -> SysResult<crate::ipc::IpcThingEntry> {
+) -> SysResult<crate::ipc::IpcHandleEntry> {
     lookup_ipc_entry_with(ipc_table, handle, |table, ipc_handle| {
-        table.get(ipc_handle, crate::ipc::IpcThingMode::Write)
+        table.get(ipc_handle, crate::ipc::IpcHandleMode::Write)
     })
 }
 
@@ -136,8 +136,8 @@ pub fn install_fd_compat_for_port_handle(
     let fd = lock.thing_table.open(
         node.clone(),
         match entry.mode {
-            crate::ipc::IpcThingMode::Read => crate::vfs::OpenFlags::read_only(),
-            crate::ipc::IpcThingMode::Write => crate::vfs::OpenFlags::write_only(),
+            crate::ipc::IpcHandleMode::Read => crate::vfs::OpenFlags::read_only(),
+            crate::ipc::IpcHandleMode::Write => crate::vfs::OpenFlags::write_only(),
         },
         alloc::format!("handle:{}", handle.0),
     )?;
@@ -199,7 +199,7 @@ mod tests {
             job: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
             thing_table,
-            ipc_table: IpcThingTable::new(),
+            ipc_table: IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -219,7 +219,7 @@ mod tests {
         let handle = {
             let mut lock = pinfo.lock();
             lock.ipc_table
-                .alloc(port, crate::ipc::IpcThingMode::Read)
+                .alloc(port, crate::ipc::IpcHandleMode::Read)
                 .expect("allocate handle")
         };
 
@@ -231,7 +231,7 @@ mod tests {
         {
             let port_id2 = crate::ipc::create_port(8);
             let port2 = crate::ipc::get_port(port_id2).unwrap();
-            pinfo.lock().ipc_table.insert_at(handle.0 as usize, crate::ipc::IpcThingEntry::new(port2, crate::ipc::IpcThingMode::Read)).unwrap();
+            pinfo.lock().ipc_table.insert_at(handle.0 as usize, crate::ipc::IpcHandleEntry::new(port2, crate::ipc::IpcHandleMode::Read)).unwrap();
         }
         let resolved = resolve_handle(&pinfo, Handle(handle.0)).expect("resolve");
         assert_eq!(resolved.kind(), HandleKind::File);
@@ -248,7 +248,7 @@ mod tests {
         let handle = {
             let mut lock = pinfo.lock();
             lock.ipc_table
-                .alloc(port, crate::ipc::IpcThingMode::Read)
+                .alloc(port, crate::ipc::IpcHandleMode::Read)
                 .expect("allocate handle")
         };
 

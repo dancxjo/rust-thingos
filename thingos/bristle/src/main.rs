@@ -15,7 +15,7 @@ use abi::hid::{
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use stem::syscall::vfs::{vfs_close, vfs_thing_from_channel, vfs_mkdir, vfs_open, vfs_read, vfs_write};
-use stem::syscall::{ChannelThing, channel_send_all};
+use stem::syscall::{ChannelHandle, channel_send_all};
 use stem::{debug, info};
 
 fn ensure_session_roots() {
@@ -56,10 +56,10 @@ fn get_active_ui() -> alloc::string::String {
 #[stem::main]
 fn main(packed_handles: usize) -> ! {
     let packed = packed_handles as u64;
-    let kbd_read = ((packed >> 48) & 0xFFFF) as ChannelThing;
-    let mouse_read = ((packed >> 32) & 0xFFFF) as ChannelThing;
-    let bloom_evt_write = ((packed >> 16) & 0xFFFF) as ChannelThing;
-    let evt_input_echo_write = (packed & 0xFFFF) as ChannelThing;
+    let kbd_read = ((packed >> 48) & 0xFFFF) as ChannelHandle;
+    let mouse_read = ((packed >> 32) & 0xFFFF) as ChannelHandle;
+    let bloom_evt_write = ((packed >> 16) & 0xFFFF) as ChannelHandle;
+    let evt_input_echo_write = (packed & 0xFFFF) as ChannelHandle;
 
     stem::debug!(
         "bristle: online (kbd={}, mouse={}, bloom_evt={}, input_echo={})",

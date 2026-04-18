@@ -11,7 +11,7 @@ use abi::syscall::vfs_flags::O_RDONLY;
 use spin::Mutex;
 use stem::abi::driver_ctx::DriverCtx;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{ChannelThing, channel_create};
+use stem::syscall::{ChannelHandle, channel_create};
 use stem::{debug, info, warn};
 
 use crate::task::{ManagedTask, TaskKind};
@@ -71,8 +71,8 @@ fn ensure_session_roots() {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayHandles {
-    pub drv_req_write: ChannelThing,
-    pub drv_resp_read: ChannelThing,
+    pub drv_req_write: ChannelHandle,
+    pub drv_resp_read: ChannelHandle,
     pub bs_id: u32,
     /// Which display backend was selected
     pub backend_name: &'static str,
@@ -266,7 +266,7 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
 
 pub fn setup_display_pipeline(
     shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
-    supervisor_port: stem::syscall::ChannelThing,
+    supervisor_port: stem::syscall::ChannelHandle,
     bind_instance_id: u64,
     force_bootfb: bool,
 ) -> Option<DisplayHandles> {
@@ -551,8 +551,8 @@ pub fn setup_terminal(
 
 #[derive(Clone, Copy, Debug)]
 pub struct InputHandles {
-    pub bloom_evt_read: ChannelThing,
-    pub evt_input_echo_read: ChannelThing,
+    pub bloom_evt_read: ChannelHandle,
+    pub evt_input_echo_read: ChannelHandle,
 }
 
 pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHandles {

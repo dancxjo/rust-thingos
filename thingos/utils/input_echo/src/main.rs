@@ -8,7 +8,7 @@ use abi::hid::{
     BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
 use stem::info;
-use stem::syscall::{channel_recv, vfs_thing_from_channel, vfs_poll, ChannelThing};
+use stem::syscall::{channel_recv, vfs_thing_from_channel, vfs_poll, ChannelHandle};
 use abi::syscall::{PollThing, poll_flags};
 
 fn log_event(buf: &[u8]) {
@@ -77,7 +77,7 @@ fn log_event(buf: &[u8]) {
 
 #[stem::main]
 fn main(arg: usize) -> ! {
-    let handle = arg as ChannelThing;
+    let handle = arg as ChannelHandle;
     info!("input_echo: starting with port={}", handle);
 
     if handle == 0 {

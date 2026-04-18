@@ -17,7 +17,7 @@ use abi::driver_interface::{
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader};
 use abi::driver_frame::FrameReader;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::syscall::{ChannelThing, channel_create, channel_send};
+use stem::syscall::{ChannelHandle, channel_create, channel_send};
 use stem::{info, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
@@ -205,11 +205,11 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
     _reserved: 0,
 };
 
-fn unpack_handle(arg: usize, index: u32) -> ChannelThing {
-    ((arg >> (index * 16)) & 0xFFFF) as ChannelThing
+fn unpack_handle(arg: usize, index: u32) -> ChannelHandle {
+    ((arg >> (index * 16)) & 0xFFFF) as ChannelHandle
 }
 
-fn send_msg(handle: ChannelThing, msg_type: u16, payload: &[u8]) {
+fn send_msg(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
     let mut buf = [0u8; 256];
     if let Some(len) = drvproto::encode_message(&mut buf, msg_type, payload) {
         let mut status = stem::syscall::channel_send_all(handle, &buf[..len]);
@@ -678,7 +678,7 @@ fn main(boot_arg: usize) -> ! {
                     if n >= 5 {
                         let resp_port =
                             u32::from_le_bytes([vfs_buf[0], vfs_buf[1], vfs_buf[2], vfs_buf[3]])
-                                as ChannelThing;
+                                as ChannelHandle;
                         let op = VfsRpcOp::from_u8(vfs_buf[4]);
                         stem::trace!("display_virtio_gpu: VFS RPC recv n={} op={:?}", n, op);
                         match op {

@@ -682,11 +682,11 @@ pub fn sys_fs_mount(
     // so it can call SYS_channel_send on it directly.
     let resp_write_handle = if let Some(provider_arc) = provider_pinfo {
         let mut lock = provider_arc.lock();
-        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
+        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcHandleMode::Write).ok_or(Errno::ENOMEM)?
     } else {
         // Fallback: use caller's table (legacy/compatibility)
         let mut lock = pinfo_arc.lock();
-        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcThingMode::Write).ok_or(Errno::ENOMEM)?
+        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcHandleMode::Write).ok_or(Errno::ENOMEM)?
     };
 
     let req_port_id = crate::ipc::find_port_id(&req_port).ok_or(Errno::EBADF)?;
@@ -723,7 +723,7 @@ pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
 ///
 /// `req_handle` is the handle to the request port of the provider.
 pub fn sys_fs_notify(req_handle: usize, node_handle: usize, revents: usize) -> SysResult<usize> {
-    let handle = crate::ipc::IpcThing(req_handle as u32);
+    let handle = crate::ipc::IpcHandle(req_handle as u32);
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let entry = {
         let lock = pinfo_arc.lock();

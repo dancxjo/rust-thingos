@@ -465,10 +465,16 @@ pub fn vfs_getcwd(buf: &mut [u8]) -> SysResult<usize> {
     abi::errors::errno(ret)
 }
 
-/// Bridge an IPC handle into the VFS as a thing.
-pub fn vfs_thing_from_channel(channel_thing: u32) -> SysResult<u32> {
-    let ret = unsafe { raw_syscall6(SYS_THING_FROM_CHANNEL, channel_thing as usize, 0, 0, 0, 0, 0) };
+/// Bridge an IPC handle into the VFS as an fd.
+pub fn vfs_handle_from_channel(channel_handle: u32) -> SysResult<u32> {
+    let ret = unsafe { raw_syscall6(SYS_THING_FROM_CHANNEL, channel_handle as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
+}
+
+/// Backward-compatible alias.
+#[inline]
+pub fn vfs_thing_from_channel(channel_thing: u32) -> SysResult<u32> {
+    vfs_handle_from_channel(channel_thing)
 }
 
 /// Notify the kernel that a provider-backed node is ready.

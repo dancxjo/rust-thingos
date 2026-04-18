@@ -43,7 +43,7 @@ use iso9660::{IsoFs, ISO_SECTOR_SIZE};
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
-use stem::syscall::{channel_create, vfs_mount, ChannelThing};
+use stem::syscall::{channel_create, vfs_mount, ChannelHandle};
 use stem::{info, warn};
 
 #[unsafe(link_section = ".thing_manifest")]
@@ -61,13 +61,13 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 
 /// [`BlockDevice`] implementation that talks to a virtio/ATA driver via ports.
 struct PortBlockDevice {
-    port: ChannelThing,
-    resp_w: ChannelThing,
-    resp_r: ChannelThing,
+    port: ChannelHandle,
+    resp_w: ChannelHandle,
+    resp_r: ChannelHandle,
 }
 
 impl PortBlockDevice {
-    fn new(port: ChannelThing) -> Option<Self> {
+    fn new(port: ChannelHandle) -> Option<Self> {
         let (resp_w, resp_r) = channel_create(256 * 1024).ok()?;
         Some(Self {
             port,
@@ -310,7 +310,7 @@ fn main(_arg: usize) -> ! {
     info!("iso9660d: starting ISO9660 VFS provider");
 
     // 1. Find block devices via VFS.
-    let mut mounted: Option<(IsoFs, PortBlockDevice, ChannelThing)> = None;
+    let mut mounted: Option<(IsoFs, PortBlockDevice, ChannelHandle)> = None;
 
     if let Ok(fd) = vfs_open("/services/storage", abi::syscall::vfs_flags::O_RDONLY) {
         let mut buf = [0u8; 4096];
@@ -330,7 +330,7 @@ fn main(_arg: usize) -> ! {
                                 let h_str = core::str::from_utf8(&h_buf[..h_n]).unwrap_or("");
                                 if let Ok(port_handle) = h_str.trim().parse::<u32>() {
                                     let block_dev =
-                                        match PortBlockDevice::new(port_handle as ChannelThing) {
+                                        match PortBlockDevice::new(port_handle as ChannelHandle) {
                                             Some(d) => d,
                                             None => {
                                                 let _ = vfs_close(h_fd);

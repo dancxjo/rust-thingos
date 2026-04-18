@@ -20,7 +20,7 @@ use abi::supervisor_protocol::{
     MSG_SERVICE_READY, classes,
 };
 use spin::Mutex;
-use stem::syscall::{ChannelThing, channel_create, channel_send_all, vfs_mount};
+use stem::syscall::{ChannelHandle, channel_create, channel_send_all, vfs_mount};
 use stem::{debug, error, info, warn};
 
 use crate::ledger::DeviceLedger;
@@ -454,7 +454,7 @@ impl Supervisor {
     fn handle_bind_ready(
         &mut self,
         task_name: &str,
-        drv_req_write: ChannelThing,
+        drv_req_write: ChannelHandle,
         payload: &[u8],
         bundled_fd: u32,
     ) {

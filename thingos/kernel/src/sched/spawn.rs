@@ -73,7 +73,7 @@ fn default_process_info(
         job: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
         unix_compat: crate::task::ProcessUnixCompat::isolated(pid, is_session_leader),
         thing_table,
-        ipc_table: crate::ipc::IpcThingTable::new(),
+        ipc_table: crate::ipc::IpcHandleTable::new(),
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: alloc::string::String::from("/"),
         root: alloc::string::String::from("/"),
@@ -1251,7 +1251,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         job: crate::task::ProcessLifecycle::new(ppid, id),
         unix_compat,
         thing_table,
-        ipc_table: crate::ipc::IpcThingTable::new(),
+        ipc_table: crate::ipc::IpcHandleTable::new(),
         namespace: crate::vfs::NamespaceRef::global(),
         cwd: if let Some(explicit_cwd) = cwd {
             explicit_cwd
@@ -1471,7 +1471,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         let parent = parent_pi.lock();
         (parent.thing_table.clone(), parent.ipc_table.clone())
     } else {
-        (crate::vfs::thing_table::ThingTable::new(), crate::ipc::IpcThingTable::new())
+        (crate::vfs::thing_table::ThingTable::new(), crate::ipc::IpcHandleTable::new())
     };
 
     let (stdin_pipe_id, stdout_pipe_id, stderr_pipe_id) =
@@ -1757,7 +1757,7 @@ mod tests {
             job: crate::task::ProcessLifecycle::new(1, leader),
             unix_compat: crate::task::ProcessUnixCompat::isolated(leader as u32, false),
             thing_table: crate::vfs::thing_table::ThingTable::new(),
-            ipc_table: crate::ipc::IpcThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
