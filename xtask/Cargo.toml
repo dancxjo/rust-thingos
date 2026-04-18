@@ -9,7 +9,6 @@ description = "ThingOS build automation tasks."
 [features]
 diagnostic-apps = []
 svg-cursors = []
-lsv = []
 
 [dependencies]
 anyhow = "1.0.100"
