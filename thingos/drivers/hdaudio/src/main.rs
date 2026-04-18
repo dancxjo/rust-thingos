@@ -31,7 +31,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_volatile};
-use stem::syscall::channel::{channel_create, channel_send_all, channel_try_recv};
+use stem::syscall::channel::{port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
 use stem::{debug, error, info, warn};
@@ -304,10 +304,10 @@ fn main(boot_fd: usize) -> ! {
     }
 
     // ── Mount VFS provider at /dev/audio/card0/ ───────────────────────────────
-    let (req_write, req_read) = match channel_create(VFS_RPC_MAX_REQ * 16) {
+    let (req_write, req_read) = match port_create(VFS_RPC_MAX_REQ * 16) {
         Ok(h) => h,
         Err(e) => {
-            error!("HDAUDIO: channel_create failed: {:?}", e);
+            error!("HDAUDIO: port_create failed: {:?}", e);
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -330,7 +330,7 @@ fn main(boot_fd: usize) -> ! {
     loop {
         // 1. Service VFS RPC requests (non-blocking).
         loop {
-            match channel_try_recv(req_read, &mut rpc_buf) {
+            match port_try_recv(req_read, &mut rpc_buf) {
                 Ok(n) if n >= hdr_size => {
                     let hdr: VfsRpcReqHeader = unsafe {
                         core::ptr::read_unaligned(rpc_buf.as_ptr() as *const VfsRpcReqHeader)
@@ -338,13 +338,13 @@ fn main(boot_fd: usize) -> ! {
                     let op = match VfsRpcOp::from_u8(hdr.op) {
                         Some(o) => o,
                         None => {
-                            let _ = channel_send_all(hdr.resp_port, &hda_resp_err(22));
+                            let _ = port_send_all(hdr.resp_port, &hda_resp_err(22));
                             continue;
                         }
                     };
                     let payload = &rpc_buf[hdr_size..n];
                     let resp = hda_dispatch_rpc(op, payload, &mut card);
-                    let _ = channel_send_all(hdr.resp_port, &resp);
+                    let _ = port_send_all(hdr.resp_port, &resp);
 
                     // Notify subscribers when ring gains space.
                     if card.out0_subscribed && card.ring.free_space() > 0 {

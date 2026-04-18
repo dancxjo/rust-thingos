@@ -40,7 +40,7 @@ use abi::vfs_rpc::VfsRpcOp::{
     Write,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
-use stem::syscall::channel::{channel_recv, channel_send_all, channel_try_recv};
+use stem::syscall::channel::{port_recv, port_send_all, port_try_recv};
 
 /// A decoded VFS RPC request from the kernel.
 pub struct ProviderRequest {
@@ -132,7 +132,7 @@ pub struct ProviderLoop {
 
 impl ProviderLoop {
     /// Create a new loop bound to `vfs_read` — the read end of the provider
-    /// channel (created with `channel_create` and passed to the supervisor).
+    /// channel (created with `port_create` and passed to the supervisor).
     pub fn new(vfs_read: u32) -> Self {
         Self {
             read_handle: vfs_read,
@@ -249,7 +249,7 @@ impl ProviderLoop {
             }
         }
 
-        match channel_try_recv(self.read_handle, &mut self.recv_buf) {
+        match port_try_recv(self.read_handle, &mut self.recv_buf) {
             Ok(0) => Ok(None),
             Ok(n) => {
                 self.pending.extend_from_slice(&self.recv_buf[..n]);
@@ -290,7 +290,7 @@ impl ProviderLoop {
                 Err(e) => return Err(e),
             }
 
-            let n = channel_recv(self.read_handle, &mut self.recv_buf)?;
+            let n = port_recv(self.read_handle, &mut self.recv_buf)?;
             if n == 0 {
                 return Err(Errno::EPIPE);
             }
@@ -305,6 +305,6 @@ impl ProviderLoop {
         buf[0] = response.status;
         let payload_len = response.payload.len().min(buf.len() - 1);
         buf[1..1 + payload_len].copy_from_slice(&response.payload[..payload_len]);
-        channel_send_all(resp_port, &buf[..1 + payload_len]).map(|_| ())
+        port_send_all(resp_port, &buf[..1 + payload_len]).map(|_| ())
     }
 }

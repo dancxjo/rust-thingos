@@ -29,7 +29,7 @@
 use abi::errors::Errno;
 use abi::rpc::{RpcHeader, RPC_FLAG_ERROR, RPC_FLAG_REPLY};
 use core::sync::atomic::{AtomicU64, Ordering};
-use stem::syscall::channel::{channel_recv, channel_send_all, ChannelHandle};
+use stem::syscall::channel::{port_recv, port_send_all, PortHandle};
 
 // ── RpcRequest ────────────────────────────────────────────────────────────────
 
@@ -47,13 +47,13 @@ pub struct RpcRequest {
 ///
 /// Blocks in `next()` until a request arrives.
 pub struct RpcServer {
-    read_handle: ChannelHandle,
+    read_handle: PortHandle,
     buf: alloc::vec::Vec<u8>,
 }
 
 impl RpcServer {
     /// Create a new server reading from `read_handle`.
-    pub fn new(read_handle: ChannelHandle) -> Self {
+    pub fn new(read_handle: PortHandle) -> Self {
         Self {
             read_handle,
             buf: alloc::vec![0u8; 4096],
@@ -62,7 +62,7 @@ impl RpcServer {
 
     /// Block until the next request arrives and decode it.
     pub fn next(&mut self) -> Result<RpcRequest, Errno> {
-        let n = channel_recv(self.read_handle, &mut self.buf)?;
+        let n = port_recv(self.read_handle, &mut self.buf)?;
         if n < RpcHeader::WIRE_SIZE {
             return Err(Errno::EINVAL);
         }
@@ -82,7 +82,7 @@ impl RpcServer {
     pub fn reply(
         &self,
         request_id: u64,
-        write_handle: ChannelHandle,
+        write_handle: PortHandle,
         payload: &[u8],
     ) -> Result<(), Errno> {
         send_reply(write_handle, request_id, RPC_FLAG_REPLY, payload)
@@ -92,7 +92,7 @@ impl RpcServer {
     pub fn reply_err(
         &self,
         request_id: u64,
-        write_handle: ChannelHandle,
+        write_handle: PortHandle,
         errno: Errno,
     ) -> Result<(), Errno> {
         let code = (errno as u32).to_le_bytes();
@@ -113,8 +113,8 @@ impl RpcServer {
 /// for concurrent in-flight requests (use a higher-level multiplexer for
 /// that).
 pub struct RpcClient {
-    write_handle: ChannelHandle,
-    read_handle: ChannelHandle,
+    write_handle: PortHandle,
+    read_handle: PortHandle,
     next_id: AtomicU64,
     buf: spin::Mutex<alloc::vec::Vec<u8>>,
 }
@@ -122,7 +122,7 @@ pub struct RpcClient {
 impl RpcClient {
     /// Create a new client using `write_handle` to send and `read_handle`
     /// to receive replies.
-    pub fn new(write_handle: ChannelHandle, read_handle: ChannelHandle) -> Self {
+    pub fn new(write_handle: PortHandle, read_handle: PortHandle) -> Self {
         Self {
             write_handle,
             read_handle,
@@ -163,12 +163,12 @@ impl RpcClient {
         let hdr = RpcHeader::request(request_id);
         hdr.encode_le(&mut msg[..RpcHeader::WIRE_SIZE]).unwrap();
         msg[RpcHeader::WIRE_SIZE..].copy_from_slice(payload);
-        channel_send_all(self.write_handle, &msg).map_err(|e| e)?;
+        port_send_all(self.write_handle, &msg).map_err(|e| e)?;
 
         // Block waiting for reply.
         let mut buf = self.buf.lock();
         loop {
-            let n = channel_recv(self.read_handle, &mut buf)?;
+            let n = port_recv(self.read_handle, &mut buf)?;
             if n < RpcHeader::WIRE_SIZE {
                 continue; // too short, skip
             }
@@ -187,7 +187,7 @@ impl RpcClient {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn send_reply(
-    write_handle: ChannelHandle,
+    write_handle: PortHandle,
     request_id: u64,
     flags: u8,
     payload: &[u8],
@@ -200,5 +200,5 @@ fn send_reply(
     };
     hdr.encode_le(&mut msg[..RpcHeader::WIRE_SIZE]).unwrap();
     msg[RpcHeader::WIRE_SIZE..].copy_from_slice(payload);
-    channel_send_all(write_handle, &msg).map(|_| ())
+    port_send_all(write_handle, &msg).map(|_| ())
 }

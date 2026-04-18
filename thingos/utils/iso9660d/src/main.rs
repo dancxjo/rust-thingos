@@ -43,7 +43,7 @@ use iso9660::{IsoFs, ISO_SECTOR_SIZE};
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
-use stem::syscall::{channel_create, vfs_mount, ChannelHandle};
+use stem::syscall::{port_create, vfs_mount, PortHandle};
 use stem::{info, warn};
 
 #[unsafe(link_section = ".thing_manifest")]
@@ -61,14 +61,14 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 
 /// [`BlockDevice`] implementation that talks to a virtio/ATA driver via ports.
 struct PortBlockDevice {
-    port: ChannelHandle,
-    resp_w: ChannelHandle,
-    resp_r: ChannelHandle,
+    port: PortHandle,
+    resp_w: PortHandle,
+    resp_r: PortHandle,
 }
 
 impl PortBlockDevice {
-    fn new(port: ChannelHandle) -> Option<Self> {
-        let (resp_w, resp_r) = channel_create(256 * 1024).ok()?;
+    fn new(port: PortHandle) -> Option<Self> {
+        let (resp_w, resp_r) = port_create(256 * 1024).ok()?;
         Some(Self {
             port,
             resp_w,
@@ -93,12 +93,12 @@ impl BlockDevice for PortBlockDevice {
             )
         };
         req[5..].copy_from_slice(req_bytes);
-        stem::syscall::channel_send(self.port, &req).map_err(|_| BlockError::IoError)?;
+        stem::syscall::port_send(self.port, &req).map_err(|_| BlockError::IoError)?;
 
         let expected =
             core::mem::size_of::<ReadResponse>() + (count as usize * ISO_SECTOR_SIZE as usize) + 1;
         let mut resp_buf = alloc::vec![0u8; expected];
-        let n = stem::syscall::channel_recv(self.resp_r, &mut resp_buf)
+        let n = stem::syscall::port_recv(self.resp_r, &mut resp_buf)
             .map_err(|_| BlockError::IoError)?;
         if n < core::mem::size_of::<ReadResponse>() + 1 {
             return Err(BlockError::IoError);
@@ -310,7 +310,7 @@ fn main(_arg: usize) -> ! {
     info!("iso9660d: starting ISO9660 VFS provider");
 
     // 1. Find block devices via VFS.
-    let mut mounted: Option<(IsoFs, PortBlockDevice, ChannelHandle)> = None;
+    let mut mounted: Option<(IsoFs, PortBlockDevice, PortHandle)> = None;
 
     if let Ok(fd) = vfs_open("/services/storage", abi::syscall::vfs_flags::O_RDONLY) {
         let mut buf = [0u8; 4096];
@@ -330,7 +330,7 @@ fn main(_arg: usize) -> ! {
                                 let h_str = core::str::from_utf8(&h_buf[..h_n]).unwrap_or("");
                                 if let Ok(port_handle) = h_str.trim().parse::<u32>() {
                                     let block_dev =
-                                        match PortBlockDevice::new(port_handle as ChannelHandle) {
+                                        match PortBlockDevice::new(port_handle as PortHandle) {
                                             Some(d) => d,
                                             None => {
                                                 let _ = vfs_close(h_fd);
@@ -343,7 +343,7 @@ fn main(_arg: usize) -> ! {
                                         info!("iso9660d: found ISO9660 on device {}", name);
 
                                         // 3. Create the provider channel pair.
-                                        let (req_write, req_read) = match channel_create(
+                                        let (req_write, req_read) = match port_create(
                                             abi::vfs_rpc::VFS_RPC_MAX_REQ * 8,
                                         ) {
                                             Ok(p) => p,
@@ -391,7 +391,7 @@ fn main(_arg: usize) -> ! {
     };
 
     // 5. Service loop using ProviderLoop — far less boilerplate than raw
-    //    channel_recv + manual header parsing.
+    //    port_recv + manual header parsing.
     info!("iso9660d: entering VFS RPC service loop");
     let mut lp = ProviderLoop::new(req_read);
     loop {

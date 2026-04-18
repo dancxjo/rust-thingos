@@ -451,9 +451,9 @@ fn main(arg: usize) -> ! {
             abi::display_driver_protocol::MSG_BIND,
             &payload_buf,
         ) {
-            let _ = stem::syscall::channel_send_all(display_req_write, &header_buf[..total]);
+            let _ = stem::syscall::port_send_all(display_req_write, &header_buf[..total]);
             // Transfer the framebuffer FD via sendmsg.
-            let req_fd = stem::syscall::vfs::vfs_thing_from_channel(display_req_write)
+            let req_fd = stem::syscall::vfs::vfs_handle_from_port(display_req_write)
                 .unwrap_or(display_req_write);
             let _ = stem::syscall::socket::sendmsg(req_fd, &[], &[bind_payload.fb_fd]);
         }
@@ -482,7 +482,7 @@ fn main(arg: usize) -> ! {
                 &payload,
             ) {
                 let _ =
-                    stem::syscall::channel_send_all(display_req_write, &present_header[..total]);
+                    stem::syscall::port_send_all(display_req_write, &present_header[..total]);
             }
         }
 
@@ -536,7 +536,7 @@ fn main(arg: usize) -> ! {
                                     abi::display_driver_protocol::MSG_PRESENT,
                                     &payload,
                                 ) {
-                                    let _ = stem::syscall::channel_send_all(
+                                    let _ = stem::syscall::port_send_all(
                                         display_req_write,
                                         &present_header[..total],
                                     );

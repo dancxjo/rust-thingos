@@ -45,7 +45,7 @@ extern crate alloc;
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
-use stem::syscall::{channel_create, vfs_mount};
+use stem::syscall::{port_create, vfs_mount};
 use stem::{info, warn};
 
 /// Mount point for this provider.
@@ -66,13 +66,13 @@ fn main(_arg: usize) -> ! {
 
     // ── 1. Create the provider channel pair ──────────────────────────────
     //
-    // channel_create returns (write_handle, read_handle).
+    // port_create returns (write_handle, read_handle).
     // The kernel sends VFS RPC requests to the write-handle; we read them
     // from the read-handle.
-    let (write_h, read_h) = match channel_create(65536) {
+    let (write_h, read_h) = match port_create(65536) {
         Ok(pair) => pair,
         Err(e) => {
-            warn!("ipc_provider_demo: channel_create failed: {:?}", e);
+            warn!("ipc_provider_demo: port_create failed: {:?}", e);
             stem::syscall::exit(1);
         }
     };

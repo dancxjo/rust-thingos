@@ -8,7 +8,7 @@ use abi::driver_interface::{
     DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
     DRIVER_DESCRIPTOR_ABI_VERSION,
 };
-use stem::syscall::vfs::{vfs_thing_from_channel, vfs_write};
+use stem::syscall::vfs::{vfs_handle_from_port, vfs_write};
 use stem::syscall::{ioport_read, irq_subscribe, irq_wait};
 use stem::{error, info, warn};
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_kbd";
@@ -103,7 +103,7 @@ fn main(raw_write_handle: usize) -> ! {
 
     // Bridge the write channel handle to a VFS file descriptor so all I/O
     // flows through the VFS-first message path rather than the legacy port API.
-    let fd = match vfs_thing_from_channel(handle) {
+    let fd = match vfs_handle_from_port(handle) {
         Ok(f) => f,
         Err(e) => {
             stem::error!("ps2_kbd: fd bridge failed ({:?}), aborting", e);

@@ -12,8 +12,8 @@ use abi::driver_interface::{
 use abi::driver_frame::FrameReader;
 use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
 use stem::info;
-use stem::syscall::vfs::vfs_thing_from_channel;
-use stem::syscall::{channel_recv, channel_send, ChannelHandle};
+use stem::syscall::vfs::vfs_handle_from_port;
+use stem::syscall::{port_recv, port_send, PortHandle};
 use stem::wait_set::WaitSet;
 use stem::thing::ThingId;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_fake";
@@ -65,8 +65,8 @@ struct FakeConfig {
     burst: bool,
 }
 
-fn unpack_handle(arg: usize, index: u32) -> ChannelHandle {
-    ((arg >> (index * 16)) & 0xFFFF) as ChannelHandle
+fn unpack_handle(arg: usize, index: u32) -> PortHandle {
+    ((arg >> (index * 16)) & 0xFFFF) as PortHandle
 }
 
 fn parse_config(arg: usize) -> FakeConfig {
@@ -100,18 +100,18 @@ fn parse_config(arg: usize) -> FakeConfig {
     }
 }
 
-fn send_msg(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
+fn send_msg(handle: PortHandle, msg_type: u16, payload: &[u8]) {
     let mut buf = [0u8; 256];
     if let Some(len) = drvproto::encode_message(&mut buf, msg_type, payload) {
-        let _ = channel_send(handle, &buf[..len]);
+        let _ = port_send(handle, &buf[..len]);
     }
 }
 
-fn send_msg_split(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
+fn send_msg_split(handle: PortHandle, msg_type: u16, payload: &[u8]) {
     let mut buf = [0u8; 256];
     if let Some(len) = drvproto::encode_message(&mut buf, msg_type, payload) {
         if len < 3 {
-            let _ = channel_send(handle, &buf[..len]);
+            let _ = port_send(handle, &buf[..len]);
             return;
         }
         let part = len / 3;
@@ -122,27 +122,27 @@ fn send_msg_split(handle: ChannelHandle, msg_type: u16, payload: &[u8]) {
             if chunk == 0 {
                 break;
             }
-            let _ = channel_send(handle, &buf[offset..offset + chunk]);
+            let _ = port_send(handle, &buf[offset..offset + chunk]);
             offset += chunk;
         }
     }
 }
 
-fn send_ack(handle: ChannelHandle, burst: bool) {
+fn send_ack(handle: PortHandle, burst: bool) {
     let mut buf = [0u8; 64];
     if let Some(len) = drvproto::encode_message(&mut buf, drvproto::MSG_ACK, &[]) {
         if burst {
             if let Some(len2) = drvproto::encode_message(&mut buf[len..], drvproto::MSG_ACK, &[]) {
                 let total = len + len2;
-                let _ = channel_send(handle, &buf[..total]);
+                let _ = port_send(handle, &buf[..total]);
                 return;
             }
         }
-        let _ = channel_send(handle, &buf[..len]);
+        let _ = port_send(handle, &buf[..len]);
     }
 }
 
-fn send_err(handle: ChannelHandle, code: u32) {
+fn send_err(handle: PortHandle, code: u32) {
     let err = drvproto::ErrResp { code };
     let mut err_bytes = [0u8; drvproto::ERR_RESP_WIRE_SIZE];
     if let Some(len) = drvproto::encode_err_resp_le(&err, &mut err_bytes) {
@@ -171,7 +171,7 @@ fn main(arg: usize) -> ! {
     let mut bound = false;
     let mut bound_fd: Option<u32> = None;
 
-    let drv_req_fd = vfs_thing_from_channel(drv_req_read).expect("display_fake: fd_from_handle");
+    let drv_req_fd = vfs_handle_from_port(drv_req_read).expect("display_fake: fd_from_handle");
     let mut ws = WaitSet::new();
     let _drv_req_tok = ws.add_fd_readable(drv_req_fd).unwrap();
 
@@ -182,7 +182,7 @@ fn main(arg: usize) -> ! {
             continue;
         }
 
-        if let Ok(n) = channel_recv(drv_req_read, &mut buf) {
+        if let Ok(n) = port_recv(drv_req_read, &mut buf) {
             if n > 0 {
                 frames.push(&buf[..n]);
             }

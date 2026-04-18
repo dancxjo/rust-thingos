@@ -5,7 +5,7 @@
 //! Thing-OS uses a two-tier IPC model:
 //!
 //! - **Control plane** – small, latency-sensitive messages sent over channels
-//!   (e.g. `channel_send` / `channel_recv`). Maximum size is the channel
+//!   (e.g. `port_send` / `port_recv`). Maximum size is the channel
 //!   ring capacity (typically 4 KiB). Use this for commands, ACKs, events, and
 //!   any metadata that directs how bulk data should be interpreted.
 //!

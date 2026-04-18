@@ -167,7 +167,7 @@ fn main(arg: usize) -> ! {
 
     // Bridge the request-read port to an FD for FD-first polling.
     let req_fd =
-        stem::syscall::vfs::vfs_thing_from_channel(net_provider.req_read_port()).unwrap_or(0);
+        stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()).unwrap_or(0);
 
     loop {
         let mut did_work = false;

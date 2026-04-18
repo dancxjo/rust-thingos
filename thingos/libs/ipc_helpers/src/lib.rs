@@ -18,7 +18,7 @@
 //! ```ignore
 //! use ipc_helpers::rpc::{RpcServer, RpcRequest};
 //!
-//! let (write_h, read_h) = stem::syscall::channel::channel_create(4096).unwrap();
+//! let (write_h, read_h) = stem::syscall::channel::port_create(4096).unwrap();
 //! // publish write_h to clients …
 //!
 //! let mut server = RpcServer::new(read_h);

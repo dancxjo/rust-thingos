@@ -21,10 +21,10 @@ use protocol::{
 use render::CompositorVisuals;
 use scene::{Scene, SurfaceBuffer};
 use stem::syscall::vfs::{
-    vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_thing_from_channel, vfs_watch_fd, vfs_watch_path,
+    vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_handle_from_port, vfs_watch_fd, vfs_watch_path,
     vfs_write,
 };
-use stem::syscall::{channel_create, channel_send_all};
+use stem::syscall::{port_create, port_send_all};
 use stem::{error, info, warn};
 
 const SERVICE_PATH: &str = "/services/bloom";
@@ -64,7 +64,7 @@ fn main(arg: usize) -> ! {
     );
 
     info!("bloom: creating service channel...");
-    let (service_write, service_read) = match channel_create(65536) {
+    let (service_write, service_read) = match port_create(65536) {
         Ok(pair) => pair,
         Err(e) => {
             error!("bloom: failed to create service channel: {:?}", e);
@@ -98,9 +98,9 @@ fn main(arg: usize) -> ! {
         warn!("bloom: no bristle event channel provided");
     }
 
-    let service_fd = vfs_thing_from_channel(service_read).ok();
+    let service_fd = vfs_handle_from_port(service_read).ok();
     let bristle_fd = if bristle_evt_read != 0 {
-        vfs_thing_from_channel(bristle_evt_read).ok()
+        vfs_handle_from_port(bristle_evt_read).ok()
     } else {
         None
     };
@@ -134,7 +134,7 @@ fn main(arg: usize) -> ! {
                                 serial: ts,
                                 timestamp_ns: ts,
                             };
-                            let _ = channel_send_all(ch, &to_vec(&done));
+                            let _ = port_send_all(ch, &to_vec(&done));
                         }
                     }
                 }
@@ -380,7 +380,7 @@ fn send_ack(reply_channel: u32, status: u32, value: u32, serial: u64) {
         value,
         serial,
     };
-    let _ = channel_send_all(reply_channel, &to_vec(&ack));
+    let _ = port_send_all(reply_channel, &to_vec(&ack));
 }
 
 fn decode_bristle_arg(arg: u64) -> u32 {

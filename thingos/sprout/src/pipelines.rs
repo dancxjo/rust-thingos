@@ -11,7 +11,7 @@ use abi::syscall::vfs_flags::O_RDONLY;
 use spin::Mutex;
 use stem::abi::driver_ctx::DriverCtx;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{ChannelHandle, channel_create};
+use stem::syscall::{PortHandle, port_create};
 use stem::{debug, info, warn};
 
 use crate::task::{ManagedTask, TaskKind};
@@ -71,8 +71,8 @@ fn ensure_session_roots() {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayHandles {
-    pub drv_req_write: ChannelHandle,
-    pub drv_resp_read: ChannelHandle,
+    pub drv_req_write: PortHandle,
+    pub drv_resp_read: PortHandle,
     pub bs_id: u32,
     /// Which display backend was selected
     pub backend_name: &'static str,
@@ -266,7 +266,7 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
 
 pub fn setup_display_pipeline(
     shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
-    supervisor_port: stem::syscall::ChannelHandle,
+    supervisor_port: stem::syscall::PortHandle,
     bind_instance_id: u64,
     force_bootfb: bool,
 ) -> Option<DisplayHandles> {
@@ -383,17 +383,17 @@ pub fn setup_display_pipeline(
     let mut drv_resp_read = 0;
 
     if let Some(driver_name) = driver_name {
-        let drv_req = match channel_create(4096) {
+        let drv_req = match port_create(4096) {
             Ok(handles) => handles,
             Err(e) => {
-                debug!("SPROUT: drv_req channel_create failed: {:?}", e);
+                debug!("SPROUT: drv_req port_create failed: {:?}", e);
                 return None;
             }
         };
-        let drv_resp = match channel_create(4096) {
+        let drv_resp = match port_create(4096) {
             Ok(handles) => handles,
             Err(e) => {
-                debug!("SPROUT: drv_resp channel_create failed: {:?}", e);
+                debug!("SPROUT: drv_resp port_create failed: {:?}", e);
                 return None;
             }
         };
@@ -551,15 +551,15 @@ pub fn setup_terminal(
 
 #[derive(Clone, Copy, Debug)]
 pub struct InputHandles {
-    pub bloom_evt_read: ChannelHandle,
-    pub evt_input_echo_read: ChannelHandle,
+    pub bloom_evt_read: PortHandle,
+    pub evt_input_echo_read: PortHandle,
 }
 
 pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHandles {
     debug!("SPROUT: Setting up input pipeline (keyboard + mouse)...");
 
     // Create kbd_raw port (ps2_kbd -> bristle)
-    let kbd_raw = match stem::syscall::channel_create(4096) {
+    let kbd_raw = match stem::syscall::port_create(4096) {
         Ok((write_h, read_h)) => {
             debug!("SPROUT: Created kbd_raw port (w={}, r={})", write_h, read_h);
             (write_h, read_h)
@@ -571,7 +571,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
     };
 
     // Create mouse_raw port (ps2_mouse -> bristle)
-    let mouse_raw = match stem::syscall::channel_create(4096) {
+    let mouse_raw = match stem::syscall::port_create(4096) {
         Ok((write_h, read_h)) => {
             debug!("SPROUT: Created mouse_raw port (w={}, r={})", write_h, read_h);
             (write_h, read_h)
@@ -583,7 +583,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
     };
 
     // Dedicated Bristle -> Bloom input channel plus optional input echo tap.
-    let bloom_evt = match stem::syscall::channel_create(4096) {
+    let bloom_evt = match stem::syscall::port_create(4096) {
         Ok(h) => h,
         Err(e) => {
             stem::error!("SPROUT: Failed to create bloom_evt: {:?}", e);
@@ -591,7 +591,7 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
         }
     };
 
-    let evt_input_echo = match stem::syscall::channel_create(4096) {
+    let evt_input_echo = match stem::syscall::port_create(4096) {
         Ok(h) => h,
         Err(e) => {
             stem::error!("SPROUT: Failed to create evt_input_echo: {:?}", e);

@@ -237,7 +237,7 @@ impl WaitSet {
     /// Watch a port for incoming data.
     ///
     /// `handle` is the **read** end of the port (as returned by the low
-    /// half of `channel_create`).
+    /// half of `port_create`).
     ///
     /// # Deprecated
     ///

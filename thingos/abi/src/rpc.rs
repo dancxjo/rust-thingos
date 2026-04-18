@@ -13,7 +13,7 @@
 //! - Timeout or cancellation logic needs to identify individual operations.
 //!
 //! For fire-and-forget events and simple notification streams, omit the header
-//! and use raw `channel_send` / `channel_recv`.
+//! and use raw `port_send` / `port_recv`.
 //!
 //! # Wire Format
 //!
@@ -38,14 +38,14 @@
 //! let mut buf = [0u8; 512];
 //! hdr.encode_le(&mut buf[..RpcHeader::WIRE_SIZE]).unwrap();
 //! buf[RpcHeader::WIRE_SIZE..].copy_from_slice(b"my-payload");
-//! channel_send_all(write_handle, &buf[..RpcHeader::WIRE_SIZE + 10]).unwrap();
+//! port_send_all(write_handle, &buf[..RpcHeader::WIRE_SIZE + 10]).unwrap();
 //! ```
 //!
 //! **Receiver (server)**
 //! ```ignore
 //! use abi::rpc::RpcHeader;
 //!
-//! let n = channel_recv(read_handle, &mut buf).unwrap();
+//! let n = port_recv(read_handle, &mut buf).unwrap();
 //! let hdr = RpcHeader::decode_le(&buf[..RpcHeader::WIRE_SIZE]).unwrap();
 //! let payload = &buf[RpcHeader::WIRE_SIZE..n];
 //! // … process payload …

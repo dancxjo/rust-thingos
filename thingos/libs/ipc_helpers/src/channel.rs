@@ -5,16 +5,16 @@
 
 use abi::errors::Errno;
 use stem::syscall::channel::{
-    channel_close, channel_recv, channel_send_all, channel_try_recv, ChannelHandle,
+    port_close, port_recv, port_send_all, port_try_recv, PortHandle,
 };
 
 /// Send `data` over `handle`, retrying on `EAGAIN` until the ring has space.
 /// Yields the current task between retries to avoid a busy-wait.
 ///
 /// Returns `Err(Errno::EPIPE)` when the peer is gone.
-pub fn send_all_blocking(handle: ChannelHandle, data: &[u8]) -> Result<(), Errno> {
+pub fn send_all_blocking(handle: PortHandle, data: &[u8]) -> Result<(), Errno> {
     loop {
-        match channel_send_all(handle, data) {
+        match port_send_all(handle, data) {
             Ok(_) => return Ok(()),
             Err(Errno::EAGAIN) => stem::syscall::yield_now(),
             Err(e) => return Err(e),
@@ -25,10 +25,10 @@ pub fn send_all_blocking(handle: ChannelHandle, data: &[u8]) -> Result<(), Errno
 /// Attempt a non-blocking receive.  Returns `Ok(None)` when no data is ready
 /// instead of `Err(Errno::EAGAIN)`.
 pub fn try_recv_opt(
-    handle: ChannelHandle,
+    handle: PortHandle,
     buf: &mut [u8],
 ) -> Result<Option<usize>, Errno> {
-    match channel_try_recv(handle, buf) {
+    match port_try_recv(handle, buf) {
         Ok(n) => Ok(Some(n)),
         Err(Errno::EAGAIN) => Ok(None),
         Err(e) => Err(e),
@@ -36,23 +36,23 @@ pub fn try_recv_opt(
 }
 
 /// Block on `handle` until a complete message arrives, then return the byte
-/// count.  The underlying `channel_recv` already blocks, so this is a thin
+/// count.  The underlying `port_recv` already blocks, so this is a thin
 /// ergonomic wrapper.
-pub fn recv_blocking(handle: ChannelHandle, buf: &mut [u8]) -> Result<usize, Errno> {
-    channel_recv(handle, buf)
+pub fn recv_blocking(handle: PortHandle, buf: &mut [u8]) -> Result<usize, Errno> {
+    port_recv(handle, buf)
 }
 
 // ── RAII channel wrapper ──────────────────────────────────────────────────────
 
 /// A thin RAII wrapper that closes a channel handle on drop.
-pub struct OwnedChannel(pub ChannelHandle);
+pub struct OwnedChannel(pub PortHandle);
 
 impl OwnedChannel {
-    pub fn new(handle: ChannelHandle) -> Self {
+    pub fn new(handle: PortHandle) -> Self {
         Self(handle)
     }
 
-    pub fn handle(&self) -> ChannelHandle {
+    pub fn handle(&self) -> PortHandle {
         self.0
     }
 
@@ -65,7 +65,7 @@ impl OwnedChannel {
     }
 
     /// Release the handle without closing it (e.g. to transfer ownership).
-    pub fn into_inner(self) -> ChannelHandle {
+    pub fn into_inner(self) -> PortHandle {
         let h = self.0;
         core::mem::forget(self);
         h
@@ -74,6 +74,6 @@ impl OwnedChannel {
 
 impl Drop for OwnedChannel {
     fn drop(&mut self) {
-        channel_close(self.0).ok();
+        port_close(self.0).ok();
     }
 }
