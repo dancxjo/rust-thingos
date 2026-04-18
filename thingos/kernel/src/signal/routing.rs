@@ -277,7 +277,7 @@ pub fn deliver_to_recipient(pid: u32, sig: u8) -> SignalDeliveryOutcome {
     };
 
     for tid in tids {
-        unsafe { crate::sched::wake_task_erased(tid as u64) };
+        interrupt_or_wake_thread(tid as u64);
     }
 
     SignalDeliveryOutcome::Delivered
@@ -304,9 +304,16 @@ pub fn deliver_to_thread_recipient(tid: u64, sig: u8) -> SignalDeliveryOutcome {
         p.unix_compat.signals.post(sig);
     }
 
-    unsafe { crate::sched::wake_task_erased(tid) };
+    interrupt_or_wake_thread(tid);
 
     SignalDeliveryOutcome::Delivered
+}
+
+#[inline]
+fn interrupt_or_wake_thread(tid: u64) {
+    if crate::sched::interrupt_task_current(tid).is_err() {
+        unsafe { crate::sched::wake_task_erased(tid) };
+    }
 }
 
 // ── Membership snapshot helper ────────────────────────────────────────────────
@@ -338,6 +345,7 @@ fn snapshot_group_pids(pgid: u32) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::sync::atomic::{AtomicU64, Ordering};
 
     // ── Unit tests for routing report construction ────────────────────────────
     //
@@ -510,5 +518,28 @@ mod tests {
             SignalDeliveryOutcome::ExistenceConfirmed,
             SignalDeliveryOutcome::RecipientNotFound
         );
+    }
+
+    static INTERRUPTED_TID: AtomicU64 = AtomicU64::new(0);
+
+    fn record_interrupt_tid(tid: u64) -> Result<(), abi::errors::Errno> {
+        INTERRUPTED_TID.store(tid, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[test]
+    fn interrupt_or_wake_prefers_interrupt_hook() {
+        INTERRUPTED_TID.store(0, Ordering::SeqCst);
+        let prev = unsafe { crate::sched::hooks::INTERRUPT_TASK_HOOK };
+        unsafe {
+            crate::sched::hooks::INTERRUPT_TASK_HOOK = Some(record_interrupt_tid);
+        }
+
+        interrupt_or_wake_thread(42);
+
+        assert_eq!(INTERRUPTED_TID.load(Ordering::SeqCst), 42);
+        unsafe {
+            crate::sched::hooks::INTERRUPT_TASK_HOOK = prev;
+        }
     }
 }
