@@ -118,6 +118,7 @@ impl<R: BootRuntime> Drop for SchedLockTrackingGuard<R> {
 fn debug_assert_scheduler_not_held_by_this_cpu<R: BootRuntime>(context: &str) {
     let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
     let cpu = crate::runtime::<R>().current_cpu_index() as isize;
+    // Keep lightweight telemetry in all builds; debug builds also assert.
     if owner == cpu {
         PROF_LOCK_ORDER_VIOLATIONS.fetch_add(1, Ordering::Relaxed);
     }
@@ -2444,13 +2445,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let current_id = if terminating_tid == current_id {
             current_id
         } else {
-            crate::kerror!(
-                "SCHED: terminate_current tid mismatch (cpu={}, scheduler_current={}, caller_tid={})",
+            panic!(
+                "scheduler invariant violated: terminate_current tid mismatch (cpu={}, scheduler_current={}, caller_tid={})",
                 cpu_idx,
                 current_id,
                 terminating_tid
             );
-            current_id
         };
 
         if let Some(task) = self.state.get_task_mut(current_id) {

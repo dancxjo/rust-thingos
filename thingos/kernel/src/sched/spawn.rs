@@ -1676,6 +1676,7 @@ mod tests {
             crate::task::registry::get_task::<MockRuntime>(id).is_none(),
             "spawn should defer REGISTRY insertion while scheduler lock is held"
         );
+        assert_eq!(sched.pending_registry_inserts.len(), 1);
 
         super::super::apply_deferred_registry_inserts::<MockRuntime>(
             sched.drain_pending_registry_inserts(),
