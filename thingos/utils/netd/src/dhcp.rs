@@ -27,6 +27,12 @@ fn now() -> Instant {
     Instant::from_millis(stem::time::now().as_millis() as i64)
 }
 
+fn wait_until(deadline: Instant) {
+    while now() < deadline {
+        stem::yield_now();
+    }
+}
+
 pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<DhcpConfig, DhcpError> {
     let mut sockets_storage: [SocketStorage; 1] = Default::default();
     let mut socket_set = SocketSet::new(&mut sockets_storage[..]);
@@ -36,11 +42,18 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
     let start = now();
     let timeout = start + Duration::from_secs(30);
+    let mut next_progress_log = start + Duration::from_secs(5);
 
     loop {
         let ts = now();
         if ts > timeout {
             return Err(DhcpError::Timeout);
+        }
+
+        if ts >= next_progress_log {
+            let elapsed_ms = (ts - start).total_millis();
+            stem::info!("DHCP: Still waiting for lease ({} ms elapsed)", elapsed_ms);
+            next_progress_log += Duration::from_secs(5);
         }
 
         let _ = iface.poll(ts, device, &mut socket_set);
@@ -84,6 +97,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
         let delay = iface.poll_delay(ts, &socket_set);
         let wait_ms = delay.map(|d| d.total_millis()).unwrap_or(100).min(100);
-        stem::time::sleep_ms(wait_ms as u64);
+        let deadline = ts + Duration::from_millis(wait_ms);
+        wait_until(deadline);
     }
 }
