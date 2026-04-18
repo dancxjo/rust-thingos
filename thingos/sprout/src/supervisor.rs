@@ -405,12 +405,12 @@ impl Supervisor {
                 use core::fmt::Write;
                 let _ = write!(&mut poll_trace, " {}:{}", t.2, t.0);
             }
-            stem::info!("SPROUT: Polling FDs:{}", poll_trace);
+            stem::trace!("SPROUT: Polling FDs:{}", poll_trace);
 
             match stem::syscall::vfs::vfs_poll(&mut pollfds, 100) {
                 Ok(n) => {
                     if n > 0 {
-                        stem::info!("SPROUT: poll yielded {} ready events", n);
+                        stem::trace!("SPROUT: poll yielded {} ready events", n);
                     }
                 }
                 Err(e) => {
