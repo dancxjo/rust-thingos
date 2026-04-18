@@ -893,17 +893,6 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
 /// Uses try_resched_if_needed to avoid deadlock when SCHEDULER is held by main code
 pub fn on_tick<R: BootRuntime>() {
     let cpu_idx = crate::runtime::<R>().current_cpu_index();
-    if let Some(lock) = SCHEDULER.try_lock() {
-        if let Some(ptr) = *lock {
-            let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-            if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
-                pc.stats.timer_interrupts = pc.stats.timer_interrupts.saturating_add(1);
-                if cpu_idx < types::MAX_CPUS && pc.current == pc.idle_task {
-                    PROF_IDLE_TICKS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-    }
     let ticks = if cpu_idx == 0 {
         TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1
     } else {
@@ -912,7 +901,7 @@ pub fn on_tick<R: BootRuntime>() {
 
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
 
-    try_resched_if_needed::<R>();
+    try_resched_if_needed::<R>(DispatchTrigger::TimerTick);
     emit_debug_summary::<R>(cpu_idx);
 }
 
@@ -975,26 +964,23 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
 
 /// Called from IPI handler - triggers reschedule without advancing time
 pub fn on_resched_ipi<R: BootRuntime>() {
-    let cpu_idx = crate::runtime::<R>().current_cpu_index();
-    if let Some(lock) = SCHEDULER.try_lock() {
-        if let Some(ptr) = *lock {
-            let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
-            if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
-                pc.stats.resched_ipi_received = pc.stats.resched_ipi_received.saturating_add(1);
-            }
-        }
-    }
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
     crate::kdebug!(
         "SCHED: Resched IPI received on CPU {}",
         crate::runtime::<R>().current_cpu_index()
     );
-    try_resched_if_needed::<R>();
+    try_resched_if_needed::<R>(DispatchTrigger::ReschedIpi);
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum DispatchTrigger {
+    TimerTick,
+    ReschedIpi,
 }
 
 /// Interrupt-safe version of resched_if_needed - uses try_lock to avoid deadlock
 /// If SCHEDULER lock is contended, simply skip rescheduling this tick
-fn try_resched_if_needed<R: BootRuntime>() {
+fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     let rt = crate::runtime::<R>();
     let irq = rt.irq_disable();
     let cpu_idx = rt.current_cpu_index();
@@ -1040,6 +1026,19 @@ fn try_resched_if_needed<R: BootRuntime>() {
         set_sched_lock_tracking::<R>(cpu_idx);
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+            if let Some(pc) = sched.state.per_cpu.get_mut(cpu_idx) {
+                match trigger {
+                    DispatchTrigger::TimerTick => {
+                        pc.stats.timer_interrupts = pc.stats.timer_interrupts.saturating_add(1);
+                        if cpu_idx < types::MAX_CPUS && pc.current == pc.idle_task {
+                            PROF_IDLE_TICKS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    DispatchTrigger::ReschedIpi => {
+                        pc.stats.resched_ipi_received = pc.stats.resched_ipi_received.saturating_add(1);
+                    }
+                }
+            }
             let current = sched.state.per_cpu.get(cpu_idx).and_then(|pc| pc.current);
             let idle = sched.state.per_cpu.get(cpu_idx).and_then(|pc| pc.idle_task);
             let runq_total = sched
@@ -1059,7 +1058,11 @@ fn try_resched_if_needed<R: BootRuntime>() {
             let resched_requested =
                 sched.state.per_cpu.get(cpu_idx).map_or(false, |pc| pc.need_resched)
                     || global_need_resched_load(cpu_idx, Ordering::Acquire);
-            let switch = sched.schedule_point(ScheduleReason::ReschedIfNeeded);
+            let reason = match trigger {
+                DispatchTrigger::TimerTick => ScheduleReason::PreemptTick,
+                DispatchTrigger::ReschedIpi => ScheduleReason::ReschedIfNeeded,
+            };
+            let switch = sched.schedule_point(reason);
             // Drain IPIs deferred by wake_sleepers while the SCHEDULER lock is
             // still held, so we can send them after releasing the lock.
             let deferred_ipis = core::mem::take(&mut sched.pending_wake_ipis);
@@ -7789,7 +7792,7 @@ mod tests {
         );
 
         // Must run while SCHEDULER lock is held so try_lock path fails.
-        try_resched_if_needed::<MockRuntime>();
+        try_resched_if_needed::<MockRuntime>(DispatchTrigger::ReschedIpi);
 
         let after_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
         let after_pending =
@@ -7804,6 +7807,50 @@ mod tests {
         );
 
         drop(lock);
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+    }
+
+    #[test]
+    fn test_try_resched_timer_tick_updates_tick_stats_and_timeslice() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        let tid = 77;
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: 2,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.per_cpu[0].current = Some(tid);
+        sched.state.per_cpu[0].idle_task = Some(999);
+
+        let mut lock = SCHEDULER.lock();
+        *lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+        drop(lock);
+
+        try_resched_if_needed::<MockRuntime>(DispatchTrigger::TimerTick);
+
+        let pc = &sched.state.per_cpu[0];
+        assert_eq!(pc.stats.timer_interrupts, 1, "timer dispatch should update tick stats");
+        assert_eq!(pc.stats.resched_ipi_received, 0, "timer dispatch must not count as an IPI");
+        assert_eq!(
+            sched.state.get_thread(tid).map(|sf| sf.timeslice_remaining),
+            Some(1),
+            "timer dispatch should execute preempt-tick bookkeeping"
+        );
+
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
     }
