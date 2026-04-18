@@ -30,7 +30,7 @@ pub struct IsoConfig<'a> {
 }
 
 pub fn default_programs() -> Vec<ProgramConfig> {
-    vec![
+    let mut programs = vec![
         ProgramConfig {
             name: "sprout",
             is_init: true,
@@ -175,9 +175,19 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "test_dlopen", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "reboot", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "shutdown", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "lsv", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "rn", is_init: false, boot_module: true, features: vec![] },
-    ]
+    ];
+
+    if cfg!(feature = "lsv") {
+        programs.push(ProgramConfig {
+            name: "lsv",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        });
+    }
+
+    programs
 }
 
 pub fn default_shared_libraries() -> Vec<SharedLibraryConfig> {
