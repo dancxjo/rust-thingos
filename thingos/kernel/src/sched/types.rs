@@ -137,6 +137,9 @@ pub struct Scheduler<R: BootRuntime> {
     /// REGISTRY lock coupling. Callers must drain/apply after releasing
     /// SCHEDULER.
     pub(crate) pending_registry_syncs: alloc::vec::Vec<DeferredRegistrySync>,
+    /// Tasks created while the scheduler lock is held that must be inserted
+    /// into the canonical REGISTRY after `SCHEDULER` is released.
+    pub(crate) pending_registry_inserts: alloc::vec::Vec<alloc::boxed::Box<crate::task::Task<R>>>,
     /// When true imbalance condition became active (any idle CPU while another CPU has depth >1).
     pub(crate) imbalance_active_since_mono: Option<u64>,
     /// Total time spent in imbalance condition (mono ticks converted to µs for reporting).
@@ -174,6 +177,7 @@ impl<R: BootRuntime> Scheduler<R> {
             pending_prepare_schedule_ipis_bitmap: 0,
             pending_misrouted_requeues: alloc::vec::Vec::new(),
             pending_registry_syncs: alloc::vec::Vec::new(),
+            pending_registry_inserts: alloc::vec::Vec::new(),
             imbalance_active_since_mono: None,
             imbalance_total_us: 0,
             imbalance_episodes: 0,
@@ -205,6 +209,12 @@ impl<R: BootRuntime> Scheduler<R> {
     pub fn current_priority_on_cpu(&self, cpu: usize) -> Option<crate::task::TaskPriority> {
         let tid = self.current_id_on_cpu(cpu)?;
         crate::task::registry::get_task::<R>(tid).map(|t| t.priority)
+    }
+
+    pub fn drain_pending_registry_inserts(
+        &mut self,
+    ) -> alloc::vec::Vec<alloc::boxed::Box<crate::task::Task<R>>> {
+        core::mem::take(&mut self.pending_registry_inserts)
     }
 
     /// Returns `true` if there is at least one task in a non-idle run queue

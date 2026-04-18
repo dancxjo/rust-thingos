@@ -239,7 +239,12 @@ impl<R: BootRuntime> Scheduler<R> {
             .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
-        crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
+        let boxed_task = alloc::boxed::Box::new(task);
+        if super::scheduler_lock_held_by_this_cpu::<R>() {
+            self.pending_registry_inserts.push(boxed_task);
+        } else {
+            crate::task::registry::get_registry::<R>().insert(boxed_task);
+        }
         self.state.enqueue_task(safe_cpu, priority as usize, id);
 
         // Under the scheduler lock we only mark the target CPU dirty.
@@ -356,7 +361,12 @@ impl<R: BootRuntime> Scheduler<R> {
             .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
-        crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
+        let boxed_task = alloc::boxed::Box::new(task);
+        if super::scheduler_lock_held_by_this_cpu::<R>() {
+            self.pending_registry_inserts.push(boxed_task);
+        } else {
+            crate::task::registry::get_registry::<R>().insert(boxed_task);
+        }
         self.state.enqueue_task(safe_cpu, priority as usize, id);
 
         // Under the scheduler lock we only mark the target CPU dirty.
@@ -445,7 +455,12 @@ impl<R: BootRuntime> Scheduler<R> {
             .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
-        crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
+        let boxed_task = alloc::boxed::Box::new(task);
+        if super::scheduler_lock_held_by_this_cpu::<R>() {
+            self.pending_registry_inserts.push(boxed_task);
+        } else {
+            crate::task::registry::get_registry::<R>().insert(boxed_task);
+        }
         self.state.enqueue_task(safe_cpu, priority as usize, id);
 
         if safe_cpu == super::current_cpu_index::<R>() {
@@ -542,10 +557,15 @@ impl<R: BootRuntime> Scheduler<R> {
             .with_wake_cpu(Some(safe_cpu))
             .into_sched_fields(task.id);
         self.state.insert_task(sched_fields);
-        // Insert into the registry so the task can be looked up by TID.
-        // The task is Blocked and not in any runqueue; it cannot be scheduled
-        // until the caller calls wake_task(id).
-        crate::task::registry::get_registry::<R>().insert(alloc::boxed::Box::new(task));
+        let boxed_task = alloc::boxed::Box::new(task);
+        if super::scheduler_lock_held_by_this_cpu::<R>() {
+            self.pending_registry_inserts.push(boxed_task);
+        } else {
+            // Insert into the registry so the task can be looked up by TID.
+            // The task is Blocked and not in any runqueue; it cannot be scheduled
+            // until the caller calls wake_task(id).
+            crate::task::registry::get_registry::<R>().insert(boxed_task);
+        }
 
         Some(id)
     }
@@ -567,7 +587,9 @@ pub fn spawn<R: BootRuntime>(
     let id = sched.spawn(entry, arg, priority, affinity);
     // Capture before releasing the lock so nudge is coherent with placement.
     let in_bringup = sched.bringup_in_progress;
+    let deferred_registry_inserts = sched.drain_pending_registry_inserts();
     super::clear_sched_lock_tracking::<R>(); drop(lock);
+    super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     // Skip remote wakeup IPIs during early-boot bringup.  Tasks placed on the
     // local CPU will be picked up naturally by the scheduler loop; deferred
     // tasks on remote CPUs will be woken when end_bringup() is called.
@@ -624,7 +646,9 @@ pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
         detached,
     );
     let in_bringup = sched.bringup_in_progress;
+    let deferred_registry_inserts = sched.drain_pending_registry_inserts();
     super::clear_sched_lock_tracking::<R>(); drop(lock);
+    super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     if !in_bringup {
         nudge_spawned_task::<R>(current_cpu, id);
     }
@@ -655,7 +679,9 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
         crate::task::Affinity::Any,
     );
     let in_bringup = sched.bringup_in_progress;
+    let deferred_registry_inserts = sched.drain_pending_registry_inserts();
     super::clear_sched_lock_tracking::<R>(); drop(lock);
+    super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     if let Some(id) = id {
         if !in_bringup {
             nudge_spawned_task::<R>(current_cpu, id);
@@ -751,20 +777,22 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         crate::task::Affinity::Any
     };
 
-    // Phase 1: minimal SCHEDULER critical section — allocate TID, register
-    // scheduler-internal state, insert into REGISTRY as Blocked.  All
+    // Phase 1: minimal SCHEDULER critical section — allocate TID and register
+    // scheduler-internal state. REGISTRY insertion is deferred until unlock. All
     // post-spawn setup (process_info, name, FDs) happens outside the lock to
     // avoid long SCHEDULER hold times under SMP contention.
-    let id = {
+    let (id, deferred_registry_inserts) = {
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
         let id = sched.spawn_user_task_deferred(entry, aspace, stack_info, regions, priority, affinity)?;
+        let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         super::clear_sched_lock_tracking::<R>();
         drop(lock);
-        id
+        (id, deferred_registry_inserts)
     };
+    super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
 
     // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
     // The task is Blocked and cannot be scheduled until wake_task(id) is called.
@@ -1055,9 +1083,9 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
 
     let _irq = rt.irq_disable();
 
-    // Phase 1: minimal SCHEDULER critical section — allocate TID, register
-    // scheduler-internal state, insert into REGISTRY as Blocked.
-    let id = {
+    // Phase 1: minimal SCHEDULER critical section — allocate TID and register
+    // scheduler-internal state. REGISTRY insertion is deferred until unlock.
+    let (id, deferred_registry_inserts) = {
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
@@ -1072,10 +1100,12 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
                 crate::task::Affinity::Any,
             )
             .ok_or(abi::errors::Errno::EAGAIN)?;
+        let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         super::clear_sched_lock_tracking::<R>();
         drop(lock);
-        id
+        (id, deferred_registry_inserts)
     };
+    super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
 
     // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
     // The task is Blocked and cannot be scheduled until wake_task(id) is called.
@@ -1379,11 +1409,11 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     }
 
     // Step 4: Create the scheduler task for the new process's initial thread.
-    // Phase 1: minimal SCHEDULER critical section — allocate TID, register
-    // scheduler-internal state, insert into REGISTRY as Blocked.
+    // Phase 1: minimal SCHEDULER critical section — allocate TID and register
+    // scheduler-internal state. REGISTRY insertion is deferred until unlock.
     let _irq = rt.irq_disable();
 
-    let id = {
+    let (id, deferred_registry_inserts) = {
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
@@ -1398,10 +1428,12 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
                 crate::task::Affinity::Any,
             )
             .ok_or(abi::errors::Errno::EAGAIN)?;
+        let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         super::clear_sched_lock_tracking::<R>();
         drop(lock);
-        id
+        (id, deferred_registry_inserts)
     };
+    super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
 
     // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
     // The task is Blocked and cannot be scheduled until wake_task(id) is called.
@@ -1625,6 +1657,30 @@ mod tests {
             assert_eq!(task.ctx.0, expected);
             assert_eq!(arg.to_raw(), expected);
         }
+    }
+
+    #[test]
+    fn spawn_defers_registry_insert_when_scheduler_lock_is_tracked() {
+        let _g = init_test_env();
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        sched.next_id = 7000;
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        super::super::set_sched_lock_tracking::<MockRuntime>(0);
+        let id = sched.spawn(mock_entry, StartupArg::Raw(9), TaskPriority::Normal, Affinity::Any);
+        super::super::clear_sched_lock_tracking::<MockRuntime>();
+
+        assert!(
+            crate::task::registry::get_task::<MockRuntime>(id).is_none(),
+            "spawn should defer REGISTRY insertion while scheduler lock is held"
+        );
+
+        super::super::apply_deferred_registry_inserts::<MockRuntime>(
+            sched.drain_pending_registry_inserts(),
+        );
+        assert!(crate::task::registry::get_task::<MockRuntime>(id).is_some());
     }
 
     /// Verify that `spawn_user_thread` correctly routes the startup argument
