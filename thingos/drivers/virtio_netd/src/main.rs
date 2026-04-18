@@ -221,15 +221,11 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         mac[5]
     );
 
-    // Wait for link up before proceeding.
-    stem::debug!("VIRTIO_NETD: Waiting for link...");
-    loop {
-        if driver.link_up() {
-            stem::debug!("VIRTIO_NETD: Link is UP");
-            break;
-        }
-        stem::time::sleep_ms(100);
-    }
+    let initial_link_up = driver.link_up();
+    stem::debug!(
+        "VIRTIO_NETD: Initial link state is {}",
+        if initial_link_up { "UP" } else { "DOWN" }
+    );
 
     let features = driver.device_features();
 
@@ -351,7 +347,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     }
 
     // Initialize shared VFS state.
-    let mut state = NetVfsState::new(mac, true, features);
+    let mut state = NetVfsState::new(mac, initial_link_up, features);
 
     // Main loop: interleave hardware polling with VFS RPC handling.
     let mut provider_loop = ProviderLoop::new(req_read);

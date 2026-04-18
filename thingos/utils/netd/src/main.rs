@@ -141,6 +141,7 @@ fn open_nic_device() -> (u32, u32, u32, [u8; 6], u32, bool) {
     let events_path = alloc::format!("{}/events", VIRTIO0_PATH);
     let mac_path = alloc::format!("{}/mac", VIRTIO0_PATH);
     let mtu_path = alloc::format!("{}/mtu", VIRTIO0_PATH);
+    let status_path = alloc::format!("{}/status", VIRTIO0_PATH);
 
     loop {
         let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
@@ -174,12 +175,17 @@ fn open_nic_device() -> (u32, u32, u32, [u8; 6], u32, bool) {
 
         let mac = read_mac_file(&mac_path).unwrap_or([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
         let mtu = read_u32_file(&mtu_path).unwrap_or(1500);
+        let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
 
         info!(
-            "NETD: Opened VFS NIC device (rx={}, tx={}, events={}, mtu={})",
-            rx_fd, tx_fd, events_fd, mtu
+            "NETD: Opened VFS NIC device (rx={}, tx={}, events={}, mtu={}, link={})",
+            rx_fd,
+            tx_fd,
+            events_fd,
+            mtu,
+            if initial_link_up { "up" } else { "down" }
         );
-        return (rx_fd, tx_fd, events_fd, mac, mtu, true);
+        return (rx_fd, tx_fd, events_fd, mac, mtu, initial_link_up);
     }
 }
 
@@ -211,6 +217,22 @@ fn read_u32_file(path: &str) -> Option<u32> {
     let n = read_file_bytes(path, &mut buf)?;
     let s = core::str::from_utf8(&buf[..n]).ok()?.trim();
     s.parse().ok()
+}
+
+fn read_link_state_file(path: &str) -> Option<bool> {
+    let mut buf = [0u8; 128];
+    let n = read_file_bytes(path, &mut buf)?;
+    let s = core::str::from_utf8(&buf[..n]).ok()?;
+    for line in s.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("link:") {
+            return Some(value.trim() == "up");
+        }
+        if let Some(value) = line.strip_prefix("state:") {
+            return Some(value.trim() == "up");
+        }
+    }
+    None
 }
 
 fn read_file_bytes(path: &str, buf: &mut [u8]) -> Option<usize> {
