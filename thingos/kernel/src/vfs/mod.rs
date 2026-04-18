@@ -40,6 +40,7 @@ pub mod ramfs;
 pub mod sysfs;
 pub mod union;
 pub mod watch;
+pub mod overlay;
 
 use abi::errors::{Errno, SysResult};
 use alloc::sync::Arc;
@@ -599,39 +600,39 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     root_union.push(Arc::new(bootfs::BootFs::new(modules))); // Layer 0: Read-only boot modules
     root_union.push(root_fs); // Layer 1: Writable RAM overlay
 
-    mount::mount("/", Arc::new(root_union));
+    mount::mount("/", Arc::new(root_union), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted union filesystem at / (root)");
 
     // Device filesystem
-    mount::mount("/dev", Arc::new(devfs::DevFs::new()));
+    mount::mount("/dev", Arc::new(devfs::DevFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted devfs at /dev");
 
     // Process info filesystem
-    mount::mount("/proc", Arc::new(procfs::ProcFs::new()));
+    mount::mount("/proc", Arc::new(procfs::ProcFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted procfs at /proc");
 
     // Kernel device metadata
-    mount::mount("/sys", Arc::new(sysfs::SysFs::new()));
+    mount::mount("/sys", Arc::new(sysfs::SysFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted sysfs at /sys");
 
     // Temporary filesystem — scratch space for userland.
-    mount::mount("/tmp", Arc::new(ramfs::RamFs::new()));
+    mount::mount("/tmp", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /tmp");
 
     // Transient runtime state
-    mount::mount("/run", Arc::new(ramfs::RamFs::new()));
+    mount::mount("/run", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /run");
 
     // Service namespace
-    mount::mount("/services", Arc::new(ramfs::RamFs::new()));
+    mount::mount("/services", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /services");
 
     // Session namespace — filesystem-native GUI objects live here.
-    mount::mount("/session", Arc::new(ramfs::RamFs::new()));
+    mount::mount("/session", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /session");
 
     // Persistent user data — writable scratchpad for userland programs.
-    mount::mount("/data", Arc::new(ramfs::RamFs::new()));
+    mount::mount("/data", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /data");
 }
 

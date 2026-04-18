@@ -14,13 +14,20 @@ use spin::Mutex;
 
 use super::VfsDriver;
 use abi::errors::{Errno, SysResult};
+use abi::syscall::mount_flags;
+
+struct MountLayer {
+    driver: Arc<dyn VfsDriver>,
+    /// Stable per-mount identifier, assigned once at mount time.
+    id: u64,
+    /// Flags applied to this layer (e.g. MCREATE, MOUNT_COR).
+    flags: u32,
+}
 
 struct MountEntry {
     /// The canonical mount point, e.g. `"/dev"` (no trailing slash).
     prefix: String,
-    driver: Arc<dyn VfsDriver>,
-    /// Stable per-mount identifier, assigned once at mount time.
-    id: u64,
+    stack: Vec<MountLayer>,
 }
 
 static MOUNT_TABLE: Mutex<Vec<MountEntry>> = Mutex::new(Vec::new());
@@ -36,16 +43,28 @@ pub fn init() {
 
 /// Mount a filesystem driver at `mount_point` (e.g. `"/dev"`).
 ///
-/// Replaces any existing mount at the same point.  Thread-safe.
-pub fn mount(mount_point: &str, driver: Arc<dyn VfsDriver>) {
+/// Thread-safe.
+pub fn mount(mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
     let prefix = normalise(mount_point);
     let id = NEXT_MOUNT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let mut table = MOUNT_TABLE.lock();
-    // Remove duplicate.
-    table.retain(|e| e.prefix != prefix);
-    table.push(MountEntry { prefix, driver, id });
-    // Keep longest-prefix first so that `/dev/pts` beats `/dev`.
-    table.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+
+    let layer = MountLayer { driver, id, flags };
+
+    if let Some(pos) = table.iter().position(|e| e.prefix == prefix) {
+        if flags & mount_flags::MBEFORE != 0 {
+            table[pos].stack.insert(0, layer);
+        } else if flags & mount_flags::MAFTER != 0 {
+            table[pos].stack.push(layer);
+        } else {
+            table[pos].stack.clear();
+            table[pos].stack.push(layer);
+        }
+    } else {
+        table.push(MountEntry { prefix, stack: alloc::vec![layer] });
+        // Keep longest-prefix first so that `/dev/pts` beats `/dev`.
+        table.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+    }
 }
 
 /// Unmount the filesystem at `mount_point`.
@@ -74,33 +93,34 @@ pub fn lookup(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
 
     // Capture matching drivers into a local list to avoid holding the spinlock
     // during potentially blocking driver lookups.
-    let matches: Vec<(String, Arc<dyn VfsDriver>)> = {
+    let matches: Vec<(String, Vec<Arc<dyn VfsDriver>>)> = {
         let table = MOUNT_TABLE.lock();
         table
             .iter()
             .filter_map(|entry| {
-                strip_prefix(path, &entry.prefix)
-                    .map(|rel| (rel.to_string(), Arc::clone(&entry.driver)))
+                strip_prefix(path, &entry.prefix).map(|rel| {
+                    let drivers = entry.stack.iter().map(|l| Arc::clone(&l.driver)).collect();
+                    (rel.to_string(), drivers)
+                })
             })
             .collect()
     };
 
-    for (rel, driver) in matches {
-        match driver.lookup(&rel) {
-            Ok(node) => return Ok(node),
-            Err(Errno::ENOENT) => {
-                // Specialized fallback for fb0 if the driver doesn't have it.
-                // This is a legacy hack for early-boot framebuffer access.
-                if rel == "fb0" && path.starts_with("/dev") {
-                    if let Ok(node) = crate::vfs::devfs::DevFs::new().lookup("fb0") {
-                        return Ok(node);
+    for (rel, stack) in matches {
+        for driver in stack {
+            match driver.lookup(&rel) {
+                Ok(node) => return Ok(node),
+                Err(Errno::ENOENT) => {
+                    // Specialized fallback for fb0 if the driver doesn't have it.
+                    // This is a legacy hack for early-boot framebuffer access.
+                    if rel == "fb0" && path.starts_with("/dev") {
+                        if let Ok(node) = crate::vfs::devfs::DevFs::new().lookup("fb0") {
+                            return Ok(node);
+                        }
                     }
+                    continue;
                 }
-                // Continue to next matching mount point (shorter prefix).
-                continue;
-            }
-            Err(err) => {
-                return Err(err);
+                Err(err) => return Err(err),
             }
         }
     }
@@ -144,13 +164,31 @@ pub fn mount_id_for_path(path: &str) -> u64 {
     }
     let table = MOUNT_TABLE.lock();
     // The table is sorted longest-prefix first, so the first match is the
-    // most specific mount.
+    // most specific mount. We return the topmost layer's ID.
     for entry in table.iter() {
         if strip_prefix(path, &entry.prefix).is_some() {
-            return entry.id;
+            if let Some(top) = entry.stack.first() {
+                return top.id;
+            }
         }
     }
     0
+}
+
+/// Return the VFS driver associated with `path`.
+pub fn get_driver_for_path(path: &str) -> SysResult<Arc<dyn VfsDriver>> {
+    if !path.starts_with('/') {
+        return Err(Errno::ENOENT);
+    }
+    let table = MOUNT_TABLE.lock();
+    for entry in table.iter() {
+        if strip_prefix(path, &entry.prefix).is_some() {
+            if let Some(top) = entry.stack.first() {
+                return Ok(Arc::clone(&top.driver));
+            }
+        }
+    }
+    Err(Errno::ENOENT)
 }
 
 /// Create a new regular file at `path` by finding the best-matching mount.
@@ -165,8 +203,11 @@ pub fn create(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
         table
             .iter()
             .find_map(|entry| {
-                strip_prefix(path, &entry.prefix)
-                    .map(|rel| (rel.to_string(), Arc::clone(&entry.driver)))
+                strip_prefix(path, &entry.prefix).and_then(|rel| {
+                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                        .or_else(|| entry.stack.first())?;
+                    Some((rel.to_string(), Arc::clone(&layer.driver)))
+                })
             })
             .ok_or(Errno::ENOENT)?
     };
@@ -185,8 +226,11 @@ pub fn mkdir(path: &str) -> SysResult<()> {
         table
             .iter()
             .find_map(|entry| {
-                strip_prefix(path, &entry.prefix)
-                    .map(|rel| (rel.to_string(), Arc::clone(&entry.driver)))
+                strip_prefix(path, &entry.prefix).and_then(|rel| {
+                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                        .or_else(|| entry.stack.first())?;
+                    Some((rel.to_string(), Arc::clone(&layer.driver)))
+                })
             })
             .ok_or(Errno::ENOENT)?
     };
@@ -205,8 +249,11 @@ pub fn unlink(path: &str) -> SysResult<()> {
         table
             .iter()
             .find_map(|entry| {
-                strip_prefix(path, &entry.prefix)
-                    .map(|rel| (rel.to_string(), Arc::clone(&entry.driver)))
+                strip_prefix(path, &entry.prefix).and_then(|rel| {
+                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                        .or_else(|| entry.stack.first())?;
+                    Some((rel.to_string(), Arc::clone(&layer.driver)))
+                })
             })
             .ok_or(Errno::ENOENT)?
     };
@@ -225,8 +272,11 @@ pub fn symlink(target: &str, link_path: &str) -> SysResult<()> {
         table
             .iter()
             .find_map(|entry| {
-                strip_prefix(link_path, &entry.prefix)
-                    .map(|rel| (rel.to_string(), Arc::clone(&entry.driver)))
+                strip_prefix(link_path, &entry.prefix).and_then(|rel| {
+                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                        .or_else(|| entry.stack.first())?;
+                    Some((rel.to_string(), Arc::clone(&layer.driver)))
+                })
             })
             .ok_or(Errno::ENOENT)?
     };
@@ -244,23 +294,26 @@ pub fn link(src_path: &str, dst_path: &str) -> SysResult<()> {
     }
     let (src_rel, dst_rel, driver): (String, String, Arc<dyn VfsDriver>) = {
         let table = MOUNT_TABLE.lock();
-        // Find the best (longest-prefix) mount for each path individually so
-        // we can distinguish "no mount" (ENOENT) from "different mounts" (EXDEV).
         let src_entry = table
             .iter()
             .find_map(|entry| {
-                strip_prefix(src_path, &entry.prefix)
-                    .map(|rel| (rel.to_string(), Arc::clone(&entry.driver)))
+                strip_prefix(src_path, &entry.prefix).and_then(|rel| {
+                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                        .or_else(|| entry.stack.first())?;
+                    Some((rel.to_string(), Arc::clone(&layer.driver)))
+                })
             })
             .ok_or(Errno::ENOENT)?;
         let dst_entry = table
             .iter()
             .find_map(|entry| {
-                strip_prefix(dst_path, &entry.prefix)
-                    .map(|rel| (rel.to_string(), Arc::clone(&entry.driver)))
+                strip_prefix(dst_path, &entry.prefix).and_then(|rel| {
+                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                        .or_else(|| entry.stack.first())?;
+                    Some((rel.to_string(), Arc::clone(&layer.driver)))
+                })
             })
             .ok_or(Errno::ENOENT)?;
-        // Both paths must resolve to the same driver (same mount point).
         if !Arc::ptr_eq(&src_entry.1, &dst_entry.1) {
             return Err(Errno::EXDEV);
         }
@@ -283,10 +336,12 @@ pub fn rename(old_path: &str, new_path: &str) -> SysResult<()> {
             .find_map(|entry| {
                 let old_rel = strip_prefix(old_path, &entry.prefix)?;
                 let new_rel = strip_prefix(new_path, &entry.prefix)?;
+                let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                    .or_else(|| entry.stack.first())?;
                 Some((
                     old_rel.to_string(),
                     new_rel.to_string(),
-                    Arc::clone(&entry.driver),
+                    Arc::clone(&layer.driver),
                 ))
             })
             .ok_or(Errno::EXDEV)?
@@ -384,21 +439,21 @@ mod tests {
     #[test]
     fn test_mount_and_lookup() {
         fresh_table();
-        mount("/test", Arc::new(DummyFs));
+        mount("/test", Arc::new(DummyFs), mount_flags::MREPL);
         assert!(lookup("/test/thing").is_ok());
     }
 
     #[test]
     fn test_lookup_unknown_path_returns_enoent() {
         fresh_table();
-        mount("/test", Arc::new(DummyFs));
+        mount("/test", Arc::new(DummyFs), mount_flags::MREPL);
         assert!(matches!(lookup("/other/thing"), Err(Errno::ENOENT)));
     }
 
     #[test]
     fn test_umount_removes_mount() {
         fresh_table();
-        mount("/rm", Arc::new(DummyFs));
+        mount("/rm", Arc::new(DummyFs), mount_flags::MREPL);
         assert!(lookup("/rm/thing").is_ok());
         umount("/rm").unwrap();
         assert!(matches!(lookup("/rm/thing"), Err(Errno::ENOENT)));
@@ -414,8 +469,8 @@ mod tests {
                 Err(Errno::EIO)
             }
         }
-        mount("/a", Arc::new(Short));
-        mount("/a/b", Arc::new(DummyFs));
+        mount("/a", Arc::new(Short), mount_flags::MREPL);
+        mount("/a/b", Arc::new(DummyFs), mount_flags::MREPL);
 
         // "/a/b/thing" should match the longer prefix "/a/b".
         assert!(lookup("/a/b/thing").is_ok());

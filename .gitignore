@@ -6,6 +6,7 @@
 # having git ignore such leftovers. You can use `.git/info/exclude` to
 # configure your local ignore list.
 
+*.log
 /assets/
 !/assets/wallpapers
 
@@ -118,3 +119,4 @@ thingos/bran/bin-x86_64/kernel
 thingos/bran/bin-x86_64/kernel
 thingos/bran/bin-x86_64/kernel
 assets/pci/pci.ids
+thingos/build.log

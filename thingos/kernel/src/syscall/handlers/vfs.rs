@@ -643,13 +643,23 @@ pub fn sys_fs_mount(
     path_ptr: usize,
     path_len: usize,
 ) -> SysResult<usize> {
+    sys_fs_mount_ex(provider_write_handle, path_ptr, path_len, abi::syscall::mount_flags::MREPL)
+}
+
+/// Mount a userland VFS provider at the given path prefix, with extended Plan 9 style flags.
+pub fn sys_fs_mount_ex(
+    provider_write_handle: usize,
+    path_ptr: usize,
+    path_len: usize,
+    flags: u32,
+) -> SysResult<usize> {
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
         return Err(Errno::EINVAL);
     }
 
     // Copy path from userspace.
-    let mut path_buf = vec![0u8; path_len];
+    let mut path_buf = alloc::vec![0u8; path_len];
     unsafe { copyin(&mut path_buf, path_ptr)? };
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
     let abs_path = resolve_path(path)?;
@@ -694,9 +704,52 @@ pub fn sys_fs_mount(
     // Build and mount the provider filesystem.
     let provider_fs =
         vfs::provider::ProviderFs::new(req_port, resp_port, resp_write_handle.0, req_port_id.0);
-    vfs::mount::mount(&abs_path, provider_fs);
 
-    crate::kinfo!("vfs: mounted userland provider at {}", abs_path);
+    let driver: Arc<dyn vfs::VfsDriver> = if (flags & abi::syscall::mount_flags::MCOR) != 0 {
+        Arc::new(vfs::overlay::OverlayFs::new(provider_fs as Arc<dyn vfs::VfsDriver>))
+    } else {
+        provider_fs as Arc<dyn vfs::VfsDriver>
+    };
+
+    vfs::mount::mount(&abs_path, driver, flags);
+
+    crate::kinfo!("vfs: mounted userland provider at {} (flags: {:#x})", abs_path, flags);
+    Ok(0)
+}
+
+/// Bind an existing path in the namespace to a new path (Plan 9 style bind).
+pub fn sys_fs_bind(
+    src_ptr: usize,
+    src_len: usize,
+    dst_ptr: usize,
+    dst_len: usize,
+    flags: u32,
+) -> SysResult<usize> {
+    validate_user_range(src_ptr, src_len, false)?;
+    validate_user_range(dst_ptr, dst_len, false)?;
+    if src_len == 0 || src_len > 4096 || dst_len == 0 || dst_len > 4096 {
+        return Err(Errno::EINVAL);
+    }
+
+    let mut src_buf = alloc::vec![0u8; src_len];
+    unsafe { copyin(&mut src_buf, src_ptr)? };
+    let src_str = core::str::from_utf8(&src_buf).map_err(|_| Errno::EINVAL)?;
+    let src_path = resolve_path(src_str)?;
+
+    let mut dst_buf = alloc::vec![0u8; dst_len];
+    unsafe { copyin(&mut dst_buf, dst_ptr)? };
+    let dst_str = core::str::from_utf8(&dst_buf).map_err(|_| Errno::EINVAL)?;
+    let dst_path = resolve_path(dst_str)?;
+
+    let mut driver = vfs::mount::get_driver_for_path(&src_path)?;
+
+    if (flags & abi::syscall::mount_flags::MCOR) != 0 {
+        driver = Arc::new(vfs::overlay::OverlayFs::new(driver));
+    }
+
+    vfs::mount::mount(&dst_path, driver, flags);
+    
+    crate::kinfo!("vfs: bound {} to {} (flags: {:#x})", src_path, dst_path, flags);
     Ok(0)
 }
 

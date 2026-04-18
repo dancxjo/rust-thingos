@@ -639,7 +639,7 @@ mod tests {
         let fill = vec![0xABu8; req_port.capacity()];
         req_port.send(&fill);
 
-        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 99 };
+        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 99 };
 
         // A Stat request payload is 8 bytes (handle: u64); combined with the
         // 7-byte header the message is 15 bytes and won't fit the full ring.
@@ -667,7 +667,7 @@ mod tests {
         // when the process exits the handle table drops all handles.)
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 99 };
+        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 99 };
 
         // Send succeeds (data lands in the ring), but response never arrives.
         let payload = b"\x05\x00\x00\x00hello"; // Lookup "hello"
@@ -692,7 +692,7 @@ mod tests {
         let resp_port = make_port(256);
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 0 };
+        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
         // Ignore the result; we only care about the counter.
         let _ = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]);
 
@@ -712,7 +712,7 @@ mod tests {
         let resp_port = make_port(256);
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 0 };
+        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
         let _ = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]);
 
         let after = crate::ipc::diag::VFS_RPC_ERRORS.load(Ordering::Relaxed);
@@ -737,7 +737,7 @@ mod tests {
         preloaded[13..21].copy_from_slice(&1u64.to_le_bytes()); // ino: 1
         resp_port.send(&preloaded);
 
-        let ch = ProviderChannelRef { req: req_port, resp: resp_port, resp_write_handle: 0 };
+        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
 
         // The Stat RPC should complete without blocking.
         let raw = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]).unwrap();
@@ -753,8 +753,8 @@ mod tests {
         let node = ProviderNode {
             handle: 7,
             channel: Arc::new(Mutex::new(ProviderChannelRef {
-                req: req_port.clone(),
-                resp: resp_port,
+                req: crate::ipc::Sender::new(req_port.clone()),
+                resp: crate::ipc::Receiver::new(resp_port),
                 resp_write_handle: 0,
             })),
             wait_queue: Arc::new(WaitQueue::new()),
@@ -773,8 +773,8 @@ mod tests {
         let node = ProviderNode {
             handle: 9,
             channel: Arc::new(Mutex::new(ProviderChannelRef {
-                req: req_port.clone(),
-                resp: resp_port,
+                req: crate::ipc::Sender::new(req_port.clone()),
+                resp: crate::ipc::Receiver::new(resp_port),
                 resp_write_handle: 0,
             })),
             wait_queue: Arc::new(WaitQueue::new()),

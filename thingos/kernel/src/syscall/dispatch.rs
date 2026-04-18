@@ -118,6 +118,8 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_FS_CHDIR => handlers::vfs::sys_fs_chdir(args[0], args[1]),
         SYS_FS_GETCWD => handlers::vfs::sys_fs_getcwd(args[0], args[1]),
         SYS_FS_MOUNT => handlers::vfs::sys_fs_mount(args[0], args[1], args[2]),
+        SYS_FS_MOUNT_EX => handlers::vfs::sys_fs_mount_ex(args[0], args[1], args[2], args[3] as u32),
+        SYS_FS_BIND => handlers::vfs::sys_fs_bind(args[0], args[1], args[2], args[3], args[4] as u32),
         SYS_FS_UMOUNT => handlers::vfs::sys_fs_umount(args[0], args[1]),
         SYS_FS_STAT => handlers::vfs::sys_fs_stat(args[0], args[1], args[2], args[3]),
         SYS_FS_READDIR => handlers::vfs::sys_fs_readdir(args[0], args[1], args[2]),

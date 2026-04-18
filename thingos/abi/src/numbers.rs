@@ -270,6 +270,12 @@ pub const SYS_FS_FLOCK: u32 = 0x4024;
 pub const SYS_FS_LUTIMES: u32 = 0x4025;
 /// Return whether an open thing is a terminal (isatty semantics).
 pub const SYS_FS_ISATTY: u32 = 0x4026;
+/// Mount a userland VFS provider with extended flags (Plan 9 style).
+/// Args: (provider_write_handle, path_ptr, path_len, flags) → 0
+pub const SYS_FS_MOUNT_EX: u32 = 0x4027;
+/// Bind an existing path to a new path in the namespace (Plan 9 style).
+/// Args: (src_path_ptr, src_path_len, dst_path_ptr, dst_path_len, flags) → 0
+pub const SYS_FS_BIND: u32 = 0x4028;
 
 const FS_SYSCALL_NUMBERS: &[u32] = &[
     SYS_FS_OPEN,
@@ -311,6 +317,8 @@ const FS_SYSCALL_NUMBERS: &[u32] = &[
     SYS_FS_FLOCK,
     SYS_FS_LUTIMES,
     SYS_FS_ISATTY,
+    SYS_FS_MOUNT_EX,
+    SYS_FS_BIND,
 ];
 
 const fn all_unique(values: &[u32]) -> bool {
@@ -436,4 +444,19 @@ pub mod poll_flags {
     pub const POLLERR: u16 = 0x0008;
     pub const POLLHUP: u16 = 0x0010;
     pub const POLLNVAL: u16 = 0x0020;
+}
+
+pub mod mount_flags {
+    /// Replace the old mount (default).
+    pub const MREPL: u32 = 0x0000;
+    /// Mount before (on top of) the existing mount.
+    pub const MBEFORE: u32 = 0x0001;
+    /// Mount after (underneath) the existing mount.
+    pub const MAFTER: u32 = 0x0002;
+    /// This layer handles creations.
+    pub const MCREATE: u32 = 0x0004;
+    /// Automatic copy-on-read layer setup.
+    pub const MCOR: u32 = 0x0008;
+    /// Automatic copy-on-write layer setup.
+    pub const MCOW: u32 = 0x0010;
 }
