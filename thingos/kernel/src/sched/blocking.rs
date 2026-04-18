@@ -28,6 +28,33 @@ pub(crate) struct DeferredWakeUpdate {
     pub set_wake_pending: bool,
 }
 
+fn recover_failed_block_current<R: BootRuntime>(tid: u64) {
+    let rt = crate::runtime::<R>();
+
+    {
+        let lock = SCHEDULER.lock();
+        super::set_sched_lock_tracking::<R>(rt.current_cpu_index());
+        if let Some(ptr) = *lock {
+            let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
+            let cpu = super::current_cpu_index::<R>();
+            sched.state.unregister_waiter(tid);
+            if let Some(sf) = sched.state.get_task_mut(tid) {
+                sf.state = TaskState::Running;
+                sf.run_cpu = Some(cpu);
+                sf.last_cpu = Some(cpu);
+                sf.wake_pending = false;
+            }
+        }
+        super::clear_sched_lock_tracking::<R>();
+    }
+
+    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
+        task.state = TaskState::Running;
+        task.last_cpu = Some(rt.current_cpu_index());
+        task.wake_pending = false;
+    }
+}
+
 pub fn block_current<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
@@ -148,6 +175,13 @@ pub fn block_current<R: BootRuntime>() {
 
     if let Some(decision) = switch_decision {
         let Some(switch) = super::resolve_switch_params::<R>(decision) else {
+            if let Some(tid) = deferred_tid.filter(|_| !was_wake_pending) {
+                crate::kwarn!(
+                    "SCHED: block_current failed to resolve switch params for tid {}; restoring task state",
+                    tid
+                );
+                recover_failed_block_current::<R>(tid);
+            }
             rt.irq_restore(_irq);
             return;
         };
@@ -162,6 +196,12 @@ pub fn block_current<R: BootRuntime>() {
                 switch.to_user_fs_base,
             );
         }
+    } else if let Some(tid) = deferred_tid.filter(|_| !was_wake_pending) {
+        crate::kwarn!(
+            "SCHED: block_current produced no switch for tid {}; restoring task state",
+            tid
+        );
+        recover_failed_block_current::<R>(tid);
     }
 
     rt.irq_restore(_irq);
