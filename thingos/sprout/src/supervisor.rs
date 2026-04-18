@@ -571,6 +571,12 @@ impl Supervisor {
                             let _ = port_send_all(drv_req_write, &reply_buf[..total_len]);
                         }
                     }
+
+                    // `vfs_mount` snapshots the provider port into a mounted
+                    // ProviderFs, but it does not consume the caller's handle.
+                    // Closing the bundled FD here tears down the only live
+                    // writer the provider task still owns and makes the mount
+                    // go stale under clients like bloom.
                 }
                 Err(e) => {
                     warn!("SPROUT: Sovereign mount FAILED for {}: {:?}", task_name, e);
@@ -580,10 +586,9 @@ impl Supervisor {
                         supervisor_protocol::errors::ERR_MOUNT_FAILED,
                         b"vfs_mount failed",
                     );
+                    let _ = vfs_close(bundled_fd);
                 }
             }
-            // Close the bundled FD now that we're done with it (mount is established or failed).
-            let _ = vfs_close(bundled_fd);
         } else {
             warn!("SPROUT: Received malformed BIND_READY from {} — rejecting", task_name);
             send_failed(
