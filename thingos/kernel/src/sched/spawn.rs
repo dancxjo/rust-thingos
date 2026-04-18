@@ -114,6 +114,18 @@ fn inherit_process_info<R: BootRuntime>(
 // Global round-robin index for CPU selection
 pub(crate) static RR_IDX: AtomicUsize = AtomicUsize::new(0);
 
+#[inline]
+fn with_spawn_scheduler_lock<R: BootRuntime, T>(
+    current_cpu: usize,
+    f: impl FnOnce(&mut Scheduler<R>) -> T,
+) -> T {
+    let lock = SCHEDULER.lock();
+    let _tracking = super::sched_lock_tracking_guard::<R>(current_cpu);
+    let ptr = lock.expect("Scheduler not initialized");
+    let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
+    f(sched)
+}
+
 /// Register `tid` in the owning process's thread-group list.
 ///
 /// This is the **single, mandatory** registration point for every thread that
@@ -580,15 +592,14 @@ pub fn spawn<R: BootRuntime>(
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
-    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
-    super::set_sched_lock_tracking::<R>(current_cpu);
-    let ptr = lock.expect("Scheduler not initialized");
-    let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-    let id = sched.spawn(entry, arg, priority, affinity);
-    // Capture before releasing the lock so nudge is coherent with placement.
-    let in_bringup = sched.bringup_in_progress;
-    let deferred_registry_inserts = sched.drain_pending_registry_inserts();
-    super::clear_sched_lock_tracking::<R>(); drop(lock);
+    let (id, in_bringup, deferred_registry_inserts) =
+        with_spawn_scheduler_lock::<R, _>(current_cpu, |sched| {
+            let id = sched.spawn(entry, arg, priority, affinity);
+            // Capture before releasing the lock so nudge is coherent with placement.
+            let in_bringup = sched.bringup_in_progress;
+            let deferred_registry_inserts = sched.drain_pending_registry_inserts();
+            (id, in_bringup, deferred_registry_inserts)
+        });
     super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     // Skip remote wakeup IPIs during early-boot bringup.  Tasks placed on the
     // local CPU will be picked up naturally by the scheduler loop; deferred
@@ -631,23 +642,22 @@ pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
-    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
-    super::set_sched_lock_tracking::<R>(current_cpu);
-    let ptr = lock.expect("Scheduler not initialized");
-    let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-    let id = sched.spawn_user_thread(
-        entry,
-        stack,
-        arg,
-        stack_info,
-        priority,
-        crate::task::Affinity::Any,
-        tls_base,
-        detached,
-    );
-    let in_bringup = sched.bringup_in_progress;
-    let deferred_registry_inserts = sched.drain_pending_registry_inserts();
-    super::clear_sched_lock_tracking::<R>(); drop(lock);
+    let (id, in_bringup, deferred_registry_inserts) =
+        with_spawn_scheduler_lock::<R, _>(current_cpu, |sched| {
+            let id = sched.spawn_user_thread(
+                entry,
+                stack,
+                arg,
+                stack_info,
+                priority,
+                crate::task::Affinity::Any,
+                tls_base,
+                detached,
+            );
+            let in_bringup = sched.bringup_in_progress;
+            let deferred_registry_inserts = sched.drain_pending_registry_inserts();
+            (id, in_bringup, deferred_registry_inserts)
+        });
     super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     if !in_bringup {
         nudge_spawned_task::<R>(current_cpu, id);
@@ -666,21 +676,20 @@ pub unsafe fn spawn_user_task_full<R: BootRuntime>(
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
     let _irq = rt.irq_disable();
-    let lock = SCHEDULER.lock(); super::set_sched_lock_tracking::<R>(current_cpu);
-    super::set_sched_lock_tracking::<R>(current_cpu);
-    let ptr = lock.expect("Scheduler not initialized");
-    let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-    let id = sched.spawn_user_task(
-        entry,
-        aspace,
-        stack_info,
-        regions,
-        priority,
-        crate::task::Affinity::Any,
-    );
-    let in_bringup = sched.bringup_in_progress;
-    let deferred_registry_inserts = sched.drain_pending_registry_inserts();
-    super::clear_sched_lock_tracking::<R>(); drop(lock);
+    let (id, in_bringup, deferred_registry_inserts) =
+        with_spawn_scheduler_lock::<R, _>(current_cpu, |sched| {
+            let id = sched.spawn_user_task(
+                entry,
+                aspace,
+                stack_info,
+                regions,
+                priority,
+                crate::task::Affinity::Any,
+            );
+            let in_bringup = sched.bringup_in_progress;
+            let deferred_registry_inserts = sched.drain_pending_registry_inserts();
+            (id, in_bringup, deferred_registry_inserts)
+        });
     super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     if let Some(id) = id {
         if !in_bringup {
