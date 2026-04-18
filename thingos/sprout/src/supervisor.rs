@@ -26,7 +26,7 @@ use stem::{debug, error, info, warn};
 use crate::ledger::DeviceLedger;
 use crate::pipelines::{
     DisplayHandles, setup_audio_stack, setup_display_pipeline, setup_graphics_stack,
-    setup_input_broker, setup_serial_shell, setup_ui_services,
+    setup_input_broker, setup_network_stack, setup_serial_shell, setup_ui_services,
 };
 use crate::task::{ManagedTask, TaskKind};
 
@@ -121,7 +121,13 @@ impl Supervisor {
         info!("SPROUT: Launching cambium...");
         self.spawn_cambium();
 
-        // Stage 8: Optional readiness model verification test.
+        // Stage 5: Launch background network stack supervision.
+        // The driver side is handled by cambium; netd waits for the NIC VFS
+        // provider and should be kept alive automatically once sprout starts.
+        info!("SPROUT: Launching netd...");
+        setup_network_stack(self.tasks.clone());
+
+        // Stage 9: Optional readiness model verification test.
         // Keep this opt-in so early-boot diagnosis is not perturbed by extra
         // child process lifecycle traffic.
         if RUN_POLL_MUX_SELF_TEST {
@@ -131,7 +137,7 @@ impl Supervisor {
             info!("SPROUT: poll_mux verification test disabled");
         }
 
-        // Stage 5: Graphics Stack Bring-up
+        // Stage 6: Graphics Stack Bring-up
         info!("SPROUT: Bringing up graphics stack...");
         let display_handles = setup_display_pipeline(
             self.tasks.clone(),
@@ -140,10 +146,10 @@ impl Supervisor {
             self.config.force_bootfb
         );
 
-        // Stage 6: Wait for Display Driver to register its VFS provider
+        // Stage 7: Wait for Display Driver to register its VFS provider
         self.wait_for_display();
 
-        // Stage 7: High-level UI Services
+        // Stage 8: High-level UI Services
         info!("SPROUT: Launching UI services...");
         let input_handles = setup_input_broker(self.tasks.clone());
         setup_graphics_stack(self.tasks.clone(), display_handles, input_handles);

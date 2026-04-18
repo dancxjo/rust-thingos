@@ -52,13 +52,11 @@ impl TcpStream {
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
-        vfs_read(self.data_fd, buf).map_err(|e| {
-            if e == abi::errors::Errno::EAGAIN {
-                Ok(0)
-            } else {
-                Err(format!("read failed: {:?}", e))
-            }
-        })?
+        match vfs_read(self.data_fd, buf) {
+            Ok(n) => Ok(n),
+            Err(abi::errors::Errno::EAGAIN) => Ok(0),
+            Err(e) => Err(format!("read failed: {:?}", e)),
+        }
     }
 }
 
@@ -69,47 +67,7 @@ impl Drop for TcpStream {
     }
 }
 
-fn send_recv(netd_port: PortHandle, my_port: PortHandle, msg: &[u8]) -> Result<Vec<u8>, String> {
-    if msg.len() < 2 {
-        return Err("Invalid message".to_string());
-    }
-    let msg_type = u16::from_le_bytes([msg[0], msg[1]]);
-    let payload = &msg[2..];
 
-    // V2 Robust format: [4: response_port][8: caller_tid][2: msg_type][2: payload_len][payload...]
-    let mut packet = Vec::with_capacity(16 + payload.len());
-    packet.extend_from_slice(&(my_port as u32).to_le_bytes());
-    let tid = stem::syscall::get_tid().unwrap_or(0);
-    packet.extend_from_slice(&tid.to_le_bytes());
-    packet.extend_from_slice(&msg_type.to_le_bytes());
-    packet.extend_from_slice(&(payload.len() as u16).to_le_bytes());
-    packet.extend_from_slice(payload);
-
-    // Kernel IPC is capped at 4096 bytes.
-    if packet.len() > 4096 {
-        stem::warn!(
-            "http: IPC message too large (len={}), will likely be truncated by kernel",
-            packet.len()
-        );
-    }
-
-    port_send(netd_port, &packet).map_err(|_| "Send failed")?;
-
-    let mut buf = [0u8; 8192]; // Large enough for response
-    let start = stem::time::monotonic_ns();
-    loop {
-        match port_try_recv(my_port, &mut buf) {
-            Ok(len) if len > 0 => return Ok(buf[..len].to_vec()),
-            _ => {
-                if stem::time::monotonic_ns() - start > 5_000_000_000 {
-                    // 5s timeout
-                    return Err("Timeout waiting for netd response".to_string());
-                }
-                stem::thread::yield_now();
-            }
-        }
-    }
-}
 
 fn parse_ipv4(s: &str) -> Result<[u8; 4], ()> {
     let mut parts = s.split('.');

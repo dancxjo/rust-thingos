@@ -176,7 +176,7 @@ fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> Provi
         VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
             ProviderResponse::ok_empty()
         }
-        VfsRpcOp::Poll => ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN),
+        VfsRpcOp::Poll => ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN as u32),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }

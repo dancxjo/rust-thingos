@@ -687,9 +687,10 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
     InputHandles { bloom_evt_read: bloom_evt.1, evt_input_echo_read: evt_input_echo.1 }
 }
 
-/// Set up network pipeline - spawn virtio_netd (driver) then netd (stack)
-// Network and Audio are now handled by cambium
-
+/// Launch the userspace network stack.
+///
+/// The NIC driver is owned by cambium; `netd` can start immediately and will
+/// block until a `/dev/net/virtioN` provider appears.
 fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     debug!("SPROUT: spawn_netd start");
     match stem::syscall::spawn_process("/bin/netd", 0) {
@@ -716,6 +717,10 @@ fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
             warn!("SPROUT: Failed to spawn netd: {:?}", e);
         }
     }
+}
+
+pub fn setup_network_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    spawn_netd(shared_tasks);
 }
 
 pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
