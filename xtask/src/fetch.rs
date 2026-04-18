@@ -17,7 +17,6 @@ pub fn fetch() -> Result<()> {
         fs::create_dir_all(&vendor)?;
     }
 
-    fetch_vendor_repos(&root, &vendor)?;
     fetch_limine(&vendor)?;
     fetch_ovmf(&vendor)?;
     fetch_fonts(&assets)?;
@@ -28,81 +27,6 @@ pub fn fetch() -> Result<()> {
     #[cfg(feature = "svg-cursors")]
     fetch_future_cursors(&assets)?;
     fetch_pciids(&assets)?;
-
-    Ok(())
-}
-
-fn fetch_vendor_repos(root: &Path, vendor: &Path) -> Result<()> {
-    println!("==> Fetching vendor repositories...");
-    let _ = (root, vendor);
-
-    Ok(())
-}
-
-fn apply_vendor_patch(repo_dir: &Path, patch_file: &Path) -> Result<()> {
-    if !patch_file.exists() {
-        return Ok(());
-    }
-
-    let check = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .arg("apply")
-        .arg("--check")
-        .arg(patch_file)
-        .output()
-        .with_context(|| {
-            format!("Failed to check patch application for {}", patch_file.display())
-        })?;
-
-    if check.status.success() {
-        println!("    Applying vendor patch {} -> {}", patch_file.display(), repo_dir.display());
-        run_cmd(Command::new("git").arg("-C").arg(repo_dir).arg("apply").arg(patch_file))?;
-        return Ok(());
-    }
-
-    let reverse_check = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .arg("apply")
-        .arg("--reverse")
-        .arg("--check")
-        .arg(patch_file)
-        .output()
-        .with_context(|| {
-            format!("Failed to check reverse patch application for {}", patch_file.display())
-        })?;
-
-    if reverse_check.status.success() {
-        println!(
-            "    Vendor patch already applied {} -> {}",
-            patch_file.display(),
-            repo_dir.display()
-        );
-        return Ok(());
-    }
-
-    anyhow::bail!(
-        "Vendor patch {} does not apply cleanly to {}",
-        patch_file.display(),
-        repo_dir.display()
-    );
-}
-
-fn ensure_vendor_repo(vendor: &Path, name: &str, url: &str) -> Result<()> {
-    let repo_dir = vendor.join(name);
-    if repo_dir.join(".git").exists() {
-        println!("    vendor/{name} already exists, skipping clone.");
-        return Ok(());
-    }
-
-    if repo_dir.exists() {
-        fs::remove_dir_all(&repo_dir)
-            .with_context(|| format!("Failed to clean existing directory {:?}", repo_dir))?;
-    }
-
-    println!("    Cloning {name}...");
-    run_cmd(Command::new("git").arg("clone").arg("--depth=1").arg(url).arg(&repo_dir))?;
 
     Ok(())
 }
