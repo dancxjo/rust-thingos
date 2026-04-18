@@ -377,7 +377,7 @@ impl SchedState {
         } = self;
 
         if let Some(pc) = per_cpu.get_mut(cpu) {
-            for _ in 0..RUNQ_STALE_PURGE_BUDGET {
+            for _cleanup_attempt in 0..RUNQ_STALE_PURGE_BUDGET {
                 let Some(tid) = pc.runq[prio].pop_front() else {
                     break;
                 };
@@ -445,12 +445,15 @@ impl SchedState {
     }
 
     pub fn remove_thread_from_runq(&mut self, tid: ThreadId) -> bool {
-        let Some((cpu, prio)) = self.get_thread(tid).and_then(|t| t.runq_location) else {
-            return false;
+        let (cpu, prio) = {
+            let Some(t) = self.get_thread_mut(tid) else {
+                return false;
+            };
+            let Some((cpu, prio)) = t.runq_location.take() else {
+                return false;
+            };
+            (cpu, prio)
         };
-        if let Some(t) = self.get_thread_mut(tid) {
-            t.runq_location = None;
-        }
         self.opportunistic_compact_runq(cpu, prio);
         true
     }
@@ -593,9 +596,9 @@ impl SchedState {
         let front_is_stale = runq
             .iter()
             .take(RUNQ_STALE_PURGE_BUDGET)
-            .all(|tid| {
+            .all(|entry_tid| {
                 threads
-                    .get(tid)
+                    .get(entry_tid)
                     .and_then(|thread| thread.runq_location)
                     != Some((cpu, prio))
             });
@@ -603,9 +606,9 @@ impl SchedState {
             return;
         }
 
-        runq.retain(|tid| {
+        runq.retain(|entry_tid| {
             threads
-                .get(tid)
+                .get(entry_tid)
                 .and_then(|thread| thread.runq_location)
                 == Some((cpu, prio))
         });
@@ -743,8 +746,10 @@ mod tests {
         let mut state = SchedState::new();
         state.per_cpu.push(PerCpu::new());
 
-        let stale_count = RUNQ_STALE_PURGE_BUDGET + 2;
-        for tid in 100..(100 + stale_count as u64) {
+        // Exceed the single-call purge budget so one dequeue cannot fully clean
+        // stale entries; leave two stale entries behind for the next call.
+        let stale_count_exceeding_budget = RUNQ_STALE_PURGE_BUDGET + 2;
+        for tid in 100..(100 + stale_count_exceeding_budget as u64) {
             state.insert_thread(sched_fields(tid, TaskState::Runnable, TaskPriority::Normal));
             state.enqueue_thread(0, TaskPriority::Normal as usize, tid);
             assert!(state.remove_thread_from_runq(tid));
@@ -763,9 +768,11 @@ mod tests {
             None,
             "first dequeue should stop after budgeted stale cleanup"
         );
+        let expected_remaining_after_first_dequeue =
+            stale_count_exceeding_budget - RUNQ_STALE_PURGE_BUDGET + 1;
         assert_eq!(
             state.per_cpu[0].runq[TaskPriority::Normal as usize].len(),
-            3,
+            expected_remaining_after_first_dequeue,
             "queue should still contain stale tail plus runnable task after bounded cleanup"
         );
 
