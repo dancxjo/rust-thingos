@@ -105,6 +105,7 @@ members = [
   "thingos/utils/head",
   "thingos/utils/hello_stdio",
   "thingos/utils/hello_std",
+  "thingos/utils/httpsd",
   "thingos/utils/input_echo",
   "thingos/utils/ipc_inbox_demo",
   "thingos/utils/ipc_memfd_demo",
