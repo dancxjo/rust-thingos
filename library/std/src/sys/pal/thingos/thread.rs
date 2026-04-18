@@ -58,18 +58,19 @@ use crate::num::NonZero;
 use crate::sync::Mutex;
 use crate::thread::ThreadInit;
 use crate::time::Duration;
-use crate::sys::thingos_syscall_numbers::{
-    SYS_AUXV_GET,
-    SYS_AVAILABLE_PARALLELISM,
-    SYS_EXIT,
-    SYS_GET_TID,
-    SYS_SLEEP_NS,
-    SYS_SPAWN_THREAD,
-    SYS_TASK_SET_NAME,
-    SYS_TASK_WAIT,
-    SYS_VM_MAP,
-    SYS_YIELD,
-};
+
+// ── Syscall numbers (abi/src/numbers.rs) ─────────────────────────────────────
+
+const SYS_EXIT: u32 = 0x1000;
+const SYS_GET_TID: u32 = 0x1001;
+const SYS_SPAWN_THREAD: u32 = 0x1004;
+const SYS_TASK_WAIT: u32 = 0x1007;
+const SYS_YIELD: u32 = 0x100B;
+const SYS_AVAILABLE_PARALLELISM: u32 = 0x1012;
+const SYS_TASK_SET_NAME: u32 = 0x101F;
+const SYS_SLEEP_NS: u32 = 0x1200;
+const SYS_AUXV_GET: u32 = 0x1105;
+const SYS_VM_MAP: u32 = 0x2001;
 
 // ── Local raw_syscall6 wrapper ────────────────────────────────────────────────
 
@@ -238,8 +239,6 @@ impl Thread {
 /// variables are immediately accessible.
 #[inline(never)]
 extern "C" fn thread_start(data: usize) -> ! {
-    crate::sys::thread_local::destructors::bootstrap();
-
     // Reconstruct the ThreadInit box that was leaked in Thread::new.
     // SAFETY: `data` is the pointer returned by Box::into_raw in Thread::new.
     let init =
@@ -497,9 +496,7 @@ pub(crate) fn allocate_tls_block() -> usize {
     unsafe {
         core::ptr::write(crate::ptr::with_exposed_provenance_mut::<usize>(tp), tp);
         core::ptr::write(
-            crate::ptr::with_exposed_provenance_mut::<usize>(
-                tp + core::mem::size_of::<usize>(),
-            ),
+            crate::ptr::with_exposed_provenance_mut::<usize>(tp + core::mem::size_of::<usize>()),
             0,
         );
     }
@@ -624,8 +621,6 @@ unsafe impl Send for PthreadRecord {}
 static PTHREADS: Mutex<BTreeMap<pthread_t, PthreadRecord>> = Mutex::new(BTreeMap::new());
 
 extern "C" fn pthread_start_trampoline(arg: usize) -> ! {
-    crate::sys::thread_local::destructors::bootstrap();
-
     // SAFETY: `arg` was produced by Box::into_raw in pthread_create.
     let start_ptr = core::ptr::with_exposed_provenance_mut::<PthreadStartContext>(arg);
     // SAFETY: `start_ptr` was reconstructed from the original exposed address.
@@ -837,11 +832,6 @@ pub extern "C" fn pthread_self() -> pthread_t {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
-    unsafe {
-        crate::sys::thread_local::destructors::run();
-    }
-    crate::rt::thread_cleanup();
-
     if let Some(tid) = current_os_id() {
         let tid = tid as pthread_t;
         let mut remove_record = false;
