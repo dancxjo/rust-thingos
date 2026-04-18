@@ -3056,6 +3056,8 @@ pub fn exit<R: BootRuntime>(code: i32) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
     let current_tid = rt.current_tid();
+    // Lock-order policy: perform REGISTRY / DEVICE_REGISTRY exit cleanup before
+    // taking SCHEDULER, then run scheduler-only termination under SCHEDULER.
     let termination = mark_task_exited_in_registry::<R>(current_tid, code);
     release_task_devices::<R>(current_tid);
 
