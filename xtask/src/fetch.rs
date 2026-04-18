@@ -34,13 +34,7 @@ pub fn fetch() -> Result<()> {
 
 fn fetch_vendor_repos(root: &Path, vendor: &Path) -> Result<()> {
     println!("==> Fetching vendor repositories...");
-    require_tool("git")?;
-
-    ensure_vendor_repo(vendor, "lsv", "https://github.com/SecretDeveloper/lsv")?;
-    ensure_vendor_repo(vendor, "runa", "https://github.com/alexm-dev/runa")?;
-
-    apply_vendor_patch(&vendor.join("lsv"), &root.join("patches/vendor/lsv.patch"))?;
-    apply_vendor_patch(&vendor.join("runa"), &root.join("patches/vendor/runa.patch"))?;
+    let _ = (root, vendor);
 
     Ok(())
 }

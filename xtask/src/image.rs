@@ -175,8 +175,6 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "test_dlopen", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "reboot", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "shutdown", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "lsv", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "rn", is_init: false, boot_module: true, features: vec![] },
     ]
 }
 
@@ -860,8 +858,6 @@ fn is_driver(name: &str) -> bool {
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
     match name {
-        "lsv" => &["lvs"],
-        "rn" => &["runa"],
         _ => &[],
     }
 }
