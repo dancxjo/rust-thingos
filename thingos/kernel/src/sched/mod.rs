@@ -5286,7 +5286,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wake_task_revalidates_scheduler_state_under_block_interleaving_window() {
+    fn test_wake_task_revalidates_under_split_authority_window() {
         let _g = init_test_env();
         crate::task::registry::init::<MockRuntime>();
 
@@ -5346,6 +5346,9 @@ mod tests {
         let _ = sched_lock_metrics_snapshot_and_reset();
 
         crate::sched::blocking::wake_task::<MockRuntime>(6101);
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+        drop(sched_lock);
 
         let task = crate::task::registry::get_task::<MockRuntime>(6101).unwrap();
         assert_eq!(task.state, TaskState::Running);
@@ -5362,9 +5365,6 @@ mod tests {
         let metrics = sched_lock_metrics_snapshot_and_reset();
         assert_eq!(metrics.wake_task_fastpath_already_pending, 0);
         assert_eq!(metrics.wake_task.wait_calls, 1);
-
-        let mut sched_lock = SCHEDULER.lock();
-        *sched_lock = None;
     }
 
     #[test]
