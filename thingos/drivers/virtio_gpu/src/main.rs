@@ -175,11 +175,11 @@ fn main(boot_fd: usize) -> ! {
     // 3. Register as VFS Provider via Sovereign Handshake
     use abi::vfs_rpc::VFS_RPC_MAX_REQ;
     let (vfs_write, vfs_read) =
-        stem::syscall::channel_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS channel");
+        stem::syscall::port_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS channel");
 
     // Bridge the response-channel handle to a VFS FD for sendmsg.
-    let drv_resp_write_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_resp_write)
-        .expect("virtio_gpu: vfs_thing_from_channel(drv_resp_write)");
+    let drv_resp_write_fd = stem::syscall::vfs::vfs_handle_from_port(drv_resp_write)
+        .expect("virtio_gpu: vfs_handle_from_port(drv_resp_write)");
 
     use abi::display_driver_protocol;
     use abi::supervisor_protocol::{self, classes};
@@ -212,7 +212,7 @@ fn main(boot_fd: usize) -> ! {
     // Wait for MSG_BIND_ASSIGNED
     let mut wait_buf = [0u8; 512];
     loop {
-        if let Ok(n) = stem::syscall::channel_try_recv(drv_req_read, &mut wait_buf) {
+        if let Ok(n) = stem::syscall::port_try_recv(drv_req_read, &mut wait_buf) {
             if let Some((header, payload)) = display_driver_protocol::parse_message(&wait_buf[..n])
             {
                 if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {

@@ -69,7 +69,7 @@ impl Drop for TcpStream {
     }
 }
 
-fn send_recv(netd_port: ChannelHandle, my_port: ChannelHandle, msg: &[u8]) -> Result<Vec<u8>, String> {
+fn send_recv(netd_port: PortHandle, my_port: PortHandle, msg: &[u8]) -> Result<Vec<u8>, String> {
     if msg.len() < 2 {
         return Err("Invalid message".to_string());
     }
@@ -93,7 +93,7 @@ fn send_recv(netd_port: ChannelHandle, my_port: ChannelHandle, msg: &[u8]) -> Re
         );
     }
 
-    channel_send(netd_port, &packet).map_err(|_| "Send failed")?;
+    port_send(netd_port, &packet).map_err(|_| "Send failed")?;
 
     let mut buf = [0u8; 8192]; // Large enough for response
     let start = stem::time::monotonic_ns();

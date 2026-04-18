@@ -17,7 +17,7 @@ use abi::driver_interface::{
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader};
 use abi::driver_frame::FrameReader;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::syscall::{ChannelThing, channel_create, channel_send};
+use stem::syscall::{PortHandle, port_create, port_send};
 use stem::{info, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
@@ -205,17 +205,17 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
     _reserved: 0,
 };
 
-fn unpack_handle(arg: usize, index: u32) -> ChannelThing {
-    ((arg >> (index * 16)) & 0xFFFF) as ChannelThing
+fn unpack_handle(arg: usize, index: u32) -> PortHandle {
+    ((arg >> (index * 16)) & 0xFFFF) as PortHandle
 }
 
-fn send_msg(handle: ChannelThing, msg_type: u16, payload: &[u8]) {
+fn send_msg(handle: PortHandle, msg_type: u16, payload: &[u8]) {
     let mut buf = [0u8; 256];
     if let Some(len) = drvproto::encode_message(&mut buf, msg_type, payload) {
-        let mut status = stem::syscall::channel_send_all(handle, &buf[..len]);
+        let mut status = stem::syscall::port_send_all(handle, &buf[..len]);
         if let Err(abi::errors::Errno::EAGAIN) = status {
             // Bridge the handle to a VFS FD for FD-first write-readiness polling.
-            if let Ok(fd) = stem::syscall::vfs::vfs_thing_from_channel(handle) {
+            if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(handle) {
                 let mut pollfds = [abi::syscall::PollThing {
                     thing: fd as i32,
                     events: abi::syscall::poll_flags::POLLOUT,
@@ -223,7 +223,7 @@ fn send_msg(handle: ChannelThing, msg_type: u16, payload: &[u8]) {
                 }];
                 while let Err(abi::errors::Errno::EAGAIN) = status {
                     let _ = stem::syscall::vfs::vfs_poll(&mut pollfds, u64::MAX);
-                    status = stem::syscall::channel_send_all(handle, &buf[..len]);
+                    status = stem::syscall::port_send_all(handle, &buf[..len]);
                 }
             }
         }
@@ -539,11 +539,11 @@ fn main(boot_arg: usize) -> ! {
 
     // Create VFS provider port
     let (vfs_write, vfs_read) =
-        channel_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
+        port_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
 
     // Bridge the supervisor channel handle to a VFS FD for sendmsg.
-    let supervisor_port_fd = stem::syscall::vfs::vfs_thing_from_channel(supervisor_port)
-        .expect("display_virtio_gpu: vfs_thing_from_channel(supervisor_port)");
+    let supervisor_port_fd = stem::syscall::vfs::vfs_handle_from_port(supervisor_port)
+        .expect("display_virtio_gpu: vfs_handle_from_port(supervisor_port)");
 
     // Send MSG_BIND_READY to supervisor instead of legacy MSG_REGISTER
     let ready = supervisor_protocol::BindReadyPayload {
@@ -590,7 +590,7 @@ fn main(boot_arg: usize) -> ! {
     let mut wait_buf = [0u8; 512];
     info!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
     let assigned_bind_id = loop {
-        if let Ok(n) = stem::syscall::channel_try_recv(drv_req_read, &mut wait_buf) {
+        if let Ok(n) = stem::syscall::port_try_recv(drv_req_read, &mut wait_buf) {
             if let Some((header, payload)) = drvproto::parse_message(&wait_buf[..n]) {
                 if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
                     if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
@@ -648,11 +648,11 @@ fn main(boot_arg: usize) -> ! {
         }
     }
 
-    let drv_req_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_req_read)
+    let drv_req_fd = stem::syscall::vfs::vfs_handle_from_port(drv_req_read)
         .expect("display_virtio_gpu: fd_from_handle(drv_req_read)");
-    let drv_resp_write_fd = stem::syscall::vfs::vfs_thing_from_channel(drv_resp_write)
+    let drv_resp_write_fd = stem::syscall::vfs::vfs_handle_from_port(drv_resp_write)
         .expect("display_virtio_gpu: fd_from_handle(drv_resp_write)");
-    let vfs_read_fd = stem::syscall::vfs::vfs_thing_from_channel(vfs_read)
+    let vfs_read_fd = stem::syscall::vfs::vfs_handle_from_port(vfs_read)
         .expect("display_virtio_gpu: fd_from_handle(vfs_read)");
     let mut ws = stem::wait_set::WaitSet::new();
     let drv_req_read_tok = ws.add_fd_readable(drv_req_fd).unwrap();
@@ -674,11 +674,11 @@ fn main(boot_arg: usize) -> ! {
                 // Opportunistically drain VFS RPCs every loop. A short timed wait
                 // plus non-blocking drain avoids deadlocks from missed readiness edges.
                 let mut vfs_buf = [0u8; VFS_RPC_MAX_REQ];
-                while let Ok(n) = stem::syscall::channel_try_recv(vfs_read, &mut vfs_buf) {
+                while let Ok(n) = stem::syscall::port_try_recv(vfs_read, &mut vfs_buf) {
                     if n >= 5 {
                         let resp_port =
                             u32::from_le_bytes([vfs_buf[0], vfs_buf[1], vfs_buf[2], vfs_buf[3]])
-                                as ChannelThing;
+                                as PortHandle;
                         let op = VfsRpcOp::from_u8(vfs_buf[4]);
                         stem::trace!("display_virtio_gpu: VFS RPC recv n={} op={:?}", n, op);
                         match op {
@@ -688,7 +688,7 @@ fn main(boot_arg: usize) -> ! {
                                 resp[0] = 0; // E_OK
                                 let handle: u64 = 1; // card
                                 resp[1..9].copy_from_slice(&handle.to_le_bytes());
-                                let _ = channel_send(resp_port, &resp);
+                                let _ = port_send(resp_port, &resp);
                             }
                             Some(VfsRpcOp::Stat) => {
                                 let mut resp = [0u8; 21];
@@ -699,7 +699,7 @@ fn main(boot_arg: usize) -> ! {
                                 resp[1..5].copy_from_slice(&mode.to_le_bytes());
                                 resp[5..13].copy_from_slice(&size.to_le_bytes());
                                 resp[13..21].copy_from_slice(&handle.to_le_bytes());
-                                let _ = channel_send(resp_port, &resp);
+                                let _ = port_send(resp_port, &resp);
                             }
                             Some(VfsRpcOp::DeviceCall) => {
                                 let payload = &vfs_buf[core::mem::size_of::<VfsRpcReqHeader>()..n];
@@ -746,13 +746,13 @@ fn main(boot_arg: usize) -> ! {
                                                 &(out_bytes.len() as u32).to_le_bytes(),
                                             );
                                             resp.extend_from_slice(out_bytes);
-                                            let _ = channel_send(resp_port, &resp);
+                                            let _ = port_send(resp_port, &resp);
                                         }
                                         DISPLAY_OP_IMPORT_BUFFER => {
                                             if call_payload.len()
                                                 < core::mem::size_of::<BufferHandle>()
                                             {
-                                                let _ = channel_send(resp_port, &[22]); // EINVAL
+                                                let _ = port_send(resp_port, &[22]); // EINVAL
                                                 continue;
                                             }
 
@@ -794,16 +794,16 @@ fn main(boot_arg: usize) -> ! {
                                                     resp.push(0); // E_OK
                                                     resp.extend_from_slice(&id.0.to_le_bytes()); // ret_val
                                                     resp.extend_from_slice(&0u32.to_le_bytes()); // out_data_len
-                                                    let _ = channel_send(resp_port, &resp);
+                                                    let _ = port_send(resp_port, &resp);
                                                 }
                                                 Err(_) => {
-                                                    let _ = channel_send(resp_port, &[12]); // ENOMEM
+                                                    let _ = port_send(resp_port, &[12]); // ENOMEM
                                                 }
                                             }
                                         }
                                         DISPLAY_OP_RELEASE_BUFFER => {
                                             if call_payload.len() < 4 {
-                                                let _ = channel_send(resp_port, &[22]); // EINVAL
+                                                let _ = port_send(resp_port, &[22]); // EINVAL
                                                 continue;
                                             }
 
@@ -819,15 +819,15 @@ fn main(boot_arg: usize) -> ! {
                                                 resp.push(0); // E_OK
                                                 resp.extend_from_slice(&0u32.to_le_bytes()); // ret_val
                                                 resp.extend_from_slice(&0u32.to_le_bytes()); // out_data_len
-                                                let _ = channel_send(resp_port, &resp);
+                                                let _ = port_send(resp_port, &resp);
                                             } else {
-                                                let _ = channel_send(resp_port, &[2]); // ENOENT
+                                                let _ = port_send(resp_port, &[2]); // ENOENT
                                             }
                                         }
                                         DISPLAY_OP_COMMIT => {
                                             let header_size = core::mem::size_of::<CommitRequest>();
                                             if call_payload.len() < header_size {
-                                                let _ = channel_send(resp_port, &[22]); // EINVAL
+                                                let _ = port_send(resp_port, &[22]); // EINVAL
                                                 continue;
                                             }
 
@@ -843,7 +843,7 @@ fn main(boot_arg: usize) -> ! {
                                                 plane_count.saturating_mul(plane_size),
                                             );
                                             if plane_count > 0 && call_payload.len() < needed {
-                                                let _ = channel_send(resp_port, &[22]); // EINVAL
+                                                let _ = port_send(resp_port, &[22]); // EINVAL
                                                 continue;
                                             }
 
@@ -977,27 +977,27 @@ fn main(boot_arg: usize) -> ! {
                                             resp.push(0); // E_OK
                                             resp.extend_from_slice(&0u32.to_le_bytes()); // ret_val
                                             resp.extend_from_slice(&0u32.to_le_bytes()); // out_data_len
-                                            let _ = channel_send(resp_port, &resp);
+                                            let _ = port_send(resp_port, &resp);
                                         }
                                         _ => {
-                                            let _ = channel_send(resp_port, &[38]); // E_NOTSUP
+                                            let _ = port_send(resp_port, &[38]); // E_NOTSUP
                                         }
                                     }
                                 } else {
-                                    let _ = channel_send(resp_port, &[22]); // E_INVAL
+                                    let _ = port_send(resp_port, &[22]); // E_INVAL
                                 }
                             }
                             Some(VfsRpcOp::SubscribeReady) => {
-                                let _ = channel_send(resp_port, &[0]); // E_OK
+                                let _ = port_send(resp_port, &[0]); // E_OK
                             }
                             Some(VfsRpcOp::UnsubscribeReady) => {
-                                let _ = channel_send(resp_port, &[0]); // E_OK
+                                let _ = port_send(resp_port, &[0]); // E_OK
                             }
                             Some(VfsRpcOp::Rename) => {
-                                let _ = channel_send(resp_port, &[38]); // E_NOTSUP
+                                let _ = port_send(resp_port, &[38]); // E_NOTSUP
                             }
                             _ => {
-                                let _ = channel_send(resp_port, &[38]); // E_NOTSUP
+                                let _ = port_send(resp_port, &[38]); // E_NOTSUP
                             }
                         }
                     }
@@ -1007,7 +1007,7 @@ fn main(boot_arg: usize) -> ! {
                 // Drain with non-blocking receives only. A blocking recv here can
                 // starve VFS RPC handling and wedge /dev/display/card0 clients.
                 loop {
-                    match stem::syscall::channel_try_recv(drv_req_read, &mut buf) {
+                    match stem::syscall::port_try_recv(drv_req_read, &mut buf) {
                         Ok(n) => {
                             if n == 0 {
                                 break;
@@ -1017,7 +1017,7 @@ fn main(boot_arg: usize) -> ! {
                         }
                         Err(abi::errors::Errno::EAGAIN) => break,
                         Err(e) => {
-                            stem::error!("display_virtio_gpu: channel_try_recv ERR: {:?}", e);
+                            stem::error!("display_virtio_gpu: port_try_recv ERR: {:?}", e);
                             break;
                         }
                     }

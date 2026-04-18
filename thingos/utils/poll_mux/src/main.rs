@@ -16,8 +16,8 @@ fn main(_arg: usize) -> ! {
     stem::println!("Pipe created: read={}, write={}", pr, pw);
 
     // 2. Create a channel and bridge it to a VFS fd
-    let (c_write, c_read) = stem::syscall::channel_create(1024).expect("channel create failed");
-    let c_read_fd = vfs_thing_from_channel(c_read).expect("vfs_thing_from_channel failed");
+    let (c_write, c_read) = stem::syscall::port_create(1024).expect("channel create failed");
+    let c_read_fd = vfs_handle_from_port(c_read).expect("vfs_handle_from_port failed");
     stem::println!(
         "Channel created: write={}, read={}, bridged_fd={}",
         c_write,
@@ -86,7 +86,7 @@ fn main(_arg: usize) -> ! {
     );
 
     // 7. Test channel readiness (write before poll)
-    stem::syscall::channel_send(c_write, b"world").expect("send to channel failed");
+    stem::syscall::port_send(c_write, b"world").expect("send to channel failed");
     stem::println!("Sent to channel, polling now...");
     fds[0].revents = 0;
     fds[1].revents = 0;

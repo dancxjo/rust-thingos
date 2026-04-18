@@ -19,7 +19,7 @@
 //!
 //! In the ThingOS typed-world ontology a VFS path is one **Form** of a
 //! **Thing**'s address within a **Place**.  Opening a path yields a
-//! compatibility handle (fd / `IpcThing`) that references that Form.
+//! compatibility handle (fd / `IpcHandle`) that references that Form.
 //! Operations on the handle are mediated by the caller's **Authority**.
 //!
 //! See `docs/architecture/ontology.md` §3.1 and

@@ -23,7 +23,7 @@ use abi::driver_interface::{
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::VirtioNetDriver;
 use ipc_helpers::provider::ProviderLoop;
-use stem::syscall::channel_create;
+use stem::syscall::port_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, warn};
 use vfs_provider::{NetVfsState, handle_vfs_rpc};
@@ -232,7 +232,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     // Create the VFS provider port pair.
     //   req_write → kernel sends VFS RPCs here
     //   req_read  → this daemon reads RPCs here
-    let (req_write, req_read) = match channel_create(VFS_RPC_MAX_REQ * 8) {
+    let (req_write, req_read) = match port_create(VFS_RPC_MAX_REQ * 8) {
         Ok(handles) => {
             stem::debug!("VIRTIO_NETD: Created VFS provider port");
             handles
@@ -247,8 +247,8 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
 
     if let Some(bootstrap) = bootstrap {
         let drv_resp_write_fd =
-            stem::syscall::vfs::vfs_thing_from_channel(bootstrap.drv_resp_write)
-                .expect("virtio_netd: vfs_thing_from_channel(drv_resp_write)");
+            stem::syscall::vfs::vfs_handle_from_port(bootstrap.drv_resp_write)
+                .expect("virtio_netd: vfs_handle_from_port(drv_resp_write)");
 
         // Sovereign Handshake
         use abi::display_driver_protocol;
@@ -280,7 +280,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
         let mut wait_buf = [0u8; 512];
         let assigned_bind_id = loop {
-            if let Ok(n) = stem::syscall::channel_try_recv(bootstrap.drv_req_read, &mut wait_buf) {
+            if let Ok(n) = stem::syscall::port_try_recv(bootstrap.drv_req_read, &mut wait_buf) {
                 if let Some((header, payload)) =
                     display_driver_protocol::parse_message(&wait_buf[..n])
                 {

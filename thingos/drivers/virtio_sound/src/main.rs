@@ -50,7 +50,7 @@ use abi::sound::{
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use spec::*;
-use stem::syscall::channel::channel_create;
+use stem::syscall::channel::port_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, info, warn};
 use virtio::device::VirtioDevice;
@@ -934,10 +934,10 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     // Mount early — before configure_stream/PCM_START/DMA alloc — so that
     // clients (e.g. chime) can open /dev/audio/card0/out0 without waiting for
     // potentially-blocking hardware initialisation steps.
-    let (req_write, req_read) = match channel_create(VFS_RPC_MAX_REQ * 16) {
+    let (req_write, req_read) = match port_create(VFS_RPC_MAX_REQ * 16) {
         Ok(p) => p,
         Err(e) => {
-            error!("SND: channel_create failed: {:?}", e);
+            error!("SND: port_create failed: {:?}", e);
             loop {
                 stem::time::sleep_ms(1000);
             }

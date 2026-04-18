@@ -46,7 +46,7 @@ extern crate alloc;
 use abi::syscall::vfs_flags::{O_CREAT, O_WRONLY};
 use ipc_helpers::channel::OwnedChannel;
 use ipc_helpers::rpc::RpcServer;
-use stem::syscall::channel::channel_create;
+use stem::syscall::channel::port_create;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_write};
 use stem::{info, warn};
 
@@ -61,10 +61,10 @@ fn main(_arg: usize) -> ! {
     //
     // The kernel returns (write_handle, read_handle).  We keep the read end
     // to receive requests and publish the write end so clients can send to us.
-    let (write_h, read_h) = match channel_create(65536) {
+    let (write_h, read_h) = match port_create(65536) {
         Ok(pair) => pair,
         Err(e) => {
-            warn!("ipc_service_demo: channel_create failed: {:?}", e);
+            warn!("ipc_service_demo: port_create failed: {:?}", e);
             loop {
                 stem::yield_now();
             }

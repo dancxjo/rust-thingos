@@ -15,8 +15,8 @@ use abi::driver_interface::{
 };
 use driver::BootFbDriver;
 use ipc_helpers::provider::ProviderLoop;
-use stem::syscall::{channel_create, channel_recv};
-use stem::syscall::vfs::vfs_thing_from_channel;
+use stem::syscall::{port_create, port_recv};
+use stem::syscall::vfs::vfs_handle_from_port;
 use stem::{debug, info, warn};
 use vfs_provider::dispatch_vfs_rpc;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_bootfb";
@@ -164,7 +164,7 @@ fn main(boot_fd: usize) -> ! {
     };
 
     // Create the VFS provider port pair.
-    let (vfs_write, vfs_read) = match channel_create(VFS_RPC_MAX_REQ * 8) {
+    let (vfs_write, vfs_read) = match port_create(VFS_RPC_MAX_REQ * 8) {
         Ok(handles) => handles,
         Err(e) => {
             debug!(
@@ -177,8 +177,8 @@ fn main(boot_fd: usize) -> ! {
 
     // Bridge the response-channel handle to a VFS FD once so we can use
     // sendmsg (FD-based) for capability transfer.
-    let drv_resp_write_fd = vfs_thing_from_channel(drv_resp_write)
-        .expect("display_bootfb: vfs_thing_from_channel(drv_resp_write)");
+    let drv_resp_write_fd = vfs_handle_from_port(drv_resp_write)
+        .expect("display_bootfb: vfs_handle_from_port(drv_resp_write)");
 
     // Sovereign Handshake
     use abi::display_driver_protocol;
@@ -214,7 +214,7 @@ fn main(boot_fd: usize) -> ! {
     loop {
         // Read from drv_req_read, NOT supervisor_port. This should block rather than
         // spin so the CPU can schedule unrelated work while the driver waits.
-        match channel_recv(drv_req_read, &mut wait_buf) {
+        match port_recv(drv_req_read, &mut wait_buf) {
             Ok(n) => {
                 if let Some((header, payload)) = display_driver_protocol::parse_message(&wait_buf[..n])
                 {
@@ -279,7 +279,7 @@ fn main(boot_fd: usize) -> ! {
         }
     }
 
-    // VFS provider service loop — ProviderLoop blocks on channel_recv and
+    // VFS provider service loop — ProviderLoop blocks on port_recv and
     // dispatches each decoded request to dispatch_vfs_rpc.
     info!("display_bootfb: entering VFS provider service loop");
     let mut lp = ProviderLoop::new(vfs_read);

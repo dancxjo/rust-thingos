@@ -19,7 +19,7 @@
 //! | Criterion                   | Inbox (this demo)                | Channel (`ipc_service_demo`)       |
 //! |-----------------------------|----------------------------------|------------------------------------|
 //! | Addressing                  | PID / pgid                       | Explicit handle exchange           |
-//! | Connection setup            | None                             | `channel_create` + publish         |
+//! | Connection setup            | None                             | `port_create` + publish         |
 //! | Fan-out                     | `msg_broadcast` (one syscall)    | Manual loop over handles           |
 //! | Backpressure                | `EAGAIN` on sender when full     | `EAGAIN` on sender when ring full  |
 //! | Best fit                    | Lifecycle events, typed dispatch | Request/reply RPC, streaming       |

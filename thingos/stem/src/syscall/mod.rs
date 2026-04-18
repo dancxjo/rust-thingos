@@ -89,15 +89,15 @@ pub fn write(thing: usize, buf: &[u8]) -> Result<usize, Errno> {
 }
 
 pub use channel::{
-    channel_capacity, channel_close, channel_create, channel_create_fds, channel_len, channel_recv,
-    channel_send, channel_send_all, channel_try_recv, ChannelThing,
+    port_capacity, port_close, port_create, port_create_fds, port_len, port_recv,
+    port_send, port_send_all, port_try_recv, PortHandle,
 };
 pub use vfs::{
     dup, dup2, pipe, tcgetattr, tcsetattr, vfs_chdir, vfs_chmod, vfs_close, vfs_fchmod, vfs_fcntl,
-    vfs_thing_from_channel, vfs_fsync, vfs_futimes, vfs_getcwd, vfs_isatty, vfs_mkdir, vfs_mount,
-    vfs_open, vfs_poll, vfs_read, vfs_readdir, vfs_readv, vfs_realpath, vfs_rename, vfs_seek,
-    vfs_stat, vfs_umount, vfs_unlink, vfs_utimes, vfs_watch_fd, vfs_watch_path, vfs_write,
-    vfs_writev,
+    vfs_handle_from_port, vfs_fsync, vfs_futimes,
+    vfs_getcwd, vfs_isatty, vfs_mkdir, vfs_mount, vfs_open, vfs_poll, vfs_read, vfs_readdir,
+    vfs_readv, vfs_realpath, vfs_rename, vfs_seek, vfs_stat, vfs_umount, vfs_unlink, vfs_utimes,
+    vfs_watch_fd, vfs_watch_path, vfs_write, vfs_writev,
 };
 pub use wait::wait_many;
 pub use signal::{

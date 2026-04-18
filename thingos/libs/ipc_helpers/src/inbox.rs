@@ -9,7 +9,7 @@
 //! | Criterion                        | Inbox (this module)           | Channel (`channel` module)        |
 //! |----------------------------------|-------------------------------|-----------------------------------|
 //! | Recipient identity               | Process by PID                | Explicit handle exchange          |
-//! | Connection setup required        | None (process-addressed)      | `channel_create` + publish handle |
+//! | Connection setup required        | None (process-addressed)      | `port_create` + publish handle |
 //! | Delivery semantics               | At-most-once, typed           | Byte-stream or structured message |
 //! | Backpressure model               | Inbox-full `EAGAIN` to sender | Ring-full `EAGAIN` to sender      |
 //! | Fan-out (one-to-many)            | `msg_broadcast` to pgid       | Manual fan-out to multiple handles|

@@ -20,7 +20,7 @@ use abi::supervisor_protocol::{
     MSG_SERVICE_READY, classes,
 };
 use spin::Mutex;
-use stem::syscall::{ChannelThing, channel_create, channel_send_all, vfs_mount};
+use stem::syscall::{PortHandle, port_create, port_send_all, vfs_mount};
 use stem::{debug, error, info, warn};
 
 use crate::ledger::DeviceLedger;
@@ -108,7 +108,7 @@ impl Supervisor {
 
         // Stage 2: Create Sovereign Registrar channel
         let (supervisor_write, supervisor_read) =
-            channel_create(4096).expect("Failed to create supervisor registrar channel");
+            port_create(4096).expect("Failed to create supervisor registrar channel");
 
         // Stage 3: Launch Serial Shell EARLY on its own processor
         info!("SPROUT: Launching early serial shell...");
@@ -207,7 +207,7 @@ impl Supervisor {
     }
 
     fn spawn_cambium(&mut self) {
-        let (write, read) = match stem::syscall::channel_create(4096) {
+        let (write, read) = match stem::syscall::port_create(4096) {
             Ok(h) => h,
             Err(_) => return,
         };
@@ -373,7 +373,7 @@ impl Supervisor {
                 if t.drv_resp_read != 0 && t.pid.is_some() {
                     // Initialize the cached FD if we haven't already.
                     if t.resp_fd.is_none() {
-                        if let Ok(fd) = stem::syscall::vfs::vfs_thing_from_channel(t.drv_resp_read) {
+                        if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(t.drv_resp_read) {
                             t.resp_fd = Some(fd);
                             stem::info!("SPROUT: Bridged resp_channel {} -> FD {} for task '{}'",
                                 t.drv_resp_read, fd, t.name);
@@ -454,12 +454,12 @@ impl Supervisor {
     fn handle_bind_ready(
         &mut self,
         task_name: &str,
-        drv_req_write: ChannelThing,
+        drv_req_write: PortHandle,
         payload: &[u8],
         bundled_fd: u32,
     ) {
         use abi::supervisor_protocol::{self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, classes};
-        use stem::syscall::{channel_send_all, vfs_mount, vfs::vfs_close};
+        use stem::syscall::{port_send_all, vfs_mount, vfs::vfs_close};
 
         // Helper: send MSG_BIND_FAILED back to the driver.
         let send_failed = |req_write: u32, id: u64, code: u32, msg: &[u8]| {
@@ -482,7 +482,7 @@ impl Supervisor {
                     MSG_BIND_FAILED,
                     &payload_bytes[..p_len],
                 ) {
-                    let _ = channel_send_all(req_write, &reply_buf[..total_len]);
+                    let _ = port_send_all(req_write, &reply_buf[..total_len]);
                 }
             }
         };
@@ -562,7 +562,7 @@ impl Supervisor {
                             MSG_BIND_ASSIGNED,
                             &payload_bytes[..p_len],
                         ) {
-                            let _ = channel_send_all(drv_req_write, &reply_buf[..total_len]);
+                            let _ = port_send_all(drv_req_write, &reply_buf[..total_len]);
                         }
                     }
                 }

@@ -1,7 +1,7 @@
 use abi::hid::{
     BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
-use stem::syscall::channel_send_all;
+use stem::syscall::port_send_all;
 
 use crate::damage::DamageTracker;
 use crate::protocol::{
@@ -64,7 +64,7 @@ impl InputState {
                             y: self.pointer_y,
                             timestamp_ns: header.timestamp_ns,
                         };
-                        let _ = channel_send_all(ch, &to_vec(&ev));
+                        let _ = port_send_all(ch, &to_vec(&ev));
                     }
                 }
                 damage.mark_dirty();
@@ -90,7 +90,7 @@ impl InputState {
                             _pad: [0; 2],
                             timestamp_ns: header.timestamp_ns,
                         };
-                        let _ = channel_send_all(ch, &to_vec(&ev));
+                        let _ = port_send_all(ch, &to_vec(&ev));
                     }
                 }
                 damage.mark_dirty();
@@ -113,7 +113,7 @@ impl InputState {
                             _pad: [0; 2],
                             timestamp_ns: header.timestamp_ns,
                         };
-                        let _ = channel_send_all(ch, &to_vec(&ev));
+                        let _ = port_send_all(ch, &to_vec(&ev));
                     }
                 }
                 damage.mark_dirty();
@@ -137,7 +137,7 @@ impl InputState {
                             _pad: [0; 3],
                             timestamp_ns: header.timestamp_ns,
                         };
-                        let _ = channel_send_all(ch, &to_vec(&ev));
+                        let _ = port_send_all(ch, &to_vec(&ev));
                     }
                 }
             }
@@ -160,7 +160,7 @@ impl InputState {
                             _pad: [0; 3],
                             timestamp_ns: header.timestamp_ns,
                         };
-                        let _ = channel_send_all(ch, &to_vec(&ev));
+                        let _ = port_send_all(ch, &to_vec(&ev));
                     }
                 }
             }
@@ -183,7 +183,7 @@ impl InputState {
                     header: msg_header(EVT_POINTER_LEAVE),
                     surface_id: old_surface,
                 };
-                let _ = channel_send_all(ch, &to_vec(&ev));
+                let _ = port_send_all(ch, &to_vec(&ev));
             }
         }
 
@@ -199,7 +199,7 @@ impl InputState {
                     x: self.pointer_x,
                     y: self.pointer_y,
                 };
-                let _ = channel_send_all(ch, &to_vec(&ev));
+                let _ = port_send_all(ch, &to_vec(&ev));
             }
         }
     }
@@ -223,7 +223,7 @@ impl InputState {
                     header: msg_header(EVT_KEYBOARD_LEAVE),
                     surface_id: old_surface,
                 };
-                let _ = channel_send_all(ch, &to_vec(&ev));
+                let _ = port_send_all(ch, &to_vec(&ev));
             }
         }
 
@@ -238,7 +238,7 @@ impl InputState {
                     modifiers: 0,
                     _pad: [0; 3],
                 };
-                let _ = channel_send_all(ch, &to_vec(&ev));
+                let _ = port_send_all(ch, &to_vec(&ev));
             }
         }
     }

@@ -8,7 +8,7 @@ use abi::hid::{
     BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
 use stem::info;
-use stem::syscall::{channel_recv, vfs_thing_from_channel, vfs_poll, ChannelThing};
+use stem::syscall::{port_recv, vfs_handle_from_port, vfs_poll, PortHandle};
 use abi::syscall::{PollThing, poll_flags};
 
 fn log_event(buf: &[u8]) {
@@ -77,7 +77,7 @@ fn log_event(buf: &[u8]) {
 
 #[stem::main]
 fn main(arg: usize) -> ! {
-    let handle = arg as ChannelThing;
+    let handle = arg as PortHandle;
     info!("input_echo: starting with port={}", handle);
 
     if handle == 0 {
@@ -88,13 +88,13 @@ fn main(arg: usize) -> ! {
     }
 
     // Bridge the channel handle to a VFS FD for FD-first polling.
-    let fd = vfs_thing_from_channel(handle).unwrap_or(0);
+    let fd = vfs_handle_from_port(handle).unwrap_or(0);
 
     let mut buf = [0u8; 256];
     loop {
         let mut pollfds = [PollThing { thing: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
         match vfs_poll(&mut pollfds, u64::MAX) {
-            Ok(_) => match channel_recv(handle, &mut buf) {
+            Ok(_) => match port_recv(handle, &mut buf) {
                 Ok(n) if n > 0 => log_event(&buf[..n]),
                 Ok(_) => {}
                 Err(err) => info!("input_echo: recv error: {:?}", err),

@@ -465,9 +465,9 @@ pub fn vfs_getcwd(buf: &mut [u8]) -> SysResult<usize> {
     abi::errors::errno(ret)
 }
 
-/// Bridge an IPC handle into the VFS as a thing.
-pub fn vfs_thing_from_channel(channel_thing: u32) -> SysResult<u32> {
-    let ret = unsafe { raw_syscall6(SYS_THING_FROM_CHANNEL, channel_thing as usize, 0, 0, 0, 0, 0) };
+/// Bridge an IPC port handle into the VFS as an fd.
+pub fn vfs_handle_from_port(port_handle: u32) -> SysResult<u32> {
+    let ret = unsafe { raw_syscall6(SYS_THING_FROM_CHANNEL, port_handle as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
 

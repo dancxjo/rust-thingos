@@ -478,7 +478,7 @@ pub struct Process {
     pub thing_table: crate::vfs::thing_table::ThingTable,
 
     /// Per-process IPC handle table.
-    pub ipc_table: crate::ipc::IpcThingTable,
+    pub ipc_table: crate::ipc::IpcHandleTable,
 
     // ── Place context (Phase 8 — world/visibility boundary) ──────────────────
     // These fields answer "in what world does this execution happen?".

@@ -15,15 +15,14 @@
 //!
 //! # Terminology
 //!
-//! The kernel-managed reference to an open object is called a **thing** in
-//! Thing-OS — what POSIX calls a "file descriptor" and Win32 calls a
-//! "handle".  User-facing docs and APIs should use **port** and **thing**
-//! terminology consistently.
+//! The kernel-managed reference to an open object is a **handle**.
+//! User-facing docs and APIs should use precise terminology: **port** for the
+//! IPC object and **handle/fd** for the opened reference.
 //!
 //! # Ontology note
 //!
 //! In the ThingOS typed-world ontology a port or pipe is a **Thing** whose
-//! **Kind** determines its message semantics.  An `IpcThing` is the current
+//! **Kind** determines its message semantics.  An `IpcHandle` is the current
 //! compatibility reference Form for a Thing — the planned replacement is a
 //! typed `Handle` that carries Kind information.  **Message** (see
 //! `thingos::message`) is the canonical typed envelope for port payloads.
@@ -38,7 +37,10 @@ pub mod pipe;
 pub mod unix_socket;
 mod port;
 
-pub use handles::{IpcThing, IpcThingEntry, IpcThingMode, IpcThingTable, MAX_IPC_THINGS};
+pub use handles::{
+    IpcHandle, IpcHandleEntry, IpcHandleMode, IpcHandleTable, IpcThing, IpcThingEntry,
+    IpcThingMode, IpcThingTable, MAX_IPC_HANDLES, MAX_IPC_THINGS,
+};
 pub use port::{Port, PortId, Receiver, Sender};
 
 use alloc::sync::Arc;
