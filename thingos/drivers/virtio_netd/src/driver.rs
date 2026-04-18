@@ -316,32 +316,38 @@ impl VirtioNetDriver {
         }
 
         let total_len = NET_HEADER_SIZE + data.len();
+        stem::debug!("VirtIO-NET: TX total_len={}", total_len);
 
         // Add to TX queue (scoped to release borrow before notify)
         {
             let txq = self.device.queue_mut(1).ok_or("No TX queue")?;
+            stem::debug!("VirtIO-NET: TX queue add begin");
             txq.add_buffer(&[(self.tx_buffer_phys, total_len as u32, false)])
                 .ok_or("TX queue full")?;
+            stem::debug!("VirtIO-NET: TX queue add end");
         }
 
         // Notify device
+        stem::debug!("VirtIO-NET: TX notify begin");
         self.device.notify_queue(1);
+        stem::debug!("VirtIO-NET: TX notify end");
 
         // Wait for completion with yield-based backoff
         // Spin briefly (10 iterations), then yield to scheduler
         for i in 0..1000 {
             if let Some(txq) = self.device.queue_mut(1) {
                 if txq.poll_used().is_some() {
-                    if i >= 1000 {
-                        stem::debug!("VirtIO-NET: TX complete after {} iterations (yielded)", i);
-                    }
+                    stem::debug!("VirtIO-NET: TX complete after {} iterations", i);
                     return Ok(());
                 }
             }
             if i < 10 {
                 core::hint::spin_loop();
             } else {
-                stem::time::sleep_ms(1); // Yield to scheduler instead of burning CPU
+                if i == 10 || i == 100 || i == 500 {
+                    stem::debug!("VirtIO-NET: TX waiting iteration={}", i);
+                }
+                stem::syscall::yield_now();
             }
         }
 
