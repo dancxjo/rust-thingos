@@ -36,6 +36,29 @@ self-hosting.
 - `just rustc-thingos` — build/cache the current cross compiler
 - `just busybox` — build and boot with the tiny busybox-compatible shell
 
+## Fetching a web page from the shell
+
+ThingOS exposes an HTTPS-backed virtual filesystem at `/https`.
+
+Boot the image and fetch a page directly from the shell:
+
+```sh
+just run
+# in the ThingOS shell:
+cat /https/en.wikipedia.org/wiki/Dormouse
+```
+
+How this works at runtime:
+
+- `cat` reads a path under `/https/...`
+- `httpsd` translates that path into an HTTPS URL
+- `http` opens `/net/tcp/*` sockets via `netd`, performs TLS, and returns body bytes
+
+Notes:
+
+- The first read may take a moment while DNS/TCP/TLS are established.
+- Requests include a ThingOS `User-Agent` so sites with bot policies can identify traffic.
+
 ## Architecture direction
 
 ThingOS keeps a typed-world architecture as the long-term canonical model, with

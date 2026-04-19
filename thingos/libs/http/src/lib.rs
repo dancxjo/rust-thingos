@@ -23,6 +23,7 @@ const MAX_HEADER_READ_ITERATIONS: usize = 20;
 const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
 // Write-side TLS record staging buffer.
 const TLS_RECORD_WRITE_BUF_SIZE: usize = 4_096;
+const DEFAULT_USER_AGENT: &str = "ThingOS-httpsd/0.1 (+https://github.com/dancxjo/thingos)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TcpConnectState {
@@ -155,11 +156,31 @@ impl TcpStream {
                     return Ok(n);
                 }
                 Err(abi::errors::Errno::EAGAIN) => {
-                    if waited_ms >= IO_POLL_TIMEOUT_MS {
-                        return Err("write timed out waiting for socket writable".to_string());
+                    if matches!(state, TcpConnectState::Closed) {
+                        return Err("write failed: socket closed before writable".to_string());
                     }
-                    let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                    info!("http: write would block; sleeping for {} ms", slice_ms);
+
+                    let timeout_ms = if matches!(
+                        state,
+                        TcpConnectState::Created | TcpConnectState::Connecting
+                    ) {
+                        CONNECT_TIMEOUT_MS
+                    } else {
+                        IO_POLL_TIMEOUT_MS
+                    };
+
+                    if waited_ms >= timeout_ms {
+                        return Err(format!(
+                            "write timed out waiting for socket writable (state={:?}, waited={} ms)",
+                            state, waited_ms
+                        ));
+                    }
+
+                    let slice_ms = (timeout_ms - waited_ms).min(IO_POLL_SLICE_MS);
+                    info!(
+                        "http: write would block while {:?}; sleeping for {} ms",
+                        state, slice_ms
+                    );
                     stem::time::sleep_ms(slice_ms);
                     waited_ms += slice_ms;
                 }
@@ -296,6 +317,7 @@ fn build_request(
     } else {
         write!(req, "Host: {}\r\n", host).ok();
     }
+    write!(req, "User-Agent: {}\r\n", DEFAULT_USER_AGENT).ok();
     write!(req, "Connection: close\r\n").ok();
     if let Some(b) = body {
         write!(req, "Content-Length: {}\r\n", b.len()).ok();
@@ -436,12 +458,14 @@ where
             Ok(n) => response.extend_from_slice(&buf[..n]),
             Err(e) => {
                 let kind = embedded_io::Error::kind(&e);
+                let err_text = format!("{:?}", e);
                 if matches!(
                     kind,
                     ErrorKind::ConnectionAborted
                         | ErrorKind::ConnectionReset
                         | ErrorKind::BrokenPipe
-                ) {
+                ) || err_text.contains("ConnectionClosed")
+                {
                     debug!("http: https read terminated with transport error {:?}", kind);
                     break;
                 }
