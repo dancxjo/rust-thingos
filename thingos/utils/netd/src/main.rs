@@ -204,7 +204,7 @@ fn main(arg: usize) -> ! {
                 events: abi::syscall::poll_flags::POLLIN,
                 revents: 0,
             }];
-            let _ = stem::syscall::vfs::vfs_poll(&mut pollfds, u64::MAX);
+            let _ = stem::syscall::vfs::vfs_poll(&mut pollfds, 1);
         }
     }
 }
