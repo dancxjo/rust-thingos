@@ -161,7 +161,7 @@ impl NetVfsProvider {
     /// Create and mount the `/net/` provider.
     ///
     /// Returns `None` if the port creation or mount fails.
-    pub fn new(mac: [u8; 6], mtu: usize, link_up: bool) -> Option<Self> {
+    pub fn new(mount_point: &str, mac: [u8; 6], mtu: usize, link_up: bool) -> Option<Self> {
         let (req_write, req_read) = match port_create(VFS_RPC_MAX_REQ * 8) {
             Ok(p) => p,
             Err(e) => {
@@ -170,9 +170,12 @@ impl NetVfsProvider {
             }
         };
 
-        match vfs_mount(req_write, "/net") {
+        match vfs_mount(req_write, mount_point) {
             Ok(()) => {
-                debug!("NetVfsProvider: mounted at /net (port w={} r={})", req_write, req_read);
+                debug!(
+                    "NetVfsProvider: mounted at {} (port w={} r={})",
+                    mount_point, req_write, req_read
+                );
             }
             Err(e) => {
                 warn!("NetVfsProvider: vfs_mount failed: {:?}", e);

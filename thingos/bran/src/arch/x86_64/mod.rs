@@ -850,7 +850,20 @@ impl ArchRuntime for X86_64Runtime {
         let vector = self.timer_vector.load(Ordering::SeqCst);
         let init_cnt = self.timer_init_cnt.load(Ordering::SeqCst);
         if vector != 0 && init_cnt != 0 {
+            kernel::kdebug!(
+                "SMP: CPU {} initializing preemption timer (vec={} init_cnt={})",
+                cpu_index,
+                vector,
+                init_cnt
+            );
             ioapic::set_lapic_timer_periodic(vector as u8, init_cnt as u32);
+        } else {
+            kernel::kwarn!(
+                "SMP: CPU {} skipped timer setup (vec={} init_cnt={}) - scheduling may fail!",
+                cpu_index,
+                vector,
+                init_cnt
+            );
         }
     }
 

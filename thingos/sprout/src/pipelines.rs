@@ -352,46 +352,6 @@ pub fn setup_input_broker(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputH
     InputHandles { bloom_evt_read: 0, evt_input_echo_read: 0 }
 }
 
-/// Launch the userspace network stack.
-///
-/// The NIC driver is owned by cambium; `netd` can start immediately and will
-/// block until a `/dev/net/virtioN` provider appears.
-fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    {
-        let tasks = shared_tasks.lock();
-        if tasks.iter().any(|t| t.name == "netd" && t.pid.is_some()) {
-            info!("SPROUT: netd already running; skipping duplicate spawn");
-            return;
-        }
-    }
-
-    info!("SPROUT: Launching netd...");
-    match stem::syscall::spawn_process("/bin/netd", 0) {
-        Ok(pid) => {
-            info!("SPROUT: Spawned netd (PID={})", pid);
-            let _ = stem::thread::set_priority(pid, 2);
-            let mut tasks = shared_tasks.lock();
-            tasks.push(ManagedTask {
-                name: "netd".to_string(),
-                kind: TaskKind::Service("svc.net".to_string()),
-                module_path: "/bin/netd".to_string(),
-                pid: Some(pid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
-            });
-        }
-        Err(e) => {
-            warn!("SPROUT: Failed to spawn netd: {:?}", e);
-        }
-    }
-}
-
 fn apply_fstab_mounts() {
     info!("SPROUT: Applying mounts from /etc/fstab...");
     let argv: [&[u8]; 2] = [b"/bin/mount", b"-a"];
@@ -412,20 +372,12 @@ fn apply_fstab_mounts() {
     }
 }
 
-pub fn setup_network_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    let netd_tasks = shared_tasks.clone();
-    let _ = stem::thread::spawn_task(move || {
-        // Let critical boot tasks and driver binding start first, then launch
-        // the network service without blocking the rest of boot.
-        stem::sleep_ms(500);
-        spawn_netd(netd_tasks);
-    });
-
+pub fn setup_network_stack(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     let _ = stem::thread::spawn_task(move || {
         stem::sleep_ms(500);
-        info!("SPROUT: Waiting for /net/tcp/new before applying /etc/fstab mounts...");
+        info!("SPROUT: Waiting for /dev/net/virtio0/rx before applying /etc/fstab mounts...");
         loop {
-            if file_exists("/net/tcp/new") {
+            if file_exists("/dev/net/virtio0/rx") {
                 apply_fstab_mounts();
                 break;
             }

@@ -66,11 +66,8 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
                     let ip = config.address.address();
                     let gateway = config.router.unwrap_or(Ipv4Address::UNSPECIFIED);
-                    let dns = config
-                        .dns_servers
-                        .first()
-                        .copied()
-                        .unwrap_or(Ipv4Address::UNSPECIFIED);
+                    let dns =
+                        config.dns_servers.first().copied().unwrap_or(Ipv4Address::UNSPECIFIED);
                     let prefix_len = config.address.prefix_len();
 
                     iface.update_ip_addrs(|addrs| {
@@ -82,12 +79,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                         let _ = iface.routes_mut().add_default_ipv4_route(route);
                     }
 
-                    return Ok(DhcpConfig {
-                        ip,
-                        prefix_len,
-                        gateway,
-                        dns,
-                    });
+                    return Ok(DhcpConfig { ip, prefix_len, gateway, dns });
                 }
                 Event::Deconfigured => {
                     stem::warn!("DHCP: Deconfigured");

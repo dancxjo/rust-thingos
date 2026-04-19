@@ -7,9 +7,7 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
-use alloc::string::String;
-use alloc::string::ToString;
-use alloc::vec;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::default::Default;
 
@@ -22,14 +20,18 @@ mod socket_api;
 mod vfs_device;
 mod vfs_provider;
 
+use abi::seed::{
+    HOST_PROGRAM, HOST_VFS_PROVIDER, INTERFACE_PROGRAM_V1, INTERFACE_VFS_PROVIDER_MOUNT_V1,
+    INTERFACE_VFS_PROVIDER_UNMOUNT_V1, SEED_ABI_VERSION, Seed, SeedInterface,
+};
 use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
-use abi::syscall::{poll_flags, PollHandle};
+use abi::syscall::{PollHandle, poll_flags};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_umount};
 use stem::syscall::{argv_get, exit};
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::{debug, info, warn};
+use stem::{debug, warn};
 use vfs_device::VfsNicDevice;
 use vfs_provider::NetVfsProvider;
 
@@ -37,11 +39,54 @@ use vfs_provider::NetVfsProvider;
 const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
 /// Maximum virtioN unit index to probe during startup.
 const MAX_VIRTIO_UNITS: u32 = 16;
+const DEFAULT_MOUNT_POINT: &str = "/net";
+const SEED_NAME: &[u8] = b"netd";
+const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
+const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_SEED: Seed = Seed {
+    abi_version: SEED_ABI_VERSION,
+    interface_count: 3,
+    hosting_modes: HOST_PROGRAM | HOST_VFS_PROVIDER,
+    capabilities: 0,
+    name_ptr: SEED_NAME.as_ptr(),
+    name_len: SEED_NAME.len(),
+    interfaces: [
+        SeedInterface {
+            interface_id: INTERFACE_PROGRAM_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: core::ptr::null(),
+            entry_symbol_len: 0,
+        },
+        SeedInterface {
+            interface_id: INTERFACE_VFS_PROVIDER_MOUNT_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: HOOK_MOUNT_V1.as_ptr(),
+            entry_symbol_len: HOOK_MOUNT_V1.len(),
+        },
+        SeedInterface {
+            interface_id: INTERFACE_VFS_PROVIDER_UNMOUNT_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: HOOK_UNMOUNT_V1.as_ptr(),
+            entry_symbol_len: HOOK_UNMOUNT_V1.len(),
+        },
+        SeedInterface::zero(),
+    ],
+};
 
 #[derive(Default)]
 struct NetdConfig {
     oneshot: bool,
     help: bool,
+    mount_point: String,
 }
 
 fn get_args() -> Vec<String> {
@@ -71,12 +116,14 @@ fn get_args() -> Vec<String> {
 }
 
 fn parse_config() -> NetdConfig {
-    let mut cfg = NetdConfig::default();
+    let mut cfg =
+        NetdConfig { mount_point: DEFAULT_MOUNT_POINT.to_string(), ..NetdConfig::default() };
     for arg in get_args() {
         match arg.as_str() {
             "--oneshot" | "--once" => cfg.oneshot = true,
             "-h" | "--help" => cfg.help = true,
-            _ => {}
+            _ if arg.starts_with('-') => {}
+            _ => cfg.mount_point = arg,
         }
     }
     cfg
@@ -129,11 +176,12 @@ fn main(arg: usize) -> ! {
         }
     }
 
+    let mount_point = cfg.mount_point.clone();
     let mut net_provider = loop {
-        match NetVfsProvider::new(mac, mtu, initial_link_up) {
+        match NetVfsProvider::new(&mount_point, mac, mtu, initial_link_up) {
             Some(provider) => break provider,
             None => {
-                warn!("NETD: Failed to mount /net/, retrying...");
+                warn!("NETD: Failed to mount {}, retrying...", mount_point);
                 stem::time::sleep_ms(200);
             }
         }
@@ -208,26 +256,42 @@ fn main(arg: usize) -> ! {
                 }
 
                 if (pollfds[0].revents & poll_flags::POLLIN) != 0 {
-                    net_provider
-                        .drain_rpcs(&mut iface, &mut device, &mut socket_set, &mut socket_api);
+                    net_provider.drain_rpcs(
+                        &mut iface,
+                        &mut device,
+                        &mut socket_set,
+                        &mut socket_api,
+                    );
                 }
             }
         }
     }
 }
 
+#[used]
+static KEEP_THINGOS_VFS_MOUNT_V1: extern "C" fn(usize) -> ! = thingos_vfs_mount_v1;
+
+#[used]
+static KEEP_THINGOS_VFS_UNMOUNT_V1: extern "C" fn(usize) -> i32 = thingos_vfs_unmount_v1;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
+    main(arg)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
+    let mount_point = parse_config().mount_point;
+    match vfs_umount(&mount_point) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
 fn idle_pollfds(req_fd: u32, events_fd: u32) -> [PollHandle; 2] {
     [
-        PollHandle {
-            handle: req_fd as i32,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        },
-        PollHandle {
-            handle: events_fd as i32,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        },
+        PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
+        PollHandle { handle: events_fd as i32, events: poll_flags::POLLIN, revents: 0 },
     ]
 }
 

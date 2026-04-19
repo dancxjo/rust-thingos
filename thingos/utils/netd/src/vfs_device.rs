@@ -4,12 +4,12 @@
 //! length-prefixed wire format:
 //! `[4 bytes little-endian frame length][raw Ethernet frame bytes...]`
 extern crate alloc;
+use alloc::collections::VecDeque;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::default::Default;
 
 use abi::syscall::vfs_flags;
-use alloc::collections::VecDeque;
-use alloc::vec::Vec;
 use smoltcp::phy::{self, Device, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};

@@ -26,25 +26,71 @@
 //! - `Poll`   — returns `POLLIN` always
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use core::default::Default;
 extern crate alloc;
 
-
+use alloc::vec::Vec;
 
 use abi::block_device_protocol::{
     BlockDeviceError, BlockDeviceRequest, BlockDeviceResponse, ReadRequest, ReadResponse,
 };
 use abi::errors::Errno;
+use abi::seed::{
+    HOST_PROGRAM, HOST_VFS_PROVIDER, INTERFACE_PROGRAM_V1, INTERFACE_VFS_PROVIDER_MOUNT_V1,
+    INTERFACE_VFS_PROVIDER_UNMOUNT_V1, SEED_ABI_VERSION, Seed, SeedInterface,
+};
 use abi::vfs_rpc::VfsRpcOp;
-use alloc::vec::Vec;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
-use iso9660::{IsoFs, ISO_SECTOR_SIZE};
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
+use iso9660::{ISO_SECTOR_SIZE, IsoFs};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
-use stem::syscall::{port_create, vfs_mount, PortHandle};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_umount};
+use stem::syscall::{PortHandle, argv_get, port_create, vfs_mount};
 use stem::{info, warn};
+
+const DEFAULT_MOUNT_POINT: &str = "/mnt/iso";
+const SEED_NAME: &[u8] = b"iso9660d";
+const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
+const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THINGOS_SEED: Seed = Seed {
+    abi_version: SEED_ABI_VERSION,
+    interface_count: 3,
+    hosting_modes: HOST_PROGRAM | HOST_VFS_PROVIDER,
+    capabilities: 0,
+    name_ptr: SEED_NAME.as_ptr(),
+    name_len: SEED_NAME.len(),
+    interfaces: [
+        SeedInterface {
+            interface_id: INTERFACE_PROGRAM_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: core::ptr::null(),
+            entry_symbol_len: 0,
+        },
+        SeedInterface {
+            interface_id: INTERFACE_VFS_PROVIDER_MOUNT_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: HOOK_MOUNT_V1.as_ptr(),
+            entry_symbol_len: HOOK_MOUNT_V1.len(),
+        },
+        SeedInterface {
+            interface_id: INTERFACE_VFS_PROVIDER_UNMOUNT_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: HOOK_UNMOUNT_V1.as_ptr(),
+            entry_symbol_len: HOOK_UNMOUNT_V1.len(),
+        },
+        SeedInterface::zero(),
+    ],
+};
 
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]
@@ -69,11 +115,7 @@ struct PortBlockDevice {
 impl PortBlockDevice {
     fn new(port: PortHandle) -> Option<Self> {
         let (resp_w, resp_r) = port_create(256 * 1024).ok()?;
-        Some(Self {
-            port,
-            resp_w,
-            resp_r,
-        })
+        Some(Self { port, resp_w, resp_r })
     }
 }
 
@@ -82,10 +124,7 @@ impl BlockDevice for PortBlockDevice {
         let mut req = [0u8; 4 + 1 + core::mem::size_of::<ReadRequest>()];
         req[0..4].copy_from_slice(&(self.resp_w as u32).to_le_bytes());
         req[4] = BlockDeviceRequest::Read as u8;
-        let read_req = ReadRequest {
-            lba,
-            sector_count: count as u32,
-        };
+        let read_req = ReadRequest { lba, sector_count: count as u32 };
         let req_bytes = unsafe {
             core::slice::from_raw_parts(
                 &read_req as *const ReadRequest as *const u8,
@@ -165,11 +204,7 @@ const S_IFREG: u32 = 0o100000;
 // ── VFS RPC dispatch ─────────────────────────────────────────────────────────
 
 /// Dispatch one decoded VFS RPC request and return the appropriate response.
-fn dispatch_request(
-    fs: &IsoFs,
-    dev: &PortBlockDevice,
-    req: &ProviderRequest,
-) -> ProviderResponse {
+fn dispatch_request(fs: &IsoFs, dev: &PortBlockDevice, req: &ProviderRequest) -> ProviderResponse {
     match req.op {
         VfsRpcOp::Lookup => handle_lookup(fs, dev, &req.payload),
         VfsRpcOp::Read => handle_read(dev, &req.payload),
@@ -230,10 +265,7 @@ fn handle_read(dev: &PortBlockDevice, payload: &[u8]) -> ProviderResponse {
         return ProviderResponse::ok_read(&[]);
     }
 
-    let iso_file = iso9660::IsoFile {
-        extent_lba: lba,
-        size,
-    };
+    let iso_file = iso9660::IsoFile { extent_lba: lba, size };
     let clamped_len = len.min((size as u64 - offset) as usize);
 
     match iso_file.read_range(dev, offset, clamped_len) {
@@ -294,11 +326,7 @@ fn handle_stat(fs: &IsoFs, dev: &PortBlockDevice, payload: &[u8]) -> ProviderRes
         !entries.is_empty()
     };
 
-    let mode = if is_dir {
-        S_IFDIR | 0o555
-    } else {
-        S_IFREG | 0o444
-    };
+    let mode = if is_dir { S_IFDIR | 0o555 } else { S_IFREG | 0o444 };
 
     ProviderResponse::ok_stat(mode, size as u64, handle)
 }
@@ -307,6 +335,7 @@ fn handle_stat(fs: &IsoFs, dev: &PortBlockDevice, payload: &[u8]) -> ProviderRes
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    let mount_point = mount_point_from_args();
     info!("iso9660d: starting ISO9660 VFS provider");
 
     // 1. Find block devices via VFS.
@@ -348,7 +377,10 @@ fn main(_arg: usize) -> ! {
                                         ) {
                                             Ok(p) => p,
                                             Err(e) => {
-                                                warn!("iso9660d: failed to create provider port: {:?}", e);
+                                                warn!(
+                                                    "iso9660d: failed to create provider port: {:?}",
+                                                    e
+                                                );
                                                 let _ = vfs_close(h_fd);
                                                 offset = end + 1;
                                                 continue;
@@ -356,9 +388,12 @@ fn main(_arg: usize) -> ! {
                                         };
 
                                         // 4. Mount via SYS_FS_MOUNT.
-                                        match vfs_mount(req_write, "/mnt/iso") {
+                                        match vfs_mount(req_write, &mount_point) {
                                             Ok(()) => {
-                                                info!("iso9660d: mounted at /mnt/iso (req_read={})", req_read);
+                                                info!(
+                                                    "iso9660d: mounted at {} (req_read={})",
+                                                    mount_point, req_read
+                                                );
                                                 mounted = Some((fs, block_dev, req_read));
                                                 let _ = vfs_close(h_fd);
                                                 break;
@@ -406,5 +441,45 @@ fn main(_arg: usize) -> ! {
     info!("iso9660d: provider port closed — exiting");
     loop {
         stem::syscall::yield_now();
+    }
+}
+
+fn mount_point_from_args() -> String {
+    let len = match argv_get(&mut []) {
+        Ok(l) if l > 0 => l,
+        _ => return DEFAULT_MOUNT_POINT.to_string(),
+    };
+    let mut buf = alloc::vec![0u8; len];
+    if argv_get(&mut buf).is_err() {
+        return DEFAULT_MOUNT_POINT.to_string();
+    }
+    let args = stem::utils::parse_argv(&buf);
+    if args.len() >= 2 {
+        if let Ok(path) = core::str::from_utf8(args[1]) {
+            if !path.is_empty() {
+                return path.to_string();
+            }
+        }
+    }
+    DEFAULT_MOUNT_POINT.to_string()
+}
+
+#[used]
+static KEEP_THINGOS_VFS_MOUNT_V1: extern "C" fn(usize) -> ! = thingos_vfs_mount_v1;
+
+#[used]
+static KEEP_THINGOS_VFS_UNMOUNT_V1: extern "C" fn(usize) -> i32 = thingos_vfs_unmount_v1;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
+    main(arg)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
+    let mount_point = mount_point_from_args();
+    match vfs_umount(&mount_point) {
+        Ok(()) => 0,
+        Err(_) => 1,
     }
 }

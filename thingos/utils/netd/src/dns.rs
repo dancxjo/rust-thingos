@@ -1,9 +1,9 @@
 //! Simple DNS client for A record lookups.
 extern crate alloc;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::default::Default;
 
-use alloc::vec::Vec;
 use smoltcp::iface::{Interface, SocketSet, SocketStorage};
 use smoltcp::phy::Device;
 use smoltcp::socket::udp::{self, PacketMetadata, Socket as UdpSocket};

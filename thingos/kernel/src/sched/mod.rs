@@ -2375,8 +2375,19 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         if next_id == current_id {
             let Some(current_sched) = self.state.get_task_mut(current_id) else {
-                crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
-                panic!("failed to find current_id {} in scheduler state", current_id);
+                // The current task was reaped by another CPU while still running here.
+                // We cannot continue running it; fallback to the idle task if available.
+                crate::kwarn!(
+                    "SCHED: current_id {} reaped while running on CPU {}; falling back to idle",
+                    current_id,
+                    cpu_idx
+                );
+                if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
+                    // Update current so next tick doesn't repeat this check
+                    self.state.per_cpu[cpu_idx].current = Some(idle);
+                    rt.set_idle_task_current(true);
+                }
+                return None;
             };
             // Keep scheduler cache fields in sync. No REGISTRY write is needed
             // in the same-task (no-switch) case: this task remains running and

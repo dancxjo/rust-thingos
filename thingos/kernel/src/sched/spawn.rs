@@ -1416,6 +1416,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
                 resolved_pc
             );
             entry.entry_pc = resolved_pc;
+            // Ensure user stack is 16-byte aligned.
+            entry.user_sp = entry.user_sp & !0xF;
         } else {
             crate::kerror!(
                 "SPAWN: entry symbol '{}' not found in '{}'; using default entry",

@@ -16,11 +16,12 @@ use http::{HttpClient, Response};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use stem::syscall::argv_get;
 use stem::syscall::vfs::{vfs_mount, vfs_umount};
-use stem::{info, warn, debug};
+use stem::{debug, info, warn};
 
 const MOUNT_POINT: &str = "/https";
 const ROOT_HANDLE: u64 = 1;
-const BODY_WINDOW_CAP: usize = 64 * 1024;
+const BODY_WINDOW_CAP: usize = 128 * 1024; // Align with multiple of 16KB chunks
+const HTTPS_PORT_CAPACITY_BYTES: usize = 32_768;
 const SEED_NAME: &[u8] = b"httpsd";
 const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
@@ -106,10 +107,8 @@ impl HttpsHandle {
         if self.body.len() > BODY_WINDOW_CAP {
             let trim = self.body.len() - BODY_WINDOW_CAP;
             self.body.drain(..trim);
-            self.body_start_offset = self
-                .body_start_offset
-                .checked_add(trim)
-                .ok_or(Errno::EOVERFLOW)?;
+            self.body_start_offset =
+                self.body_start_offset.checked_add(trim).ok_or(Errno::EOVERFLOW)?;
         }
         Ok(())
     }
@@ -191,20 +190,15 @@ impl HttpsProvider {
         }
 
         let needed_end = offset.saturating_add(max_len);
-        let mut body_end = state
-            .body_start_offset
-            .checked_add(state.body.len())
-            .ok_or(Errno::EOVERFLOW)?;
+        let mut body_end =
+            state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
 
         // Offset reads are constrained to the retained body window.
         // If the caller seeks behind `body_start_offset`, those bytes have been evicted.
         if offset < state.body_start_offset {
             debug!(
                 "httpsd: read handle={} offset={} before retained window start={} (cap={})",
-                handle,
-                offset,
-                state.body_start_offset,
-                BODY_WINDOW_CAP
+                handle, offset, state.body_start_offset, BODY_WINDOW_CAP
             );
             return Err(Errno::EINVAL);
         }
@@ -234,19 +228,15 @@ impl HttpsProvider {
             }
             debug!("httpsd: upstream chunk handle={} bytes={}", handle, chunk.len());
             state.push_chunk(&chunk)?;
-            body_end = state
-                .body_start_offset
-                .checked_add(state.body.len())
-                .ok_or(Errno::EOVERFLOW)?;
+            body_end =
+                state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
         }
 
         // Re-check after fetch because the retained window may have advanced while reading chunks.
         if offset < state.body_start_offset {
             debug!(
                 "httpsd: read handle={} offset={} evicted while streaming (start={})",
-                handle,
-                offset,
-                state.body_start_offset
+                handle, offset, state.body_start_offset
             );
             return Err(Errno::EINVAL);
         }
@@ -256,9 +246,7 @@ impl HttpsProvider {
             return Ok(Vec::new());
         }
         let start = offset - state.body_start_offset;
-        let end_limit = needed_end
-            .checked_sub(state.body_start_offset)
-            .ok_or(Errno::EINVAL)?;
+        let end_limit = needed_end.checked_sub(state.body_start_offset).ok_or(Errno::EINVAL)?;
         let end = state.body.len().min(end_limit);
         let out = state.body[start..end].to_vec();
         debug!(
@@ -289,6 +277,12 @@ fn main(_arg: usize) -> ! {
     run_provider(&mount_point)
 }
 
+#[used]
+static KEEP_THINGOS_VFS_MOUNT_V1: extern "C" fn(usize) -> ! = thingos_vfs_mount_v1;
+
+#[used]
+static KEEP_THINGOS_VFS_UNMOUNT_V1: extern "C" fn(usize) -> i32 = thingos_vfs_unmount_v1;
+
 #[no_mangle]
 pub extern "C" fn thingos_vfs_mount_v1(_arg: usize) -> ! {
     let mount_point = mount_point_from_args();
@@ -305,7 +299,7 @@ pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
 }
 
 fn run_provider(mount_point: &str) -> ! {
-    let (req_write, req_read) = match stem::syscall::port::port_create(64 * 1024) {
+    let (req_write, req_read) = match stem::syscall::port::port_create(HTTPS_PORT_CAPACITY_BYTES) {
         Ok(pair) => pair,
         Err(e) => {
             warn!("httpsd: port_create failed: {:?}", e);
@@ -426,8 +420,10 @@ fn dispatch_readdir(payload: &[u8]) -> ProviderResponse {
 
 #[cfg(test)]
 mod tests {
-    use abi::errors::Errno;
     use alloc::vec;
+
+    use abi::errors::Errno;
+
     use super::HttpsProvider;
     extern crate std;
 

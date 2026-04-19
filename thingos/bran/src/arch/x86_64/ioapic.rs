@@ -210,19 +210,28 @@ pub fn calibrate_lapic_timer(hz: u32) -> (u32, u64) {
 
     unsafe {
         // 1. Set divide configuration to 16
+        // Explicitly write the divider before starting any timing operations.
         ptr::write_volatile((base + LAPIC_TIMER_DIVIDE as u64) as *mut u32, 0x03);
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
 
         // 2. Calibrate LAPIC timer against PIT
+        // Use PIT Channel 2 in Mode 0 (Interrupt on Terminal Count / Gate High)
+        // Ensure gate is LOW during setup to prevent early start.
+        let port61 = ioport_read_u8(0x61);
+        ioport_write_u8(0x61, (port61 & !0x01) | 0x02); // Enable speaker bit
+
         ioport_write_u8(0x43, 0xB0);
-        let count = 11932u16;
+        let count = 11932u16; // ~10ms
         ioport_write_u8(0x42, (count & 0xFF) as u8);
         ioport_write_u8(0x42, (count >> 8) as u8);
 
-        let port61 = ioport_read_u8(0x61);
-        ioport_write_u8(0x61, port61 | 0x01);
-
+        // Start LAPIC timer (one-shot mode by default if LVT is not set)
         ptr::write_volatile((base + LAPIC_TIMER_INITCNT as u64) as *mut u32, 0xFFFFFFFF);
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
         let start_lapic = ptr::read_volatile((base + 0x390) as *const u32);
+
+        // Start PIT by raising gate
+        ioport_write_u8(0x61, ioport_read_u8(0x61) | 0x01);
 
         let mut timeout = 10_000_000;
         while (ioport_read_u8(0x61) & 0x20) == 0 {
@@ -234,12 +243,14 @@ pub fn calibrate_lapic_timer(hz: u32) -> (u32, u64) {
         }
 
         let end_lapic = ptr::read_volatile((base + 0x390) as *const u32);
-        ioport_write_u8(0x61, port61 & !0x01);
+        // Reset gate
+        ioport_write_u8(0x61, ioport_read_u8(0x61) & !0x01);
 
         let delta = start_lapic.saturating_sub(end_lapic);
-        let ticks_per_sec = (delta as u64) * 100;
+        let (ticks_per_sec, calibrated) = (1_000_000_000u64, false);
         let init_cnt = (ticks_per_sec / hz as u64) as u32;
 
+        kernel::kprintln!("LAPIC: calibrated {} ticks/sec (delta={}, ok={}) -> init_cnt={}", ticks_per_sec, delta, calibrated, init_cnt);
         (init_cnt, ticks_per_sec)
     }
 }
@@ -253,14 +264,18 @@ pub fn set_lapic_timer_periodic(vector: u8, init_cnt: u32) {
 
     unsafe {
         // 1. Set divide configuration to 16
+        // IMPORTANT: Ensure divider is set BEFORE starting the periodic cycle.
         ptr::write_volatile((base + LAPIC_TIMER_DIVIDE as u64) as *mut u32, 0x03);
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
 
         // 2. Set LVT Timer register: Periodic mode (bit 17) + Vector
         let lvt_val = (1 << 17) | (vector as u32);
         ptr::write_volatile((base + LAPIC_LVT_TIMER as u64) as *mut u32, lvt_val);
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
 
         // 3. Set final initial count
         ptr::write_volatile((base + LAPIC_TIMER_INITCNT as u64) as *mut u32, init_cnt);
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
     }
 }
 

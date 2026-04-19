@@ -695,19 +695,14 @@ impl SocketApi {
             _ => return false,
         };
 
-        let should_bind = self
-            .sockets
-            .get(&api_handle)
-            .map(|s| s.local.is_none())
-            .unwrap_or(false);
+        let should_bind = self.sockets.get(&api_handle).map(|s| s.local.is_none()).unwrap_or(false);
 
         if should_bind {
             let socket = socket_set.get_mut::<smoltcp::socket::udp::Socket>(socket_handle);
             if let Err(e) = socket.bind(local_port) {
                 warn!(
                     "SOCKET_API: handle_udp_connect: failed to auto-bind port {}: {:?}",
-                    local_port,
-                    e
+                    local_port, e
                 );
                 return false;
             }
@@ -761,9 +756,7 @@ impl SocketApi {
             Some(s) if s.kind == SocketType::Icmp => s.handle,
             _ => return false,
         };
-        socket_set
-            .get_mut::<IcmpSocket>(socket_handle)
-            .set_hop_limit(Some(ttl as u8));
+        socket_set.get_mut::<IcmpSocket>(socket_handle).set_hop_limit(Some(ttl as u8));
         if let Some(m) = self.sockets.get_mut(&api_handle) {
             m.ttl = ttl;
         }
@@ -1362,11 +1355,7 @@ impl SocketApi {
         if managed.local.is_none() {
             let socket = socket_set.get_mut::<smoltcp::socket::udp::Socket>(managed.handle);
             if let Err(e) = socket.bind(local_port) {
-                warn!(
-                    "SOCKET_API: UDP_SEND_TO failed to auto-bind port {}: {:?}",
-                    local_port,
-                    e
-                );
+                warn!("SOCKET_API: UDP_SEND_TO failed to auto-bind port {}: {:?}", local_port, e);
                 return encode_send_result(0);
             }
             if let Some(m) = self.sockets.get_mut(&handle) {
