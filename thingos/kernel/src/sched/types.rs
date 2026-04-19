@@ -1,9 +1,9 @@
 //! Core scheduler types and data structures.
 
-use crate::BootRuntime;
-use crate::task::TaskId;
-use crate::task::TaskState;
 use core::marker::PhantomData;
+
+use crate::BootRuntime;
+use crate::task::{TaskId, TaskState};
 
 /// Default time slice in ticks (~100ms at 100Hz timer)
 pub const DEFAULT_TIMESLICE: u32 = 10;
@@ -153,14 +153,7 @@ pub struct Scheduler<R: BootRuntime> {
 
 impl SchedulerMetrics {
     pub fn new() -> Self {
-        SchedulerMetrics {
-            yields: 0,
-            pops: 0,
-            pushes: 0,
-            idle_picks: 0,
-            steals: 0,
-            last_flush: 0,
-        }
+        SchedulerMetrics { yields: 0, pops: 0, pushes: 0, idle_picks: 0, steals: 0, last_flush: 0 }
     }
 }
 

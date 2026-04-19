@@ -6,7 +6,8 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
+use abi::errors::Errno;
+use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
 use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_read, vfs_write};
 
 fn get_args() -> Vec<String> {
@@ -218,18 +219,22 @@ fn lookup(name: &str, server_ip: &str) -> Result<Vec<[u8; 4]>, &'static str> {
     // Poll for the response (up to ~3 seconds, spinning)
     let deadline = stem::time::now() + stem::time::Duration::from_millis(3000);
     loop {
-        let Ok(fd) = vfs_open(&data_path, O_RDONLY) else {
+        let Ok(fd) = vfs_open(&data_path, O_RDONLY | O_NONBLOCK) else {
             return Err("cannot open udp data for read");
         };
         let mut buf = alloc::vec![0u8; 2048 + 4];
-        let n = vfs_read(fd, &mut buf).unwrap_or(0);
+        let read_result = vfs_read(fd, &mut buf);
         let _ = vfs_close(fd);
 
-        if n >= 5 {
-            // First 4 bytes are the length prefix
-            let payload = &buf[4..n];
-            let addrs = parse_dns_response(payload);
-            return Ok(addrs);
+        match read_result {
+            Ok(n) if n >= 5 => {
+                // First 4 bytes are the length prefix
+                let payload = &buf[4..n];
+                let addrs = parse_dns_response(payload);
+                return Ok(addrs);
+            }
+            Ok(_) | Err(Errno::EAGAIN) => {}
+            Err(_) => return Err("read failed"),
         }
 
         if stem::time::now() >= deadline {

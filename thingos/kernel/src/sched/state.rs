@@ -341,17 +341,12 @@ impl SchedState {
         if self.threads.contains_key(&tid) {
             panic!("Thread ID {} already exists in sched", tid);
         }
-        let slot = self
-            .free_thread_slots
-            .pop()
-            .unwrap_or_else(|| {
-                let slot = self.next_thread_slot;
-                self.next_thread_slot = self
-                    .next_thread_slot
-                    .checked_add(1)
-                    .expect("scheduler thread slot overflow");
-                slot
-            });
+        let slot = self.free_thread_slots.pop().unwrap_or_else(|| {
+            let slot = self.next_thread_slot;
+            self.next_thread_slot =
+                self.next_thread_slot.checked_add(1).expect("scheduler thread slot overflow");
+            slot
+        });
         self.threads.insert(tid, fields);
         self.thread_slot_by_tid.insert(tid, slot);
         self.task_runtime_stats.entry(tid).or_default();
@@ -370,11 +365,7 @@ impl SchedState {
     }
 
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
-        let SchedState {
-            threads,
-            per_cpu,
-            ..
-        } = self;
+        let SchedState { threads, per_cpu, .. } = self;
 
         if let Some(pc) = per_cpu.get_mut(cpu) {
             for _cleanup_attempt in 0..RUNQ_STALE_PURGE_BUDGET {
@@ -385,10 +376,8 @@ impl SchedState {
                 // `remove_thread_from_runq` marks them not-enqueued.
                 // Only return the entry if it still matches the task's canonical
                 // runq placement metadata.
-                let valid_location = threads
-                    .get(&tid)
-                    .and_then(|thread| thread.runq_location)
-                    == Some((cpu, prio));
+                let valid_location =
+                    threads.get(&tid).and_then(|thread| thread.runq_location) == Some((cpu, prio));
 
                 if !valid_location {
                     continue;
@@ -416,18 +405,12 @@ impl SchedState {
     /// bounded lookahead paths (e.g. steal) that intentionally target a
     /// non-front candidate.
     pub fn dequeue_thread_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
-        let SchedState {
-            threads,
-            per_cpu,
-            ..
-        } = self;
+        let SchedState { threads, per_cpu, .. } = self;
 
         let pc = per_cpu.get_mut(cpu)?;
         let tid = pc.runq[prio].get(idx).copied()?;
-        let valid_location = threads
-            .get(&tid)
-            .and_then(|thread| thread.runq_location)
-            == Some((cpu, prio));
+        let valid_location =
+            threads.get(&tid).and_then(|thread| thread.runq_location) == Some((cpu, prio));
         if !valid_location {
             return None;
         }
@@ -490,10 +473,7 @@ impl SchedState {
 
     #[inline]
     pub fn last_enqueue_cause(&self, tid: ThreadId) -> EnqueueCause {
-        self.last_enqueue_cause
-            .get(&tid)
-            .copied()
-            .unwrap_or(EnqueueCause::Unknown)
+        self.last_enqueue_cause.get(&tid).copied().unwrap_or(EnqueueCause::Unknown)
     }
 
     pub fn refresh_sleep_bucket_membership(&mut self, wake_tick: u64) {
@@ -504,13 +484,7 @@ impl SchedState {
             return;
         };
         for (idx, tid) in bucket.iter().copied().enumerate() {
-            self.sleep_membership.insert(
-                tid,
-                SleepMembership {
-                    wake_tick,
-                    bucket_index: idx,
-                },
-            );
+            self.sleep_membership.insert(tid, SleepMembership { wake_tick, bucket_index: idx });
         }
     }
 
@@ -522,13 +496,7 @@ impl SchedState {
             bucket.push(tid);
             bucket.len() - 1
         };
-        self.sleep_membership.insert(
-            tid,
-            SleepMembership {
-                wake_tick,
-                bucket_index: idx,
-            },
-        );
+        self.sleep_membership.insert(tid, SleepMembership { wake_tick, bucket_index: idx });
     }
 
     pub fn remove_task_from_sleep_queue(&mut self, tid: ThreadId) -> bool {
@@ -569,21 +537,14 @@ impl SchedState {
         if let Some((moved_tid, moved_idx)) = moved {
             self.sleep_membership.insert(
                 moved_tid,
-                SleepMembership {
-                    wake_tick: membership.wake_tick,
-                    bucket_index: moved_idx,
-                },
+                SleepMembership { wake_tick: membership.wake_tick, bucket_index: moved_idx },
             );
         }
         removed
     }
 
     fn opportunistic_compact_runq(&mut self, cpu: usize, prio: usize) {
-        let SchedState {
-            threads,
-            per_cpu,
-            ..
-        } = self;
+        let SchedState { threads, per_cpu, .. } = self;
 
         let Some(pc) = per_cpu.get_mut(cpu) else {
             return;
@@ -593,24 +554,15 @@ impl SchedState {
             return;
         }
 
-        let front_is_stale = runq
-            .iter()
-            .take(RUNQ_STALE_PURGE_BUDGET)
-            .all(|entry_tid| {
-                threads
-                    .get(entry_tid)
-                    .and_then(|thread| thread.runq_location)
-                    != Some((cpu, prio))
-            });
+        let front_is_stale = runq.iter().take(RUNQ_STALE_PURGE_BUDGET).all(|entry_tid| {
+            threads.get(entry_tid).and_then(|thread| thread.runq_location) != Some((cpu, prio))
+        });
         if !front_is_stale {
             return;
         }
 
         runq.retain(|entry_tid| {
-            threads
-                .get(entry_tid)
-                .and_then(|thread| thread.runq_location)
-                == Some((cpu, prio))
+            threads.get(entry_tid).and_then(|thread| thread.runq_location) == Some((cpu, prio))
         });
     }
 
@@ -685,9 +637,7 @@ mod tests {
         assert!(state.remove_thread_from_runq(11));
         assert_eq!(state.get_thread(11).and_then(|t| t.runq_location), None);
         assert!(
-            state.per_cpu[0].runq[TaskPriority::Normal as usize]
-                .iter()
-                .any(|&tid| tid == 11),
+            state.per_cpu[0].runq[TaskPriority::Normal as usize].iter().any(|&tid| tid == 11),
             "lazy invalidation keeps stale entry in queue until dequeue"
         );
         assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), None);
@@ -727,16 +677,14 @@ mod tests {
         assert_eq!(state.per_cpu[0].stats.runnable_dequeues, 0);
         assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), None);
         assert_eq!(
-            state.per_cpu[0].stats.runnable_dequeues,
-            0,
+            state.per_cpu[0].stats.runnable_dequeues, 0,
             "stale entries should not count as runnable dequeues"
         );
 
         state.enqueue_thread(0, TaskPriority::Normal as usize, 13);
         assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), Some(13));
         assert_eq!(
-            state.per_cpu[0].stats.runnable_dequeues,
-            1,
+            state.per_cpu[0].stats.runnable_dequeues, 1,
             "valid dequeue should increment runnable_dequeues"
         );
     }
@@ -756,11 +704,7 @@ mod tests {
         }
 
         let runnable_tid = 10_000;
-        state.insert_thread(sched_fields(
-            runnable_tid,
-            TaskState::Runnable,
-            TaskPriority::Normal,
-        ));
+        state.insert_thread(sched_fields(runnable_tid, TaskState::Runnable, TaskPriority::Normal));
         state.enqueue_thread(0, TaskPriority::Normal as usize, runnable_tid);
 
         assert_eq!(
@@ -820,10 +764,7 @@ mod tests {
         assert_eq!(state.sleep_queue.get(&100).cloned(), Some(alloc::vec![22]));
         assert_eq!(
             state.sleep_membership.get(&22).copied(),
-            Some(SleepMembership {
-                wake_tick: 100,
-                bucket_index: 0
-            })
+            Some(SleepMembership { wake_tick: 100, bucket_index: 0 })
         );
 
         assert!(state.remove_task_from_sleep_queue(22));
@@ -844,10 +785,7 @@ mod tests {
         assert_eq!(state.sleep_queue.get(&12).cloned(), Some(alloc::vec![31]));
         assert_eq!(
             state.sleep_membership.get(&31).copied(),
-            Some(SleepMembership {
-                wake_tick: 12,
-                bucket_index: 0
-            })
+            Some(SleepMembership { wake_tick: 12, bucket_index: 0 })
         );
     }
 

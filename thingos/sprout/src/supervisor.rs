@@ -93,7 +93,7 @@ impl Supervisor {
                 }
             }
         }
-        
+
         info!("SPROUT: FORCING display=bootfb for diagnostic test!");
         force_bootfb = true;
 
@@ -124,7 +124,7 @@ impl Supervisor {
         // Stage 5: Launch background network stack supervision.
         // The driver side is handled by cambium; netd waits for the NIC VFS
         // provider and should be kept alive automatically once sprout starts.
-        info!("SPROUT: Launching netd...");
+        info!("SPROUT: Scheduling netd launch...");
         setup_network_stack(self.tasks.clone());
 
         // Stage 9: Optional readiness model verification test.
@@ -143,7 +143,7 @@ impl Supervisor {
             self.tasks.clone(),
             supervisor_write,
             0xB001,
-            self.config.force_bootfb
+            self.config.force_bootfb,
         );
 
         // Stage 7: Wait for Display Driver to register its VFS provider
@@ -381,8 +381,12 @@ impl Supervisor {
                     if t.resp_fd.is_none() {
                         if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(t.drv_resp_read) {
                             t.resp_fd = Some(fd);
-                            stem::info!("SPROUT: Bridged resp_channel {} -> FD {} for task '{}'",
-                                t.drv_resp_read, fd, t.name);
+                            stem::info!(
+                                "SPROUT: Bridged resp_channel {} -> FD {} for task '{}'",
+                                t.drv_resp_read,
+                                fd,
+                                t.name
+                            );
                         }
                     }
 
@@ -427,23 +431,38 @@ impl Supervisor {
         }
 
         // DRAIN MESSAGES
-        for ((resp_fd, drv_req_write, task_name), pollfd) in tasks_to_poll.into_iter().zip(pollfds.iter()) {
+        for ((resp_fd, drv_req_write, task_name), pollfd) in
+            tasks_to_poll.into_iter().zip(pollfds.iter())
+        {
             let mut msg_data = [0u8; 1024];
             let mut msg_fds = [0u32; 1];
-            
+
             loop {
                 // info!("SPROUT: Calling recvmsg for {}...", task_name);
                 match stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds) {
                     Ok((n, n_fds)) => {
-                        info!("SPROUT: Recvmsg SUCCESS from {}: n={}, nfds={}", task_name, n, n_fds);
-                        if n == 0 && n_fds == 0 { break; }
-                        
+                        info!(
+                            "SPROUT: Recvmsg SUCCESS from {}: n={}, nfds={}",
+                            task_name, n, n_fds
+                        );
+                        if n == 0 && n_fds == 0 {
+                            break;
+                        }
+
                         let bundled_fd = if n_fds > 0 { msg_fds[0] } else { 0 };
                         let parsed = abi::display_driver_protocol::parse_message(&msg_data[..n]);
                         if let Some((header, payload)) = parsed {
                             if header.msg_type == abi::supervisor_protocol::MSG_BIND_READY {
-                                info!("SPROUT: BIND_READY from {} (bundle_fd={})", task_name, bundled_fd);
-                                self.handle_bind_ready(&task_name, drv_req_write, payload, bundled_fd);
+                                info!(
+                                    "SPROUT: BIND_READY from {} (bundle_fd={})",
+                                    task_name, bundled_fd
+                                );
+                                self.handle_bind_ready(
+                                    &task_name,
+                                    drv_req_write,
+                                    payload,
+                                    bundled_fd,
+                                );
                             }
                         }
                     }
@@ -465,7 +484,8 @@ impl Supervisor {
         bundled_fd: u32,
     ) {
         use abi::supervisor_protocol::{self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, classes};
-        use stem::syscall::{port_send_all, vfs_mount, vfs::vfs_close};
+        use stem::syscall::vfs::vfs_close;
+        use stem::syscall::{port_send_all, vfs_mount};
 
         // Helper: send MSG_BIND_FAILED back to the driver.
         let send_failed = |req_write: u32, id: u64, code: u32, msg: &[u8]| {
@@ -541,7 +561,7 @@ impl Supervisor {
             let mut ledger = self.ledger.lock();
             let unit = ledger.get(class_name).cloned().unwrap_or(0);
             ledger.insert(class_name.to_string(), unit + 1);
-            let path = alloc::format!("{root}{unit}"); 
+            let path = alloc::format!("{root}{unit}");
             drop(ledger); // Release ledger lock before mounting
 
             match vfs_mount(provider_port, &path) {

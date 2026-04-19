@@ -797,7 +797,8 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         super::set_sched_lock_tracking::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-        let id = sched.spawn_user_task_deferred(entry, aspace, stack_info, regions, priority, affinity)?;
+        let id = sched
+            .spawn_user_task_deferred(entry, aspace, stack_info, regions, priority, affinity)?;
         let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         super::clear_sched_lock_tracking::<R>();
         drop(lock);

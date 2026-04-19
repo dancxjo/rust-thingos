@@ -1,14 +1,15 @@
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+use abi::errors::Errno;
+use abi::vm::{VmProt, VmRegionInfo};
+use spin::Mutex;
+
 use super::SCHEDULER;
 use super::types::Scheduler;
 use crate::memory::mappings::MappingList;
 use crate::{BootRuntime, BootTasking, MapKind, MapPerms};
-use abi::errors::Errno;
-use abi::vm::{VmProt, VmRegionInfo};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
-use spin::Mutex;
-
-use core::sync::atomic::{AtomicPtr, Ordering};
 
 #[allow(clippy::declare_interior_mutable_const)]
 const EMPTY_MAPPING: AtomicPtr<Mutex<MappingList>> = AtomicPtr::new(core::ptr::null_mut());
@@ -75,21 +76,13 @@ pub fn remove_user_mappings<R: BootRuntime>(
 pub fn check_user_mapping<R: BootRuntime>(addr: usize, len: usize, write: bool) -> bool {
     let cpu = super::current_cpu_index::<R>();
     let ptr = CURRENT_MAPPINGS[cpu].load(Ordering::Acquire);
-    if ptr.is_null() {
-        false
-    } else {
-        unsafe { (*ptr).lock().check(addr, len, write) }
-    }
+    if ptr.is_null() { false } else { unsafe { (*ptr).lock().check(addr, len, write) } }
 }
 
 pub fn get_user_mapping_at<R: BootRuntime>(addr: usize) -> Option<VmRegionInfo> {
     let cpu = super::current_cpu_index::<R>();
     let ptr = CURRENT_MAPPINGS[cpu].load(Ordering::Acquire);
-    if ptr.is_null() {
-        None
-    } else {
-        unsafe { (*ptr).lock().find_at(addr) }
-    }
+    if ptr.is_null() { None } else { unsafe { (*ptr).lock().find_at(addr) } }
 }
 
 pub unsafe fn translate_user_page<R: BootRuntime>(addr: u64) -> Option<u64> {

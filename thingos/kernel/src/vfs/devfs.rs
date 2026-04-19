@@ -24,13 +24,13 @@
 //! shadow built-in names when needed (last registration wins).  The global
 //! registry is protected by a spin-lock.
 
-use abi::errors::{Errno, SysResult};
 use alloc::collections::BTreeMap;
-use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
+
+use abi::errors::{Errno, SysResult};
 use spin::Mutex;
 
 use super::{VfsDriver, VfsNode, VfsStat};
@@ -168,9 +168,7 @@ struct DevSubDirNode {
 
 impl DevSubDirNode {
     fn new(prefix: &str) -> Self {
-        Self {
-            prefix: prefix.to_string(),
-        }
+        Self { prefix: prefix.to_string() }
     }
 }
 
@@ -229,11 +227,7 @@ impl VfsNode for DevDirNode {
         })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let mut names = alloc::vec![
-            "console".to_string(),
-            "null".to_string(),
-            "zero".to_string()
-        ];
+        let mut names = alloc::vec!["console".to_string(), "null".to_string(), "zero".to_string()];
         if BOOT_FB_INFO.lock().is_some() {
             names.push("fb0".to_string());
         }
@@ -271,9 +265,7 @@ struct ConsoleTtyState {
 
 impl Default for ConsoleTtyState {
     fn default() -> Self {
-        Self {
-            termios: abi::termios::DEFAULT_TERMIOS,
-        }
+        Self { termios: abi::termios::DEFAULT_TERMIOS }
     }
 }
 
@@ -285,9 +277,8 @@ struct ConsoleCaller {
 }
 
 /// Global tty state for `/dev/console`.
-static CONSOLE_TTY_STATE: Mutex<ConsoleTtyState> = Mutex::new(ConsoleTtyState {
-    termios: abi::termios::DEFAULT_TERMIOS,
-});
+static CONSOLE_TTY_STATE: Mutex<ConsoleTtyState> =
+    Mutex::new(ConsoleTtyState { termios: abi::termios::DEFAULT_TERMIOS });
 
 /// Return the current `/dev/console` foreground process-group ID.
 pub(crate) fn console_foreground_pgid() -> Option<u32> {
@@ -404,15 +395,137 @@ impl ConsoleNode {
         CONSOLE_TTY_STATE.lock().termios = t;
     }
 
+    /// Drain pending hardware input into the console line discipline.
+    ///
+    /// This keeps control characters such as `VINTR` responsive even when the
+    /// foreground program is not actively reading from stdin (for example,
+    /// `top` while sleeping between refreshes).
+    pub fn poll_input() {
+        Self::drain_input(crate::runtime_base());
+    }
+
     #[cfg(test)]
     fn set_tty_owner_for_test(sid: Option<u32>, fg_pgid: Option<u32>) {
         crate::presence::set_console_presence_for_test(sid, fg_pgid);
+    }
+
+    fn drain_input(rt: &'static dyn crate::BootRuntimeBase) -> bool {
+        use abi::termios::{ECHO, ECHOE, ICANON, ICRNL, ISIG, VINTR, VQUIT, VSUSP};
+
+        let tty_state = CONSOLE_TTY_STATE.lock();
+        let termios = tty_state.termios;
+        let foreground_pgid = crate::presence::console_foreground_pgid();
+        drop(tty_state);
+
+        let canonical = termios.c_lflag & ICANON != 0;
+        let do_echo = termios.c_lflag & ECHO != 0;
+        let do_echo_erase = termios.c_lflag & ECHOE != 0;
+        let isig = termios.c_lflag & ISIG != 0;
+        let icrnl = termios.c_iflag & ICRNL != 0;
+
+        let vintr = termios.c_cc[VINTR];
+        let vquit = termios.c_cc[VQUIT];
+        let vsusp = termios.c_cc[VSUSP];
+
+        let mut interrupted = false;
+
+        while let Some(c) = rt.getchar() {
+            if isig {
+                if c == vintr {
+                    if do_echo {
+                        rt.putchar(b'^');
+                        rt.putchar(b'C');
+                        rt.putchar(b'\r');
+                        rt.putchar(b'\n');
+                    }
+                    CONSOLE_BUF.lock().clear();
+                    if let Some(pgid) = foreground_pgid {
+                        crate::signal::send_signal_to_group(pgid, abi::signal::SIGINT);
+                    }
+                    interrupted = true;
+                    continue;
+                } else if c == vquit {
+                    if do_echo {
+                        rt.putchar(b'^');
+                        rt.putchar(b'\\');
+                        rt.putchar(b'\r');
+                        rt.putchar(b'\n');
+                    }
+                    CONSOLE_BUF.lock().clear();
+                    if let Some(pgid) = foreground_pgid {
+                        crate::signal::send_signal_to_group(pgid, abi::signal::SIGQUIT);
+                    }
+                    interrupted = true;
+                    continue;
+                } else if c == vsusp {
+                    if do_echo {
+                        rt.putchar(b'^');
+                        rt.putchar(b'Z');
+                        rt.putchar(b'\r');
+                        rt.putchar(b'\n');
+                    }
+                    CONSOLE_BUF.lock().clear();
+                    if let Some(pgid) = foreground_pgid {
+                        crate::signal::send_signal_to_group(pgid, abi::signal::SIGTSTP);
+                    }
+                    interrupted = true;
+                    continue;
+                }
+            }
+
+            match c {
+                b'\r' | b'\n' => {
+                    let mapped = if icrnl { b'\n' } else { c };
+                    if do_echo {
+                        rt.putchar(b'\r');
+                        rt.putchar(b'\n');
+                    }
+                    CONSOLE_BUF.lock().push_back(mapped);
+                }
+                0x08 | 0x7f => {
+                    if canonical {
+                        let mut cb = CONSOLE_BUF.lock();
+                        let last = cb.back().copied();
+                        if last.is_some() && last != Some(b'\n') {
+                            cb.pop_back();
+                            if do_echo && do_echo_erase {
+                                rt.putchar(0x08);
+                                rt.putchar(b' ');
+                                rt.putchar(0x08);
+                            }
+                        }
+                    } else {
+                        CONSOLE_BUF.lock().push_back(c);
+                    }
+                }
+                0x04 => {
+                    if canonical {
+                        CONSOLE_BUF.lock().push_back(0x04);
+                    } else {
+                        CONSOLE_BUF.lock().push_back(c);
+                    }
+                }
+                0x20..=0x7e => {
+                    if do_echo {
+                        rt.putchar(c);
+                    }
+                    CONSOLE_BUF.lock().push_back(c);
+                }
+                _ => {
+                    if !canonical {
+                        CONSOLE_BUF.lock().push_back(c);
+                    }
+                }
+            }
+        }
+
+        interrupted
     }
 }
 
 impl VfsNode for ConsoleNode {
     fn read(&self, _offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        use abi::termios::{ECHO, ECHOE, ICANON, ICRNL, ISIG, VINTR, VMIN, VQUIT, VSUSP};
+        use abi::termios::VMIN;
 
         if buf.is_empty() {
             return Ok(0);
@@ -428,119 +541,13 @@ impl VfsNode for ConsoleNode {
 
             let rt = crate::runtime_base();
 
-            // Snapshot current terminal flags and special characters so we are
-            // consistent across one drain + one dequeue pass.
             let tty_state = CONSOLE_TTY_STATE.lock();
             let termios = tty_state.termios;
-            let foreground_pgid = crate::presence::console_foreground_pgid();
+            let canonical = termios.c_lflag & abi::termios::ICANON != 0;
             drop(tty_state);
 
-            let canonical = termios.c_lflag & ICANON != 0;
-            let do_echo = termios.c_lflag & ECHO != 0;
-            let do_echo_erase = termios.c_lflag & ECHOE != 0;
-            let isig = termios.c_lflag & ISIG != 0;
-            let icrnl = termios.c_iflag & ICRNL != 0;
-
-            // Get configured signal characters
-            let vintr = termios.c_cc[VINTR];
-            let vquit = termios.c_cc[VQUIT];
-            let vsusp = termios.c_cc[VSUSP];
-
-            // ── Drain hardware FIFO into the software buffer ──────────────────
-            while let Some(c) = rt.getchar() {
-                // ── Check for signal-generating characters ────────────────────
-                if isig {
-                    if c == vintr {
-                        // SIGINT (interrupt) character
-                        if do_echo {
-                            rt.putchar(b'^');
-                            rt.putchar(b'C');
-                            rt.putchar(b'\r');
-                            rt.putchar(b'\n');
-                        }
-                        CONSOLE_BUF.lock().clear();
-                        if let Some(pgid) = foreground_pgid {
-                            crate::signal::send_signal_to_group(pgid, abi::signal::SIGINT);
-                        }
-                        return Err(abi::errors::Errno::EINTR);
-                    } else if c == vquit {
-                        // SIGQUIT (quit) character
-                        if do_echo {
-                            rt.putchar(b'^');
-                            rt.putchar(b'\\');
-                            rt.putchar(b'\r');
-                            rt.putchar(b'\n');
-                        }
-                        CONSOLE_BUF.lock().clear();
-                        if let Some(pgid) = foreground_pgid {
-                            crate::signal::send_signal_to_group(pgid, abi::signal::SIGQUIT);
-                        }
-                        return Err(abi::errors::Errno::EINTR);
-                    } else if c == vsusp {
-                        // SIGTSTP (suspend) character
-                        if do_echo {
-                            rt.putchar(b'^');
-                            rt.putchar(b'Z');
-                            rt.putchar(b'\r');
-                            rt.putchar(b'\n');
-                        }
-                        CONSOLE_BUF.lock().clear();
-                        if let Some(pgid) = foreground_pgid {
-                            crate::signal::send_signal_to_group(pgid, abi::signal::SIGTSTP);
-                        }
-                        return Err(abi::errors::Errno::EINTR);
-                    }
-                }
-
-                // ── Regular character processing ──────────────────────────────
-                match c {
-                    b'\r' | b'\n' => {
-                        let mapped = if icrnl { b'\n' } else { c };
-                        if do_echo {
-                            rt.putchar(b'\r');
-                            rt.putchar(b'\n');
-                        }
-                        CONSOLE_BUF.lock().push_back(mapped);
-                    }
-                    0x08 | 0x7f => {
-                        // Backspace / DEL
-                        if canonical {
-                            let mut cb = CONSOLE_BUF.lock();
-                            let last = cb.back().copied();
-                            if last.is_some() && last != Some(b'\n') {
-                                cb.pop_back();
-                                if do_echo && do_echo_erase {
-                                    rt.putchar(0x08);
-                                    rt.putchar(b' ');
-                                    rt.putchar(0x08);
-                                }
-                            }
-                        } else {
-                            CONSOLE_BUF.lock().push_back(c);
-                        }
-                    }
-                    0x04 => {
-                        // Ctrl-D (EOF in canonical mode)
-                        if canonical {
-                            CONSOLE_BUF.lock().push_back(0x04);
-                        } else {
-                            CONSOLE_BUF.lock().push_back(c);
-                        }
-                    }
-                    0x20..=0x7e => {
-                        if do_echo {
-                            rt.putchar(c);
-                        }
-                        CONSOLE_BUF.lock().push_back(c);
-                    }
-                    _ => {
-                        // In raw mode pass all bytes through; in canonical
-                        // mode silently discard control chars we don't handle.
-                        if !canonical {
-                            CONSOLE_BUF.lock().push_back(c);
-                        }
-                    }
-                }
+            if Self::drain_input(rt) {
+                return Err(abi::errors::Errno::EINTR);
             }
 
             // ── Check whether enough data is available to satisfy the read ───
@@ -888,11 +895,7 @@ struct FbShadow {
 
 impl FbNode {
     pub fn new(fb: crate::FramebufferInfo, resource_id: u64) -> Self {
-        Self {
-            fb,
-            resource_id,
-            shadow: Mutex::new(FbShadow::new(fb)),
-        }
+        Self { fb, resource_id, shadow: Mutex::new(FbShadow::new(fb)) }
     }
 }
 
@@ -929,11 +932,7 @@ impl VfsNode for FbNode {
 
         let off = offset as usize;
         if off >= slice.len() {
-            crate::kwarn!(
-                "FbNode::read: EOF (offset={} >= slice.len={})",
-                off,
-                slice.len()
-            );
+            crate::kwarn!("FbNode::read: EOF (offset={} >= slice.len={})", off, slice.len());
             return Ok(0);
         }
 
@@ -970,9 +969,7 @@ impl VfsNode for FbNode {
             return Ok(0);
         }
 
-        let n = buf
-            .len()
-            .min((self.fb.byte_len.saturating_sub(off as u64)) as usize);
+        let n = buf.len().min((self.fb.byte_len.saturating_sub(off as u64)) as usize);
         if n == 0 {
             return Ok(0);
         }
@@ -987,14 +984,22 @@ impl VfsNode for FbNode {
         if off == 0 && (n as u64 == self.fb.byte_len || n == expected_frame_bytes) {
             let row_bytes = self.fb.pitch as usize;
             let bytes_per_pixel = ((self.fb.bpp as usize) + 7) / 8;
-            let payload_bytes = (self.fb.width as usize).saturating_mul(bytes_per_pixel).min(row_bytes);
+            let payload_bytes =
+                (self.fb.width as usize).saturating_mul(bytes_per_pixel).min(row_bytes);
 
             // Fast blitting: cast pointers to u64/u32 to force wide MMIO transactions.
             // Generic [u8] copies often fall back to 1-byte writes on uncacheable memory,
             // bypassing PCIe Write Combining and causing multi-second screen freezes.
-            if bytes_per_pixel == 4 && row_bytes % 8 == 0 && (self.fb.addr as usize) % 8 == 0 && n % 8 == 0 {
-                let dst_u64 = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u64, n / 8) };
-                let src_u64 = unsafe { core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u64, n / 8) };
+            if bytes_per_pixel == 4
+                && row_bytes % 8 == 0
+                && (self.fb.addr as usize) % 8 == 0
+                && n % 8 == 0
+            {
+                let dst_u64 =
+                    unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u64, n / 8) };
+                let src_u64 = unsafe {
+                    core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u64, n / 8)
+                };
 
                 if row_bytes == payload_bytes {
                     dst_u64.copy_from_slice(src_u64);
@@ -1011,9 +1016,16 @@ impl VfsNode for FbNode {
                     }
                 }
                 return Ok(n);
-            } else if bytes_per_pixel == 4 && row_bytes % 4 == 0 && (self.fb.addr as usize) % 4 == 0 && n % 4 == 0 {
-                let dst_u32 = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u32, n / 4) };
-                let src_u32 = unsafe { core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u32, n / 4) };
+            } else if bytes_per_pixel == 4
+                && row_bytes % 4 == 0
+                && (self.fb.addr as usize) % 4 == 0
+                && n % 4 == 0
+            {
+                let dst_u32 =
+                    unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u32, n / 4) };
+                let src_u32 = unsafe {
+                    core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u32, n / 4)
+                };
 
                 if row_bytes == payload_bytes {
                     dst_u32.copy_from_slice(src_u32);
@@ -1050,7 +1062,8 @@ impl VfsNode for FbNode {
             return Ok(n);
         }
 
-        let dst_slice = unsafe { core::slice::from_raw_parts_mut((self.fb.addr as usize + off) as *mut u8, n) };
+        let dst_slice =
+            unsafe { core::slice::from_raw_parts_mut((self.fb.addr as usize + off) as *mut u8, n) };
         dst_slice.copy_from_slice(&shadow.bytes[off..off + n]);
         Ok(n)
     }
@@ -1259,8 +1272,9 @@ impl VfsNode for KmsgNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
+
+    use super::*;
 
     fn lookup(path: &str) -> SysResult<Arc<dyn VfsNode>> {
         DevFs::new().lookup(path)
@@ -1408,10 +1422,7 @@ mod tests {
         assert!(DevFs::new().lookup("test_unique_dev_99").is_ok());
         let removed = unregister("test_unique_dev_99");
         assert!(removed);
-        assert!(matches!(
-            DevFs::new().lookup("test_unique_dev_99"),
-            Err(Errno::ENOENT)
-        ));
+        assert!(matches!(DevFs::new().lookup("test_unique_dev_99"), Err(Errno::ENOENT)));
     }
 
     // ── /dev/urandom tests ───────────────────────────────────────────────────
@@ -1534,11 +1545,7 @@ mod tests {
         ConsoleNode::set_termios(raw);
 
         let t = ConsoleNode::get_termios();
-        assert_eq!(
-            t.c_lflag & abi::termios::ICANON,
-            0,
-            "ICANON should be clear"
-        );
+        assert_eq!(t.c_lflag & abi::termios::ICANON, 0, "ICANON should be clear");
         assert_eq!(t.c_lflag & abi::termios::ECHO, 0, "ECHO should be clear");
         assert_eq!(t.c_lflag & abi::termios::ISIG, 0, "ISIG should be clear");
 
@@ -1548,8 +1555,9 @@ mod tests {
 
     #[test]
     fn test_console_read_returns_eintr_on_pending_interrupt() {
-        use crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK;
         use core::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK;
 
         static INTERRUPT_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -1856,11 +1864,7 @@ mod tests {
     fn test_dev_dir_stat_has_nlink_two() {
         let st = DevDirNode.stat().unwrap();
         assert!(st.is_dir());
-        assert!(
-            st.nlink >= 2,
-            "dev dir nlink should be >= 2, got {}",
-            st.nlink
-        );
+        assert!(st.nlink >= 2, "dev dir nlink should be >= 2, got {}", st.nlink);
     }
 
     #[test]
@@ -1876,9 +1880,7 @@ mod tests {
             format: crate::PixelFormat::Bgra8888,
         };
         let node = FbNode::new(fb, 0);
-        let new_frame = [
-            1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-        ];
+        let new_frame = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
         let written = node.write(0, &new_frame).unwrap();
         assert_eq!(written, new_frame.len());

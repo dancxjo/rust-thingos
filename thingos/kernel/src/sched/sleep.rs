@@ -1,11 +1,8 @@
 //! Timing and yield functions.
 
-use crate::BootRuntime;
-use crate::BootTasking;
-
 use super::SCHEDULER;
-
 use super::types::{ScheduleReason, Scheduler};
+use crate::{BootRuntime, BootTasking};
 
 /// Cooperative yield: attempt to switch to the next runnable task.
 ///
@@ -165,12 +162,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             lock_start,
         );
         super::clear_sched_lock_tracking::<R>();
-        (
-            switch,
-            (current_id, final_state),
-            deferred_prepare_ipis,
-            deferred_registry_syncs,
-        )
+        (switch, (current_id, final_state), deferred_prepare_ipis, deferred_registry_syncs)
     };
     // SCHEDULER lock released here.
     super::apply_deferred_registry_syncs::<R>(deferred_registry_syncs);

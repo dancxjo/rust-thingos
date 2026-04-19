@@ -385,7 +385,11 @@ fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 }
 
 pub fn setup_network_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    spawn_netd(shared_tasks);
+    let _ = stem::thread::spawn_task(move || {
+        // Let critical boot tasks run first, then launch netd opportunistically.
+        stem::sleep_ms(500);
+        spawn_netd(shared_tasks);
+    });
 }
 
 pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {

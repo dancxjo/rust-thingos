@@ -534,7 +534,10 @@ impl WakeBatchLoadSnapshot {
         self.per_cpu_depths.get(cpu).copied().unwrap_or(0)
     }
 
-    fn least_loaded_online_cpu(&self, state: &crate::sched::state::SchedState) -> Option<(usize, usize)> {
+    fn least_loaded_online_cpu(
+        &self,
+        state: &crate::sched::state::SchedState,
+    ) -> Option<(usize, usize)> {
         state
             .online_cpus
             .iter()
@@ -938,6 +941,10 @@ pub fn on_tick<R: BootRuntime>() {
         TICK_COUNT.load(Ordering::Relaxed)
     };
 
+    if cpu_idx == 0 {
+        crate::vfs::devfs::ConsoleNode::poll_input();
+    }
+
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
 
     try_resched_if_needed::<R>(DispatchTrigger::TimerTick);
@@ -1050,14 +1057,13 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         // WATCHDOG: Detect if the lock has been held for an implausibly long time.
         // If it's held > 2 seconds, we likely have a deadlock or a lock leak.
         if owner != -1 && acquired_at != 0 && held_duration > (freq * 2) {
-             panic!(
+            panic!(
                 "SCHEDULER LOCK WATCHDOG: Lock held by CPU {} for {} ticks ({} ms) - potential DEADLOCK",
                 owner,
                 held_duration,
                 (held_duration * 1000) / freq
             );
         }
-
     }
 
     if let Some(mut lock) = lock {
@@ -1202,8 +1208,9 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         let freq = rt.mono_freq_hz().max(1);
         let watchdog_limit_ticks = freq * 2;
 
-        if owner != -1 && acquired_at != 0 && now.saturating_sub(acquired_at) > watchdog_limit_ticks {
-             panic!(
+        if owner != -1 && acquired_at != 0 && now.saturating_sub(acquired_at) > watchdog_limit_ticks
+        {
+            panic!(
                 "SCHEDULER LOCK WATCHDOG: Lock held by CPU {} for {} ticks ({} ms) - potential DEADLOCK",
                 owner,
                 now.saturating_sub(acquired_at),
@@ -1902,9 +1909,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                                 cpu
                             }
                             crate::task::Affinity::Any => {
-                                let preferred = select_preferred_any_affinity_wake_cpu_from_snapshot::<
-                                    R,
-                                >(self, sf.last_cpu, &wake_batch_loads);
+                                let preferred =
+                                    select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
+                                        self,
+                                        sf.last_cpu,
+                                        &wake_batch_loads,
+                                    );
                                 let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
                                     self,
                                     preferred,
@@ -6358,7 +6368,8 @@ mod tests {
                 pid,
                 job: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
                 unix_compat: crate::task::ProcessUnixCompat::isolated(pid, false),
-                thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+                thing_table: crate::vfs::thing_table::ThingTable::new(),
+                ipc_table: crate::ipc::IpcHandleTable::new(),
                 namespace: crate::vfs::NamespaceRef::global(),
                 cwd: alloc::string::String::from("/"),
                 root: alloc::string::String::from("/"),
@@ -6423,7 +6434,8 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(1220, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -6712,7 +6724,8 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(7000, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -6749,7 +6762,8 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(8700, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -6807,7 +6821,8 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(8800, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -6874,7 +6889,8 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9900, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -6896,7 +6912,8 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9800, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -6947,7 +6964,8 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9100, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -7049,7 +7067,8 @@ mod tests {
                 uc.set_spawn_context(alloc::vec![b"old".to_vec()], alloc::vec![]);
                 uc
             },
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
@@ -7130,7 +7149,8 @@ mod tests {
             pid: 9300,
             job: crate::task::ProcessLifecycle::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(), ipc_table: crate::ipc::IpcHandleTable::new(),
+            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),

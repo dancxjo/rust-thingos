@@ -23,6 +23,10 @@ use sysfs::{SysDevice, scan_devices};
 /// How many main-loop ticks between full catalog rescans.
 /// At 100 ms per tick this is ~30 seconds.
 const CATALOG_RESCAN_TICKS: u32 = 300;
+/// How many main-loop ticks between full device topology rescans.
+/// Cambium does not have topology-change notifications yet, so avoid walking
+/// `/sys/devices` every tick when the machine is idle.
+const DEVICE_RESCAN_TICKS: u32 = 50;
 
 fn is_network_device(device: &SysDevice) -> bool {
     if device.kind.starts_with("dev.net") {
@@ -199,17 +203,23 @@ fn run_daemon_mode() -> ! {
     // Initial catalog scan.
     catalog.scan();
 
-    loop {
-        match scan_devices() {
-            Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
-            Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
-        }
+    match scan_devices() {
+        Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
+        Err(err) => warn!("CAMBIUM: initial scan of /sys/devices failed: {:?}", err),
+    }
 
+    loop {
         for managed in drivers.values_mut() {
             managed.monitor();
         }
 
         tick = tick.wrapping_add(1);
+        if tick % DEVICE_RESCAN_TICKS == 0 {
+            match scan_devices() {
+                Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
+                Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
+            }
+        }
         if tick % CATALOG_RESCAN_TICKS == 0 {
             debug!("CAMBIUM: rescanning driver catalog");
             catalog.scan();

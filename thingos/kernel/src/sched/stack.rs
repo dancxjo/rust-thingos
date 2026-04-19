@@ -2,11 +2,10 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::memory::MapError;
-use crate::{BootRuntime, BootTasking, MapKind, MapPerms, memory};
-
 use super::SCHEDULER;
 use super::types::{Scheduler, StackFaultResult};
+use crate::memory::MapError;
+use crate::{BootRuntime, BootTasking, MapKind, MapPerms, memory};
 
 const DEFAULT_USER_STACK_PAGES: usize = 16;
 const MAX_USER_STACK_PAGES: usize = 256;
@@ -17,11 +16,7 @@ pub fn alloc_user_stack<R: BootRuntime>(pages: usize) -> Option<usize> {
     let rt = crate::runtime::<R>();
     let page_size = rt.page_size() as u64;
 
-    let requested_pages = if pages == 0 {
-        DEFAULT_USER_STACK_PAGES
-    } else {
-        pages
-    };
+    let requested_pages = if pages == 0 { DEFAULT_USER_STACK_PAGES } else { pages };
     let clamped_pages = core::cmp::min(requested_pages, MAX_USER_STACK_PAGES);
     let total_size = (clamped_pages as u64).saturating_mul(page_size);
 
@@ -29,13 +24,8 @@ pub fn alloc_user_stack<R: BootRuntime>(pages: usize) -> Option<usize> {
     let top = base + total_size;
 
     let aspace = rt.tasking().active_address_space();
-    let perms = MapPerms {
-        user: true,
-        read: true,
-        write: true,
-        exec: false,
-        kind: MapKind::Normal,
-    };
+    let perms =
+        MapPerms { user: true, read: true, write: true, exec: false, kind: MapKind::Normal };
     let hook = crate::GlobalAllocHook;
 
     let mut virt = base;
@@ -45,9 +35,7 @@ pub fn alloc_user_stack<R: BootRuntime>(pages: usize) -> Option<usize> {
         unsafe {
             core::ptr::write_bytes(hhdm_virt as *mut u8, 0, page_size as usize);
         }
-        rt.tasking()
-            .map_page(aspace, virt, phys, perms, MapKind::Normal, &hook)
-            .ok()?;
+        rt.tasking().map_page(aspace, virt, phys, perms, MapKind::Normal, &hook).ok()?;
         virt += page_size;
     }
 
@@ -67,13 +55,8 @@ pub unsafe fn map_user_page<R: BootRuntime>(virt: u64, phys: u64) -> Result<(), 
 
     let rt = crate::runtime::<R>();
     let aspace = rt.tasking().active_address_space();
-    let perms = MapPerms {
-        user: true,
-        read: true,
-        write: true,
-        exec: false,
-        kind: MapKind::Normal,
-    };
+    let perms =
+        MapPerms { user: true, read: true, write: true, exec: false, kind: MapKind::Normal };
     let hook = MapHook;
 
     rt.tasking()
@@ -115,9 +98,7 @@ pub unsafe fn unmap_user_page<R: BootRuntime>(virt: u64) -> Result<(), MapError>
     let rt = crate::runtime::<R>();
     let aspace = rt.tasking().active_address_space();
 
-    rt.tasking()
-        .unmap_page(aspace, virt)
-        .map_err(|()| MapError::NotMapped)?;
+    rt.tasking().unmap_page(aspace, virt).map_err(|()| MapError::NotMapped)?;
     rt.tasking().tlb_flush_page(virt);
     Ok(())
 }
@@ -130,9 +111,7 @@ pub unsafe fn protect_user_page<R: BootRuntime>(
     let rt = crate::runtime::<R>();
     let aspace = rt.tasking().active_address_space();
 
-    rt.tasking()
-        .protect_page(aspace, virt, perms)
-        .map_err(|()| MapError::PageTableFault)?;
+    rt.tasking().protect_page(aspace, virt, perms).map_err(|()| MapError::PageTableFault)?;
     rt.tasking().tlb_flush_page(virt);
     Ok(())
 }
@@ -208,13 +187,8 @@ pub unsafe fn handle_stack_fault<R: BootRuntime>(addr: u64) -> StackFaultResult 
     }
 
     let hhdm = crate::boot_info::get().map(|i| i.hhdm_offset).unwrap_or(0);
-    let perms = MapPerms {
-        user: true,
-        read: true,
-        write: true,
-        exec: false,
-        kind: MapKind::Normal,
-    };
+    let perms =
+        MapPerms { user: true, read: true, write: true, exec: false, kind: MapKind::Normal };
 
     let mut virt = new_commit_start;
     while virt < committed_start {
@@ -236,10 +210,8 @@ pub unsafe fn handle_stack_fault<R: BootRuntime>(addr: u64) -> StackFaultResult 
         virt += page_size;
     }
 
-    task.stack_info = Some(abi::types::StackInfo {
-        committed_start: new_commit_start as usize,
-        ..info
-    });
+    task.stack_info =
+        Some(abi::types::StackInfo { committed_start: new_commit_start as usize, ..info });
 
     rt.irq_restore(_irq);
     StackFaultResult::Grew
