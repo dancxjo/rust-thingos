@@ -135,6 +135,12 @@ pub fn sys_wait_many(
         unsafe {
             crate::sched::block_current_erased();
         }
+
+        if crate::sched::take_pending_interrupt_current() {
+            cleanup_all(&regs, tid, timeout_tick)?;
+            return Err(Errno::EINTR);
+        }
+
         cleanup_all(&regs, tid, timeout_tick)?;
     }
 }

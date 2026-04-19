@@ -7,6 +7,7 @@ use xshell::{Shell, cmd};
 pub fn clean(sh: &Shell) -> Result<()> {
     println!("Cleaning build artifacts and fetched state...");
     cmd!(sh, "cargo clean").run()?;
+    sh.remove_path("build")?;
     sh.remove_path("iso_root")?;
 
     for entry in std::fs::read_dir(".").into_iter().flatten() {

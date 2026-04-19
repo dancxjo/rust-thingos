@@ -88,6 +88,10 @@ impl ProviderPort {
                 crate::sched::block_current_erased();
             }
             self.resp.remove_waiter(tid);
+
+            if crate::sched::take_pending_interrupt_current() {
+                return Err(Errno::EINTR);
+            }
         }
     }
 
@@ -260,6 +264,10 @@ impl ProviderPortRef {
                 crate::sched::block_current_erased();
             }
             self.resp.remove_waiter(tid);
+
+            if crate::sched::take_pending_interrupt_current() {
+                return Err(Errno::EINTR);
+            }
         }
     }
 }

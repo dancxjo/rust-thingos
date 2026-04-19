@@ -3332,6 +3332,11 @@ pub fn wait_task<R: BootRuntime>(tid: TaskId) -> Result<i32, abi::errors::Errno>
         unsafe {
             block_current_erased();
         }
+
+        if take_pending_interrupt::<R>() {
+            let _ = unregister_task_exit_waiter::<R>(tid, current_tid);
+            return Err(abi::errors::Errno::EINTR);
+        }
     }
 }
 
@@ -3548,17 +3553,24 @@ fn waitpid_for_pid<R: BootRuntime>(
             block_current_erased();
         }
 
+        let interrupted = take_pending_interrupt::<R>();
+
         crate::ktrace!(
-            "waitpid: woke parent_pid={} parent_tid={} target_pid={} flags=0x{:x}",
+            "waitpid: woke parent_pid={} parent_tid={} target_pid={} flags=0x{:x} interrupted={}",
             our_pid,
             our_tid,
             pid,
-            flags
+            flags,
+            interrupted
         );
 
         // After waking, unregister from children that haven't yet exited.
         for &child_tid in &registered {
             let _ = unregister_task_exit_waiter::<R>(child_tid, our_tid);
+        }
+
+        if interrupted {
+            return Err(abi::errors::Errno::EINTR);
         }
 
         // Loop back to find the next queued child state transition.

@@ -183,6 +183,11 @@ fn sys_port_recv_impl(
         unsafe {
             crate::sched::block_current_erased();
         }
+
+        if crate::sched::take_pending_interrupt_current() {
+            port.remove_waiter_read(tid);
+            return Err(Errno::EINTR);
+        }
     }
 }
 
