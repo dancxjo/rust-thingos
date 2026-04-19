@@ -333,96 +333,26 @@ fn handle_stat(fs: &IsoFs, dev: &PortBlockDevice, payload: &[u8]) -> ProviderRes
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+const DISCOVERY_RETRY_MS: u64 = 500;
+const DISCOVERY_LOG_EVERY_ATTEMPTS: u32 = 20;
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let mount_point = mount_point_from_args();
     info!("iso9660d: starting ISO9660 VFS provider");
 
-    // 1. Find block devices via VFS.
-    let mut mounted: Option<(IsoFs, PortBlockDevice, PortHandle)> = None;
-
-    if let Ok(fd) = vfs_open("/services/storage", abi::syscall::vfs_flags::O_RDONLY) {
-        let mut buf = [0u8; 4096];
-        if let Ok(n) = vfs_readdir(fd, &mut buf) {
-            let mut offset = 0;
-            while offset < n {
-                let mut end = offset;
-                while end < n && buf[end] != 0 {
-                    end += 1;
-                }
-                if end > offset {
-                    if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
-                        let path = alloc::format!("/services/storage/{}", name);
-                        if let Ok(h_fd) = vfs_open(&path, abi::syscall::vfs_flags::O_RDONLY) {
-                            let mut h_buf = [0u8; 32];
-                            if let Ok(h_n) = vfs_read(h_fd, &mut h_buf) {
-                                let h_str = core::str::from_utf8(&h_buf[..h_n]).unwrap_or("");
-                                if let Ok(port_handle) = h_str.trim().parse::<u32>() {
-                                    let block_dev =
-                                        match PortBlockDevice::new(port_handle as PortHandle) {
-                                            Some(d) => d,
-                                            None => {
-                                                let _ = vfs_close(h_fd);
-                                                offset = end + 1;
-                                                continue;
-                                            }
-                                        };
-
-                                    if let Some(fs) = IsoFs::probe(&block_dev) {
-                                        info!("iso9660d: found ISO9660 on device {}", name);
-
-                                        // 3. Create the provider port pair.
-                                        let (req_write, req_read) = match port_create(
-                                            abi::vfs_rpc::VFS_RPC_MAX_REQ * 8,
-                                        ) {
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                warn!(
-                                                    "iso9660d: failed to create provider port: {:?}",
-                                                    e
-                                                );
-                                                let _ = vfs_close(h_fd);
-                                                offset = end + 1;
-                                                continue;
-                                            }
-                                        };
-
-                                        // 4. Mount via SYS_FS_MOUNT.
-                                        match vfs_mount(req_write, &mount_point) {
-                                            Ok(()) => {
-                                                info!(
-                                                    "iso9660d: mounted at {} (req_read={})",
-                                                    mount_point, req_read
-                                                );
-                                                mounted = Some((fs, block_dev, req_read));
-                                                let _ = vfs_close(h_fd);
-                                                break;
-                                            }
-                                            Err(e) => {
-                                                warn!("iso9660d: vfs_mount failed: {:?}", e);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            let _ = vfs_close(h_fd);
-                        }
-                    }
-                }
-                offset = end + 1;
-            }
+    // Keep probing until storage services and an ISO9660-capable block device appear.
+    let mut attempts = 0u32;
+    let (fs, dev, req_read) = loop {
+        if let Some(mounted) = try_mount_iso9660(&mount_point) {
+            break mounted;
         }
-        let _ = vfs_close(fd);
-    }
 
-    let (fs, dev, req_read) = match mounted {
-        Some(m) => m,
-        None => {
-            info!("iso9660d: no ISO9660 filesystem found — sleeping");
-            loop {
-                stem::sleep(core::time::Duration::from_secs(60));
-            }
+        attempts = attempts.saturating_add(1);
+        if attempts == 1 || attempts % DISCOVERY_LOG_EVERY_ATTEMPTS == 0 {
+            info!("iso9660d: no ISO9660 filesystem found yet — retrying");
         }
+        stem::time::sleep_ms(DISCOVERY_RETRY_MS);
     };
 
     // 5. Service loop using ProviderLoop — far less boilerplate than raw
@@ -442,6 +372,82 @@ fn main(_arg: usize) -> ! {
     loop {
         stem::syscall::yield_now();
     }
+}
+
+fn try_mount_iso9660(mount_point: &str) -> Option<(IsoFs, PortBlockDevice, PortHandle)> {
+    let fd = vfs_open("/services/storage", abi::syscall::vfs_flags::O_RDONLY).ok()?;
+    let mut mounted = None;
+
+    let mut buf = [0u8; 4096];
+    if let Ok(n) = vfs_readdir(fd, &mut buf) {
+        let mut offset = 0;
+        while offset < n {
+            let mut end = offset;
+            while end < n && buf[end] != 0 {
+                end += 1;
+            }
+            if end > offset {
+                if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
+                    let path = alloc::format!("/services/storage/{}", name);
+                    if let Ok(h_fd) = vfs_open(&path, abi::syscall::vfs_flags::O_RDONLY) {
+                        let mut h_buf = [0u8; 32];
+                        if let Ok(h_n) = vfs_read(h_fd, &mut h_buf) {
+                            let h_str = core::str::from_utf8(&h_buf[..h_n]).unwrap_or("");
+                            if let Ok(port_handle) = h_str.trim().parse::<u32>() {
+                                let block_dev =
+                                    match PortBlockDevice::new(port_handle as PortHandle) {
+                                        Some(d) => d,
+                                        None => {
+                                            let _ = vfs_close(h_fd);
+                                            offset = end + 1;
+                                            continue;
+                                        }
+                                    };
+
+                                if let Some(fs) = IsoFs::probe(&block_dev) {
+                                    info!("iso9660d: found ISO9660 on device {}", name);
+
+                                    let (req_write, req_read) = match port_create(
+                                        abi::vfs_rpc::VFS_RPC_MAX_REQ * 8,
+                                    ) {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            warn!(
+                                                "iso9660d: failed to create provider port: {:?}",
+                                                e
+                                            );
+                                            let _ = vfs_close(h_fd);
+                                            offset = end + 1;
+                                            continue;
+                                        }
+                                    };
+
+                                    match vfs_mount(req_write, mount_point) {
+                                        Ok(()) => {
+                                            info!(
+                                                "iso9660d: mounted at {} (req_read={})",
+                                                mount_point, req_read
+                                            );
+                                            mounted = Some((fs, block_dev, req_read));
+                                            let _ = vfs_close(h_fd);
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            warn!("iso9660d: vfs_mount failed: {:?}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let _ = vfs_close(h_fd);
+                    }
+                }
+            }
+            offset = end + 1;
+        }
+    }
+    let _ = vfs_close(fd);
+    mounted
 }
 
 fn mount_point_from_args() -> String {
