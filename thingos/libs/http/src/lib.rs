@@ -5,17 +5,20 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
-use abi::syscall::{poll_flags, PollHandle};
-use stem::syscall::port::{port_close, port_create, port_recv, port_send_all, PortHandle};
-use stem::thread::spawn_task_detached;
 
+use abi::syscall::{PollHandle, PollThing, poll_flags, poll_flags};
 use embedded_io::ErrorKind;
 use embedded_tls::blocking::{
     Aes128GcmSha256, Aes256GcmSha384, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
+use stem::syscall::port::{
+    PortHandle, PortHandle, port_close, port_close, port_create, port_create, port_recv, port_recv,
+    port_send_all, port_send_all,
+};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
+use stem::thread::spawn_task_detached;
 use stem::{debug, info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
@@ -86,9 +89,12 @@ impl TcpStream {
             match vfs_read(new_fd, &mut buf) {
                 Ok(n) if n > 0 => break n,
                 Ok(_) | Err(abi::errors::Errno::EAGAIN) => {
-                    if let Err(e) =
-                        wait_fd_ready(new_fd, poll_flags::POLLIN, deadline_ns, "http connect new socket id")
-                    {
+                    if let Err(e) = wait_fd_ready(
+                        new_fd,
+                        poll_flags::POLLIN,
+                        deadline_ns,
+                        "http connect new socket id",
+                    ) {
                         let _ = vfs_close(new_fd);
                         return Err(e);
                     }
@@ -128,8 +134,12 @@ impl TcpStream {
             let _ = vfs_close(ctl_fd);
             return Err(format!("connect command failed: {:?}", e));
         }
-        let revents =
-            wait_fd_ready(data_fd, poll_flags::POLLOUT | poll_flags::POLLIN, deadline_after_ms(CONNECT_TIMEOUT_MS), "http connect socket")?;
+        let revents = wait_fd_ready(
+            data_fd,
+            poll_flags::POLLOUT | poll_flags::POLLIN,
+            deadline_after_ms(CONNECT_TIMEOUT_MS),
+            "http connect socket",
+        )?;
         if (revents & (poll_flags::POLLERR | poll_flags::POLLNVAL) != 0)
             || ((revents & poll_flags::POLLHUP != 0) && (revents & poll_flags::POLLOUT == 0))
         {
@@ -148,8 +158,24 @@ impl TcpStream {
         let deadline_ns = deadline_after_ms(IO_POLL_TIMEOUT_MS);
         loop {
             match vfs_write(self.data_fd, data) {
-                Ok(n) if n > 0 => return Ok(n),
-                Ok(0) | Err(abi::errors::Errno::EAGAIN) => {
+                Ok(n) => {
+                    if n > 0 {
+                        return Ok(n);
+                    }
+                    let revents = wait_fd_ready(
+                        self.data_fd,
+                        poll_flags::POLLOUT | poll_flags::POLLIN,
+                        deadline_ns,
+                        "http write",
+                    )?;
+                    if (revents & (poll_flags::POLLERR | poll_flags::POLLNVAL) != 0)
+                        || ((revents & poll_flags::POLLHUP != 0)
+                            && (revents & poll_flags::POLLOUT == 0))
+                    {
+                        return Err(format!("write readiness failed: revents=0x{:x}", revents));
+                    }
+                }
+                Err(abi::errors::Errno::EAGAIN) => {
                     let revents = wait_fd_ready(
                         self.data_fd,
                         poll_flags::POLLOUT | poll_flags::POLLIN,
@@ -172,8 +198,24 @@ impl TcpStream {
         let deadline_ns = deadline_after_ms(IO_POLL_TIMEOUT_MS);
         loop {
             match vfs_read(self.data_fd, buf) {
-                Ok(n) if n > 0 => return Ok(n),
-                Ok(0) | Err(abi::errors::Errno::EAGAIN) => {
+                Ok(n) => {
+                    if n > 0 {
+                        return Ok(n);
+                    }
+                    let revents = wait_fd_ready(
+                        self.data_fd,
+                        poll_flags::POLLIN | poll_flags::POLLHUP,
+                        deadline_ns,
+                        "http read",
+                    )?;
+                    if revents & (poll_flags::POLLERR | poll_flags::POLLNVAL) != 0 {
+                        return Err(format!("read readiness failed: revents=0x{:x}", revents));
+                    }
+                    if (revents & poll_flags::POLLHUP != 0) && (revents & poll_flags::POLLIN == 0) {
+                        return Ok(0);
+                    }
+                }
+                Err(abi::errors::Errno::EAGAIN) => {
                     let revents = wait_fd_ready(
                         self.data_fd,
                         poll_flags::POLLIN | poll_flags::POLLHUP,
@@ -359,13 +401,14 @@ fn read_https_response_with_suite<S>(
 where
     S: embedded_tls::TlsCipherSuite + Send + 'static,
 {
-    let (write_handle, read_handle) = port_create(64 * 1024).map_err(|e| format!("port create failed: {:?}", e))?;
+    let (write_handle, read_handle) =
+        port_create(64 * 1024).map_err(|e| format!("port create failed: {:?}", e))?;
     let host = url.host.clone();
     let req_bytes = request.as_bytes().to_vec();
-    
+
     // We do the TLS connection setup in the main thread so we can return errors immediately.
     let mut tcp = TcpStream::connect(&host, url.port)?;
-    
+
     // To handle the TLS context borrowing locally in the background thread,
     // we spawn a native stem task that will perform the TLS read loop.
     let _ = spawn_task_detached(move || {
@@ -410,7 +453,7 @@ where
                 }
             }
         }
-        
+
         if let Err(e) = tls.flush() {
             let msg = format!("ERR: https flush failed: {:?}", e);
             let _ = port_send_all(write_handle, msg.as_bytes());
@@ -443,12 +486,15 @@ where
                             | ErrorKind::ConnectionReset
                             | ErrorKind::BrokenPipe
                     ) || err_text.contains("ConnectionClosed")
-                      || err_text.contains("CryptoError")
+                        || err_text.contains("CryptoError")
                     {
                         if err_text.contains("ConnectionClosed") {
                             debug!("http: https read gracefully terminated ({:?})", err_text);
                         } else {
-                            warn!("http: https read terminated with transport/crypto error {:?}", err_text);
+                            warn!(
+                                "http: https read terminated with transport/crypto error {:?}",
+                                err_text
+                            );
                         }
                         break;
                     }
@@ -458,7 +504,7 @@ where
                 }
             }
         }
-        
+
         let _ = port_close(write_handle);
     });
 
@@ -483,7 +529,7 @@ where
                     }
                     return Err("Background thread reported unknown error".to_string());
                 }
-                
+
                 response.extend_from_slice(chunk);
                 if let Some(idx) = find_subsequence(&response, b"\r\n\r\n") {
                     body_start = idx + 4;
@@ -503,7 +549,10 @@ where
     Ok((read_handle, response, body_start))
 }
 
-fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(PortHandle, Vec<u8>, usize), String> {
+fn read_https_response(
+    url: &ParsedUrl,
+    request: &str,
+) -> Result<(PortHandle, Vec<u8>, usize), String> {
     match read_https_response_with_suite::<Aes128GcmSha256>(url, request) {
         Ok(v) => Ok(v),
         Err(e) if e.contains("InvalidHandshake") => {
@@ -619,7 +668,7 @@ impl Response {
             debug!("http: response fully consumed");
             return Ok(Vec::new());
         };
-        
+
         match stream {
             ResponseStream::Http(tcp) => {
                 let mut buf = [0u8; 4096];
