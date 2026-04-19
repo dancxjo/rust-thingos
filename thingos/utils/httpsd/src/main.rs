@@ -24,7 +24,7 @@ const SEED_NAME: &[u8] = b"httpsd";
 const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 #[used]
 pub static THINGOS_SEED: Seed = Seed {
     abi_version: SEED_ABI_VERSION,
@@ -230,13 +230,13 @@ fn main(_arg: usize) -> ! {
     run_provider(&mount_point)
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub extern "C" fn thingos_vfs_mount_v1(_arg: usize) -> ! {
     let mount_point = mount_point_from_args();
     run_provider(&mount_point)
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     let mount_point = mount_point_from_args();
     match vfs_umount(&mount_point) {

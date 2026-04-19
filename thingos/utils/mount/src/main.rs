@@ -207,7 +207,14 @@ fn read_file(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
         if n == 0 {
             break;
         }
-        if out.len().saturating_add(n) > max_bytes {
+        let next_len = match out.len().checked_add(n) {
+            Some(v) => v,
+            None => {
+                let _ = vfs_close(fd);
+                return None;
+            }
+        };
+        if next_len > max_bytes {
             let _ = vfs_close(fd);
             return None;
         }
@@ -248,7 +255,7 @@ fn resolve_elf64_symbol_from_bytes(bytes: &[u8], target: &str) -> Option<u64> {
     }
 
     for i in 0..e_shnum {
-        let sh_off = e_shoff.saturating_add(i.saturating_mul(e_shentsize));
+        let sh_off = e_shoff.checked_add(i.checked_mul(e_shentsize)?)?;
         if sh_off + e_shentsize > bytes.len() {
             break;
         }
@@ -258,7 +265,7 @@ fn resolve_elf64_symbol_from_bytes(bytes: &[u8], target: &str) -> Option<u64> {
         }
 
         let sh_link = read_u32(bytes, sh_off + 40)? as usize;
-        let strtab_sh_off = e_shoff.saturating_add(sh_link.saturating_mul(e_shentsize));
+        let strtab_sh_off = e_shoff.checked_add(sh_link.checked_mul(e_shentsize)?)?;
         if strtab_sh_off + e_shentsize > bytes.len() {
             continue;
         }
