@@ -15,7 +15,7 @@ use rand_core::SeedableRng;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};
 use stem::{debug, info, warn};
 
-const IO_POLL_TIMEOUT_MS: u64 = 20_000;
+const IO_POLL_TIMEOUT_MS: u64 = 60_000;
 const IO_POLL_SLICE_MS: u64 = 100;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 const MAX_HEADER_READ_ITERATIONS: usize = 20;
