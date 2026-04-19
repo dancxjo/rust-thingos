@@ -21,6 +21,8 @@ const IO_POLL_TIMEOUT_MS: u64 = 60_000;
 const IO_POLL_SLICE_EARLY_MS: u64 = 1;
 const IO_POLL_SLICE_MEDIUM_MS: u64 = 5;
 const IO_POLL_SLICE_LATE_MS: u64 = 25;
+const IO_POLL_EARLY_THRESHOLD_MS: u64 = 20;
+const IO_POLL_MEDIUM_THRESHOLD_MS: u64 = 200;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 const MAX_HEADER_READ_ITERATIONS: usize = 20;
 // Max TLS record payload + TLS overhead as recommended by embedded-tls docs.
@@ -31,14 +33,24 @@ const DEFAULT_USER_AGENT: &str = "ThingOS-httpsd/0.1 (+https://github.com/dancxj
 
 fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
     let remaining = timeout_ms.saturating_sub(waited_ms);
-    let preferred = if waited_ms < 20 {
+    let preferred = if waited_ms < IO_POLL_EARLY_THRESHOLD_MS {
         IO_POLL_SLICE_EARLY_MS
-    } else if waited_ms < 200 {
+    } else if waited_ms < IO_POLL_MEDIUM_THRESHOLD_MS {
         IO_POLL_SLICE_MEDIUM_MS
     } else {
         IO_POLL_SLICE_LATE_MS
     };
     remaining.min(preferred)
+}
+
+fn should_refresh_tcp_state(last_state: TcpConnectState, waited_ms: u64) -> bool {
+    matches!(
+        last_state,
+        TcpConnectState::Created
+            | TcpConnectState::Connecting
+            | TcpConnectState::Closed
+            | TcpConnectState::Other
+    ) || waited_ms == 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,14 +187,7 @@ impl TcpStream {
                     return Ok(n);
                 }
                 Err(abi::errors::Errno::EAGAIN) => {
-                    let state = if matches!(
-                        last_state,
-                        TcpConnectState::Created
-                            | TcpConnectState::Connecting
-                            | TcpConnectState::Closed
-                            | TcpConnectState::Other
-                    ) || waited_ms == 0
-                    {
+                    let state = if should_refresh_tcp_state(last_state, waited_ms) {
                         read_tcp_state(&self.socket_id)
                     } else {
                         last_state
