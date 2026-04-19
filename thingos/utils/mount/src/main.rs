@@ -119,17 +119,18 @@ fn mount_all_from_fstab(path: &str) -> i32 {
 fn mount_one(fs_type: &str, target: &str) -> Result<(), Errno> {
     let provider_path = resolve_provider_binary(fs_type).ok_or(Errno::ENOENT)?;
     let bytes = read_file(&provider_path, 8 * 1024 * 1024).ok_or(Errno::EINVAL)?;
-    let mount_sym = resolve_provider_mount_symbol(&bytes)?;
+    let mount_sym = resolve_provider_mount_symbol(&bytes);
 
     let argv = [provider_path.as_bytes(), target.as_bytes()];
-    let _resp = spawn_driver_ex(&provider_path, &argv, &BTreeMap::new(), 0, &[], Some(&mount_sym))?;
+    let _resp =
+        spawn_driver_ex(&provider_path, &argv, &BTreeMap::new(), 0, &[], mount_sym.as_deref())?;
 
     wait_for_mount(target, MOUNT_VERIFICATION_ATTEMPTS, MOUNT_VERIFICATION_DELAY_MS)?;
     out(&alloc::format!("mounted type={} target={}\n", fs_type, target));
     Ok(())
 }
 
-fn resolve_provider_mount_symbol(bytes: &[u8]) -> Result<String, Errno> {
+fn resolve_provider_mount_symbol(bytes: &[u8]) -> Option<String> {
     if let Some(seed_vaddr) = resolve_elf64_symbol_from_bytes(bytes, SEED_SYMBOL) {
         if let Some(seed) = read_seed_descriptor(bytes, seed_vaddr) {
             if seed.abi_version == SEED_ABI_VERSION {
@@ -149,7 +150,7 @@ fn resolve_provider_mount_symbol(bytes: &[u8]) -> Result<String, Errno> {
                             )
                             .and_then(|s| core::str::from_utf8(s).ok().map(String::from))
                             {
-                                return Ok(mount_sym);
+                                return Some(mount_sym);
                             }
                         }
                     }
@@ -158,14 +159,17 @@ fn resolve_provider_mount_symbol(bytes: &[u8]) -> Result<String, Errno> {
         }
     }
 
+    if resolve_elf64_symbol_from_bytes(bytes, "_start").is_some() {
+        return Some(String::from("_start"));
+    }
     if resolve_elf64_symbol_from_bytes(bytes, "thingos_vfs_mount_v1").is_some() {
-        return Ok(String::from("thingos_vfs_mount_v1"));
+        return Some(String::from("thingos_vfs_mount_v1"));
     }
     if resolve_elf64_symbol_from_bytes(bytes, "entry_impl").is_some() {
-        return Ok(String::from("entry_impl"));
+        return Some(String::from("entry_impl"));
     }
 
-    Err(Errno::EINVAL)
+    None
 }
 
 fn wait_for_mount(target: &str, attempts: usize, delay_ms: u64) -> Result<(), Errno> {

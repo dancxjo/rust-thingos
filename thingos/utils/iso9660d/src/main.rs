@@ -51,7 +51,7 @@ use stem::{info, warn};
 
 const DEFAULT_MOUNT_POINT: &str = "/mnt/iso";
 const SEED_NAME: &[u8] = b"iso9660d";
-const HOOK_MOUNT_V1: &[u8] = b"entry_impl";
+const HOOK_MOUNT_V1: &[u8] = b"_start";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
 
 #[unsafe(no_mangle)]
