@@ -13,6 +13,7 @@ use abi::driver_interface::{
 };
 use driver::Rtl8168Driver;
 use protocol::{MSG_FRAME_RX, MSG_FRAME_TX, MSG_MAC_REQ, MSG_MAC_RESP, NetDriverMsg};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::{port_create, port_recv, port_send};
 use stem::{error, info, warn};
 
@@ -83,6 +84,17 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
 unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
     main(0)
 }
+
+#[unsafe(link_section = ".thing_manifest")]
+#[unsafe(no_mangle)]
+#[used]
+pub static MANIFEST: ManifestHeader = ManifestHeader {
+    magic: MANIFEST_MAGIC,
+    kind: ModuleKind::Driver,
+    device_kind: device_kind_bytes(b"dev.net.Nic"),
+    version: 1,
+    _reserved: 0,
+};
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {

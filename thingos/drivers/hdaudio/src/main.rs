@@ -31,6 +31,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_volatile};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::port::{port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
@@ -95,6 +96,17 @@ core::arch::global_asm!(
 unsafe extern "C" fn thingos_driver_start_rust(boot_fd: usize) -> Status {
     main(boot_fd)
 }
+
+#[unsafe(link_section = ".thing_manifest")]
+#[unsafe(no_mangle)]
+#[used]
+pub static MANIFEST: ManifestHeader = ManifestHeader {
+    magic: MANIFEST_MAGIC,
+    kind: ModuleKind::Driver,
+    device_kind: device_kind_bytes(b"dev.sound.Hda"),
+    version: 1,
+    _reserved: 0,
+};
 
 const REG_GCAP: u32 = 0x00;
 const REG_GCTL: u32 = 0x08;

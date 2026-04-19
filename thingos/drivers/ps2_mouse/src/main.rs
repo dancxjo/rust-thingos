@@ -12,6 +12,7 @@ use abi::driver_interface::{
     DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
     DRIVER_DESCRIPTOR_ABI_VERSION,
 };
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::syscall::vfs::{vfs_handle_from_port, vfs_write};
 use stem::{debug, error, info};
@@ -79,6 +80,17 @@ unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut Pro
 unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
     main(0)
 }
+
+#[unsafe(link_section = ".thing_manifest")]
+#[unsafe(no_mangle)]
+#[used]
+pub static MANIFEST: ManifestHeader = ManifestHeader {
+    magic: MANIFEST_MAGIC,
+    kind: ModuleKind::Driver,
+    device_kind: device_kind_bytes(b"drv.Ps2Mouse"),
+    version: 1,
+    _reserved: 0,
+};
 
 const PS2_DATA: usize = 0x60;
 const PS2_STATUS: usize = 0x64;

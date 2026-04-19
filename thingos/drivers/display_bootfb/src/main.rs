@@ -15,11 +15,17 @@ use abi::driver_interface::{
 };
 use driver::BootFbDriver;
 use ipc_helpers::provider::ProviderLoop;
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::{port_create, port_recv};
 use stem::syscall::vfs::vfs_handle_from_port;
 use stem::{debug, info, warn};
 use vfs_provider::dispatch_vfs_rpc;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_bootfb";
+
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" {
+    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+}
 
 #[unsafe(no_mangle)]
 #[used]
@@ -27,9 +33,12 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
     driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
     driver_name_len: THINGOS_DRIVER_NAME.len(),
-    driver_class: DriverClass::Unknown,
+    driver_class: DriverClass::Display,
     flags: 0,
     probe: thingos_driver_probe,
+    #[cfg(target_arch = "x86_64")]
+    start: thingos_driver_start_safe,
+    #[cfg(not(target_arch = "x86_64"))]
     start: thingos_driver_start,
 };
 
@@ -48,6 +57,42 @@ unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut Pro
 unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
     main(0)
 }
+
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    r#"
+    .section .text
+    .global thingos_driver_start_safe
+    thingos_driver_start_safe:
+        // RSP = 16n (kernel spawn)
+        sub rsp, 8
+        push rdi
+        // Call std initialization (TLS, etc)
+        call thingos_runtime_setup
+        // Restore RDI and realign for the next call.
+        pop rdi
+        add rsp, 8
+        // CALL will push 8 bytes, so inside Rust entry RSP = 16n + 8.
+        call thingos_driver_start_rust
+        ret
+"#
+);
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+    thingos_driver_start(ctx)
+}
+
+#[unsafe(link_section = ".thing_manifest")]
+#[unsafe(no_mangle)]
+#[used]
+pub static MANIFEST: ManifestHeader = ManifestHeader {
+    magic: MANIFEST_MAGIC,
+    kind: ModuleKind::Driver,
+    device_kind: device_kind_bytes(b"dev.display.Gpu"),
+    version: 1,
+    _reserved: 0,
+};
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
