@@ -100,6 +100,19 @@ impl HttpsHandle {
     fn new(node: HttpsNode, response: Option<Response>) -> Self {
         Self { node, response, body: Vec::new(), body_start_offset: 0, eof: false }
     }
+
+    fn push_chunk(&mut self, chunk: &[u8]) -> Result<(), Errno> {
+        self.body.extend_from_slice(chunk);
+        if self.body.len() > BODY_WINDOW_CAP {
+            let trim = self.body.len() - BODY_WINDOW_CAP;
+            self.body.drain(..trim);
+            self.body_start_offset = self
+                .body_start_offset
+                .checked_add(trim)
+                .ok_or(Errno::EOVERFLOW)?;
+        }
+        Ok(())
+    }
 }
 
 impl HttpsProvider {
@@ -146,6 +159,9 @@ impl HttpsProvider {
         if handle == ROOT_HANDLE {
             return Err(Errno::EISDIR);
         }
+        if max_len == 0 {
+            return Ok(Vec::new());
+        }
         let Some(state) = self.handles.get_mut(&handle) else {
             return Err(Errno::EBADF);
         };
@@ -175,7 +191,10 @@ impl HttpsProvider {
         }
 
         let needed_end = offset.saturating_add(max_len);
-        let mut body_end = state.body_start_offset.saturating_add(state.body.len());
+        let mut body_end = state
+            .body_start_offset
+            .checked_add(state.body.len())
+            .ok_or(Errno::EOVERFLOW)?;
 
         // Offset reads are constrained to the retained body window.
         // If the caller seeks behind `body_start_offset`, those bytes have been evicted.
@@ -214,16 +233,14 @@ impl HttpsProvider {
                 break;
             }
             debug!("httpsd: upstream chunk handle={} bytes={}", handle, chunk.len());
-            state.body.extend_from_slice(&chunk);
-            if state.body.len() > BODY_WINDOW_CAP {
-                let trim = state.body.len() - BODY_WINDOW_CAP;
-                state.body.drain(..trim);
-                state.body_start_offset = state.body_start_offset.saturating_add(trim);
-            }
-            body_end = state.body_start_offset.saturating_add(state.body.len());
+            state.push_chunk(&chunk)?;
+            body_end = state
+                .body_start_offset
+                .checked_add(state.body.len())
+                .ok_or(Errno::EOVERFLOW)?;
         }
 
-        body_end = state.body_start_offset.saturating_add(state.body.len());
+        // Re-check after fetch because the retained window may have advanced while reading chunks.
         if offset < state.body_start_offset {
             debug!(
                 "httpsd: read handle={} offset={} evicted while streaming (start={})",
@@ -239,7 +256,10 @@ impl HttpsProvider {
             return Ok(Vec::new());
         }
         let start = offset - state.body_start_offset;
-        let end = state.body.len().min(needed_end.saturating_sub(state.body_start_offset));
+        let end_limit = needed_end
+            .checked_sub(state.body_start_offset)
+            .ok_or(Errno::EINVAL)?;
+        let end = state.body.len().min(end_limit);
         let out = state.body[start..end].to_vec();
         debug!(
             "httpsd: read handle={} -> returned {} bytes (cached={} start={} eof={})",
@@ -407,6 +427,7 @@ fn dispatch_readdir(payload: &[u8]) -> ProviderResponse {
 #[cfg(test)]
 mod tests {
     use abi::errors::Errno;
+    use alloc::vec;
     use super::HttpsProvider;
     extern crate std;
 
@@ -446,5 +467,15 @@ mod tests {
 
         assert_eq!(provider.read_node(handle, 4, 3).expect("windowed read"), b"bcd");
         assert_eq!(provider.read_node(handle, 9, 8).expect("eof read"), b"");
+    }
+
+    #[test]
+    fn push_chunk_trims_to_bounded_window() {
+        let mut handle = super::HttpsHandle::new(super::HttpsNode::new("example.com", ""), None);
+        let chunk = vec![7u8; super::BODY_WINDOW_CAP + 5];
+        handle.push_chunk(&chunk).expect("chunk push");
+        assert_eq!(handle.body.len(), super::BODY_WINDOW_CAP);
+        assert_eq!(handle.body_start_offset, 5);
+        assert!(handle.body.iter().all(|b| *b == 7));
     }
 }
