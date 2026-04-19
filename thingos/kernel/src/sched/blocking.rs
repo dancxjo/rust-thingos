@@ -167,7 +167,13 @@ pub fn block_current<R: BootRuntime>() {
     super::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(decision) = switch_decision {
-        let Some(switch) = super::resolve_switch_params::<R>(decision) else {
+        let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
+        let mut ghost_fs_base = 0;
+        let Some(switch) = super::resolve_switch_params::<R>(
+            decision,
+            &mut ghost_ctx,
+            &mut ghost_fs_base,
+        ) else {
             if let Some(tid) = deferred_tid.filter(|_| !was_wake_pending) {
                 crate::kwarn!(
                     "SCHED: block_current failed to resolve switch params for tid {}; restoring task state",

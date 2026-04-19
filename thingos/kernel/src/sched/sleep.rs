@@ -47,7 +47,13 @@ pub fn yield_now<R: BootRuntime>() -> bool {
     super::send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
 
     if let Some(decision) = switch_decision {
-        let Some(switch) = super::resolve_switch_params::<R>(decision) else {
+        let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
+        let mut ghost_fs_base = 0;
+        let Some(switch) = super::resolve_switch_params::<R>(
+            decision,
+            &mut ghost_ctx,
+            &mut ghost_fs_base,
+        ) else {
             rt.irq_restore(_irq);
             return has_work;
         };
@@ -175,7 +181,13 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
     }
 
     if let Some(decision) = switch_decision {
-        let Some(switch) = super::resolve_switch_params::<R>(decision) else {
+        let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
+        let mut ghost_fs_base = 0;
+        let Some(switch) = super::resolve_switch_params::<R>(
+            decision,
+            &mut ghost_ctx,
+            &mut ghost_fs_base,
+        ) else {
             rt.irq_restore(_irq);
             return;
         };

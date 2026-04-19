@@ -1124,7 +1124,13 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                 }
                 send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
                 apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
-                let Some(switch) = resolve_switch_params::<R>(switch_decision) else {
+                let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
+                let mut ghost_fs_base = 0;
+                let Some(switch) = resolve_switch_params::<R>(
+                    switch_decision,
+                    &mut ghost_ctx,
+                    &mut ghost_fs_base,
+                ) else {
                     rt.irq_restore(irq);
                     return;
                 };
@@ -3281,7 +3287,13 @@ pub fn exit<R: BootRuntime>(code: i32) {
     apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
     wake_waiters(&termination.waiters);
-    let switch = resolve_switch_params::<R>(switch_decision).unwrap_or_else(|| {
+    let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
+    let mut ghost_fs_base = 0;
+    let switch = resolve_switch_params::<R>(
+        switch_decision,
+        &mut ghost_ctx,
+        &mut ghost_fs_base,
+    ).unwrap_or_else(|| {
         panic!(
             "scheduler invariant violated: terminate_current produced switch decision (from={}, to={}) but registry lookup failed",
             switch_decision.from_tid, switch_decision.to_tid
