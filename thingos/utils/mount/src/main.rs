@@ -160,19 +160,20 @@ fn mount_one(fs_type: &str, target: &str) -> Result<(), Errno> {
         target,
         MOUNT_VERIFICATION_ATTEMPTS,
         MOUNT_VERIFICATION_DELAY_MS,
-    );
+    )?;
     out(&alloc::format!("mounted type={} target={}\n", fs_type, target));
     Ok(())
 }
 
-fn wait_for_mount(target: &str, attempts: usize, delay_ms: u64) {
+fn wait_for_mount(target: &str, attempts: usize, delay_ms: u64) -> Result<(), Errno> {
     for _ in 0..attempts {
         if let Ok(fd) = vfs_open(target, abi::syscall::vfs_flags::O_RDONLY) {
             let _ = vfs_close(fd);
-            return;
+            return Ok(());
         }
         stem::time::sleep_ms(delay_ms);
     }
+    Err(Errno::ETIMEDOUT)
 }
 
 fn resolve_provider_binary(fs_type: &str) -> Option<String> {

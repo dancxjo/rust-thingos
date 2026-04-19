@@ -393,11 +393,6 @@ fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 }
 
 fn apply_fstab_mounts() {
-    if file_exists("/https") {
-        info!("SPROUT: /https already mounted; skipping mount -a");
-        return;
-    }
-
     info!("SPROUT: Applying mounts from /etc/fstab...");
     let argv: [&[u8]; 2] = [b"/bin/mount", b"-a"];
     match stem::syscall::spawn_process_ex(
