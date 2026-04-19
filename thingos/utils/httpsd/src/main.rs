@@ -48,8 +48,8 @@ struct HttpsHandle {
 }
 
 impl HttpsHandle {
-    fn new(node: HttpsNode) -> Self {
-        Self { node, response: None, body: Vec::new(), eof: false }
+    fn new(node: HttpsNode, response: Option<Response>) -> Self {
+        Self { node, response, body: Vec::new(), eof: false }
     }
 }
 
@@ -58,10 +58,10 @@ impl HttpsProvider {
         Self { next_handle: ROOT_HANDLE + 1, handles: BTreeMap::new() }
     }
 
-    fn allocate_node(&mut self, host: &str, path: &str) -> u64 {
+    fn allocate_node(&mut self, host: &str, path: &str, response: Option<Response>) -> u64 {
         let handle = self.next_handle;
         self.next_handle = self.next_handle.saturating_add(1);
-        self.handles.insert(handle, HttpsHandle::new(HttpsNode::new(host, path)));
+        self.handles.insert(handle, HttpsHandle::new(HttpsNode::new(host, path), response));
         handle
     }
 
@@ -82,11 +82,14 @@ impl HttpsProvider {
         let rest = parts.collect::<Vec<_>>().join("/");
         let node = HttpsNode::new(host, &rest);
         info!("httpsd: lookup '{}' probing {}", path, node.url());
-        if HttpClient::get(&node.url()).is_err() {
-            warn!("httpsd: lookup '{}' probe failed", path);
-            return Err(Errno::ENOENT);
-        }
-        let handle = self.allocate_node(host, &rest);
+        let response = match HttpClient::get(&node.url()) {
+            Ok(response) => response,
+            Err(_) => {
+                warn!("httpsd: lookup '{}' probe failed", path);
+                return Err(Errno::ENOENT);
+            }
+        };
+        let handle = self.allocate_node(host, &rest, Some(response));
         info!("httpsd: lookup '{}' -> handle {}", path, handle);
         Ok(handle)
     }
