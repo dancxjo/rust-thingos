@@ -586,9 +586,9 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         &shell_path,
         &[shell_path.as_bytes()],
         &alloc::collections::BTreeMap::new(),
-        abi::types::stdio_mode::thing(console_fd), // stdin
-        abi::types::stdio_mode::thing(console_fd), // stdout
-        abi::types::stdio_mode::thing(console_fd), // stderr
+        abi::types::stdio_mode::handle(console_fd), // stdin
+        abi::types::stdio_mode::handle(console_fd), // stdout
+        abi::types::stdio_mode::handle(console_fd), // stderr
         0,
         &[],
     ) {

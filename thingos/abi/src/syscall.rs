@@ -25,15 +25,15 @@ pub struct IoVec {
     pub len: usize,
 }
 
-/// Entry in the `poll_things` array passed to [`SYS_FS_POLL`].
+/// Entry in the `poll_handles` array passed to [`SYS_FS_POLL`].
 ///
 /// Layout mirrors POSIX `struct pollfd` so that future libc ports can
 /// alias this directly.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct PollHandle {
-    /// Thing to watch.
-    pub thing: i32,
+    /// Handle to watch.
+    pub handle: i32,
     /// Events to wait for (input, using [`poll_flags`]).
     pub events: u16,
     /// Events that occurred (output, filled by the kernel).

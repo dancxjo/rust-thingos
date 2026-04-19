@@ -229,7 +229,7 @@ pub fn task_exec_current<R: BootRuntime>(
     }
 
     // 6. Update ProcessInfo metadata (argv, env, and auxv).
-    //    Also close all THING_CLOEXEC-flagged file descriptors and clear
+    //    Also close all HANDLE_CLOEXEC-flagged file descriptors and clear
     //    exec_in_progress now that we are about to commit — the caller is the
     //    sole surviving thread from this point forward.
     {
@@ -241,7 +241,7 @@ pub fn task_exec_current<R: BootRuntime>(
         pinfo.unix_compat.set_spawn_context(argv, build_auxv(&aux_info, page_size));
         // Record the executable path for /proc/self/exe.
         pinfo.exec_path = exec_fd_path;
-        // Close all file descriptors marked THING_CLOEXEC before the new image runs.
+        // Close all file descriptors marked HANDLE_CLOEXEC before the new image runs.
         pinfo.handle_table.close_on_exec();
         // Commit: caller is now the only thread; clear the flag.
         pinfo.job.exec_in_progress = false;
@@ -692,9 +692,9 @@ mod tests {
         );
     }
 
-    // ── THING_CLOEXEC / close-on-exec unit tests ────────────────────────────────
+    // ── HANDLE_CLOEXEC / close-on-exec unit tests ────────────────────────────────
 
-    use crate::vfs::handle_table::THING_CLOEXEC;
+    use crate::vfs::handle_table::HANDLE_CLOEXEC;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
     use abi::errors::SysResult;
 
@@ -721,7 +721,7 @@ mod tests {
     }
 
     /// Simulates the commit phase of exec: close_on_exec is called on the fd
-    /// table, then exec_in_progress is cleared.  FDs with THING_CLOEXEC should be
+    /// table, then exec_in_progress is cleared.  FDs with HANDLE_CLOEXEC should be
     /// gone; others should remain.
     #[test]
     fn exec_commit_closes_cloexec_fds() {
@@ -739,7 +739,7 @@ mod tests {
             space: crate::task::ProcessAddressSpace::empty(),
         }));
 
-        // Set up: fd 0 survives, fd 1 has THING_CLOEXEC.
+        // Set up: fd 0 survives, fd 1 has HANDLE_CLOEXEC.
         {
             let mut pi = pinfo.lock();
             pi.handle_table
@@ -748,7 +748,7 @@ mod tests {
             pi.handle_table
                 .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec".into())
                 .unwrap();
-            pi.handle_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
+            pi.handle_table.set_handle_flags(1, HANDLE_CLOEXEC).unwrap();
         }
 
         // Simulate exec commit phase.
@@ -762,16 +762,16 @@ mod tests {
         let pi = pinfo.lock();
         assert!(
             pi.handle_table.get(0).is_ok(),
-            "fd 0 (no THING_CLOEXEC) must survive exec"
+            "fd 0 (no HANDLE_CLOEXEC) must survive exec"
         );
         assert!(
             matches!(pi.handle_table.get(1), Err(abi::errors::Errno::EBADF)),
-            "fd 1 (THING_CLOEXEC) must be closed on exec"
+            "fd 1 (HANDLE_CLOEXEC) must be closed on exec"
         );
         assert!(!pi.job.exec_in_progress, "exec_in_progress cleared after commit");
     }
 
-    /// When no FDs have THING_CLOEXEC, close_on_exec during exec is a no-op and
+    /// When no FDs have HANDLE_CLOEXEC, close_on_exec during exec is a no-op and
     /// all FDs survive.
     #[test]
     fn exec_commit_preserves_all_fds_without_cloexec() {
@@ -799,7 +799,7 @@ mod tests {
                 .unwrap();
         }
 
-        // Exec commit with no THING_CLOEXEC flags set.
+        // Exec commit with no HANDLE_CLOEXEC flags set.
         pinfo.lock().handle_table.close_on_exec();
 
         let pi = pinfo.lock();
@@ -923,15 +923,15 @@ mod tests {
     /// Helper: build a ProcessInfo pre-loaded with realistic pre-exec metadata.
     fn make_pinfo_with_metadata(pid: u32) -> Arc<Mutex<ProcessInfo>> {
         let mut handle_table = crate::vfs::handle_table::HandleTable::new();
-        // fd 0: stays open (no THING_CLOEXEC)
+        // fd 0: stays open (no HANDLE_CLOEXEC)
         handle_table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/stdin".into())
             .unwrap();
-        // fd 1: marked THING_CLOEXEC, must be closed on exec
+        // fd 1: marked HANDLE_CLOEXEC, must be closed on exec
         handle_table
             .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec_fd".into())
             .unwrap();
-        handle_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
+        handle_table.set_handle_flags(1, HANDLE_CLOEXEC).unwrap();
 
         Arc::new(Mutex::new(ProcessInfo {
             pid,
@@ -1141,10 +1141,10 @@ mod tests {
             "new AT_ENTRY missing from auxv after exec"
         );
 
-        // handle_table: THING_CLOEXEC fd must be closed
+        // handle_table: HANDLE_CLOEXEC fd must be closed
         assert!(
             matches!(pi.handle_table.get(1), Err(abi::errors::Errno::EBADF)),
-            "THING_CLOEXEC fd must be closed after exec"
+            "HANDLE_CLOEXEC fd must be closed after exec"
         );
         assert!(pi.handle_table.get(0).is_ok(), "non-cloexec fd must survive");
 

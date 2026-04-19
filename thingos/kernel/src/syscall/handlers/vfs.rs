@@ -18,7 +18,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 
 use abi::errors::{Errno, SysResult};
-use abi::syscall::{PollHandle, fcntl_cmd, poll_flags, thing_flags, vfs_flags};
+use abi::syscall::{PollHandle, fcntl_cmd, poll_flags, handle_flags, vfs_flags};
 
 use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
@@ -172,10 +172,10 @@ pub fn sys_fs_fcntl(fd: usize, cmd: usize, arg: usize) -> SysResult<usize> {
     let mut lock = pinfo_arc.lock();
 
     match cmd as u32 {
-        fcntl_cmd::F_GETFD => Ok(lock.handle_table.get_thing_flags(fd as u32)? as usize),
+        fcntl_cmd::F_GETFD => Ok(lock.handle_table.get_handle_flags(fd as u32)? as usize),
         fcntl_cmd::F_SETFD => {
             lock.handle_table
-                .set_thing_flags(fd as u32, (arg as u32) & thing_flags::THING_CLOEXEC)?;
+                .set_handle_flags(fd as u32, (arg as u32) & handle_flags::HANDLE_CLOEXEC)?;
             Ok(0)
         }
         fcntl_cmd::F_GETFL => {
@@ -856,9 +856,9 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
     {
         let lock = pinfo_arc.lock();
         for (i, kfd) in kfds.iter().enumerate() {
-            if kfd.thing >= 0 {
+            if kfd.handle >= 0 {
                 entries[i].node =
-                    lock.handle_table.get(kfd.thing as u32).ok().map(|f| f.node.clone());
+                    lock.handle_table.get(kfd.handle as u32).ok().map(|f| f.node.clone());
                 entries[i].events = kfd.events;
             }
         }
@@ -887,7 +887,7 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
         for (i, entry) in entries.iter().enumerate() {
             let revents = if let Some(ref node) = entry.node {
                 node.poll() & (entry.events | poll_flags::POLLERR | poll_flags::POLLHUP)
-            } else if kfds[i].thing >= 0 {
+            } else if kfds[i].handle >= 0 {
                 poll_flags::POLLNVAL
             } else {
                 0
@@ -939,7 +939,7 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
         for (i, entry) in entries.iter().enumerate() {
             let revents = if let Some(ref node) = entry.node {
                 node.poll() & (entry.events | poll_flags::POLLERR | poll_flags::POLLHUP)
-            } else if kfds[i].thing >= 0 {
+            } else if kfds[i].handle >= 0 {
                 poll_flags::POLLNVAL
             } else {
                 0
@@ -1788,7 +1788,7 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(AlwaysReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollHandle { thing: 3, events: poll_flags::POLLIN, revents: 0 }];
+        let mut fds = [PollHandle { handle: 3, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 1, "one fd should be ready");
@@ -1801,7 +1801,7 @@ mod tests {
         let node: Arc<dyn VfsNode> = Arc::new(NeverReadyNode);
         let pinfo = make_process_info_with_nodes(&[(3, node)]);
 
-        let mut fds = [PollHandle { thing: 3, events: poll_flags::POLLIN, revents: 0 }];
+        let mut fds = [PollHandle { handle: 3, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 0, "no fds ready in non-blocking mode");
@@ -1820,9 +1820,9 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollHandle { thing: 3, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
-            PollHandle { thing: 4, events: poll_flags::POLLIN, revents: 0 },
-            PollHandle { thing: 5, events: poll_flags::POLLOUT, revents: 0 },
+            PollHandle { handle: 3, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
+            PollHandle { handle: 4, events: poll_flags::POLLIN, revents: 0 },
+            PollHandle { handle: 5, events: poll_flags::POLLOUT, revents: 0 },
         ];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
@@ -1857,7 +1857,7 @@ mod tests {
     fn poll_negative_fd_is_skipped() {
         let pinfo = make_process_info_with_nodes(&[]);
 
-        let mut fds = [PollHandle { thing: -1, events: poll_flags::POLLIN, revents: 0 }];
+        let mut fds = [PollHandle { handle: -1, events: poll_flags::POLLIN, revents: 0 }];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");
         assert_eq!(n, 0, "negative fd is silently skipped");
@@ -1882,9 +1882,9 @@ mod tests {
         ]);
 
         let mut fds = [
-            PollHandle { thing: 3, events: poll_flags::POLLIN, revents: 0 },
-            PollHandle { thing: 4, events: poll_flags::POLLIN, revents: 0 },
-            PollHandle { thing: 5, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
+            PollHandle { handle: 3, events: poll_flags::POLLIN, revents: 0 },
+            PollHandle { handle: 4, events: poll_flags::POLLIN, revents: 0 },
+            PollHandle { handle: 5, events: poll_flags::POLLIN | poll_flags::POLLOUT, revents: 0 },
         ];
 
         let n = poll_nonblocking(pinfo, &mut fds).expect("poll should succeed");

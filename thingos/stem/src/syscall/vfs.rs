@@ -276,9 +276,9 @@ pub fn vfs_umount(path: &str) -> SysResult<()> {
     abi::errors::errno(ret).map(|_| ())
 }
 
-/// Duplicate `old_handle` to the lowest available thing.
+/// Duplicate `old_handle` to the lowest available handle.
 ///
-/// Returns the new thing on success.
+/// Returns the new handle on success.
 pub fn dup(old_handle: u32) -> SysResult<u32> {
     let ret = unsafe { raw_syscall6(SYS_FS_DUP, old_handle as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
@@ -329,7 +329,7 @@ pub fn pipe(pipefd: &mut [u32; 2]) -> SysResult<()> {
 /// ```no_run
 /// use abi::syscall::{PollHandle, poll_flags};
 /// use stem::syscall::vfs_poll;
-/// let mut fds = [PollHandle { thing: 0, events: poll_flags::POLLIN, revents: 0 }];
+/// let mut fds = [PollHandle { handle: 0, events: poll_flags::POLLIN, revents: 0 }];
 /// let n = vfs_poll(&mut fds, u64::MAX).unwrap();
 /// if n > 0 { /* fd 0 is readable */ }
 /// ```

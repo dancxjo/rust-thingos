@@ -50,7 +50,7 @@ fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Resul
     loop {
         let timeout_ms = timeout_ms_until_deadline(deadline_ns)
             .map_err(|_| format!("{context}: timed out waiting for readiness"))?;
-        let mut pollfd = [PollHandle { thing, events, revents: 0 }];
+        let mut pollfd = [PollHandle { handle: thing, events, revents: 0 }];
         match vfs_poll(&mut pollfd, timeout_ms) {
             Ok(0) => return Err(format!("{context}: timed out waiting for readiness")),
             Ok(_) => {

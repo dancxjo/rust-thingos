@@ -1049,30 +1049,30 @@ fn spawn_job(
             if let Some(path) = cmd.stdin_file {
                 let fd = open_read(path)?;
                 transient_fds.push(fd);
-                stdio_mode::thing(fd)
+                stdio_mode::handle(fd)
             } else if background {
-                stdio_mode::thing(bg_in.unwrap())
+                stdio_mode::handle(bg_in.unwrap())
             } else {
                 stdio_mode::INHERIT
             }
         } else {
-            stdio_mode::thing(pipes[idx - 1][0])
+            stdio_mode::handle(pipes[idx - 1][0])
         };
 
         let stdout_mode = if idx + 1 < cmds.len() {
-            stdio_mode::thing(pipes[idx][1])
+            stdio_mode::handle(pipes[idx][1])
         } else if let Some(path) = cmd.stdout_file {
             let fd = open_write(path, cmd.stdout_append)?;
             transient_fds.push(fd);
-            stdio_mode::thing(fd)
+            stdio_mode::handle(fd)
         } else if background {
-            stdio_mode::thing(bg_out.unwrap())
+            stdio_mode::handle(bg_out.unwrap())
         } else {
             stdio_mode::INHERIT
         };
 
         let stderr_mode =
-            if background { stdio_mode::thing(bg_out.unwrap()) } else { stdio_mode::INHERIT };
+            if background { stdio_mode::handle(bg_out.unwrap()) } else { stdio_mode::INHERIT };
 
         match syscall::spawn_process_ex(
             &path,

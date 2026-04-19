@@ -433,8 +433,8 @@ pub mod fcntl_cmd {
     pub const F_SETFL: u32 = 4;
 }
 
-pub mod thing_flags {
-    pub const THING_CLOEXEC: u32 = 0x1;
+pub mod handle_flags {
+    pub const HANDLE_CLOEXEC: u32 = 0x1;
 }
 
 pub mod poll_flags {

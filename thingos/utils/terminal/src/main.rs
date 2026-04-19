@@ -502,7 +502,7 @@ fn main(arg: usize) -> ! {
 
         // Check for focus change
         if focus_watch != 0 {
-            let mut fds = [abi::syscall::PollHandle { thing: focus_watch as i32,
+            let mut fds = [abi::syscall::PollHandle { handle: focus_watch as i32,
                 events: abi::syscall::poll_flags::POLLIN as u16,
                 revents: 0,
             }];

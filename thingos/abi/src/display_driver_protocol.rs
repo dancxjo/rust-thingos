@@ -127,7 +127,7 @@ pub struct ErrResp {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct OfferFramebufferPayload {
-    pub thing: u32,
+    pub handle: u32,
     pub _pad: u32,
     pub width: u32,
     pub height: u32,
@@ -147,7 +147,7 @@ pub struct AcceptFramebufferPayload {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct AcquiredPayload {
-    pub thing: u32,
+    pub handle: u32,
     pub _pad1: u32,
     pub width: u32,
     pub height: u32,

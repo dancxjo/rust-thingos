@@ -1,16 +1,16 @@
-//! Per-process VFS thing table.
+//! Per-process VFS handle table.
 //!
 //! Each process that uses VFS syscalls has an `HandleTable` embedded inside its
 //! `ProcessInfo`.  Kernel threads do not have an `HandleTable` and all VFS
 //! syscalls return `ENOENT` for them.
 //!
-//! Things are non-negative integers starting at 0.  Descriptors 0,
+//! Handles are non-negative integers starting at 0.  Descriptors 0,
 //! 1, and 2 are **stdio** (stdin / stdout / stderr) and are pre-populated at
 //! process spawn time via [`HandleTable::insert_at`].  All other descriptors are
 //! allocated by [`HandleTable::open`] which scans for the lowest free slot.
 //!
 //! # Limits
-//! `MAX_HANDLES` open things per process.  This is intentionally small for now.
+//! `MAX_HANDLES` open handles per process.  This is intentionally small for now.
 
 use abi::errors::{Errno, SysResult};
 use alloc::string::String;
@@ -20,25 +20,25 @@ use spin::Mutex;
 use super::{OpenFlags, VfsNode};
 
 pub const MAX_HANDLES: usize = 256;
-pub const THING_CLOEXEC: u32 = abi::syscall::thing_flags::THING_CLOEXEC;
+pub const HANDLE_CLOEXEC: u32 = abi::syscall::handle_flags::HANDLE_CLOEXEC;
 
-/// A single open-thing entry in the FD table.
+/// A single open-handle entry in the FD table.
 ///
-/// The `offset` is wrapped in `Arc<Mutex<u64>>` so that things
+/// The `offset` is wrapped in `Arc<Mutex<u64>>` so that handles
 /// created by `dup` or `dup2` share the same file position, matching POSIX
-/// open-thing-description semantics.
+/// open-handle-description semantics.
 #[derive(Clone)]
 pub struct OpenHandle {
     pub node: Arc<dyn VfsNode>,
     pub status_flags: Arc<Mutex<OpenFlags>>,
-    pub thing_flags: u32,
+    pub handle_flags: u32,
     /// Absolute path of this open file (if known).
     pub path: Arc<String>,
     /// Shared read/write position — cloned (not copied) on dup/dup2.
     pub offset: Arc<Mutex<u64>>,
 }
 
-/// Per-process thing table.
+/// Per-process handle table.
 #[derive(Clone)]
 pub struct HandleTable {
     entries: alloc::vec::Vec<Option<OpenHandle>>,
@@ -53,10 +53,10 @@ impl HandleTable {
         Self { entries }
     }
 
-    /// Insert `node` into the table and return the allocated thing.
+    /// Insert `node` into the table and return the allocated handle.
     ///
     /// Scans from slot 0 and returns the first free slot.  Because slots 0–2
-    /// are pre-populated at spawn time, regular opens naturally receive thing ≥ 3.
+    /// are pre-populated at spawn time, regular opens naturally receive handle ≥ 3.
     /// Returns `EMFILE` when all slots are exhausted.
     pub fn open(
         &mut self,
@@ -69,7 +69,7 @@ impl HandleTable {
                 self.entries[i] = Some(OpenHandle {
                     node,
                     status_flags: Arc::new(Mutex::new(flags)),
-                    thing_flags: 0,
+                    handle_flags: 0,
                     path: Arc::new(path),
                     offset: Arc::new(Mutex::new(0)),
                 });
@@ -79,7 +79,7 @@ impl HandleTable {
         Err(Errno::EMFILE)
     }
 
-    /// Insert `node` at a specific thing slot.
+    /// Insert `node` at a specific handle slot.
     ///
     /// Used at process creation to populate stdin (0), stdout (1), stderr (2).
     /// Returns `EBADF` if `fd` is out of range or already occupied.
@@ -100,7 +100,7 @@ impl HandleTable {
         self.entries[idx] = Some(OpenHandle {
             node,
             status_flags: Arc::new(Mutex::new(flags)),
-            thing_flags: 0,
+            handle_flags: 0,
             path: Arc::new(path),
             offset: Arc::new(Mutex::new(0)),
         });
@@ -110,8 +110,8 @@ impl HandleTable {
     /// Duplicate `old_handle` to the lowest available descriptor.
     ///
     /// The new descriptor shares the same `VfsNode` **and** file offset as
-    /// `old_handle`, matching POSIX open-thing-description semantics.
-    /// Returns the new thing, or `EBADF` if `old_handle` is not open.
+    /// `old_handle`, matching POSIX open-handle-description semantics.
+    /// Returns the new handle, or `EBADF` if `old_handle` is not open.
     pub fn dup(&mut self, old_handle: u32) -> SysResult<u32> {
         let idx = old_handle as usize;
         if idx >= MAX_HANDLES {
@@ -127,7 +127,7 @@ impl HandleTable {
                 self.entries[i] = Some(OpenHandle {
                     node: new_node,
                     status_flags: new_status_flags,
-                    thing_flags: 0,
+                    handle_flags: 0,
                     path: new_path,
                     offset: shared_offset,
                 });
@@ -142,7 +142,7 @@ impl HandleTable {
     /// If `new_handle` is already open it is closed first.  If `old_handle == new_handle`
     /// this is a no-op that returns `new_handle`.  Both descriptors will share the
     /// same file offset after this call.  Returns `EBADF` if `old_handle` is not
-    /// open or either thing is out of range.
+    /// open or either handle is out of range.
     pub fn dup2(&mut self, old_handle: u32, new_handle: u32) -> SysResult<u32> {
         let old_idx = old_handle as usize;
         let new_idx = new_handle as usize;
@@ -166,14 +166,14 @@ impl HandleTable {
         self.entries[new_idx] = Some(OpenHandle {
             node: new_node,
             status_flags: new_status_flags,
-            thing_flags: 0,
+            handle_flags: 0,
             path: new_path,
             offset: shared_offset,
         });
         Ok(new_handle)
     }
 
-    /// Return a reference to the open-thing entry for `fd`, or `EBADF`.
+    /// Return a reference to the open-handle entry for `fd`, or `EBADF`.
     pub fn get(&self, thing: u32) -> SysResult<&OpenHandle> {
         let idx = thing as usize;
         if idx >= MAX_HANDLES {
@@ -182,7 +182,7 @@ impl HandleTable {
         self.entries[idx].as_ref().ok_or(Errno::EBADF)
     }
 
-    /// Return a mutable reference to the open-thing entry for `fd`, or `EBADF`.
+    /// Return a mutable reference to the open-handle entry for `fd`, or `EBADF`.
     pub fn get_mut(&mut self, thing: u32) -> SysResult<&mut OpenHandle> {
         let idx = thing as usize;
         if idx >= MAX_HANDLES {
@@ -192,17 +192,17 @@ impl HandleTable {
     }
 
     /// Read the thing flags (`FD_*`) for `fd`.
-    pub fn get_thing_flags(&self, thing: u32) -> SysResult<u32> {
-        Ok(self.get(thing)?.thing_flags)
+    pub fn get_handle_flags(&self, thing: u32) -> SysResult<u32> {
+        Ok(self.get(thing)?.handle_flags)
     }
 
     /// Replace the thing flags (`FD_*`) for `fd`.
-    pub fn set_thing_flags(&mut self, thing: u32, flags: u32) -> SysResult<()> {
-        self.get_mut(thing)?.thing_flags = flags & THING_CLOEXEC;
+    pub fn set_handle_flags(&mut self, thing: u32, flags: u32) -> SysResult<()> {
+        self.get_mut(thing)?.handle_flags = flags & HANDLE_CLOEXEC;
         Ok(())
     }
 
-    /// Close thing `fd`.  Returns `EBADF` if not open.
+    /// Close handle `fd`.  Returns `EBADF` if not open.
     pub fn close(&mut self, thing: u32) -> SysResult<()> {
         let idx = thing as usize;
         if idx >= MAX_HANDLES {
@@ -213,7 +213,7 @@ impl HandleTable {
         Ok(())
     }
 
-    /// Close all open things (called on process exit).
+    /// Close all open handles (called on process exit).
     pub fn close_all(&mut self) {
         for slot in self.entries.iter_mut() {
             if let Some(entry) = slot.take() {
@@ -222,15 +222,15 @@ impl HandleTable {
         }
     }
 
-    /// Close all things that have the `THING_CLOEXEC` flag set.
+    /// Close all handles that have the `HANDLE_CLOEXEC` flag set.
     ///
     /// Called during `exec` to implement close-on-exec semantics.  File
-    /// descriptors without `THING_CLOEXEC` are preserved across the exec.
+    /// descriptors without `HANDLE_CLOEXEC` are preserved across the exec.
     pub fn close_on_exec(&mut self) {
         for slot in self.entries.iter_mut() {
             let should_close = slot
                 .as_ref()
-                .map(|e| e.thing_flags & THING_CLOEXEC != 0)
+                .map(|e| e.handle_flags & HANDLE_CLOEXEC != 0)
                 .unwrap_or(false);
             if should_close {
                 if let Some(entry) = slot.take() {
@@ -521,15 +521,15 @@ mod tests {
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
-        table.set_thing_flags(0, THING_CLOEXEC).unwrap();
+        table.set_handle_flags(0, HANDLE_CLOEXEC).unwrap();
 
         let new_handle = table.dup(0).unwrap();
 
-        assert_eq!(table.get_thing_flags(0).unwrap(), THING_CLOEXEC);
+        assert_eq!(table.get_handle_flags(0).unwrap(), HANDLE_CLOEXEC);
         assert_eq!(
-            table.get_thing_flags(new_handle).unwrap(),
+            table.get_handle_flags(new_handle).unwrap(),
             0,
-            "dup should not inherit THING_CLOEXEC"
+            "dup should not inherit HANDLE_CLOEXEC"
         );
     }
 
@@ -550,7 +550,7 @@ mod tests {
 
     // ── close_on_exec tests ───────────────────────────────────────────────────
 
-    /// FDs with THING_CLOEXEC set should be closed; others should survive.
+    /// FDs with HANDLE_CLOEXEC set should be closed; others should survive.
     #[test]
     fn test_close_on_exec_closes_flagged_fds() {
         let mut table = HandleTable::new();
@@ -558,27 +558,27 @@ mod tests {
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
             .unwrap();
-        // thing 1: THING_CLOEXEC → should be closed on exec
+        // thing 1: HANDLE_CLOEXEC → should be closed on exec
         table
             .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
             .unwrap();
-        table.set_thing_flags(1, THING_CLOEXEC).unwrap();
-        // thing 3: THING_CLOEXEC → should be closed on exec
+        table.set_handle_flags(1, HANDLE_CLOEXEC).unwrap();
+        // thing 3: HANDLE_CLOEXEC → should be closed on exec
         table
             .insert_at(3, null_node(), OpenFlags::read_only(), "/extra".into())
             .unwrap();
-        table.set_thing_flags(3, THING_CLOEXEC).unwrap();
+        table.set_handle_flags(3, HANDLE_CLOEXEC).unwrap();
 
         table.close_on_exec();
 
-        assert!(table.get(0).is_ok(), "thing 0 (no THING_CLOEXEC) should survive");
+        assert!(table.get(0).is_ok(), "thing 0 (no HANDLE_CLOEXEC) should survive");
         assert!(
             matches!(table.get(1), Err(Errno::EBADF)),
-            "thing 1 (THING_CLOEXEC) should be closed"
+            "thing 1 (HANDLE_CLOEXEC) should be closed"
         );
         assert!(
             matches!(table.get(3), Err(Errno::EBADF)),
-            "thing 3 (THING_CLOEXEC) should be closed"
+            "thing 3 (HANDLE_CLOEXEC) should be closed"
         );
     }
 
@@ -614,7 +614,7 @@ mod tests {
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/f".into())
             .unwrap();
-        table.set_thing_flags(0, THING_CLOEXEC).unwrap();
+        table.set_handle_flags(0, HANDLE_CLOEXEC).unwrap();
 
         table.close_on_exec();
 

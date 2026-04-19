@@ -1,19 +1,27 @@
-//! Declarative macros for creating Things.
+//! Declarative macros for creating handles.
 
-/// Create a Thing<T> from a struct literal.
+/// Create a Handle<T> from a struct literal.
 ///
 /// Example:
 /// ```ignore
-/// let w = thing!(Window { x: 10, y: 20, ... });
+/// let w = handle!(Window { x: 10, y: 20, ... });
 /// ```
 #[macro_export]
-macro_rules! thing {
+macro_rules! handle {
     ($val:expr) => {{
-        $crate::Thing::new($val)
+        $crate::Handle::new($val)
     }};
 }
 
-/// Create a Thing<Edge>.
+/// Backward-compatible alias for [`handle!`].
+#[macro_export]
+macro_rules! thing {
+    ($val:expr) => {{
+        $crate::handle!($val)
+    }};
+}
+
+/// Create a Handle<Edge>.
 ///
 /// Example:
 /// ```ignore
@@ -22,7 +30,7 @@ macro_rules! thing {
 #[macro_export]
 macro_rules! edge {
     ($from:expr, $pred:expr, $to:expr, $flags:expr $(,)?) => {{
-        $crate::Thing::new($crate::graphable::Edge {
+        $crate::Handle::new($crate::graphable::Edge {
             from: $from,
             predicate: $pred,
             to: $to,

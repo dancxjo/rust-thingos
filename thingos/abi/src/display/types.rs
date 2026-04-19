@@ -29,7 +29,7 @@ pub struct DisplayMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BufferHandle {
     /// File descriptor of the backing storage (e.g. memfd).
-    pub thing: u32,
+    pub handle: u32,
     /// Offset into the FD where pixel data begins.
     pub offset: u64,
     /// Width in pixels.

@@ -76,7 +76,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedMemoryRef {
     /// Sender-local thing number.
-    pub thing: u32,
+    pub handle: u32,
     /// Reserved padding (must be zero).
     pub _pad: u32,
     /// Byte length of the valid data window within the shared memory.

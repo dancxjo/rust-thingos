@@ -286,7 +286,7 @@ fn read_piped_stdin() -> Option<Vec<u8>> {
         return None;
     }
 
-    let mut pollfds = [abi::syscall::PollHandle { thing: 0, events: POLLIN, revents: 0 }];
+    let mut pollfds = [abi::syscall::PollHandle { handle: 0, events: POLLIN, revents: 0 }];
 
     if vfs_poll(&mut pollfds, 0).is_err() || (pollfds[0].revents & POLLIN) == 0 {
         return None;
@@ -316,7 +316,7 @@ fn interrupted_while_waiting_for_audio() -> bool {
         return false;
     }
 
-    let mut pollfds = [PollHandle { thing: 0, events: POLLIN, revents: 0 }];
+    let mut pollfds = [PollHandle { handle: 0, events: POLLIN, revents: 0 }];
     match vfs_poll(&mut pollfds, 0) {
         Ok(0) => false,
         Ok(_) => {
