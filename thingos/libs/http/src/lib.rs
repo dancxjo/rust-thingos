@@ -15,7 +15,7 @@ use rand_core::SeedableRng;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};
 use stem::{debug, info, warn};
 
-const IO_POLL_TIMEOUT_MS: u64 = 5_000;
+const IO_POLL_TIMEOUT_MS: u64 = 20_000;
 const IO_POLL_SLICE_MS: u64 = 100;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 const MAX_HEADER_READ_ITERATIONS: usize = 20;
@@ -242,13 +242,19 @@ impl TcpStream {
                     return Ok(n);
                 }
                 Err(abi::errors::Errno::EAGAIN) => {
+                    let state = read_tcp_state(&self.socket_id);
+                    if matches!(state, TcpConnectState::Closed) {
+                        info!("http: read got EAGAIN but socket is closed; treating as EOF");
+                        return Ok(0);
+                    }
+
                     if waited_ms >= IO_POLL_TIMEOUT_MS {
                         warn!("http: read timed out after {} ms", waited_ms);
                         return Err("read timed out waiting for socket data".to_string());
                     }
 
                     let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                    info!("http: read would block; sleeping for {} ms", slice_ms);
+                    info!("http: read would block while {:?}; sleeping for {} ms", state, slice_ms);
                     stem::time::sleep_ms(slice_ms);
                     waited_ms += slice_ms;
                 }
