@@ -57,6 +57,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "rm", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "rmdir", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "mkdir", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "mount", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "echo", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "grep", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "pwd", is_init: true, boot_module: true, features: vec![] },
@@ -250,6 +251,7 @@ fn generate_limine_config(
     common_modules.push_str("    module_path: boot():/etc/locale.conf\n");
     common_modules.push_str("    module_path: boot():/etc/profile\n");
     common_modules.push_str("    module_path: boot():/etc/motd\n");
+    common_modules.push_str("    module_path: boot():/etc/fstab\n");
     if include_default_shell {
         common_modules.push_str("    module_path: boot():/etc/default/shell\n");
     }
@@ -413,6 +415,7 @@ pub fn build_iso_with_config(
     )?;
 
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
+    sh.write_file(iso_root.join("etc/fstab"), "none /https https defaults 0 0\n")?;
 
     let mut include_default_shell = false;
     if let Ok(default_shell) = std::env::var("THINGOS_DEFAULT_SHELL") {

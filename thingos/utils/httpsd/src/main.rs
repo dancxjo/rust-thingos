@@ -7,14 +7,60 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use abi::errors::Errno;
+use abi::seed::{
+    HOST_PROGRAM, HOST_VFS_PROVIDER, INTERFACE_PROGRAM_V1, INTERFACE_VFS_PROVIDER_MOUNT_V1,
+    INTERFACE_VFS_PROVIDER_UNMOUNT_V1, SEED_ABI_VERSION, Seed, SeedInterface,
+};
 use abi::vfs_rpc::VfsRpcOp;
 use http::{HttpClient, Response};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
-use stem::syscall::vfs::vfs_mount;
+use stem::syscall::argv_get;
+use stem::syscall::vfs::{vfs_mount, vfs_umount};
 use stem::{info, warn};
 
 const MOUNT_POINT: &str = "/https";
 const ROOT_HANDLE: u64 = 1;
+const SEED_NAME: &[u8] = b"httpsd";
+const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
+const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
+
+#[no_mangle]
+#[used]
+pub static THINGOS_SEED: Seed = Seed {
+    abi_version: SEED_ABI_VERSION,
+    interface_count: 3,
+    hosting_modes: HOST_PROGRAM | HOST_VFS_PROVIDER,
+    capabilities: 0,
+    name_ptr: SEED_NAME.as_ptr(),
+    name_len: SEED_NAME.len(),
+    interfaces: [
+        SeedInterface {
+            interface_id: INTERFACE_PROGRAM_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: core::ptr::null(),
+            entry_symbol_len: 0,
+        },
+        SeedInterface {
+            interface_id: INTERFACE_VFS_PROVIDER_MOUNT_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: HOOK_MOUNT_V1.as_ptr(),
+            entry_symbol_len: HOOK_MOUNT_V1.len(),
+        },
+        SeedInterface {
+            interface_id: INTERFACE_VFS_PROVIDER_UNMOUNT_V1,
+            interface_version: 1,
+            flags: 0,
+            reserved: 0,
+            entry_symbol_ptr: HOOK_UNMOUNT_V1.as_ptr(),
+            entry_symbol_len: HOOK_UNMOUNT_V1.len(),
+        },
+        SeedInterface::zero(),
+    ],
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HttpsNode {
@@ -180,6 +226,26 @@ impl HttpsProvider {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    let mount_point = mount_point_from_args();
+    run_provider(&mount_point)
+}
+
+#[no_mangle]
+pub extern "C" fn thingos_vfs_mount_v1(_arg: usize) -> ! {
+    let mount_point = mount_point_from_args();
+    run_provider(&mount_point)
+}
+
+#[no_mangle]
+pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
+    let mount_point = mount_point_from_args();
+    match vfs_umount(&mount_point) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+fn run_provider(mount_point: &str) -> ! {
     let (req_write, req_read) = match stem::syscall::channel::port_create(64 * 1024) {
         Ok(pair) => pair,
         Err(e) => {
@@ -188,10 +254,10 @@ fn main(_arg: usize) -> ! {
         }
     };
 
-    match vfs_mount(req_write, MOUNT_POINT) {
-        Ok(()) => info!("httpsd: mounted at {}", MOUNT_POINT),
+    match vfs_mount(req_write, mount_point) {
+        Ok(()) => info!("httpsd: mounted at {}", mount_point),
         Err(e) => {
-            warn!("httpsd: failed to mount {}: {:?}", MOUNT_POINT, e);
+            warn!("httpsd: failed to mount {}: {:?}", mount_point, e);
             stem::syscall::exit(1);
         }
     }
@@ -211,6 +277,26 @@ fn main(_arg: usize) -> ! {
     }
 
     stem::syscall::exit(0);
+}
+
+fn mount_point_from_args() -> String {
+    let len = match argv_get(&mut []) {
+        Ok(l) if l > 0 => l,
+        _ => return MOUNT_POINT.to_string(),
+    };
+    let mut buf = alloc::vec![0u8; len];
+    if argv_get(&mut buf).is_err() {
+        return MOUNT_POINT.to_string();
+    }
+    let args = stem::utils::parse_argv(&buf);
+    if args.len() >= 2 {
+        if let Ok(path) = core::str::from_utf8(args[1]) {
+            if !path.is_empty() {
+                return path.to_string();
+            }
+        }
+    }
+    MOUNT_POINT.to_string()
 }
 
 fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
