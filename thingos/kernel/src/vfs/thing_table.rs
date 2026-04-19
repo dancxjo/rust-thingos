@@ -10,7 +10,7 @@
 //! allocated by [`ThingTable::open`] which scans for the lowest free slot.
 //!
 //! # Limits
-//! `MAX_THINGS` open things per process.  This is intentionally small for now.
+//! `MAX_HANDLES` open things per process.  This is intentionally small for now.
 
 use abi::errors::{Errno, SysResult};
 use alloc::string::String;
@@ -19,7 +19,7 @@ use spin::Mutex;
 
 use super::{OpenFlags, VfsNode};
 
-pub const MAX_THINGS: usize = 256;
+pub const MAX_HANDLES: usize = 256;
 pub const THING_CLOEXEC: u32 = abi::syscall::thing_flags::THING_CLOEXEC;
 
 /// A single open-thing entry in the FD table.
@@ -46,8 +46,8 @@ pub struct ThingTable {
 
 impl ThingTable {
     pub fn new() -> Self {
-        let mut entries = alloc::vec::Vec::with_capacity(MAX_THINGS);
-        for _ in 0..MAX_THINGS {
+        let mut entries = alloc::vec::Vec::with_capacity(MAX_HANDLES);
+        for _ in 0..MAX_HANDLES {
             entries.push(None);
         }
         Self { entries }
@@ -64,7 +64,7 @@ impl ThingTable {
         flags: OpenFlags,
         path: String,
     ) -> SysResult<u32> {
-        for i in 0..MAX_THINGS {
+        for i in 0..MAX_HANDLES {
             if self.entries[i].is_none() {
                 self.entries[i] = Some(OpenThing {
                     node,
@@ -91,7 +91,7 @@ impl ThingTable {
         path: String,
     ) -> SysResult<()> {
         let idx = thing as usize;
-        if idx >= MAX_THINGS {
+        if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
         if self.entries[idx].is_some() {
@@ -114,7 +114,7 @@ impl ThingTable {
     /// Returns the new thing, or `EBADF` if `old_thing` is not open.
     pub fn dup(&mut self, old_thing: u32) -> SysResult<u32> {
         let idx = old_thing as usize;
-        if idx >= MAX_THINGS {
+        if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
         let entry = self.entries[idx].as_ref().ok_or(Errno::EBADF)?;
@@ -122,7 +122,7 @@ impl ThingTable {
         let new_status_flags = entry.status_flags.clone();
         let new_path = entry.path.clone();
         let shared_offset = entry.offset.clone(); // share offset with original
-        for i in 0..MAX_THINGS {
+        for i in 0..MAX_HANDLES {
             if self.entries[i].is_none() {
                 self.entries[i] = Some(OpenThing {
                     node: new_node,
@@ -146,7 +146,7 @@ impl ThingTable {
     pub fn dup2(&mut self, old_thing: u32, new_thing: u32) -> SysResult<u32> {
         let old_idx = old_thing as usize;
         let new_idx = new_thing as usize;
-        if old_idx >= MAX_THINGS || new_idx >= MAX_THINGS {
+        if old_idx >= MAX_HANDLES || new_idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
         if old_thing == new_thing {
@@ -176,7 +176,7 @@ impl ThingTable {
     /// Return a reference to the open-thing entry for `fd`, or `EBADF`.
     pub fn get(&self, thing: u32) -> SysResult<&OpenThing> {
         let idx = thing as usize;
-        if idx >= MAX_THINGS {
+        if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
         self.entries[idx].as_ref().ok_or(Errno::EBADF)
@@ -185,7 +185,7 @@ impl ThingTable {
     /// Return a mutable reference to the open-thing entry for `fd`, or `EBADF`.
     pub fn get_mut(&mut self, thing: u32) -> SysResult<&mut OpenThing> {
         let idx = thing as usize;
-        if idx >= MAX_THINGS {
+        if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
         self.entries[idx].as_mut().ok_or(Errno::EBADF)
@@ -205,7 +205,7 @@ impl ThingTable {
     /// Close thing `fd`.  Returns `EBADF` if not open.
     pub fn close(&mut self, thing: u32) -> SysResult<()> {
         let idx = thing as usize;
-        if idx >= MAX_THINGS {
+        if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
         let entry = self.entries[idx].take().ok_or(Errno::EBADF)?;
@@ -397,7 +397,7 @@ mod tests {
         let mut table = ThingTable::new();
         assert!(matches!(
             table.insert_at(
-                MAX_THINGS as u32,
+                MAX_HANDLES as u32,
                 null_node(),
                 OpenFlags::read_only(),
                 "/null".into()
@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_emfile_when_full() {
-        // Open MAX_THINGS files and ensure EMFILE on the next open.
+        // Open MAX_HANDLES files and ensure EMFILE on the next open.
         let mut table = ThingTable::new();
         let mut count = 0usize;
         loop {
@@ -545,7 +545,7 @@ mod tests {
                 Err(e) => panic!("unexpected error {:?}", e),
             }
         }
-        assert_eq!(count, MAX_THINGS);
+        assert_eq!(count, MAX_HANDLES);
     }
 
     // ── close_on_exec tests ───────────────────────────────────────────────────

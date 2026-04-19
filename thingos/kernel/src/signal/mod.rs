@@ -314,7 +314,7 @@ pub fn queue_parent_child_event(ppid: u32, child_pid: u32, status: i32) -> alloc
 ///
 /// This is the canonical lifecycle notification path for `waitpid`-style
 /// observers. The parent consumes queued `(child_pid, status)` pairs from
-/// `ProcessLifecycle.children_done`; no `SIGCHLD` side channel is required.
+/// `ProcessLifecycle.children_done`; no `SIGCHLD` side port is required.
 pub fn notify_parent_child_event(ppid: u32, child_pid: u32, status: i32) {
     let tids = queue_parent_child_event(ppid, child_pid, status);
 

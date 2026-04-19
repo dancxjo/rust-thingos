@@ -33,7 +33,7 @@ use alloc::vec::Vec;
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderRequest, ProviderResponse};
-use stem::debug;
+use stem::{debug, trace};
 
 use crate::driver::VirtioNetDriver;
 
@@ -119,7 +119,7 @@ pub fn handle_vfs_rpc(
     let op = req.op;
     let payload = &req.payload;
 
-    debug!("VIRTIO_NETD: rpc op={:?} payload_len={}", op, payload.len(),);
+    trace!("VIRTIO_NETD: rpc op={:?} payload_len={}", op, payload.len(),);
 
     match op {
         VfsRpcOp::Lookup => handle_lookup(payload),

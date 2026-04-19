@@ -55,7 +55,7 @@ impl InputState {
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(ch) = scene
                         .surface_client(surface_id)
-                        .and_then(|client| scene.client_event_channel(client))
+                        .and_then(|client| scene.client_event_port(client))
                     {
                         let ev = PointerMotionEvent {
                             header: msg_header(EVT_POINTER_MOTION),
@@ -80,7 +80,7 @@ impl InputState {
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(ch) = scene
                         .surface_client(surface_id)
-                        .and_then(|client| scene.client_event_channel(client))
+                        .and_then(|client| scene.client_event_port(client))
                     {
                         let ev = PointerButtonEvent {
                             header: msg_header(EVT_POINTER_BUTTON),
@@ -103,7 +103,7 @@ impl InputState {
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(ch) = scene
                         .surface_client(surface_id)
-                        .and_then(|client| scene.client_event_channel(client))
+                        .and_then(|client| scene.client_event_port(client))
                     {
                         let ev = PointerButtonEvent {
                             header: msg_header(EVT_POINTER_BUTTON),
@@ -125,7 +125,7 @@ impl InputState {
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(ch) = scene
                         .surface_client(surface_id)
-                        .and_then(|client| scene.client_event_channel(client))
+                        .and_then(|client| scene.client_event_port(client))
                     {
                         let ev = KeyboardKeyEvent {
                             header: msg_header(EVT_KEYBOARD_KEY),
@@ -148,7 +148,7 @@ impl InputState {
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(ch) = scene
                         .surface_client(surface_id)
-                        .and_then(|client| scene.client_event_channel(client))
+                        .and_then(|client| scene.client_event_port(client))
                     {
                         let ev = KeyboardKeyEvent {
                             header: msg_header(EVT_KEYBOARD_KEY),
@@ -177,7 +177,7 @@ impl InputState {
         if let Some(old_surface) = scene.pointer_focus {
             if let Some(ch) = scene
                 .surface_client(old_surface)
-                .and_then(|client| scene.client_event_channel(client))
+                .and_then(|client| scene.client_event_port(client))
             {
                 let ev = PointerLeaveEvent {
                     header: msg_header(EVT_POINTER_LEAVE),
@@ -191,7 +191,7 @@ impl InputState {
         if let Some(surface_id) = new_focus {
             if let Some(ch) = scene
                 .surface_client(surface_id)
-                .and_then(|client| scene.client_event_channel(client))
+                .and_then(|client| scene.client_event_port(client))
             {
                 let ev = PointerEnterEvent {
                     header: msg_header(EVT_POINTER_ENTER),
@@ -217,7 +217,7 @@ impl InputState {
         if let Some(old_surface) = old_focus {
             if let Some(ch) = scene
                 .surface_client(old_surface)
-                .and_then(|client| scene.client_event_channel(client))
+                .and_then(|client| scene.client_event_port(client))
             {
                 let ev = KeyboardLeaveEvent {
                     header: msg_header(EVT_KEYBOARD_LEAVE),
@@ -230,7 +230,7 @@ impl InputState {
         if let Some(new_surface) = new_focus {
             if let Some(ch) = scene
                 .surface_client(new_surface)
-                .and_then(|client| scene.client_event_channel(client))
+                .and_then(|client| scene.client_event_port(client))
             {
                 let ev = KeyboardEnterEvent {
                     header: msg_header(EVT_KEYBOARD_ENTER),

@@ -1,7 +1,7 @@
 //! VFS provider server loop.
 //!
-//! [`ProviderLoop`] abstracts the channel framing for a userland VFS provider.
-//! It reads requests from the provider channel, dispatches them to your
+//! [`ProviderLoop`] abstracts the port framing for a userland VFS provider.
+//! It reads requests from the provider port, dispatches them to your
 //! handler, and sends responses back to the kernel.
 //!
 //! # Usage
@@ -16,7 +16,7 @@
 //!     loop {
 //!         let req = match lp.next_request() {
 //!             Ok(r) => r,
-//!             Err(_) => break,  // channel closed — exit cleanly
+//!             Err(_) => break,  // port closed — exit cleanly
 //!         };
 //!         let resp = dispatch(&req);
 //!         lp.send_response(req.resp_port, resp).ok();
@@ -40,7 +40,7 @@ use abi::vfs_rpc::VfsRpcOp::{
     Write,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
-use stem::syscall::channel::{port_recv, port_send_all, port_try_recv};
+use stem::syscall::port::{port_recv, port_send_all, port_try_recv};
 
 /// A decoded VFS RPC request from the kernel.
 pub struct ProviderRequest {
@@ -122,7 +122,7 @@ impl ProviderResponse {
 
 /// The VFS provider server loop.
 ///
-/// Owns the read end of the provider channel.  Call [`next_request`] in a
+/// Owns the read end of the provider port.  Call [`next_request`] in a
 /// loop to receive decoded requests, then call [`send_response`] to reply.
 pub struct ProviderLoop {
     read_handle: u32,
@@ -132,7 +132,7 @@ pub struct ProviderLoop {
 
 impl ProviderLoop {
     /// Create a new loop bound to `vfs_read` — the read end of the provider
-    /// channel (created with `port_create` and passed to the supervisor).
+    /// port (created with `port_create` and passed to the supervisor).
     pub fn new(vfs_read: u32) -> Self {
         Self {
             read_handle: vfs_read,
@@ -221,9 +221,9 @@ impl ProviderLoop {
 
     /// Try to receive the next request without blocking.
     ///
-    /// Returns `Ok(None)` when no message is currently available (the channel
+    /// Returns `Ok(None)` when no message is currently available (the port
     /// is empty).  Returns `Ok(Some(req))` when a request was decoded
-    /// successfully.  Returns `Err` on a fatal channel error (e.g. the kernel
+    /// successfully.  Returns `Err` on a fatal port error (e.g. the kernel
     /// closed the request port — the provider should exit cleanly).
     ///
     /// Use this variant in event-loop drivers that must interleave VFS RPC
@@ -237,7 +237,7 @@ impl ProviderLoop {
                 Ok(Some(req)) => return Ok(Some(req)),
                 Ok(None) => break,
                 Err(Errno::EINVAL) => {
-                    // Byte-stream channels can deliver fragmented/coalesced traffic.
+                    // Byte-stream ports can deliver fragmented/coalesced traffic.
                     // If framing gets out of sync, drop one byte and retry to
                     // recover alignment instead of returning EINVAL forever.
                     if self.pending.is_empty() {
@@ -274,7 +274,7 @@ impl ProviderLoop {
 
     /// Block until the next request arrives and decode it.
     ///
-    /// Returns `Err(Errno::EPIPE)` when the channel is closed (provider
+    /// Returns `Err(Errno::EPIPE)` when the port is closed (provider
     /// should exit cleanly).
     pub fn next_request(&mut self) -> Result<ProviderRequest, Errno> {
         loop {

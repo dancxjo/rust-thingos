@@ -15,11 +15,11 @@ fn main(_arg: usize) -> ! {
     let (pr, pw) = (pipefds[0], pipefds[1]);
     stem::println!("Pipe created: read={}, write={}", pr, pw);
 
-    // 2. Create a channel and bridge it to a VFS fd
-    let (c_write, c_read) = stem::syscall::port_create(1024).expect("channel create failed");
+    // 2. Create a port and bridge it to a VFS fd
+    let (c_write, c_read) = stem::syscall::port_create(1024).expect("port create failed");
     let c_read_fd = vfs_handle_from_port(c_read).expect("vfs_handle_from_port failed");
     stem::println!(
-        "Channel created: write={}, read={}, bridged_fd={}",
+        "Port created: write={}, read={}, bridged_fd={}",
         c_write,
         c_read,
         c_read_fd
@@ -32,7 +32,7 @@ fn main(_arg: usize) -> ! {
         vfs_open("/dev/null", abi::syscall::vfs_flags::O_RDWR).expect("open /dev/null failed");
     stem::println!("VFS file opened: fd={}", dev_null_fd);
 
-    // 4. Test timeout — pipe and channel are both empty so poll should expire.
+    // 4. Test timeout — pipe and port are both empty so poll should expire.
     let mut fds = [
         PollThing { thing: pr as i32,
             events: poll_flags::POLLIN,
@@ -43,7 +43,7 @@ fn main(_arg: usize) -> ! {
             revents: 0,
         },
     ];
-    stem::println!("Polling pipe+channel for 100ms (should timeout)...");
+    stem::println!("Polling pipe+port for 100ms (should timeout)...");
     let start = stem::syscall::monotonic_ns();
     let n = vfs_poll(&mut fds, 100).expect("poll failed");
     let end = stem::syscall::monotonic_ns();
@@ -85,9 +85,9 @@ fn main(_arg: usize) -> ! {
         "Expected POLLIN on pipe"
     );
 
-    // 7. Test channel readiness (write before poll)
-    stem::syscall::port_send(c_write, b"world").expect("send to channel failed");
-    stem::println!("Sent to channel, polling now...");
+    // 7. Test port readiness (write before poll)
+    stem::syscall::port_send(c_write, b"world").expect("send to port failed");
+    stem::println!("Sent to port, polling now...");
     fds[0].revents = 0;
     fds[1].revents = 0;
     let n = vfs_poll(&mut fds, 100).expect("poll failed");
@@ -99,13 +99,13 @@ fn main(_arg: usize) -> ! {
     );
     assert!(
         fds[1].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on channel"
+        "Expected POLLIN on port"
     );
 
-    // 8. Mixed poll: channel + pipe + VFS file all at once.
-    //    Pipe (index 0) and channel (index 1) still have unread data;
+    // 8. Mixed poll: port + pipe + VFS file all at once.
+    //    Pipe (index 0) and port (index 1) still have unread data;
     //    VFS file (index 2) is always ready.  All three should fire.
-    stem::println!("Mixed poll: pipe + channel + VFS file...");
+    stem::println!("Mixed poll: pipe + port + VFS file...");
     let mut mixed = [
         PollThing { thing: pr as i32,
             events: poll_flags::POLLIN,
@@ -124,7 +124,7 @@ fn main(_arg: usize) -> ! {
     stem::println!("Mixed poll returned {} entries", n);
     assert!(
         n == 3,
-        "Expected all 3 fds ready (pipe + channel + VFS file), got {}",
+        "Expected all 3 fds ready (pipe + port + VFS file), got {}",
         n
     );
     assert!(
@@ -133,7 +133,7 @@ fn main(_arg: usize) -> ! {
     );
     assert!(
         mixed[1].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on channel in mixed"
+        "Expected POLLIN on port in mixed"
     );
     assert!(
         mixed[2].revents & (poll_flags::POLLIN | poll_flags::POLLOUT) != 0,

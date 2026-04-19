@@ -1,7 +1,7 @@
 //! VFS node wrapper for IPC ports.
 //!
 //! This allows IPC ports to be treated as VFS nodes, enabling them to be
-//! passed across channels using the standard handle-passing mechanism.
+//! passed across ports using the standard handle-passing mechanism.
 
 use super::{VfsNode, VfsStat};
 use crate::ipc::{IpcHandleMode, Port};
@@ -171,7 +171,7 @@ mod tests {
     use super::*;
     use abi::syscall::poll_flags;
 
-    fn make_channel(capacity: usize) -> (Arc<PortNode>, Arc<PortNode>) {
+    fn make_port(capacity: usize) -> (Arc<PortNode>, Arc<PortNode>) {
         let port = Arc::new(Port::new(capacity));
         let read_node = Arc::new(PortNode::new(Arc::clone(&port), IpcHandleMode::Read));
         let write_node = Arc::new(PortNode::new(Arc::clone(&port), IpcHandleMode::Write));
@@ -182,21 +182,21 @@ mod tests {
 
     #[test]
     fn read_handle_not_ready_when_empty_with_writer() {
-        let (r, _w) = make_channel(64);
+        let (r, _w) = make_port(64);
         // Empty queue, writer still alive → not readable.
         assert_eq!(r.poll() & poll_flags::POLLIN, 0);
     }
 
     #[test]
     fn read_handle_ready_after_send() {
-        let (r, w) = make_channel(64);
+        let (r, w) = make_port(64);
         w.write(0, b"hi").expect("write");
         assert_ne!(r.poll() & poll_flags::POLLIN, 0, "POLLIN set after send");
     }
 
     #[test]
     fn read_handle_reports_pollhup_when_writer_closed() {
-        let (r, w) = make_channel(64);
+        let (r, w) = make_port(64);
         // Closing the write handle signals hangup on the read handle.
         w.close();
         assert_ne!(r.poll() & poll_flags::POLLIN, 0, "POLLIN set on EOF");
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn read_handle_reports_both_pollin_and_pollhup_with_data_and_closed_writer() {
-        let (r, w) = make_channel(64);
+        let (r, w) = make_port(64);
         w.write(0, b"x").expect("write");
         w.close();
         let flags = r.poll();
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn write_handle_ready_when_queue_has_space() {
-        let (_r, w) = make_channel(64);
+        let (_r, w) = make_port(64);
         assert_ne!(
             w.poll() & poll_flags::POLLOUT,
             0,
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn write_handle_reports_pollhup_when_reader_closed() {
-        let (r, w) = make_channel(64);
+        let (r, w) = make_port(64);
         // Closing the read handle signals broken-pipe on the write handle.
         r.close();
         let flags = w.poll();
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn write_handle_not_pollout_when_queue_full() {
         // Use a small capacity so we can fill it.
-        let (_r, w) = make_channel(16);
+        let (_r, w) = make_port(16);
         // Fill the queue completely.
         w.write(0, &[0u8; 16]).expect("write");
         assert_eq!(

@@ -9,7 +9,7 @@
 //! * `Message` envelope wrapping (via `kernel::message::bridge`)
 //! * `Inbox` delivery (via `kernel::inbox`)
 //!
-//! No side channels or bespoke callbacks are used.  Delivery failure is
+//! No side ports or bespoke callbacks are used.  Delivery failure is
 //! logged and observable but never corrupts lifecycle state.
 //!
 //! # Emission rules

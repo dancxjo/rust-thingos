@@ -23,7 +23,7 @@ fn fs_syscall_numbers_are_unique() {
         SYS_FS_DEVICE_CALL,
         SYS_FS_CHDIR,
         SYS_FS_GETCWD,
-        SYS_THING_FROM_CHANNEL,
+        SYS_HANDLE_FROM_PORT,
         SYS_FS_NOTIFY,
         SYS_FS_REALPATH,
         SYS_FS_SYNC,

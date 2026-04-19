@@ -10,7 +10,7 @@ use abi::driver_interface::{
 };
 use stem::syscall::vfs::{vfs_handle_from_port, vfs_write};
 use stem::syscall::{ioport_read, irq_subscribe, irq_wait};
-use stem::{error, info, warn};
+use stem::{error, info, debug, warn};
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_kbd";
 
 #[cfg(target_arch = "x86_64")]
@@ -101,7 +101,7 @@ fn main(raw_write_handle: usize) -> ! {
 
     stem::debug!("ps2_kbd: online (handle={})", handle);
 
-    // Bridge the write channel handle to a VFS file descriptor so all I/O
+    // Bridge the write port handle to a VFS file descriptor so all I/O
     // flows through the VFS-first message path rather than the legacy port API.
     let fd = match vfs_handle_from_port(handle) {
         Ok(f) => f,
@@ -120,7 +120,7 @@ fn main(raw_write_handle: usize) -> ! {
             interrupt_loop(fd);
         }
         Err(e) => {
-            info!("ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling", e);
+            debug!("ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling", e);
             polling_loop(fd);
         }
     }

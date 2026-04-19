@@ -47,10 +47,10 @@ impl Reactor {
     /// # Deprecated
     ///
     /// Port-handle waits are superseded by FD-based readiness.  Bridge the
-    /// channel to a VFS file descriptor with `vfs_fd_from_handle` and then use
+    /// port to a VFS file descriptor with `vfs_fd_from_handle` and then use
     /// `add_fd_readable` instead.
     #[deprecated(
-        note = "Use vfs_fd_from_handle to bridge the channel then add_fd_readable instead"
+        note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead"
     )]
     pub fn add_port_readable(&self, handle: u64, waker: Waker) -> Result<WaitToken, Errno> {
         let mut ws = self.wait_set.borrow_mut();
@@ -151,7 +151,7 @@ use crate::syscall;
 /// `AsyncPort` is superseded by FD-based async I/O.  Bridge the port handle
 /// via `vfs_fd_from_handle` and use an async FD reader instead.
 #[deprecated(
-    note = "Use vfs_fd_from_handle to bridge the channel then read from a VFS FD instead"
+    note = "Use vfs_fd_from_handle to bridge the port then read from a VFS FD instead"
 )]
 pub struct AsyncPort {
     handle: u64,

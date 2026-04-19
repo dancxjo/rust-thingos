@@ -14,7 +14,7 @@
 //! when the driver's ring buffer has room.
 //!
 //! The driver runs a single-threaded event loop that services VFS RPC requests
-//! from the kernel (via the provider channel) and feeds the virtio TX queue
+//! from the kernel (via the provider port) and feeds the virtio TX queue
 //! from the internal ring buffer.
 //!
 //! ## IPC substrate
@@ -50,7 +50,7 @@ use abi::sound::{
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use spec::*;
-use stem::syscall::channel::port_create;
+use stem::syscall::port::port_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, info, warn};
 use virtio::device::VirtioDevice;
@@ -360,7 +360,7 @@ impl AudioCard {
             params: AudioParams {
                 sample_format: AudioSampleFormat::S16LE as u32,
                 rate: 44100,
-                channels: 2,
+                ports: 2,
                 period_frames: 1024,
                 buffer_frames: 4096,
                 _reserved: [0; 3],
@@ -380,7 +380,7 @@ impl AudioCard {
     fn bytes_per_frame(&self) -> usize {
         let fmt = AudioSampleFormat::from_u32(self.params.sample_format)
             .unwrap_or(AudioSampleFormat::S16LE);
-        (fmt.bytes_per_sample() * self.params.channels) as usize
+        (fmt.bytes_per_sample() * self.params.ports) as usize
     }
 
     fn stream_info(&self) -> AudioStreamInfo {
@@ -389,7 +389,7 @@ impl AudioCard {
                 | format_bit(AudioSampleFormat::U8),
             min_rate: 8000,
             max_rate: 96000,
-            max_channels: 2,
+            max_ports: 2,
             min_buffer_frames: 256,
             max_buffer_frames: 65536,
             min_period_frames: 64,
@@ -700,11 +700,11 @@ fn dispatch_device_call(payload: &[u8], card: &mut AudioCard) -> (ProviderRespon
             if in_data.len() >= size_of::<AudioParams>() {
                 let req: AudioParams =
                     unsafe { core::ptr::read_unaligned(in_data.as_ptr() as *const AudioParams) };
-                // Accept the request as-is (clamp channels to 2 if unsupported).
+                // Accept the request as-is (clamp ports to 2 if unsupported).
                 card.params = AudioParams {
                     sample_format: req.sample_format,
                     rate: req.rate.clamp(8000, 96000),
-                    channels: req.channels.clamp(1, 2),
+                    ports: req.ports.clamp(1, 2),
                     period_frames: req.period_frames.max(64),
                     buffer_frames: req.buffer_frames.max(256),
                     _reserved: [0; 3],
@@ -1586,7 +1586,7 @@ fn configure_stream(
     let bytes_per_frame = AudioSampleFormat::from_u32(params.sample_format)
         .unwrap_or(AudioSampleFormat::S16LE)
         .bytes_per_sample() as u32
-        * params.channels.max(1);
+        * params.ports.max(1);
     let period_bytes = params.period_frames.max(64).saturating_mul(bytes_per_frame);
     let buffer_bytes =
         params.buffer_frames.max(params.period_frames.max(64)).saturating_mul(bytes_per_frame);
@@ -1599,7 +1599,7 @@ fn configure_stream(
             buffer_bytes,
             period_bytes,
             features: 0,
-            channels: params.channels.clamp(1, 2) as u8,
+            ports: params.ports.clamp(1, 2) as u8,
             format: map_audio_format(params.sample_format),
             rate: map_audio_rate(params.rate),
             padding: 0,

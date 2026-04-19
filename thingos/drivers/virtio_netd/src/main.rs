@@ -186,11 +186,11 @@ fn parse_supervisor_bootstrap(arg: usize) -> (Option<String>, Option<SupervisorB
 }
 
 fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstrap>) -> ! {
-    stem::info!("VIRTIO_NETD: Starting VirtIO-NET driver service...");
+    stem::debug!("VIRTIO_NETD: Starting VirtIO-NET driver service...");
 
     let claimed_path = claimed_path.unwrap_or_default();
 
-    stem::info!("VIRTIO_NETD: Initializing hardware driver...");
+    stem::debug!("VIRTIO_NETD: Initializing hardware driver...");
 
     // Initialize VirtIO-NET driver.
     let mut driver: VirtioNetDriver = match if !claimed_path.is_empty() {
@@ -199,7 +199,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         VirtioNetDriver::find_and_claim()
     } {
         Ok(d) => {
-            stem::info!("VIRTIO_NETD: Driver initialized successfully");
+            stem::debug!("VIRTIO_NETD: Driver initialized successfully");
             d
         }
         Err(e) => {
@@ -211,7 +211,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     };
 
     let mac = driver.mac();
-    stem::info!(
+    stem::debug!(
         "VIRTIO_NETD: MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         mac[0],
         mac[1],
@@ -222,7 +222,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     );
 
     let initial_link_up = driver.link_up();
-    stem::info!(
+    stem::debug!(
         "VIRTIO_NETD: Initial link state is {}",
         if initial_link_up { "UP" } else { "DOWN" }
     );
@@ -273,7 +273,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                     &buf[..total_len],
                     &[req_write],
                 );
-                stem::info!("VIRTIO_NETD: Sent MSG_BIND_READY, waiting for MSG_BIND_ASSIGNED...");
+                stem::debug!("VIRTIO_NETD: Sent MSG_BIND_READY, waiting for MSG_BIND_ASSIGNED...");
             }
         }
 
@@ -292,7 +292,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                                 assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
                             let path = core::str::from_utf8(&assigned.primary_path[..path_len])
                                 .unwrap_or("?");
-                            stem::info!(
+                            stem::debug!(
                                 "VIRTIO_NETD: Sovereign registration COMPLETE. Assigned: {}",
                                 path
                             );
@@ -336,19 +336,19 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
             ) {
                 let _ =
                     stem::syscall::socket::sendmsg(drv_resp_write_fd, &svc_buf[..total_len], &[]);
-                stem::info!("VIRTIO_NETD: Sent MSG_SERVICE_READY.");
+                stem::debug!("VIRTIO_NETD: Sent MSG_SERVICE_READY.");
             }
         }
     } else {
         match vfs_mount(req_write, DEFAULT_MOUNT_PATH) {
-            Ok(()) => stem::info!("VIRTIO_NETD: Mounted at {}", DEFAULT_MOUNT_PATH),
+            Ok(()) => stem::debug!("VIRTIO_NETD: Mounted at {}", DEFAULT_MOUNT_PATH),
             Err(e) => warn!("VIRTIO_NETD: vfs_mount({}) failed: {:?}", DEFAULT_MOUNT_PATH, e),
         }
     }
 
     // Initialize shared VFS state.
     let mut state = NetVfsState::new(mac, initial_link_up, features);
-    stem::info!(
+    stem::debug!(
         "VIRTIO_NETD: Entering VFS provider service loop at {}",
         DEFAULT_MOUNT_PATH
     );
@@ -376,7 +376,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                 let op = req.op;
                 let resp_port = req.resp_port;
                 let req_payload_len = req.payload.len();
-                stem::debug!(
+                stem::trace!(
                     "VIRTIO_NETD: dispatch begin op={:?} resp_port={} payload_len={}",
                     op,
                     resp_port,
@@ -385,7 +385,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                 let resp = handle_vfs_rpc(&mut state, &mut driver, &req);
                 let resp_status = resp.status;
                 let resp_payload_len = resp.payload.len();
-                stem::debug!(
+                stem::trace!(
                     "VIRTIO_NETD: dispatch end op={:?} resp_port={} status={} resp_payload_len={}",
                     op,
                     resp_port,
@@ -409,7 +409,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
             }
             Ok(None) => {} // no request ready
             Err(e) => {
-                warn!("VIRTIO_NETD: provider channel error: {:?}", e);
+                warn!("VIRTIO_NETD: provider port error: {:?}", e);
             }
         }
 

@@ -52,7 +52,7 @@ fn scale_ch(c: u8, a: u8) -> u32 {
 }
 
 #[inline(always)]
-fn blend_channel(s: u32, d: u32, sa: u32) -> u32 {
+fn blend_port(s: u32, d: u32, sa: u32) -> u32 {
     let inv = 255 - sa;
     let t = s * sa + d * inv;
     (t + 1 + (t >> 8)) >> 8
@@ -79,10 +79,10 @@ unsafe fn apply_div255_sse2(t_lo: __m128i, t_hi: __m128i, out: &mut __m128i) {
     *out = _mm_packus_epi16(res_lo, res_hi);
 }
 
-/// Modulate 4 RGBA pixels by a mask, returning modulated u8 channels.
+/// Modulate 4 RGBA pixels by a mask, returning modulated u8 ports.
 ///
 /// # Layout
-/// The mask_vec should contain mask values replicated across each pixel's 4 channels:
+/// The mask_vec should contain mask values replicated across each pixel's 4 ports:
 /// - Bytes 0-3: First pixel's mask repeated 4 times (M0, M0, M0, M0)
 /// - Bytes 4-7: Second pixel's mask repeated 4 times (M1, M1, M1, M1)
 /// - Bytes 8-11: Third pixel's mask repeated 4 times (M2, M2, M2, M2)
@@ -100,7 +100,7 @@ unsafe fn modulate_by_mask_sse2(pixels: __m128i, mask_vec: __m128i, out: &mut __
     let m_lo = _mm_unpacklo_epi8(mask_vec, zero);
     let m_hi = _mm_unpackhi_epi8(mask_vec, zero);
 
-    // Multiply channel * mask
+    // Multiply port * mask
     let t_lo = _mm_mullo_epi16(px_lo, m_lo);
     let t_hi = _mm_mullo_epi16(px_hi, m_hi);
 
@@ -115,9 +115,9 @@ unsafe fn modulate_by_mask_sse2(pixels: __m128i, mask_vec: __m128i, out: &mut __
 ///
 /// Math contract (canonical - matches scalar exactly):
 /// - All inputs/outputs are premultiplied RGBA8888
-/// - Coverage mask modulates the color's alpha and RGB channels
-/// - Modulation uses: `result = (channel * mask + 1 + (channel * mask >> 8)) >> 8`
-///   This is a fast approximation of `(channel * mask) / 255` with exact rounding
+/// - Coverage mask modulates the color's alpha and RGB ports
+/// - Modulation uses: `result = (port * mask + 1 + (port * mask >> 8)) >> 8`
+///   This is a fast approximation of `(port * mask) / 255` with exact rounding
 /// - After modulation, applies over operator: `dst = color' + dst * (1 - color_a')`
 /// - Over blend also uses `(t + 1 + (t >> 8)) >> 8` rounding
 /// - Mask values: 0 = no change, 255 = full color, intermediate = proportional blend
@@ -204,9 +204,9 @@ pub unsafe fn composite_solid_masked_over_sse2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x + i] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -237,9 +237,9 @@ pub unsafe fn composite_solid_masked_over_sse2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -256,9 +256,9 @@ pub unsafe fn composite_solid_masked_over_sse2(
 ///
 /// Math contract (canonical - matches scalar exactly):
 /// - All inputs/outputs are premultiplied RGBA8888
-/// - Mask modulates source alpha and RGB channels
-/// - Modulation uses: `result = (channel * mask + 1 + (channel * mask >> 8)) >> 8`
-///   This is a fast approximation of `(channel * mask) / 255` with exact rounding
+/// - Mask modulates source alpha and RGB ports
+/// - Modulation uses: `result = (port * mask + 1 + (port * mask >> 8)) >> 8`
+///   This is a fast approximation of `(port * mask) / 255` with exact rounding
 /// - After modulation, applies over operator: `dst = src' + dst * (1 - src_a')`
 /// - Over blend also uses `(t + 1 + (t >> 8)) >> 8` rounding
 ///
@@ -344,9 +344,9 @@ pub unsafe fn composite_src_masked_over_sse2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x + i] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -383,9 +383,9 @@ pub unsafe fn composite_src_masked_over_sse2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -517,10 +517,10 @@ unsafe fn apply_div255_avx2(t_lo: __m256i, t_hi: __m256i, out: &mut __m256i) {
     *out = _mm256_packus_epi16(res_lo, res_hi);
 }
 
-/// Modulate 8 RGBA pixels by a mask, returning modulated u8 channels (AVX2 version).
+/// Modulate 8 RGBA pixels by a mask, returning modulated u8 ports (AVX2 version).
 ///
 /// # Layout
-/// The mask_vec should contain mask values replicated across each pixel's 4 channels:
+/// The mask_vec should contain mask values replicated across each pixel's 4 ports:
 /// - Each 4-byte group contains one mask repeated 4 times (M, M, M, M)
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -535,7 +535,7 @@ unsafe fn modulate_by_mask_avx2(pixels: __m256i, mask_vec: __m256i, out: &mut __
     let m_lo = _mm256_unpacklo_epi8(mask_vec, zero);
     let m_hi = _mm256_unpackhi_epi8(mask_vec, zero);
 
-    // Multiply channel * mask
+    // Multiply port * mask
     let t_lo = _mm256_mullo_epi16(px_lo, m_lo);
     let t_hi = _mm256_mullo_epi16(px_hi, m_hi);
 
@@ -669,9 +669,9 @@ pub unsafe fn composite_solid_masked_over_avx2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x + i] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -702,9 +702,9 @@ pub unsafe fn composite_solid_masked_over_avx2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -840,9 +840,9 @@ pub unsafe fn composite_src_masked_over_avx2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x + i] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -879,9 +879,9 @@ pub unsafe fn composite_src_masked_over_avx2(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }

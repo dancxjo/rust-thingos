@@ -723,9 +723,9 @@ fn main(boot_fd: usize) -> ! {
 
     debug!("AHCI: Entering RPC service loop");
 
-    // Build a WaitSet over the FD-bridged read ends of each port's channel.
+    // Build a WaitSet over the FD-bridged read ends of each port's port.
     // We keep a parallel token→handle mapping so that when an event fires we
-    // know which channel handle to drain.
+    // know which port handle to drain.
     let mut ws = stem::wait_set::WaitSet::new();
     let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, PortHandle)> = Vec::new();
 
@@ -748,7 +748,7 @@ fn main(boot_fd: usize) -> ! {
 
     // Main service loop
     loop {
-        // Block until any registered channel becomes readable.
+        // Block until any registered port becomes readable.
         let events = match ws.wait(None::<stem::time::Duration>) {
             Ok(ev) => ev,
             Err(e) => {

@@ -1,14 +1,14 @@
-//! ipc_service_demo — demonstrates the happy path for writing a channel service
+//! ipc_service_demo — demonstrates the happy path for writing a port service
 //! using [`ipc_helpers`].
 //!
 //! # What this shows
 //!
-//! 1. **Startup handshake** — the service creates a channel pair, publishes the
+//! 1. **Startup handshake** — the service creates a port pair, publishes the
 //!    write end so clients can find it, then waits for the first client message.
 //! 2. **Event loop** — uses [`RpcServer`] to receive typed requests and
 //!    [`RpcServer::reply`] to send responses without touching raw byte buffers.
 //! 3. **Clean shutdown** — when [`RpcServer::next`] returns `Err`, the peer
-//!    has closed the channel; the service logs and exits gracefully.
+//!    has closed the port; the service logs and exits gracefully.
 //!
 //! # Running
 //!
@@ -44,9 +44,9 @@ extern crate alloc;
 
 
 use abi::syscall::vfs_flags::{O_CREAT, O_WRONLY};
-use ipc_helpers::channel::OwnedChannel;
+use ipc_helpers::port::OwnedPort;
 use ipc_helpers::rpc::RpcServer;
-use stem::syscall::channel::port_create;
+use stem::syscall::port::port_create;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_write};
 use stem::{info, warn};
 
@@ -57,7 +57,7 @@ const SERVICE_PATH: &str = "/services/echo";
 fn main(_arg: usize) -> ! {
     info!("ipc_service_demo: starting up");
 
-    // ── 1. Startup: create channel pair ──────────────────────────────────────
+    // ── 1. Startup: create port pair ──────────────────────────────────────
     //
     // The kernel returns (write_handle, read_handle).  We keep the read end
     // to receive requests and publish the write end so clients can send to us.
@@ -71,8 +71,8 @@ fn main(_arg: usize) -> ! {
         }
     };
 
-    // Wrap the read end in OwnedChannel for automatic close on drop.
-    let _read_channel = OwnedChannel::new(read_h);
+    // Wrap the read end in OwnedPort for automatic close on drop.
+    let _read_port = OwnedPort::new(read_h);
 
     // ── 2. Startup handshake: publish write handle at a known VFS path ────────
     //
@@ -96,7 +96,7 @@ fn main(_arg: usize) -> ! {
                 "ipc_service_demo: failed to open {}: {:?}",
                 SERVICE_PATH, e
             );
-            // Continue anyway — the channel still works; clients just need
+            // Continue anyway — the port still works; clients just need
             // to know the handle number out-of-band.
         }
     }
@@ -116,11 +116,11 @@ fn main(_arg: usize) -> ! {
             Ok(r) => r,
             // ── 4. Clean shutdown ─────────────────────────────────────────────
             //
-            // EPIPE / ENOTCONN means the peer closed the channel.  Exit the
+            // EPIPE / ENOTCONN means the peer closed the port.  Exit the
             // event loop and let the process terminate cleanly.
             Err(e) => {
                 info!(
-                    "ipc_service_demo: channel closed ({:?}) after {} requests — shutting down",
+                    "ipc_service_demo: port closed ({:?}) after {} requests — shutting down",
                     e, request_count
                 );
                 break;

@@ -1,5 +1,5 @@
 pub mod arch;
-pub mod channel;
+pub mod port;
 pub mod message;
 pub mod signal;
 pub mod socket;
@@ -88,7 +88,7 @@ pub fn write(thing: usize, buf: &[u8]) -> Result<usize, Errno> {
     abi::errors::errno(ret)
 }
 
-pub use channel::{
+pub use port::{
     port_capacity, port_close, port_create, port_create_fds, port_len, port_recv,
     port_send, port_send_all, port_try_recv, PortHandle,
 };

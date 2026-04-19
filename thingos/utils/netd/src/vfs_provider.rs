@@ -54,7 +54,7 @@ use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp, VfsRpcReqHeader};
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
-use stem::syscall::channel::{PortHandle, port_create, port_send, port_try_recv};
+use stem::syscall::port::{PortHandle, port_create, port_send, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::{info, warn};
 
@@ -172,7 +172,7 @@ impl NetVfsProvider {
 
         match vfs_mount(req_write, "/net") {
             Ok(()) => {
-                info!("NetVfsProvider: mounted at /net (port w={} r={})", req_write, req_read);
+                debug!("NetVfsProvider: mounted at /net (port w={} r={})", req_write, req_read);
             }
             Err(e) => {
                 warn!("NetVfsProvider: vfs_mount failed: {:?}", e);

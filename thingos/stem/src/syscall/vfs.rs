@@ -6,7 +6,7 @@
 
 use abi::errors::SysResult;
 use abi::syscall::{
-    PollThing, SYS_THING_FROM_CHANNEL, SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL,
+    PollThing, SYS_HANDLE_FROM_PORT, SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL,
     SYS_FS_DUP, SYS_FS_DUP2, SYS_FS_FCHMOD, SYS_FS_FCNTL, SYS_FS_FLOCK, SYS_FS_FTRUNCATE,
     SYS_FS_FUTIMES, SYS_FS_GETCWD, SYS_FS_ISATTY, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_MKDIR,
     SYS_FS_MOUNT, SYS_FS_NOTIFY, SYS_FS_OPEN, SYS_FS_POLL, SYS_FS_READ, SYS_FS_READDIR,
@@ -467,7 +467,7 @@ pub fn vfs_getcwd(buf: &mut [u8]) -> SysResult<usize> {
 
 /// Bridge an IPC port handle into the VFS as an fd.
 pub fn vfs_handle_from_port(port_handle: u32) -> SysResult<u32> {
-    let ret = unsafe { raw_syscall6(SYS_THING_FROM_CHANNEL, port_handle as usize, 0, 0, 0, 0, 0) };
+    let ret = unsafe { raw_syscall6(SYS_HANDLE_FROM_PORT, port_handle as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
 

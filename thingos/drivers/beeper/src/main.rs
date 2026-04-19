@@ -284,7 +284,7 @@ fn main(_arg: usize) -> ! {
     let desired = AudioParams {
         sample_format: AudioSampleFormat::S16LE as u32,
         rate: 44100,
-        channels: 2,
+        ports: 2,
         period_frames: 1024,
         buffer_frames: 4096,
         _reserved: [0; 3],
@@ -305,7 +305,7 @@ fn main(_arg: usize) -> ! {
     let sample_rate = accepted.rate;
     info!(
         "chime: Configured stream (rate={}Hz, fmt={}, ch={})",
-        sample_rate, accepted.sample_format, accepted.channels
+        sample_rate, accepted.sample_format, accepted.ports
     );
 
     // Start playback.

@@ -1,6 +1,6 @@
 //! Typed request/reply RPC client and server helpers.
 //!
-//! These helpers layer [`abi::rpc::RpcHeader`] framing on top of channels to
+//! These helpers layer [`abi::rpc::RpcHeader`] framing on top of ports to
 //! provide a request/reply RPC substrate without the ceremony of manual header
 //! encoding/decoding.
 //!
@@ -29,7 +29,7 @@
 use abi::errors::Errno;
 use abi::rpc::{RpcHeader, RPC_FLAG_ERROR, RPC_FLAG_REPLY};
 use core::sync::atomic::{AtomicU64, Ordering};
-use stem::syscall::channel::{port_recv, port_send_all, PortHandle};
+use stem::syscall::port::{port_recv, port_send_all, PortHandle};
 
 // ── RpcRequest ────────────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ pub struct RpcRequest {
 
 // ── RpcServer ─────────────────────────────────────────────────────────────────
 
-/// A simple RPC server bound to a single channel read handle.
+/// A simple RPC server bound to a single port read handle.
 ///
 /// Blocks in `next()` until a request arrives.
 pub struct RpcServer {

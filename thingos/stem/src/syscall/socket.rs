@@ -146,7 +146,7 @@ pub fn socketpair(domain: u32, type_: u32, protocol: u32) -> SysResult<(u32, u32
     })
 }
 
-/// Send data and zero or more FDs atomically over a socket or channel FD.
+/// Send data and zero or more FDs atomically over a socket or port FD.
 ///
 /// `fds` is a slice of `u32` thing numbers to attach.  The kernel
 /// resolves each number from the caller's FD table (then falls back to the
@@ -183,7 +183,7 @@ pub fn sendmsg(thing: u32, data: &[u8], fds: &[u32]) -> SysResult<()> {
     abi::errors::errno(ret).map(|_| ())
 }
 
-/// Receive one message (data bytes + FDs) from a socket or channel FD.
+/// Receive one message (data bytes + FDs) from a socket or port FD.
 ///
 /// On success returns `(actual_data_len, actual_things_count)`.
 /// Returns `Err(Errno::EAGAIN)` when no message is available (non-blocking).

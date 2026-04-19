@@ -1,4 +1,4 @@
-//! Userspace helper library for writing VFS providers and channel services.
+//! Userspace helper library for writing VFS providers and port services.
 //!
 //! This library provides ergonomic wrappers around the raw Thing-OS IPC
 //! syscalls, making it easy to write drivers and system services without
@@ -6,19 +6,19 @@
 //!
 //! # Modules
 //!
-//! - [`channel`] — channel send/recv wrappers with RPC framing support
+//! - [`port`] — port send/recv wrappers with RPC framing support
 //! - [`inbox`]   — typed message send/recv over the process inbox IPC path
 //! - [`provider`] — VFS provider server loop
 //! - [`rpc`] — typed request/reply client and server helpers
 //!
 //! # Quick Start
 //!
-//! **Writing a simple service** (see [`channel`]):
+//! **Writing a simple service** (see [`port`]):
 //!
 //! ```ignore
 //! use ipc_helpers::rpc::{RpcServer, RpcRequest};
 //!
-//! let (write_h, read_h) = stem::syscall::channel::port_create(4096).unwrap();
+//! let (write_h, read_h) = stem::syscall::port::port_create(4096).unwrap();
 //! // publish write_h to clients …
 //!
 //! let mut server = RpcServer::new(read_h);
@@ -66,7 +66,7 @@
 #![no_std]
 extern crate alloc;
 
-pub mod channel;
+pub mod port;
 pub mod inbox;
 pub mod provider;
 pub mod rpc;

@@ -24,15 +24,15 @@ pub struct ManagedTask {
     pub spawn_arg: usize,
     /// Unique token for sovereign registration handshake
     pub bind_instance_id: u64,
-    /// Write end of the request channel for handshake response (0 if unused)
+    /// Write end of the request port for handshake response (0 if unused)
     pub drv_req_write: stem::syscall::PortHandle,
-    /// Read end of the response channel for driver communication (0 if unused)
+    /// Read end of the response port for driver communication (0 if unused)
     pub drv_resp_read: stem::syscall::PortHandle,
-    /// Bootstrap handle: Read end of req channel (for driver consumption)
+    /// Bootstrap handle: Read end of req port (for driver consumption)
     pub boot_req_read: stem::syscall::PortHandle,
-    /// Bootstrap handle: Write end of resp channel (for driver consumption)
+    /// Bootstrap handle: Write end of resp port (for driver consumption)
     pub boot_resp_write: stem::syscall::PortHandle,
-    /// Cached VFS FD for the response channel (bridged via vfs_handle_from_port)
+    /// Cached VFS FD for the response port (bridged via vfs_handle_from_port)
     pub resp_fd: Option<u32>,
 }
 

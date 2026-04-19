@@ -32,7 +32,7 @@ impl ProcessPool {
     pub fn new() -> Self {
         let processes = Arc::new(Mutex::new(vec![]));
         let code = Arc::new(Mutex::new(None));
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::port();
         let cloned = processes.clone();
         let code_cloned = code.clone();
 

@@ -985,7 +985,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
                 // Safety check for page overflow
                 if string_offset_bytes + name_len > 4096 {
-                    kinfo!("Warning: Module registry page overflow, truncating list.");
+                    kdebug!("Warning: Module registry page overflow, truncating list.");
                     *ptr = i; // Update count
                     break;
                 }
@@ -1120,7 +1120,7 @@ extern "C" fn thread_a(arg: usize) -> ! {
         // Only log the first few iterations to avoid flooding serial output
         if count < 5 {
             let ticks = runtime_base().mono_ticks();
-            crate::kinfo!("Thread A (arg={}) ticks={}", arg, ticks);
+            crate::kdebug!("Thread A (arg={}) ticks={}", arg, ticks);
         }
         count = count.wrapping_add(1);
         for _ in 0..1000000 {
@@ -1138,7 +1138,7 @@ extern "C" fn thread_b(arg: usize) -> ! {
         // Only log the first few iterations to avoid flooding serial output
         if count < 5 {
             let ticks = runtime_base().mono_ticks();
-            crate::kinfo!("Thread B (arg={}) ticks={}", arg, ticks);
+            crate::kdebug!("Thread B (arg={}) ticks={}", arg, ticks);
         }
         count = count.wrapping_add(1);
         for _ in 0..1000000 {
@@ -1157,7 +1157,7 @@ extern "C" fn kernel_secondary_entry<R: BootRuntime>(cpu_index: usize) -> ! {
     // This must happen before ANY kernel code that might fault or use logging (which uses GS).
     let base = unsafe { RAW_RUNTIME_BASE.expect("RAW_RUNTIME_BASE not initialized") };
     base.init_secondary_cpu(cpu_index);
-    crate::kinfo!(
+    crate::kdebug!(
         "SMP: kernel_secondary_entry arg_cpu={} runtime_cpu={}",
         cpu_index,
         base.current_cpu_index()

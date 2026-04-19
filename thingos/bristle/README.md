@@ -62,7 +62,7 @@ Apps subscribe to an event stream with filtering:
 - By seat (future)
 - By device kind
 - By focus routing (only focused app gets text/keys)
-- By privileged channels (compositor receives all pointer movement)
+- By privileged ports (compositor receives all pointer movement)
 
 ---
 
@@ -129,7 +129,7 @@ Bristle owns repeat (per-device but unified per seat). Repeat generates `KeyDown
 | **Device Registry** | Map `device_id` → device state machine, store capabilities |
 | **Normalizers** | `ps2_normalizer`, `hid_normalizer`, `mouse_normalizer` |
 | **State** | Keyboard state (pressed set, mods, locks), pointer state |
-| **Router** | Focus-based event routing, privileged channels |
+| **Router** | Focus-based event routing, privileged ports |
 
 ---
 

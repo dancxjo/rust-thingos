@@ -646,7 +646,7 @@ pub fn sys_fd_from_handle(handle_val: usize) -> SysResult<usize> {
 /// [`abi::vfs_rpc`]) to that port whenever a path under `path` is accessed.
 ///
 /// The kernel creates a private response port and registers its write-handle
-/// in the global handle table so the provider can call `SYS_channel_send` to
+/// in the global handle table so the provider can call `SYS_port_send` to
 /// deliver replies.
 pub fn sys_fs_mount(
     provider_write_handle: usize,
@@ -699,7 +699,7 @@ pub fn sys_fs_mount_ex(
 
     // Register the write end of the response port.
     // We prefer to inject this into the provider process's own handle table
-    // so it can call SYS_channel_send on it directly.
+    // so it can call SYS_port_send on it directly.
     let resp_write_handle = if let Some(provider_arc) = provider_pinfo {
         let mut lock = provider_arc.lock();
         lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcHandleMode::Write).ok_or(Errno::ENOMEM)?
@@ -723,7 +723,7 @@ pub fn sys_fs_mount_ex(
 
     vfs::mount::mount(&abs_path, driver, flags);
 
-    crate::kinfo!("vfs: mounted userland provider at {} (flags: {:#x})", abs_path, flags);
+    crate::kdebug!("vfs: mounted userland provider at {} (flags: {:#x})", abs_path, flags);
     Ok(0)
 }
 
@@ -759,7 +759,7 @@ pub fn sys_fs_bind(
 
     vfs::mount::mount(&dst_path, driver, flags);
     
-    crate::kinfo!("vfs: bound {} to {} (flags: {:#x})", src_path, dst_path, flags);
+    crate::kdebug!("vfs: bound {} to {} (flags: {:#x})", src_path, dst_path, flags);
     Ok(0)
 }
 
@@ -776,7 +776,7 @@ pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
     let abs_path = resolve_path(path)?;
     vfs::mount::umount(&abs_path)?;
-    crate::kinfo!("vfs: unmounted userland provider at {}", abs_path);
+    crate::kdebug!("vfs: unmounted userland provider at {}", abs_path);
     Ok(0)
 }
 
@@ -1864,10 +1864,10 @@ mod tests {
         assert_eq!(fds[0].revents, 0, "revents must stay 0 for negative fd");
     }
 
-    /// Mixed poll: pipe (ready), channel (not ready), VFS file (ready).
+    /// Mixed poll: pipe (ready), port (not ready), VFS file (ready).
     /// Exercises the multi-fd path with heterogeneous node types.
     #[test]
-    fn poll_mixed_pipe_channel_vfsfile() {
+    fn poll_mixed_pipe_port_vfsfile() {
         let (pipe_r, pipe_w) = crate::ipc::pipe::create_fd_pair(0, false);
         // Write data so the read end is POLLIN-ready.
         pipe_w.write(0, b"hello").expect("write to pipe");

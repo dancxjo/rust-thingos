@@ -127,13 +127,12 @@ pub const SYS_SHARED_MEMORY_PHYS: u32 = 0x2007;
 // IPC (0x3000)
 // ============================================================================
 pub const SYS_PORT_CREATE: u32 = 0x3000;
-pub const SYS_CHANNEL_CREATE: u32 = 0x3000;
-pub const SYS_CHANNEL_SEND: u32 = 0x3001;
-pub const SYS_CHANNEL_RECV: u32 = 0x3002;
-pub const SYS_CHANNEL_TRY_RECV: u32 = 0x3003;
-pub const SYS_CHANNEL_SEND_ALL: u32 = 0x3004;
-pub const SYS_CHANNEL_INFO: u32 = 0x3007;
-pub const SYS_CHANNEL_CLOSE: u32 = 0x3008;
+pub const SYS_PORT_SEND: u32 = 0x3001;
+pub const SYS_PORT_RECV: u32 = 0x3002;
+pub const SYS_PORT_TRY_RECV: u32 = 0x3003;
+pub const SYS_PORT_SEND_ALL: u32 = 0x3004;
+pub const SYS_PORT_INFO: u32 = 0x3007;
+pub const SYS_PORT_CLOSE: u32 = 0x3008;
 pub const SYS_PIPE: u32 = 0x3015;
 
 // ── Unix Domain Sockets (0x3020) ─────────────────────────────────────────────
@@ -151,10 +150,10 @@ pub const SYS_CONNECT: u32 = 0x3024;
 pub const SYS_SHUTDOWN: u32 = 0x3025;
 /// Create a connected socket pair. Args: (domain, type, protocol, things_ptr) → 0
 pub const SYS_SOCKETPAIR: u32 = 0x3026;
-/// Send data + zero or more things over a socket or channel.
+/// Send data + zero or more things over a socket or port.
 /// Args: (thing, data_ptr, data_len, things_ptr, things_count, 0) → 0
 pub const SYS_SENDMSG: u32 = 0x3027;
-/// Receive data + zero or more things from a socket or channel.
+/// Receive data + zero or more things from a socket or port.
 /// Args: (thing, data_ptr, data_cap, things_ptr, things_cap, out_lens_ptr) → 0
 /// out_lens_ptr → `[usize; 2]` = `[actual_data_len, actual_things_count]`
 /// Returns `EAGAIN` if no message is available.
@@ -164,7 +163,7 @@ pub const SYS_RECVMSG: u32 = 0x3028;
 //
 // Prototype group-broadcast using the typed message delivery model.
 // Broadcast is implemented as repeated per-recipient typed delivery;
-// there is no separate metaphysical channel.
+// there is no separate metaphysical port.
 //
 // Membership is snapshotted once at send time (snapshot semantics).
 //
@@ -233,7 +232,7 @@ pub const SYS_FS_RENAME: u32 = 0x4010;
 pub const SYS_FS_DEVICE_CALL: u32 = 0x4011;
 pub const SYS_FS_CHDIR: u32 = 0x4012;
 pub const SYS_FS_GETCWD: u32 = 0x4013;
-pub const SYS_THING_FROM_CHANNEL: u32 = 0x4014;
+pub const SYS_HANDLE_FROM_PORT: u32 = 0x4014;
 pub const SYS_FS_NOTIFY: u32 = 0x4015;
 pub const SYS_FS_REALPATH: u32 = 0x4016;
 pub const SYS_FS_SYNC: u32 = 0x4017;
@@ -298,7 +297,7 @@ const FS_SYSCALL_NUMBERS: &[u32] = &[
     SYS_FS_DEVICE_CALL,
     SYS_FS_CHDIR,
     SYS_FS_GETCWD,
-    SYS_THING_FROM_CHANNEL,
+    SYS_HANDLE_FROM_PORT,
     SYS_FS_NOTIFY,
     SYS_FS_REALPATH,
     SYS_FS_SYNC,

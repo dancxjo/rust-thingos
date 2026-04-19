@@ -87,7 +87,7 @@ fn main(arg: usize) -> ! {
         }
     }
 
-    // Bridge the channel handle to a VFS FD for FD-first polling.
+    // Bridge the port handle to a VFS FD for FD-first polling.
     let fd = vfs_handle_from_port(handle).unwrap_or(0);
 
     let mut buf = [0u8; 256];

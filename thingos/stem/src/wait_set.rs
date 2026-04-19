@@ -7,7 +7,7 @@
 //! source fires.
 //!
 //! This eliminates userspace polling loops.  Because all VFS-backed objects
-//! (pipes, sockets, and channel ends bridged via `SYS_FS_FD_FROM_HANDLE`)
+//! (pipes, sockets, and port ends bridged via `SYS_FS_FD_FROM_HANDLE`)
 //! expose FD readiness, a single `WaitSet` can multiplex the complete set of
 //! I/O the calling task cares about.
 //!
@@ -18,14 +18,14 @@
 //! use core::time::Duration;
 //!
 //! let mut set = WaitSet::new();
-//! let rx_fd = 1u32;    // channel end bridged via vfs_fd_from_handle
+//! let rx_fd = 1u32;    // port end bridged via vfs_fd_from_handle
 //! let pipe_read_fd = 3u32;
 //! let tok_rx   = set.add_fd_readable(rx_fd).unwrap();
 //! let tok_pipe = set.add_fd_readable(pipe_read_fd).unwrap();
 //!
 //! for event in set.wait(Some(Duration::from_secs(5))).unwrap() {
 //!     if event.token() == tok_rx && event.is_readable() {
-//!         // channel FD has data — call vfs_read
+//!         // port FD has data — call vfs_read
 //!     } else if event.token() == tok_pipe && event.is_readable() {
 //!         // pipe has data — call vfs_read
 //!     }
@@ -242,10 +242,10 @@ impl WaitSet {
     /// # Deprecated
     ///
     /// Port-handle waits are superseded by FD-based readiness.  Bridge the
-    /// channel to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
+    /// port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
     /// `vfs_fd_from_handle`) and then use [`add_fd_readable`][Self::add_fd_readable].
     #[deprecated(
-        note = "Use vfs_fd_from_handle to bridge the channel then add_fd_readable instead"
+        note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead"
     )]
     pub fn add_port_readable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
         #[allow(deprecated)]
@@ -259,10 +259,10 @@ impl WaitSet {
     /// # Deprecated
     ///
     /// Port-handle waits are superseded by FD-based readiness.  Bridge the
-    /// channel to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
+    /// port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
     /// `vfs_fd_from_handle`) and then use [`add_fd_writable`][Self::add_fd_writable].
     #[deprecated(
-        note = "Use vfs_fd_from_handle to bridge the channel then add_fd_writable instead"
+        note = "Use vfs_fd_from_handle to bridge the port then add_fd_writable instead"
     )]
     pub fn add_port_writable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
         #[allow(deprecated)]
@@ -271,7 +271,7 @@ impl WaitSet {
 
     /// Watch a VFS thing for readability.
     ///
-    /// `fd` is any open thing: a pipe read-end, a socket, a channel
+    /// `fd` is any open thing: a pipe read-end, a socket, a port
     /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLIN`.
     ///
@@ -283,7 +283,7 @@ impl WaitSet {
 
     /// Watch a VFS thing for writability.
     ///
-    /// `fd` is any open thing: a pipe write-end, a socket, a channel
+    /// `fd` is any open thing: a pipe write-end, a socket, a port
     /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLOUT`.
     pub fn add_fd_writable(&mut self, fd: u32) -> Result<WaitToken, Errno> {

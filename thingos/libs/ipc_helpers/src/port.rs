@@ -1,10 +1,10 @@
-//! Channel send/recv wrappers.
+//! Port send/recv wrappers.
 //!
-//! These helpers sit on top of the raw `stem::syscall::channel` functions and
+//! These helpers sit on top of the raw `stem::syscall::port` functions and
 //! add framing, polling, and ergonomic error handling.
 
 use abi::errors::Errno;
-use stem::syscall::channel::{
+use stem::syscall::port::{
     port_close, port_recv, port_send_all, port_try_recv, PortHandle,
 };
 
@@ -42,12 +42,12 @@ pub fn recv_blocking(handle: PortHandle, buf: &mut [u8]) -> Result<usize, Errno>
     port_recv(handle, buf)
 }
 
-// ── RAII channel wrapper ──────────────────────────────────────────────────────
+// ── RAII port wrapper ──────────────────────────────────────────────────────
 
-/// A thin RAII wrapper that closes a channel handle on drop.
-pub struct OwnedChannel(pub PortHandle);
+/// A thin RAII wrapper that closes a port handle on drop.
+pub struct OwnedPort(pub PortHandle);
 
-impl OwnedChannel {
+impl OwnedPort {
     pub fn new(handle: PortHandle) -> Self {
         Self(handle)
     }
@@ -72,7 +72,7 @@ impl OwnedChannel {
     }
 }
 
-impl Drop for OwnedChannel {
+impl Drop for OwnedPort {
     fn drop(&mut self) {
         port_close(self.0).ok();
     }

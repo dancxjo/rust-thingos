@@ -28,7 +28,7 @@ use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
 use stem::syscall::{argv_get, exit};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::{info, warn};
+use stem::{debug, info, warn};
 use vfs_device::VfsNicDevice;
 use vfs_provider::NetVfsProvider;
 
@@ -98,14 +98,14 @@ fn main(arg: usize) -> ! {
         exit(0);
     }
 
-    info!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
+    debug!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
 
-    info!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
+    debug!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
     let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
         open_nic_device();
     let mtu = iface_mtu as usize;
 
-    info!(
+    debug!(
         "NETD: Driver online at {} — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  MTU {}",
         provider_path, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mtu
     );
@@ -115,10 +115,10 @@ fn main(arg: usize) -> ! {
     let mut iface = Interface::new(config, &mut device, VfsNicDevice::now());
 
     if cfg.oneshot {
-        info!("NETD: oneshot mode enabled — DHCP probe will exit after completion");
+        debug!("NETD: oneshot mode enabled — DHCP probe will exit after completion");
         match dhcp::run_dhcp(&mut iface, &mut device) {
             Ok(cfg) => {
-                info!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
+                debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
                 exit(0);
             }
             Err(e) => {
@@ -138,10 +138,10 @@ fn main(arg: usize) -> ! {
         }
     };
 
-    info!("NETD: Running DHCP...");
+    debug!("NETD: Running DHCP...");
     let dhcp_config = match dhcp::run_dhcp(&mut iface, &mut device) {
         Ok(cfg) => {
-            info!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
+            debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
             cfg
         }
         Err(e) => {
@@ -158,7 +158,7 @@ fn main(arg: usize) -> ! {
         dhcp_config.gateway,
         dhcp_config.dns,
     );
-    info!("NETD: Network ready — entering VFS service loop");
+    debug!("NETD: Network ready — entering VFS service loop");
 
     let mut socket_api = SocketApi::new();
     let mut sockets_storage: [SocketStorage; 256] = [SocketStorage::EMPTY; 256];
@@ -193,7 +193,7 @@ fn main(arg: usize) -> ! {
             last_link_state = current_link;
             net_provider.link_up = current_link;
             did_work = true;
-            info!("NETD: Link state changed → {}", if current_link { "UP" } else { "DOWN" });
+            debug!("NETD: Link state changed → {}", if current_link { "UP" } else { "DOWN" });
         }
 
         socket_api.gc_closed_sockets(&mut socket_set);
@@ -255,7 +255,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
             let mtu = read_u32_file(&mtu_path).unwrap_or(1500);
             let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
 
-            info!(
+            debug!(
                 "NETD: Opened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
                 provider_path,
                 rx_fd,

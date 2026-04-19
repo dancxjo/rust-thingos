@@ -38,7 +38,7 @@ pub enum AudioSampleFormat {
 }
 
 impl AudioSampleFormat {
-    /// Bytes per sample for one channel.
+    /// Bytes per sample for one port.
     pub const fn bytes_per_sample(self) -> u32 {
         match self {
             Self::U8 => 1,
@@ -89,7 +89,7 @@ pub struct AudioParams {
     /// Sample rate in Hz (e.g. 44100, 48000).
     pub rate: u32,
     /// Channel count (1 = mono, 2 = stereo, …).
-    pub channels: u32,
+    pub ports: u32,
     /// Hardware period size in frames.
     ///
     /// One period is the minimum DMA transfer unit.
@@ -113,8 +113,8 @@ pub struct AudioStreamInfo {
     pub min_rate: u32,
     /// Maximum supported sample rate in Hz.
     pub max_rate: u32,
-    /// Maximum channel count.
-    pub max_channels: u32,
+    /// Maximum port count.
+    pub max_ports: u32,
     /// Minimum buffer size in frames.
     pub min_buffer_frames: u32,
     /// Maximum buffer size in frames.

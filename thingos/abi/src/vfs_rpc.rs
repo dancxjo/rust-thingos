@@ -112,7 +112,7 @@ impl VfsRpcOp {
 /// ```
 /// The `resp_port` is the write thing of the kernel's private response port.
 /// After processing the request, the provider **must** send its response to
-/// that handle using `SYS_channel_send`.
+/// that handle using `SYS_port_send`.
 #[derive(Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct VfsRpcReqHeader {

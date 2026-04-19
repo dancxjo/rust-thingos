@@ -187,7 +187,7 @@ fn request_audio_drain(out_fd: u32) {
 fn wait_for_playback_completion(out_fd: u32, sample_bytes: usize, params: &AudioParams) {
     let fmt = AudioSampleFormat::from_u32(params.sample_format).unwrap_or(AudioSampleFormat::S16LE);
     let bytes_per_frame =
-        (fmt.bytes_per_sample() as usize).saturating_mul(params.channels as usize).max(1);
+        (fmt.bytes_per_sample() as usize).saturating_mul(params.ports as usize).max(1);
     let queued_frames = sample_bytes / bytes_per_frame;
     let playback_ms = if params.rate > 0 {
         ((queued_frames as u64) * 1000).div_ceil(params.rate as u64)
@@ -387,7 +387,7 @@ fn main(_arg: usize) -> ! {
     let desired = AudioParams {
         sample_format: AudioSampleFormat::S16LE as u32,
         rate: 44100,
-        channels: 2,
+        ports: 2,
         period_frames: 1024,
         buffer_frames: 4096,
         _reserved: [0; 3],
@@ -408,7 +408,7 @@ fn main(_arg: usize) -> ! {
     let sample_rate = accepted.rate;
     info!(
         "chime: Configured stream (rate={}Hz, fmt={}, ch={})",
-        sample_rate, accepted.sample_format, accepted.channels
+        sample_rate, accepted.sample_format, accepted.ports
     );
 
     // Start playback.

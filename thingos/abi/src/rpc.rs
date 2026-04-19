@@ -1,7 +1,7 @@
-//! Structured request/reply header for channel-based RPC.
+//! Structured request/reply header for port-based RPC.
 //!
 //! This module provides [`RpcHeader`] — a small framing header prepended to
-//! channel messages that participate in request/reply RPC.  It enables
+//! port messages that participate in request/reply RPC.  It enables
 //! correlation of replies to requests without requiring out-of-band signalling.
 //!
 //! # Doctrine
@@ -61,9 +61,9 @@ pub const RPC_FLAG_ERROR: u8 = 1 << 2;
 /// Flag bit: this request is a one-way notification; no reply is expected.
 pub const RPC_FLAG_ONEWAY: u8 = 1 << 3;
 
-/// Framing header for channel-based request/reply RPC.
+/// Framing header for port-based request/reply RPC.
 ///
-/// Embed this at the start of every channel message that participates in
+/// Embed this at the start of every port message that participates in
 /// request/reply correlation.  The server echoes `request_id` back in the
 /// reply so the client can match it.
 ///
@@ -75,7 +75,7 @@ pub struct RpcHeader {
     ///
     /// The server must echo this value verbatim in the reply header.
     /// Clients may use any numbering scheme; monotonically increasing
-    /// integers per channel are conventional.
+    /// integers per port are conventional.
     pub request_id: u64,
     /// Flags: `RPC_FLAG_REQUEST`, `RPC_FLAG_REPLY`, `RPC_FLAG_ERROR`, etc.
     pub flags: u8,

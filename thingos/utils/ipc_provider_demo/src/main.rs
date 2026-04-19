@@ -5,8 +5,8 @@
 //!
 //! # What this shows
 //!
-//! 1. **Channel creation** — create the provider channel pair.
-//! 2. **Mount** — register the channel write-end with the kernel via
+//! 1. **Port creation** — create the provider port pair.
+//! 2. **Mount** — register the port write-end with the kernel via
 //!    `vfs_mount(provider_write_handle, path)`.
 //! 3. **Provider loop** — use [`ProviderLoop`] to read typed kernel requests
 //!    and dispatch them with [`ProviderResponse`] values.
@@ -64,7 +64,7 @@ const HELLO_CONTENT: &[u8] = b"Hello from the VFS provider!\n";
 fn main(_arg: usize) -> ! {
     info!("ipc_provider_demo: starting up");
 
-    // ── 1. Create the provider channel pair ──────────────────────────────
+    // ── 1. Create the provider port pair ──────────────────────────────
     //
     // port_create returns (write_handle, read_handle).
     // The kernel sends VFS RPC requests to the write-handle; we read them
@@ -77,7 +77,7 @@ fn main(_arg: usize) -> ! {
         }
     };
     info!(
-        "ipc_provider_demo: channel pair write_h={} read_h={}",
+        "ipc_provider_demo: port pair write_h={} read_h={}",
         write_h, read_h
     );
 
@@ -98,7 +98,7 @@ fn main(_arg: usize) -> ! {
 
     // ── 3. Provider loop ──────────────────────────────────────────────────
     //
-    // ProviderLoop reads raw VFS RPC frames from the channel and decodes
+    // ProviderLoop reads raw VFS RPC frames from the port and decodes
     // the header for us.  We only need to return a ProviderResponse for
     // each request.
     let mut lp = ProviderLoop::new(read_h);
@@ -109,7 +109,7 @@ fn main(_arg: usize) -> ! {
             Ok(r) => r,
             Err(e) => {
                 info!(
-                    "ipc_provider_demo: channel closed ({:?}) after {} requests — exiting",
+                    "ipc_provider_demo: port closed ({:?}) after {} requests — exiting",
                     e, request_count
                 );
                 break;

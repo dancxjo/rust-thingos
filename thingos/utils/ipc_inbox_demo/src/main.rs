@@ -5,7 +5,7 @@
 //! This demo exercises the end-to-end path for the inbox/message IPC family:
 //!
 //! 1. **Sender path** — `msg_send(pid, kind, payload)` delivers one typed
-//!    message directly to a target process by PID.  No channel or handle
+//!    message directly to a target process by PID.  No port or handle
 //!    exchange is required.
 //!
 //! 2. **Receiver path** — `InboxReceiver::try_recv()` / `recv_blocking()` pulls
@@ -16,7 +16,7 @@
 //!
 //! # Architectural comparison
 //!
-//! | Criterion                   | Inbox (this demo)                | Channel (`ipc_service_demo`)       |
+//! | Criterion                   | Inbox (this demo)                | Port (`ipc_service_demo`)       |
 //! |-----------------------------|----------------------------------|------------------------------------|
 //! | Addressing                  | PID / pgid                       | Explicit handle exchange           |
 //! | Connection setup            | None                             | `port_create` + publish         |
@@ -72,7 +72,7 @@ fn main(_arg: usize) -> ! {
 
     // ── 2. Self-send: deliver one typed message to our own inbox ─────────────
     //
-    // `send_typed` is a thin wrapper around `SYS_MSG_SEND`.  No channel or
+    // `send_typed` is a thin wrapper around `SYS_MSG_SEND`.  No port or
     // connection setup is needed — the kernel routes the message directly to
     // the target process's inbox.
     info!(

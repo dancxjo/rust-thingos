@@ -215,7 +215,7 @@ pub fn sys_socketpair(
 // sys_sendmsg
 // ---------------------------------------------------------------------------
 
-/// Send data + zero or more FDs atomically over a socket or channel FD.
+/// Send data + zero or more FDs atomically over a socket or port FD.
 ///
 /// Syscall args:
 ///   0: fd (socket or PortNode FD — must be writable)
@@ -291,7 +291,7 @@ pub fn sys_sendmsg(
 // sys_recvmsg
 // ---------------------------------------------------------------------------
 
-/// Receive one message (data bytes + FDs) from a socket or channel FD.
+/// Receive one message (data bytes + FDs) from a socket or port FD.
 ///
 /// Syscall args:
 ///   0: fd (socket or PortNode FD — must be readable)

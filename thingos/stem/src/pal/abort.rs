@@ -13,10 +13,10 @@ pub fn abort(exit_code: i32) -> ! {
     exit(exit_code)
 }
 
-/// Write to debug output channel.
+/// Write to debug output port.
 ///
 /// Used primarily by panic handlers to emit diagnostics before aborting.
-/// The debug channel bypasses normal logging infrastructure.
+/// The debug port bypasses normal logging infrastructure.
 #[inline]
 pub fn debug_write_str(s: &str) {
     let _ = debug_write(s, s.len());

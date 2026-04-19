@@ -207,14 +207,15 @@ impl SocketApi {
             SocketType::Tcp => match tcp_state {
                 Some(TcpState::Closed) => "closed",
                 Some(TcpState::Listen) => "listening",
-                Some(TcpState::Established)
-                | Some(TcpState::FinWait1)
-                | Some(TcpState::FinWait2)
-                | Some(TcpState::CloseWait)
-                | Some(TcpState::Closing)
-                | Some(TcpState::LastAck)
-                | Some(TcpState::TimeWait) => "connected",
-                Some(TcpState::SynSent) | Some(TcpState::SynReceived) => "bound",
+                Some(TcpState::Established) => "established",
+                Some(TcpState::FinWait1) => "fin-wait-1",
+                Some(TcpState::FinWait2) => "fin-wait-2",
+                Some(TcpState::CloseWait) => "close-wait",
+                Some(TcpState::Closing) => "closing",
+                Some(TcpState::LastAck) => "last-ack",
+                Some(TcpState::TimeWait) => "time-wait",
+                Some(TcpState::SynSent) => "syn-sent",
+                Some(TcpState::SynReceived) => "syn-received",
                 None => {
                     if managed.local.is_some() {
                         "bound"
@@ -666,7 +667,7 @@ impl SocketApi {
                     m.local =
                         Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port: local_port });
                 }
-                info!(
+                debug!(
                     "SOCKET_API: connect_existing handle={} to {}:{}",
                     api_handle, remote_ip, remote_port
                 );
@@ -960,7 +961,7 @@ impl SocketApi {
         backlog: u16,
         buf_idx: usize,
     ) -> Vec<u8> {
-        info!("SOCKET_API: TCP_LISTEN on port {} with backlog {}", port, backlog);
+        debug!("SOCKET_API: TCP_LISTEN on port {} with backlog {}", port, backlog);
 
         let rx_buffer = SocketBuffer::new(unsafe { &mut CONN_RX[buf_idx][..] });
         let tx_buffer = SocketBuffer::new(unsafe { &mut CONN_TX[buf_idx][..] });
@@ -1006,7 +1007,7 @@ impl SocketApi {
         self.sockets.insert(api_handle, managed);
         self.pending_accepts.insert(api_handle, Vec::new());
 
-        info!("SOCKET_API: Listening on port {}, handle={}", port, api_handle);
+        debug!("SOCKET_API: Listening on port {}, handle={}", port, api_handle);
         encode_handle(api_handle)
     }
 
@@ -1022,7 +1023,7 @@ impl SocketApi {
         remote_port: u16,
         buf_idx: usize,
     ) -> Vec<u8> {
-        info!("SOCKET_API: TCP_CONNECT to {}:{}", remote_ip, remote_port);
+        debug!("SOCKET_API: TCP_CONNECT to {}:{}", remote_ip, remote_port);
 
         let rx_buffer = SocketBuffer::new(unsafe { &mut CONN_RX[buf_idx][..] });
         let tx_buffer = SocketBuffer::new(unsafe { &mut CONN_TX[buf_idx][..] });
@@ -1058,7 +1059,7 @@ impl SocketApi {
 
         self.sockets.insert(api_handle, managed);
 
-        info!("SOCKET_API: Connected handle={} local_port={}", api_handle, local_port);
+        debug!("SOCKET_API: Connected handle={} local_port={}", api_handle, local_port);
         encode_handle(api_handle)
     }
 
@@ -1138,7 +1139,7 @@ impl SocketApi {
         // Diagnostic: log the listener socket state on every accept attempt
         let state = socket.state();
         if state != TcpState::Listen {
-            info!("SOCKET_API: TCP_ACCEPT handle={} socket state={:?}", listen_handle, state);
+            debug!("SOCKET_API: TCP_ACCEPT handle={} socket state={:?}", listen_handle, state);
         }
 
         // Check socket state - if it's established, we have a connection
@@ -1259,7 +1260,7 @@ impl SocketApi {
 
         self.pending_accepts.insert(api_handle, Vec::new());
 
-        info!(
+        debug!(
             "SOCKET_API: Listening on port {}, handle={} (backlog={})",
             port, api_handle, backlog
         );
@@ -1293,7 +1294,7 @@ impl SocketApi {
 
         managed.local = Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port });
 
-        info!("SOCKET_API: Bound UDP on port {}, handle={}", port, api_handle);
+        debug!("SOCKET_API: Bound UDP on port {}, handle={}", port, api_handle);
         true
     }
 
@@ -1310,7 +1311,7 @@ impl SocketApi {
         tx_payload_storage: &'a mut [u8],
         buf_idx: usize,
     ) -> Vec<u8> {
-        info!("SOCKET_API: UDP_BIND on port {}", port);
+        debug!("SOCKET_API: UDP_BIND on port {}", port);
 
         let rx_buffer =
             smoltcp::socket::udp::PacketBuffer::new(rx_metadata_storage, rx_payload_storage);
@@ -1340,7 +1341,7 @@ impl SocketApi {
 
         self.sockets.insert(api_handle, managed);
 
-        info!("SOCKET_API: Bound UDP on port {}, handle={}", port, api_handle);
+        debug!("SOCKET_API: Bound UDP on port {}, handle={}", port, api_handle);
         encode_handle(api_handle)
     }
 
@@ -1542,7 +1543,7 @@ impl SocketApi {
         device: &mut D,
         multicast_ip: Ipv4Address,
     ) -> Vec<u8> {
-        info!("SOCKET_API: Joining multicast group {}", multicast_ip);
+        debug!("SOCKET_API: Joining multicast group {}", multicast_ip);
         let now = Instant::from_millis(stem::time::now().as_millis() as i64);
         iface.join_multicast_group(device, IpAddress::Ipv4(multicast_ip), now).ok();
         encode_ok()
@@ -1627,13 +1628,13 @@ impl SocketApi {
                 // established. That is not EOF and must surface as EAGAIN so
                 // higher layers can poll instead of seeing a spurious close.
                 if matches!(state, TcpState::SynSent | TcpState::SynReceived | TcpState::Listen) {
-                    info!(
+                    debug!(
                         "SOCKET_API: TCP_RECV handle={} waiting for connection state={:?}",
                         handle, state
                     );
                     encode_empty()
                 } else if state == TcpState::Established || socket.may_recv() {
-                    info!(
+                    debug!(
                         "SOCKET_API: TCP_RECV handle={} no data yet state={:?} may_recv={}",
                         handle,
                         state,
@@ -1641,7 +1642,7 @@ impl SocketApi {
                     );
                     encode_empty()
                 } else {
-                    info!(
+                    debug!(
                         "SOCKET_API: TCP_RECV handle={} EOF state={:?} may_recv={}",
                         handle,
                         state,

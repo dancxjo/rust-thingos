@@ -32,7 +32,7 @@
 //!   specific recipients.
 //! * **Group broadcast** — fan-out delivery of a single `Message` to all
 //!   members of a [`Group`](crate::group::Group).
-//! * **Port-based IPC** — channel endpoints that carry `Message` values
+//! * **Port-based IPC** — port endpoints that carry `Message` values
 //!   across process boundaries.
 //!
 //! # What this is *not* (yet)

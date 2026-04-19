@@ -24,7 +24,7 @@ fn scale_ch(c: u8, a: u8) -> u32 {
 }
 
 #[inline(always)]
-fn blend_channel(s: u32, d: u32, sa: u32) -> u32 {
+fn blend_port(s: u32, d: u32, sa: u32) -> u32 {
     let inv = 255 - sa;
     let t = s * sa + d * inv;
     (t + 1 + (t >> 8)) >> 8
@@ -55,10 +55,10 @@ unsafe fn apply_div255_neon(t_lo: uint16x8_t, t_hi: uint16x8_t) -> uint8x16_t {
     vcombine_u8(res_lo_u8, res_hi_u8)
 }
 
-/// Modulate 4 RGBA pixels by a mask, returning modulated u8 channels.
+/// Modulate 4 RGBA pixels by a mask, returning modulated u8 ports.
 ///
 /// # Layout
-/// The mask_vec should contain mask values replicated across each pixel's 4 channels:
+/// The mask_vec should contain mask values replicated across each pixel's 4 ports:
 /// - Bytes 0-3: First pixel's mask repeated 4 times (M0, M0, M0, M0)
 /// - Bytes 4-7: Second pixel's mask repeated 4 times (M1, M1, M1, M1)
 /// - Bytes 8-11: Third pixel's mask repeated 4 times (M2, M2, M2, M2)
@@ -78,7 +78,7 @@ unsafe fn modulate_by_mask_neon(pixels: uint8x16_t, mask_vec: uint8x16_t) -> uin
     let m_lo_16 = vmovl_u8(m_lo);
     let m_hi_16 = vmovl_u8(m_hi);
 
-    // Multiply channel * mask
+    // Multiply port * mask
     let t_lo = vmulq_u16(px_lo_16, m_lo_16);
     let t_hi = vmulq_u16(px_hi_16, m_hi_16);
 
@@ -93,9 +93,9 @@ unsafe fn modulate_by_mask_neon(pixels: uint8x16_t, mask_vec: uint8x16_t) -> uin
 ///
 /// Math contract (canonical - matches scalar exactly):
 /// - All inputs/outputs are premultiplied RGBA8888
-/// - Coverage mask modulates the color's alpha and RGB channels
-/// - Modulation uses: `result = (channel * mask + 1 + (channel * mask >> 8)) >> 8`
-///   This is a fast approximation of `(channel * mask) / 255` with exact rounding
+/// - Coverage mask modulates the color's alpha and RGB ports
+/// - Modulation uses: `result = (port * mask + 1 + (port * mask >> 8)) >> 8`
+///   This is a fast approximation of `(port * mask) / 255` with exact rounding
 /// - After modulation, applies over operator: `dst = color' + dst * (1 - color_a')`
 /// - Over blend also uses `(t + 1 + (t >> 8)) >> 8` rounding
 /// - Mask values: 0 = no change, 255 = full color, intermediate = proportional blend
@@ -188,9 +188,9 @@ pub unsafe fn composite_solid_masked_over_neon(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x + i] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -221,9 +221,9 @@ pub unsafe fn composite_solid_masked_over_neon(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -240,9 +240,9 @@ pub unsafe fn composite_solid_masked_over_neon(
 ///
 /// Math contract (canonical - matches scalar exactly):
 /// - All inputs/outputs are premultiplied RGBA8888
-/// - Mask modulates source alpha and RGB channels
-/// - Modulation uses: `result = (channel * mask + 1 + (channel * mask >> 8)) >> 8`
-///   This is a fast approximation of `(channel * mask) / 255` with exact rounding
+/// - Mask modulates source alpha and RGB ports
+/// - Modulation uses: `result = (port * mask + 1 + (port * mask >> 8)) >> 8`
+///   This is a fast approximation of `(port * mask) / 255` with exact rounding
 /// - After modulation, applies over operator: `dst = src' + dst * (1 - src_a')`
 /// - Over blend also uses `(t + 1 + (t >> 8)) >> 8` rounding
 ///
@@ -331,9 +331,9 @@ pub unsafe fn composite_src_masked_over_neon(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x + i] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -370,9 +370,9 @@ pub unsafe fn composite_src_masked_over_neon(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }

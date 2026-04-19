@@ -4,8 +4,8 @@
 //!
 //! Thing-OS uses a two-tier IPC model:
 //!
-//! - **Control plane** – small, latency-sensitive messages sent over channels
-//!   (e.g. `port_send` / `port_recv`). Maximum size is the channel
+//! - **Control plane** – small, latency-sensitive messages sent over ports
+//!   (e.g. `port_send` / `port_recv`). Maximum size is the port
 //!   ring capacity (typically 4 KiB). Use this for commands, ACKs, events, and
 //!   any metadata that directs how bulk data should be interpreted.
 //!
@@ -69,7 +69,7 @@
 ///
 /// Embed this in any control-plane message that accompanies a shared memory transfer.
 /// The `thing` field is the sender's local thing number; the physical backing is
-/// transferred by passing the thing over the channel with `sendmsg`.
+/// transferred by passing the thing over the port with `sendmsg`.
 ///
 /// Wire size: [`SHARED_MEMORY_REF_WIRE_SIZE`] bytes (little-endian).
 #[repr(C)]
@@ -176,7 +176,7 @@ mod tests {
         assert!(desc.encode_le(&mut buf).is_none());
     }
 
-    /// Verify that a descriptor survives a channel-message round-trip
+    /// Verify that a descriptor survives a port-message round-trip
     /// (control header + SharedMemoryRef payload, then back).
     #[test]
     fn control_message_payload_round_trip() {

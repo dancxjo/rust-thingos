@@ -175,7 +175,7 @@ fn main(boot_fd: usize) -> ! {
         }
     };
 
-    // Bridge the response-channel handle to a VFS FD once so we can use
+    // Bridge the response-port handle to a VFS FD once so we can use
     // sendmsg (FD-based) for capability transfer.
     let drv_resp_write_fd = vfs_handle_from_port(drv_resp_write)
         .expect("display_bootfb: vfs_handle_from_port(drv_resp_write)");
@@ -292,6 +292,6 @@ fn main(boot_fd: usize) -> ! {
         lp.send_response(req.resp_port, resp).ok();
     }
 
-    info!("display_bootfb: VFS provider channel closed — exiting");
+    info!("display_bootfb: VFS provider port closed — exiting");
     stem::syscall::exit(0);
 }

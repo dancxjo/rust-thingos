@@ -31,7 +31,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_volatile};
-use stem::syscall::channel::{port_create, port_send_all, port_try_recv};
+use stem::syscall::port::{port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
 use stem::{debug, error, info, warn};
@@ -370,7 +370,7 @@ fn main(boot_fd: usize) -> ! {
                 let bpf = {
                     let fmt = AudioSampleFormat::from_u32(card.params.sample_format)
                         .unwrap_or(AudioSampleFormat::S16LE);
-                    (fmt.bytes_per_sample() * card.params.channels) as usize
+                    (fmt.bytes_per_sample() * card.params.ports) as usize
                 };
                 card.app_frame += (n / bpf.max(1)) as u64;
                 let now = stem::time::monotonic_ns();
@@ -459,7 +459,7 @@ impl HdaAudioCard {
             params: AudioParams {
                 sample_format: AudioSampleFormat::S16LE as u32,
                 rate: 48000,
-                channels: 2,
+                ports: 2,
                 period_frames: 1024,
                 buffer_frames: 4096,
                 _reserved: [0; 3],
@@ -476,7 +476,7 @@ impl HdaAudioCard {
             supported_formats: format_bit(AudioSampleFormat::S16LE),
             min_rate: 44100,
             max_rate: 48000,
-            max_channels: 2,
+            max_ports: 2,
             min_buffer_frames: 256,
             max_buffer_frames: 65536,
             min_period_frames: 64,
@@ -488,7 +488,7 @@ impl HdaAudioCard {
     fn status(&self) -> AudioStatus {
         let fmt = AudioSampleFormat::from_u32(self.params.sample_format)
             .unwrap_or(AudioSampleFormat::S16LE);
-        let bpf = (fmt.bytes_per_sample() * self.params.channels) as usize;
+        let bpf = (fmt.bytes_per_sample() * self.params.ports) as usize;
         let avail = if bpf > 0 { (self.ring.free_space() / bpf) as u32 } else { 0 };
         AudioStatus {
             state: self.state,
@@ -623,7 +623,7 @@ fn hda_dispatch_rpc(op: VfsRpcOp, payload: &[u8], card: &mut HdaAudioCard) -> Ve
                 AUDIO_SET_PARAMS => {
                     if in_data.len() >= size_of::<AudioParams>() {
                         let req: AudioParams = unsafe { core::ptr::read_unaligned(in_data.as_ptr() as *const AudioParams) };
-                        card.params = AudioParams { sample_format: req.sample_format, rate: req.rate.clamp(44100, 48000), channels: req.channels.clamp(1,2), period_frames: req.period_frames.max(64), buffer_frames: req.buffer_frames.max(256), _reserved: [0;3] };
+                        card.params = AudioParams { sample_format: req.sample_format, rate: req.rate.clamp(44100, 48000), ports: req.ports.clamp(1,2), period_frames: req.period_frames.max(64), buffer_frames: req.buffer_frames.max(256), _reserved: [0;3] };
                     }
                     let bytes = unsafe { core::slice::from_raw_parts(&card.params as *const AudioParams as *const u8, size_of::<AudioParams>()) };
                     hda_resp_ok_dc(0, bytes)

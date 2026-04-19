@@ -5,7 +5,7 @@ fn scale_ch(c: u8, a: u8) -> u32 {
 }
 
 #[inline(always)]
-fn blend_channel(s: u32, d: u32, sa: u32) -> u32 {
+fn blend_port(s: u32, d: u32, sa: u32) -> u32 {
     let inv = 255 - sa;
     let t = s * sa + d * inv;
     (t + 1 + (t >> 8)) >> 8
@@ -36,9 +36,9 @@ pub fn blit_rgba8888_over_scalar(dst: &mut [u32], src: &[u32]) {
             let db = dv & 0xFF;
 
             let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-            let out_r = blend_channel(sr, dr, sa);
-            let out_g = blend_channel(sg, dg, sa);
-            let out_b = blend_channel(sb, db, sa);
+            let out_r = blend_port(sr, dr, sa);
+            let out_g = blend_port(sg, dg, sa);
+            let out_b = blend_port(sb, db, sa);
 
             *d = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
         }
@@ -49,9 +49,9 @@ pub fn blit_rgba8888_over_scalar(dst: &mut [u32], src: &[u32]) {
 ///
 /// Math contract (canonical):
 /// - All inputs/outputs are premultiplied RGBA8888
-/// - Coverage mask modulates the color's alpha and RGB channels
-/// - Modulation uses: `result = (channel * mask * 1 + (channel * mask >> 8)) >> 8`
-///   This is a fast approximation of `(channel * mask) / 255` with exact rounding
+/// - Coverage mask modulates the color's alpha and RGB ports
+/// - Modulation uses: `result = (port * mask * 1 + (port * mask >> 8)) >> 8`
+///   This is a fast approximation of `(port * mask) / 255` with exact rounding
 /// - After modulation, applies over operator: `dst = color' + dst * (1 - color_a')`
 /// - Over blend also uses `(t + 1 + (t >> 8)) >> 8` rounding
 /// - Mask values: 0 = no change, 255 = full color, intermediate = proportional blend
@@ -105,9 +105,9 @@ pub fn composite_solid_masked_over_scalar(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }
@@ -119,9 +119,9 @@ pub fn composite_solid_masked_over_scalar(
 ///
 /// Math contract (canonical):
 /// - All inputs/outputs are premultiplied RGBA8888
-/// - Mask modulates source alpha and RGB channels
-/// - Modulation uses: `result = (channel * mask * 1 + (channel * mask >> 8)) >> 8`
-///   This is a fast approximation of `(channel * mask) / 255` with exact rounding
+/// - Mask modulates source alpha and RGB ports
+/// - Modulation uses: `result = (port * mask * 1 + (port * mask >> 8)) >> 8`
+///   This is a fast approximation of `(port * mask) / 255` with exact rounding
 /// - After modulation, applies over operator: `dst = src' + dst * (1 - src_a')`
 /// - Over blend also uses `(t + 1 + (t >> 8)) >> 8` rounding
 ///
@@ -180,9 +180,9 @@ pub fn composite_src_masked_over_scalar(
                 let db = dv & 0xFF;
 
                 let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-                let out_r = blend_channel(sr, dr, sa);
-                let out_g = blend_channel(sg, dg, sa);
-                let out_b = blend_channel(sb, db, sa);
+                let out_r = blend_port(sr, dr, sa);
+                let out_g = blend_port(sg, dg, sa);
+                let out_b = blend_port(sb, db, sa);
 
                 dst_row[x] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
             }

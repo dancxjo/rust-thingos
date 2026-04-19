@@ -165,9 +165,9 @@ pub fn reject_ipv6(addr: &str) -> SysResult<()> {
 pub struct TcpHandle {
     /// Socket ID assigned by netd (index under `/net/tcp/`).
     pub id: u32,
-    /// Read-write data channel: `/net/tcp/<id>/data`.
+    /// Read-write data port: `/net/tcp/<id>/data`.
     pub data_fd: Fd,
-    /// Write-only control channel: `/net/tcp/<id>/ctl`.
+    /// Write-only control port: `/net/tcp/<id>/ctl`.
     pub ctl_fd: Fd,
     /// Whether the data fd is in nonblocking mode (PAL-level flag).
     nonblocking: bool,
@@ -261,9 +261,9 @@ pub struct TcpListenerHandle {
     pub id: u32,
     /// Port this listener is bound to.
     pub port: u16,
-    /// Write-only control channel.
+    /// Write-only control port.
     ctl_fd: Fd,
-    /// Read-only accept channel: `/net/tcp/<id>/accept`.
+    /// Read-only accept port: `/net/tcp/<id>/accept`.
     accept_fd: Fd,
     /// Whether accept is in nonblocking mode.
     nonblocking: bool,
@@ -389,9 +389,9 @@ pub struct UdpHandle {
     pub id: u32,
     /// Local port this socket is bound to.
     pub local_port: u16,
-    /// Read-write data channel: `/net/udp/<id>/data`.
+    /// Read-write data port: `/net/udp/<id>/data`.
     pub data_fd: Fd,
-    /// Write-only control channel: `/net/udp/<id>/ctl`.
+    /// Write-only control port: `/net/udp/<id>/ctl`.
     pub ctl_fd: Fd,
     /// Default remote endpoint set by `connect()`, if any.
     connected_remote: Option<([u8; 4], u16)>,

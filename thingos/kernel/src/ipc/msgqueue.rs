@@ -358,7 +358,7 @@ impl InboxView {
 /// A connection-first view over a [`KernelMessageQueue`] for structured
 /// messages.
 ///
-/// `PortMsgView` exposes the port/channel structured-message semantic API
+/// `PortMsgView` exposes the port/port structured-message semantic API
 /// (`send_msg` / `try_recv_msg`) over an
 /// `Arc<KernelMessageQueue<KernelMessage>>`.  It demonstrates how the
 /// `Port` structured-message path can be layered on the shared queue core.

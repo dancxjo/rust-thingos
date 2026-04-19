@@ -40,15 +40,15 @@ pub struct MessageHeader {
 #[derive(Clone, Copy, Debug)]
 pub struct ConnectRequest {
     pub header: MessageHeader,
-    pub reply_channel: u32,
-    pub event_channel: u32,
+    pub reply_port: u32,
+    pub event_port: u32,
 }
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct CreateSurfaceRequest {
     pub header: MessageHeader,
-    pub reply_channel: u32,
+    pub reply_port: u32,
     pub client_id: u32,
 }
 
@@ -56,7 +56,7 @@ pub struct CreateSurfaceRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct DestroySurfaceRequest {
     pub header: MessageHeader,
-    pub reply_channel: u32,
+    pub reply_port: u32,
     pub client_id: u32,
     pub surface_id: u32,
 }
@@ -65,7 +65,7 @@ pub struct DestroySurfaceRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct AttachBufferRequest {
     pub header: MessageHeader,
-    pub reply_channel: u32,
+    pub reply_port: u32,
     pub client_id: u32,
     pub surface_id: u32,
     pub handle_thing: u32,
@@ -80,7 +80,7 @@ pub struct AttachBufferRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct RectRequest {
     pub header: MessageHeader,
-    pub reply_channel: u32,
+    pub reply_port: u32,
     pub client_id: u32,
     pub surface_id: u32,
     pub rect: Rect,
@@ -90,7 +90,7 @@ pub struct RectRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct SetZOrderRequest {
     pub header: MessageHeader,
-    pub reply_channel: u32,
+    pub reply_port: u32,
     pub client_id: u32,
     pub surface_id: u32,
     pub z_order: i32,
@@ -100,7 +100,7 @@ pub struct SetZOrderRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct CommitRequest {
     pub header: MessageHeader,
-    pub reply_channel: u32,
+    pub reply_port: u32,
     pub client_id: u32,
     pub surface_id: u32,
 }

@@ -81,7 +81,7 @@ fn main(packed_handles: usize) -> ! {
     let mut kbd_tok = None;
     let mut mouse_tok = None;
 
-    // Keyboard input path: bridge the channel handle to a VFS FD so the read
+    // Keyboard input path: bridge the port handle to a VFS FD so the read
     // side uses the VFS-first message path (add_fd_readable + vfs_read) instead
     // of the legacy port-based wait (add_port_readable + port_recv).
     let kbd_fd: Option<u32> = if kbd_read != 0 {
@@ -99,7 +99,7 @@ fn main(packed_handles: usize) -> ! {
     } else {
         None
     };
-    // Mouse input path: bridge the channel handle to a VFS FD so the read side
+    // Mouse input path: bridge the port handle to a VFS FD so the read side
     // uses the VFS-first message path (add_fd_readable + vfs_read) instead of
     // the legacy port-based wait (add_port_readable + port_recv).
     let mouse_fd: Option<u32> = if mouse_read != 0 {

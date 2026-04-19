@@ -5,6 +5,8 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
+use stem::syscall::port::{port_close, port_create, port_recv, port_send_all, PortHandle};
+use stem::thread::spawn_task_detached;
 
 use embedded_io::ErrorKind;
 use embedded_tls::blocking::{
@@ -30,6 +32,7 @@ enum TcpConnectState {
     Created,
     Connecting,
     Connected,
+    CloseWait,
     Closed,
     Other,
 }
@@ -51,9 +54,10 @@ fn read_tcp_state(socket_id: &str) -> TcpConnectState {
             return match state.trim() {
                 "created" => TcpConnectState::Created,
                 "bound" | "syn-sent" | "syn-received" => TcpConnectState::Connecting,
-                "connected" | "established" | "fin-wait-1" | "fin-wait-2" | "close-wait" => {
+                "connected" | "established" | "fin-wait-1" | "fin-wait-2" => {
                     TcpConnectState::Connected
                 }
+                "close-wait" => TcpConnectState::CloseWait,
                 "closed" | "time-wait" | "closing" | "last-ack" => TcpConnectState::Closed,
                 _ => TcpConnectState::Other,
             };
@@ -72,10 +76,10 @@ impl TcpStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, String> {
         use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR};
 
-        info!("http: connect host={} port={}", host, port);
+        debug!("http: connect host={} port={}", host, port);
 
         // 1. Allocate a new TCP socket via /net/tcp/new
-        info!("http: opening /net/tcp/new");
+        debug!("http: opening /net/tcp/new");
         let new_fd = vfs_open("/net/tcp/new", O_RDONLY | O_NONBLOCK)
             .map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
         let mut buf = [0u8; 16];
@@ -89,7 +93,7 @@ impl TcpStream {
                         return Err("timed out waiting for /net/tcp/new socket id".to_string());
                     }
                     let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                    info!("http: waiting for /net/tcp/new socket id ({} ms elapsed)", waited_ms);
+                    debug!("http: waiting for /net/tcp/new socket id ({} ms elapsed)", waited_ms);
                     stem::time::sleep_ms(slice_ms);
                     waited_ms += slice_ms;
                 }
@@ -103,16 +107,16 @@ impl TcpStream {
 
         let socket_id =
             core::str::from_utf8(&buf[..n]).map_err(|_| "invalid socket id encoding")?.trim();
-        info!("http: allocated tcp socket id={}", socket_id);
+        debug!("http: allocated tcp socket id={}", socket_id);
 
         // 2. Open ctl and data files
         let ctl_path = format!("/net/tcp/{}/ctl", socket_id);
         let data_path = format!("/net/tcp/{}/data", socket_id);
 
-        info!("http: opening ctl path {}", ctl_path);
+        debug!("http: opening ctl path {}", ctl_path);
         let ctl_fd =
             vfs_open(&ctl_path, O_RDWR).map_err(|e| format!("failed to open ctl: {:?}", e))?;
-        info!("http: opening data path {}", data_path);
+        debug!("http: opening data path {}", data_path);
         let data_fd = vfs_open(&data_path, O_RDWR | O_NONBLOCK)
             .map_err(|e| format!("failed to open data: {:?}", e))?;
 
@@ -121,13 +125,13 @@ impl TcpStream {
         vfs_write(ctl_fd, conn_cmd.as_bytes())
             .map_err(|e| format!("connect command failed: {:?}", e))?;
 
-        info!("http: connect command issued for socket id={}", socket_id);
+        debug!("http: connect command issued for socket id={}", socket_id);
 
         Ok(Self { data_fd, ctl_fd, socket_id: socket_id.to_string() })
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<usize, String> {
-        info!("http: write {} bytes", data.len());
+        debug!("http: write {} bytes", data.len());
         let mut waited_ms = 0;
         loop {
             let state = read_tcp_state(&self.socket_id);
@@ -142,7 +146,7 @@ impl TcpStream {
                             ));
                         }
                         let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                        info!(
+                        debug!(
                             "http: write returned 0 while {:?}; sleeping for {} ms",
                             state, slice_ms
                         );
@@ -151,7 +155,7 @@ impl TcpStream {
                         continue;
                     }
                     if waited_ms != 0 {
-                        info!("http: write completed after waiting {} ms", waited_ms);
+                        debug!("http: write completed after waiting {} ms", waited_ms);
                     }
                     return Ok(n);
                 }
@@ -177,7 +181,7 @@ impl TcpStream {
                     }
 
                     let slice_ms = (timeout_ms - waited_ms).min(IO_POLL_SLICE_MS);
-                    info!(
+                    debug!(
                         "http: write would block while {:?}; sleeping for {} ms",
                         state, slice_ms
                     );
@@ -194,7 +198,7 @@ impl TcpStream {
                             ));
                         }
                         let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                        info!("http: write while {:?}; sleeping for {} ms", state, slice_ms);
+                        debug!("http: write while {:?}; sleeping for {} ms", state, slice_ms);
                         stem::time::sleep_ms(slice_ms);
                         waited_ms += slice_ms;
                         continue;
@@ -229,7 +233,7 @@ impl TcpStream {
                             }
 
                             let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                            info!(
+                            debug!(
                                 "http: read returned 0 while {:?}; sleeping for {} ms",
                                 state, slice_ms
                             );
@@ -238,13 +242,13 @@ impl TcpStream {
                             continue;
                         }
                     }
-                    info!("http: read returned {} bytes after waiting {} ms", n, waited_ms);
+                    debug!("http: read returned {} bytes after waiting {} ms", n, waited_ms);
                     return Ok(n);
                 }
                 Err(abi::errors::Errno::EAGAIN) => {
                     let state = read_tcp_state(&self.socket_id);
-                    if matches!(state, TcpConnectState::Closed) {
-                        info!("http: read got EAGAIN but socket is closed; treating as EOF");
+                    if matches!(state, TcpConnectState::Closed | TcpConnectState::CloseWait) {
+                        debug!("http: read got EAGAIN but socket is closed/close-wait; treating as EOF");
                         return Ok(0);
                     }
 
@@ -254,7 +258,7 @@ impl TcpStream {
                     }
 
                     let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                    info!("http: read would block while {:?}; sleeping for {} ms", state, slice_ms);
+                    debug!("http: read would block while {:?}; sleeping for {} ms", state, slice_ms);
                     stem::time::sleep_ms(slice_ms);
                     waited_ms += slice_ms;
                 }
@@ -397,7 +401,7 @@ fn read_header_and_initial_body_from_tcp(
 
     for attempt in 0..MAX_HEADER_READ_ITERATIONS {
         let n = stream.read(&mut temp_buf)?;
-        info!("http: header read iter={} bytes={}", attempt, n);
+        debug!("http: header read iter={} bytes={}", attempt, n);
         if n == 0 {
             break;
         }
@@ -406,7 +410,7 @@ fn read_header_and_initial_body_from_tcp(
         if let Some(idx) = find_subsequence(&buffer, b"\r\n\r\n") {
             body_start = idx + 4;
             headers_done = true;
-            info!(
+            debug!(
                 "http: headers complete iter={} total_buffer={} body_start={}",
                 attempt,
                 buffer.len(),
@@ -426,70 +430,155 @@ fn read_header_and_initial_body_from_tcp(
 fn read_https_response_with_suite<S>(
     url: &ParsedUrl,
     request: &str,
-) -> Result<(Vec<u8>, usize), String>
+) -> Result<(PortHandle, Vec<u8>, usize), String>
 where
-    S: embedded_tls::TlsCipherSuite + 'static,
+    S: embedded_tls::TlsCipherSuite + Send + 'static,
 {
-    let tcp = TcpStream::connect(&url.host, url.port)?;
-    // Ownership of the raw TCP stream is transferred into TcpTransport/TlsConnection,
-    // and is closed when those values are dropped.
-    let transport = TcpTransport { inner: tcp };
-    let mut record_read_buf = [0u8; TLS_RECORD_READ_BUF_SIZE];
-    let mut record_write_buf = [0u8; TLS_RECORD_WRITE_BUF_SIZE];
-    let mut tls = TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
+    let (write_handle, read_handle) = port_create(64 * 1024).map_err(|e| format!("port create failed: {:?}", e))?;
+    let host = url.host.clone();
+    let req_bytes = request.as_bytes().to_vec();
+    
+    // We do the TLS connection setup in the main thread so we can return errors immediately.
+    let mut tcp = TcpStream::connect(&host, url.port)?;
+    
+    // To handle the TLS context borrowing locally in the background thread,
+    // we spawn a native stem task that will perform the TLS read loop.
+    let _ = spawn_task_detached(move || {
+        let transport = TcpTransport { inner: tcp };
+        let mut record_read_buf = [0u8; TLS_RECORD_READ_BUF_SIZE];
+        let mut record_write_buf = [0u8; TLS_RECORD_WRITE_BUF_SIZE];
+        let mut tls = TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
 
-    let config = TlsConfig::new().with_server_name(&url.host).enable_rsa_signatures();
-    let seed = build_tls_seed()?;
-    let rng = ChaCha20Rng::from_seed(seed);
-    tls.open(TlsContext::new(&config, UnsecureProvider::new::<S>(rng)))
-        .map_err(|e| format!("https handshake failed: {:?}", e))?;
-
-    let mut offset = 0usize;
-    while offset < request.len() {
-        let written = tls
-            .write(&request.as_bytes()[offset..])
-            .map_err(|e| format!("https write failed: {:?}", e))?;
-        if written == 0 {
-            return Err("https write returned 0 bytes".to_string());
-        }
-        offset += written;
-    }
-    tls.flush().map_err(|e| format!("https flush failed: {:?}", e))?;
-
-    let mut response = Vec::with_capacity(8 * 1024);
-    let mut buf = [0u8; 1024];
-    loop {
-        match tls.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => response.extend_from_slice(&buf[..n]),
+        let config = TlsConfig::new().with_server_name(&host).enable_rsa_signatures();
+        let seed = match build_tls_seed() {
+            Ok(s) => s,
             Err(e) => {
-                let kind = embedded_io::Error::kind(&e);
-                let err_text = format!("{:?}", e);
-                if matches!(
-                    kind,
-                    ErrorKind::ConnectionAborted
-                        | ErrorKind::ConnectionReset
-                        | ErrorKind::BrokenPipe
-                ) || err_text.contains("ConnectionClosed")
-                  || err_text.contains("CryptoError")
-                {
-                    debug!("http: https read terminated with error {:?}", err_text);
-                    break;
+                let msg = format!("ERR: https seed failed: {:?}", e);
+                let _ = port_send_all(write_handle, msg.as_bytes());
+                let _ = port_close(write_handle);
+                return;
+            }
+        };
+        let rng = ChaCha20Rng::from_seed(seed);
+
+        if let Err(e) = tls.open(TlsContext::new(&config, UnsecureProvider::new::<S>(rng))) {
+            let msg = format!("ERR: https handshake failed: {:?}", e);
+            let _ = port_send_all(write_handle, msg.as_bytes());
+            let _ = port_close(write_handle);
+            return;
+        }
+
+        let mut offset = 0usize;
+        while offset < req_bytes.len() {
+            match tls.write(&req_bytes[offset..]) {
+                Ok(0) => {
+                    let _ = port_send_all(write_handle, b"ERR: https write returned 0 bytes");
+                    let _ = port_close(write_handle);
+                    return;
                 }
-                if find_subsequence(&response, b"\r\n\r\n").is_some() {
-                    warn!("http: https read failed after headers, returning partial: {:?}", e);
-                    break;
+                Ok(written) => offset += written,
+                Err(e) => {
+                    let msg = format!("ERR: https write failed: {:?}", e);
+                    let _ = port_send_all(write_handle, msg.as_bytes());
+                    let _ = port_close(write_handle);
+                    return;
                 }
-                return Err(format!("https read failed: {:?}", e));
             }
         }
+        
+        if let Err(e) = tls.flush() {
+            let msg = format!("ERR: https flush failed: {:?}", e);
+            let _ = port_send_all(write_handle, msg.as_bytes());
+            let _ = port_close(write_handle);
+            return;
+        }
+
+        let mut buf = [0u8; 16384];
+        loop {
+            match tls.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let mut offset = 0;
+                    while offset < n {
+                        match port_send_all(write_handle, &buf[offset..n]) {
+                            Ok(written) => offset += written,
+                            Err(_) => break,
+                        }
+                    }
+                    if offset < n {
+                        break; // Receiver likely closed or error occurred
+                    }
+                }
+                Err(e) => {
+                    let kind = embedded_io::Error::kind(&e);
+                    let err_text = format!("{:?}", e);
+                    if matches!(
+                        kind,
+                        ErrorKind::ConnectionAborted
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::BrokenPipe
+                    ) || err_text.contains("ConnectionClosed")
+                      || err_text.contains("CryptoError")
+                    {
+                        if err_text.contains("ConnectionClosed") {
+                            debug!("http: https read gracefully terminated ({:?})", err_text);
+                        } else {
+                            warn!("http: https read terminated with transport/crypto error {:?}", err_text);
+                        }
+                        break;
+                    }
+                    let msg = format!("ERR: https read failed: {:?}", e);
+                    let _ = port_send_all(write_handle, msg.as_bytes());
+                    break;
+                }
+            }
+        }
+        
+        let _ = port_close(write_handle);
+    });
+
+    let mut response = Vec::new();
+    let mut buf = [0u8; 4096];
+    let mut body_start = 0;
+    let mut headers_done = false;
+
+    // Read chunks from the port until we have all the headers
+    for attempt in 0..MAX_HEADER_READ_ITERATIONS {
+        match port_recv(read_handle, &mut buf) {
+            Ok(0) | Err(abi::errors::Errno::EPIPE) => {
+                // Port closed early
+                break;
+            }
+            Ok(n) => {
+                let chunk = &buf[..n];
+                // Check if it's an error message from the thread
+                if chunk.starts_with(b"ERR: ") {
+                    if let Ok(msg) = core::str::from_utf8(&chunk[5..]) {
+                        return Err(msg.to_string());
+                    }
+                    return Err("Background thread reported unknown error".to_string());
+                }
+                
+                response.extend_from_slice(chunk);
+                if let Some(idx) = find_subsequence(&response, b"\r\n\r\n") {
+                    body_start = idx + 4;
+                    headers_done = true;
+                    debug!("http: headers complete body_start={}", body_start);
+                    break;
+                }
+            }
+            Err(e) => return Err(format!("port_recv failed: {:?}", e)),
+        }
     }
 
-    let body_start = find_subsequence(&response, b"\r\n\r\n").map(|idx| idx + 4).unwrap_or(0);
-    Ok((response, body_start))
+    if !headers_done {
+        warn!("http: https headers not completed, initial buffer={}", response.len());
+    }
+
+    Ok((read_handle, response, body_start))
 }
 
-fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize), String> {
+fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(PortHandle, Vec<u8>, usize), String> {
     match read_https_response_with_suite::<Aes128GcmSha256>(url, request) {
         Ok(v) => Ok(v),
         Err(e) if e.contains("InvalidHandshake") => {
@@ -530,9 +619,9 @@ impl HttpClient {
         // (no certificate-chain verification). This is intended as a minimal
         // in-OS TLS transport bootstrap and must not be treated as
         // production-grade authenticated HTTPS.
-        info!("http: request method={} url={}", method, url);
+        debug!("http: request method={} url={}", method, url);
         let parsed = parse_url(url)?;
-        info!(
+        debug!(
             "http: request resolved host={} port={} path={}",
             parsed.host, parsed.port, parsed.path
         );
@@ -551,17 +640,17 @@ impl HttpClient {
         );
 
         let request_line_end = req.find("\r\n").unwrap_or(req.len());
-        info!("http: sending request bytes={} first_line={}", req.len(), &req[..request_line_end]);
+        debug!("http: sending request bytes={} first_line={}", req.len(), &req[..request_line_end]);
         let (stream, buffer, body_start) = match parsed.scheme {
             UrlScheme::Http => {
                 let mut stream = TcpStream::connect(&parsed.host, parsed.port)?;
                 stream.write(req.as_bytes())?;
                 let (buffer, body_start) = read_header_and_initial_body_from_tcp(&mut stream)?;
-                (Some(stream), buffer, body_start)
+                (Some(ResponseStream::Http(stream)), buffer, body_start)
             }
             UrlScheme::Https => {
-                let (buffer, body_start) = read_https_response(&parsed, &req)?;
-                (None, buffer, body_start)
+                let (rx, buffer, body_start) = read_https_response(&parsed, &req)?;
+                (Some(ResponseStream::Https(rx)), buffer, body_start)
             }
         };
 
@@ -569,16 +658,25 @@ impl HttpClient {
     }
 }
 
+pub enum ResponseStream {
+    Http(TcpStream),
+    Https(PortHandle),
+}
+
+impl Drop for ResponseStream {
+    fn drop(&mut self) {
+        if let ResponseStream::Https(handle) = self {
+            let _ = port_close(*handle);
+        }
+    }
+}
+
 /// HTTP response body reader.
 ///
-/// For `http://`, body bytes are streamed from the underlying socket after the
+/// Body bytes are streamed from the underlying socket after the
 /// initially buffered bytes are consumed.
-///
-/// For `https://`, the current implementation buffers the full response body
-/// up-front during TLS processing; once buffered bytes are consumed, further
-/// reads return EOF.
 pub struct Response {
-    stream: Option<TcpStream>,
+    stream: Option<ResponseStream>,
     buffer: Vec<u8>,
     cursor: usize,
 }
@@ -588,22 +686,48 @@ impl Response {
         if self.cursor < self.buffer.len() {
             let chunk = self.buffer[self.cursor..].to_vec();
             self.cursor = self.buffer.len();
-            info!("http: returning buffered chunk bytes={}", chunk.len());
+            debug!("http: returning buffered chunk bytes={}", chunk.len());
             return Ok(chunk);
         }
 
-        let mut buf = [0u8; 1024];
         let Some(stream) = self.stream.as_mut() else {
-            info!("http: buffered HTTPS response fully consumed");
+            debug!("http: response fully consumed");
             return Ok(Vec::new());
         };
-        let n = stream.read(&mut buf)?;
-        if n == 0 {
-            info!("http: response stream EOF");
-            return Ok(Vec::new());
+        
+        match stream {
+            ResponseStream::Http(tcp) => {
+                let mut buf = [0u8; 1024];
+                let n = tcp.read(&mut buf)?;
+                if n == 0 {
+                    debug!("http: response stream EOF");
+                    return Ok(Vec::new());
+                }
+                debug!("http: returning streamed chunk bytes={}", n);
+                Ok(buf[..n].to_vec())
+            }
+            ResponseStream::Https(handle) => {
+                let mut buf = [0u8; 4096];
+                match port_recv(*handle, &mut buf) {
+                    Ok(0) | Err(abi::errors::Errno::EPIPE) => {
+                        debug!("http: https response stream EOF");
+                        Ok(Vec::new())
+                    }
+                    Ok(n) => {
+                        let chunk = &buf[..n];
+                        if chunk.starts_with(b"ERR: ") {
+                            if let Ok(msg) = core::str::from_utf8(&chunk[5..]) {
+                                return Err(msg.to_string());
+                            }
+                            return Err("Background thread reported unknown error".to_string());
+                        }
+                        debug!("http: returning streamed https chunk bytes={}", n);
+                        Ok(chunk.to_vec())
+                    }
+                    Err(e) => Err(format!("port_recv failed: {:?}", e)),
+                }
+            }
         }
-        info!("http: returning streamed chunk bytes={}", n);
-        Ok(buf[..n].to_vec())
     }
 }
 

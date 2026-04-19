@@ -146,16 +146,16 @@ mod tests {
         let dg = (dst >> 8) & 0xFF;
         let db = dst & 0xFF;
 
-        let blend_channel = |s: u32, d: u32, sa: u32| -> u32 {
+        let blend_port = |s: u32, d: u32, sa: u32| -> u32 {
             let inv = 255 - sa;
             let t = s * sa + d * inv;
             (t + 1 + (t >> 8)) >> 8
         };
 
         let out_a = sa + scale_ch(da as u8, (255 - sa) as u8);
-        let out_r = blend_channel(sr, dr, sa);
-        let out_g = blend_channel(sg, dg, sa);
-        let out_b = blend_channel(sb, db, sa);
+        let out_r = blend_port(sr, dr, sa);
+        let out_g = blend_port(sg, dg, sa);
+        let out_b = blend_port(sb, db, sa);
 
         (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b
     }

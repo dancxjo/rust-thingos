@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 #[derive(Clone, Copy, Debug)]
 pub struct Client {
     pub id: u32,
-    pub event_channel: u32,
+    pub event_port: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -79,24 +79,24 @@ impl Scene {
         }
     }
 
-    pub fn register_client(&mut self, event_channel: u32) -> u32 {
+    pub fn register_client(&mut self, event_port: u32) -> u32 {
         let id = self.next_client_id;
         self.next_client_id = self.next_client_id.saturating_add(1);
-        self.clients.insert(id, Client { id, event_channel });
+        self.clients.insert(id, Client { id, event_port });
         id
     }
 
-    pub fn update_client_channel(&mut self, client_id: u32, event_channel: u32) -> bool {
+    pub fn update_client_port(&mut self, client_id: u32, event_port: u32) -> bool {
         if let Some(client) = self.clients.get_mut(&client_id) {
-            client.event_channel = event_channel;
+            client.event_port = event_port;
             true
         } else {
             false
         }
     }
 
-    pub fn client_event_channel(&self, client_id: u32) -> Option<u32> {
-        self.clients.get(&client_id).map(|c| c.event_channel)
+    pub fn client_event_port(&self, client_id: u32) -> Option<u32> {
+        self.clients.get(&client_id).map(|c| c.event_port)
     }
 
     pub fn create_surface(&mut self, client_id: u32) -> Option<u32> {

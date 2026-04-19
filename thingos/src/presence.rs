@@ -170,7 +170,7 @@ impl PresenceMode {
 pub enum EmbodimentKind {
     /// Direct, first-person, locally embodied presence.
     Direct,
-    /// Presence mediated through a remote channel or proxy.
+    /// Presence mediated through a remote port or proxy.
     Remote,
     /// Presence inherited from a parent or enclosing context.
     Inherited,

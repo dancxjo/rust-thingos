@@ -342,7 +342,7 @@ fn main(_arg: usize) -> ! {
                                     if let Some(fs) = IsoFs::probe(&block_dev) {
                                         info!("iso9660d: found ISO9660 on device {}", name);
 
-                                        // 3. Create the provider channel pair.
+                                        // 3. Create the provider port pair.
                                         let (req_write, req_read) = match port_create(
                                             abi::vfs_rpc::VFS_RPC_MAX_REQ * 8,
                                         ) {
@@ -397,13 +397,13 @@ fn main(_arg: usize) -> ! {
     loop {
         let req = match lp.next_request() {
             Ok(r) => r,
-            Err(_) => break, // channel closed — exit cleanly
+            Err(_) => break, // port closed — exit cleanly
         };
         let resp = dispatch_request(&fs, &dev, &req);
         lp.send_response(req.resp_port, resp).ok();
     }
 
-    info!("iso9660d: provider channel closed — exiting");
+    info!("iso9660d: provider port closed — exiting");
     loop {
         stem::syscall::yield_now();
     }

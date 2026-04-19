@@ -245,7 +245,7 @@ impl BlockDevice for AtapiDevice {
     }
 }
 
-/// Try to detect ATAPI device on a channel.
+/// Try to detect ATAPI device on a port.
 fn probe_atapi(io_base: u16, ctrl_base: u16, is_slave: bool) -> Option<AtapiDevice> {
     let dev = AtapiDevice {
         io_base,
@@ -493,7 +493,7 @@ fn main(_arg: usize) -> ! {
     // Try to find ATAPI CD-ROM
     let mut atapi_dev: Option<AtapiDevice> = None;
 
-    // Probe secondary channel first (common for CD-ROM)
+    // Probe secondary port first (common for CD-ROM)
     info!("ISO_READER: Probing for ATAPI CD-ROM...");
     if let Some(dev) = probe_atapi(ATA_SECONDARY_IO, ATA_SECONDARY_CTRL, false) {
         info!("ISO_READER: Found ATAPI device on secondary master");

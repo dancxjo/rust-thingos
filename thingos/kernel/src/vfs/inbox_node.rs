@@ -2,7 +2,7 @@
 //!
 //! Wraps an `Arc<Inbox>` as a [`VfsNode`] so that inbox-backed delivery
 //! queues can participate in `SYS_FS_POLL`-based readiness monitoring
-//! alongside channels and pipes.
+//! alongside ports and pipes.
 //!
 //! # Motivation
 //!
@@ -41,7 +41,7 @@ use alloc::sync::Arc;
 /// VFS node backed by an [`Inbox`].
 ///
 /// Enables inbox-backed queues to participate in `SYS_FS_POLL` readiness
-/// monitoring alongside channels and pipes, fulfilling the unified readiness
+/// monitoring alongside ports and pipes, fulfilling the unified readiness
 /// model described in `docs/ipc/inbox_vs_port_semantics.md` §5.
 pub struct InboxNode {
     inbox: Arc<Inbox>,

@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn color_channel_extraction() {
+    fn color_port_extraction() {
         let c = Color::from_rgba(0xAA, 0xBB, 0xCC, 0xDD);
         assert_eq!(c.red(), 0xAA);
         assert_eq!(c.green(), 0xBB);

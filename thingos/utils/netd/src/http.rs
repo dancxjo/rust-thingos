@@ -74,7 +74,7 @@ fn http_get_internal(
     
     let endpoint = IpEndpoint::new(IpAddress::Ipv4(ip), 80);
 
-    stem::info!("HTTP: GET http://{}{}  (redirect #{})", host, path, redirect_count);
+    stem::debug!("HTTP: GET http://{}{}  (redirect #{})", host, path, redirect_count);
 
     let start = VirtioNicDevice::now();
     let timeout = start + Duration::from_secs(30);
@@ -133,7 +133,7 @@ fn http_get_internal(
                     // Parse status code
                     if let Some(status) = parse_status_code(headers) {
                         status_code = status;
-                        stem::info!("HTTP: Status {}", status_code);
+                        stem::debug!("HTTP: Status {}", status_code);
 
                         // Check for redirect and parse Location
                         if status_code >= 300 && status_code < 400 {
@@ -195,7 +195,7 @@ fn http_get_internal(
         Vec::new()
     };
 
-    stem::info!("HTTP: Response complete ({} bytes)", body.len());
+    stem::debug!("HTTP: Response complete ({} bytes)", body.len());
 
     Ok(HttpResponse { status_code, body })
 }
@@ -209,7 +209,7 @@ fn follow_redirect(
     location: &str,
     redirect_count: u8,
 ) -> Result<HttpResponse, HttpError> {
-    stem::info!("HTTP: Following redirect to {}", location);
+    stem::debug!("HTTP: Following redirect to {}", location);
 
     // HTTPS requires an in-OS TLS client. Do not fall back to host proxies.
     if location.starts_with("https://") {
@@ -230,15 +230,15 @@ fn follow_redirect(
         (String::from(current_host), alloc::format!("/{}", location))
     };
 
-    stem::info!("HTTP: Redirect target: host={} path={}", new_host, new_path);
+    stem::debug!("HTTP: Redirect target: host={} path={}", new_host, new_path);
 
     // If host changed, we need DNS lookup
     let new_ip = if new_host.as_str() != current_host {
         // Need to resolve the new host
-        stem::info!("HTTP: Resolving new host {}", new_host);
+        stem::debug!("HTTP: Resolving new host {}", new_host);
         match dns::lookup_a(iface, device, dns_server, &new_host) {
             Ok(ip) => {
-                stem::info!("HTTP: Resolved {} to {}", new_host, ip);
+                stem::debug!("HTTP: Resolved {} to {}", new_host, ip);
                 ip
             }
             Err(_) => {

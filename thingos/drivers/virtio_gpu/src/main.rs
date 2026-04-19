@@ -175,9 +175,9 @@ fn main(boot_fd: usize) -> ! {
     // 3. Register as VFS Provider via Sovereign Handshake
     use abi::vfs_rpc::VFS_RPC_MAX_REQ;
     let (vfs_write, vfs_read) =
-        stem::syscall::port_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS channel");
+        stem::syscall::port_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
 
-    // Bridge the response-channel handle to a VFS FD for sendmsg.
+    // Bridge the response-port handle to a VFS FD for sendmsg.
     let drv_resp_write_fd = stem::syscall::vfs::vfs_handle_from_port(drv_resp_write)
         .expect("virtio_gpu: vfs_handle_from_port(drv_resp_write)");
 

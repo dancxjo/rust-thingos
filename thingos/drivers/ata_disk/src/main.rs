@@ -337,7 +337,7 @@ fn read_sectors(
     Ok(bytes_needed)
 }
 
-fn register_disk(disk: &mut AtaDisk, channel: &str, drive: &str) {
+fn register_disk(disk: &mut AtaDisk, port: &str, drive: &str) {
     // Create RPC port for block device service (4KB buffer)
     let (write_handle, read_handle) = match port_create(4096) {
         Ok(handles) => handles,
@@ -351,7 +351,7 @@ fn register_disk(disk: &mut AtaDisk, channel: &str, drive: &str) {
     // Publish to VFS
     use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
     let _ = vfs_mkdir("/services/storage");
-    let name = alloc::format!("/services/storage/ata_{}_{}", channel, drive);
+    let name = alloc::format!("/services/storage/ata_{}_{}", port, drive);
     if let Ok(fd) = vfs_open(
         &name,
         abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR,
@@ -366,7 +366,7 @@ fn register_disk(disk: &mut AtaDisk, channel: &str, drive: &str) {
 
     info!(
         "ATA_DISK: Registered disk ch={} drv={} sectors={} lba48={} model='{}' rpc_port={}",
-        channel, drive, disk.sector_count, disk.supports_lba48, model_str, write_handle
+        port, drive, disk.sector_count, disk.supports_lba48, model_str, write_handle
     );
 }
 
@@ -548,7 +548,7 @@ fn ata_outw(port: u16, val: u16) {
     ioport_write(port as usize, val as usize, 2);
 }
 
-fn register_atapi(dev: &mut AtapiDevice, channel: &str, drive: &str) {
+fn register_atapi(dev: &mut AtapiDevice, port: &str, drive: &str) {
     // Create RPC port for block device service (4KB buffer)
     let (write_handle, read_handle) = match port_create(4096) {
         Ok(handles) => handles,
@@ -562,7 +562,7 @@ fn register_atapi(dev: &mut AtapiDevice, channel: &str, drive: &str) {
     // Publish to VFS
     use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
     let _ = vfs_mkdir("/services/storage");
-    let name = alloc::format!("/services/storage/atapi_{}_{}", channel, drive);
+    let name = alloc::format!("/services/storage/atapi_{}_{}", port, drive);
     if let Ok(fd) = vfs_open(
         &name,
         abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR,
@@ -577,7 +577,7 @@ fn register_atapi(dev: &mut AtapiDevice, channel: &str, drive: &str) {
 
     info!(
         "ATA_DISK: Registered ATAPI ch={} drv={} model='{}' rpc_port={}",
-        channel, drive, model_str, write_handle
+        port, drive, model_str, write_handle
     );
 }
 
@@ -588,8 +588,8 @@ fn main(_arg: usize) -> ! {
     let mut disks: Vec<AtaDisk> = Vec::new();
     let mut atapi_devs: Vec<AtapiDevice> = Vec::new();
 
-    // Probe primary channel - ATA
-    info!("ATA_DISK: Probing primary channel (0x1F0)...");
+    // Probe primary port - ATA
+    info!("ATA_DISK: Probing primary port (0x1F0)...");
     if let Some(mut disk) = identify_drive(ATA_PRIMARY_IO, ATA_PRIMARY_CTRL, false) {
         info!("ATA_DISK: Found primary master (ATA)");
         register_disk(&mut disk, "primary", "master");
@@ -610,8 +610,8 @@ fn main(_arg: usize) -> ! {
         atapi_devs.push(dev);
     }
 
-    // Probe secondary channel
-    info!("ATA_DISK: Probing secondary channel (0x170)...");
+    // Probe secondary port
+    info!("ATA_DISK: Probing secondary port (0x170)...");
     if let Some(mut disk) = identify_drive(ATA_SECONDARY_IO, ATA_SECONDARY_CTRL, false) {
         info!("ATA_DISK: Found secondary master (ATA)");
         register_disk(&mut disk, "secondary", "master");
@@ -641,9 +641,9 @@ fn main(_arg: usize) -> ! {
 
     info!("ATA_DISK: Entering RPC service loop");
 
-    // Build a WaitSet over the FD-bridged read ends of each device's channel.
+    // Build a WaitSet over the FD-bridged read ends of each device's port.
     // We keep a parallel token→handle mapping so that when an event fires we
-    // know which channel handle to drain.
+    // know which port handle to drain.
     let mut ws = stem::wait_set::WaitSet::new();
     let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, PortHandle)> = Vec::new();
 
@@ -675,7 +675,7 @@ fn main(_arg: usize) -> ! {
 
     // Main service loop
     loop {
-        // Block until any registered channel becomes readable.
+        // Block until any registered port becomes readable.
         let events = match ws.wait(None::<stem::time::Duration>) {
             Ok(ev) => ev,
             Err(e) => {

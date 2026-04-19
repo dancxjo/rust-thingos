@@ -50,7 +50,7 @@ pub fn lookup_a<D: Device>(
     let query = build_dns_query(name);
     let endpoint = IpEndpoint::new(IpAddress::Ipv4(dns_server), 53);
 
-    stem::info!("DNS: Querying {} for {}", dns_server, name);
+    stem::debug!("DNS: Querying {} for {}", dns_server, name);
 
     let start = now();
     let timeout = start + Duration::from_secs(5);
@@ -60,7 +60,7 @@ pub fn lookup_a<D: Device>(
     loop {
         let ts = now();
         if ts > timeout {
-            stem::info!("DNS: Timeout after {} polls", poll_count);
+            stem::debug!("DNS: Timeout after {} polls", poll_count);
             return Err(DnsError::Timeout);
         }
 
@@ -72,7 +72,7 @@ pub fn lookup_a<D: Device>(
             match socket.send_slice(&query, endpoint) {
                 Ok(()) => {
                     sent = true;
-                    stem::info!(
+                    stem::debug!(
                         "DNS: Query sent to {}:53 (txid=0x1234, {} bytes)",
                         dns_server,
                         query.len()
@@ -86,7 +86,7 @@ pub fn lookup_a<D: Device>(
 
         if socket.can_recv() {
             let (data, _) = socket.recv().map_err(|_| DnsError::InvalidResponse)?;
-            stem::info!("DNS: Response received ({} bytes)", data.len());
+            stem::debug!("DNS: Response received ({} bytes)", data.len());
             return parse_dns_response(data);
         }
 

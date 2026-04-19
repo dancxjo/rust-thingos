@@ -11,7 +11,7 @@
 //!
 //! Do not use a port as a byte stream (streaming raw PCM, text output, etc.)
 //! and do not use a pipe for structured message exchange (commands, replies,
-//! capability passing).  See `docs/concepts/channels_vs_pipes.md`.
+//! capability passing).  See `docs/concepts/ports_vs_pipes.md`.
 //!
 //! # Terminology
 //!
@@ -39,7 +39,7 @@ mod port;
 
 pub use handles::{
     IpcHandle, IpcHandleEntry, IpcHandleMode, IpcHandleTable, IpcThing, IpcThingEntry,
-    IpcThingMode, IpcThingTable, MAX_IPC_HANDLES, MAX_IPC_THINGS,
+    IpcThingMode, IpcThingTable, MAX_IPC_HANDLES,
 };
 pub use port::{Port, PortId, Receiver, Sender};
 
@@ -57,14 +57,14 @@ static PORTS: Mutex<Vec<Option<Arc<Port>>>> = Mutex::new(Vec::new());
 pub fn create_port(capacity: usize) -> PortId {
     let port = Arc::new(Port::new(capacity));
     let mut ports = PORTS.lock();
-    crate::kinfo!("CREATE_PORT: capacity={} port={:p}", capacity, Arc::as_ptr(&port));
+    crate::kdebug!("CREATE_PORT: capacity={} port={:p}", capacity, Arc::as_ptr(&port));
 
     // Find a free slot or append
     for (i, slot) in ports.iter_mut().enumerate() {
         if slot.is_none() {
             *slot = Some(port);
             let id = PortId(i as u32);
-            crate::kinfo!("CREATE_PORT: slot={} id={:?}", i, id);
+            crate::kdebug!("CREATE_PORT: slot={} id={:?}", i, id);
             return id;
         }
     }
@@ -72,7 +72,7 @@ pub fn create_port(capacity: usize) -> PortId {
     // No free slot, append
     let id = PortId(ports.len() as u32);
     ports.push(Some(port));
-    crate::kinfo!("CREATE_PORT: appended id={:?}", id);
+    crate::kdebug!("CREATE_PORT: appended id={:?}", id);
     id
 }
 

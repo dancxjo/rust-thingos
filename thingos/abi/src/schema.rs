@@ -129,7 +129,7 @@ pub mod keys {
     pub const SECTOR_SIZE: &str = "sector_size";
     pub const SECTOR_COUNT: &str = "sector_count";
     pub const LBA48: &str = "lba48";
-    pub const ATA_CHANNEL: &str = "ata_channel";
+    pub const ATA_PORT: &str = "ata_port";
     pub const ATA_DRIVE: &str = "ata_drive";
     pub const MODEL: &str = "model";
     pub const SERIAL: &str = "serial";
@@ -571,7 +571,7 @@ pub mod keys {
     pub const PROC_NAME: &str = "proc.name";
     /// Initial startup argument passed via `spawn_with_arg` (usize stored as u64).
     /// Set on the spawned thread node so supervisors can observe it without
-    /// out-of-band channels.
+    /// out-of-band ports.
     pub const PROC_SPAWN_ARG: &str = "proc.spawn_arg";
 
     // Launch/Event Properties

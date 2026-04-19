@@ -116,8 +116,8 @@ pub struct VirtioSndPcmInfo {
     pub formats: u64,
     pub rates: u64,
     pub direction: u8,
-    pub channels_min: u8,
-    pub channels_max: u8,
+    pub ports_min: u8,
+    pub ports_max: u8,
     pub padding: [u8; 5],
 }
 
@@ -128,7 +128,7 @@ pub struct VirtioSndPcmSetParams {
     pub buffer_bytes: u32,
     pub period_bytes: u32,
     pub features: u32,
-    pub channels: u8,
+    pub ports: u8,
     pub format: u8,
     pub rate: u8,
     pub padding: u8,

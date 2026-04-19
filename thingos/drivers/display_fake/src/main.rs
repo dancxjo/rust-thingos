@@ -176,7 +176,7 @@ fn main(arg: usize) -> ! {
     let _drv_req_tok = ws.add_fd_readable(drv_req_fd).unwrap();
 
     loop {
-        // Block until the request channel has data available.
+        // Block until the request port has data available.
         if ws.wait(None::<stem::time::Duration>).is_err() {
             stem::yield_now();
             continue;

@@ -1,4 +1,4 @@
-//! Userland VFS provider channel — kernel side.
+//! Userland VFS provider port — kernel side.
 //!
 //! When a userland process calls `SYS_FS_MOUNT`, the kernel instantiates a
 //! [`ProviderFs`] and registers it in the global mount table.  From that point
@@ -18,10 +18,10 @@ use super::{VfsDriver, VfsNode, VfsStat};
 use crate::sched::wait_queue::WaitQueue;
 use crate::syscall::validate::{copyin, copyout};
 
-// ── ProviderChannel ──────────────────────────────────────────────────────────
+// ── ProviderPort ──────────────────────────────────────────────────────────
 
 /// Inner state protected by the serialisation lock.
-struct ProviderChannel {
+struct ProviderPort {
     /// The provider's request port (kernel → provider).
     req: crate::ipc::Sender,
     /// The kernel's private response port (provider → kernel).
@@ -33,7 +33,7 @@ struct ProviderChannel {
     waiters: BTreeMap<u64, Arc<WaitQueue>>,
 }
 
-impl ProviderChannel {
+impl ProviderPort {
     /// Perform a blocking round-trip RPC with the provider.
     fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
         let hdr = VfsRpcReqHeader { resp_port: self.resp_write_handle, op: op as u8, _pad: [0, 0] };
@@ -100,8 +100,8 @@ impl ProviderChannel {
 
 /// A [`VfsDriver`] that forwards all operations to a userland provider via IPC.
 pub struct ProviderFs {
-    channel: Mutex<ProviderChannel>,
-    rpc: Arc<Mutex<ProviderChannelRef>>,
+    port: Mutex<ProviderPort>,
+    rpc: Arc<Mutex<ProviderPortRef>>,
 }
 
 static PROVIDER_MAP: Mutex<BTreeMap<u32, Weak<ProviderFs>>> = Mutex::new(BTreeMap::new());
@@ -113,13 +113,13 @@ impl ProviderFs {
         resp_write_handle: u32,
         req_port_id: u32,
     ) -> Arc<Self> {
-        let rpc = Arc::new(Mutex::new(ProviderChannelRef {
+        let rpc = Arc::new(Mutex::new(ProviderPortRef {
             req: crate::ipc::Sender::new(req_port.clone()),
             resp: crate::ipc::Receiver::new(resp_port.clone()),
             resp_write_handle,
         }));
         let this = Arc::new(Self {
-            channel: Mutex::new(ProviderChannel {
+            port: Mutex::new(ProviderPort {
                 req: crate::ipc::Sender::new(req_port),
                 resp: crate::ipc::Receiver::new(resp_port),
                 resp_write_handle,
@@ -132,7 +132,7 @@ impl ProviderFs {
     }
 
     pub fn notify(&self, handle: u64, _revents: u16) {
-        let mut chan = self.channel.lock();
+        let mut chan = self.port.lock();
         if let Some(wq) = chan.waiters.get(&handle) {
             wq.wake_all();
         }
@@ -148,10 +148,10 @@ impl VfsDriver for ProviderFs {
         payload[..4].copy_from_slice(&path_len.to_le_bytes());
         payload[4..].copy_from_slice(path_bytes);
 
-        let resp = self.channel.lock().rpc(VfsRpcOp::Lookup, &payload)?;
+        let resp = self.port.lock().rpc(VfsRpcOp::Lookup, &payload)?;
         parse_response_handle(&resp).map(|handle| {
-            let wq = self.channel.lock().get_wait_queue(handle);
-            Arc::new(ProviderNode { handle, channel: self.rpc.clone(), wait_queue: wq })
+            let wq = self.port.lock().get_wait_queue(handle);
+            Arc::new(ProviderNode { handle, port: self.rpc.clone(), wait_queue: wq })
                 as Arc<dyn VfsNode>
         })
     }
@@ -166,7 +166,7 @@ impl VfsDriver for ProviderFs {
         payload[off..off + 4].copy_from_slice(&(new_bytes.len() as u32).to_le_bytes());
         payload[off + 4..].copy_from_slice(new_bytes);
 
-        let resp = self.channel.lock().rpc(VfsRpcOp::Rename, &payload)?;
+        let resp = self.port.lock().rpc(VfsRpcOp::Rename, &payload)?;
         if resp.is_empty() {
             return Err(Errno::EIO);
         }
@@ -179,7 +179,7 @@ impl VfsDriver for ProviderFs {
 
 impl Drop for ProviderFs {
     fn drop(&mut self) {
-        // All Sender/Receiver handles held by this ProviderFs (via channel
+        // All Sender/Receiver handles held by this ProviderFs (via port
         // and rpc fields) will be dropped, automatically releasing the
         // kernel's reference counts on the IPC ports.
     }
@@ -198,15 +198,15 @@ fn parse_response_handle(resp: &[u8]) -> SysResult<u64> {
     Ok(u64::from_le_bytes([resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7], resp[8]]))
 }
 
-// ── ProviderChannelRef ────────────────────────────────────────────────────────
+// ── ProviderPortRef ────────────────────────────────────────────────────────
 
-struct ProviderChannelRef {
+struct ProviderPortRef {
     req: crate::ipc::Sender,
     resp: crate::ipc::Receiver,
     resp_write_handle: u32,
 }
 
-impl ProviderChannelRef {
+impl ProviderPortRef {
     fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
         let hdr = VfsRpcReqHeader { resp_port: self.resp_write_handle, op: op as u8, _pad: [0, 0] };
         let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
@@ -268,7 +268,7 @@ impl ProviderChannelRef {
 
 pub struct ProviderNode {
     handle: u64,
-    channel: Arc<Mutex<ProviderChannelRef>>,
+    port: Arc<Mutex<ProviderPortRef>>,
     wait_queue: Arc<WaitQueue>,
 }
 
@@ -282,7 +282,7 @@ impl VfsNode for ProviderNode {
         payload[..8].copy_from_slice(&self.handle.to_le_bytes());
         payload[8..16].copy_from_slice(&offset.to_le_bytes());
         payload[16..20].copy_from_slice(&len.to_le_bytes());
-        let resp = self.channel.lock().rpc(VfsRpcOp::Read, &payload)?;
+        let resp = self.port.lock().rpc(VfsRpcOp::Read, &payload)?;
         parse_response_read(&resp, buf)
     }
 
@@ -293,13 +293,13 @@ impl VfsNode for ProviderNode {
         payload[8..16].copy_from_slice(&offset.to_le_bytes());
         payload[16..20].copy_from_slice(&data_len.to_le_bytes());
         payload[20..].copy_from_slice(&data[..data_len as usize]);
-        let resp = self.channel.lock().rpc(VfsRpcOp::Write, &payload)?;
+        let resp = self.port.lock().rpc(VfsRpcOp::Write, &payload)?;
         parse_response_u32(&resp).map(|n| n as usize)
     }
 
     fn stat(&self) -> SysResult<VfsStat> {
         let payload = self.handle.to_le_bytes();
-        let resp = self.channel.lock().rpc(VfsRpcOp::Stat, &payload)?;
+        let resp = self.port.lock().rpc(VfsRpcOp::Stat, &payload)?;
         parse_response_stat(&resp)
     }
 
@@ -309,7 +309,7 @@ impl VfsNode for ProviderNode {
         payload[..8].copy_from_slice(&self.handle.to_le_bytes());
         payload[8..16].copy_from_slice(&offset.to_le_bytes());
         payload[16..20].copy_from_slice(&len.to_le_bytes());
-        let resp = self.channel.lock().rpc(VfsRpcOp::Readdir, &payload)?;
+        let resp = self.port.lock().rpc(VfsRpcOp::Readdir, &payload)?;
         parse_response_read(&resp, buf)
     }
 
@@ -319,7 +319,7 @@ impl VfsNode for ProviderNode {
         // wedge the calling task (e.g. shell waiting on `ls` completion).
         //
         // If providers need strict handle-lifetime notifications in the future,
-        // this should be replaced with an asynchronous fire-and-forget channel.
+        // this should be replaced with an asynchronous fire-and-forget port.
     }
 
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
@@ -345,7 +345,7 @@ impl VfsNode for ProviderNode {
                 )?;
             }
         }
-        let resp = self.channel.lock().rpc(VfsRpcOp::DeviceCall, &payload)?;
+        let resp = self.port.lock().rpc(VfsRpcOp::DeviceCall, &payload)?;
         if resp.is_empty() {
             return Err(Errno::EIO);
         }
@@ -371,7 +371,7 @@ impl VfsNode for ProviderNode {
         payload[..8].copy_from_slice(&self.handle.to_le_bytes());
         let events = abi::syscall::poll_flags::POLLIN | abi::syscall::poll_flags::POLLOUT;
         payload[8..12].copy_from_slice(&(events as u32).to_le_bytes());
-        let resp = self.channel.lock().rpc(VfsRpcOp::Poll, &payload);
+        let resp = self.port.lock().rpc(VfsRpcOp::Poll, &payload);
         match resp {
             Ok(r) => parse_response_u32(&r).unwrap_or(0) as u16,
             Err(_) => abi::syscall::poll_flags::POLLERR,
@@ -639,7 +639,7 @@ mod tests {
         let fill = vec![0xABu8; req_port.capacity()];
         req_port.send(&fill);
 
-        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 99 };
+        let ch = ProviderPortRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 99 };
 
         // A Stat request payload is 8 bytes (handle: u64); combined with the
         // 7-byte header the message is 15 bytes and won't fit the full ring.
@@ -667,7 +667,7 @@ mod tests {
         // when the process exits the handle table drops all handles.)
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 99 };
+        let ch = ProviderPortRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 99 };
 
         // Send succeeds (data lands in the ring), but response never arrives.
         let payload = b"\x05\x00\x00\x00hello"; // Lookup "hello"
@@ -692,7 +692,7 @@ mod tests {
         let resp_port = make_port(256);
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
+        let ch = ProviderPortRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
         // Ignore the result; we only care about the counter.
         let _ = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]);
 
@@ -712,7 +712,7 @@ mod tests {
         let resp_port = make_port(256);
         resp_port.close_writer();
 
-        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
+        let ch = ProviderPortRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
         let _ = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]);
 
         let after = crate::ipc::diag::VFS_RPC_ERRORS.load(Ordering::Relaxed);
@@ -737,7 +737,7 @@ mod tests {
         preloaded[13..21].copy_from_slice(&1u64.to_le_bytes()); // ino: 1
         resp_port.send(&preloaded);
 
-        let ch = ProviderChannelRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
+        let ch = ProviderPortRef { req: crate::ipc::Sender::new(req_port), resp: crate::ipc::Receiver::new(resp_port), resp_write_handle: 0 };
 
         // The Stat RPC should complete without blocking.
         let raw = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]).unwrap();
@@ -752,7 +752,7 @@ mod tests {
         let resp_port = make_port(4096);
         let node = ProviderNode {
             handle: 7,
-            channel: Arc::new(Mutex::new(ProviderChannelRef {
+            port: Arc::new(Mutex::new(ProviderPortRef {
                 req: crate::ipc::Sender::new(req_port.clone()),
                 resp: crate::ipc::Receiver::new(resp_port),
                 resp_write_handle: 0,
@@ -772,7 +772,7 @@ mod tests {
         let resp_port = make_port(4096);
         let node = ProviderNode {
             handle: 9,
-            channel: Arc::new(Mutex::new(ProviderChannelRef {
+            port: Arc::new(Mutex::new(ProviderPortRef {
                 req: crate::ipc::Sender::new(req_port.clone()),
                 resp: crate::ipc::Receiver::new(resp_port),
                 resp_write_handle: 0,

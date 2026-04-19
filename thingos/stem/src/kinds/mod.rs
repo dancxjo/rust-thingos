@@ -258,7 +258,7 @@ pub const KIND_ID_THINGOS_PRESENCE_EMBODIMENT_KIND: [u8; 16] = [0x94, 0xa8, 0xe7
 pub enum EmbodimentKind {
     /// Direct, first-person, locally embodied presence.
     Direct,
-    /// Presence mediated through a remote channel or proxy.
+    /// Presence mediated through a remote port or proxy.
     Remote,
     /// Presence inherited from a parent or enclosing context.
     Inherited,

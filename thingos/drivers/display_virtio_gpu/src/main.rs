@@ -541,7 +541,7 @@ fn main(boot_arg: usize) -> ! {
     let (vfs_write, vfs_read) =
         port_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
 
-    // Bridge the supervisor channel handle to a VFS FD for sendmsg.
+    // Bridge the supervisor port handle to a VFS FD for sendmsg.
     let supervisor_port_fd = stem::syscall::vfs::vfs_handle_from_port(supervisor_port)
         .expect("display_virtio_gpu: vfs_handle_from_port(supervisor_port)");
 

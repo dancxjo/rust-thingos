@@ -35,14 +35,14 @@ pub struct KindId(pub [u8; 16]);
 pub struct PredicateId(pub [u8; 16]);
 
 #[cfg(feature = "kernel-id-gen")]
-static NEXT_THING_ID: AtomicU64 = AtomicU64::new(0);
+static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(0);
 
 impl ThingId {
     #[cfg(feature = "kernel-id-gen")]
     pub fn new_debug_nonce() -> Self {
-        let seq = NEXT_THING_ID.fetch_add(1, Ordering::Relaxed);
+        let seq = NEXT_HANDLE_ID.fetch_add(1, Ordering::Relaxed);
         // Simple nonce to distinguish runs (if ASLR/pointers vary)
-        let bootish = (core::ptr::addr_of!(NEXT_THING_ID) as u64) ^ 0x5EED_C0DE_CAFE_BABE;
+        let bootish = (core::ptr::addr_of!(NEXT_HANDLE_ID) as u64) ^ 0x5EED_C0DE_CAFE_BABE;
 
         let mut bytes = [0u8; 16];
         bytes[0..8].copy_from_slice(&bootish.to_le_bytes());

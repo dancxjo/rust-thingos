@@ -333,7 +333,7 @@ pub trait VfsNode: Send + Sync {
     }
 
     /// Send data and zero or more capability FDs atomically over this socket
-    /// or channel FD.
+    /// or port FD.
     ///
     /// `fds` is a list of `Arc<dyn VfsNode>` capabilities to attach.  The
     /// receiver will have each one installed into its own FD table.
@@ -348,7 +348,7 @@ pub trait VfsNode: Send + Sync {
     }
 
     /// Receive one message (data bytes + capability FDs) from this socket or
-    /// channel FD.
+    /// port FD.
     ///
     /// Returns `Ok(Some((data, fds)))` when a message is available,
     /// `Ok(None)` when the queue is empty (non-blocking / EAGAIN), or

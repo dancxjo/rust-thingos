@@ -106,9 +106,9 @@ impl Supervisor {
         // Stage 1: Discover boot modules
         self.discover();
 
-        // Stage 2: Create Sovereign Registrar channel
+        // Stage 2: Create Sovereign Registrar port
         let (supervisor_write, supervisor_read) =
-            port_create(4096).expect("Failed to create supervisor registrar channel");
+            port_create(4096).expect("Failed to create supervisor registrar port");
 
         // Stage 3: Launch Serial Shell EARLY on its own processor
         info!("SPROUT: Launching early serial shell...");
@@ -370,7 +370,7 @@ impl Supervisor {
 
     fn process_registrations(&mut self) {
         // Collect tasks that need polling. We only poll tasks that have a response
-        // channel and are currently alive.
+        // port and are currently alive.
         let tasks_to_poll: Vec<(u32, u32, alloc::string::String)> = {
             let mut tasks = self.tasks.lock();
             let mut poll_set = Vec::new();
@@ -382,7 +382,7 @@ impl Supervisor {
                         if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(t.drv_resp_read) {
                             t.resp_fd = Some(fd);
                             stem::info!(
-                                "SPROUT: Bridged resp_channel {} -> FD {} for task '{}'",
+                                "SPROUT: Bridged resp_port {} -> FD {} for task '{}'",
                                 t.drv_resp_read,
                                 fd,
                                 t.name

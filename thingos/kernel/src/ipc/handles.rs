@@ -69,8 +69,6 @@ impl Drop for IpcHandleEntry {
 
 /// Maximum handles per process (v0 limit)
 pub const MAX_IPC_HANDLES: usize = 1024;
-/// Backward-compatible alias.
-pub const MAX_IPC_THINGS: usize = MAX_IPC_HANDLES;
 
 /// Per-process handle table
 #[derive(Debug, Clone)]
@@ -97,7 +95,7 @@ impl IpcHandleTable {
                 let port_id = super::find_port_id(&port).unwrap();
                 *slot = Some(IpcHandleEntry::new(port, mode));
                 let h = IpcHandle(i as u32);
-                crate::kinfo!(
+                crate::kdebug!(
                     "ALLOC_HANDLE: handle={} port_id={:?} mode={:?}",
                     h.0,
                     port_id,

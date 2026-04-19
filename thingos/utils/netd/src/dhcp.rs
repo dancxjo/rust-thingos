@@ -38,7 +38,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
     let mut socket_set = SocketSet::new(&mut sockets_storage[..]);
     let dhcp_handle = socket_set.add(Dhcpv4Socket::new());
 
-    stem::info!("DHCP: Starting discovery...");
+    stem::debug!("DHCP: Starting discovery...");
 
     let start = now();
     let timeout = start + Duration::from_secs(30);
@@ -62,7 +62,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
         if let Some(event) = dhcp_socket.poll() {
             match event {
                 Event::Configured(config) => {
-                    stem::info!("DHCP: Configuration received");
+                    stem::debug!("DHCP: Configuration received");
 
                     let ip = config.address.address();
                     let gateway = config.router.unwrap_or(Ipv4Address::UNSPECIFIED);

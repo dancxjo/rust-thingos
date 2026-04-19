@@ -2402,7 +2402,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             old_registry_sync.new_state = Some(TaskState::Runnable);
             old_registry_sync.new_enqueued_at_tick = Some(now);
             if current_id == 6 {
-                crate::kdebug!(
+                crate::ktrace!(
                     "SCHED[TID6]: Running → Runnable (cpu={}, next={})",
                     cpu_idx,
                     next_id
@@ -2706,7 +2706,7 @@ pub fn end_bringup<R: BootRuntime>() {
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         if sched.bringup_in_progress {
-            crate::kinfo!(
+            crate::kdebug!(
                 "SCHED: early-boot bringup complete; resuming steady-state SMP scheduling"
             );
             sched.bringup_in_progress = false;
@@ -3200,7 +3200,7 @@ fn release_task_devices<R: BootRuntime>(tid: TaskId) {
     debug_assert_scheduler_not_held_by_this_cpu::<R>("release_task_devices");
     let released = crate::device_registry::REGISTRY.lock().release_all_for_task(tid);
     if released > 0 {
-        crate::kinfo!("DEVICE: released {} claims for task {}", released, tid);
+        crate::kdebug!("DEVICE: released {} claims for task {}", released, tid);
     }
 }
 
@@ -3295,10 +3295,10 @@ pub fn kill_by_tid<R: BootRuntime>(tid: u64) -> bool {
                         let released =
                             crate::device_registry::REGISTRY.lock().release_all_for_task(tid);
                         if released > 0 {
-                            crate::kinfo!("DEVICE: released {} claims for task {}", released, tid);
+                            crate::kdebug!("DEVICE: released {} claims for task {}", released, tid);
                         }
 
-                        crate::kinfo!("SCHED: Killed task {} (SIGKILL)", tid);
+                        crate::kdebug!("SCHED: Killed task {} (SIGKILL)", tid);
                         (true, waiters)
                     }
                 }

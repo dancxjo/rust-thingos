@@ -234,7 +234,7 @@ pub struct DriverHostVtable {
         path_len: usize,
         service_handle: Handle,
     ) -> Status,
-    pub create_channel: unsafe extern "C" fn(out_server: *mut Handle, out_client: *mut Handle) -> Status,
+    pub create_port: unsafe extern "C" fn(out_server: *mut Handle, out_client: *mut Handle) -> Status,
     pub create_stream_pair: unsafe extern "C" fn(out_a: *mut Handle, out_b: *mut Handle) -> Status,
     pub wait: unsafe extern "C" fn(
         handles_ptr: *const Handle,

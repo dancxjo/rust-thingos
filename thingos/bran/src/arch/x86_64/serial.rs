@@ -58,7 +58,7 @@ impl SerialPort {
             return cached;
         }
 
-        // basic calibration using PIT channel 2 (speaker) or channel 0 (system timer).
+        // basic calibration using PIT port 2 (speaker) or port 0 (system timer).
         let freq = unsafe { calibrate_tsc_pit() };
         self.freq_hz.store(freq, Ordering::Relaxed);
         freq

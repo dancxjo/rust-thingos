@@ -121,7 +121,7 @@ impl ArenaHeap {
 
     /// Add a pre-existing memory region as an arena
     pub fn add_arena(&mut self, mut arena: Arena) -> ArenaId {
-        crate::kinfo!(
+        crate::kdebug!(
             "ArenaHeap: Adding arena '{}' base={:x} size={} flags={:?}",
             arena.tag,
             arena.base,
@@ -217,7 +217,7 @@ impl ArenaHeap {
         // Remove from list
         let mut arena = self.arenas[id_to_evict.0 as usize].take()?;
 
-        crate::kinfo!(
+        crate::kdebug!(
             "ArenaHeap: Evicting arena '{}' id={:?} used={}",
             arena.tag,
             id_to_evict,
@@ -313,15 +313,15 @@ pub fn rewind(mark: Mark) {
 pub fn heap_status() {
     let heap = crate::memory::kheap::kernel_heap().lock();
     let stats = heap.stats();
-    crate::kinfo!("Heap Status:");
-    crate::kinfo!("  Pinned:    {} bytes", stats.total_pinned_bytes);
-    crate::kinfo!("  Evictable: {} bytes", stats.total_evictable_bytes);
-    crate::kinfo!(
+    crate::kdebug!("Heap Status:");
+    crate::kdebug!("  Pinned:    {} bytes", stats.total_pinned_bytes);
+    crate::kdebug!("  Evictable: {} bytes", stats.total_evictable_bytes);
+    crate::kdebug!(
         "  Evictions: {} (freed {} bytes)",
         stats.eviction_count,
         stats.bytes_freed_by_eviction
     );
-    crate::kinfo!("  Max Req:   {} bytes", stats.largest_alloc_request);
+    crate::kdebug!("  Max Req:   {} bytes", stats.largest_alloc_request);
 }
 
 // Ensure tests compile (updated for new API)

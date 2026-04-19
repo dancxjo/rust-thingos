@@ -270,7 +270,7 @@ fn main(raw_write_handle: usize) -> ! {
 
     stem::debug!("ps2_mouse: online (handle={})", handle);
 
-    // Bridge the write channel handle to a VFS file descriptor so all I/O
+    // Bridge the write port handle to a VFS file descriptor so all I/O
     // flows through the VFS-first message path rather than the legacy port API.
     let fd = match vfs_handle_from_port(handle) {
         Ok(f) => f,
@@ -372,7 +372,7 @@ fn send_mouse_events(
             if !send_ok && len > 0 {
                 *drop_counter = drop_counter.wrapping_add(1);
                 if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-                    info!(
+                    debug!(
                         "ps2_mouse: dropped {} mouse events (write fd={} failed)",
                         *drop_counter, fd
                     );

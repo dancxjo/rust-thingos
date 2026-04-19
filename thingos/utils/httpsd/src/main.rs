@@ -172,7 +172,10 @@ impl HttpsProvider {
         }
 
         let needed_end = offset.saturating_add(max_len);
-        while state.body.len() < needed_end && !state.eof {
+        
+        // STREAMING FIX: If we already have ANY data starting at `offset`, return it immediately.
+        // We do not wait for `needed_end` to be satisfied unless we have no data at all for this offset.
+        while state.body.len() <= offset && !state.eof {
             let Some(response) = state.response.as_mut() else {
                 state.eof = true;
                 break;
@@ -246,7 +249,7 @@ pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
 }
 
 fn run_provider(mount_point: &str) -> ! {
-    let (req_write, req_read) = match stem::syscall::channel::port_create(64 * 1024) {
+    let (req_write, req_read) = match stem::syscall::port::port_create(64 * 1024) {
         Ok(pair) => pair,
         Err(e) => {
             warn!("httpsd: port_create failed: {:?}", e);

@@ -72,7 +72,7 @@ pub fn generate_chime(sample_rate: u32) -> Vec<u8> {
         let signal = if signal > 0.8 { 0.8 + (signal - 0.8) * 0.5 } else { signal };
 
         let sample_l = signal;
-        // Stereo widener: Phase shift the right channel slightly
+        // Stereo widener: Phase shift the right port slightly
         let sample_r = signal * 0.9 + 0.1 * libm::sinf(2.0 * PI * (f_root * 1.01) * t) * env * 0.15;
 
         let pcm_l = (sample_l * 30000.0) as i16;

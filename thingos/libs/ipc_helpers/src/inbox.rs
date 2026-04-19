@@ -4,9 +4,9 @@
 //! [`stem::syscall::message`] functions so that services and drivers can
 //! adopt the inbox/message IPC pattern without writing boilerplate.
 //!
-//! # When to use inbox vs channel
+//! # When to use inbox vs port
 //!
-//! | Criterion                        | Inbox (this module)           | Channel (`channel` module)        |
+//! | Criterion                        | Inbox (this module)           | Port (`port` module)        |
 //! |----------------------------------|-------------------------------|-----------------------------------|
 //! | Recipient identity               | Process by PID                | Explicit handle exchange          |
 //! | Connection setup required        | None (process-addressed)      | `port_create` + publish handle |

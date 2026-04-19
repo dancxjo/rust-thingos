@@ -8,7 +8,7 @@ pub const WAIT_MANY_MAX_ITEMS: usize = 32;
 pub enum WaitKind {
     /// Legacy port-handle wait kind. Still functional; use `WaitKind::Fd` for new code.
     ///
-    /// Bridge a channel to a VFS file descriptor with `SYS_FD_FROM_HANDLE` and then
+    /// Bridge a port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` and then
     /// use `WaitKind::Fd` (stem: `WaitSet::add_fd_readable` / `add_fd_writable`).
     #[deprecated(
         note = "Port handles are superseded by FD-based readiness; use SYS_FD_FROM_HANDLE then WaitKind::Fd"
@@ -29,7 +29,7 @@ pub enum WaitKind {
     /// Wait for a VFS file descriptor to become readable or writable.
     ///
     /// This is the primary readiness kind for all VFS-backed resources:
-    /// pipes, sockets, channels bridged via `SYS_THING_FROM_CHANNEL`, and
+    /// pipes, sockets, ports bridged via `SYS_HANDLE_FROM_PORT`, and
     /// device nodes.
     Fd = 7,
 }

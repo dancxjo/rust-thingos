@@ -1,10 +1,10 @@
-//! Port: the internal ring-buffer backing a user-facing channel.
+//! Port: the internal ring-buffer backing a user-facing port.
 //!
-//! A **channel** (as exposed by `SYS_CHANNEL_CREATE` and the `SYS_CHANNEL_*`
-//! family) is the user-visible IPC primitive.  Internally each channel is
+//! A **port** (as exposed by `SYS_PORT_CREATE` and the `SYS_PORT_*`
+//! family) is the user-visible IPC primitive.  Internally each port is
 //! backed by a `Port` — a fixed-capacity SPSC ring buffer with a structured
 //! message queue.  `Port` / `PortId` are kernel-private names; user-space
-//! and all documentation should say "channel" and "thing" instead.
+//! and all documentation should say "port" and "thing" instead.
 //!
 //! Each port has a single writer and single reader thing.
 
@@ -29,7 +29,7 @@ pub struct PortId(pub u32);
 
 /// A structured message that bundles data bytes and zero or more capability
 /// handles (VFS nodes).  This is the unit stored in the message queue and
-/// exchanged via `SYS_CHANNEL_SEND_MSG` / `SYS_CHANNEL_RECV_MSG`.
+/// exchanged via `SYS_PORT_SEND_MSG` / `SYS_PORT_RECV_MSG`.
 pub struct KernelMessage {
     /// Payload bytes (may be empty for handle-only messages).
     pub data: alloc::vec::Vec<u8>,
@@ -214,7 +214,7 @@ impl Port {
     /// Enqueue a structured message with optional data and capability handles.
     ///
     /// This is the kernel-internal primitive used by both the new
-    /// `SYS_CHANNEL_SEND_MSG` path and the legacy `send_handle` compatibility
+    /// `SYS_PORT_SEND_MSG` path and the legacy `send_handle` compatibility
     /// wrapper.
     ///
     /// # Transfer semantics
@@ -546,7 +546,7 @@ mod tests {
 
     /// Test basic send/receive on a Port
     #[test]
-    fn test_channel_send_recv() {
+    fn test_port_send_recv() {
         let port = Arc::new(Port::new(64));
         let sender = Sender::new(Arc::clone(&port));
         let receiver = Receiver::new(Arc::clone(&port));
@@ -611,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn test_channel_send_all_atomic() {
+    fn test_port_send_all_atomic() {
         let port = Arc::new(Port::new(16));
         let receiver = Receiver::new(Arc::clone(&port));
 

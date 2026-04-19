@@ -63,11 +63,11 @@ fn main(arg: usize) -> ! {
         primary.width, primary.height, primary.refresh_mhz
     );
 
-    info!("bloom: creating service channel...");
+    info!("bloom: creating service port...");
     let (service_write, service_read) = match port_create(65536) {
         Ok(pair) => pair,
         Err(e) => {
-            error!("bloom: failed to create service channel: {:?}", e);
+            error!("bloom: failed to create service port: {:?}", e);
             loop {
                 stem::sleep_ms(1000);
             }
@@ -93,9 +93,9 @@ fn main(arg: usize) -> ! {
     let mut input = InputState::new(primary.width, primary.height);
     let bristle_evt_read = decode_bristle_arg(arg as u64);
     if bristle_evt_read != 0 {
-        info!("bloom: listening for bristle events on channel {}", bristle_evt_read);
+        info!("bloom: listening for bristle events on port {}", bristle_evt_read);
     } else {
-        warn!("bloom: no bristle event channel provided");
+        warn!("bloom: no bristle event port provided");
     }
 
     let service_fd = vfs_handle_from_port(service_read).ok();
@@ -124,7 +124,7 @@ fn main(arg: usize) -> ! {
                 let ts = stem::monotonic_ns();
                 for entry in composition {
                     if let Some(client_id) = scene.surface_client(entry.surface_id) {
-                        if let Some(ch) = scene.client_event_channel(client_id) {
+                        if let Some(ch) = scene.client_event_port(client_id) {
                             let done = FrameDoneEvent {
                                 header: msg_header(EVT_FRAME_DONE),
                                 surface_id: entry.surface_id,
@@ -214,31 +214,31 @@ fn process_client_message(
 
     match req {
         ClientRequest::Connect(req) => {
-            let client_id = if req.event_channel == 0 {
+            let client_id = if req.event_port == 0 {
                 0
             } else {
-                scene.register_client(req.event_channel)
+                scene.register_client(req.event_port)
             };
-            send_ack(req.reply_channel, 0, client_id, 0);
+            send_ack(req.reply_port, 0, client_id, 0);
             client_id != 0
         }
         ClientRequest::CreateSurface(req) => {
             let Some(surface_id) = scene.create_surface(req.client_id) else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 return false;
             };
-            send_ack(req.reply_channel, 0, surface_id, 0);
+            send_ack(req.reply_port, 0, surface_id, 0);
             true
         }
         ClientRequest::DestroySurface(req) => {
             let Some(release_ids) = scene.destroy_surface(req.client_id, req.surface_id) else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 return false;
             };
             for id in release_ids {
                 display.release_buffer(id);
             }
-            send_ack(req.reply_channel, 0, req.surface_id, 0);
+            send_ack(req.reply_port, 0, req.surface_id, 0);
             damage.mark_dirty();
             *needs_redraw = true;
             true
@@ -252,7 +252,7 @@ fn process_client_message(
                 req.format,
                 req.modifier,
             ) else {
-                send_ack(req.reply_channel, 2, 0, 0);
+                send_ack(req.reply_port, 2, 0, 0);
                 return false;
             };
 
@@ -269,16 +269,16 @@ fn process_client_message(
             match old_pending {
                 Some(Some(old_id)) => {
                     display.release_buffer(old_id);
-                    send_ack(req.reply_channel, 0, buffer_id, 0);
+                    send_ack(req.reply_port, 0, buffer_id, 0);
                     true
                 }
                 Some(None) => {
-                    send_ack(req.reply_channel, 0, buffer_id, 0);
+                    send_ack(req.reply_port, 0, buffer_id, 0);
                     true
                 }
                 None => {
                     display.release_buffer(buffer_id);
-                    send_ack(req.reply_channel, 1, 0, 0);
+                    send_ack(req.reply_port, 1, 0, 0);
                     false
                 }
             }
@@ -286,58 +286,58 @@ fn process_client_message(
         ClientRequest::Damage(req) => {
             if scene.damage_pending(req.client_id, req.surface_id, req.rect) {
                 damage.mark_rect(req.rect);
-                send_ack(req.reply_channel, 0, 0, 0);
+                send_ack(req.reply_port, 0, 0, 0);
                 true
             } else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 false
             }
         }
         ClientRequest::SetInputRegion(req) => {
             if scene.set_pending_input_region(req.client_id, req.surface_id, req.rect) {
-                send_ack(req.reply_channel, 0, 0, 0);
+                send_ack(req.reply_port, 0, 0, 0);
                 true
             } else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 false
             }
         }
         ClientRequest::SetOpaqueRegion(req) => {
             if scene.set_pending_opaque_region(req.client_id, req.surface_id, req.rect) {
-                send_ack(req.reply_channel, 0, 0, 0);
+                send_ack(req.reply_port, 0, 0, 0);
                 true
             } else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 false
             }
         }
         ClientRequest::SetDestRect(req) => {
             if scene.set_pending_dest_rect(req.client_id, req.surface_id, req.rect) {
-                send_ack(req.reply_channel, 0, 0, 0);
+                send_ack(req.reply_port, 0, 0, 0);
                 true
             } else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 false
             }
         }
         ClientRequest::SetZOrder(req) => {
             if scene.set_pending_z_order(req.client_id, req.surface_id, req.z_order) {
-                send_ack(req.reply_channel, 0, 0, 0);
+                send_ack(req.reply_port, 0, 0, 0);
                 true
             } else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 false
             }
         }
         ClientRequest::Commit(req) => {
             let Some(result) = scene.commit_surface(req.client_id, req.surface_id) else {
-                send_ack(req.reply_channel, 1, 0, 0);
+                send_ack(req.reply_port, 1, 0, 0);
                 return false;
             };
             for id in result.released_buffer_ids {
                 display.release_buffer(id);
             }
-            send_ack(req.reply_channel, 0, req.surface_id, result.frame_serial);
+            send_ack(req.reply_port, 0, req.surface_id, result.frame_serial);
             if result.changed {
                 damage.mark_dirty();
                 *needs_redraw = true;
@@ -356,8 +356,8 @@ fn publish_service_handle(path: &str, handle: u32) {
     }
 }
 
-fn send_ack(reply_channel: u32, status: u32, value: u32, serial: u64) {
-    if reply_channel == 0 {
+fn send_ack(reply_port: u32, status: u32, value: u32, serial: u64) {
+    if reply_port == 0 {
         return;
     }
     let ack = AckEvent {
@@ -366,7 +366,7 @@ fn send_ack(reply_channel: u32, status: u32, value: u32, serial: u64) {
         value,
         serial,
     };
-    let _ = port_send_all(reply_channel, &to_vec(&ack));
+    let _ = port_send_all(reply_port, &to_vec(&ack));
 }
 
 fn decode_bristle_arg(arg: u64) -> u32 {
