@@ -122,6 +122,7 @@ members = [
   "thingos/utils/loglevel",
   "thingos/utils/ls",
   "thingos/utils/mkdir",
+  "thingos/utils/mount",
   "thingos/utils/mv",
   "thingos/utils/netd",
   "thingos/utils/nslookup",

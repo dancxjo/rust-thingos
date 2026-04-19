@@ -37,6 +37,18 @@ pub const INTERFACE_LIFECYCLE_V1: u32 = 2;
 /// `bind(ctx, dev) -> BindResult`, `unbind(ctx, dev) -> Status`
 pub const INTERFACE_DRIVER_V1: u32 = 3;
 
+/// Interface id for `VfsProviderMountV1` — a Seed entrypoint that mounts and
+/// starts a VFS provider service.
+///
+/// Required entry: `mount(args...) -> !`
+pub const INTERFACE_VFS_PROVIDER_MOUNT_V1: u32 = 4;
+
+/// Interface id for `VfsProviderUnmountV1` — a Seed entrypoint that unmounts a
+/// mounted VFS provider.
+///
+/// Required entry: `unmount(args...) -> Status`
+pub const INTERFACE_VFS_PROVIDER_UNMOUNT_V1: u32 = 5;
+
 // ── Hosting mode bits ─────────────────────────────────────────────────────────
 
 /// Hosting mode: Seed can be germinated as a regular program (ProgramV1).
@@ -45,6 +57,8 @@ pub const HOST_PROGRAM: u64 = 1 << 0;
 pub const HOST_LIFECYCLE: u64 = 1 << 1;
 /// Hosting mode: Seed can be probed/bound as a driver (DriverV1).
 pub const HOST_DRIVER: u64 = 1 << 2;
+/// Hosting mode: Seed can be mounted as a VFS provider.
+pub const HOST_VFS_PROVIDER: u64 = 1 << 3;
 
 // ── Core types ────────────────────────────────────────────────────────────────
 
@@ -136,6 +150,24 @@ impl Seed {
     pub fn implements_program_v1(&self) -> bool {
         self.interface(INTERFACE_PROGRAM_V1, 1).is_some()
     }
+
+    /// Returns `true` if this Seed declares [`INTERFACE_VFS_PROVIDER_MOUNT_V1`].
+    #[inline]
+    pub fn implements_vfs_provider_mount_v1(&self) -> bool {
+        self.interface(INTERFACE_VFS_PROVIDER_MOUNT_V1, 1).is_some()
+    }
+
+    /// Returns `true` if this Seed declares [`INTERFACE_VFS_PROVIDER_UNMOUNT_V1`].
+    #[inline]
+    pub fn implements_vfs_provider_unmount_v1(&self) -> bool {
+        self.interface(INTERFACE_VFS_PROVIDER_UNMOUNT_V1, 1).is_some()
+    }
+
+    /// Returns `true` if this Seed declares both mount and unmount provider hooks.
+    #[inline]
+    pub fn implements_vfs_provider_v1(&self) -> bool {
+        self.implements_vfs_provider_mount_v1() && self.implements_vfs_provider_unmount_v1()
+    }
 }
 
 #[cfg(test)]
@@ -146,7 +178,7 @@ mod tests {
     fn seed_interface_lookup_finds_declared_interfaces() {
         let seed = Seed {
             abi_version: SEED_ABI_VERSION,
-            interface_count: 2,
+            interface_count: 4,
             hosting_modes: HOST_PROGRAM,
             capabilities: 0,
             name_ptr: core::ptr::null(),
@@ -168,13 +200,28 @@ mod tests {
                     entry_symbol_ptr: core::ptr::null(),
                     entry_symbol_len: 0,
                 },
-                SeedInterface::zero(),
-                SeedInterface::zero(),
+                SeedInterface {
+                    interface_id: INTERFACE_VFS_PROVIDER_MOUNT_V1,
+                    interface_version: 1,
+                    flags: 0,
+                    reserved: 0,
+                    entry_symbol_ptr: core::ptr::null(),
+                    entry_symbol_len: 0,
+                },
+                SeedInterface {
+                    interface_id: INTERFACE_VFS_PROVIDER_UNMOUNT_V1,
+                    interface_version: 1,
+                    flags: 0,
+                    reserved: 0,
+                    entry_symbol_ptr: core::ptr::null(),
+                    entry_symbol_len: 0,
+                },
             ],
         };
 
         assert!(seed.implements_program_v1());
         assert!(seed.implements_driver_v1());
+        assert!(seed.implements_vfs_provider_v1());
         assert!(seed.interface(INTERFACE_LIFECYCLE_V1, 1).is_none());
     }
 }
