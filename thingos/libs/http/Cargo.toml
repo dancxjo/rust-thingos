@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 stem = { path = "../../stem" }
 abi = { path = "../../abi" }
+embedded-tls = { version = "0.18", default-features = false, features = ["alloc"] }
+embedded-io = "0.7"
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = { version = "0.6", default-features = false }

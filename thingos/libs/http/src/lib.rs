@@ -1,20 +1,27 @@
 #![no_std]
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
-use core::str::FromStr;
 
 use abi::syscall::{poll_flags, PollThing};
+use embedded_io::ErrorKind;
+use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
-use stem::{info, warn};
+use stem::{debug, info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 5_000;
 const IO_POLL_SLICE_MS: u64 = 100;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
+const MAX_HEADER_READ_ITERATIONS: usize = 20;
+// Max TLS record payload + TLS overhead as recommended by embedded-tls docs.
+const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
+// Write-side TLS record staging buffer.
+const TLS_RECORD_WRITE_BUF_SIZE: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TcpConnectState {
@@ -181,6 +188,220 @@ impl Drop for TcpStream {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UrlScheme {
+    Http,
+    Https,
+}
+
+struct ParsedUrl {
+    scheme: UrlScheme,
+    host: String,
+    port: u16,
+    path: String,
+}
+
+fn parse_url(url: &str) -> Result<ParsedUrl, String> {
+    let (scheme, rest, default_port) = if let Some(rest) = url.strip_prefix("http://") {
+        (UrlScheme::Http, rest, 80)
+    } else if let Some(rest) = url.strip_prefix("https://") {
+        (UrlScheme::Https, rest, 443)
+    } else {
+        return Err("unsupported URL scheme".to_string());
+    };
+
+    let (host_port, path) = if let Some(idx) = rest.find('/') {
+        (&rest[..idx], &rest[idx..])
+    } else {
+        (rest, "/")
+    };
+
+    let (host, port) = if let Some(idx) = host_port.find(':') {
+        (
+            &host_port[..idx],
+                host_port[idx + 1..]
+                    .parse::<u16>()
+                    .map_err(|_| "invalid port".to_string())?,
+        )
+    } else {
+        (host_port, default_port)
+    };
+
+    Ok(ParsedUrl {
+        scheme,
+        host: host.to_string(),
+        port,
+        path: path.to_string(),
+    })
+}
+
+fn build_request(
+    method: &str,
+    host: &str,
+    port: u16,
+    path: &str,
+    body: Option<&str>,
+    scheme_default_port: u16,
+) -> String {
+    let mut req = String::new();
+    write!(req, "{} {} HTTP/1.1\r\n", method, path).ok();
+    if port != scheme_default_port {
+        write!(req, "Host: {}:{}\r\n", host, port).ok();
+    } else {
+        write!(req, "Host: {}\r\n", host).ok();
+    }
+    write!(req, "Connection: close\r\n").ok();
+    if let Some(b) = body {
+        write!(req, "Content-Length: {}\r\n", b.len()).ok();
+        write!(req, "Content-Type: application/json\r\n").ok();
+    }
+    write!(req, "\r\n").ok();
+    if let Some(b) = body {
+        req.push_str(b);
+    }
+    req
+}
+
+fn build_tls_seed() -> Result<[u8; 32], String> {
+    let mut seed = [0u8; 32];
+    stem::syscall::getrandom(&mut seed).map_err(|e| format!("getrandom failed: {:?}", e))?;
+    Ok(seed)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TcpTransportError(ErrorKind);
+
+impl embedded_io::Error for TcpTransportError {
+    fn kind(&self) -> ErrorKind {
+        self.0
+    }
+}
+
+struct TcpTransport {
+    inner: TcpStream,
+}
+
+impl embedded_io::ErrorType for TcpTransport {
+    type Error = TcpTransportError;
+}
+
+impl embedded_io::Read for TcpTransport {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        // The VFS socket API currently surfaces string errors here, so we map
+        // into a conservative transport `Other` kind for embedded-io.
+        self.inner
+            .read(buf)
+            .map_err(|_| TcpTransportError(ErrorKind::Other))
+    }
+}
+
+impl embedded_io::Write for TcpTransport {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        // The VFS socket API currently surfaces string errors here, so we map
+        // into a conservative transport `Other` kind for embedded-io.
+        self.inner
+            .write(buf)
+            .map_err(|_| TcpTransportError(ErrorKind::Other))
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+fn read_header_and_initial_body_from_tcp(stream: &mut TcpStream) -> Result<(Vec<u8>, usize), String> {
+    let mut buffer = Vec::new();
+    let mut temp_buf = [0u8; 1024];
+    let mut body_start = 0;
+    let mut headers_done = false;
+
+    for attempt in 0..MAX_HEADER_READ_ITERATIONS {
+        let n = stream.read(&mut temp_buf)?;
+        info!("http: header read iter={} bytes={}", attempt, n);
+        if n == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&temp_buf[..n]);
+
+        if let Some(idx) = find_subsequence(&buffer, b"\r\n\r\n") {
+            body_start = idx + 4;
+            headers_done = true;
+            info!(
+                "http: headers complete iter={} total_buffer={} body_start={}",
+                attempt,
+                buffer.len(),
+                body_start
+            );
+            break;
+        }
+    }
+
+    if !headers_done {
+        warn!("http: headers not completed initial_buffer={}", buffer.len());
+    }
+
+    Ok((buffer, body_start))
+}
+
+fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize), String> {
+    let tcp = TcpStream::connect(&url.host, url.port)?;
+    // Ownership of the raw TCP stream is transferred into TcpTransport/TlsConnection,
+    // and is closed when those values are dropped.
+    let transport = TcpTransport { inner: tcp };
+    let mut record_read_buf = [0u8; TLS_RECORD_READ_BUF_SIZE];
+    let mut record_write_buf = [0u8; TLS_RECORD_WRITE_BUF_SIZE];
+    let mut tls = TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
+
+    let config = TlsConfig::new()
+        .with_server_name(&url.host)
+        .enable_rsa_signatures();
+    let seed = build_tls_seed()?;
+    let rng = ChaCha20Rng::from_seed(seed);
+    tls.open(TlsContext::new(
+        &config,
+        UnsecureProvider::new::<Aes128GcmSha256>(rng),
+    ))
+    .map_err(|e| format!("https handshake failed: {:?}", e))?;
+
+    let mut offset = 0usize;
+    while offset < request.len() {
+        let written = tls
+            .write(&request.as_bytes()[offset..])
+            .map_err(|e| format!("https write failed: {:?}", e))?;
+        if written == 0 {
+            return Err("https write returned 0 bytes".to_string());
+        }
+        offset += written;
+    }
+    tls.flush()
+        .map_err(|e| format!("https flush failed: {:?}", e))?;
+
+    let mut response = Vec::with_capacity(8 * 1024);
+    let mut buf = [0u8; 1024];
+    loop {
+        match tls.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(e) => {
+                let kind = embedded_io::Error::kind(&e);
+                if matches!(
+                    kind,
+                    ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
+                ) {
+                    debug!("http: https read terminated with transport error {:?}", kind);
+                    break;
+                }
+                return Err(format!("https read failed: {:?}", e));
+            }
+        }
+    }
+
+    let body_start = find_subsequence(&response, b"\r\n\r\n")
+        .map(|idx| idx + 4)
+        .unwrap_or(0);
+    Ok((response, body_start))
+}
+
 
 
 fn parse_ipv4(s: &str) -> Result<[u8; 4], ()> {
@@ -208,53 +429,29 @@ impl HttpClient {
     }
 
     fn request(method: &str, url: &str, body: Option<&str>) -> Result<Response, String> {
+        // SECURITY: HTTPS currently uses embedded-tls UnsecureProvider
+        // (no certificate-chain verification). This is intended as a minimal
+        // in-OS TLS transport bootstrap and must not be treated as
+        // production-grade authenticated HTTPS.
         info!("http: request method={} url={}", method, url);
-        let (host, port, path) = if url.starts_with("http://") {
-            let rest = &url[7..];
-            let (host_port, path) = if let Some(idx) = rest.find('/') {
-                (&rest[..idx], &rest[idx..])
-            } else {
-                (rest, "/")
-            };
+        let parsed = parse_url(url)?;
+        info!(
+            "http: request resolved host={} port={} path={}",
+            parsed.host, parsed.port, parsed.path
+        );
 
-            let (host, port) = if let Some(idx) = host_port.find(':') {
-                (
-                    &host_port[..idx],
-                    host_port[idx + 1..]
-                        .parse::<u16>()
-                        .map_err(|_| "Invalid port")?,
-                )
-            } else {
-                (host_port, 80)
-            };
-            (host.to_string(), port, path.to_string())
-        } else if url.starts_with("https://") {
-            warn!("http: https requested but in-OS TLS client is not implemented yet");
-            return Err("https is not implemented in-os yet".to_string());
-        } else {
-            return Err("unsupported URL scheme".to_string());
+        let scheme_default_port = match parsed.scheme {
+            UrlScheme::Http => 80,
+            UrlScheme::Https => 443,
         };
-
-        info!("http: request resolved host={} port={} path={}", host, port, path);
-
-        let mut stream = TcpStream::connect(&host, port)?;
-
-        let mut req = String::new();
-        write!(req, "{} {} HTTP/1.1\r\n", method, path).ok();
-        if port != 80 {
-            write!(req, "Host: {}:{}\r\n", host, port).ok();
-        } else {
-            write!(req, "Host: {}\r\n", host).ok();
-        }
-        write!(req, "Connection: close\r\n").ok();
-        if let Some(b) = body {
-            write!(req, "Content-Length: {}\r\n", b.len()).ok();
-            write!(req, "Content-Type: application/json\r\n").ok();
-        }
-        write!(req, "\r\n").ok();
-        if let Some(b) = body {
-            req.push_str(b);
-        }
+        let req = build_request(
+            method,
+            &parsed.host,
+            parsed.port,
+            &parsed.path,
+            body,
+            scheme_default_port,
+        );
 
         let request_line_end = req.find("\r\n").unwrap_or(req.len());
         info!(
@@ -262,39 +459,18 @@ impl HttpClient {
             req.len(),
             &req[..request_line_end]
         );
-        stream.write(req.as_bytes())?;
-
-        let mut buffer = Vec::new();
-        let mut temp_buf = [0u8; 1024];
-        let mut body_start = 0;
-        let mut headers_done = false;
-
-        // Initial read loop to find headers
-        for iter in 0..20 {
-            // Limit tries
-            let n = stream.read(&mut temp_buf)?;
-            info!("http: header read iter={} bytes={}", iter, n);
-            if n == 0 {
-                break;
+        let (stream, buffer, body_start) = match parsed.scheme {
+            UrlScheme::Http => {
+                let mut stream = TcpStream::connect(&parsed.host, parsed.port)?;
+                stream.write(req.as_bytes())?;
+                let (buffer, body_start) = read_header_and_initial_body_from_tcp(&mut stream)?;
+                (Some(stream), buffer, body_start)
             }
-            buffer.extend_from_slice(&temp_buf[..n]);
-
-            if let Some(idx) = find_subsequence(&buffer, b"\r\n\r\n") {
-                body_start = idx + 4;
-                headers_done = true;
-                info!(
-                    "http: headers complete iter={} total_buffer={} body_start={}",
-                    iter,
-                    buffer.len(),
-                    body_start
-                );
-                break;
+            UrlScheme::Https => {
+                let (buffer, body_start) = read_https_response(&parsed, &req)?;
+                (None, buffer, body_start)
             }
-        }
-
-        if !headers_done {
-            warn!("http: headers not completed initial_buffer={}", buffer.len());
-        }
+        };
 
         Ok(Response {
             stream,
@@ -304,8 +480,16 @@ impl HttpClient {
     }
 }
 
+/// HTTP response body reader.
+///
+/// For `http://`, body bytes are streamed from the underlying socket after the
+/// initially buffered bytes are consumed.
+///
+/// For `https://`, the current implementation buffers the full response body
+/// up-front during TLS processing; once buffered bytes are consumed, further
+/// reads return EOF.
 pub struct Response {
-    stream: TcpStream,
+    stream: Option<TcpStream>,
     buffer: Vec<u8>,
     cursor: usize,
 }
@@ -320,7 +504,11 @@ impl Response {
         }
 
         let mut buf = [0u8; 1024];
-        let n = self.stream.read(&mut buf)?;
+        let Some(stream) = self.stream.as_mut() else {
+            info!("http: buffered HTTPS response fully consumed");
+            return Ok(Vec::new());
+        };
+        let n = stream.read(&mut buf)?;
         if n == 0 {
             info!("http: response stream EOF");
             return Ok(Vec::new());
@@ -388,5 +576,20 @@ mod tests {
 
         // Overlapping needle
         assert_eq!(find_subsequence(b"aaaaa", b"aa"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_url_http_and_https() {
+        let http = parse_url("http://example.com/path").unwrap();
+        assert!(matches!(http.scheme, UrlScheme::Http));
+        assert_eq!(http.host, "example.com");
+        assert_eq!(http.port, 80);
+        assert_eq!(http.path, "/path");
+
+        let https = parse_url("https://example.com:8443/secure").unwrap();
+        assert!(matches!(https.scheme, UrlScheme::Https));
+        assert_eq!(https.host, "example.com");
+        assert_eq!(https.port, 8443);
+        assert_eq!(https.path, "/secure");
     }
 }
