@@ -6,14 +6,13 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
 
-use abi::syscall::{PollThing, poll_flags};
 use embedded_io::ErrorKind;
 use embedded_tls::blocking::{
-    Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
+    Aes128GcmSha256, Aes256GcmSha384, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};
 use stem::{debug, info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 5_000;
@@ -65,20 +64,40 @@ fn read_tcp_state(socket_id: &str) -> TcpConnectState {
 pub struct TcpStream {
     data_fd: u32,
     ctl_fd: u32,
+    socket_id: String,
 }
 
 impl TcpStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, String> {
-        use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
+        use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR};
 
         info!("http: connect host={} port={}", host, port);
 
         // 1. Allocate a new TCP socket via /net/tcp/new
-        let new_fd = vfs_open("/net/tcp/new", O_RDONLY)
+        info!("http: opening /net/tcp/new");
+        let new_fd = vfs_open("/net/tcp/new", O_RDONLY | O_NONBLOCK)
             .map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
         let mut buf = [0u8; 16];
-        let n =
-            vfs_read(new_fd, &mut buf).map_err(|e| format!("failed to read socket id: {:?}", e))?;
+        let mut waited_ms = 0;
+        let n = loop {
+            match vfs_read(new_fd, &mut buf) {
+                Ok(n) if n > 0 => break n,
+                Ok(_) | Err(abi::errors::Errno::EAGAIN) => {
+                    if waited_ms >= CONNECT_TIMEOUT_MS {
+                        let _ = vfs_close(new_fd);
+                        return Err("timed out waiting for /net/tcp/new socket id".to_string());
+                    }
+                    let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                    info!("http: waiting for /net/tcp/new socket id ({} ms elapsed)", waited_ms);
+                    stem::time::sleep_ms(slice_ms);
+                    waited_ms += slice_ms;
+                }
+                Err(e) => {
+                    let _ = vfs_close(new_fd);
+                    return Err(format!("failed to read socket id: {:?}", e));
+                }
+            }
+        };
         let _ = vfs_close(new_fd);
 
         let socket_id =
@@ -89,8 +108,10 @@ impl TcpStream {
         let ctl_path = format!("/net/tcp/{}/ctl", socket_id);
         let data_path = format!("/net/tcp/{}/data", socket_id);
 
+        info!("http: opening ctl path {}", ctl_path);
         let ctl_fd =
             vfs_open(&ctl_path, O_RDWR).map_err(|e| format!("failed to open ctl: {:?}", e))?;
+        info!("http: opening data path {}", data_path);
         let data_fd =
             vfs_open(&data_path, O_RDWR).map_err(|e| format!("failed to open data: {:?}", e))?;
 
@@ -101,50 +122,79 @@ impl TcpStream {
 
         info!("http: connect command issued for socket id={}", socket_id);
 
-        let mut waited_ms = 0;
-        loop {
-            let state = read_tcp_state(socket_id);
-            info!(
-                "http: connect wait socket id={} state={:?} waited={} ms",
-                socket_id, state, waited_ms
-            );
-            match state {
-                TcpConnectState::Connected => break,
-                TcpConnectState::Closed => {
-                    let _ = vfs_close(data_fd);
-                    let _ = vfs_close(ctl_fd);
-                    return Err(format!(
-                        "connect failed: socket {} closed before establishment",
-                        socket_id
-                    ));
-                }
-                _ => {}
-            }
-
-            if waited_ms >= CONNECT_TIMEOUT_MS {
-                let _ = vfs_close(data_fd);
-                let _ = vfs_close(ctl_fd);
-                return Err(format!(
-                    "connect timed out waiting for socket {} to establish",
-                    socket_id
-                ));
-            }
-
-            let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-            let mut pollfd =
-                [PollThing { thing: data_fd as i32, events: poll_flags::POLLOUT, revents: 0 }];
-            let ready = vfs_poll(&mut pollfd, slice_ms)
-                .map_err(|e| format!("poll failed while waiting for connect: {:?}", e))?;
-            info!("http: connect poll ready_count={} revents=0x{:x}", ready, pollfd[0].revents);
-            waited_ms += slice_ms;
-        }
-
-        Ok(Self { data_fd, ctl_fd })
+        Ok(Self { data_fd, ctl_fd, socket_id: socket_id.to_string() })
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<usize, String> {
         info!("http: write {} bytes", data.len());
-        vfs_write(self.data_fd, data).map_err(|e| format!("write failed: {:?}", e))
+        let mut waited_ms = 0;
+        loop {
+            let state = read_tcp_state(&self.socket_id);
+            if matches!(state, TcpConnectState::Created | TcpConnectState::Connecting) {
+                if waited_ms >= CONNECT_TIMEOUT_MS {
+                    return Err(format!(
+                        "write timed out waiting for connected state (state={:?})",
+                        state
+                    ));
+                }
+                let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                info!("http: write deferred while {:?}; sleeping for {} ms", state, slice_ms);
+                stem::time::sleep_ms(slice_ms);
+                waited_ms += slice_ms;
+                continue;
+            }
+
+            match vfs_write(self.data_fd, data) {
+                Ok(n) => {
+                    if n == 0 {
+                        if waited_ms >= IO_POLL_TIMEOUT_MS {
+                            return Err(format!(
+                                "write returned 0 for {} ms (state={:?})",
+                                waited_ms, state
+                            ));
+                        }
+                        let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                        info!(
+                            "http: write returned 0 while {:?}; sleeping for {} ms",
+                            state, slice_ms
+                        );
+                        stem::time::sleep_ms(slice_ms);
+                        waited_ms += slice_ms;
+                        continue;
+                    }
+                    if waited_ms != 0 {
+                        info!("http: write completed after waiting {} ms", waited_ms);
+                    }
+                    return Ok(n);
+                }
+                Err(abi::errors::Errno::EAGAIN) => {
+                    if waited_ms >= IO_POLL_TIMEOUT_MS {
+                        return Err("write timed out waiting for socket writable".to_string());
+                    }
+                    let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                    info!("http: write would block; sleeping for {} ms", slice_ms);
+                    stem::time::sleep_ms(slice_ms);
+                    waited_ms += slice_ms;
+                }
+                Err(e) => {
+                    let state = read_tcp_state(&self.socket_id);
+                    if matches!(state, TcpConnectState::Created | TcpConnectState::Connecting) {
+                        if waited_ms >= CONNECT_TIMEOUT_MS {
+                            return Err(format!(
+                                "write failed while connecting: {:?} (state={:?})",
+                                e, state
+                            ));
+                        }
+                        let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                        info!("http: write while {:?}; sleeping for {} ms", state, slice_ms);
+                        stem::time::sleep_ms(slice_ms);
+                        waited_ms += slice_ms;
+                        continue;
+                    }
+                    return Err(format!("write failed: {:?} (state={:?})", e, state));
+                }
+            }
+        }
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
@@ -152,6 +202,34 @@ impl TcpStream {
         loop {
             match vfs_read(self.data_fd, buf) {
                 Ok(n) => {
+                    if n == 0 {
+                        // Some provider-backed TCP paths can transiently return 0
+                        // before payload bytes arrive. Treat that as "wait" while
+                        // the socket is still connected.
+                        let state = read_tcp_state(&self.socket_id);
+                        if matches!(state, TcpConnectState::Connected | TcpConnectState::Connecting)
+                        {
+                            if waited_ms >= IO_POLL_TIMEOUT_MS {
+                                warn!(
+                                    "http: read got 0 bytes while {:?}; timed out after {} ms",
+                                    state, waited_ms
+                                );
+                                return Err(
+                                    "read timed out waiting for socket data (zero-byte reads)"
+                                        .to_string(),
+                                );
+                            }
+
+                            let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                            info!(
+                                "http: read returned 0 while {:?}; sleeping for {} ms",
+                                state, slice_ms
+                            );
+                            stem::time::sleep_ms(slice_ms);
+                            waited_ms += slice_ms;
+                            continue;
+                        }
+                    }
                     info!("http: read returned {} bytes after waiting {} ms", n, waited_ms);
                     return Ok(n);
                 }
@@ -162,18 +240,8 @@ impl TcpStream {
                     }
 
                     let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                    info!("http: read would block; polling for {} ms", slice_ms);
-                    let mut pollfd = [PollThing {
-                        thing: self.data_fd as i32,
-                        events: poll_flags::POLLIN,
-                        revents: 0,
-                    }];
-                    let ready = vfs_poll(&mut pollfd, slice_ms)
-                        .map_err(|e| format!("poll failed while waiting for read: {:?}", e))?;
-                    info!(
-                        "http: poll result ready_count={} revents=0x{:x}",
-                        ready, pollfd[0].revents
-                    );
+                    info!("http: read would block; sleeping for {} ms", slice_ms);
+                    stem::time::sleep_ms(slice_ms);
                     waited_ms += slice_ms;
                 }
                 Err(e) => return Err(format!("read failed: {:?}", e)),
@@ -340,7 +408,13 @@ fn read_header_and_initial_body_from_tcp(
     Ok((buffer, body_start))
 }
 
-fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize), String> {
+fn read_https_response_with_suite<S>(
+    url: &ParsedUrl,
+    request: &str,
+) -> Result<(Vec<u8>, usize), String>
+where
+    S: embedded_tls::TlsCipherSuite + 'static,
+{
     let tcp = TcpStream::connect(&url.host, url.port)?;
     // Ownership of the raw TCP stream is transferred into TcpTransport/TlsConnection,
     // and is closed when those values are dropped.
@@ -352,7 +426,7 @@ fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize
     let config = TlsConfig::new().with_server_name(&url.host).enable_rsa_signatures();
     let seed = build_tls_seed()?;
     let rng = ChaCha20Rng::from_seed(seed);
-    tls.open(TlsContext::new(&config, UnsecureProvider::new::<Aes128GcmSha256>(rng)))
+    tls.open(TlsContext::new(&config, UnsecureProvider::new::<S>(rng)))
         .map_err(|e| format!("https handshake failed: {:?}", e))?;
 
     let mut offset = 0usize;
@@ -391,6 +465,18 @@ fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize
 
     let body_start = find_subsequence(&response, b"\r\n\r\n").map(|idx| idx + 4).unwrap_or(0);
     Ok((response, body_start))
+}
+
+fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize), String> {
+    match read_https_response_with_suite::<Aes128GcmSha256>(url, request) {
+        Ok(v) => Ok(v),
+        Err(e) if e.contains("InvalidHandshake") => {
+            warn!("http: tls handshake with AES-128 failed ({}) - retrying with AES-256", e);
+            read_https_response_with_suite::<Aes256GcmSha384>(url, request)
+                .map_err(|e2| format!("{}; retry_with_aes256_failed: {}", e, e2))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn parse_ipv4(s: &str) -> Result<[u8; 4], ()> {

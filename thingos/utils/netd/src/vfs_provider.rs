@@ -605,7 +605,7 @@ impl NetVfsProvider {
         &mut self,
         handle: u64,
         offset: u64,
-        _len: usize,
+        len: usize,
         socket_set: &mut SocketSet,
         socket_api: &mut SocketApi,
     ) -> ReadResult {
@@ -677,7 +677,7 @@ impl NetVfsProvider {
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - TCP_DYN_BASE) >> 8) as u32;
-                self.read_tcp(api_handle, sf, offset, socket_set, socket_api)
+                self.read_tcp(api_handle, sf, offset, len, socket_set, socket_api)
             }
             // Dynamic UDP data
             h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
@@ -727,6 +727,7 @@ impl NetVfsProvider {
         api_handle: u32,
         sf: u8,
         offset: u64,
+        len: usize,
         socket_set: &mut SocketSet,
         socket_api: &mut SocketApi,
     ) -> ReadResult {
@@ -736,7 +737,11 @@ impl NetVfsProvider {
                 ReadResult::text_offset(&socket_api.tcp_status_text(api_handle, socket_set), offset)
             }
             SF_DATA => {
-                let recv = socket_api.handle_recv(socket_set, api_handle, 8192);
+                if len == 0 {
+                    return ReadResult::Data(Vec::new());
+                }
+                let recv_len = len.min(u16::MAX as usize) as u16;
+                let recv = socket_api.handle_recv(socket_set, api_handle, recv_len);
                 // handle_recv returns [resp_type: u16][data...]
                 if recv.len() < 2 {
                     return ReadResult::Error;
