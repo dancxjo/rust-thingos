@@ -67,64 +67,11 @@ pub struct TcpStream {
     ctl_fd: u32,
 }
 
-fn resolve_host_ipv4(host: &str) -> Result<[u8; 4], String> {
-    use abi::errors::Errno;
-    use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR};
-    use stem::syscall::{monotonic_ns, sleep_ms};
-
-    if let Ok(ip) = parse_ipv4(host) {
-        return Ok(ip);
-    }
-
-    if host.contains(':') || host.starts_with('[') {
-        return Err("ipv6 hostnames are not supported".to_string());
-    }
-
-    let lookup_fd = vfs_open("/net/dns/lookup", O_RDWR)
-        .map_err(|e| format!("failed to open /net/dns/lookup: {:?}", e))?;
-    if let Err(e) = vfs_write(lookup_fd, host.as_bytes()) {
-        let _ = vfs_close(lookup_fd);
-        return Err(format!("dns lookup request failed: {:?}", e));
-    }
-    let _ = vfs_close(lookup_fd);
-
-    let deadline_ns = monotonic_ns().saturating_add(CONNECT_TIMEOUT_MS.saturating_mul(1_000_000));
-    let mut buf = [0u8; 64];
-    loop {
-        let read_fd = vfs_open("/net/dns/lookup", O_RDONLY | O_NONBLOCK)
-            .map_err(|e| format!("failed to reopen /net/dns/lookup: {:?}", e))?;
-        let read_result = vfs_read(read_fd, &mut buf);
-        let _ = vfs_close(read_fd);
-
-        match read_result {
-            Ok(n) if n > 0 => {
-                let text = core::str::from_utf8(&buf[..n])
-                    .map_err(|_| "dns lookup returned invalid UTF-8".to_string())?
-                    .trim();
-                return parse_ipv4(text)
-                    .map_err(|_| format!("dns lookup returned invalid IPv4 '{}': {}", host, text));
-            }
-            Ok(_) | Err(Errno::EAGAIN) => {
-                if monotonic_ns() >= deadline_ns {
-                    return Err(format!("dns lookup timed out for host {}", host));
-                }
-                sleep_ms(50);
-            }
-            Err(e) => return Err(format!("dns lookup failed for host {}: {:?}", host, e)),
-        }
-    }
-}
-
 impl TcpStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, String> {
         use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 
         info!("http: connect host={} port={}", host, port);
-        let remote_ip = resolve_host_ipv4(host)?;
-        info!(
-            "http: connect resolved host={} to {}.{}.{}.{}",
-            host, remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3]
-        );
 
         // 1. Allocate a new TCP socket via /net/tcp/new
         let new_fd = vfs_open("/net/tcp/new", O_RDONLY)
@@ -148,10 +95,7 @@ impl TcpStream {
             vfs_open(&data_path, O_RDWR).map_err(|e| format!("failed to open data: {:?}", e))?;
 
         // 3. Connect via ctl file
-        let conn_cmd = format!(
-            "connect {}.{}.{}.{} {}",
-            remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], port
-        );
+        let conn_cmd = format!("connect {} {}", host, port);
         vfs_write(ctl_fd, conn_cmd.as_bytes())
             .map_err(|e| format!("connect command failed: {:?}", e))?;
 

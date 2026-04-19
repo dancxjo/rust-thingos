@@ -18,7 +18,7 @@
 //! ├── tcp/
 //! │   ├── new           ← read:  allocates socket, returns id
 //! │   └── <id>/
-//! │       ├── ctl       ← write: "connect IP PORT" / "listen PORT [BACKLOG]" / "shutdown read|write|both" / "ttl N" / "linger off|SECS" / "only_v6 0|1" / "close"
+//! │       ├── ctl       ← write: "connect HOST_OR_IP PORT" / "listen PORT [BACKLOG]" / "shutdown read|write|both" / "ttl N" / "linger off|SECS" / "only_v6 0|1" / "close"
 //! │       ├── data      ← read/write: TCP byte stream
 //! │       ├── accept    ← read:  "<conn_id> <ip> <port>\n" (listener sockets only)
 //! │       ├── status    ← read:  state text
@@ -46,19 +46,19 @@
 //! convert `drain_rpcs` to use `try_next_request`, return `ProviderResponse` from
 //! all `op_*` methods).  Tracked in the VFS RPC IPC migration audit.
 extern crate alloc;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 
-use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader, VFS_RPC_MAX_REQ};
-use alloc::string::String;
-use alloc::{vec, vec::Vec};
+use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp, VfsRpcReqHeader};
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
-use stem::syscall::channel::{port_create, port_send, port_try_recv, PortHandle};
+use stem::syscall::channel::{PortHandle, port_create, port_send, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::{info, warn};
 
-use crate::socket_api::{SocketApi, CONN_RX, CONN_TX};
+use crate::socket_api::{CONN_RX, CONN_TX, SocketApi};
 
 // ── errno shorthands ─────────────────────────────────────────────────────────
 
@@ -172,10 +172,7 @@ impl NetVfsProvider {
 
         match vfs_mount(req_write, "/net") {
             Ok(()) => {
-                info!(
-                    "NetVfsProvider: mounted at /net (port w={} r={})",
-                    req_write, req_read
-                );
+                info!("NetVfsProvider: mounted at /net (port w={} r={})", req_write, req_read);
             }
             Err(e) => {
                 warn!("NetVfsProvider: vfs_mount failed: {:?}", e);
@@ -212,12 +209,7 @@ impl NetVfsProvider {
         gateway: Ipv4Address,
         dns_server: Ipv4Address,
     ) {
-        self.ip_config = Some(IpConfig {
-            ip,
-            prefix_len,
-            gateway,
-            dns_server,
-        });
+        self.ip_config = Some(IpConfig { ip, prefix_len, gateway, dns_server });
     }
 
     /// Process all pending VFS RPC messages (non-blocking drain).
@@ -625,11 +617,7 @@ impl NetVfsProvider {
             HANDLE_ETH0_EVENTS => {
                 // Events are single-shot; subsequent reads return EOF until next event.
                 if offset == 0 {
-                    let s = if self.link_up {
-                        "link-up\n"
-                    } else {
-                        "link-down\n"
-                    };
+                    let s = if self.link_up { "link-up\n" } else { "link-down\n" };
                     ReadResult::Data(s.as_bytes().to_vec())
                 } else {
                     ReadResult::EOF
@@ -862,9 +850,10 @@ impl NetVfsProvider {
     ) -> ReadResult {
         match sf {
             SF_DIR => ReadResult::NotSupported,
-            SF_STATUS => {
-                ReadResult::text_offset(&socket_api.icmp_status_text(api_handle, socket_set), offset)
-            }
+            SF_STATUS => ReadResult::text_offset(
+                &socket_api.icmp_status_text(api_handle, socket_set),
+                offset,
+            ),
             SF_DATA => {
                 let recv = socket_api.handle_icmp_recv_from(socket_set, api_handle);
                 if recv.len() < 2 {
@@ -938,9 +927,7 @@ impl NetVfsProvider {
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - TCP_DYN_BASE) >> 8) as u32;
-                self.write_tcp(
-                    api_handle, sf, data, text, iface, device, socket_set, socket_api,
-                )
+                self.write_tcp(api_handle, sf, data, text, iface, device, socket_set, socket_api)
             }
             // Dynamic UDP
             h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
@@ -1020,27 +1007,46 @@ impl NetVfsProvider {
         raw: &[u8],
         text: &str,
         iface: &mut Interface,
-        _device: &mut D,
+        device: &mut D,
         socket_set: &mut SocketSet,
         socket_api: &mut SocketApi,
     ) -> WriteResult {
         match sf {
             SF_CTL => {
-                // "connect IP PORT", "listen PORT [BACKLOG]", "shutdown read|write|both",
+                // "connect HOST_OR_IP PORT", "listen PORT [BACKLOG]", "shutdown read|write|both",
                 // "ttl N", "linger off|SECS", "only_v6 0|1", or "close"
                 if let Some(rest) = text.strip_prefix("connect ") {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
                     if parts.len() >= 2 {
-                        if let (Some(ip), Ok(port)) =
-                            (parse_ipv4(parts[0]), parts[1].parse::<u16>())
-                        {
-                            let r = socket_api
-                                .handle_connect_existing(iface, socket_set, api_handle, ip, port);
-                            return if r {
-                                WriteResult::Ok(text.len())
+                        if let Ok(port) = parts[1].parse::<u16>() {
+                            let host = parts[0];
+                            let resolved_ip = if let Some(ip) = parse_ipv4(host) {
+                                Some(ip)
+                            } else if let Some(dns_ip) = self.effective_dns_server() {
+                                match crate::dns::lookup_a(iface, device, dns_ip, host) {
+                                    Ok(ip) => Some(ip),
+                                    Err(e) => {
+                                        warn!(
+                                            "NetVfsProvider: TCP connect DNS lookup failed for '{}': {:?}",
+                                            host, e
+                                        );
+                                        None
+                                    }
+                                }
                             } else {
-                                WriteResult::Error
+                                None
                             };
+
+                            if let Some(ip) = resolved_ip {
+                                let r = socket_api.handle_connect_existing(
+                                    iface, socket_set, api_handle, ip, port,
+                                );
+                                return if r {
+                                    WriteResult::Ok(text.len())
+                                } else {
+                                    WriteResult::Error
+                                };
+                            }
                         }
                     }
                 } else if let Some(rest) = text.strip_prefix("listen ") {
@@ -1124,11 +1130,7 @@ impl NetVfsProvider {
                 if let Some(rest) = text.strip_prefix("bind ") {
                     if let Ok(port) = rest.trim().parse::<u16>() {
                         let r = socket_api.handle_udp_bind_port(socket_set, api_handle, port);
-                        return if r {
-                            WriteResult::Ok(text.len())
-                        } else {
-                            WriteResult::Error
-                        };
+                        return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
                     }
                 } else if let Some(rest) = text.strip_prefix("connect ") {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
@@ -1151,11 +1153,7 @@ impl NetVfsProvider {
                         _ => return WriteResult::Error,
                     };
                     let r = socket_api.handle_udp_set_broadcast(api_handle, enabled);
-                    return if r {
-                        WriteResult::Ok(text.len())
-                    } else {
-                        WriteResult::Error
-                    };
+                    return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
                 } else if let Some(rest) = text.strip_prefix("ttl ") {
                     if let Ok(ttl) = rest.trim().parse::<u32>() {
                         let r = socket_api.handle_udp_set_ttl(api_handle, ttl);
@@ -1185,43 +1183,57 @@ impl NetVfsProvider {
                 } else if let Some(rest) = text.strip_prefix("join_multicast_v4 ") {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
                     if parts.len() >= 2 {
-                        if let (Some(group), Some(interface)) = (parse_ipv4(parts[0]), parse_ipv4(parts[1])) {
-                            let r = socket_api.handle_udp_join_multicast_v4(
-                                api_handle,
-                                group,
-                                interface,
-                            );
-                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                        if let (Some(group), Some(interface)) =
+                            (parse_ipv4(parts[0]), parse_ipv4(parts[1]))
+                        {
+                            let r = socket_api
+                                .handle_udp_join_multicast_v4(api_handle, group, interface);
+                            return if r {
+                                WriteResult::Ok(text.len())
+                            } else {
+                                WriteResult::Error
+                            };
                         }
                     }
                 } else if let Some(rest) = text.strip_prefix("leave_multicast_v4 ") {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
                     if parts.len() >= 2 {
-                        if let (Some(group), Some(interface)) = (parse_ipv4(parts[0]), parse_ipv4(parts[1])) {
-                            let r = socket_api.handle_udp_leave_multicast_v4(
-                                api_handle,
-                                group,
-                                interface,
-                            );
-                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                        if let (Some(group), Some(interface)) =
+                            (parse_ipv4(parts[0]), parse_ipv4(parts[1]))
+                        {
+                            let r = socket_api
+                                .handle_udp_leave_multicast_v4(api_handle, group, interface);
+                            return if r {
+                                WriteResult::Ok(text.len())
+                            } else {
+                                WriteResult::Error
+                            };
                         }
                     }
                 } else if let Some(rest) = text.strip_prefix("join_multicast_v6 ") {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
                     if parts.len() >= 2 {
                         if let Ok(interface) = parts[1].parse::<u32>() {
-                            let r =
-                                socket_api.handle_udp_join_multicast_v6(api_handle, parts[0], interface);
-                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                            let r = socket_api
+                                .handle_udp_join_multicast_v6(api_handle, parts[0], interface);
+                            return if r {
+                                WriteResult::Ok(text.len())
+                            } else {
+                                WriteResult::Error
+                            };
                         }
                     }
                 } else if let Some(rest) = text.strip_prefix("leave_multicast_v6 ") {
                     let parts: Vec<&str> = rest.split_whitespace().collect();
                     if parts.len() >= 2 {
                         if let Ok(interface) = parts[1].parse::<u32>() {
-                            let r =
-                                socket_api.handle_udp_leave_multicast_v6(api_handle, parts[0], interface);
-                            return if r { WriteResult::Ok(text.len()) } else { WriteResult::Error };
+                            let r = socket_api
+                                .handle_udp_leave_multicast_v6(api_handle, parts[0], interface);
+                            return if r {
+                                WriteResult::Ok(text.len())
+                            } else {
+                                WriteResult::Error
+                            };
                         }
                     }
                 } else if text == "close" {
@@ -1414,11 +1426,7 @@ impl NetVfsProvider {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - TCP_DYN_BASE) >> 8) as u32;
                 if socket_api.has_socket(api_handle) {
-                    if sf == SF_DIR {
-                        (S_IFDIR | 0o555, 0)
-                    } else {
-                        (S_IFREG | 0o644, 0)
-                    }
+                    if sf == SF_DIR { (S_IFDIR | 0o555, 0) } else { (S_IFREG | 0o644, 0) }
                 } else {
                     (0, 0) // not found
                 }
@@ -1427,11 +1435,7 @@ impl NetVfsProvider {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - UDP_DYN_BASE) >> 8) as u32;
                 if socket_api.has_socket(api_handle) {
-                    if sf == SF_DIR {
-                        (S_IFDIR | 0o555, 0)
-                    } else {
-                        (S_IFREG | 0o644, 0)
-                    }
+                    if sf == SF_DIR { (S_IFDIR | 0o555, 0) } else { (S_IFREG | 0o644, 0) }
                 } else {
                     (0, 0) // not found
                 }
@@ -1440,11 +1444,7 @@ impl NetVfsProvider {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - ICMP_DYN_BASE) >> 8) as u32;
                 if socket_api.has_socket(api_handle) {
-                    if sf == SF_DIR {
-                        (S_IFDIR | 0o555, 0)
-                    } else {
-                        (S_IFREG | 0o644, 0)
-                    }
+                    if sf == SF_DIR { (S_IFDIR | 0o555, 0) } else { (S_IFREG | 0o644, 0) }
                 } else {
                     (0, 0)
                 }
@@ -1494,14 +1494,7 @@ impl NetVfsProvider {
         let ip_line = match &self.ip_config {
             Some(c) => {
                 let b = c.ip.as_bytes();
-                alloc::format!(
-                    "ipv4: {}.{}.{}.{}/{}\n",
-                    b[0],
-                    b[1],
-                    b[2],
-                    b[3],
-                    c.prefix_len
-                )
+                alloc::format!("ipv4: {}.{}.{}.{}/{}\n", b[0], b[1], b[2], b[3], c.prefix_len)
             }
             None => "ipv4: unassigned\n".into(),
         };
@@ -1574,11 +1567,7 @@ impl NetVfsProvider {
 
     fn effective_dns_server(&self) -> Option<Ipv4Address> {
         self.ip_config.as_ref().map(|cfg| {
-            if cfg.dns_server != Ipv4Address::UNSPECIFIED {
-                cfg.dns_server
-            } else {
-                cfg.gateway
-            }
+            if cfg.dns_server != Ipv4Address::UNSPECIFIED { cfg.dns_server } else { cfg.gateway }
         })
     }
 }
@@ -1597,18 +1586,15 @@ impl ReadResult {
     fn text_offset(text: &str, offset: u64) -> Self {
         let bytes = text.as_bytes();
         let off = offset as usize;
-        if off >= bytes.len() {
-            ReadResult::EOF
-        } else {
-            ReadResult::Data(bytes[off..].to_vec())
-        }
+        if off >= bytes.len() { ReadResult::EOF } else { ReadResult::Data(bytes[off..].to_vec()) }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{IpConfig, NetVfsProvider};
     use smoltcp::wire::Ipv4Address;
+
+    use super::{IpConfig, NetVfsProvider};
 
     fn provider_with_config(dns_server: Ipv4Address, gateway: Ipv4Address) -> NetVfsProvider {
         NetVfsProvider {
@@ -1634,26 +1620,16 @@ mod tests {
 
     #[test]
     fn effective_dns_server_prefers_configured_dns() {
-        let provider = provider_with_config(
-            Ipv4Address::new(1, 1, 1, 1),
-            Ipv4Address::new(10, 0, 2, 2),
-        );
-        assert_eq!(
-            provider.effective_dns_server(),
-            Some(Ipv4Address::new(1, 1, 1, 1))
-        );
+        let provider =
+            provider_with_config(Ipv4Address::new(1, 1, 1, 1), Ipv4Address::new(10, 0, 2, 2));
+        assert_eq!(provider.effective_dns_server(), Some(Ipv4Address::new(1, 1, 1, 1)));
     }
 
     #[test]
     fn effective_dns_server_falls_back_to_gateway() {
-        let provider = provider_with_config(
-            Ipv4Address::UNSPECIFIED,
-            Ipv4Address::new(10, 0, 2, 2),
-        );
-        assert_eq!(
-            provider.effective_dns_server(),
-            Some(Ipv4Address::new(10, 0, 2, 2))
-        );
+        let provider =
+            provider_with_config(Ipv4Address::UNSPECIFIED, Ipv4Address::new(10, 0, 2, 2));
+        assert_eq!(provider.effective_dns_server(), Some(Ipv4Address::new(10, 0, 2, 2)));
     }
 }
 
