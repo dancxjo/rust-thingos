@@ -269,7 +269,7 @@ fn generate_limine_config(
             title: "ThingOS (BootFB Fallback)",
             kernel_cmdline: "loglevel=info display=bootfb",
         },
-        LimineEntry { title: "ThingOS (Debug)", kernel_cmdline: "loglevel=debug" },
+        LimineEntry { title: "ThingOS (Debug)", kernel_cmdline: "loglevel=4" },
         LimineEntry { title: "ThingOS (Trace)", kernel_cmdline: "loglevel=5" },
     ];
 
