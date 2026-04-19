@@ -276,32 +276,42 @@ pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<us
 
     let mut kbuf = vec![0u8; buf_len];
     let offset: u64 = *offset_cell.lock();
+    let is_mounts_phase = (offset & (1 << 63)) != 0;
+    let mut n = 0;
 
-    // 1. First, call the node's own readdir.
-    // This fills the buffer using the filesystem's own entries.
-    let mut n = node.readdir(offset, &mut kbuf)?;
+    // 1. Natural entries phase
+    if !is_mounts_phase {
+        n = node.readdir(offset, &mut kbuf)?;
+        if n > 0 {
+            *offset_cell.lock() = offset.saturating_add(n as u64);
+        } else {
+            // Reached EOF of natural entries. Switch to mounts phase.
+            *offset_cell.lock() = 1 << 63;
+        }
+    }
 
-    // 2. Then, supplement with mount points if there is space and we've reached
-    // the "end" of the node's natural entries (heuristic: n < buf_len).
-    if n < buf_len {
-        let mounts = crate::vfs::mount::get_mounts_under(&path);
+    let current_offset = *offset_cell.lock();
+    let is_mounts_phase_now = (current_offset & (1 << 63)) != 0;
+
+    // 2. Mount points supplement phase
+    // Only supplement if we are in the mounts phase AND we have room in the buffer
+    if is_mounts_phase_now && n < buf_len {
+        let mut mounts = crate::vfs::mount::get_mounts_under(&path);
         if !mounts.is_empty() {
-            // Write more entries if we have space.
-            // For now, we only supplement if n == 0 to avoid complex deduplication
-            // and offset management. This is sufficient for /dev/display and /sys.
-            if n == 0 {
-                let m_n = crate::vfs::write_readdir_entries(
-                    mounts.iter().map(|s| s.as_str()),
-                    offset,
-                    &mut kbuf,
-                )?;
-                n = m_n;
+            let mounts_offset = current_offset & !(1 << 63);
+            let m_n = crate::vfs::write_readdir_entries(
+                mounts.iter().map(|s| s.as_str()),
+                mounts_offset,
+                &mut kbuf[n..],
+            )?;
+            if m_n > 0 {
+                *offset_cell.lock() = current_offset.saturating_add(m_n as u64);
+                n += m_n;
             }
         }
     }
 
     if n > 0 {
-        *offset_cell.lock() = offset.saturating_add(n as u64);
         unsafe { copyout(buf_ptr, &kbuf[..n])? };
     }
 

@@ -16,7 +16,7 @@ use http::{HttpClient, Response};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use stem::syscall::argv_get;
 use stem::syscall::vfs::{vfs_mount, vfs_umount};
-use stem::{info, warn};
+use stem::{info, warn, debug};
 
 const MOUNT_POINT: &str = "/https";
 const ROOT_HANDLE: u64 = 1;
@@ -115,23 +115,23 @@ impl HttpsProvider {
     fn resolve_path(&mut self, path: &str) -> Result<u64, Errno> {
         let clean = path.trim_matches('/');
         if clean.is_empty() {
-            info!("httpsd: lookup '{}' -> root", path);
+            debug!("httpsd: lookup '{}' -> root", path);
             return Ok(ROOT_HANDLE);
         }
 
         let mut parts = clean.split('/');
         let host = parts.next().ok_or(Errno::ENOENT)?;
         if !Self::is_valid_host_label(host) {
-            info!("httpsd: lookup '{}' rejected: invalid host '{}'", path, host);
+            debug!("httpsd: lookup '{}' rejected: invalid host '{}'", path, host);
             return Err(Errno::ENOENT);
         }
 
         let rest = parts.collect::<Vec<_>>().join("/");
         let node = HttpsNode::new(host, &rest);
         // Keep lookup side-effect free: actual network I/O is deferred to read.
-        info!("httpsd: lookup '{}' -> staging {}", path, node.url());
+        debug!("httpsd: lookup '{}' -> staging {}", path, node.url());
         let handle = self.allocate_node(host, &rest, None);
-        info!("httpsd: lookup '{}' -> handle {}", path, handle);
+        debug!("httpsd: lookup '{}' -> handle {}", path, handle);
         Ok(handle)
     }
 
@@ -148,7 +148,7 @@ impl HttpsProvider {
             return Err(Errno::EBADF);
         };
 
-        info!(
+        debug!(
             "httpsd: read handle={} url={} offset={} len={} cached={} eof={}",
             handle,
             state.node.url(),
@@ -159,7 +159,7 @@ impl HttpsProvider {
         );
 
         if state.response.is_none() && !state.eof {
-            info!("httpsd: opening upstream stream for handle={} {}", handle, state.node.url());
+            debug!("httpsd: opening upstream stream for handle={} {}", handle, state.node.url());
             state.response = Some(HttpClient::get(&state.node.url()).map_err(|err| {
                 warn!(
                     "httpsd: upstream open failed for handle={} {}: {}",
@@ -188,22 +188,22 @@ impl HttpsProvider {
                 Errno::EIO
             })?;
             if chunk.is_empty() {
-                info!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
+                debug!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
                 state.response = None;
                 state.eof = true;
                 break;
             }
-            info!("httpsd: upstream chunk handle={} bytes={}", handle, chunk.len());
+            debug!("httpsd: upstream chunk handle={} bytes={}", handle, chunk.len());
             state.body.extend_from_slice(&chunk);
         }
 
         if offset >= state.body.len() {
-            info!("httpsd: read handle={} -> EOF at offset {}", handle, offset);
+            debug!("httpsd: read handle={} -> EOF at offset {}", handle, offset);
             return Ok(Vec::new());
         }
         let end = state.body.len().min(needed_end);
         let out = state.body[offset..end].to_vec();
-        info!(
+        debug!(
             "httpsd: read handle={} -> returned {} bytes (cached={} eof={})",
             handle,
             out.len(),
@@ -255,7 +255,7 @@ fn run_provider(mount_point: &str) -> ! {
     };
 
     match vfs_mount(req_write, mount_point) {
-        Ok(()) => info!("httpsd: mounted at {}", mount_point),
+        Ok(()) => debug!("httpsd: mounted at {}", mount_point),
         Err(e) => {
             warn!("httpsd: failed to mount {}: {:?}", mount_point, e);
             stem::syscall::exit(1);
@@ -300,7 +300,7 @@ fn mount_point_from_args() -> String {
 }
 
 fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
-    info!("httpsd: rpc {:?} payload_len={}", op, payload.len());
+    debug!("httpsd: rpc {:?} payload_len={}", op, payload.len());
     match op {
         VfsRpcOp::Lookup => dispatch_lookup(provider, payload),
         VfsRpcOp::Read => dispatch_read(provider, payload),
