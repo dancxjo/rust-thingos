@@ -20,7 +20,10 @@ use stem::{debug, info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
-const MAX_HEADER_READ_ITERATIONS: usize = 20;
+const HEADER_READ_TIMEOUT_MS: u64 = 5_000;
+const MAX_HEADER_READ_ITERATIONS: usize = 128;
+const HEADER_STAGING_CHUNK_SIZE: usize = 4_096;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
 // Max TLS record payload + TLS overhead as recommended by embedded-tls docs.
 const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
 // Write-side TLS record staging buffer.
@@ -359,20 +362,23 @@ fn read_header_and_initial_body_from_tcp(
     stream: &mut TcpStream,
 ) -> Result<(Vec<u8>, usize), String> {
     let mut buffer = Vec::new();
-    let mut temp_buf = [0u8; 1024];
+    let mut temp_buf = [0u8; HEADER_STAGING_CHUNK_SIZE];
     let mut body_start = 0;
     let mut headers_done = false;
+    let deadline_ns = deadline_after_ms(HEADER_READ_TIMEOUT_MS);
 
     for attempt in 0..MAX_HEADER_READ_ITERATIONS {
+        if stem::syscall::monotonic_ns() >= deadline_ns {
+            warn!("http: header read timed out after {} iterations", attempt);
+            break;
+        }
         let n = stream.read(&mut temp_buf)?;
         debug!("http: header read iter={} bytes={}", attempt, n);
         if n == 0 {
             break;
         }
-        buffer.extend_from_slice(&temp_buf[..n]);
-
-        if let Some(idx) = find_subsequence(&buffer, b"\r\n\r\n") {
-            body_start = idx + 4;
+        if let Some(start) = append_header_chunk_and_find_body_start(&mut buffer, &temp_buf[..n])? {
+            body_start = start;
             headers_done = true;
             debug!(
                 "http: headers complete iter={} total_buffer={} body_start={}",
@@ -506,12 +512,17 @@ where
     });
 
     let mut response = Vec::new();
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; HEADER_STAGING_CHUNK_SIZE];
     let mut body_start = 0;
     let mut headers_done = false;
+    let deadline_ns = deadline_after_ms(HEADER_READ_TIMEOUT_MS);
 
     // Read chunks from the port until we have all the headers
     for attempt in 0..MAX_HEADER_READ_ITERATIONS {
+        if stem::syscall::monotonic_ns() >= deadline_ns {
+            warn!("http: https header read timed out after {} iterations", attempt);
+            break;
+        }
         match port_recv(read_handle, &mut buf) {
             Ok(0) | Err(abi::errors::Errno::EPIPE) => {
                 // Port closed early
@@ -526,10 +537,9 @@ where
                     }
                     return Err("Background thread reported unknown error".to_string());
                 }
-
-                response.extend_from_slice(chunk);
-                if let Some(idx) = find_subsequence(&response, b"\r\n\r\n") {
-                    body_start = idx + 4;
+                
+                if let Some(start) = append_header_chunk_and_find_body_start(&mut response, chunk)? {
+                    body_start = start;
                     headers_done = true;
                     debug!("http: headers complete body_start={}", body_start);
                     break;
@@ -706,6 +716,34 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|window| window == needle)
 }
 
+fn append_header_chunk_and_find_body_start(
+    buffer: &mut Vec<u8>,
+    chunk: &[u8],
+) -> Result<Option<usize>, String> {
+    buffer.extend_from_slice(chunk);
+
+    if let Some(idx) = find_subsequence(buffer, b"\r\n\r\n") {
+        let body_start = idx + 4;
+        if body_start > MAX_HEADER_BYTES {
+            return Err(format!(
+                "response headers exceed max size: {} > {}",
+                body_start, MAX_HEADER_BYTES
+            ));
+        }
+        return Ok(Some(body_start));
+    }
+
+    if buffer.len() > MAX_HEADER_BYTES {
+        return Err(format!(
+            "response headers exceed max size: {} > {}",
+            buffer.len(),
+            MAX_HEADER_BYTES
+        ));
+    }
+
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,5 +826,53 @@ mod tests {
     fn test_timeout_ms_until_deadline_errors_when_expired() {
         let now = stem::syscall::monotonic_ns();
         assert!(timeout_ms_until_deadline(now).is_err());
+    }
+
+    #[test]
+    fn test_append_header_chunk_detects_fragmented_header_terminator() {
+        let mut buffer = Vec::new();
+        assert_eq!(
+            append_header_chunk_and_find_body_start(
+                &mut buffer,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n"
+            )
+            .unwrap(),
+            None
+        );
+        let body_start = append_header_chunk_and_find_body_start(&mut buffer, b"\r\nBody")
+            .unwrap()
+            .unwrap();
+        assert_eq!(body_start, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n".len());
+        assert_eq!(&buffer[body_start..], b"Body");
+    }
+
+    #[test]
+    fn test_append_header_chunk_allows_header_at_max_boundary() {
+        let prefix = b"HTTP/1.1 200 OK\r\nX-Large: ";
+        let suffix = b"\r\n\r\n";
+        let filler_len = MAX_HEADER_BYTES - prefix.len() - suffix.len();
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(prefix);
+        chunk.extend_from_slice(&vec![b'a'; filler_len]);
+        chunk.extend_from_slice(suffix);
+
+        let mut buffer = Vec::new();
+        let body_start = append_header_chunk_and_find_body_start(&mut buffer, &chunk)
+            .unwrap()
+            .unwrap();
+        assert_eq!(body_start, MAX_HEADER_BYTES);
+    }
+
+    #[test]
+    fn test_append_header_chunk_rejects_header_over_max_boundary() {
+        let mut buffer = Vec::new();
+        let chunk = vec![b'a'; MAX_HEADER_BYTES];
+        assert_eq!(
+            append_header_chunk_and_find_body_start(&mut buffer, &chunk).unwrap(),
+            None
+        );
+
+        let err = append_header_chunk_and_find_body_start(&mut buffer, b"b").unwrap_err();
+        assert!(err.contains("response headers exceed max size"));
     }
 }
