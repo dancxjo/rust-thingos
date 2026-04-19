@@ -760,7 +760,11 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     let current_cpu = super::current_cpu_index::<R>();
     let modules = rt.modules();
     let basename = name.rsplit('/').next().unwrap_or(name);
-    let module = modules.iter().find(|m| m.name.contains(basename))?;
+    let module = modules
+        .iter()
+        .find(|m| m.name == basename)
+        .or_else(|| modules.iter().find(|m| m.name.rsplit('/').next().unwrap_or(m.name) == basename))
+        .or_else(|| modules.iter().find(|m| m.name.contains(basename)))?;
 
     let aspace = rt.tasking().make_user_address_space();
 

@@ -357,10 +357,18 @@ pub fn setup_input_broker(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputH
 /// The NIC driver is owned by cambium; `netd` can start immediately and will
 /// block until a `/dev/net/virtioN` provider appears.
 fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    debug!("SPROUT: spawn_netd start");
+    {
+        let tasks = shared_tasks.lock();
+        if tasks.iter().any(|t| t.name == "netd" && t.pid.is_some()) {
+            info!("SPROUT: netd already running; skipping duplicate spawn");
+            return;
+        }
+    }
+
+    info!("SPROUT: Launching netd...");
     match stem::syscall::spawn_process("/bin/netd", 0) {
         Ok(pid) => {
-            debug!("SPROUT: Spawned netd (PID={})", pid);
+            info!("SPROUT: Spawned netd (PID={})", pid);
             let _ = stem::thread::set_priority(pid, 2);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
@@ -384,11 +392,62 @@ fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     }
 }
 
+fn spawn_httpsd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    {
+        let tasks = shared_tasks.lock();
+        if tasks.iter().any(|t| t.name == "httpsd" && t.pid.is_some()) {
+            info!("SPROUT: httpsd already running; skipping duplicate spawn");
+            return;
+        }
+    }
+
+    info!("SPROUT: Launching httpsd...");
+    match stem::syscall::spawn_process("/bin/httpsd", 0) {
+        Ok(pid) => {
+            info!("SPROUT: Spawned httpsd (PID={})", pid);
+            let _ = stem::thread::set_priority(pid, 2);
+            let mut tasks = shared_tasks.lock();
+            tasks.push(ManagedTask {
+                name: "httpsd".to_string(),
+                kind: TaskKind::Service("svc.https".to_string()),
+                module_path: "/bin/httpsd".to_string(),
+                pid: Some(pid),
+                restarts: 0,
+                spawn_arg: 0,
+                bind_instance_id: 0,
+                drv_req_write: 0,
+                drv_resp_read: 0,
+                boot_req_read: 0,
+                boot_resp_write: 0,
+                resp_fd: None,
+            });
+        }
+        Err(e) => {
+            warn!("SPROUT: Failed to spawn httpsd: {:?}", e);
+        }
+    }
+}
+
 pub fn setup_network_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    let netd_tasks = shared_tasks.clone();
     let _ = stem::thread::spawn_task(move || {
-        // Let critical boot tasks run first, then launch netd opportunistically.
+        // Let critical boot tasks and driver binding start first, then launch
+        // the network service without blocking the rest of boot.
         stem::sleep_ms(500);
-        spawn_netd(shared_tasks);
+        spawn_netd(netd_tasks);
+    });
+
+    let httpsd_tasks = shared_tasks;
+    let _ = stem::thread::spawn_task(move || {
+        stem::sleep_ms(500);
+        info!("SPROUT: Waiting for /net/tcp/new before launching httpsd...");
+        loop {
+            if file_exists("/net/tcp/new") {
+                spawn_httpsd(httpsd_tasks.clone());
+                break;
+            }
+            stem::sleep_ms(100);
+        }
     });
 }
 
@@ -445,30 +504,7 @@ pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         }
     }
 
-    match stem::syscall::spawn_process("/bin/httpsd", 0) {
-        Ok(pid) => {
-            debug!("SPROUT: Spawned httpsd (PID={})", pid);
-            let _ = stem::thread::set_priority(pid, 2);
-            let mut tasks = shared_tasks.lock();
-            tasks.push(ManagedTask {
-                name: "httpsd".to_string(),
-                kind: TaskKind::Service("svc.https".to_string()),
-                module_path: "/bin/httpsd".to_string(),
-                pid: Some(pid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
-            });
-        }
-        Err(e) => {
-            warn!("SPROUT: Failed to spawn httpsd: {:?}", e);
-        }
-    }
+    spawn_httpsd(shared_tasks.clone());
 }
 
 pub fn setup_taskman_service(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {

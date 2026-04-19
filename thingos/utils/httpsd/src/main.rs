@@ -7,17 +7,13 @@ use abi::vfs_rpc::VfsRpcOp;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use http::HttpClient;
+use http::{HttpClient, Response};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
-use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read, vfs_write};
+use stem::syscall::vfs::vfs_mount;
 use stem::{info, warn};
 
 const MOUNT_POINT: &str = "/https";
 const ROOT_HANDLE: u64 = 1;
-const DNS_LOOKUP_PATH: &str = "/net/dns/lookup";
-const DNS_MAX_ATTEMPTS: usize = 20;
-const DNS_RETRY_MS: u64 = 25;
-const DT_DIR: u8 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HttpsNode {
@@ -41,86 +37,119 @@ impl HttpsNode {
 
 struct HttpsProvider {
     next_handle: u64,
-    handles: BTreeMap<u64, HttpsNode>,
-    reverse: BTreeMap<String, u64>,
-    host_cache: BTreeMap<String, bool>,
+    handles: BTreeMap<u64, HttpsHandle>,
+}
+
+struct HttpsHandle {
+    node: HttpsNode,
+    response: Option<Response>,
+    body: Vec<u8>,
+    eof: bool,
+}
+
+impl HttpsHandle {
+    fn new(node: HttpsNode) -> Self {
+        Self { node, response: None, body: Vec::new(), eof: false }
+    }
 }
 
 impl HttpsProvider {
     fn new() -> Self {
-        Self {
-            next_handle: ROOT_HANDLE + 1,
-            handles: BTreeMap::new(),
-            reverse: BTreeMap::new(),
-            host_cache: BTreeMap::new(),
-        }
+        Self { next_handle: ROOT_HANDLE + 1, handles: BTreeMap::new() }
     }
 
-    fn key(host: &str, path: &str) -> String {
-        alloc::format!("{}|{}", host, path)
-    }
-
-    fn lookup_or_insert_node(&mut self, host: &str, path: &str) -> u64 {
-        let key = Self::key(host, path);
-        if let Some(handle) = self.reverse.get(&key) {
-            return *handle;
-        }
-
+    fn allocate_node(&mut self, host: &str, path: &str) -> u64 {
         let handle = self.next_handle;
         self.next_handle = self.next_handle.saturating_add(1);
-        self.handles.insert(handle, HttpsNode::new(host, path));
-        self.reverse.insert(key, handle);
+        self.handles.insert(handle, HttpsHandle::new(HttpsNode::new(host, path)));
         handle
     }
 
     fn resolve_path(&mut self, path: &str) -> Result<u64, Errno> {
         let clean = path.trim_matches('/');
         if clean.is_empty() {
+            info!("httpsd: lookup '{}' -> root", path);
             return Ok(ROOT_HANDLE);
         }
 
         let mut parts = clean.split('/');
         let host = parts.next().ok_or(Errno::ENOENT)?;
-        if !Self::is_valid_host_label(host) || !self.resolve_host(host) {
+        if !Self::is_valid_host_label(host) {
+            info!("httpsd: lookup '{}' rejected: invalid host '{}'", path, host);
             return Err(Errno::ENOENT);
         }
 
         let rest = parts.collect::<Vec<_>>().join("/");
-        Ok(self.lookup_or_insert_node(host, &rest))
-    }
-
-    fn resolve_host(&mut self, host: &str) -> bool {
-        if let Some(&true) = self.host_cache.get(host) {
-            return true;
+        let node = HttpsNode::new(host, &rest);
+        info!("httpsd: lookup '{}' probing {}", path, node.url());
+        if HttpClient::get(&node.url()).is_err() {
+            warn!("httpsd: lookup '{}' probe failed", path);
+            return Err(Errno::ENOENT);
         }
-        let ok = resolve_host_via_netd(host);
-        if ok {
-            self.host_cache.insert(host.to_string(), true);
-        }
-        ok
+        let handle = self.allocate_node(host, &rest);
+        info!("httpsd: lookup '{}' -> handle {}", path, handle);
+        Ok(handle)
     }
 
     fn is_valid_host_label(host: &str) -> bool {
         host.contains('.') && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
     }
 
-    fn read_node(&self, handle: u64) -> Result<Vec<u8>, Errno> {
+    fn read_node(&mut self, handle: u64, offset: usize, max_len: usize) -> Result<Vec<u8>, Errno> {
         if handle == ROOT_HANDLE {
             return Err(Errno::EISDIR);
         }
-        let Some(node) = self.handles.get(&handle) else {
+        let Some(state) = self.handles.get_mut(&handle) else {
             return Err(Errno::EBADF);
         };
-        let mut response = HttpClient::get(&node.url()).map_err(|_| Errno::EIO)?;
-        let mut all = Vec::new();
-        loop {
+
+        info!(
+            "httpsd: read handle={} url={} offset={} len={} cached={} eof={}",
+            handle,
+            state.node.url(),
+            offset,
+            max_len,
+            state.body.len(),
+            state.eof
+        );
+
+        if state.response.is_none() && !state.eof {
+            info!("httpsd: opening upstream stream for handle={} {}", handle, state.node.url());
+            state.response = Some(HttpClient::get(&state.node.url()).map_err(|_| Errno::EIO)?);
+        }
+
+        let needed_end = offset.saturating_add(max_len);
+        while state.body.len() < needed_end && !state.eof {
+            let Some(response) = state.response.as_mut() else {
+                state.eof = true;
+                break;
+            };
+
             let chunk = response.read_chunk().map_err(|_| Errno::EIO)?;
             if chunk.is_empty() {
+                info!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
+                state.response = None;
+                state.eof = true;
                 break;
             }
-            all.extend_from_slice(&chunk);
+            info!("httpsd: upstream chunk handle={} bytes={}", handle, chunk.len());
+            state.body.extend_from_slice(&chunk);
         }
-        Ok(all)
+
+        if offset >= state.body.len() {
+            info!("httpsd: read handle={} -> EOF at offset {}", handle, offset);
+            return Ok(Vec::new());
+        }
+        let end = state.body.len().min(needed_end);
+        let out = state.body[offset..end].to_vec();
+        info!(
+            "httpsd: read handle={} -> returned {} bytes (cached={} eof={})",
+            handle,
+            out.len(),
+            state.body.len(),
+            state.eof
+        );
+        Ok(out)
     }
 
     fn stat_node(&self, handle: u64) -> Result<(u32, u64, u64), Errno> {
@@ -128,7 +157,7 @@ impl HttpsProvider {
             return Ok((0o040_555, 0, ROOT_HANDLE));
         }
         if self.handles.contains_key(&handle) {
-            return Ok((0o040_555, 0, handle));
+            return Ok((0o100_444, 0, handle));
         }
         Err(Errno::EBADF)
     }
@@ -170,6 +199,7 @@ fn main(_arg: usize) -> ! {
 }
 
 fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
+    info!("httpsd: rpc {:?} payload_len={}", op, payload.len());
     match op {
         VfsRpcOp::Lookup => dispatch_lookup(provider, payload),
         VfsRpcOp::Read => dispatch_read(provider, payload),
@@ -200,7 +230,7 @@ fn dispatch_lookup(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderResp
     }
 }
 
-fn dispatch_read(provider: &HttpsProvider, payload: &[u8]) -> ProviderResponse {
+fn dispatch_read(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 20 {
         return ProviderResponse::err(Errno::EINVAL);
     }
@@ -208,15 +238,11 @@ fn dispatch_read(provider: &HttpsProvider, payload: &[u8]) -> ProviderResponse {
     let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
     let max_len = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
 
-    let data = match provider.read_node(handle) {
+    let data = match provider.read_node(handle, offset, max_len) {
         Ok(d) => d,
         Err(e) => return ProviderResponse::err(e),
     };
-    if offset >= data.len() {
-        return ProviderResponse::ok_read(&[]);
-    }
-    let end = data.len().min(offset + max_len);
-    ProviderResponse::ok_read(&data[offset..end])
+    ProviderResponse::ok_read(&data)
 }
 
 fn dispatch_stat(provider: &HttpsProvider, payload: &[u8]) -> ProviderResponse {
@@ -234,49 +260,8 @@ fn dispatch_readdir(payload: &[u8]) -> ProviderResponse {
     if payload.len() < 20 {
         return ProviderResponse::err(Errno::EINVAL);
     }
-    let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
-    if handle != ROOT_HANDLE {
-        return ProviderResponse::ok_read(&[]);
-    }
-
-    // Root is intentionally sparse: it only grows as hosts are traversed.
-    // We still return "." so standard directory readers have a stable entry.
-    let mut out = Vec::new();
-    out.extend_from_slice(&ROOT_HANDLE.to_le_bytes());
-    out.push(DT_DIR);
-    out.push(1);
-    out.push(b'.');
-    ProviderResponse::ok_read(&out)
-}
-
-fn resolve_host_via_netd(host: &str) -> bool {
-    use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
-
-    let Ok(write_fd) = vfs_open(DNS_LOOKUP_PATH, O_WRONLY) else {
-        return false;
-    };
-    if vfs_write(write_fd, host.as_bytes()).is_err() {
-        let _ = vfs_close(write_fd);
-        return false;
-    }
-    let _ = vfs_close(write_fd);
-
-    let Ok(read_fd) = vfs_open(DNS_LOOKUP_PATH, O_RDONLY) else {
-        return false;
-    };
-    let mut buf = [0u8; 64];
-    for _ in 0..DNS_MAX_ATTEMPTS {
-        match vfs_read(read_fd, &mut buf) {
-            Ok(n) if n > 0 => {
-                let _ = vfs_close(read_fd);
-                return core::str::from_utf8(&buf[..n]).map(|s| s.trim().contains('.')).unwrap_or(false);
-            }
-            Err(abi::errors::Errno::EAGAIN) => stem::time::sleep_ms(DNS_RETRY_MS),
-            _ => break, // Fail fast on EIO or other errors
-        }
-    }
-    let _ = vfs_close(read_fd);
-    false
+    let _handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
+    ProviderResponse::ok_read(&[])
 }
 
 #[cfg(test)]
