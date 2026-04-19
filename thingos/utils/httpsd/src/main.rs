@@ -23,7 +23,7 @@ const ROOT_HANDLE: u64 = 1;
 const BODY_WINDOW_CAP: usize = 128 * 1024; // Align with multiple of 16KB chunks
 const HTTPS_PORT_CAPACITY_BYTES: usize = 32_768;
 const SEED_NAME: &[u8] = b"httpsd";
-const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
+const HOOK_MOUNT_V1: &[u8] = b"entry_impl";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
 
 #[no_mangle]

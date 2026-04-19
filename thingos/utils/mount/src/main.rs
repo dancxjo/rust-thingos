@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 
 use abi::errors::Errno;
 use abi::seed::{
-    INTERFACE_VFS_PROVIDER_MOUNT_V1, INTERFACE_VFS_PROVIDER_UNMOUNT_V1, SEED_ABI_VERSION, SEED_SYMBOL,
-    Seed,
+    INTERFACE_VFS_PROVIDER_MOUNT_V1, INTERFACE_VFS_PROVIDER_UNMOUNT_V1, SEED_ABI_VERSION,
+    SEED_SYMBOL, Seed,
 };
 use stem::syscall::{argv_get, exit, spawn_driver_ex, vfs_close, vfs_open, vfs_read, vfs_write};
 
@@ -106,7 +106,9 @@ fn mount_all_from_fstab(path: &str) -> i32 {
             had_error = true;
             err(&alloc::format!(
                 "mount: fstab entry failed for type={} target={}: {:?}\n",
-                fs_type, target, e
+                fs_type,
+                target,
+                e
             ));
         }
     }
@@ -117,52 +119,53 @@ fn mount_all_from_fstab(path: &str) -> i32 {
 fn mount_one(fs_type: &str, target: &str) -> Result<(), Errno> {
     let provider_path = resolve_provider_binary(fs_type).ok_or(Errno::ENOENT)?;
     let bytes = read_file(&provider_path, 8 * 1024 * 1024).ok_or(Errno::EINVAL)?;
-
-    let seed_vaddr = resolve_elf64_symbol_from_bytes(&bytes, SEED_SYMBOL).ok_or(Errno::EINVAL)?;
-    let seed = read_seed_descriptor(&bytes, seed_vaddr).ok_or(Errno::EINVAL)?;
-    if seed.abi_version != SEED_ABI_VERSION {
-        return Err(Errno::EINVAL);
-    }
-
-    let mount_iface = seed
-        .interface(INTERFACE_VFS_PROVIDER_MOUNT_V1, 1)
-        .ok_or(Errno::ENOSYS)?;
-    let unmount_iface = seed
-        .interface(INTERFACE_VFS_PROVIDER_UNMOUNT_V1, 1)
-        .ok_or(Errno::ENOSYS)?;
-    if mount_iface.entry_symbol_ptr.is_null()
-        || mount_iface.entry_symbol_len == 0
-        || unmount_iface.entry_symbol_ptr.is_null()
-        || unmount_iface.entry_symbol_len == 0
-    {
-        return Err(Errno::ENOSYS);
-    }
-
-    let mount_sym = read_vaddr_bytes(
-        &bytes,
-        mount_iface.entry_symbol_ptr as u64,
-        mount_iface.entry_symbol_len,
-    )
-    .and_then(|s| core::str::from_utf8(s).ok().map(String::from))
-    .ok_or(Errno::EINVAL)?;
+    let mount_sym = resolve_provider_mount_symbol(&bytes)?;
 
     let argv = [provider_path.as_bytes(), target.as_bytes()];
-    let _resp = spawn_driver_ex(
-        &provider_path,
-        &argv,
-        &BTreeMap::new(),
-        0,
-        &[],
-        Some(&mount_sym),
-    )?;
+    let _resp = spawn_driver_ex(&provider_path, &argv, &BTreeMap::new(), 0, &[], Some(&mount_sym))?;
 
-    wait_for_mount(
-        target,
-        MOUNT_VERIFICATION_ATTEMPTS,
-        MOUNT_VERIFICATION_DELAY_MS,
-    )?;
+    wait_for_mount(target, MOUNT_VERIFICATION_ATTEMPTS, MOUNT_VERIFICATION_DELAY_MS)?;
     out(&alloc::format!("mounted type={} target={}\n", fs_type, target));
     Ok(())
+}
+
+fn resolve_provider_mount_symbol(bytes: &[u8]) -> Result<String, Errno> {
+    if let Some(seed_vaddr) = resolve_elf64_symbol_from_bytes(bytes, SEED_SYMBOL) {
+        if let Some(seed) = read_seed_descriptor(bytes, seed_vaddr) {
+            if seed.abi_version == SEED_ABI_VERSION {
+                if let Some(mount_iface) = seed.interface(INTERFACE_VFS_PROVIDER_MOUNT_V1, 1) {
+                    if let Some(unmount_iface) =
+                        seed.interface(INTERFACE_VFS_PROVIDER_UNMOUNT_V1, 1)
+                    {
+                        if !mount_iface.entry_symbol_ptr.is_null()
+                            && mount_iface.entry_symbol_len > 0
+                            && !unmount_iface.entry_symbol_ptr.is_null()
+                            && unmount_iface.entry_symbol_len > 0
+                        {
+                            if let Some(mount_sym) = read_vaddr_bytes(
+                                bytes,
+                                mount_iface.entry_symbol_ptr as u64,
+                                mount_iface.entry_symbol_len,
+                            )
+                            .and_then(|s| core::str::from_utf8(s).ok().map(String::from))
+                            {
+                                return Ok(mount_sym);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if resolve_elf64_symbol_from_bytes(bytes, "thingos_vfs_mount_v1").is_some() {
+        return Ok(String::from("thingos_vfs_mount_v1"));
+    }
+    if resolve_elf64_symbol_from_bytes(bytes, "entry_impl").is_some() {
+        return Ok(String::from("entry_impl"));
+    }
+
+    Err(Errno::EINVAL)
 }
 
 fn wait_for_mount(target: &str, attempts: usize, delay_ms: u64) -> Result<(), Errno> {
@@ -280,18 +283,12 @@ fn resolve_elf64_symbol_from_bytes(bytes: &[u8], target: &str) -> Option<u64> {
 
         let sh_link = read_u32(bytes, sh_off.checked_add(40)?)? as usize;
         let strtab_sh_off = e_shoff.checked_add(sh_link.checked_mul(e_shentsize)?)?;
-        if strtab_sh_off
-            .checked_add(e_shentsize)
-            .map_or(true, |v| v > bytes.len())
-        {
+        if strtab_sh_off.checked_add(e_shentsize).map_or(true, |v| v > bytes.len()) {
             continue;
         }
         let strtab_off = read_u64(bytes, strtab_sh_off.checked_add(24)?)? as usize;
         let strtab_size = read_u64(bytes, strtab_sh_off.checked_add(32)?)? as usize;
-        if strtab_off
-            .checked_add(strtab_size)
-            .map_or(true, |v| v > bytes.len())
-        {
+        if strtab_off.checked_add(strtab_size).map_or(true, |v| v > bytes.len()) {
             continue;
         }
 

@@ -41,7 +41,7 @@ const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
 const MAX_VIRTIO_UNITS: u32 = 16;
 const DEFAULT_MOUNT_POINT: &str = "/net";
 const SEED_NAME: &[u8] = b"netd";
-const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
+const HOOK_MOUNT_V1: &[u8] = b"entry_impl";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
 
 #[unsafe(no_mangle)]
