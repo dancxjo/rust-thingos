@@ -18,7 +18,9 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};
 use stem::{debug, info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
-const IO_POLL_SLICE_MS: u64 = 100;
+const IO_POLL_SLICE_EARLY_MS: u64 = 1;
+const IO_POLL_SLICE_MEDIUM_MS: u64 = 5;
+const IO_POLL_SLICE_LATE_MS: u64 = 25;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 const MAX_HEADER_READ_ITERATIONS: usize = 20;
 // Max TLS record payload + TLS overhead as recommended by embedded-tls docs.
@@ -26,6 +28,18 @@ const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
 // Write-side TLS record staging buffer.
 const TLS_RECORD_WRITE_BUF_SIZE: usize = 4_096;
 const DEFAULT_USER_AGENT: &str = "ThingOS-httpsd/0.1 (+https://github.com/dancxjo/thingos)";
+
+fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
+    let remaining = timeout_ms.saturating_sub(waited_ms);
+    let preferred = if waited_ms < 20 {
+        IO_POLL_SLICE_EARLY_MS
+    } else if waited_ms < 200 {
+        IO_POLL_SLICE_MEDIUM_MS
+    } else {
+        IO_POLL_SLICE_LATE_MS
+    };
+    remaining.min(preferred)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TcpConnectState {
@@ -92,7 +106,7 @@ impl TcpStream {
                         let _ = vfs_close(new_fd);
                         return Err("timed out waiting for /net/tcp/new socket id".to_string());
                     }
-                    let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                    let slice_ms = poll_sleep_slice_ms(waited_ms, CONNECT_TIMEOUT_MS);
                     debug!("http: waiting for /net/tcp/new socket id ({} ms elapsed)", waited_ms);
                     stem::time::sleep_ms(slice_ms);
                     waited_ms += slice_ms;
@@ -133,19 +147,20 @@ impl TcpStream {
     pub fn write(&mut self, data: &[u8]) -> Result<usize, String> {
         debug!("http: write {} bytes", data.len());
         let mut waited_ms = 0;
+        let mut last_state = TcpConnectState::Other;
         loop {
-            let state = read_tcp_state(&self.socket_id);
-
             match vfs_write(self.data_fd, data) {
                 Ok(n) => {
                     if n == 0 {
+                        let state = read_tcp_state(&self.socket_id);
+                        last_state = state;
                         if waited_ms >= IO_POLL_TIMEOUT_MS {
                             return Err(format!(
                                 "write returned 0 for {} ms (state={:?})",
                                 waited_ms, state
                             ));
                         }
-                        let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                        let slice_ms = poll_sleep_slice_ms(waited_ms, IO_POLL_TIMEOUT_MS);
                         debug!(
                             "http: write returned 0 while {:?}; sleeping for {} ms",
                             state, slice_ms
@@ -160,6 +175,19 @@ impl TcpStream {
                     return Ok(n);
                 }
                 Err(abi::errors::Errno::EAGAIN) => {
+                    let state = if matches!(
+                        last_state,
+                        TcpConnectState::Created
+                            | TcpConnectState::Connecting
+                            | TcpConnectState::Closed
+                            | TcpConnectState::Other
+                    ) || waited_ms == 0
+                    {
+                        read_tcp_state(&self.socket_id)
+                    } else {
+                        last_state
+                    };
+                    last_state = state;
                     if matches!(state, TcpConnectState::Closed) {
                         return Err("write failed: socket closed before writable".to_string());
                     }
@@ -180,7 +208,7 @@ impl TcpStream {
                         ));
                     }
 
-                    let slice_ms = (timeout_ms - waited_ms).min(IO_POLL_SLICE_MS);
+                    let slice_ms = poll_sleep_slice_ms(waited_ms, timeout_ms);
                     debug!(
                         "http: write would block while {:?}; sleeping for {} ms",
                         state, slice_ms
@@ -197,7 +225,7 @@ impl TcpStream {
                                 e, state
                             ));
                         }
-                        let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                        let slice_ms = poll_sleep_slice_ms(waited_ms, CONNECT_TIMEOUT_MS);
                         debug!("http: write while {:?}; sleeping for {} ms", state, slice_ms);
                         stem::time::sleep_ms(slice_ms);
                         waited_ms += slice_ms;
@@ -232,7 +260,7 @@ impl TcpStream {
                                 );
                             }
 
-                            let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                            let slice_ms = poll_sleep_slice_ms(waited_ms, IO_POLL_TIMEOUT_MS);
                             debug!(
                                 "http: read returned 0 while {:?}; sleeping for {} ms",
                                 state, slice_ms
@@ -257,7 +285,7 @@ impl TcpStream {
                         return Err("read timed out waiting for socket data".to_string());
                     }
 
-                    let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                    let slice_ms = poll_sleep_slice_ms(waited_ms, IO_POLL_TIMEOUT_MS);
                     debug!("http: read would block while {:?}; sleeping for {} ms", state, slice_ms);
                     stem::time::sleep_ms(slice_ms);
                     waited_ms += slice_ms;
@@ -697,7 +725,7 @@ impl Response {
         
         match stream {
             ResponseStream::Http(tcp) => {
-                let mut buf = [0u8; 1024];
+                let mut buf = [0u8; 4096];
                 let n = tcp.read(&mut buf)?;
                 if n == 0 {
                     debug!("http: response stream EOF");
