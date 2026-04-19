@@ -24,6 +24,8 @@ const HEADER_READ_TIMEOUT_MS: u64 = 5_000;
 const MAX_HEADER_READ_ITERATIONS: usize = 128;
 const HEADER_STAGING_CHUNK_SIZE: usize = 4_096;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
+const HTTPS_STREAM_CHUNK_SIZE: usize = 16_384;
+const HTTPS_PORT_CAPACITY_BYTES: usize = HTTPS_STREAM_CHUNK_SIZE * 2;
 // Max TLS record payload + TLS overhead as recommended by embedded-tls docs.
 const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
 // Write-side TLS record staging buffer.
@@ -404,8 +406,10 @@ fn read_https_response_with_suite<S>(
 where
     S: embedded_tls::TlsCipherSuite + Send + 'static,
 {
-    let (write_handle, read_handle) =
-        port_create(64 * 1024).map_err(|e| format!("port create failed: {:?}", e))?;
+    // Keep the bridge bounded so producer-side `port_send_all` naturally applies
+    // backpressure when the response reader lags behind.
+    let (write_handle, read_handle) = port_create(HTTPS_PORT_CAPACITY_BYTES)
+        .map_err(|e| format!("port create failed: {:?}", e))?;
     let host = url.host.clone();
     let req_bytes = request.as_bytes().to_vec();
 
@@ -464,7 +468,7 @@ where
             return;
         }
 
-        let mut buf = [0u8; 16384];
+        let mut buf = [0u8; HTTPS_STREAM_CHUNK_SIZE];
         loop {
             match tls.read(&mut buf) {
                 Ok(0) => break,
@@ -472,12 +476,12 @@ where
                     let mut offset = 0;
                     while offset < n {
                         match port_send_all(write_handle, &buf[offset..n]) {
+                            Ok(0) | Err(_) => break,
                             Ok(written) => offset += written,
-                            Err(_) => break,
                         }
                     }
                     if offset < n {
-                        break; // Receiver likely closed or error occurred
+                        break; // Receiver likely closed or error occurred.
                     }
                 }
                 Err(e) => {
@@ -688,7 +692,7 @@ impl Response {
                 Ok(buf[..n].to_vec())
             }
             ResponseStream::Https(handle) => {
-                let mut buf = [0u8; 4096];
+                let mut buf = [0u8; HTTPS_STREAM_CHUNK_SIZE];
                 match port_recv(*handle, &mut buf) {
                     Ok(0) | Err(abi::errors::Errno::EPIPE) => {
                         debug!("http: https response stream EOF");
