@@ -236,17 +236,20 @@ fn read_file(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
 }
 
 fn read_u16(bytes: &[u8], off: usize) -> Option<u16> {
-    let b = bytes.get(off..off + 2)?;
+    let end = off.checked_add(2)?;
+    let b = bytes.get(off..end)?;
     Some(u16::from_le_bytes([b[0], b[1]]))
 }
 
 fn read_u32(bytes: &[u8], off: usize) -> Option<u32> {
-    let b = bytes.get(off..off + 4)?;
+    let end = off.checked_add(4)?;
+    let b = bytes.get(off..end)?;
     Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 fn read_u64(bytes: &[u8], off: usize) -> Option<u64> {
-    let b = bytes.get(off..off + 8)?;
+    let end = off.checked_add(8)?;
+    let b = bytes.get(off..end)?;
     Some(u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
@@ -267,50 +270,56 @@ fn resolve_elf64_symbol_from_bytes(bytes: &[u8], target: &str) -> Option<u64> {
 
     for i in 0..e_shnum {
         let sh_off = e_shoff.checked_add(i.checked_mul(e_shentsize)?)?;
-        if sh_off + e_shentsize > bytes.len() {
+        if sh_off.checked_add(e_shentsize).map_or(true, |v| v > bytes.len()) {
             break;
         }
-        let sh_type = read_u32(bytes, sh_off + 4)?;
+        let sh_type = read_u32(bytes, sh_off.checked_add(4)?)?;
         if sh_type != 2 && sh_type != 11 {
             continue;
         }
 
-        let sh_link = read_u32(bytes, sh_off + 40)? as usize;
+        let sh_link = read_u32(bytes, sh_off.checked_add(40)?)? as usize;
         let strtab_sh_off = e_shoff.checked_add(sh_link.checked_mul(e_shentsize)?)?;
-        if strtab_sh_off + e_shentsize > bytes.len() {
+        if strtab_sh_off
+            .checked_add(e_shentsize)
+            .map_or(true, |v| v > bytes.len())
+        {
             continue;
         }
-        let strtab_off = read_u64(bytes, strtab_sh_off + 24)? as usize;
-        let strtab_size = read_u64(bytes, strtab_sh_off + 32)? as usize;
-        if strtab_off + strtab_size > bytes.len() {
+        let strtab_off = read_u64(bytes, strtab_sh_off.checked_add(24)?)? as usize;
+        let strtab_size = read_u64(bytes, strtab_sh_off.checked_add(32)?)? as usize;
+        if strtab_off
+            .checked_add(strtab_size)
+            .map_or(true, |v| v > bytes.len())
+        {
             continue;
         }
 
-        let sym_off = read_u64(bytes, sh_off + 24)? as usize;
-        let sym_size = read_u64(bytes, sh_off + 32)? as usize;
+        let sym_off = read_u64(bytes, sh_off.checked_add(24)?)? as usize;
+        let sym_size = read_u64(bytes, sh_off.checked_add(32)?)? as usize;
         const SYM_ENTRY: usize = 24;
-        if sym_size == 0 || sym_off + sym_size > bytes.len() {
+        if sym_size == 0 || sym_off.checked_add(sym_size).map_or(true, |v| v > bytes.len()) {
             continue;
         }
 
         for s in 0..(sym_size / SYM_ENTRY) {
-            let se = sym_off + s * SYM_ENTRY;
-            if se + SYM_ENTRY > bytes.len() {
+            let se = sym_off.checked_add(s.checked_mul(SYM_ENTRY)?)?;
+            if se.checked_add(SYM_ENTRY).map_or(true, |v| v > bytes.len()) {
                 break;
             }
             let st_name = read_u32(bytes, se)? as usize;
-            let st_value = read_u64(bytes, se + 8)?;
+            let st_value = read_u64(bytes, se.checked_add(8)?)?;
             if st_value == 0 {
                 continue;
             }
-            let name_off = strtab_off + st_name;
+            let name_off = strtab_off.checked_add(st_name)?;
             if name_off >= bytes.len() {
                 continue;
             }
             let name_end = bytes[name_off..]
                 .iter()
                 .position(|&b| b == 0)
-                .map(|n| name_off + n)
+                .and_then(|n| name_off.checked_add(n))
                 .unwrap_or(bytes.len());
             if let Ok(name) = core::str::from_utf8(&bytes[name_off..name_end]) {
                 if name == target {
@@ -331,20 +340,22 @@ fn vaddr_to_file_offset(bytes: &[u8], vaddr: u64) -> Option<usize> {
     let e_phnum = read_u16(bytes, 56)? as usize;
 
     for i in 0..e_phnum {
-        let off = e_phoff + i * e_phentsize;
-        if off + e_phentsize > bytes.len() {
+        let off = e_phoff.checked_add(i.checked_mul(e_phentsize)?)?;
+        if off.checked_add(e_phentsize).map_or(true, |v| v > bytes.len()) {
             break;
         }
         let p_type = read_u32(bytes, off)?;
         if p_type != 1 {
             continue;
         }
-        let p_offset = read_u64(bytes, off + 8)?;
-        let p_vaddr = read_u64(bytes, off + 16)?;
-        let p_filesz = read_u64(bytes, off + 32)?;
-        if vaddr >= p_vaddr && vaddr < p_vaddr + p_filesz {
+        let p_offset = read_u64(bytes, off.checked_add(8)?)?;
+        let p_vaddr = read_u64(bytes, off.checked_add(16)?)?;
+        let p_filesz = read_u64(bytes, off.checked_add(32)?)?;
+        let end = p_vaddr.checked_add(p_filesz)?;
+        if vaddr >= p_vaddr && vaddr < end {
             let delta = vaddr - p_vaddr;
-            return Some((p_offset + delta) as usize);
+            let file_off = p_offset.checked_add(delta)?;
+            return Some(file_off as usize);
         }
     }
     None
@@ -353,7 +364,7 @@ fn vaddr_to_file_offset(bytes: &[u8], vaddr: u64) -> Option<usize> {
 fn read_seed_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<Seed> {
     let file_off = vaddr_to_file_offset(bytes, sym_vaddr)?;
     let size = core::mem::size_of::<Seed>();
-    if file_off + size > bytes.len() {
+    if file_off.checked_add(size).map_or(true, |v| v > bytes.len()) {
         return None;
     }
     let desc: Seed = unsafe {
@@ -370,5 +381,6 @@ fn read_seed_descriptor(bytes: &[u8], sym_vaddr: u64) -> Option<Seed> {
 
 fn read_vaddr_bytes<'a>(bytes: &'a [u8], vaddr: u64, len: usize) -> Option<&'a [u8]> {
     let file_off = vaddr_to_file_offset(bytes, vaddr)?;
-    bytes.get(file_off..file_off + len)
+    let end = file_off.checked_add(len)?;
+    bytes.get(file_off..end)
 }
