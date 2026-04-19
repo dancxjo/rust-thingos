@@ -100,7 +100,7 @@ fn main(_arg: usize) -> ! {
     loop {
         if let Some(fd) = watch_fd {
             let mut fds = [PollHandle {
-                thing: fd as i32,
+                handle: fd as i32,
                 events: poll_flags::POLLIN as u16,
                 revents: 0,
             }];

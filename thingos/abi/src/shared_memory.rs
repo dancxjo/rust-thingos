@@ -188,7 +188,7 @@ mod tests {
         // Deserialise
         assert_eq!(msg[0], MSG_BULK_OFFER);
         let decoded = SharedMemoryRef::decode_le(&msg[1..]).unwrap();
-        assert_eq!(decoded.thing, 5);
+        assert_eq!(decoded.handle, 5);
         assert_eq!(decoded.length, 1920 * 1080 * 4);
     }
 }

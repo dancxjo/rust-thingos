@@ -65,7 +65,7 @@ impl BootFbDriver {
             len: size,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::PRIVATE,
-            backing: VmBacking::File { thing: handle.thing, offset: handle.offset },
+            backing: VmBacking::File { thing: handle.handle, offset: handle.offset },
         };
 
         let resp = vm_map(&req).map_err(|_| Errno::ENOMEM)?;
@@ -213,7 +213,8 @@ fn find_framebuffer() -> Option<Framebuffer> {
     if n < FB_INFO_PAYLOAD_SIZE {
         stem::warn!(
             "[BOOTFB] display_bootfb: /dev/fb0 info read too short: got {} bytes, need {}",
-            n, FB_INFO_PAYLOAD_SIZE
+            n,
+            FB_INFO_PAYLOAD_SIZE
         );
         let _ = vfs_close(fd);
         return None;

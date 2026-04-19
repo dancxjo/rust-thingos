@@ -18,7 +18,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 
 use abi::errors::{Errno, SysResult};
-use abi::syscall::{PollHandle, fcntl_cmd, poll_flags, handle_flags, vfs_flags};
+use abi::syscall::{PollHandle, fcntl_cmd, handle_flags, poll_flags, vfs_flags};
 
 use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
@@ -702,11 +702,15 @@ pub fn sys_fs_mount_ex(
     // so it can call SYS_port_send on it directly.
     let resp_write_handle = if let Some(provider_arc) = provider_pinfo {
         let mut lock = provider_arc.lock();
-        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcHandleMode::Write).ok_or(Errno::ENOMEM)?
+        lock.ipc_table
+            .alloc(resp_port.clone(), crate::ipc::IpcHandleMode::Write)
+            .ok_or(Errno::ENOMEM)?
     } else {
         // Fallback: use caller's table (legacy/compatibility)
         let mut lock = pinfo_arc.lock();
-        lock.ipc_table.alloc(resp_port.clone(), crate::ipc::IpcHandleMode::Write).ok_or(Errno::ENOMEM)?
+        lock.ipc_table
+            .alloc(resp_port.clone(), crate::ipc::IpcHandleMode::Write)
+            .ok_or(Errno::ENOMEM)?
     };
 
     let req_port_id = crate::ipc::find_port_id(&req_port).ok_or(Errno::EBADF)?;
@@ -758,7 +762,7 @@ pub fn sys_fs_bind(
     }
 
     vfs::mount::mount(&dst_path, driver, flags);
-    
+
     crate::kdebug!("vfs: bound {} to {} (flags: {:#x})", src_path, dst_path, flags);
     Ok(0)
 }
@@ -1838,7 +1842,7 @@ mod tests {
         let pinfo = make_process_info_with_nodes(&[]);
 
         let mut fds = [PollHandle {
-            thing: 99, // no such fd
+            handle: 99, // no such fd
             events: poll_flags::POLLIN,
             revents: 0,
         }];

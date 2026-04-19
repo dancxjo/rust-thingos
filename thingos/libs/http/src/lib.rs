@@ -6,17 +6,14 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
 
-use abi::syscall::{PollHandle, PollThing, poll_flags, poll_flags};
+use abi::syscall::{PollHandle, poll_flags};
 use embedded_io::ErrorKind;
 use embedded_tls::blocking::{
     Aes128GcmSha256, Aes256GcmSha384, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use stem::syscall::port::{
-    PortHandle, PortHandle, port_close, port_close, port_create, port_create, port_recv, port_recv,
-    port_send_all, port_send_all,
-};
+use stem::syscall::port::{PortHandle, port_close, port_create, port_recv, port_send_all};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 use stem::thread::spawn_task_detached;
 use stem::{debug, info, warn};

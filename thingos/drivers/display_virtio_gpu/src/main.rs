@@ -10,12 +10,12 @@ use abi::display::{
     PlaneCommit, PlaneId,
 };
 use abi::display_driver_protocol as drvproto;
+use abi::driver_frame::FrameReader;
 use abi::driver_interface::{
-    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
+    DriverStartContext, ProbeResult, Status,
 };
 use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader};
-use abi::driver_frame::FrameReader;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::syscall::{PortHandle, port_create, port_send};
 use stem::{info, warn};
@@ -217,7 +217,7 @@ fn send_msg(handle: PortHandle, msg_type: u16, payload: &[u8]) {
             // Bridge the handle to a VFS FD for FD-first write-readiness polling.
             if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(handle) {
                 let mut pollfds = [abi::syscall::PollHandle {
-                    thing: fd as i32,
+                    handle: fd as i32,
                     events: abi::syscall::poll_flags::POLLOUT,
                     revents: 0,
                 }];
@@ -341,9 +341,12 @@ fn main(boot_arg: usize) -> ! {
     stem::info!("display_virtio_gpu: starting v0.4.1 (boot_arg={})", boot_arg);
 
     if boot_arg == 0 {
-        stem::error!("display_virtio_gpu: No boot argument provided! Standard driver entry required.");
+        stem::error!(
+            "display_virtio_gpu: No boot argument provided! Standard driver entry required."
+        );
         stem::syscall::exit(1);
-    }    stem::info!("display_virtio_gpu: Starting VFS-native VirtIO GPU driver...");
+    }
+    stem::info!("display_virtio_gpu: Starting VFS-native VirtIO GPU driver...");
     stem::info!("display_virtio_gpu: boot_arg={}", boot_arg);
 
     let mut drv_req_read = 0;
@@ -384,7 +387,11 @@ fn main(boot_arg: usize) -> ! {
             );
         }
         Err(e) => {
-            stem::info!("display_virtio_gpu: ERROR: Failed to vm_map bootstrap memfd {}: {:?}", boot_arg, e);
+            stem::info!(
+                "display_virtio_gpu: ERROR: Failed to vm_map bootstrap memfd {}: {:?}",
+                boot_arg,
+                e
+            );
         }
     }
 
@@ -769,7 +776,7 @@ fn main(boot_arg: usize) -> ! {
                                                 prot: abi::vm::VmProt::READ | abi::vm::VmProt::USER,
                                                 flags: abi::vm::VmMapFlags::PRIVATE,
                                                 backing: abi::vm::VmBacking::File {
-                                                    thing: handle.thing,
+                                                    thing: handle.handle,
                                                     offset: handle.offset,
                                                 },
                                             };
@@ -1080,7 +1087,7 @@ fn main(boot_arg: usize) -> ! {
                     next_buffer_idx = (next_buffer_idx + 1) % frame_pool_buffers.len();
 
                     let acquired = drvproto::AcquiredPayload {
-                        thing: frame_pool_buffers[idx].fd,
+                        handle: frame_pool_buffers[idx].fd,
                         _pad1: 0,
                         width: disp_width,
                         height: disp_height,
