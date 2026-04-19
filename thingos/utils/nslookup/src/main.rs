@@ -227,9 +227,15 @@ fn lookup(name: &str, server_ip: &str) -> Result<Vec<[u8; 4]>, &'static str> {
         let _ = vfs_close(fd);
 
         match read_result {
-            Ok(n) if n >= 5 => {
-                // First 4 bytes are the length prefix
-                let payload = &buf[4..n];
+            Ok(n) if n >= 10 => {
+                // /net/udp/<id>/data read format:
+                // [4: src_ipv4][2: src_port_le][4: payload_len_le][payload]
+                let payload_len =
+                    u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]) as usize;
+                if n < 10 + payload_len {
+                    return Err("short udp response");
+                }
+                let payload = &buf[10..10 + payload_len];
                 let addrs = parse_dns_response(payload);
                 return Ok(addrs);
             }
