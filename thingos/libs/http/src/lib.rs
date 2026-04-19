@@ -842,4 +842,26 @@ mod tests {
         assert_eq!(https.port, 8443);
         assert_eq!(https.path, "/secure");
     }
+
+    #[test]
+    fn test_poll_sleep_slice_ms_thresholds() {
+        assert_eq!(poll_sleep_slice_ms(0, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_EARLY_MS);
+        assert_eq!(poll_sleep_slice_ms(19, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_EARLY_MS);
+        assert_eq!(poll_sleep_slice_ms(20, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_MEDIUM_MS);
+        assert_eq!(poll_sleep_slice_ms(199, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_MEDIUM_MS);
+        assert_eq!(poll_sleep_slice_ms(200, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_LATE_MS);
+        assert_eq!(poll_sleep_slice_ms(IO_POLL_TIMEOUT_MS - 1, IO_POLL_TIMEOUT_MS), 1);
+        assert_eq!(poll_sleep_slice_ms(IO_POLL_TIMEOUT_MS, IO_POLL_TIMEOUT_MS), 0);
+    }
+
+    #[test]
+    fn test_should_refresh_tcp_state() {
+        assert!(should_refresh_tcp_state(None));
+        assert!(should_refresh_tcp_state(Some(TcpConnectState::Created)));
+        assert!(should_refresh_tcp_state(Some(TcpConnectState::Connecting)));
+        assert!(!should_refresh_tcp_state(Some(TcpConnectState::Connected)));
+        assert!(!should_refresh_tcp_state(Some(TcpConnectState::CloseWait)));
+        assert!(should_refresh_tcp_state(Some(TcpConnectState::Closed)));
+        assert!(should_refresh_tcp_state(Some(TcpConnectState::Other)));
+    }
 }
