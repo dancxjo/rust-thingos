@@ -23,6 +23,7 @@ mod vfs_device;
 mod vfs_provider;
 
 use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
+use abi::syscall::{poll_flags, PollHandle};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
@@ -199,14 +200,35 @@ fn main(arg: usize) -> ! {
         socket_api.gc_closed_sockets(&mut socket_set);
 
         if !did_work {
-            let mut pollfds = [abi::syscall::PollHandle {
-                thing: req_fd as i32,
-                events: abi::syscall::poll_flags::POLLIN,
-                revents: 0,
-            }];
-            let _ = stem::syscall::vfs::vfs_poll(&mut pollfds, 1);
+            let mut pollfds = idle_pollfds(req_fd, events_fd);
+            if stem::syscall::vfs::vfs_poll(&mut pollfds, 1).unwrap_or(0) > 0 {
+                if (pollfds[1].revents & poll_flags::POLLIN) != 0 {
+                    let now = VfsNicDevice::now();
+                    let _ = iface.poll(now, &mut device, &mut socket_set);
+                }
+
+                if (pollfds[0].revents & poll_flags::POLLIN) != 0 {
+                    net_provider
+                        .drain_rpcs(&mut iface, &mut device, &mut socket_set, &mut socket_api);
+                }
+            }
         }
     }
+}
+
+fn idle_pollfds(req_fd: u32, events_fd: u32) -> [PollHandle; 2] {
+    [
+        PollHandle {
+            handle: req_fd as i32,
+            events: poll_flags::POLLIN,
+            revents: 0,
+        },
+        PollHandle {
+            handle: events_fd as i32,
+            events: poll_flags::POLLIN,
+            revents: 0,
+        },
+    ]
 }
 
 /// Open a virtio NIC device fileset, retrying until any `/dev/net/virtioN`
@@ -380,5 +402,14 @@ mod tests {
         // Trimming whitespace around each octet should work
         let mac = parse_mac("52:54: 00:12:34:56").unwrap();
         assert_eq!(mac, [0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn test_idle_pollfds_includes_request_and_events() {
+        let pollfds = idle_pollfds(11, 22);
+        assert_eq!(pollfds[0].handle, 11);
+        assert_eq!(pollfds[1].handle, 22);
+        assert_eq!(pollfds[0].events, poll_flags::POLLIN);
+        assert_eq!(pollfds[1].events, poll_flags::POLLIN);
     }
 }
