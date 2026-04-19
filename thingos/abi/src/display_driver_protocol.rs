@@ -279,12 +279,7 @@ pub fn parse_message(buf: &[u8]) -> Option<(DriverHeader, &[u8])> {
         return None;
     }
 
-    let header = DriverHeader {
-        magic,
-        version,
-        msg_type,
-        payload_len,
-    };
+    let header = DriverHeader { magic, version, msg_type, payload_len };
 
     Some((header, &buf[HEADER_SIZE..total]))
 }
@@ -500,9 +495,7 @@ pub fn decode_err_resp_le(buf: &[u8]) -> Option<ErrResp> {
     if buf.len() < ERR_RESP_WIRE_SIZE {
         return None;
     }
-    Some(ErrResp {
-        code: u32::from_le_bytes(buf[0..4].try_into().ok()?),
-    })
+    Some(ErrResp { code: u32::from_le_bytes(buf[0..4].try_into().ok()?) })
 }
 
 pub fn encode_offer_framebuffer_payload_le(
@@ -512,7 +505,7 @@ pub fn encode_offer_framebuffer_payload_le(
     if out.len() < OFFER_FRAMEBUFFER_PAYLOAD_WIRE_SIZE {
         return None;
     }
-    out[0..4].copy_from_slice(&payload.thing.to_le_bytes());
+    out[0..4].copy_from_slice(&payload.handle.to_le_bytes());
     out[4..8].copy_from_slice(&payload._pad.to_le_bytes());
     out[8..12].copy_from_slice(&payload.width.to_le_bytes());
     out[12..16].copy_from_slice(&payload.height.to_le_bytes());
@@ -526,7 +519,7 @@ pub fn decode_offer_framebuffer_payload_le(buf: &[u8]) -> Option<OfferFramebuffe
         return None;
     }
     Some(OfferFramebufferPayload {
-        thing: u32::from_le_bytes(buf[0..4].try_into().ok()?),
+        handle: u32::from_le_bytes(buf[0..4].try_into().ok()?),
         _pad: u32::from_le_bytes(buf[4..8].try_into().ok()?),
         width: u32::from_le_bytes(buf[8..12].try_into().ok()?),
         height: u32::from_le_bytes(buf[12..16].try_into().ok()?),
@@ -561,7 +554,7 @@ pub fn encode_acquired_payload_le(payload: &AcquiredPayload, out: &mut [u8]) -> 
     if out.len() < ACQUIRED_PAYLOAD_WIRE_SIZE {
         return None;
     }
-    out[0..4].copy_from_slice(&payload.thing.to_le_bytes());
+    out[0..4].copy_from_slice(&payload.handle.to_le_bytes());
     out[4..8].copy_from_slice(&payload._pad1.to_le_bytes());
     out[8..12].copy_from_slice(&payload.width.to_le_bytes());
     out[12..16].copy_from_slice(&payload.height.to_le_bytes());
@@ -577,7 +570,7 @@ pub fn decode_acquired_payload_le(buf: &[u8]) -> Option<AcquiredPayload> {
         return None;
     }
     Some(AcquiredPayload {
-        thing: u32::from_le_bytes(buf[0..4].try_into().ok()?),
+        handle: u32::from_le_bytes(buf[0..4].try_into().ok()?),
         _pad1: u32::from_le_bytes(buf[4..8].try_into().ok()?),
         width: u32::from_le_bytes(buf[8..12].try_into().ok()?),
         height: u32::from_le_bytes(buf[12..16].try_into().ok()?),

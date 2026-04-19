@@ -90,11 +90,7 @@ impl SharedMemoryRef {
     /// Create a new descriptor.
     #[inline]
     pub const fn new(thing: u32, length: u64) -> Self {
-        Self {
-            thing,
-            _pad: 0,
-            length,
-        }
+        Self { handle: thing, _pad: 0, length }
     }
 
     /// Encode to little-endian bytes.  Returns the number of bytes written, or
@@ -103,7 +99,7 @@ impl SharedMemoryRef {
         if out.len() < SHARED_MEMORY_REF_WIRE_SIZE {
             return None;
         }
-        out[0..4].copy_from_slice(&self.thing.to_le_bytes());
+        out[0..4].copy_from_slice(&self.handle.to_le_bytes());
         out[4..8].copy_from_slice(&self._pad.to_le_bytes());
         out[8..16].copy_from_slice(&self.length.to_le_bytes());
         Some(SHARED_MEMORY_REF_WIRE_SIZE)
@@ -117,10 +113,10 @@ impl SharedMemoryRef {
         // SAFETY: the length check above guarantees these sub-slices are
         // exactly 4 / 4 / 8 bytes, so the fixed-size array conversions below
         // cannot fail.
-        let thing = u32::from_le_bytes(src[0..4].try_into().unwrap());
+        let handle = u32::from_le_bytes(src[0..4].try_into().unwrap());
         let _pad = u32::from_le_bytes(src[4..8].try_into().unwrap());
         let length = u64::from_le_bytes(src[8..16].try_into().unwrap());
-        Some(Self { thing, _pad, length })
+        Some(Self { handle, _pad, length })
     }
 }
 
@@ -142,7 +138,7 @@ mod tests {
         assert_eq!(written, SHARED_MEMORY_REF_WIRE_SIZE);
 
         let decoded = SharedMemoryRef::decode_le(&buf).unwrap();
-        assert_eq!(decoded.thing, 7);
+        assert_eq!(decoded.handle, 7);
         assert_eq!(decoded._pad, 0);
         assert_eq!(decoded.length, 0x0001_0000);
     }
