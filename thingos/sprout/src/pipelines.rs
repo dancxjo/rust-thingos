@@ -265,13 +265,109 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
 // Storage, Network, and Audio are now handled by cambium
 
 pub fn setup_display_pipeline(
-    _shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
-    _supervisor_port: stem::syscall::PortHandle,
-    _bind_instance_id: u64,
-    _force_bootfb: bool,
+    shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
+    supervisor_port: stem::syscall::PortHandle,
+    bind_instance_id: u64,
+    force_bootfb: bool,
 ) -> Option<DisplayHandles> {
-    info!("SPROUT: Display driver startup is disabled (network-only mode)");
-    None
+    let (width, height, stride, format) = probe_bootfb_vfs()?;
+
+    let driver_path = if force_bootfb || !file_exists("/drivers/display_virtio_gpu") {
+        "/drivers/display_bootfb"
+    } else {
+        "/drivers/display_virtio_gpu"
+    };
+
+    // Supervisor -> driver requests.
+    let (drv_req_write, drv_req_read) = match port_create(4096) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("SPROUT: Failed to create display request port: {:?}", e);
+            return None;
+        }
+    };
+
+    // Driver -> supervisor responses.
+    let (drv_resp_write, drv_resp_read) = match port_create(4096) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("SPROUT: Failed to create display response port: {:?}", e);
+            return None;
+        }
+    };
+
+    let boot_size = 4096;
+    let boot_fd = match stem::syscall::memfd_create("display.boot", boot_size) {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("SPROUT: Failed to create display bootstrap memfd: {:?}", e);
+            return None;
+        }
+    };
+
+    use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
+    let req = VmMapReq {
+        addr_hint: 0,
+        len: boot_size,
+        prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
+        flags: VmMapFlags::empty(),
+        backing: VmBacking::File { thing: boot_fd, offset: 0 },
+    };
+    let map = match stem::syscall::vm_map(&req) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("SPROUT: Failed to map display bootstrap memfd: {:?}", e);
+            return None;
+        }
+    };
+
+    let words = unsafe { core::slice::from_raw_parts_mut(map.addr as *mut u32, boot_size / 4) };
+    words[0] = drv_req_read;
+    words[1] = drv_resp_write;
+    words[2] = supervisor_port;
+    words[3] = (bind_instance_id & 0xffff_ffff) as u32;
+    words[4] = ((bind_instance_id >> 32) & 0xffff_ffff) as u32;
+
+    info!(
+        "SPROUT: Launching display driver '{}' (boot_fd={}, bind_id={})",
+        driver_path, boot_fd, bind_instance_id
+    );
+    let pid = match stem::syscall::spawn_process(driver_path, boot_fd as usize) {
+        Ok(pid) => pid,
+        Err(e) => {
+            warn!("SPROUT: Failed to spawn display driver '{}': {:?}", driver_path, e);
+            return None;
+        }
+    };
+
+    {
+        let mut tasks = shared_tasks.lock();
+        tasks.push(ManagedTask {
+            name: "display".to_string(),
+            kind: TaskKind::Service("svc.display".to_string()),
+            module_path: driver_path.to_string(),
+            pid: Some(pid),
+            restarts: 0,
+            spawn_arg: boot_fd as usize,
+            bind_instance_id: bind_instance_id as usize,
+            drv_req_write,
+            drv_resp_read,
+            boot_req_read: 0,
+            boot_resp_write: 0,
+            resp_fd: None,
+        });
+    }
+
+    Some(DisplayHandles {
+        drv_req_write,
+        drv_resp_read,
+        bs_id: 0,
+        backend_name: if driver_path.ends_with("bootfb") { "bootfb" } else { "virtio_gpu" },
+        width,
+        height,
+        stride,
+        format,
+    })
 }
 
 pub fn setup_terminal(
@@ -514,11 +610,38 @@ pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 
 pub fn setup_graphics_stack(
     shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
-    _display: Option<DisplayHandles>,
+    display: Option<DisplayHandles>,
     _input: InputHandles,
 ) {
-    let _ = shared_tasks;
-    info!("SPROUT: Bloom launch is temporarily disabled in setup_graphics_stack");
+    if display.is_none() {
+        warn!("SPROUT: Graphics stack skipped because no display handle was established");
+        return;
+    }
+
+    match stem::syscall::spawn_process("/bin/bloom", 0) {
+        Ok(pid) => {
+            info!("SPROUT: Spawned bloom (PID={})", pid);
+            let _ = stem::thread::set_priority(pid, 2);
+            let mut tasks = shared_tasks.lock();
+            tasks.push(ManagedTask {
+                name: "bloom".to_string(),
+                kind: TaskKind::Service("svc.bloom".to_string()),
+                module_path: "/bin/bloom".to_string(),
+                pid: Some(pid),
+                restarts: 0,
+                spawn_arg: 0,
+                bind_instance_id: 0,
+                drv_req_write: 0,
+                drv_resp_read: 0,
+                boot_req_read: 0,
+                boot_resp_write: 0,
+                resp_fd: None,
+            });
+        }
+        Err(e) => {
+            warn!("SPROUT: Failed to spawn bloom: {:?}", e);
+        }
+    }
 }
 
 pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
