@@ -78,7 +78,7 @@ fn print_usage() {
 }
 
 fn mount_all_from_fstab(path: &str) -> i32 {
-    let Ok(data) = read_file(path, 64 * 1024) else {
+    let Some(data) = read_file(path, 64 * 1024) else {
         err("mount: cannot read /etc/fstab\n");
         return 1;
     };
