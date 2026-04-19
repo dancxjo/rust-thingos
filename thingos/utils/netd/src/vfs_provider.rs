@@ -251,8 +251,7 @@ impl NetVfsProvider {
         // If a DNS lookup was requested, resolve it now (synchronously in netd).
         if self.dns_result.is_none() {
             if let Some(hostname) = self.dns_pending.take() {
-                if let Some(dns_ip) = self.ip_config.as_ref().map(|c| c.gateway) {
-                    // Use gateway as DNS server if not configured separately.
+                if let Some(dns_ip) = self.effective_dns_server() {
                     match crate::dns::lookup_a(iface, device, dns_ip, &hostname) {
                         Ok(ip) => {
                             let b = ip.as_bytes();
@@ -1572,6 +1571,16 @@ impl NetVfsProvider {
             None => "0.0.0.0\n".into(),
         }
     }
+
+    fn effective_dns_server(&self) -> Option<Ipv4Address> {
+        self.ip_config.as_ref().map(|cfg| {
+            if cfg.dns_server != Ipv4Address::UNSPECIFIED {
+                cfg.dns_server
+            } else {
+                cfg.gateway
+            }
+        })
+    }
 }
 
 // ── Result types ─────────────────────────────────────────────────────────────
@@ -1593,6 +1602,58 @@ impl ReadResult {
         } else {
             ReadResult::Data(bytes[off..].to_vec())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IpConfig, NetVfsProvider};
+    use smoltcp::wire::Ipv4Address;
+
+    fn provider_with_config(dns_server: Ipv4Address, gateway: Ipv4Address) -> NetVfsProvider {
+        NetVfsProvider {
+            req_read: 0,
+            mac: [0; 6],
+            mtu: 1500,
+            link_up: true,
+            ip_config: Some(IpConfig {
+                ip: Ipv4Address::new(10, 0, 2, 15),
+                prefix_len: 24,
+                gateway,
+                dns_server,
+            }),
+            rx_bytes: 0,
+            tx_bytes: 0,
+            rx_packets: 0,
+            tx_packets: 0,
+            req_buf: alloc::vec![0u8; 32],
+            dns_pending: None,
+            dns_result: None,
+        }
+    }
+
+    #[test]
+    fn effective_dns_server_prefers_configured_dns() {
+        let provider = provider_with_config(
+            Ipv4Address::new(1, 1, 1, 1),
+            Ipv4Address::new(10, 0, 2, 2),
+        );
+        assert_eq!(
+            provider.effective_dns_server(),
+            Some(Ipv4Address::new(1, 1, 1, 1))
+        );
+    }
+
+    #[test]
+    fn effective_dns_server_falls_back_to_gateway() {
+        let provider = provider_with_config(
+            Ipv4Address::UNSPECIFIED,
+            Ipv4Address::new(10, 0, 2, 2),
+        );
+        assert_eq!(
+            provider.effective_dns_server(),
+            Some(Ipv4Address::new(10, 0, 2, 2))
+        );
     }
 }
 

@@ -9,6 +9,7 @@ use smoltcp::phy::Device;
 use smoltcp::socket::udp::{self, PacketMetadata, Socket as UdpSocket};
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
+use stem::warn;
 
 fn now() -> Instant {
     Instant::from_millis(stem::time::now().as_millis() as i64)
@@ -68,13 +69,19 @@ pub fn lookup_a<D: Device>(
 
         let socket = socket_set.get_mut::<UdpSocket>(udp_handle);
         if !sent && socket.can_send() {
-            let _ = socket.send_slice(&query, endpoint);
-            sent = true;
-            stem::info!(
-                "DNS: Query sent to {}:53 (txid=0x1234, {} bytes)",
-                dns_server,
-                query.len()
-            );
+            match socket.send_slice(&query, endpoint) {
+                Ok(()) => {
+                    sent = true;
+                    stem::info!(
+                        "DNS: Query sent to {}:53 (txid=0x1234, {} bytes)",
+                        dns_server,
+                        query.len()
+                    );
+                }
+                Err(e) => {
+                    warn!("DNS: Failed to send query to {}:53: {:?}", dns_server, e);
+                }
+            }
         }
 
         if socket.can_recv() {
