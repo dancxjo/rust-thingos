@@ -1,14 +1,14 @@
 # Platform Layer Contract
 
-This document defines the formal boundary between Thing-OS applications and the underlying platform, enforcing the principle that **stem is our std**.
+This document defines the formal boundary between Thing-OS applications and the underlying platform for a repository that **builds and customizes Rust `std`** while also maintaining an explicit **stem PAL** for low-level platform primitives.
 
 ## Overview
 
-Thing-OS does not use Rust's standard library (`std`). Instead, we provide platform capabilities through the **stem** crate, which builds on `core` and `alloc` with our own platform abstraction layer (`stem::pal`).
+Thing-OS is a fork of Rust that includes `compiler/` and `library/` at the repository root so we can ship Thing-OS-specific `std` behavior. In parallel, we provide platform capabilities through the **stem** crate, which builds on `core` and `alloc` with our platform abstraction layer (`stem::pal`).
 
 ### Why This Matters
 
-- **Sustainability**: We can evolve platform APIs without forking rustc/Rust's std
+- **Sustainability**: We can evolve both Thing-OS `std` and PAL interfaces in-repo
 - **Safety**: Enforced boundary prevents accidental std contamination
 - **Clarity**: Platform capabilities are explicit and documented
 - **Incremental**: New platform features are added intentionally, not accidentally
@@ -42,26 +42,27 @@ To keep this failure mode explicit, Thing-OS runtime code emits a compile-time d
 1. **Explicit over implicit**: All platform capabilities must go through PAL
 2. **Minimal and stable**: Only essential primitives are exposed
 3. **Replaceable**: Implementations can be swapped without breaking consumers
-4. **No std leakage**: Ensures `no_std` compliance throughout
+4. **Clear boundary**: Platform-specific behavior should stay explicit even when `std` is available
 
 ## What's Allowed Where
 
 ### Kernel and Userspace (Runtime Code)
 
-**MUST use:**
+**Preferred building blocks:**
 - `core` - Rust's core library (no allocator, no platform)
 - `alloc` - Rust's allocator library (requires our global allocator)
 - `stem` - Our platform layer (includes `stem::pal`)
 - `abi` - Shared types and syscall interfaces
+- Thing-OS `std` (when appropriate for crate role and target behavior)
 
-**MUST NOT use:**
-- `std` - Rust's standard library
-- Any crate that transitively depends on `std`
+**Boundary guidance:**
+- Kernel and low-level runtime crates should keep explicit platform boundaries and often remain `no_std`.
+- Higher-level runtime crates may use Thing-OS `std` when that improves correctness, compatibility, or maintainability.
+- Avoid accidental host-std assumptions; prefer target-aware APIs and explicit OS integration points.
 
 **How it's enforced:**
-- `#![no_std]` attribute in every kernel/userspace crate
-- `scripts/audit_platform_boundary.py` verifies compliance
-- CI runs the audit on every commit
+- `scripts/audit_platform_boundary.py` verifies the currently configured boundary policy
+- CI/project checks may enforce additional crate-specific constraints
 
 ### Build Tools (Compile-time Code)
 
@@ -212,24 +213,21 @@ mod tests {
 
 ### Automated Audit
 
-Run the platform boundary audit:
+Run the platform boundary audit when working on boundary-sensitive crates:
 
 ```bash
 python3 scripts/audit_platform_boundary.py
 ```
 
-This script:
-- Verifies all kernel/userspace crates have `#![no_std]`
-- Lists allowed std-using crates (build tools)
-- Fails CI if violations are detected
+This script validates the repository's current boundary policy and reports violations.
 
 ### Manual Review
 
 When reviewing code:
-- ✅ New `use stem::pal::*` - Good, using the platform layer
-- ✅ New `use core::*` or `use alloc::*` - Fine
-- ❌ New `use std::*` in kernel/userspace - **REJECT**
-- ❌ Missing `#![no_std]` in new userspace crate - **REJECT**
+- ✅ New `use stem::pal::*` in low-level/platform code - Good, explicit boundary
+- ✅ New `use std::*` in crates intended to run with Thing-OS `std` - Acceptable
+- ❌ Host-only assumptions leaking into Thing-OS runtime code - **REJECT**
+- ❌ Platform behavior hidden behind unrelated abstractions - **REJECT**
 
 ## Current Platform Surface
 
@@ -268,10 +266,10 @@ Example progression:
 ## FAQ
 
 **Q: Can I use std in my userspace app?**  
-A: No. Use `stem` instead. It provides logging, time, alloc, and more.
+A: Yes, when the crate is intended to run with Thing-OS `std`. Use `stem::pal` (or stem wrappers) for explicit platform primitives and low-level boundaries.
 
 **Q: What if I need threading/async/sockets?**  
-A: Add them to `stem::pal` first, then build ergonomic APIs on top in stem.
+A: If this is a low-level/platform contract, add or extend `stem::pal`. If this is higher-level runtime behavior, using Thing-OS `std` APIs can be appropriate.
 
 **Q: Can build tools use std?**  
 A: Yes! `xtask` and crates under `tools/` can use std freely.

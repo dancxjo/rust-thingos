@@ -4,11 +4,13 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::fmt::Write;
+use core::fmt::{self, Write};
 
-use abi::syscall::{poll_flags, PollThing};
+use abi::syscall::{PollThing, poll_flags};
 use embedded_io::ErrorKind;
-use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
+use embedded_tls::blocking::{
+    Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
+};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
@@ -65,33 +67,93 @@ pub struct TcpStream {
     ctl_fd: u32,
 }
 
+fn resolve_host_ipv4(host: &str) -> Result<[u8; 4], String> {
+    use abi::errors::Errno;
+    use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR};
+    use stem::syscall::{monotonic_ns, sleep_ms};
+
+    if let Ok(ip) = parse_ipv4(host) {
+        return Ok(ip);
+    }
+
+    if host.contains(':') || host.starts_with('[') {
+        return Err("ipv6 hostnames are not supported".to_string());
+    }
+
+    let lookup_fd = vfs_open("/net/dns/lookup", O_RDWR)
+        .map_err(|e| format!("failed to open /net/dns/lookup: {:?}", e))?;
+    if let Err(e) = vfs_write(lookup_fd, host.as_bytes()) {
+        let _ = vfs_close(lookup_fd);
+        return Err(format!("dns lookup request failed: {:?}", e));
+    }
+    let _ = vfs_close(lookup_fd);
+
+    let deadline_ns = monotonic_ns().saturating_add(CONNECT_TIMEOUT_MS.saturating_mul(1_000_000));
+    let mut buf = [0u8; 64];
+    loop {
+        let read_fd = vfs_open("/net/dns/lookup", O_RDONLY | O_NONBLOCK)
+            .map_err(|e| format!("failed to reopen /net/dns/lookup: {:?}", e))?;
+        let read_result = vfs_read(read_fd, &mut buf);
+        let _ = vfs_close(read_fd);
+
+        match read_result {
+            Ok(n) if n > 0 => {
+                let text = core::str::from_utf8(&buf[..n])
+                    .map_err(|_| "dns lookup returned invalid UTF-8".to_string())?
+                    .trim();
+                return parse_ipv4(text)
+                    .map_err(|_| format!("dns lookup returned invalid IPv4 '{}': {}", host, text));
+            }
+            Ok(_) | Err(Errno::EAGAIN) => {
+                if monotonic_ns() >= deadline_ns {
+                    return Err(format!("dns lookup timed out for host {}", host));
+                }
+                sleep_ms(50);
+            }
+            Err(e) => return Err(format!("dns lookup failed for host {}: {:?}", host, e)),
+        }
+    }
+}
+
 impl TcpStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, String> {
         use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 
         info!("http: connect host={} port={}", host, port);
+        let remote_ip = resolve_host_ipv4(host)?;
+        info!(
+            "http: connect resolved host={} to {}.{}.{}.{}",
+            host, remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3]
+        );
 
         // 1. Allocate a new TCP socket via /net/tcp/new
-        let new_fd = vfs_open("/net/tcp/new", O_RDONLY).map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
+        let new_fd = vfs_open("/net/tcp/new", O_RDONLY)
+            .map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
         let mut buf = [0u8; 16];
-        let n = vfs_read(new_fd, &mut buf).map_err(|e| format!("failed to read socket id: {:?}", e))?;
+        let n =
+            vfs_read(new_fd, &mut buf).map_err(|e| format!("failed to read socket id: {:?}", e))?;
         let _ = vfs_close(new_fd);
 
-        let socket_id = core::str::from_utf8(&buf[..n])
-            .map_err(|_| "invalid socket id encoding")?
-            .trim();
+        let socket_id =
+            core::str::from_utf8(&buf[..n]).map_err(|_| "invalid socket id encoding")?.trim();
         info!("http: allocated tcp socket id={}", socket_id);
 
         // 2. Open ctl and data files
         let ctl_path = format!("/net/tcp/{}/ctl", socket_id);
         let data_path = format!("/net/tcp/{}/data", socket_id);
 
-        let ctl_fd = vfs_open(&ctl_path, O_RDWR).map_err(|e| format!("failed to open ctl: {:?}", e))?;
-        let data_fd = vfs_open(&data_path, O_RDWR).map_err(|e| format!("failed to open data: {:?}", e))?;
+        let ctl_fd =
+            vfs_open(&ctl_path, O_RDWR).map_err(|e| format!("failed to open ctl: {:?}", e))?;
+        let data_fd =
+            vfs_open(&data_path, O_RDWR).map_err(|e| format!("failed to open data: {:?}", e))?;
 
         // 3. Connect via ctl file
-        let conn_cmd = format!("connect {} {}", host, port);
-        vfs_write(ctl_fd, conn_cmd.as_bytes()).map_err(|e| format!("connect command failed: {:?}", e))?;
+        let conn_cmd = format!(
+            "connect {}.{}.{}.{} {}",
+            remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], port
+        );
+        vfs_write(ctl_fd, conn_cmd.as_bytes())
+            .map_err(|e| format!("connect command failed: {:?}", e))?;
 
         info!("http: connect command issued for socket id={}", socket_id);
 
@@ -107,7 +169,10 @@ impl TcpStream {
                 TcpConnectState::Closed => {
                     let _ = vfs_close(data_fd);
                     let _ = vfs_close(ctl_fd);
-                    return Err(format!("connect failed: socket {} closed before establishment", socket_id));
+                    return Err(format!(
+                        "connect failed: socket {} closed before establishment",
+                        socket_id
+                    ));
                 }
                 _ => {}
             }
@@ -122,18 +187,11 @@ impl TcpStream {
             }
 
             let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-            let mut pollfd = [PollThing {
-                thing: data_fd as i32,
-                events: poll_flags::POLLOUT,
-                revents: 0,
-            }];
+            let mut pollfd =
+                [PollThing { thing: data_fd as i32, events: poll_flags::POLLOUT, revents: 0 }];
             let ready = vfs_poll(&mut pollfd, slice_ms)
                 .map_err(|e| format!("poll failed while waiting for connect: {:?}", e))?;
-            info!(
-                "http: connect poll ready_count={} revents=0x{:x}",
-                ready,
-                pollfd[0].revents
-            );
+            info!("http: connect poll ready_count={} revents=0x{:x}", ready, pollfd[0].revents);
             waited_ms += slice_ms;
         }
 
@@ -170,8 +228,7 @@ impl TcpStream {
                         .map_err(|e| format!("poll failed while waiting for read: {:?}", e))?;
                     info!(
                         "http: poll result ready_count={} revents=0x{:x}",
-                        ready,
-                        pollfd[0].revents
+                        ready, pollfd[0].revents
                     );
                     waited_ms += slice_ms;
                 }
@@ -210,29 +267,19 @@ fn parse_url(url: &str) -> Result<ParsedUrl, String> {
         return Err("unsupported URL scheme".to_string());
     };
 
-    let (host_port, path) = if let Some(idx) = rest.find('/') {
-        (&rest[..idx], &rest[idx..])
-    } else {
-        (rest, "/")
-    };
+    let (host_port, path) =
+        if let Some(idx) = rest.find('/') { (&rest[..idx], &rest[idx..]) } else { (rest, "/") };
 
     let (host, port) = if let Some(idx) = host_port.find(':') {
         (
             &host_port[..idx],
-                host_port[idx + 1..]
-                    .parse::<u16>()
-                    .map_err(|_| "invalid port".to_string())?,
+            host_port[idx + 1..].parse::<u16>().map_err(|_| "invalid port".to_string())?,
         )
     } else {
         (host_port, default_port)
     };
 
-    Ok(ParsedUrl {
-        scheme,
-        host: host.to_string(),
-        port,
-        path: path.to_string(),
-    })
+    Ok(ParsedUrl { scheme, host: host.to_string(), port, path: path.to_string() })
 }
 
 fn build_request(
@@ -271,6 +318,14 @@ fn build_tls_seed() -> Result<[u8; 32], String> {
 #[derive(Debug, Clone, Copy)]
 struct TcpTransportError(ErrorKind);
 
+impl fmt::Display for TcpTransportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+impl core::error::Error for TcpTransportError {}
+
 impl embedded_io::Error for TcpTransportError {
     fn kind(&self) -> ErrorKind {
         self.0
@@ -289,9 +344,7 @@ impl embedded_io::Read for TcpTransport {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         // The VFS socket API currently surfaces string errors here, so we map
         // into a conservative transport `Other` kind for embedded-io.
-        self.inner
-            .read(buf)
-            .map_err(|_| TcpTransportError(ErrorKind::Other))
+        self.inner.read(buf).map_err(|_| TcpTransportError(ErrorKind::Other))
     }
 }
 
@@ -299,9 +352,7 @@ impl embedded_io::Write for TcpTransport {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         // The VFS socket API currently surfaces string errors here, so we map
         // into a conservative transport `Other` kind for embedded-io.
-        self.inner
-            .write(buf)
-            .map_err(|_| TcpTransportError(ErrorKind::Other))
+        self.inner.write(buf).map_err(|_| TcpTransportError(ErrorKind::Other))
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
@@ -309,7 +360,9 @@ impl embedded_io::Write for TcpTransport {
     }
 }
 
-fn read_header_and_initial_body_from_tcp(stream: &mut TcpStream) -> Result<(Vec<u8>, usize), String> {
+fn read_header_and_initial_body_from_tcp(
+    stream: &mut TcpStream,
+) -> Result<(Vec<u8>, usize), String> {
     let mut buffer = Vec::new();
     let mut temp_buf = [0u8; 1024];
     let mut body_start = 0;
@@ -352,16 +405,11 @@ fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize
     let mut record_write_buf = [0u8; TLS_RECORD_WRITE_BUF_SIZE];
     let mut tls = TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
 
-    let config = TlsConfig::new()
-        .with_server_name(&url.host)
-        .enable_rsa_signatures();
+    let config = TlsConfig::new().with_server_name(&url.host).enable_rsa_signatures();
     let seed = build_tls_seed()?;
     let rng = ChaCha20Rng::from_seed(seed);
-    tls.open(TlsContext::new(
-        &config,
-        UnsecureProvider::new::<Aes128GcmSha256>(rng),
-    ))
-    .map_err(|e| format!("https handshake failed: {:?}", e))?;
+    tls.open(TlsContext::new(&config, UnsecureProvider::new::<Aes128GcmSha256>(rng)))
+        .map_err(|e| format!("https handshake failed: {:?}", e))?;
 
     let mut offset = 0usize;
     while offset < request.len() {
@@ -373,8 +421,7 @@ fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize
         }
         offset += written;
     }
-    tls.flush()
-        .map_err(|e| format!("https flush failed: {:?}", e))?;
+    tls.flush().map_err(|e| format!("https flush failed: {:?}", e))?;
 
     let mut response = Vec::with_capacity(8 * 1024);
     let mut buf = [0u8; 1024];
@@ -386,7 +433,9 @@ fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize
                 let kind = embedded_io::Error::kind(&e);
                 if matches!(
                     kind,
-                    ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
+                    ErrorKind::ConnectionAborted
+                        | ErrorKind::ConnectionReset
+                        | ErrorKind::BrokenPipe
                 ) {
                     debug!("http: https read terminated with transport error {:?}", kind);
                     break;
@@ -396,13 +445,9 @@ fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize
         }
     }
 
-    let body_start = find_subsequence(&response, b"\r\n\r\n")
-        .map(|idx| idx + 4)
-        .unwrap_or(0);
+    let body_start = find_subsequence(&response, b"\r\n\r\n").map(|idx| idx + 4).unwrap_or(0);
     Ok((response, body_start))
 }
-
-
 
 fn parse_ipv4(s: &str) -> Result<[u8; 4], ()> {
     let mut parts = s.split('.');
@@ -454,11 +499,7 @@ impl HttpClient {
         );
 
         let request_line_end = req.find("\r\n").unwrap_or(req.len());
-        info!(
-            "http: sending request bytes={} first_line={}",
-            req.len(),
-            &req[..request_line_end]
-        );
+        info!("http: sending request bytes={} first_line={}", req.len(), &req[..request_line_end]);
         let (stream, buffer, body_start) = match parsed.scheme {
             UrlScheme::Http => {
                 let mut stream = TcpStream::connect(&parsed.host, parsed.port)?;
@@ -472,11 +513,7 @@ impl HttpClient {
             }
         };
 
-        Ok(Response {
-            stream,
-            buffer,
-            cursor: body_start,
-        })
+        Ok(Response { stream, buffer, cursor: body_start })
     }
 }
 
@@ -519,9 +556,7 @@ impl Response {
 }
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    haystack.windows(needle.len()).position(|window| window == needle)
 }
 
 #[cfg(test)]

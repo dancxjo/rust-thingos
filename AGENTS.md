@@ -44,18 +44,18 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 - Runtime UI coordination should happen through mounted services and session/runtime files such as `/services`, `/run`, and `/session`.
 - Desktop background configuration lives at `/session/desktop/{wallpaper,mode,background_color}` and Bloom is expected to watch and react to those files.
 
-## Platform Layer Contract ("stem is our std")
+## Platform Layer Contract (std + stem PAL)
 
-**Thing-OS does not use Rust's `std`**. Instead:
+**Thing-OS is a Rust fork that builds and customizes `std` for Thing-OS targets.**
 
-- Kernel and userspace use `core` + `alloc` + `stem`
-- Platform capabilities are explicit in `stem::pal` (Platform Abstraction Layer)
-- Build tools (`xtask`, `tools/*`) can use `std` (they run at compile-time only)
+- The repository includes Rust `compiler/` and `library/` sources specifically so Thing-OS can evolve its own `std` behavior.
+- `stem::pal` remains the explicit platform abstraction for OS primitives and for crates that stay `no_std`.
+- Build tools (`xtask`, `tools/*`) can use `std` as host-side tooling.
 
 **Key rules:**
-- All kernel/userspace crates MUST have `#![no_std]`
-- Platform primitives go in `stem::pal` (log, clock, abort, alloc)
-- Run `python3 scripts/audit_platform_boundary.py` to verify compliance
+- Do not assume all runtime crates are `no_std`; choose `std` vs `no_std + stem` based on crate role and target constraints.
+- Kernel and other low-level/runtime-critical crates should continue to prefer explicit platform boundaries via `stem::pal`.
+- Run `python3 scripts/audit_platform_boundary.py` where boundary checks are expected by current project policy.
 
 **See `docs/platform.md` for the complete platform layer contract.**
 

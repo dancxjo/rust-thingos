@@ -2,11 +2,12 @@
 #![no_main]
 extern crate alloc;
 
-use abi::errors::Errno;
-use abi::vfs_rpc::VfsRpcOp;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+use abi::errors::Errno;
+use abi::vfs_rpc::VfsRpcOp;
 use http::{HttpClient, Response};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use stem::syscall::vfs::vfs_mount;
@@ -81,21 +82,16 @@ impl HttpsProvider {
 
         let rest = parts.collect::<Vec<_>>().join("/");
         let node = HttpsNode::new(host, &rest);
-        info!("httpsd: lookup '{}' probing {}", path, node.url());
-        let response = match HttpClient::get(&node.url()) {
-            Ok(response) => response,
-            Err(err) => {
-                warn!("httpsd: lookup '{}' probe failed: {}", path, err);
-                return Err(Errno::ENOENT);
-            }
-        };
-        let handle = self.allocate_node(host, &rest, Some(response));
+        // Keep lookup side-effect free: actual network I/O is deferred to read.
+        info!("httpsd: lookup '{}' -> staging {}", path, node.url());
+        let handle = self.allocate_node(host, &rest, None);
         info!("httpsd: lookup '{}' -> handle {}", path, handle);
         Ok(handle)
     }
 
     fn is_valid_host_label(host: &str) -> bool {
-        host.contains('.') && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        host.contains('.')
+            && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
     }
 
     fn read_node(&mut self, handle: u64, offset: usize, max_len: usize) -> Result<Vec<u8>, Errno> {
@@ -119,7 +115,12 @@ impl HttpsProvider {
         if state.response.is_none() && !state.eof {
             info!("httpsd: opening upstream stream for handle={} {}", handle, state.node.url());
             state.response = Some(HttpClient::get(&state.node.url()).map_err(|err| {
-                warn!("httpsd: upstream open failed for handle={} {}: {}", handle, state.node.url(), err);
+                warn!(
+                    "httpsd: upstream open failed for handle={} {}: {}",
+                    handle,
+                    state.node.url(),
+                    err
+                );
                 Errno::EIO
             })?);
         }
@@ -132,7 +133,12 @@ impl HttpsProvider {
             };
 
             let chunk = response.read_chunk().map_err(|err| {
-                warn!("httpsd: upstream read failed for handle={} {}: {}", handle, state.node.url(), err);
+                warn!(
+                    "httpsd: upstream read failed for handle={} {}: {}",
+                    handle,
+                    state.node.url(),
+                    err
+                );
                 Errno::EIO
             })?;
             if chunk.is_empty() {
