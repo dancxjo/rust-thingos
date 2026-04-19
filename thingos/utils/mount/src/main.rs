@@ -13,6 +13,10 @@ use abi::seed::{
 };
 use stem::syscall::{argv_get, exit, spawn_driver_ex, vfs_close, vfs_open, vfs_read, vfs_write};
 
+const MOUNT_VERIFICATION_ATTEMPTS: usize = 50;
+const MOUNT_VERIFICATION_DELAY_MS: u64 = 100;
+const READ_FILE_CHUNK_SIZE: usize = 1024;
+
 fn get_args() -> Vec<String> {
     let len = match argv_get(&mut []) {
         Ok(l) if l > 0 => l,
@@ -152,7 +156,11 @@ fn mount_one(fs_type: &str, target: &str) -> Result<(), Errno> {
         Some(&mount_sym),
     )?;
 
-    wait_for_mount(target, 50, 100);
+    wait_for_mount(
+        target,
+        MOUNT_VERIFICATION_ATTEMPTS,
+        MOUNT_VERIFICATION_DELAY_MS,
+    );
     out(&alloc::format!("mounted type={} target={}\n", fs_type, target));
     Ok(())
 }
@@ -203,7 +211,7 @@ fn path_exists(path: &str) -> bool {
 fn read_file(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
     let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
     let mut out = Vec::new();
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; READ_FILE_CHUNK_SIZE];
     loop {
         let n = vfs_read(fd, &mut buf).ok()?;
         if n == 0 {

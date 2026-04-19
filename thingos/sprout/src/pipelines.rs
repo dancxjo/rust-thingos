@@ -392,7 +392,7 @@ fn spawn_netd(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     }
 }
 
-fn spawn_https_mounts(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+fn apply_fstab_mounts() {
     if file_exists("/https") {
         info!("SPROUT: /https already mounted; skipping mount -a");
         return;
@@ -426,13 +426,12 @@ pub fn setup_network_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         spawn_netd(netd_tasks);
     });
 
-    let httpsd_tasks = shared_tasks;
     let _ = stem::thread::spawn_task(move || {
         stem::sleep_ms(500);
         info!("SPROUT: Waiting for /net/tcp/new before applying /etc/fstab mounts...");
         loop {
             if file_exists("/net/tcp/new") {
-                spawn_https_mounts(httpsd_tasks.clone());
+                apply_fstab_mounts();
                 break;
             }
             stem::sleep_ms(100);
@@ -493,7 +492,7 @@ pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         }
     }
 
-    spawn_https_mounts(shared_tasks.clone());
+    apply_fstab_mounts();
 }
 
 pub fn setup_taskman_service(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
