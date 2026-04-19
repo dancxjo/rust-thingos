@@ -8,7 +8,12 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use core::str::FromStr;
 
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};
+use abi::syscall::{poll_flags, PollThing};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
+use stem::{info, warn};
+
+const IO_POLL_TIMEOUT_MS: u64 = 5_000;
+const IO_POLL_SLICE_MS: u64 = 100;
 
 pub struct TcpStream {
     data_fd: u32,
@@ -19,6 +24,8 @@ impl TcpStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, String> {
         use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 
+        info!("http: connect host={} port={}", host, port);
+
         // 1. Allocate a new TCP socket via /net/tcp/new
         let new_fd = vfs_open("/net/tcp/new", O_RDONLY).map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
         let mut buf = [0u8; 16];
@@ -28,6 +35,7 @@ impl TcpStream {
         let socket_id = core::str::from_utf8(&buf[..n])
             .map_err(|_| "invalid socket id encoding")?
             .trim();
+        info!("http: allocated tcp socket id={}", socket_id);
 
         // 2. Open ctl and data files
         let ctl_path = format!("/net/tcp/{}/ctl", socket_id);
@@ -43,19 +51,48 @@ impl TcpStream {
         // Wait for connection to establish (poor man's poll/check for now)
         // In a real implementation we would poll status or events.
         stem::time::sleep_ms(100);
+        info!("http: connect command issued for socket id={}", socket_id);
 
         Ok(Self { data_fd, ctl_fd })
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<usize, String> {
+        info!("http: write {} bytes", data.len());
         vfs_write(self.data_fd, data).map_err(|e| format!("write failed: {:?}", e))
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
-        match vfs_read(self.data_fd, buf) {
-            Ok(n) => Ok(n),
-            Err(abi::errors::Errno::EAGAIN) => Ok(0),
-            Err(e) => Err(format!("read failed: {:?}", e)),
+        let mut waited_ms = 0;
+        loop {
+            match vfs_read(self.data_fd, buf) {
+                Ok(n) => {
+                    info!("http: read returned {} bytes after waiting {} ms", n, waited_ms);
+                    return Ok(n);
+                }
+                Err(abi::errors::Errno::EAGAIN) => {
+                    if waited_ms >= IO_POLL_TIMEOUT_MS {
+                        warn!("http: read timed out after {} ms", waited_ms);
+                        return Err("read timed out waiting for socket data".to_string());
+                    }
+
+                    let slice_ms = (IO_POLL_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+                    info!("http: read would block; polling for {} ms", slice_ms);
+                    let mut pollfd = [PollThing {
+                        thing: self.data_fd as i32,
+                        events: poll_flags::POLLIN,
+                        revents: 0,
+                    }];
+                    let ready = vfs_poll(&mut pollfd, slice_ms)
+                        .map_err(|e| format!("poll failed while waiting for read: {:?}", e))?;
+                    info!(
+                        "http: poll result ready_count={} revents=0x{:x}",
+                        ready,
+                        pollfd[0].revents
+                    );
+                    waited_ms += slice_ms;
+                }
+                Err(e) => return Err(format!("read failed: {:?}", e)),
+            }
         }
     }
 }
@@ -94,6 +131,7 @@ impl HttpClient {
     }
 
     fn request(method: &str, url: &str, body: Option<&str>) -> Result<Response, String> {
+        info!("http: request method={} url={}", method, url);
         let (host, port, path, final_url) = if url.starts_with("http://") {
             let rest = &url[7..];
             let (host_port, path) = if let Some(idx) = rest.find('/') {
@@ -122,15 +160,18 @@ impl HttpClient {
             ("10.0.2.2".to_string(), 8081, proxy_path, url.to_string())
         };
 
+        info!("http: request resolved host={} port={} path={}", host, port, path);
+
         let mut stream = TcpStream::connect(&host, port)?;
 
         let mut req = String::new();
         write!(req, "{} {} HTTP/1.1\r\n", method, path).ok();
-        write!(req, "Host: {}\r\n", host).ok();
-        write!(req, "Connection: close\r\n").ok();
-        if host == "10.0.2.2" {
-            write!(req, "X-Original-URL: {}\r\n", final_url).ok();
+        if (url.starts_with("http://") && port != 80) || (!url.starts_with("http://") && port != 80) {
+            write!(req, "Host: {}:{}\r\n", host, port).ok();
+        } else {
+            write!(req, "Host: {}\r\n", host).ok();
         }
+        write!(req, "Connection: close\r\n").ok();
         if let Some(b) = body {
             write!(req, "Content-Length: {}\r\n", b.len()).ok();
             write!(req, "Content-Type: application/json\r\n").ok();
@@ -140,6 +181,12 @@ impl HttpClient {
             req.push_str(b);
         }
 
+        let request_line_end = req.find("\r\n").unwrap_or(req.len());
+        info!(
+            "http: sending request bytes={} first_line={}",
+            req.len(),
+            &req[..request_line_end]
+        );
         stream.write(req.as_bytes())?;
 
         let mut buffer = Vec::new();
@@ -148,9 +195,10 @@ impl HttpClient {
         let mut headers_done = false;
 
         // Initial read loop to find headers
-        for _ in 0..20 {
+        for iter in 0..20 {
             // Limit tries
             let n = stream.read(&mut temp_buf)?;
+            info!("http: header read iter={} bytes={}", iter, n);
             if n == 0 {
                 break;
             }
@@ -159,12 +207,18 @@ impl HttpClient {
             if let Some(idx) = find_subsequence(&buffer, b"\r\n\r\n") {
                 body_start = idx + 4;
                 headers_done = true;
+                info!(
+                    "http: headers complete iter={} total_buffer={} body_start={}",
+                    iter,
+                    buffer.len(),
+                    body_start
+                );
                 break;
             }
         }
 
         if !headers_done {
-            // Maybe no body or something weird, but let's assume we have what we have
+            warn!("http: headers not completed initial_buffer={}", buffer.len());
         }
 
         Ok(Response {
@@ -186,14 +240,17 @@ impl Response {
         if self.cursor < self.buffer.len() {
             let chunk = self.buffer[self.cursor..].to_vec();
             self.cursor = self.buffer.len();
+            info!("http: returning buffered chunk bytes={}", chunk.len());
             return Ok(chunk);
         }
 
         let mut buf = [0u8; 1024];
         let n = self.stream.read(&mut buf)?;
         if n == 0 {
+            info!("http: response stream EOF");
             return Ok(Vec::new());
         }
+        info!("http: returning streamed chunk bytes={}", n);
         Ok(buf[..n].to_vec())
     }
 }

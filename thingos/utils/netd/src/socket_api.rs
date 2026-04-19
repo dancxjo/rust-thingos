@@ -1622,16 +1622,31 @@ impl SocketApi {
                 encode_data(&self.recv_scratch[..len])
             }
             Err(_) => {
-                // If we can't receive, check if it's because the socket is empty or closed
-                if socket.state() == TcpState::Established {
-                    // Still established but no data
+                let state = socket.state();
+                // `recv_slice` also fails while a TCP connection is still being
+                // established. That is not EOF and must surface as EAGAIN so
+                // higher layers can poll instead of seeing a spurious close.
+                if matches!(state, TcpState::SynSent | TcpState::SynReceived | TcpState::Listen) {
+                    info!(
+                        "SOCKET_API: TCP_RECV handle={} waiting for connection state={:?}",
+                        handle, state
+                    );
                     encode_empty()
-                } else if socket.may_recv() {
-                    // Still potentially receiving (e.g. FIN received but buffer not empty,
-                    // though recv_slice would have returned data in that case)
+                } else if state == TcpState::Established || socket.may_recv() {
+                    info!(
+                        "SOCKET_API: TCP_RECV handle={} no data yet state={:?} may_recv={}",
+                        handle,
+                        state,
+                        socket.may_recv()
+                    );
                     encode_empty()
                 } else {
-                    // Socket closed or EOF reached
+                    info!(
+                        "SOCKET_API: TCP_RECV handle={} EOF state={:?} may_recv={}",
+                        handle,
+                        state,
+                        socket.may_recv()
+                    );
                     encode_closed()
                 }
             }
