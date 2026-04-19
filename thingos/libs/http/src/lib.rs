@@ -45,16 +45,18 @@ fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
     remaining.min(preferred)
 }
 
-/// Refresh state when we are in setup/terminal/unknown phases, or on the
-/// first wait iteration before we have a stable writable-state signal.
-fn should_refresh_tcp_state(last_state: TcpConnectState, waited_ms: u64) -> bool {
+/// Refresh state while the socket is unstable (`Created`/`Connecting`),
+/// terminal (`Closed`), or unknown (`Other`), and also before the first
+/// write wait when no state has been observed yet.
+fn should_refresh_tcp_state(last_state: Option<TcpConnectState>) -> bool {
     matches!(
         last_state,
-        TcpConnectState::Created
-            | TcpConnectState::Connecting
-            | TcpConnectState::Closed
-            | TcpConnectState::Other
-    ) || waited_ms == 0
+        None
+            | Some(TcpConnectState::Created)
+            | Some(TcpConnectState::Connecting)
+            | Some(TcpConnectState::Closed)
+            | Some(TcpConnectState::Other)
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,14 +165,13 @@ impl TcpStream {
     pub fn write(&mut self, data: &[u8]) -> Result<usize, String> {
         debug!("http: write {} bytes", data.len());
         let mut waited_ms = 0;
-        // Start at `Other` so the first loop iteration refreshes state.
-        let mut last_state = TcpConnectState::Other;
+        let mut last_state: Option<TcpConnectState> = None;
         loop {
             match vfs_write(self.data_fd, data) {
                 Ok(n) => {
                     if n == 0 {
                         let state = read_tcp_state(&self.socket_id);
-                        last_state = state;
+                        last_state = Some(state);
                         if waited_ms >= IO_POLL_TIMEOUT_MS {
                             return Err(format!(
                                 "write returned 0 for {} ms (state={:?})",
@@ -192,12 +193,12 @@ impl TcpStream {
                     return Ok(n);
                 }
                 Err(abi::errors::Errno::EAGAIN) => {
-                    let state = if should_refresh_tcp_state(last_state, waited_ms) {
+                    let state = if should_refresh_tcp_state(last_state) {
                         read_tcp_state(&self.socket_id)
                     } else {
-                        last_state
+                        last_state.unwrap_or(TcpConnectState::Other)
                     };
-                    last_state = state;
+                    last_state = Some(state);
                     if matches!(state, TcpConnectState::Closed) {
                         return Err("write failed: socket closed before writable".to_string());
                     }
