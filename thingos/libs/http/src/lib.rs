@@ -7,16 +7,21 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 
 use abi::syscall::{poll_flags, PollThing};
-use embedded_io::{Error as _, ErrorKind};
+use embedded_io::ErrorKind;
 use embedded_tls::blocking::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
-use stem::{info, warn};
+use stem::{debug, info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 5_000;
 const IO_POLL_SLICE_MS: u64 = 100;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
+const MAX_HEADER_READ_ITERATIONS: usize = 20;
+// Max TLS record payload + TLS overhead as recommended by embedded-tls docs.
+const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
+// Write-side TLS record staging buffer.
+const TLS_RECORD_WRITE_BUF_SIZE: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TcpConnectState {
@@ -183,7 +188,7 @@ impl Drop for TcpStream {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UrlScheme {
     Http,
     Https,
@@ -214,9 +219,9 @@ fn parse_url(url: &str) -> Result<ParsedUrl, String> {
     let (host, port) = if let Some(idx) = host_port.find(':') {
         (
             &host_port[..idx],
-            host_port[idx + 1..]
-                .parse::<u16>()
-                .map_err(|_| "Invalid port".to_string())?,
+                host_port[idx + 1..]
+                    .parse::<u16>()
+                    .map_err(|_| "invalid port".to_string())?,
         )
     } else {
         (host_port, default_port)
@@ -230,10 +235,17 @@ fn parse_url(url: &str) -> Result<ParsedUrl, String> {
     })
 }
 
-fn build_request(method: &str, host: &str, port: u16, path: &str, body: Option<&str>, default_port: u16) -> String {
+fn build_request(
+    method: &str,
+    host: &str,
+    port: u16,
+    path: &str,
+    body: Option<&str>,
+    scheme_default_port: u16,
+) -> String {
     let mut req = String::new();
     write!(req, "{} {} HTTP/1.1\r\n", method, path).ok();
-    if port != default_port {
+    if port != scheme_default_port {
         write!(req, "Host: {}:{}\r\n", host, port).ok();
     } else {
         write!(req, "Host: {}\r\n", host).ok();
@@ -250,25 +262,10 @@ fn build_request(method: &str, host: &str, port: u16, path: &str, body: Option<&
     req
 }
 
-fn build_tls_seed(host: &str, port: u16, path: &str) -> [u8; 32] {
+fn build_tls_seed() -> Result<[u8; 32], String> {
     let mut seed = [0u8; 32];
-    let mut state = stem::syscall::monotonic_ns()
-        ^ ((port as u64) << 32)
-        ^ 0x9e37_79b9_7f4a_7c15;
-    for (idx, byte) in host.as_bytes().iter().chain(path.as_bytes().iter()).enumerate() {
-        let mix = (*byte as u64) ^ ((idx as u64).wrapping_mul(0x94d0_49bb_1331_11eb));
-        state ^= mix.rotate_left((idx % 64) as u32);
-        state = state.wrapping_mul(0xbf58_476d_1ce4_e5b9).rotate_left(17);
-    }
-    for chunk in seed.chunks_mut(8) {
-        state ^= state >> 33;
-        state = state.wrapping_mul(0xff51_afd7_ed55_8ccd);
-        state ^= state >> 33;
-        state = state.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
-        state ^= state >> 33;
-        chunk.copy_from_slice(&state.to_le_bytes());
-    }
-    seed
+    stem::syscall::getrandom(&mut seed).map_err(|e| format!("getrandom failed: {:?}", e))?;
+    Ok(seed)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -290,6 +287,8 @@ impl embedded_io::ErrorType for TcpTransport {
 
 impl embedded_io::Read for TcpTransport {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        // The VFS socket API currently surfaces string errors here, so we map
+        // into a conservative transport `Other` kind for embedded-io.
         self.inner
             .read(buf)
             .map_err(|_| TcpTransportError(ErrorKind::Other))
@@ -298,6 +297,8 @@ impl embedded_io::Read for TcpTransport {
 
 impl embedded_io::Write for TcpTransport {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        // The VFS socket API currently surfaces string errors here, so we map
+        // into a conservative transport `Other` kind for embedded-io.
         self.inner
             .write(buf)
             .map_err(|_| TcpTransportError(ErrorKind::Other))
@@ -314,9 +315,9 @@ fn read_header_and_initial_body_from_tcp(stream: &mut TcpStream) -> Result<(Vec<
     let mut body_start = 0;
     let mut headers_done = false;
 
-    for iter in 0..20 {
+    for attempt in 0..MAX_HEADER_READ_ITERATIONS {
         let n = stream.read(&mut temp_buf)?;
-        info!("http: header read iter={} bytes={}", iter, n);
+        info!("http: header read iter={} bytes={}", attempt, n);
         if n == 0 {
             break;
         }
@@ -327,7 +328,7 @@ fn read_header_and_initial_body_from_tcp(stream: &mut TcpStream) -> Result<(Vec<
             headers_done = true;
             info!(
                 "http: headers complete iter={} total_buffer={} body_start={}",
-                iter,
+                attempt,
                 buffer.len(),
                 body_start
             );
@@ -344,16 +345,17 @@ fn read_header_and_initial_body_from_tcp(stream: &mut TcpStream) -> Result<(Vec<
 
 fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize), String> {
     let tcp = TcpStream::connect(&url.host, url.port)?;
-    let mut transport = TcpTransport { inner: tcp };
-    let mut record_read_buf = [0u8; 16_640];
-    let mut record_write_buf = [0u8; 4_096];
-    let mut tls =
-        TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
+    // Ownership of the raw TCP stream is transferred into TcpTransport/TlsConnection,
+    // and is closed when those values are dropped.
+    let transport = TcpTransport { inner: tcp };
+    let mut record_read_buf = [0u8; TLS_RECORD_READ_BUF_SIZE];
+    let mut record_write_buf = [0u8; TLS_RECORD_WRITE_BUF_SIZE];
+    let mut tls = TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
 
     let config = TlsConfig::new()
         .with_server_name(&url.host)
         .enable_rsa_signatures();
-    let seed = build_tls_seed(&url.host, url.port, &url.path);
+    let seed = build_tls_seed()?;
     let rng = ChaCha20Rng::from_seed(seed);
     tls.open(TlsContext::new(
         &config,
@@ -374,17 +376,19 @@ fn read_https_response(url: &ParsedUrl, request: &str) -> Result<(Vec<u8>, usize
     tls.flush()
         .map_err(|e| format!("https flush failed: {:?}", e))?;
 
-    let mut response = Vec::new();
+    let mut response = Vec::with_capacity(8 * 1024);
     let mut buf = [0u8; 1024];
     loop {
         match tls.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => response.extend_from_slice(&buf[..n]),
             Err(e) => {
+                let kind = embedded_io::Error::kind(&e);
                 if matches!(
-                    e.kind(),
+                    kind,
                     ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
                 ) {
+                    debug!("http: https read terminated with transport error {:?}", kind);
                     break;
                 }
                 return Err(format!("https read failed: {:?}", e));
@@ -425,6 +429,10 @@ impl HttpClient {
     }
 
     fn request(method: &str, url: &str, body: Option<&str>) -> Result<Response, String> {
+        // SECURITY: HTTPS currently uses embedded-tls UnsecureProvider
+        // (no certificate-chain verification). This is intended as a minimal
+        // in-OS TLS transport bootstrap and must not be treated as
+        // production-grade authenticated HTTPS.
         info!("http: request method={} url={}", method, url);
         let parsed = parse_url(url)?;
         info!(
@@ -432,11 +440,18 @@ impl HttpClient {
             parsed.host, parsed.port, parsed.path
         );
 
-        let default_port = match parsed.scheme {
+        let scheme_default_port = match parsed.scheme {
             UrlScheme::Http => 80,
             UrlScheme::Https => 443,
         };
-        let req = build_request(method, &parsed.host, parsed.port, &parsed.path, body, default_port);
+        let req = build_request(
+            method,
+            &parsed.host,
+            parsed.port,
+            &parsed.path,
+            body,
+            scheme_default_port,
+        );
 
         let request_line_end = req.find("\r\n").unwrap_or(req.len());
         info!(
@@ -465,6 +480,14 @@ impl HttpClient {
     }
 }
 
+/// HTTP response body reader.
+///
+/// For `http://`, body bytes are streamed from the underlying socket after the
+/// initially buffered bytes are consumed.
+///
+/// For `https://`, the current implementation buffers the full response body
+/// up-front during TLS processing; once buffered bytes are consumed, further
+/// reads return EOF.
 pub struct Response {
     stream: Option<TcpStream>,
     buffer: Vec<u8>,
@@ -482,6 +505,7 @@ impl Response {
 
         let mut buf = [0u8; 1024];
         let Some(stream) = self.stream.as_mut() else {
+            info!("http: buffered HTTPS response fully consumed");
             return Ok(Vec::new());
         };
         let n = stream.read(&mut buf)?;
