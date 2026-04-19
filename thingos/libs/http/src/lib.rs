@@ -473,11 +473,15 @@ where
             match tls.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    match port_send_all(write_handle, &buf[..n]) {
-                        Ok(written) if written == n => {}
-                        Ok(_) | Err(_) => {
-                            break; // Receiver likely closed or error occurred.
+                    let mut offset = 0;
+                    while offset < n {
+                        match port_send_all(write_handle, &buf[offset..n]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(written) => offset += written,
                         }
+                    }
+                    if offset < n {
+                        break; // Receiver likely closed or error occurred.
                     }
                 }
                 Err(e) => {
