@@ -10,17 +10,37 @@ mod sysfs;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+use abi::driver_interface::DriverClass;
+use abi::syscall::vfs_flags::O_RDONLY;
 use binding::{match_binding, mount_hint};
 use catalog::Catalog;
 use spawn::ManagedDriver;
-use abi::syscall::vfs_flags::O_RDONLY;
 use stem::syscall::vfs::{vfs_close, vfs_open};
 use stem::{debug, error, warn};
-use sysfs::{scan_devices, SysDevice};
+use sysfs::{SysDevice, scan_devices};
 
 /// How many main-loop ticks between full catalog rescans.
 /// At 100 ms per tick this is ~30 seconds.
 const CATALOG_RESCAN_TICKS: u32 = 300;
+
+fn is_network_device(device: &SysDevice) -> bool {
+    if device.kind.starts_with("dev.net") {
+        return true;
+    }
+
+    // PCI class major 0x02 == network controller.
+    ((device.class_code >> 16) & 0xff) == 0x02
+}
+
+fn is_network_catalog_entry(entry: &catalog::DriverEntry) -> bool {
+    if entry.driver_class == DriverClass::Net {
+        return true;
+    }
+
+    // Legacy hint fallback when class enum is not populated.
+    ((entry.class_code >> 16) & 0xff) == 0x02
+}
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -60,11 +80,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         driver_path.to_string()
     } else {
         let in_drivers = alloc::format!("/drivers/{}", driver_path);
-        if path_exists(&in_drivers) {
-            in_drivers
-        } else {
-            alloc::format!("/bin/{}", driver_path)
-        }
+        if path_exists(&in_drivers) { in_drivers } else { alloc::format!("/bin/{}", driver_path) }
     };
 
     // Inspect the binary.
@@ -72,10 +88,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
     let entry = match catalog.inspect_binary_path(&abs_path) {
         Some(e) => e.clone(),
         None => {
-            error!(
-                "CAMBIUM: '{}' does not export THING_DRIVER_V1 or could not be read",
-                abs_path
-            );
+            error!("CAMBIUM: '{}' does not export THING_DRIVER_V1 or could not be read", abs_path);
             stem::syscall::exit(1);
         }
     };
@@ -91,6 +104,14 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         entry.start_symbol
     );
 
+    if !is_network_catalog_entry(&entry) {
+        error!(
+            "CAMBIUM: refusing to run non-network driver '{}' while network-only mode is active",
+            abs_path
+        );
+        stem::syscall::exit(1);
+    }
+
     // Find matching devices.
     let devices = match scan_devices() {
         Ok(d) => d,
@@ -104,6 +125,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         .into_iter()
         .filter(|d| {
             d.present
+                && is_network_device(d)
                 && slot_filter.map_or(true, |s| d.slot == s)
                 && entry.matches_pci(d.vendor_id, d.device_id, d.class_code)
         })
@@ -116,7 +138,10 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         if let Some(slot) = slot_filter {
             // If an explicit slot was given, try to run the driver for it
             // regardless of the marker's match hints — the user said to do it.
-            debug!("CAMBIUM: no match by hints for slot '{}'; spawning anyway (explicit override)", slot);
+            debug!(
+                "CAMBIUM: no match by hints for slot '{}'; spawning anyway (explicit override)",
+                slot
+            );
             // Create a synthetic device record from what we know.
             let fake_device = SysDevice {
                 slot: slot.to_string(),
@@ -207,35 +232,33 @@ fn reconcile_devices(
             continue;
         }
 
-        // First try the symbol-based catalog (new path).
-        let maybe_entry = if device.kind != "unknown" {
-            catalog.find_for_kind(&device.kind)
-        } else {
-            None
-        };
+        if !is_network_device(&device) {
+            continue;
+        }
 
-        if let Some(entry) = maybe_entry.or_else(|| {
-            catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code)
-        }) {
-            // SPROUT-DRIVEN ORCHESTRATION: Display drivers are managed explicitly
-            // by sprout via the Sovereign Display Protocol to coordinate boot
-            // graphics. devd must ignore them to avoid duplicate spawns.
-            use abi::driver_interface::DriverClass;
-            if entry.driver_class == DriverClass::Display {
-                debug!("CAMBIUM: ignoring display device at {} (managed by sprout)", device.slot);
+        // First try the symbol-based catalog (new path).
+        let maybe_entry =
+            if device.kind != "unknown" { catalog.find_for_kind(&device.kind) } else { None };
+
+        if let Some(entry) = maybe_entry
+            .or_else(|| catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code))
+        {
+            if !is_network_catalog_entry(entry) {
+                debug!(
+                    "CAMBIUM: ignoring non-network catalog driver '{}' for slot {}",
+                    entry.path, device.slot
+                );
                 continue;
             }
 
-            let managed = drivers
-                .entry(device.slot.clone())
-                .or_insert_with(|| {
-                    ManagedDriver::new_from_catalog(
-                        &device,
-                        entry.path.clone(),
-                        entry.start_symbol.clone(),
-                        None,
-                    )
-                });
+            let managed = drivers.entry(device.slot.clone()).or_insert_with(|| {
+                ManagedDriver::new_from_catalog(
+                    &device,
+                    entry.path.clone(),
+                    entry.start_symbol.clone(),
+                    None,
+                )
+            });
             managed.ensure_running();
             continue;
         }
@@ -251,11 +274,8 @@ fn reconcile_devices(
         managed.ensure_running();
     }
 
-    let stale_slots: Vec<_> = drivers
-        .keys()
-        .filter(|slot| !seen.contains_key(*slot))
-        .cloned()
-        .collect();
+    let stale_slots: Vec<_> =
+        drivers.keys().filter(|slot| !seen.contains_key(*slot)).cloned().collect();
 
     for slot in stale_slots {
         if let Some(mut managed) = drivers.remove(&slot) {

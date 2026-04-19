@@ -146,6 +146,10 @@ impl SocketApi {
         h
     }
 
+    fn next_ephemeral_port(&self) -> u16 {
+        49152 + (self.next_handle as u16 % 16384)
+    }
+
     /// Public handle allocator — used by the VFS provider to pre-register socket ids.
     #[allow(dead_code)]
     pub fn alloc_handle_pub(&mut self) -> u32 {
@@ -679,16 +683,44 @@ impl SocketApi {
     /// the default send destination).
     pub fn handle_udp_connect<'a>(
         &mut self,
-        _socket_set: &mut SocketSet<'a>,
+        socket_set: &mut SocketSet<'a>,
         api_handle: u32,
         remote_ip: Ipv4Address,
         remote_port: u16,
     ) -> bool {
-        if let Some(m) = self.sockets.get_mut(&api_handle) {
-            if m.kind == SocketType::Udp {
-                m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
-                return true;
+        let local_port = self.next_ephemeral_port();
+        let socket_handle = match self.sockets.get(&api_handle) {
+            Some(s) if s.kind == SocketType::Udp => s.handle,
+            _ => return false,
+        };
+
+        let should_bind = self
+            .sockets
+            .get(&api_handle)
+            .map(|s| s.local.is_none())
+            .unwrap_or(false);
+
+        if should_bind {
+            let socket = socket_set.get_mut::<smoltcp::socket::udp::Socket>(socket_handle);
+            if let Err(e) = socket.bind(local_port) {
+                warn!(
+                    "SOCKET_API: handle_udp_connect: failed to auto-bind port {}: {:?}",
+                    local_port,
+                    e
+                );
+                return false;
             }
+        }
+
+        if let Some(m) = self.sockets.get_mut(&api_handle) {
+            if m.kind != SocketType::Udp {
+                return false;
+            }
+            if m.local.is_none() {
+                m.local = Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port: local_port });
+            }
+            m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
+            return true;
         }
         false
     }
@@ -1325,8 +1357,27 @@ impl SocketApi {
             Some(s) if s.kind == SocketType::Udp => s,
             _ => return encode_error(),
         };
+        let local_port = self.next_ephemeral_port();
+        if managed.local.is_none() {
+            let socket = socket_set.get_mut::<smoltcp::socket::udp::Socket>(managed.handle);
+            if let Err(e) = socket.bind(local_port) {
+                warn!(
+                    "SOCKET_API: UDP_SEND_TO failed to auto-bind port {}: {:?}",
+                    local_port,
+                    e
+                );
+                return encode_send_result(0);
+            }
+            if let Some(m) = self.sockets.get_mut(&handle) {
+                m.local = Some(EndpointV4 { ip: Ipv4Address::new(0, 0, 0, 0), port: local_port });
+            }
+        }
 
-        let socket = socket_set.get_mut::<smoltcp::socket::udp::Socket>(managed.handle);
+        let socket_handle = match self.sockets.get(&handle) {
+            Some(s) if s.kind == SocketType::Udp => s.handle,
+            _ => return encode_error(),
+        };
+        let socket = socket_set.get_mut::<smoltcp::socket::udp::Socket>(socket_handle);
         let endpoint = IpEndpoint::new(IpAddress::Ipv4(remote_ip), remote_port);
 
         if !socket.can_send() {

@@ -60,6 +60,19 @@ fn read_file(path: &str) -> String {
     String::from_utf8_lossy(&buf).trim().into()
 }
 
+fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut parts = s.trim().split('.');
+    for octet in &mut out {
+        let part = parts.next()?;
+        *octet = part.parse().ok()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(out)
+}
+
 /// Build a DNS A-record query packet for the given name.
 fn build_dns_query(name: &str) -> Vec<u8> {
     let mut pkt: Vec<u8> = Vec::new();
@@ -173,6 +186,8 @@ fn lookup(name: &str, server_ip: &str) -> Result<Vec<[u8; 4]>, &'static str> {
     let ctl_path = alloc::format!("/net/udp/{}/ctl", new_id);
     let data_path = alloc::format!("/net/udp/{}/data", new_id);
 
+    let server_addr = parse_ipv4(server_ip).ok_or("bad server ip")?;
+
     // Connect the socket to the DNS server on port 53
     {
         let Ok(fd) = vfs_open(&ctl_path, O_WRONLY) else {
@@ -183,16 +198,19 @@ fn lookup(name: &str, server_ip: &str) -> Result<Vec<[u8; 4]>, &'static str> {
         let _ = vfs_close(fd);
     }
 
-    // Build and send the DNS query (length-prefixed)
+    // Build and send the DNS query using the current /net/udp data format:
+    // [4: dest_ipv4][2: dest_port_le][4: payload_len_le][payload]
     let query = build_dns_query(name);
     {
         let Ok(fd) = vfs_open(&data_path, O_WRONLY) else {
             return Err("cannot open udp data for write");
         };
-        let mut pkt = alloc::vec![0u8; 4 + query.len()];
+        let mut pkt = alloc::vec![0u8; 10 + query.len()];
         let len32 = query.len() as u32;
-        pkt[..4].copy_from_slice(&len32.to_le_bytes());
-        pkt[4..].copy_from_slice(&query);
+        pkt[..4].copy_from_slice(&server_addr);
+        pkt[4..6].copy_from_slice(&53u16.to_le_bytes());
+        pkt[6..10].copy_from_slice(&len32.to_le_bytes());
+        pkt[10..].copy_from_slice(&query);
         let _ = vfs_write(fd, &pkt);
         let _ = vfs_close(fd);
     }
