@@ -84,8 +84,8 @@ impl HttpsProvider {
         info!("httpsd: lookup '{}' probing {}", path, node.url());
         let response = match HttpClient::get(&node.url()) {
             Ok(response) => response,
-            Err(_) => {
-                warn!("httpsd: lookup '{}' probe failed", path);
+            Err(err) => {
+                warn!("httpsd: lookup '{}' probe failed: {}", path, err);
                 return Err(Errno::ENOENT);
             }
         };
@@ -118,7 +118,10 @@ impl HttpsProvider {
 
         if state.response.is_none() && !state.eof {
             info!("httpsd: opening upstream stream for handle={} {}", handle, state.node.url());
-            state.response = Some(HttpClient::get(&state.node.url()).map_err(|_| Errno::EIO)?);
+            state.response = Some(HttpClient::get(&state.node.url()).map_err(|err| {
+                warn!("httpsd: upstream open failed for handle={} {}: {}", handle, state.node.url(), err);
+                Errno::EIO
+            })?);
         }
 
         let needed_end = offset.saturating_add(max_len);
@@ -128,7 +131,10 @@ impl HttpsProvider {
                 break;
             };
 
-            let chunk = response.read_chunk().map_err(|_| Errno::EIO)?;
+            let chunk = response.read_chunk().map_err(|err| {
+                warn!("httpsd: upstream read failed for handle={} {}: {}", handle, state.node.url(), err);
+                Errno::EIO
+            })?;
             if chunk.is_empty() {
                 info!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
                 state.response = None;

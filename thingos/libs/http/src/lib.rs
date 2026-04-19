@@ -14,6 +14,44 @@ use stem::{info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 5_000;
 const IO_POLL_SLICE_MS: u64 = 100;
+const CONNECT_TIMEOUT_MS: u64 = 5_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TcpConnectState {
+    Created,
+    Connecting,
+    Connected,
+    Closed,
+    Other,
+}
+
+fn read_tcp_state(socket_id: &str) -> TcpConnectState {
+    use abi::syscall::vfs_flags::O_RDONLY;
+
+    let status_path = format!("/net/tcp/{}/status", socket_id);
+    let Ok(fd) = vfs_open(&status_path, O_RDONLY) else {
+        return TcpConnectState::Other;
+    };
+    let mut buf = [0u8; 256];
+    let n = vfs_read(fd, &mut buf).unwrap_or(0);
+    let _ = vfs_close(fd);
+
+    let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
+    for line in text.lines() {
+        if let Some(state) = line.strip_prefix("state: ") {
+            return match state.trim() {
+                "created" => TcpConnectState::Created,
+                "bound" | "syn-sent" | "syn-received" => TcpConnectState::Connecting,
+                "connected" | "established" | "fin-wait-1" | "fin-wait-2" | "close-wait" => {
+                    TcpConnectState::Connected
+                }
+                "closed" | "time-wait" | "closing" | "last-ack" => TcpConnectState::Closed,
+                _ => TcpConnectState::Other,
+            };
+        }
+    }
+    TcpConnectState::Other
+}
 
 pub struct TcpStream {
     data_fd: u32,
@@ -48,10 +86,49 @@ impl TcpStream {
         let conn_cmd = format!("connect {} {}", host, port);
         vfs_write(ctl_fd, conn_cmd.as_bytes()).map_err(|e| format!("connect command failed: {:?}", e))?;
 
-        // Wait for connection to establish (poor man's poll/check for now)
-        // In a real implementation we would poll status or events.
-        stem::time::sleep_ms(100);
         info!("http: connect command issued for socket id={}", socket_id);
+
+        let mut waited_ms = 0;
+        loop {
+            let state = read_tcp_state(socket_id);
+            info!(
+                "http: connect wait socket id={} state={:?} waited={} ms",
+                socket_id, state, waited_ms
+            );
+            match state {
+                TcpConnectState::Connected => break,
+                TcpConnectState::Closed => {
+                    let _ = vfs_close(data_fd);
+                    let _ = vfs_close(ctl_fd);
+                    return Err(format!("connect failed: socket {} closed before establishment", socket_id));
+                }
+                _ => {}
+            }
+
+            if waited_ms >= CONNECT_TIMEOUT_MS {
+                let _ = vfs_close(data_fd);
+                let _ = vfs_close(ctl_fd);
+                return Err(format!(
+                    "connect timed out waiting for socket {} to establish",
+                    socket_id
+                ));
+            }
+
+            let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
+            let mut pollfd = [PollThing {
+                thing: data_fd as i32,
+                events: poll_flags::POLLOUT,
+                revents: 0,
+            }];
+            let ready = vfs_poll(&mut pollfd, slice_ms)
+                .map_err(|e| format!("poll failed while waiting for connect: {:?}", e))?;
+            info!(
+                "http: connect poll ready_count={} revents=0x{:x}",
+                ready,
+                pollfd[0].revents
+            );
+            waited_ms += slice_ms;
+        }
 
         Ok(Self { data_fd, ctl_fd })
     }
@@ -132,7 +209,7 @@ impl HttpClient {
 
     fn request(method: &str, url: &str, body: Option<&str>) -> Result<Response, String> {
         info!("http: request method={} url={}", method, url);
-        let (host, port, path, final_url) = if url.starts_with("http://") {
+        let (host, port, path) = if url.starts_with("http://") {
             let rest = &url[7..];
             let (host_port, path) = if let Some(idx) = rest.find('/') {
                 (&rest[..idx], &rest[idx..])
@@ -150,14 +227,12 @@ impl HttpClient {
             } else {
                 (host_port, 80)
             };
-            (host.to_string(), port, path.to_string(), url.to_string())
+            (host.to_string(), port, path.to_string())
+        } else if url.starts_with("https://") {
+            warn!("http: https requested but in-OS TLS client is not implemented yet");
+            return Err("https is not implemented in-os yet".to_string());
         } else {
-            // Use proxy for non-http (likely https)
-            // Proxy format: http://10.0.2.2:8081/?url=<encoded_url>
-            // Note: 10.0.2.2 is QEMU host loopback
-            let encoded_url = url_encode(url);
-            let proxy_path = format!("/?url={}", encoded_url);
-            ("10.0.2.2".to_string(), 8081, proxy_path, url.to_string())
+            return Err("unsupported URL scheme".to_string());
         };
 
         info!("http: request resolved host={} port={} path={}", host, port, path);
@@ -166,7 +241,7 @@ impl HttpClient {
 
         let mut req = String::new();
         write!(req, "{} {} HTTP/1.1\r\n", method, path).ok();
-        if (url.starts_with("http://") && port != 80) || (!url.starts_with("http://") && port != 80) {
+        if port != 80 {
             write!(req, "Host: {}:{}\r\n", host, port).ok();
         } else {
             write!(req, "Host: {}\r\n", host).ok();
@@ -261,41 +336,10 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn url_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.as_bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~".contains(b) {
-            out.push(*b as char);
-        } else {
-            write!(out, "%{:02X}", b).ok();
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     extern crate std;
-
-    #[test]
-    fn test_url_encoding() {
-        // Alphanumeric - should not be encoded
-        assert_eq!(url_encode("abc123XYZ"), "abc123XYZ");
-
-        // Allowed characters - should not be encoded
-        assert_eq!(url_encode("a-b_c.d~e"), "a-b_c.d~e");
-
-        // Space - should be encoded as %20
-        assert_eq!(url_encode("hello world"), "hello%20world");
-
-        // Special characters - should be encoded
-        // / -> %2F, : -> %3A
-        assert_eq!(url_encode("http://example.com"), "http%3A%2F%2Fexample.com");
-
-        // Empty string
-        assert_eq!(url_encode(""), "");
-    }
 
     #[test]
     fn test_parse_ipv4() {
