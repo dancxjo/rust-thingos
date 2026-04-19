@@ -1328,48 +1328,83 @@ pub(crate) fn apply_deferred_registry_inserts<R: BootRuntime>(
 
 pub(crate) fn resolve_switch_params<R: BootRuntime>(
     decision: SwitchDecision,
+    ghost_ctx: &mut <R::Tasking as BootTasking>::Context,
+    ghost_fs_base: &mut u64,
 ) -> Option<
     SwitchParams<<R::Tasking as BootTasking>::Context, <R::Tasking as BootTasking>::AddressSpace>,
 > {
     debug_assert_scheduler_not_held_by_this_cpu::<R>("resolve_switch_params");
     let mut registry = crate::task::registry::get_registry::<R>();
-    let from_idx = registry.threads.binary_search_by_key(&decision.from_tid, |t| t.id).ok()?;
+    let from_task_result = registry.threads.binary_search_by_key(&decision.from_tid, |t| t.id);
     let to_idx = registry.threads.binary_search_by_key(&decision.to_tid, |t| t.id).ok()?;
-    let (from_task, to_task) = if from_idx < to_idx {
-        let (left, right) = registry.threads.split_at_mut(to_idx);
-        (&mut left[from_idx], &mut right[0])
+
+    if let Ok(from_idx) = from_task_result {
+        let (from_task, to_task) = if from_idx < to_idx {
+            let (left, right) = registry.threads.split_at_mut(to_idx);
+            (&mut left[from_idx], &mut right[0])
+        } else if from_idx > to_idx {
+            let (left, right) = registry.threads.split_at_mut(from_idx);
+            (&mut right[0], &mut left[to_idx])
+        } else {
+            // from_tid == to_tid (should have been caught in prepare_schedule)
+            return None;
+        };
+
+        // CURRENT_MAPPINGS is currently typed as a mutable raw pointer for
+        // historical compatibility, but the stored Arc target is treated as
+        // read-only by mapping-check fast paths unless they take the mapping lock.
+        crate::sched::vm::CURRENT_MAPPINGS[decision.cpu_idx]
+            .store(alloc::sync::Arc::as_ptr(&to_task.mappings) as *mut _, Ordering::Release);
+
+        from_task.simd.save(crate::runtime::<R>());
+        to_task.simd.restore(crate::runtime::<R>());
+
+        crate::trace::irq_ring::push(abi::trace::TraceEvent::ContextSwitch {
+            from: from_task.id,
+            to: to_task.id,
+            timestamp: crate::trace::now(),
+        });
+
+        Some(SwitchParams {
+            from_ctx: &mut from_task.ctx,
+            to_ctx: &to_task.ctx,
+            to_aspace: to_task.aspace,
+            from_aspace: from_task.aspace,
+            from_tid: from_task.id,
+            to_tid: to_task.id,
+            from_user: from_task.is_user,
+            to_user: to_task.is_user,
+            from_user_fs_base: &mut from_task.user_fs_base,
+            to_user_fs_base: to_task.user_fs_base,
+        })
     } else {
-        let (left, right) = registry.threads.split_at_mut(from_idx);
-        (&mut right[0], &mut left[to_idx])
-    };
+        // The outgoing task was already reaped (likely by another CPU).
+        // Use the provided ghost storage to avoid saving into a dropped Thread struct.
+        crate::kdebug!(
+            "SCHED: from_tid {} reaped during switch on CPU {}, using ghost storage (to={})",
+            decision.from_tid,
+            decision.cpu_idx,
+            decision.to_tid
+        );
+        let to_task = &mut registry.threads[to_idx];
+        
+        crate::sched::vm::CURRENT_MAPPINGS[decision.cpu_idx]
+            .store(alloc::sync::Arc::as_ptr(&to_task.mappings) as *mut _, Ordering::Release);
+        to_task.simd.restore(crate::runtime::<R>());
 
-    // CURRENT_MAPPINGS is currently typed as a mutable raw pointer for
-    // historical compatibility, but the stored Arc target is treated as
-    // read-only by mapping-check fast paths unless they take the mapping lock.
-    crate::sched::vm::CURRENT_MAPPINGS[decision.cpu_idx]
-        .store(alloc::sync::Arc::as_ptr(&to_task.mappings) as *mut _, Ordering::Release);
-
-    from_task.simd.save(crate::runtime::<R>());
-    to_task.simd.restore(crate::runtime::<R>());
-
-    crate::trace::irq_ring::push(abi::trace::TraceEvent::ContextSwitch {
-        from: from_task.id,
-        to: to_task.id,
-        timestamp: crate::trace::now(),
-    });
-
-    Some(SwitchParams {
-        from_ctx: &mut from_task.ctx as *mut _,
-        to_ctx: &to_task.ctx as *const _,
-        to_aspace: to_task.aspace,
-        from_aspace: from_task.aspace,
-        from_tid: from_task.id,
-        to_tid: to_task.id,
-        from_user: from_task.is_user,
-        to_user: to_task.is_user,
-        from_user_fs_base: &mut from_task.user_fs_base as *mut u64,
-        to_user_fs_base: to_task.user_fs_base,
-    })
+        Some(SwitchParams {
+            from_ctx: ghost_ctx as *mut _,
+            to_ctx: &to_task.ctx,
+            to_aspace: to_task.aspace,
+            from_aspace: to_task.aspace, // Dummy same as target
+            from_tid: decision.from_tid,
+            to_tid: decision.to_tid,
+            from_user: false, // Reaped task is now essentially a kernel context switch away
+            to_user: to_task.is_user,
+            from_user_fs_base: ghost_fs_base as *mut _,
+            to_user_fs_base: to_task.user_fs_base,
+        })
+    }
 }
 
 pub(crate) fn select_any_affinity_wake_cpu<R: BootRuntime>(
@@ -2392,25 +2427,32 @@ impl<R: BootRuntime> types::Scheduler<R> {
             new_enqueued_at_tick: None,
             new_last_cpu: Some(cpu_idx),
         };
-        let Some(old_sched) = self.state.get_task_mut(current_id) else {
-            crate::kerror!("SchedTasks: {:?}", self.state.thread_ids());
-            panic!("failed to find current_id {} in scheduler state", current_id);
-        };
-        if old_was_running {
-            old_sched.state = TaskState::Runnable;
-            old_sched.enqueued_at_tick = now;
-            old_registry_sync.new_state = Some(TaskState::Runnable);
-            old_registry_sync.new_enqueued_at_tick = Some(now);
-            if current_id == 6 {
-                crate::ktrace!(
-                    "SCHED[TID6]: Running → Runnable (cpu={}, next={})",
-                    cpu_idx,
-                    next_id
-                );
+        if let Some(old_sched) = self.state.get_task_mut(current_id) {
+            if old_was_running {
+                old_sched.state = TaskState::Runnable;
+                old_sched.enqueued_at_tick = now;
+                old_registry_sync.new_state = Some(TaskState::Runnable);
+                old_registry_sync.new_enqueued_at_tick = Some(now);
+                if current_id == 6 {
+                    crate::ktrace!(
+                        "SCHED[TID6]: Running → Runnable (cpu={}, next={})",
+                        cpu_idx,
+                        next_id
+                    );
+                }
             }
+            old_sched.last_cpu = Some(cpu_idx);
+            self.pending_registry_syncs.push(old_registry_sync);
+        } else {
+            // Task already removed from scheduler state (reaped).
+            // resolve_switch_params will handle saving its registers into ghost storage.
+            crate::kdebug!(
+                "SCHED: current_id {} missing from state (reaped?) on CPU {}, switching to {}",
+                current_id,
+                cpu_idx,
+                next_id
+            );
         }
-        old_sched.last_cpu = Some(cpu_idx);
-        self.pending_registry_syncs.push(old_registry_sync);
 
         let mut migrated = false;
         {
