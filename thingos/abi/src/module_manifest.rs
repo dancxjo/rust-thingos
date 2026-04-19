@@ -17,3 +17,13 @@ pub struct ManifestHeader {
 
 pub const MANIFEST_MAGIC: u64 = 0xBAD_D00D_CAFE_FEED;
 pub const SECTION_NAME: &str = ".thing_manifest";
+
+pub const fn device_kind_bytes(kind: &[u8]) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    let mut i = 0;
+    while i < kind.len() && i < out.len() {
+        out[i] = kind[i];
+        i += 1;
+    }
+    out
+}

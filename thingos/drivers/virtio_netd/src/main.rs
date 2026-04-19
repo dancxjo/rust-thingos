@@ -23,6 +23,7 @@ use abi::driver_interface::{
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::VirtioNetDriver;
 use ipc_helpers::provider::ProviderLoop;
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::port_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, warn};
@@ -103,6 +104,17 @@ core::arch::global_asm!(
 unsafe extern "C" fn thingos_driver_start_rust(boot_fd: usize) -> Status {
     main(boot_fd)
 }
+
+#[unsafe(link_section = ".thing_manifest")]
+#[unsafe(no_mangle)]
+#[used]
+pub static MANIFEST: ManifestHeader = ManifestHeader {
+    magic: MANIFEST_MAGIC,
+    kind: ModuleKind::Driver,
+    device_kind: device_kind_bytes(b"dev.net.Nic"),
+    version: 1,
+    _reserved: 0,
+};
 
 struct SupervisorBootstrap {
     drv_req_read: u32,
