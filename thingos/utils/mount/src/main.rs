@@ -16,6 +16,7 @@ use stem::syscall::{argv_get, exit, spawn_driver_ex, vfs_close, vfs_open, vfs_re
 const MOUNT_VERIFICATION_ATTEMPTS: usize = 50;
 const MOUNT_VERIFICATION_DELAY_MS: u64 = 100;
 const READ_FILE_CHUNK_SIZE: usize = 1024;
+const PROVIDER_ELF_INSPECTION_LIMIT: usize = 64 * 1024 * 1024;
 
 fn get_args() -> Vec<String> {
     let len = match argv_get(&mut []) {
@@ -118,7 +119,7 @@ fn mount_all_from_fstab(path: &str) -> i32 {
 
 fn mount_one(fs_type: &str, target: &str) -> Result<(), Errno> {
     let provider_path = resolve_provider_binary(fs_type).ok_or(Errno::ENOENT)?;
-    let bytes = read_file(&provider_path, 8 * 1024 * 1024).ok_or(Errno::EINVAL)?;
+    let bytes = read_file(&provider_path, PROVIDER_ELF_INSPECTION_LIMIT).ok_or(Errno::EINVAL)?;
     let mount_sym = resolve_provider_mount_symbol(&bytes);
 
     let argv = [provider_path.as_bytes(), target.as_bytes()];
