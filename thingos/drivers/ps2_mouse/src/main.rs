@@ -12,8 +12,8 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
-use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::syscall::vfs::{vfs_handle_from_port, vfs_write};
+use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::{debug, error, info};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_mouse";

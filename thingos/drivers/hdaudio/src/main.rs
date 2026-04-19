@@ -20,7 +20,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_volatile};
-use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 
 use abi::device::DeviceKind;
 use abi::driver_interface::{
@@ -33,6 +32,7 @@ use abi::sound::{
     format_bit,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp, VfsRpcReqHeader};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::port::{port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
