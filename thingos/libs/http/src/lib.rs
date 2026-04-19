@@ -47,7 +47,7 @@ fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
 
 /// Refresh state while the socket is unstable (`Created`/`Connecting`), closed
 /// for the current connection attempt (`Closed`), or unknown (`Other`), and
-/// also before the first write wait when no state has been observed yet.
+/// also when no state has been observed yet (`None`).
 fn should_refresh_tcp_state(last_state: Option<TcpConnectState>) -> bool {
     matches!(
         last_state,
@@ -195,7 +195,7 @@ impl TcpStream {
                     let state = if should_refresh_tcp_state(last_state) {
                         read_tcp_state(&self.socket_id)
                     } else {
-                        last_state.unwrap_or(TcpConnectState::Other)
+                        last_state.expect("state must be set when refresh is not required")
                     };
                     last_state = Some(state);
                     if matches!(state, TcpConnectState::Closed) {
