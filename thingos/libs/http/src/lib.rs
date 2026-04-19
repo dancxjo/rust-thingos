@@ -471,8 +471,13 @@ where
                         | ErrorKind::ConnectionReset
                         | ErrorKind::BrokenPipe
                 ) || err_text.contains("ConnectionClosed")
+                  || err_text.contains("CryptoError")
                 {
-                    debug!("http: https read terminated with transport error {:?}", kind);
+                    debug!("http: https read terminated with error {:?}", err_text);
+                    break;
+                }
+                if find_subsequence(&response, b"\r\n\r\n").is_some() {
+                    warn!("http: https read failed after headers, returning partial: {:?}", e);
                     break;
                 }
                 return Err(format!("https read failed: {:?}", e));

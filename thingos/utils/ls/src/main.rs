@@ -174,8 +174,9 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
     }
     let _ = vfs_close(fd);
 
-    // Sort entries for consistency
+    // Sort and deduplicate entries for consistency and to handle mount point overlays
     entries.sort();
+    entries.dedup();
 
     let mut subdirs = Vec::new();
 
