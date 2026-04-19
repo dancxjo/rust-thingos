@@ -10,10 +10,7 @@ pub struct IrqRing {
 
 impl IrqRing {
     pub const fn new() -> Self {
-        Self {
-            buffer: [TraceEvent::Empty; RING_SIZE],
-            head: 0,
-        }
+        Self { buffer: [TraceEvent::Empty; RING_SIZE], head: 0 }
     }
 
     pub fn push_internal(&mut self, event: TraceEvent) {

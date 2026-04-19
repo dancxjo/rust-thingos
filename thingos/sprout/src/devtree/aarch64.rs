@@ -2,8 +2,9 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use super::DevTreeCtx;
 use stem::info;
+
+use super::DevTreeCtx;
 
 #[allow(dead_code)]
 pub fn enumerate(_ctx: &DevTreeCtx) -> Result<(), ()> {

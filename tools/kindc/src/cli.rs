@@ -1,7 +1,8 @@
-use clap::Parser as ClapParser;
-use kindc::*;
 use std::fs;
 use std::path::PathBuf;
+
+use clap::Parser as ClapParser;
+use kindc::*;
 
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]

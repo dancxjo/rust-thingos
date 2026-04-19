@@ -3,10 +3,12 @@
 //! This allows IPC ports to be treated as VFS nodes, enabling them to be
 //! passed across ports using the standard handle-passing mechanism.
 
+use alloc::sync::Arc;
+
+use abi::errors::SysResult;
+
 use super::{VfsNode, VfsStat};
 use crate::ipc::{IpcHandleMode, Port};
-use abi::errors::SysResult;
-use alloc::sync::Arc;
 
 /// A VFS node that wraps an IPC port.
 pub struct PortNode {
@@ -21,11 +23,7 @@ impl PortNode {
             IpcHandleMode::Read => port.open_reader(),
             IpcHandleMode::Write => port.open_writer(),
         }
-        Self {
-            port,
-            mode,
-            closed: core::sync::atomic::AtomicBool::new(false),
-        }
+        Self { port, mode, closed: core::sync::atomic::AtomicBool::new(false) }
     }
 
     pub fn port(&self) -> &Arc<Port> {
@@ -49,11 +47,7 @@ impl VfsNode for PortNode {
     }
 
     fn stat(&self) -> SysResult<VfsStat> {
-        let (r, w) = if self.mode == IpcHandleMode::Read {
-            (0o400, 0)
-        } else {
-            (0, 0o200)
-        };
+        let (r, w) = if self.mode == IpcHandleMode::Read { (0o400, 0) } else { (0, 0o200) };
         Ok(VfsStat {
             mode: VfsStat::S_IFIFO | r | w,
             size: self.port.len() as u64,
@@ -75,7 +69,13 @@ impl VfsNode for PortNode {
                 if !has_writers {
                     revents |= POLLHUP;
                 }
-                crate::ktrace!("PORTNODE: poll(Read) -> revents=0x{:x} (empty={}, has_writers={}, port={:p})", revents, empty, has_writers, Arc::as_ptr(&self.port));
+                crate::ktrace!(
+                    "PORTNODE: poll(Read) -> revents=0x{:x} (empty={}, has_writers={}, port={:p})",
+                    revents,
+                    empty,
+                    has_writers,
+                    Arc::as_ptr(&self.port)
+                );
             }
             IpcHandleMode::Write => {
                 if !self.port.has_readers() {
@@ -130,7 +130,11 @@ impl VfsNode for PortNode {
             return Err(abi::errors::Errno::EBADF);
         }
         let caps_len = fds.len();
-        crate::ktrace!("PORT_NODE: sock_sendmsg caps_len={} port={:p}", caps_len, Arc::as_ptr(&self.port));
+        crate::ktrace!(
+            "PORT_NODE: sock_sendmsg caps_len={} port={:p}",
+            caps_len,
+            Arc::as_ptr(&self.port)
+        );
         self.port.send_msg(data.to_vec(), fds).map_err(|e| match e {
             crate::ipc::msgqueue::MqSendError::Full { capacity } => {
                 crate::ktrace!(
@@ -152,7 +156,11 @@ impl VfsNode for PortNode {
         }
         match self.port.try_recv_msg() {
             Some(msg) => {
-                crate::ktrace!("PORT_NODE: sock_recvmsg caps_len={} port={:p}", msg.caps.len(), Arc::as_ptr(&self.port));
+                crate::ktrace!(
+                    "PORT_NODE: sock_recvmsg caps_len={} port={:p}",
+                    msg.caps.len(),
+                    Arc::as_ptr(&self.port)
+                );
                 Ok(Some((msg.data, msg.caps)))
             }
             None => Ok(None),
@@ -168,8 +176,9 @@ impl Drop for PortNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use abi::syscall::poll_flags;
+
+    use super::*;
 
     fn make_port(capacity: usize) -> (Arc<PortNode>, Arc<PortNode>) {
         let port = Arc::new(Port::new(capacity));
@@ -200,11 +209,7 @@ mod tests {
         // Closing the write handle signals hangup on the read handle.
         w.close();
         assert_ne!(r.poll() & poll_flags::POLLIN, 0, "POLLIN set on EOF");
-        assert_ne!(
-            r.poll() & poll_flags::POLLHUP,
-            0,
-            "POLLHUP set when writer closed"
-        );
+        assert_ne!(r.poll() & poll_flags::POLLHUP, 0, "POLLHUP set when writer closed");
     }
 
     #[test]
@@ -213,16 +218,8 @@ mod tests {
         w.write(0, b"x").expect("write");
         w.close();
         let flags = r.poll();
-        assert_ne!(
-            flags & poll_flags::POLLIN,
-            0,
-            "POLLIN set when data present"
-        );
-        assert_ne!(
-            flags & poll_flags::POLLHUP,
-            0,
-            "POLLHUP set when writer gone"
-        );
+        assert_ne!(flags & poll_flags::POLLIN, 0, "POLLIN set when data present");
+        assert_ne!(flags & poll_flags::POLLHUP, 0, "POLLHUP set when writer gone");
     }
 
     // ── Write-handle poll semantics ────────────────────────────────────────
@@ -230,11 +227,7 @@ mod tests {
     #[test]
     fn write_handle_ready_when_queue_has_space() {
         let (_r, w) = make_port(64);
-        assert_ne!(
-            w.poll() & poll_flags::POLLOUT,
-            0,
-            "POLLOUT when space available"
-        );
+        assert_ne!(w.poll() & poll_flags::POLLOUT, 0, "POLLOUT when space available");
     }
 
     #[test]
@@ -253,10 +246,6 @@ mod tests {
         let (_r, w) = make_port(16);
         // Fill the queue completely.
         w.write(0, &[0u8; 16]).expect("write");
-        assert_eq!(
-            w.poll() & poll_flags::POLLOUT,
-            0,
-            "POLLOUT clear when queue full"
-        );
+        assert_eq!(w.poll() & poll_flags::POLLOUT, 0, "POLLOUT clear when queue full");
     }
 }

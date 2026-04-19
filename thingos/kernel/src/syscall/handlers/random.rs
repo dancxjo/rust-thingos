@@ -1,7 +1,8 @@
 //! Random/entropy syscall handlers.
 
-use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use abi::errors::SysResult;
+
+use crate::syscall::validate::{copyin, copyout, validate_user_range};
 
 /// SYS_GETRANDOM: Fill a user buffer with random bytes.
 ///

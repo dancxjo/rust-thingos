@@ -8,8 +8,8 @@ mod driver;
 mod protocol;
 
 use abi::driver_interface::{
-    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
+    DriverStartContext, ProbeResult, Status,
 };
 use driver::Rtl8168Driver;
 use protocol::{MSG_FRAME_RX, MSG_FRAME_TX, MSG_MAC_REQ, MSG_MAC_RESP, NetDriverMsg};

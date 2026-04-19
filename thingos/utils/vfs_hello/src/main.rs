@@ -67,11 +67,7 @@ fn main() -> ! {
                     info!("vfs_hello: /dev/zero OK (read {} zero bytes)", n);
                 }
                 Ok(n) => {
-                    info!(
-                        "vfs_hello: /dev/zero unexpected: n={} buf={:?}",
-                        n,
-                        &buf[..n]
-                    );
+                    info!("vfs_hello: /dev/zero unexpected: n={} buf={:?}", n, &buf[..n]);
                 }
                 Err(e) => {
                     info!("vfs_hello: read /dev/zero failed: {:?}", e);

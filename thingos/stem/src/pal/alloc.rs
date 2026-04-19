@@ -21,11 +21,8 @@ struct HeapState {
     initialized: bool,
 }
 
-static HEAP_STATE: Mutex<HeapState> = Mutex::new(HeapState {
-    base: HEAP_BASE,
-    size: 0,
-    initialized: false,
-});
+static HEAP_STATE: Mutex<HeapState> =
+    Mutex::new(HeapState { base: HEAP_BASE, size: 0, initialized: false });
 
 /// Grow the heap by at least `min_bytes`.
 ///

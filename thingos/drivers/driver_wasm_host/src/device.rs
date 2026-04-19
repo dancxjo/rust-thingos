@@ -2,8 +2,9 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use crate::trace::TraceMode;
 use wasmi::StoreLimits;
+
+use crate::trace::TraceMode;
 
 pub struct HostState {
     pub limits: StoreLimits,

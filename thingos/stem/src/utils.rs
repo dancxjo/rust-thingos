@@ -62,11 +62,7 @@ impl RangeExt for core::ops::Range<usize> {
     fn intersection(&self, other: &Self) -> Option<Self> {
         let start = core::cmp::max(self.start, other.start);
         let end = core::cmp::min(self.end, other.end);
-        if start < end {
-            Some(start..end)
-        } else {
-            None
-        }
+        if start < end { Some(start..end) } else { None }
     }
 }
 

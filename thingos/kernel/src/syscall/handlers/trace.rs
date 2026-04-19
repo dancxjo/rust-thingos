@@ -1,9 +1,11 @@
-use crate::syscall::validate::{copyout, validate_user_range};
-use crate::trace::irq_ring;
-use abi::errors::{Errno, SysResult};
-use abi::trace::TraceEvent;
 use alloc::vec;
 use core::sync::atomic::{AtomicPtr, Ordering};
+
+use abi::errors::{Errno, SysResult};
+use abi::trace::TraceEvent;
+
+use crate::syscall::validate::{copyout, validate_user_range};
+use crate::trace::irq_ring;
 
 pub fn sys_trace_read(ptr: usize, len: usize) -> SysResult<usize> {
     if len > 8192 {

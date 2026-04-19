@@ -79,14 +79,7 @@ impl Virtqueue {
             write_volatile(&raw mut (*used_ptr).idx, 0);
         }
 
-        Self {
-            virt_base,
-            phys_base,
-            size,
-            free_head: 0,
-            num_free: size,
-            last_used_idx: 0,
-        }
+        Self { virt_base, phys_base, size, free_head: 0, num_free: size, last_used_idx: 0 }
     }
 
     /// Add a buffer chain to the virtqueue

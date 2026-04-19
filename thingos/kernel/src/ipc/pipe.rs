@@ -15,6 +15,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
+
 use spin::Mutex;
 
 use crate::sched::wait_queue::WaitQueue;
@@ -116,11 +117,7 @@ const DEFAULT_PIPE_CAPACITY: usize = 4096;
 /// Create a new anonymous pipe. Returns the internal pipe ID used to back
 /// read/write VFS endpoints.
 pub fn create(capacity: u32, flags: u32) -> u64 {
-    let cap = if capacity == 0 {
-        DEFAULT_PIPE_CAPACITY
-    } else {
-        capacity as usize
-    };
+    let cap = if capacity == 0 { DEFAULT_PIPE_CAPACITY } else { capacity as usize };
     let nonblock = (flags & abi::syscall::pipe_flags::NONBLOCK) != 0;
 
     let inner = Arc::new(Mutex::new(PipeInner {
@@ -290,11 +287,7 @@ pub fn close_write(pipe_id: u64) -> Result<(), abi::errors::Errno> {
 // ---------------------------------------------------------------------------
 
 fn get_pipe(id: u64) -> Result<Arc<Mutex<PipeInner>>, abi::errors::Errno> {
-    PIPES
-        .lock()
-        .get(&id)
-        .cloned()
-        .ok_or(abi::errors::Errno::EBADF)
+    PIPES.lock().get(&id).cloned().ok_or(abi::errors::Errno::EBADF)
 }
 
 // ---------------------------------------------------------------------------
@@ -515,16 +508,8 @@ pub fn write_node_for_id(pipe_id: u64) -> Option<alloc::sync::Arc<dyn crate::vfs
 pub fn create_fd_pair_with_id(
     capacity: u32,
     nonblock: bool,
-) -> (
-    u64,
-    alloc::sync::Arc<dyn crate::vfs::VfsNode>,
-    alloc::sync::Arc<dyn crate::vfs::VfsNode>,
-) {
-    let cap = if capacity == 0 {
-        DEFAULT_PIPE_CAPACITY
-    } else {
-        capacity as usize
-    };
+) -> (u64, alloc::sync::Arc<dyn crate::vfs::VfsNode>, alloc::sync::Arc<dyn crate::vfs::VfsNode>) {
+    let cap = if capacity == 0 { DEFAULT_PIPE_CAPACITY } else { capacity as usize };
     let inner = Arc::new(Mutex::new(PipeInner {
         buf: RingBuf::new(cap),
         readers: 1,
@@ -535,10 +520,8 @@ pub fn create_fd_pair_with_id(
     }));
     let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
     PIPES.lock().insert(id, inner.clone());
-    let read_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> = Arc::new(PipeReadNode {
-        inner: inner.clone(),
-        pipe_id: id,
-    });
+    let read_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> =
+        Arc::new(PipeReadNode { inner: inner.clone(), pipe_id: id });
     let write_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> =
         Arc::new(PipeWriteNode { inner, pipe_id: id });
     (id, read_node, write_node)
@@ -551,22 +534,21 @@ pub fn create_fd_pair_with_id(
 pub fn create_fd_pair(
     capacity: u32,
     nonblock: bool,
-) -> (
-    alloc::sync::Arc<dyn crate::vfs::VfsNode>,
-    alloc::sync::Arc<dyn crate::vfs::VfsNode>,
-) {
+) -> (alloc::sync::Arc<dyn crate::vfs::VfsNode>, alloc::sync::Arc<dyn crate::vfs::VfsNode>) {
     let (_id, r, w) = create_fd_pair_with_id(capacity, nonblock);
     (r, w)
 }
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use abi::syscall::poll_flags;
+
     use super::*;
     use crate::sched::blocking::BLOCK_CURRENT_HOOK;
     use crate::sched::hooks::{CURRENT_TID_HOOK, TAKE_PENDING_INTERRUPT_HOOK};
     use crate::vfs::VfsNode;
-    use abi::syscall::poll_flags;
-    use core::sync::atomic::{AtomicBool, Ordering};
 
     static TEST_INTERRUPT_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -599,11 +581,7 @@ mod tests {
     fn read_end_ready_after_write() {
         let (r, w) = make_pair();
         w.write(0, b"hi").expect("write");
-        assert_ne!(
-            r.poll() & poll_flags::POLLIN,
-            0,
-            "should be POLLIN after write"
-        );
+        assert_ne!(r.poll() & poll_flags::POLLIN, 0, "should be POLLIN after write");
     }
 
     #[test]
@@ -614,11 +592,7 @@ mod tests {
         w.close();
         // No data, no writer → POLLIN (EOF indicator) + POLLHUP
         assert_ne!(r.poll() & poll_flags::POLLIN, 0, "POLLIN set on EOF");
-        assert_ne!(
-            r.poll() & poll_flags::POLLHUP,
-            0,
-            "POLLHUP set on writer closed"
-        );
+        assert_ne!(r.poll() & poll_flags::POLLHUP, 0, "POLLHUP set on writer closed");
     }
 
     #[test]
@@ -630,16 +604,8 @@ mod tests {
         w.close();
         // Data available AND writer closed → both POLLIN and POLLHUP.
         let flags = r.poll();
-        assert_ne!(
-            flags & poll_flags::POLLIN,
-            0,
-            "POLLIN set when data present"
-        );
-        assert_ne!(
-            flags & poll_flags::POLLHUP,
-            0,
-            "POLLHUP set when writer gone"
-        );
+        assert_ne!(flags & poll_flags::POLLIN, 0, "POLLIN set when data present");
+        assert_ne!(flags & poll_flags::POLLHUP, 0, "POLLHUP set when writer gone");
     }
 
     // ── Write-end poll semantics ───────────────────────────────────────────
@@ -647,11 +613,7 @@ mod tests {
     #[test]
     fn write_end_ready_when_buffer_has_space() {
         let (_r, w) = make_pair();
-        assert_ne!(
-            w.poll() & poll_flags::POLLOUT,
-            0,
-            "POLLOUT when space available"
-        );
+        assert_ne!(w.poll() & poll_flags::POLLOUT, 0, "POLLOUT when space available");
     }
 
     #[test]
@@ -683,19 +645,12 @@ mod tests {
             PIPES.lock().insert(id, inner.clone());
             (inner, id)
         };
-        let write_node = Arc::new(PipeWriteNode {
-            inner,
-            pipe_id: _id,
-        });
+        let write_node = Arc::new(PipeWriteNode { inner, pipe_id: _id });
 
         // Fill the buffer.
         write_node.write(0, b"X").expect("first write");
         // Buffer now full → POLLOUT should not be set.
-        assert_eq!(
-            write_node.poll() & poll_flags::POLLOUT,
-            0,
-            "POLLOUT clear when buffer full"
-        );
+        assert_eq!(write_node.poll() & poll_flags::POLLOUT, 0, "POLLOUT clear when buffer full");
     }
 
     #[test]
@@ -708,10 +663,7 @@ mod tests {
             read_waitq: WaitQueue::new(),
             write_waitq: WaitQueue::new(),
         }));
-        let read_node = PipeReadNode {
-            inner: inner.clone(),
-            pipe_id: 1,
-        };
+        let read_node = PipeReadNode { inner: inner.clone(), pipe_id: 1 };
         unsafe {
             CURRENT_TID_HOOK = Some(test_current_tid);
             TAKE_PENDING_INTERRUPT_HOOK = Some(test_take_interrupt);
@@ -736,10 +688,7 @@ mod tests {
             read_waitq: WaitQueue::new(),
             write_waitq: WaitQueue::new(),
         }));
-        let write_node = PipeWriteNode {
-            inner: inner.clone(),
-            pipe_id: 2,
-        };
+        let write_node = PipeWriteNode { inner: inner.clone(), pipe_id: 2 };
         write_node.write(0, b"x").expect("fill pipe");
 
         unsafe {

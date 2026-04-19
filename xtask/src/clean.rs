@@ -1,7 +1,8 @@
 //! Clean tasks.
 
-use crate::common::Result;
 use xshell::{Shell, cmd};
+
+use crate::common::Result;
 
 /// Clean build artifacts plus fetched/vendor state.
 pub fn clean(sh: &Shell) -> Result<()> {

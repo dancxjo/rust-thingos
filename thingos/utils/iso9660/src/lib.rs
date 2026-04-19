@@ -35,12 +35,11 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+
 use stem::block::{BlockDevice, BlockError};
 
 /// ISO9660 sector size (logical block size).
@@ -209,10 +208,7 @@ impl IsoFs {
         extent_lba: u32,
         size: u32,
     ) -> Vec<IsoDirEntry> {
-        let key = DirCacheKey {
-            extent_lba,
-            data_length: size,
-        };
+        let key = DirCacheKey { extent_lba, data_length: size };
 
         // Check if already cached
         {
@@ -235,9 +231,7 @@ impl IsoFs {
         let entries = self.parse_dir_entries(dev, extent_lba, size);
 
         // Cache the parsed entries and return a clone from the cache
-        self.dir_cache
-            .borrow_mut()
-            .insert(key, DirIndex { entries });
+        self.dir_cache.borrow_mut().insert(key, DirIndex { entries });
 
         // Return a clone of the cached entries
         self.dir_cache.borrow().get(&key).unwrap().entries.clone()
@@ -257,10 +251,7 @@ impl IsoFs {
         let buf_size = (sectors_needed * ISO_SECTOR_SIZE) as usize;
         let mut buf = alloc::vec![0u8; buf_size];
 
-        if dev
-            .read_sectors(extent_lba as u64, sectors_needed, &mut buf)
-            .is_err()
-        {
+        if dev.read_sectors(extent_lba as u64, sectors_needed, &mut buf).is_err() {
             return entries;
         }
 
@@ -401,13 +392,9 @@ impl IsoFs {
                                     let ce_start = ce_byte_offset as usize;
                                     let ce_end = ce_start + ce_length as usize;
                                     let mut ce_pos = ce_start;
-                                    while ce_pos + 4 <= ce_end
-                                        && ce_pos + 4 <= ce_buf.len()
-                                    {
-                                        let ce_sig =
-                                            &ce_buf[ce_pos..ce_pos + 2];
-                                        let ce_len =
-                                            ce_buf[ce_pos + 2] as usize;
+                                    while ce_pos + 4 <= ce_end && ce_pos + 4 <= ce_buf.len() {
+                                        let ce_sig = &ce_buf[ce_pos..ce_pos + 2];
+                                        let ce_len = ce_buf[ce_pos + 2] as usize;
                                         if ce_len < 4
                                             || ce_pos + ce_len > ce_end
                                             || ce_pos + ce_len > ce_buf.len()
@@ -418,14 +405,10 @@ impl IsoFs {
                                             let name_start = ce_pos + 5;
                                             let name_end = ce_pos + ce_len;
                                             if name_end > name_start {
-                                                if let Ok(nm_part) =
-                                                    core::str::from_utf8(
-                                                        &ce_buf[name_start
-                                                            ..name_end],
-                                                    )
-                                                {
-                                                    rock_ridge_name
-                                                        .push_str(nm_part);
+                                                if let Ok(nm_part) = core::str::from_utf8(
+                                                    &ce_buf[name_start..name_end],
+                                                ) {
+                                                    rock_ridge_name.push_str(nm_part);
                                                     found_nm = true;
                                                 }
                                             }
@@ -500,10 +483,7 @@ impl IsoFs {
         for (i, part) in parts.iter().enumerate() {
             let is_last = i == parts.len() - 1;
             let entries = self.list_dir(dev, current_extent, current_size);
-            let entry = entries
-                .iter()
-                .find(|e| Self::ascii_eq_ignore_case(&e.name, part))?
-                .clone();
+            let entry = entries.iter().find(|e| Self::ascii_eq_ignore_case(&e.name, part))?.clone();
 
             if is_last {
                 return Some(entry);
@@ -542,15 +522,10 @@ impl IsoFs {
             let entries = self.list_dir(dev, current_extent, current_size);
 
             // Use allocation-free case-insensitive comparison
-            let entry = entries
-                .iter()
-                .find(|e| Self::ascii_eq_ignore_case(&e.name, part))?;
+            let entry = entries.iter().find(|e| Self::ascii_eq_ignore_case(&e.name, part))?;
 
             if is_last {
-                return Some(IsoFile {
-                    extent_lba: entry.extent_lba,
-                    size: entry.size,
-                });
+                return Some(IsoFile { extent_lba: entry.extent_lba, size: entry.size });
             } else {
                 if !entry.is_directory {
                     return None;
@@ -598,11 +573,7 @@ impl IsoFile {
         let buf_size = (sectors_to_read * ISO_SECTOR_SIZE) as usize;
         let mut buf = alloc::vec![0u8; buf_size];
 
-        dev.read_sectors(
-            self.extent_lba as u64 + start_sector,
-            sectors_to_read,
-            &mut buf,
-        )?;
+        dev.read_sectors(self.extent_lba as u64 + start_sector, sectors_to_read, &mut buf)?;
 
         let start_in_buf = (offset % ISO_SECTOR_SIZE) as usize;
         Ok(buf[start_in_buf..start_in_buf + actual_len].to_vec())
@@ -1108,11 +1079,7 @@ mod tests {
 
         off += record_len;
 
-        let dev = CeMockDevice {
-            dir_sector: dir_buf,
-            ce_lba: CE_LBA as u64,
-            ce_sector,
-        };
+        let dev = CeMockDevice { dir_sector: dir_buf, ce_lba: CE_LBA as u64, ce_sector };
 
         let iso = IsoFs {
             pvd: PrimaryVolumeDescriptor {
@@ -1147,9 +1114,7 @@ mod tests {
 
     impl MockIsoImage {
         fn new() -> Self {
-            Self {
-                sectors: BTreeMap::new(),
-            }
+            Self { sectors: BTreeMap::new() }
         }
 
         fn set_sector(&mut self, lba: u64, data: &[u8]) {
@@ -1207,36 +1172,12 @@ mod tests {
         let mut root_buf = [0u8; 2048];
         let mut offset = 0;
         // . and ..
-        write_dir_record(
-            &mut root_buf,
-            &mut offset,
-            "\x00",
-            root_lba,
-            root_size,
-            2,
-            None,
-        );
-        write_dir_record(
-            &mut root_buf,
-            &mut offset,
-            "\x01",
-            root_lba,
-            root_size,
-            2,
-            None,
-        );
+        write_dir_record(&mut root_buf, &mut offset, "\x00", root_lba, root_size, 2, None);
+        write_dir_record(&mut root_buf, &mut offset, "\x01", root_lba, root_size, 2, None);
         // SUBDIR
         write_dir_record(&mut root_buf, &mut offset, "SUBDIR", 200, 2048, 2, None);
         // ROOTFILE.TXT;1
-        write_dir_record(
-            &mut root_buf,
-            &mut offset,
-            "ROOTFILE.TXT;1",
-            300,
-            100,
-            0,
-            None,
-        );
+        write_dir_record(&mut root_buf, &mut offset, "ROOTFILE.TXT;1", 300, 100, 0, None);
         image.set_sector(100, &root_buf);
 
         // SUBDIR (LBA 200)

@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
-use crate::{PhysRange, PhysRangeKind};
 use alloc::vec::Vec;
+
+use crate::{PhysRange, PhysRangeKind};
 
 pub fn normalize(mut ranges: Vec<PhysRange>) -> Vec<PhysRange> {
     // 1. Sort by start address
@@ -27,27 +28,16 @@ pub fn normalize(mut ranges: Vec<PhysRange>) -> Vec<PhysRange> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
+
+    use super::*;
 
     #[test]
     fn test_sorting_and_coalescing() {
         let input = vec![
-            PhysRange {
-                start: 100,
-                end: 200,
-                kind: PhysRangeKind::Usable,
-            },
-            PhysRange {
-                start: 0,
-                end: 100,
-                kind: PhysRangeKind::Usable,
-            },
-            PhysRange {
-                start: 200,
-                end: 300,
-                kind: PhysRangeKind::Reserved,
-            },
+            PhysRange { start: 100, end: 200, kind: PhysRangeKind::Usable },
+            PhysRange { start: 0, end: 100, kind: PhysRangeKind::Usable },
+            PhysRange { start: 200, end: 300, kind: PhysRangeKind::Reserved },
         ];
         let normalized = normalize(input);
 

@@ -5,17 +5,15 @@ use core::default::Default;
 extern crate alloc;
 
 use alloc::collections::BTreeMap;
+
 use stem::println;
 use stem::syscall::{execv, execve, getpid, vfs_close, vfs_mkdir, vfs_open, vfs_unlink, vfs_write};
 
 /// Write `content` to `path`, creating/overwriting it.  Returns `Ok(())` on
 /// success or a string describing the failure.
 fn write_file(path: &str, content: &[u8]) -> Result<(), &'static str> {
-    let fd = vfs_open(
-        path,
-        abi::syscall::vfs_flags::O_RDWR | abi::syscall::vfs_flags::O_CREAT,
-    )
-    .map_err(|_| "open failed")?;
+    let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDWR | abi::syscall::vfs_flags::O_CREAT)
+        .map_err(|_| "open failed")?;
     let mut written = 0;
     while written < content.len() {
         match vfs_write(fd, &content[written..]) {
@@ -73,7 +71,9 @@ fn main(_arg0: usize) -> ! {
                         e
                     ),
                     Ok(()) => {
-                        println!("TEST_EXEC: [FAIL] shebang with missing interpreter succeeded unexpectedly");
+                        println!(
+                            "TEST_EXEC: [FAIL] shebang with missing interpreter succeeded unexpectedly"
+                        );
                         stem::syscall::exit(-1);
                     }
                 }
@@ -95,10 +95,9 @@ fn main(_arg0: usize) -> ! {
             Ok(()) => {
                 let res = execve(bad_path, &[b"test_not_exec.txt"], &BTreeMap::new());
                 match res {
-                    Err(e) => println!(
-                        "TEST_EXEC: [PASS] non-executable file returned error: {:?}",
-                        e
-                    ),
+                    Err(e) => {
+                        println!("TEST_EXEC: [PASS] non-executable file returned error: {:?}", e)
+                    }
                     Ok(()) => {
                         println!(
                             "TEST_EXEC: [FAIL] non-executable file exec succeeded unexpectedly"
@@ -120,9 +119,8 @@ fn main(_arg0: usize) -> ! {
     // ── Test 5: execve a valid ELF binary (replaces this process) ────────────
     // We assume /bin/echo exists on the system.
     let path = "/bin/echo";
-    let args: &[&[u8]] = &[
-        b"echo", b"Hello", b"from", b"execve!", b"(PID", b"should", b"be", b"the", b"same)",
-    ];
+    let args: &[&[u8]] =
+        &[b"echo", b"Hello", b"from", b"execve!", b"(PID", b"should", b"be", b"the", b"same)"];
     let env = BTreeMap::new();
 
     println!("TEST_EXEC: Executing {} with args...", path);

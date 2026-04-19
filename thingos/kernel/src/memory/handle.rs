@@ -1,5 +1,6 @@
-use super::arena::ArenaId;
 use core::ptr::NonNull;
+
+use super::arena::ArenaId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvictHandle {
@@ -11,12 +12,7 @@ pub struct EvictHandle {
 
 impl EvictHandle {
     pub fn new(arena_id: ArenaId, generation: u64, offset: u32, len: u32) -> Self {
-        Self {
-            arena_id,
-            generation,
-            offset,
-            len,
-        }
+        Self { arena_id, generation, offset, len }
     }
 
     /// Resolve the handle to a pointer.

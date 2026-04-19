@@ -11,10 +11,7 @@ fn repo_root() -> PathBuf {
 fn read_repo_file(relative_path: &str) -> String {
     let path = repo_root().join(relative_path);
     fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!(
-            "failed to read guardrail target file '{}': {err}",
-            path.display()
-        )
+        panic!("failed to read guardrail target file '{}': {err}", path.display())
     })
 }
 
@@ -34,9 +31,7 @@ fn assert_no_forbidden_tokens(relative_path: &str, forbidden_tokens: &[&str]) {
 
 fn thread_sched_fields_block(state_rs: &str) -> &str {
     const STRUCT_DECL: &str = "pub struct ThreadSchedFields {";
-    let start = state_rs
-        .find(STRUCT_DECL)
-        .expect("ThreadSchedFields struct must exist");
+    let start = state_rs.find(STRUCT_DECL).expect("ThreadSchedFields struct must exist");
     let open_brace = start + STRUCT_DECL.len() - 1;
     assert_eq!(
         state_rs.as_bytes().get(open_brace).copied(),

@@ -1,6 +1,7 @@
-use crate::BootRuntime;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::BootRuntime;
 
 pub struct SimdGuard<'a, R: BootRuntime> {
     _rt: &'a R,
@@ -32,10 +33,7 @@ unsafe impl Sync for SimdState {}
 
 impl SimdState {
     pub fn new<R: BootRuntime>(_rt: &R) -> Self {
-        Self {
-            buffer: [0; 544],
-            valid: false,
-        }
+        Self { buffer: [0; 544], valid: false }
     }
 
     fn aligned_ptr(&self) -> *mut u8 {
@@ -50,10 +48,7 @@ impl SimdState {
     pub fn save<R: BootRuntime>(&mut self, rt: &R) {
         let ptr = self.aligned_ptr();
         if (ptr as usize) % 16 != 0 {
-            crate::kinfo!(
-                "SIMD ALIGNMENT ERROR! buffer is NOT 16-byte aligned! ptr={:p}",
-                ptr
-            );
+            crate::kinfo!("SIMD ALIGNMENT ERROR! buffer is NOT 16-byte aligned! ptr={:p}", ptr);
         }
         unsafe { rt.simd_save(ptr) };
         self.valid = true;

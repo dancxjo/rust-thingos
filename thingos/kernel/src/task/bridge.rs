@@ -42,8 +42,9 @@
 //! Both `Thread` and `Process` remain the transitional backing; first-class
 //! `Task` and `Job` kernel objects will replace them as the scheduler migrates.
 
-use crate::task::ThreadState;
 use thingos::task::{Task, TaskState};
+
+use crate::task::ThreadState;
 
 /// Convert a kernel-internal `ThreadState` into the canonical `TaskState`.
 ///
@@ -64,11 +65,7 @@ pub fn task_state_from_thread(state: ThreadState) -> TaskState {
 /// left as `None`.  Prefer [`task_from_snapshot`] when a `ProcessSnapshot` is
 /// available so that the richer Task shape can be fully populated.
 pub fn task_from_thread_state(state: ThreadState) -> Task {
-    Task {
-        state: task_state_from_thread(state),
-        job: None,
-        name: None,
-    }
+    Task { state: task_state_from_thread(state), job: None, name: None }
 }
 
 /// Construct a canonical `Task` from a [`crate::sched::hooks::ProcessSnapshot`].
@@ -95,11 +92,10 @@ pub fn task_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> Ta
 
 // --- Compatibility Aliases ---
 
-/// Alias for [`task_state_from_thread`].
-pub use task_state_from_thread as thread_state_to_task_state;
-
 /// Alias for [`task_from_thread_state`].
 pub use task_from_thread_state as thread_state_to_task;
+/// Alias for [`task_state_from_thread`].
+pub use task_state_from_thread as thread_state_to_task_state;
 
 #[cfg(test)]
 mod tests {
@@ -216,10 +212,7 @@ mod tests {
 
     #[test]
     fn test_thread_state_to_task_state_alias() {
-        assert_eq!(
-            thread_state_to_task_state(ThreadState::Dead),
-            TaskState::Exited
-        );
+        assert_eq!(thread_state_to_task_state(ThreadState::Dead), TaskState::Exited);
     }
 
     #[test]

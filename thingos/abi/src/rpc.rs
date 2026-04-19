@@ -110,11 +110,7 @@ impl RpcHeader {
         let request_id = u64::from_le_bytes(src[0..8].try_into().unwrap());
         let flags = src[8];
         let _pad: [u8; 5] = src[9..14].try_into().unwrap();
-        Some(Self {
-            request_id,
-            flags,
-            _pad,
-        })
+        Some(Self { request_id, flags, _pad })
     }
 
     /// Returns `true` if this is a request message.
@@ -144,31 +140,19 @@ impl RpcHeader {
     /// Build a request header with the given `request_id`.
     #[inline]
     pub const fn request(request_id: u64) -> Self {
-        Self {
-            request_id,
-            flags: RPC_FLAG_REQUEST,
-            _pad: [0; 5],
-        }
+        Self { request_id, flags: RPC_FLAG_REQUEST, _pad: [0; 5] }
     }
 
     /// Build a reply header echoing `request_id`.
     #[inline]
     pub const fn reply(request_id: u64) -> Self {
-        Self {
-            request_id,
-            flags: RPC_FLAG_REPLY,
-            _pad: [0; 5],
-        }
+        Self { request_id, flags: RPC_FLAG_REPLY, _pad: [0; 5] }
     }
 
     /// Build an error-reply header echoing `request_id`.
     #[inline]
     pub const fn error_reply(request_id: u64) -> Self {
-        Self {
-            request_id,
-            flags: RPC_FLAG_REPLY | RPC_FLAG_ERROR,
-            _pad: [0; 5],
-        }
+        Self { request_id, flags: RPC_FLAG_REPLY | RPC_FLAG_ERROR, _pad: [0; 5] }
     }
 }
 

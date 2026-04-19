@@ -67,8 +67,9 @@ fn font_graph_keys_exist() {
 
 #[test]
 fn font_kinds_no_collision() {
-    use abi::schema::kinds;
     use std::collections::HashSet;
+
+    use abi::schema::kinds;
 
     let mut seen = HashSet::new();
     let kinds = [
@@ -95,10 +96,7 @@ fn font_protocol_encode_decode_roundtrip() {
     use abi::wire::ThingId;
 
     // Test GetFaceMetrics
-    let req = GetFaceMetrics {
-        face_id: ThingId::from_u64(0x12345678),
-        px_size: 16,
-    };
+    let req = GetFaceMetrics { face_id: ThingId::from_u64(0x12345678), px_size: 16 };
     let mut buf = [0u8; 64];
     let len = req.encode(&mut buf).unwrap();
     let decoded = GetFaceMetrics::decode(&buf[1..len]).unwrap();
@@ -106,12 +104,7 @@ fn font_protocol_encode_decode_roundtrip() {
     assert_eq!(decoded.px_size, 16);
 
     // Test FaceMetrics
-    let metrics = FaceMetrics {
-        ascent: 800,
-        descent: -200,
-        line_gap: 100,
-        units_per_em: 1000,
-    };
+    let metrics = FaceMetrics { ascent: 800, descent: -200, line_gap: 100, units_per_em: 1000 };
     let mut buf = [0u8; 64];
     let len = metrics.encode(&mut buf).unwrap();
     let decoded = FaceMetrics::decode(&buf[1..len]).unwrap();

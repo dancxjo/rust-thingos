@@ -9,8 +9,9 @@
 //! New code should resolve resources through this bridge rather than manually
 //! probing `handle_table` and global IPC handle tables in syscall handlers.
 
-use abi::errors::{Errno, SysResult};
 use alloc::sync::Arc;
+
+use abi::errors::{Errno, SysResult};
 use spin::Mutex;
 
 /// Canonical kernel handle token.
@@ -28,14 +29,8 @@ pub enum HandleKind {
 /// Resolved handle target across compatibility tables.
 #[derive(Clone)]
 pub enum ResolvedHandle {
-    FileLike {
-        kind: HandleKind,
-        node: Arc<dyn crate::vfs::VfsNode>,
-    },
-    Port {
-        port: Arc<crate::ipc::Port>,
-        mode: crate::ipc::IpcHandleMode,
-    },
+    FileLike { kind: HandleKind, node: Arc<dyn crate::vfs::VfsNode> },
+    Port { port: Arc<crate::ipc::Port>, mode: crate::ipc::IpcHandleMode },
 }
 
 impl ResolvedHandle {
@@ -97,17 +92,11 @@ pub fn resolve_handle(
     let lock = pinfo_arc.lock();
     if let Ok(file) = lock.handle_table.get(handle.0) {
         let node = file.node.clone();
-        return Ok(ResolvedHandle::FileLike {
-            kind: classify_file_like(&node),
-            node,
-        });
+        return Ok(ResolvedHandle::FileLike { kind: classify_file_like(&node), node });
     }
 
     let entry = lookup_ipc_entry_any(&lock.ipc_table, handle)?;
-    Ok(ResolvedHandle::Port {
-        port: entry.port.clone(),
-        mode: entry.mode,
-    })
+    Ok(ResolvedHandle::Port { port: entry.port.clone(), mode: entry.mode })
 }
 
 /// Resolve a handle for stream I/O call paths that consume a `VfsNode`.
@@ -141,7 +130,13 @@ pub fn install_fd_compat_for_port_handle(
         },
         alloc::format!("handle:{}", handle.0),
     )?;
-    crate::kinfo!("BRIDGE: handle={} -> fd={} node={:p} port={:p}", handle.0, fd, Arc::as_ptr(&node), Arc::as_ptr(&entry.port));
+    crate::kinfo!(
+        "BRIDGE: handle={} -> fd={} node={:p} port={:p}",
+        handle.0,
+        fd,
+        Arc::as_ptr(&node),
+        Arc::as_ptr(&entry.port)
+    );
     Ok(fd)
 }
 
@@ -218,9 +213,7 @@ mod tests {
         let pinfo = make_test_process_with_thing_table(&[(0, node)]); // Use a placeholder FD
         let handle = {
             let mut lock = pinfo.lock();
-            lock.ipc_table
-                .alloc(port, crate::ipc::IpcHandleMode::Read)
-                .expect("allocate handle")
+            lock.ipc_table.alloc(port, crate::ipc::IpcHandleMode::Read).expect("allocate handle")
         };
 
         // Re-create pinfo with the handle in handle_table to test preference
@@ -231,7 +224,14 @@ mod tests {
         {
             let port_id2 = crate::ipc::create_port(8);
             let port2 = crate::ipc::get_port(port_id2).unwrap();
-            pinfo.lock().ipc_table.insert_at(handle.0 as usize, crate::ipc::IpcHandleEntry::new(port2, crate::ipc::IpcHandleMode::Read)).unwrap();
+            pinfo
+                .lock()
+                .ipc_table
+                .insert_at(
+                    handle.0 as usize,
+                    crate::ipc::IpcHandleEntry::new(port2, crate::ipc::IpcHandleMode::Read),
+                )
+                .unwrap();
         }
         let resolved = resolve_handle(&pinfo, Handle(handle.0)).expect("resolve");
         assert_eq!(resolved.kind(), HandleKind::File);
@@ -247,9 +247,7 @@ mod tests {
         let pinfo = make_test_process_with_thing_table(&[]);
         let handle = {
             let mut lock = pinfo.lock();
-            lock.ipc_table
-                .alloc(port, crate::ipc::IpcHandleMode::Read)
-                .expect("allocate handle")
+            lock.ipc_table.alloc(port, crate::ipc::IpcHandleMode::Read).expect("allocate handle")
         };
 
         let fd = install_fd_compat_for_port_handle(&pinfo, Handle(handle.0)).expect("fd");

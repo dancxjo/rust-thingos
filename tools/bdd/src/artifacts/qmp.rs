@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
@@ -46,17 +47,11 @@ pub async fn execute_on_stream(
                     }
                 }
                 Ok(Ok(0)) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "EOF",
-                    ));
+                    return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "EOF"));
                 }
                 Ok(Err(e)) => return Err(e),
                 Err(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "Read timeout",
-                    ));
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Read timeout"));
                 }
                 Ok(Ok(_)) => unreachable!(),
             }
@@ -102,9 +97,7 @@ pub async fn connect_qmp(
     let mut buf = vec![0u8; 4096];
     let _ = stream.readable().await;
     let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await?;
-    stream
-        .write_all(b"{\"execute\": \"qmp_capabilities\"}\n")
-        .await?;
+    stream.write_all(b"{\"execute\": \"qmp_capabilities\"}\n").await?;
     let _ = stream.readable().await;
     let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await?;
     Ok(stream)
@@ -217,10 +210,7 @@ pub async fn dump_registers_global(
     let content = if let Some(start) = response_str.find("\"return\": \"") {
         let remainder = &response_str[start + 11..];
         if let Some(end) = remainder.rfind("\"}") {
-            remainder[..end]
-                .replace("\\r\\n", "\n")
-                .replace("\\n", "\n")
-                .replace("\\\"", "\"")
+            remainder[..end].replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\\"", "\"")
         } else {
             response_str
         }

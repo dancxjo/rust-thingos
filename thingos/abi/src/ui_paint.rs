@@ -85,10 +85,7 @@ impl PaintBuilder {
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         debug_assert_eq!(bytes.len(), UI_PAINT_HEADER_BYTES);
-        Self {
-            bytes,
-            cmd_count: 0,
-        }
+        Self { bytes, cmd_count: 0 }
     }
 
     pub fn push_clip(&mut self, x: i32, y: i32, w: i32, h: i32) {
@@ -208,8 +205,7 @@ impl PaintBuilder {
 
     fn push_cmd(&mut self, tag: PaintOpTag, payload: &[u8]) {
         self.bytes.extend_from_slice(&tag.as_raw().to_le_bytes());
-        self.bytes
-            .extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        self.bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         self.bytes.extend_from_slice(payload);
         self.cmd_count = self.cmd_count.saturating_add(1);
     }
@@ -241,11 +237,7 @@ impl<'a> PaintReader<'a> {
             return None;
         }
         let cmd_count = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
-        Some(Self {
-            bytes,
-            cursor: UI_PAINT_HEADER_BYTES,
-            remaining: cmd_count,
-        })
+        Some(Self { bytes, cursor: UI_PAINT_HEADER_BYTES, remaining: cmd_count })
     }
 }
 
@@ -260,11 +252,7 @@ impl<'a> Iterator for PaintReader<'a> {
             return None;
         }
         let tag_raw = u32::from_le_bytes(self.bytes[self.cursor..self.cursor + 4].try_into().ok()?);
-        let len = u32::from_le_bytes(
-            self.bytes[self.cursor + 4..self.cursor + 8]
-                .try_into()
-                .ok()?,
-        );
+        let len = u32::from_le_bytes(self.bytes[self.cursor + 4..self.cursor + 8].try_into().ok()?);
         let payload_start = self.cursor + 8;
         let payload_end = payload_start + len as usize;
         if payload_end > self.bytes.len() {

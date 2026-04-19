@@ -63,10 +63,18 @@ impl RingBuf {
         Self { data, head: 0, tail: 0, len: 0, cap }
     }
 
-    fn is_empty(&self) -> bool { self.len == 0 }
-    fn is_full(&self)  -> bool { self.len == self.cap }
-    fn available(&self) -> usize { self.len }
-    fn free_space(&self) -> usize { self.cap - self.len }
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    fn is_full(&self) -> bool {
+        self.len == self.cap
+    }
+    fn available(&self) -> usize {
+        self.len
+    }
+    fn free_space(&self) -> usize {
+        self.cap - self.len
+    }
 
     fn dequeue(&mut self, dst: &mut [u8]) -> usize {
         let n = dst.len().min(self.len);
@@ -100,7 +108,7 @@ const DEFAULT_SOCK_CAPACITY: usize = 4096;
 /// handles (VFS nodes).  Used by the `sendmsg`/`recvmsg` path.
 struct SockMsg {
     data: Vec<u8>,
-    fds:  Vec<Arc<dyn VfsNode>>,
+    fds: Vec<Arc<dyn VfsNode>>,
 }
 
 /// State shared between the two ends of a connected socket pair.
@@ -133,14 +141,14 @@ pub struct SocketPeer {
 impl SocketPeer {
     fn new() -> Self {
         Self {
-            a_to_b:        RingBuf::new(DEFAULT_SOCK_CAPACITY),
-            b_to_a:        RingBuf::new(DEFAULT_SOCK_CAPACITY),
-            msgs_a_to_b:   VecDeque::new(),
-            msgs_b_to_a:   VecDeque::new(),
-            a_alive:       true,
-            b_alive:       true,
-            a_read_waitq:  WaitQueue::new(),
-            b_read_waitq:  WaitQueue::new(),
+            a_to_b: RingBuf::new(DEFAULT_SOCK_CAPACITY),
+            b_to_a: RingBuf::new(DEFAULT_SOCK_CAPACITY),
+            msgs_a_to_b: VecDeque::new(),
+            msgs_b_to_a: VecDeque::new(),
+            a_alive: true,
+            b_alive: true,
+            a_read_waitq: WaitQueue::new(),
+            b_read_waitq: WaitQueue::new(),
             a_write_waitq: WaitQueue::new(),
             b_write_waitq: WaitQueue::new(),
         }
@@ -163,11 +171,7 @@ pub struct ListeningSocket {
 
 impl ListeningSocket {
     fn new(backlog: usize) -> Self {
-        Self {
-            backlog,
-            accept_queue: Mutex::new(VecDeque::new()),
-            accept_waitq: WaitQueue::new(),
-        }
+        Self { backlog, accept_queue: Mutex::new(VecDeque::new()), accept_waitq: WaitQueue::new() }
     }
 
     pub fn queue_len(&self) -> usize {
@@ -179,8 +183,7 @@ impl ListeningSocket {
 // Global socket registry — path → ListeningSocket
 // ---------------------------------------------------------------------------
 
-static SOCKET_REGISTRY: Mutex<BTreeMap<String, Arc<ListeningSocket>>> =
-    Mutex::new(BTreeMap::new());
+static SOCKET_REGISTRY: Mutex<BTreeMap<String, Arc<ListeningSocket>>> = Mutex::new(BTreeMap::new());
 
 /// Register a path in the global socket registry, overwriting any stale entry.
 fn registry_insert(path: &str, listener: Arc<ListeningSocket>) {
@@ -203,7 +206,10 @@ fn registry_get(path: &str) -> Option<Arc<ListeningSocket>> {
 
 /// Which side of a connected [`SocketPeer`] this node represents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Side { A, B }
+enum Side {
+    A,
+    B,
+}
 
 /// Internal state of a [`UnixSocketNode`].
 enum SocketState {
@@ -223,7 +229,7 @@ static NEXT_SOCKET_INO: AtomicU64 = AtomicU64::new(1);
 
 /// A Unix domain stream socket exposed as a [`VfsNode`].
 pub struct UnixSocketNode {
-    ino:   u64,
+    ino: u64,
     state: Mutex<SocketState>,
 }
 
@@ -231,7 +237,7 @@ impl UnixSocketNode {
     /// Create a new unbound socket.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            ino:   NEXT_SOCKET_INO.fetch_add(1, Ordering::Relaxed),
+            ino: NEXT_SOCKET_INO.fetch_add(1, Ordering::Relaxed),
             state: Mutex::new(SocketState::Unbound),
         })
     }
@@ -357,12 +363,8 @@ impl UnixSocketNode {
             SocketState::Unbound => {}
             _ => return Err(abi::errors::Errno::EINVAL),
         }
-        *state = SocketState::Connected {
-            side: Side::A,
-            peer,
-            shutdown_rd: false,
-            shutdown_wr: false,
-        };
+        *state =
+            SocketState::Connected { side: Side::A, peer, shutdown_rd: false, shutdown_wr: false };
         Ok(())
     }
 
@@ -373,7 +375,9 @@ impl UnixSocketNode {
             SocketState::Connected { side, peer, shutdown_rd, shutdown_wr } => {
                 let shut_rd = how == 0 || how == 2;
                 let shut_wr = how == 1 || how == 2;
-                if shut_rd { *shutdown_rd = true; }
+                if shut_rd {
+                    *shutdown_rd = true;
+                }
                 if shut_wr {
                     *shutdown_wr = true;
                     // Wake the peer's readers so they see EOF.
@@ -422,8 +426,14 @@ impl VfsNode for UnixSocketNode {
                         }
                         let mut p = peer.lock();
                         // Extract bool copies before taking any mutable borrow.
-                        let other_alive = match side { Side::A => p.b_alive, Side::B => p.a_alive };
-                        let has_data = match side { Side::A => !p.b_to_a.is_empty(), Side::B => !p.a_to_b.is_empty() };
+                        let other_alive = match side {
+                            Side::A => p.b_alive,
+                            Side::B => p.a_alive,
+                        };
+                        let has_data = match side {
+                            Side::A => !p.b_to_a.is_empty(),
+                            Side::B => !p.a_to_b.is_empty(),
+                        };
 
                         if has_data {
                             let n = match side {
@@ -474,8 +484,14 @@ impl VfsNode for UnixSocketNode {
                         }
                         let mut p = peer.lock();
                         // Extract bool copies before taking any mutable borrow.
-                        let other_alive = match side { Side::A => p.b_alive, Side::B => p.a_alive };
-                        let tx_full = match side { Side::A => p.a_to_b.is_full(), Side::B => p.b_to_a.is_full() };
+                        let other_alive = match side {
+                            Side::A => p.b_alive,
+                            Side::B => p.a_alive,
+                        };
+                        let tx_full = match side {
+                            Side::A => p.a_to_b.is_full(),
+                            Side::B => p.b_to_a.is_full(),
+                        };
 
                         if !other_alive {
                             return Err(abi::errors::Errno::EPIPE);
@@ -646,7 +662,10 @@ impl VfsNode for UnixSocketNode {
                     return Err(abi::errors::Errno::EPIPE);
                 }
                 let mut p = peer.lock();
-                if !match side { Side::A => p.b_alive, Side::B => p.a_alive } {
+                if !match side {
+                    Side::A => p.b_alive,
+                    Side::B => p.a_alive,
+                } {
                     return Err(abi::errors::Errno::EPIPE);
                 }
                 let msg = SockMsg { data: data.to_vec(), fds };
@@ -669,9 +688,8 @@ impl VfsNode for UnixSocketNode {
 
     fn sock_recvmsg(
         &self,
-    ) -> abi::errors::SysResult<
-        Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<Arc<dyn VfsNode>>)>,
-    > {
+    ) -> abi::errors::SysResult<Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<Arc<dyn VfsNode>>)>>
+    {
         let state = self.state.lock();
         match &*state {
             SocketState::Connected { side, peer, shutdown_rd, .. } => {
@@ -708,9 +726,7 @@ pub struct SocketFileMarker {
 
 impl SocketFileMarker {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            ino: NEXT_SOCKET_INO.fetch_add(1, Ordering::Relaxed),
-        })
+        Arc::new(Self { ino: NEXT_SOCKET_INO.fetch_add(1, Ordering::Relaxed) })
     }
 }
 
@@ -739,13 +755,18 @@ impl VfsNode for SocketFileMarker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use abi::syscall::poll_flags;
+
+    use super::*;
 
     // Wire up no-op scheduling hooks for tests.
     fn setup_test_hooks() {
-        fn tid() -> u64 { 1 }
-        fn no_interrupt() -> bool { false }
+        fn tid() -> u64 {
+            1
+        }
+        fn no_interrupt() -> bool {
+            false
+        }
         unsafe {
             crate::sched::hooks::CURRENT_TID_HOOK = Some(tid);
             crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK = Some(no_interrupt);
@@ -791,7 +812,7 @@ mod tests {
 
         // Both writable, neither readable initially.
         assert_ne!(a.poll() & poll_flags::POLLOUT, 0, "A writable");
-        assert_eq!(a.poll() & poll_flags::POLLIN,  0, "A not readable");
+        assert_eq!(a.poll() & poll_flags::POLLIN, 0, "A not readable");
 
         a.write(0, b"x").expect("write");
 
@@ -857,9 +878,7 @@ mod tests {
     fn connect_to_nonexistent_path_returns_econnrefused() {
         setup_test_hooks();
         let client = UnixSocketNode::new();
-        let err = client
-            .connect("/run/no_such_socket")
-            .expect_err("connect to missing");
+        let err = client.connect("/run/no_such_socket").expect_err("connect to missing");
         assert_eq!(err, abi::errors::Errno::ECONNREFUSED);
     }
 }

@@ -1,7 +1,8 @@
-use abi::errors::{Errno, SysResult};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+use abi::errors::{Errno, SysResult};
 use spin::Mutex;
 
 use crate::task::ProcessInfo;
@@ -38,12 +39,7 @@ pub fn task_exec_current<R: BootRuntime>(
     let sibling_tids: Vec<crate::task::TaskId> = {
         let mut pinfo = pinfo_arc.lock();
         pinfo.job.exec_in_progress = true;
-        pinfo
-            .job.thread_ids
-            .iter()
-            .copied()
-            .filter(|&t| t != tid)
-            .collect()
+        pinfo.job.thread_ids.iter().copied().filter(|&t| t != tid).collect()
     };
 
     // 2. Kill sibling threads so they cannot resume in the old address space.
@@ -140,9 +136,7 @@ pub fn task_exec_current<R: BootRuntime>(
     //     into the same address space at a high base, then hand control to it.
     //     The interpreter is responsible for processing DT_NEEDED libraries,
     //     relocating symbols, and jumping to the real entry point (AT_ENTRY).
-    if let Some(interp_path_bytes) =
-        crate::task::loader::extract_interp_path(static_bytes)
-    {
+    if let Some(interp_path_bytes) = crate::task::loader::extract_interp_path(static_bytes) {
         crate::kinfo!(
             "EXEC: PT_INTERP found: {:?}",
             core::str::from_utf8(&interp_path_bytes).unwrap_or("<invalid>")
@@ -158,11 +152,7 @@ pub fn task_exec_current<R: BootRuntime>(
         let interp_node = match crate::vfs::mount::lookup(path_str) {
             Ok(n) => n,
             Err(e) => {
-                crate::kwarn!(
-                    "EXEC: Failed to open interpreter '{}': {:?}",
-                    path_str,
-                    e
-                );
+                crate::kwarn!("EXEC: Failed to open interpreter '{}': {:?}", path_str, e);
                 abort_exec!(e);
             }
         };
@@ -196,8 +186,7 @@ pub fn task_exec_current<R: BootRuntime>(
         // Use 0x7F00_0000 for x86_64 — well within the 47-bit user VA range.
         const INTERP_LOAD_BASE: u64 = 0x7F00_0000;
 
-        let static_interp: &'static [u8] =
-            unsafe { core::mem::transmute(&interp_buf as &[u8]) };
+        let static_interp: &'static [u8] = unsafe { core::mem::transmute(&interp_buf as &[u8]) };
         let interp_module = crate::BootModuleDesc {
             name: "ld.so",
             cmdline: "",
@@ -309,8 +298,7 @@ pub fn task_exec_current<R: BootRuntime>(
     // Discard the outgoing FS_BASE; switch in with the new image's TLS pointer.
     let mut _discard_tls: u64 = 0;
     unsafe {
-        rt.tasking()
-            .switch_with_tls(&mut dummy_ctx, &to_ctx, tid, &mut _discard_tls, tls_tp);
+        rt.tasking().switch_with_tls(&mut dummy_ctx, &to_ctx, tid, &mut _discard_tls, tls_tp);
     }
 
     // switch() should never return to this stack because we didn't save it into any task.ctx
@@ -483,8 +471,6 @@ mod tests {
         assert!(!auxv.iter().any(|&(k, _)| k == AT_BASE));
     }
 
-
-
     /// Helper: build a minimal ProcessInfo with two threads.
     fn make_two_thread_pinfo(
         pid: u32,
@@ -546,11 +532,7 @@ mod tests {
         // Simulate the sibling collection step in task_exec_current.
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let pi = pinfo.lock();
-            pi.job.thread_ids
-                .iter()
-                .copied()
-                .filter(|&t| t != caller_tid)
-                .collect()
+            pi.job.thread_ids.iter().copied().filter(|&t| t != caller_tid).collect()
         };
 
         assert_eq!(siblings, alloc::vec![9221], "only sibling should be collected");
@@ -585,11 +567,7 @@ mod tests {
         let caller_tid: crate::task::TaskId = 9230;
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let pi = pinfo.lock();
-            pi.job.thread_ids
-                .iter()
-                .copied()
-                .filter(|&t| t != caller_tid)
-                .collect()
+            pi.job.thread_ids.iter().copied().filter(|&t| t != caller_tid).collect()
         };
 
         assert_eq!(siblings.len(), 2, "two siblings expected");
@@ -619,11 +597,7 @@ mod tests {
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let mut pi = pinfo.lock();
             pi.job.exec_in_progress = true;
-            pi.job.thread_ids
-                .iter()
-                .copied()
-                .filter(|&t| t != caller_tid)
-                .collect()
+            pi.job.thread_ids.iter().copied().filter(|&t| t != caller_tid).collect()
         };
 
         assert!(siblings.is_empty(), "no siblings in single-threaded process");
@@ -641,11 +615,7 @@ mod tests {
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let mut pi = pinfo.lock();
             pi.job.exec_in_progress = true;
-            pi.job.thread_ids
-                .iter()
-                .copied()
-                .filter(|&t| t != caller_tid)
-                .collect()
+            pi.job.thread_ids.iter().copied().filter(|&t| t != caller_tid).collect()
         };
         assert_eq!(siblings, alloc::vec![9251]);
 
@@ -678,10 +648,7 @@ mod tests {
         // Simulate a pre-commit failure (e.g., ENOEXEC).
         pinfo.lock().job.exec_in_progress = false;
 
-        assert!(
-            !pinfo.lock().job.exec_in_progress,
-            "exec_in_progress must be cleared on rollback"
-        );
+        assert!(!pinfo.lock().job.exec_in_progress, "exec_in_progress must be cleared on rollback");
         // thread_ids should be untouched (siblings are still alive in the real
         // failure path because kill_by_tid is only called during the sibling-kill
         // phase which happens before FD resolution and ELF loading).
@@ -694,9 +661,10 @@ mod tests {
 
     // ── HANDLE_CLOEXEC / close-on-exec unit tests ────────────────────────────────
 
+    use abi::errors::SysResult;
+
     use crate::vfs::handle_table::HANDLE_CLOEXEC;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
-    use abi::errors::SysResult;
 
     struct NullNode;
     impl VfsNode for NullNode {
@@ -707,12 +675,7 @@ mod tests {
             Ok(buf.len())
         }
         fn stat(&self) -> SysResult<VfsStat> {
-            Ok(VfsStat {
-                mode: VfsStat::S_IFCHR | 0o666,
-                size: 0,
-                ino: 1,
-                ..Default::default()
-            })
+            Ok(VfsStat { mode: VfsStat::S_IFCHR | 0o666, size: 0, ino: 1, ..Default::default() })
         }
     }
 
@@ -760,10 +723,7 @@ mod tests {
         }
 
         let pi = pinfo.lock();
-        assert!(
-            pi.handle_table.get(0).is_ok(),
-            "fd 0 (no HANDLE_CLOEXEC) must survive exec"
-        );
+        assert!(pi.handle_table.get(0).is_ok(), "fd 0 (no HANDLE_CLOEXEC) must survive exec");
         assert!(
             matches!(pi.handle_table.get(1), Err(abi::errors::Errno::EBADF)),
             "fd 1 (HANDLE_CLOEXEC) must be closed on exec"
@@ -841,9 +801,8 @@ mod tests {
     /// all threads referencing the same process share the **same** `Arc`.
     #[test]
     fn thread_mappings_share_same_arc_as_process() {
-        let mappings_arc = alloc::sync::Arc::new(spin::Mutex::new(
-            crate::memory::mappings::MappingList::new(),
-        ));
+        let mappings_arc =
+            alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()));
 
         // Two threads in the same process, both getting a clone of the same Arc.
         let thread1_mappings = mappings_arc.clone();
@@ -910,7 +869,11 @@ mod tests {
 
         // After exec: process reflects new VM state.
         let pi = pinfo.lock();
-        assert_eq!(pi.space.aspace_raw(), NEW_CR3, "aspace_raw must reflect new page table after exec");
+        assert_eq!(
+            pi.space.aspace_raw(),
+            NEW_CR3,
+            "aspace_raw must reflect new page table after exec"
+        );
         assert_eq!(
             pi.space.mappings().lock().regions.len(),
             1,
@@ -924,9 +887,7 @@ mod tests {
     fn make_pinfo_with_metadata(pid: u32) -> Arc<Mutex<ProcessInfo>> {
         let mut handle_table = crate::vfs::handle_table::HandleTable::new();
         // fd 0: stays open (no HANDLE_CLOEXEC)
-        handle_table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/stdin".into())
-            .unwrap();
+        handle_table.insert_at(0, null_node(), OpenFlags::read_only(), "/stdin".into()).unwrap();
         // fd 1: marked HANDLE_CLOEXEC, must be closed on exec
         handle_table
             .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec_fd".into())
@@ -974,15 +935,21 @@ mod tests {
         assert_eq!(old_argv[0], b"old_binary");
 
         // Simulate exec commit: replace argv.
-        let new_argv: alloc::vec::Vec<alloc::vec::Vec<u8>> = alloc::vec![
-            b"new_binary".to_vec(),
-            b"--new-arg1".to_vec(),
-        ];
+        let new_argv: alloc::vec::Vec<alloc::vec::Vec<u8>> =
+            alloc::vec![b"new_binary".to_vec(), b"--new-arg1".to_vec(),];
         pinfo.lock().unix_compat.set_spawn_context(new_argv.clone(), alloc::vec![]);
 
         let pi = pinfo.lock();
-        assert_eq!(pi.unix_compat.spawn_record().argv(), new_argv, "argv must be completely replaced after exec");
-        assert_ne!(pi.unix_compat.spawn_record().argv(), old_argv, "old argv must not survive exec commit");
+        assert_eq!(
+            pi.unix_compat.spawn_record().argv(),
+            new_argv,
+            "argv must be completely replaced after exec"
+        );
+        assert_ne!(
+            pi.unix_compat.spawn_record().argv(),
+            old_argv,
+            "old argv must not survive exec commit"
+        );
         // Old argv must not appear anywhere in the new argv
         assert!(
             !pi.unix_compat.spawn_record().argv().iter().any(|a| a == b"old_binary"),
@@ -1033,10 +1000,7 @@ mod tests {
             pi.exec_path, "/new/binary",
             "exec_path must be updated to new binary after exec"
         );
-        assert_ne!(
-            pi.exec_path, "/old/binary",
-            "old exec_path must not survive exec commit"
-        );
+        assert_ne!(pi.exec_path, "/old/binary", "old exec_path must not survive exec commit");
     }
 
     /// After a successful exec commit, auxv is rebuilt from the new image.
@@ -1060,7 +1024,11 @@ mod tests {
         pinfo.lock().unix_compat.set_spawn_context(alloc::vec![], new_auxv.clone());
 
         let pi = pinfo.lock();
-        assert_eq!(pi.unix_compat.spawn_record().auxv(), new_auxv, "auxv must be completely replaced after exec");
+        assert_eq!(
+            pi.unix_compat.spawn_record().auxv(),
+            new_auxv,
+            "auxv must be completely replaced after exec"
+        );
         assert!(
             !pi.unix_compat.spawn_record().auxv().contains(&(AT_ENTRY, 0x1000)),
             "old AT_ENTRY value must not survive exec commit"
@@ -1091,10 +1059,7 @@ mod tests {
         let new_argv = alloc::vec![b"new_binary".to_vec()];
         let mut new_env = alloc::collections::BTreeMap::new();
         new_env.insert(b"NEW_VAR".to_vec(), b"new_val".to_vec());
-        let new_info = LoaderAuxInfo {
-            entry_vaddr: 0x402000,
-            ..Default::default()
-        };
+        let new_info = LoaderAuxInfo { entry_vaddr: 0x402000, ..Default::default() };
         let new_auxv = build_auxv(&new_info, 4096);
 
         {
@@ -1203,17 +1168,10 @@ mod tests {
         // ── Phase 2: collect siblings (must exclude caller) ───────────────────
         let siblings: alloc::vec::Vec<crate::task::TaskId> = {
             let pi = pinfo.lock();
-            pi.job.thread_ids
-                .iter()
-                .copied()
-                .filter(|&t| t != caller_tid)
-                .collect()
+            pi.job.thread_ids.iter().copied().filter(|&t| t != caller_tid).collect()
         };
         assert_eq!(siblings.len(), 3, "expected exactly 3 siblings");
-        assert!(
-            !siblings.contains(&caller_tid),
-            "caller must not appear in sibling list"
-        );
+        assert!(!siblings.contains(&caller_tid), "caller must not appear in sibling list");
         for &sid in &sibling_tids {
             assert!(siblings.contains(&sid), "sibling {} must be in list", sid);
         }
@@ -1232,10 +1190,7 @@ mod tests {
                 "only exec-caller TID must remain in thread_ids after collapse"
             );
             // exec_in_progress is still set (commit hasn't happened yet)
-            assert!(
-                pi.job.exec_in_progress,
-                "exec_in_progress must remain set until commit"
-            );
+            assert!(pi.job.exec_in_progress, "exec_in_progress must remain set until commit");
         }
 
         // ── Phase 5: commit (clear exec_in_progress) ─────────────────────────

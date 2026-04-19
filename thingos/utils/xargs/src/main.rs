@@ -3,11 +3,12 @@
 
 extern crate alloc;
 
-use abi::signal::{wexitstatus, wifexited, wifsignaled, wtermsig};
-use abi::types::stdio_mode;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use abi::signal::{wexitstatus, wifexited, wifsignaled, wtermsig};
+use abi::types::stdio_mode;
 use stem::abi::errors::Errno;
 use stem::syscall::{argv_get, env_get, spawn_process_ex, vfs_open, vfs_read, vfs_write, waitpid};
 
@@ -172,11 +173,8 @@ fn build_base_argv(cmd: &str, fixed_args: &[String]) -> Vec<Vec<u8>> {
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let args = get_args();
-    let (cmd, fixed_args): (&str, &[String]) = if args.is_empty() {
-        ("echo", &[])
-    } else {
-        (args[0].as_str(), &args[1..])
-    };
+    let (cmd, fixed_args): (&str, &[String]) =
+        if args.is_empty() { ("echo", &[]) } else { (args[0].as_str(), &args[1..]) };
 
     let path_entries = get_path_entries();
     let path = match resolve_program(cmd, &path_entries) {

@@ -41,9 +41,7 @@ use thingos::group::{Group, GroupKind};
 /// Foreground membership is derived from source-of-truth TTY foreground
 /// ownership: the process is foreground iff its `pgid` matches the current
 /// console `foreground_pgid`.
-pub fn group_kind_from_snapshot(
-    snapshot: &crate::sched::hooks::ProcessSnapshot,
-) -> GroupKind {
+pub fn group_kind_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> GroupKind {
     if snapshot.foreground_pgid == Some(snapshot.pgid) {
         GroupKind::Foreground
     } else {
@@ -70,9 +68,7 @@ pub fn group_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> G
 /// It is the canonical Group-vocabulary answer to "is this process in the
 /// foreground group?" and replaces any direct TTY/pgid inspection for new
 /// introspection surfaces.
-pub fn foreground_group_from_snapshot(
-    snapshot: &crate::sched::hooks::ProcessSnapshot,
-) -> bool {
+pub fn foreground_group_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> bool {
     group_kind_from_snapshot(snapshot) == GroupKind::Foreground
 }
 

@@ -4,9 +4,9 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_stat, vfs_write};
 
 fn get_args() -> Vec<String> {

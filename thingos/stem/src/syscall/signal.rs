@@ -1,11 +1,11 @@
 //! Userspace wrappers for POSIX-compatible signal syscalls.
 
 use abi::errors::{Errno, SysResult, errno};
-use abi::syscall::{
-    SYS_ALARM, SYS_GETPGRP, SYS_KILL, SYS_PAUSE, SYS_RAISE, SYS_SETPGID, SYS_SETSID,
-    SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGSUSPEND,
-};
 use abi::signal::{SigAction, SigSet, sig_how};
+use abi::syscall::{
+    SYS_ALARM, SYS_GETPGRP, SYS_KILL, SYS_PAUSE, SYS_RAISE, SYS_SETPGID, SYS_SETSID, SYS_SIGACTION,
+    SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGSUSPEND,
+};
 
 use super::arch::raw_syscall6;
 
@@ -39,15 +39,10 @@ pub fn sigaction(
 }
 
 /// Examine and/or change the calling thread's signal mask.
-pub fn sigprocmask(
-    how: u32,
-    set: Option<&SigSet>,
-    oldset: Option<&mut SigSet>,
-) -> SysResult<()> {
+pub fn sigprocmask(how: u32, set: Option<&SigSet>, oldset: Option<&mut SigSet>) -> SysResult<()> {
     let set_ptr = set.map(|s| s as *const SigSet as usize).unwrap_or(0);
     let oldset_ptr = oldset.map(|s| s as *mut SigSet as usize).unwrap_or(0);
-    let ret =
-        unsafe { raw_syscall6(SYS_SIGPROCMASK, how as usize, set_ptr, oldset_ptr, 0, 0, 0) };
+    let ret = unsafe { raw_syscall6(SYS_SIGPROCMASK, how as usize, set_ptr, oldset_ptr, 0, 0, 0) };
     errno(ret).map(|_| ())
 }
 
@@ -72,9 +67,8 @@ pub fn sig_setmask(set: &SigSet) -> SysResult<()> {
 /// Return the set of signals that are blocked and pending for the calling thread.
 pub fn sigpending() -> SysResult<SigSet> {
     let mut set = SigSet::EMPTY;
-    let ret = unsafe {
-        raw_syscall6(SYS_SIGPENDING, &mut set as *mut SigSet as usize, 0, 0, 0, 0, 0)
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_SIGPENDING, &mut set as *mut SigSet as usize, 0, 0, 0, 0, 0) };
     errno(ret).map(|_| set)
 }
 
@@ -82,9 +76,8 @@ pub fn sigpending() -> SysResult<SigSet> {
 ///
 /// Always returns `Err(Errno::EINTR)`.
 pub fn sigsuspend(mask: &SigSet) -> Errno {
-    let ret = unsafe {
-        raw_syscall6(SYS_SIGSUSPEND, mask as *const SigSet as usize, 0, 0, 0, 0, 0)
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_SIGSUSPEND, mask as *const SigSet as usize, 0, 0, 0, 0, 0) };
     errno(ret).map(|_| ()).unwrap_err()
 }
 

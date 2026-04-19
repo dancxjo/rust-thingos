@@ -41,8 +41,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use abi::syscall::vfs_flags::{O_CREAT, O_WRONLY};
 use ipc_helpers::port::OwnedPort;
 use ipc_helpers::rpc::RpcServer;
@@ -84,18 +82,12 @@ fn main(_arg: usize) -> ! {
             if let Err(e) = vfs_write(fd, handle_str.as_bytes()) {
                 warn!("ipc_service_demo: failed to write handle: {:?}", e);
             } else {
-                info!(
-                    "ipc_service_demo: published write_h={} at {}",
-                    write_h, SERVICE_PATH
-                );
+                info!("ipc_service_demo: published write_h={} at {}", write_h, SERVICE_PATH);
             }
             let _ = vfs_close(fd);
         }
         Err(e) => {
-            warn!(
-                "ipc_service_demo: failed to open {}: {:?}",
-                SERVICE_PATH, e
-            );
+            warn!("ipc_service_demo: failed to open {}: {:?}", SERVICE_PATH, e);
             // Continue anyway — the port still works; clients just need
             // to know the handle number out-of-band.
         }

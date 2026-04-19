@@ -14,12 +14,14 @@
 //! - `sys_getpgrp`     — get current process group ID
 //! - `sys_setsid`      — create a new session
 
+use core::mem::size_of;
+
+use abi::errors::{Errno, SysResult};
+use abi::signal::{SIGKILL, SIGSTOP, SigAction, SigSet, sig_how};
+
 use super::copyin;
 use crate::sched;
 use crate::syscall::validate::validate_user_range;
-use abi::errors::{Errno, SysResult};
-use abi::signal::{SigAction, SigSet, SIGKILL, SIGSTOP, sig_how};
-use core::mem::size_of;
 
 // ── kill ─────────────────────────────────────────────────────────────────────
 
@@ -47,9 +49,7 @@ use core::mem::size_of;
 pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
     let pid = pid_raw as isize as i64;
     let sig = sig_raw as u8;
-    let caller_pid = sched::process_info_current()
-        .map(|p| p.lock().pid)
-        .unwrap_or(0);
+    let caller_pid = sched::process_info_current().map(|p| p.lock().pid).unwrap_or(0);
 
     // Validate signal number.
     if sig >= abi::signal::NSIG && sig != 0 {
@@ -64,9 +64,7 @@ pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
         }
         // Existence check (sig == 0).
         if sig == 0 {
-            let exists = sched::list_processes_current()
-                .iter()
-                .any(|s| s.pid == target_pid);
+            let exists = sched::list_processes_current().iter().any(|s| s.pid == target_pid);
             if exists { Ok(0) } else { Err(Errno::ESRCH) }
         } else {
             if crate::signal::send_signal_to_process(target_pid, sig) {
@@ -85,11 +83,7 @@ pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
         } else {
             crate::signal::send_signal_to_group(pgid, sig)
         };
-        if delivered == 0 {
-            Err(Errno::ESRCH)
-        } else {
-            Ok(0)
-        }
+        if delivered == 0 { Err(Errno::ESRCH) } else { Ok(0) }
     } else if pid < -1 {
         let authority = crate::authority::bridge::authority_for_current();
         crate::authority::bridge::check_privilege(&authority, "signal")?;
@@ -99,11 +93,7 @@ pub fn sys_kill(pid_raw: usize, sig_raw: usize) -> SysResult<usize> {
         } else {
             crate::signal::send_signal_to_group(pgid, sig)
         };
-        if delivered == 0 {
-            Err(Errno::ESRCH)
-        } else {
-            Ok(0)
-        }
+        if delivered == 0 { Err(Errno::ESRCH) } else { Ok(0) }
     } else {
         // pid == -1 (broadcast) is not implemented yet.
         Err(Errno::EPERM)
@@ -144,11 +134,7 @@ pub fn sys_raise(sig_raw: usize) -> SysResult<usize> {
 // ── sigaction ─────────────────────────────────────────────────────────────────
 
 /// `sigaction(sig, act, oldact)` — examine and/or change the action for `sig`.
-pub fn sys_sigaction(
-    sig_raw: usize,
-    act_ptr: usize,
-    oldact_ptr: usize,
-) -> SysResult<usize> {
+pub fn sys_sigaction(sig_raw: usize, act_ptr: usize, oldact_ptr: usize) -> SysResult<usize> {
     let sig = sig_raw as u8;
     if sig == 0 || sig >= abi::signal::NSIG {
         return Err(Errno::EINVAL);
@@ -164,9 +150,14 @@ pub fn sys_sigaction(
         validate_user_range(oldact_ptr, size_of::<SigAction>(), true)?;
         let old = p.unix_compat.signals.action(sig);
         let old_bytes = unsafe {
-            core::slice::from_raw_parts(&old as *const SigAction as *const u8, size_of::<SigAction>())
+            core::slice::from_raw_parts(
+                &old as *const SigAction as *const u8,
+                size_of::<SigAction>(),
+            )
         };
-        unsafe { super::copyout(oldact_ptr, old_bytes)?; }
+        unsafe {
+            super::copyout(oldact_ptr, old_bytes)?;
+        }
     }
 
     if act_ptr != 0 {
@@ -178,7 +169,9 @@ pub fn sys_sigaction(
                 size_of::<SigAction>(),
             )
         };
-        unsafe { copyin(dst, act_ptr)?; }
+        unsafe {
+            copyin(dst, act_ptr)?;
+        }
         new_action.mask = SigSet(new_action.mask.0 & !crate::signal::UNCATCHABLE.0);
         p.unix_compat.signals.set_action(sig, new_action);
         if new_action.handler == abi::signal::SIG_IGN {
@@ -193,20 +186,21 @@ pub fn sys_sigaction(
 
 /// `sigprocmask(how, set, oldset)` — examine and/or change the calling
 /// thread's signal mask.
-pub fn sys_sigprocmask(
-    how_raw: usize,
-    set_ptr: usize,
-    oldset_ptr: usize,
-) -> SysResult<usize> {
+pub fn sys_sigprocmask(how_raw: usize, set_ptr: usize, oldset_ptr: usize) -> SysResult<usize> {
     let how = how_raw as u32;
     let current_mask = sched::get_signal_mask_current();
 
     if oldset_ptr != 0 {
         validate_user_range(oldset_ptr, size_of::<SigSet>(), true)?;
         let mask_bytes = unsafe {
-            core::slice::from_raw_parts(&current_mask as *const SigSet as *const u8, size_of::<SigSet>())
+            core::slice::from_raw_parts(
+                &current_mask as *const SigSet as *const u8,
+                size_of::<SigSet>(),
+            )
         };
-        unsafe { super::copyout(oldset_ptr, mask_bytes)?; }
+        unsafe {
+            super::copyout(oldset_ptr, mask_bytes)?;
+        }
     }
 
     if set_ptr != 0 {
@@ -218,7 +212,9 @@ pub fn sys_sigprocmask(
                 size_of::<SigSet>(),
             )
         };
-        unsafe { copyin(dst, set_ptr)?; }
+        unsafe {
+            copyin(dst, set_ptr)?;
+        }
         let filtered = SigSet(new_set.0 & !crate::signal::UNCATCHABLE.0);
         let new_mask = match how {
             sig_how::SIG_BLOCK => SigSet(current_mask.0 | filtered.0),
@@ -250,7 +246,9 @@ pub fn sys_sigpending(set_ptr: usize) -> SysResult<usize> {
     let pending_bytes = unsafe {
         core::slice::from_raw_parts(&pending as *const SigSet as *const u8, size_of::<SigSet>())
     };
-    unsafe { super::copyout(set_ptr, pending_bytes)?; }
+    unsafe {
+        super::copyout(set_ptr, pending_bytes)?;
+    }
     Ok(0)
 }
 
@@ -269,7 +267,9 @@ pub fn sys_sigsuspend(mask_ptr: usize) -> SysResult<usize> {
             size_of::<SigSet>(),
         )
     };
-    unsafe { copyin(dst, mask_ptr)?; }
+    unsafe {
+        copyin(dst, mask_ptr)?;
+    }
     let new_mask = SigSet(new_mask.0 & !crate::signal::UNCATCHABLE.0);
 
     // Save the old mask, install the new one.
@@ -283,8 +283,8 @@ pub fn sys_sigsuspend(mask_ptr: usize) -> SysResult<usize> {
             .map(|p| p.lock().unix_compat.signals.pending)
             .unwrap_or(SigSet::EMPTY);
         let all = thread_pending.union(proc_pending);
-        let deliverable = all.difference(new_mask)
-            .union(all.intersection(crate::signal::UNCATCHABLE));
+        let deliverable =
+            all.difference(new_mask).union(all.intersection(crate::signal::UNCATCHABLE));
         if !deliverable.is_empty() {
             break;
         }
@@ -349,8 +349,7 @@ pub fn sys_pause() -> SysResult<usize> {
             .map(|p| p.lock().unix_compat.signals.pending)
             .unwrap_or(SigSet::EMPTY);
         let all = thread_pending.union(proc_pending);
-        let deliverable = all.difference(mask)
-            .union(all.intersection(crate::signal::UNCATCHABLE));
+        let deliverable = all.difference(mask).union(all.intersection(crate::signal::UNCATCHABLE));
         if !deliverable.is_empty() {
             break;
         }

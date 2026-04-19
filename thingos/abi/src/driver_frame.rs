@@ -14,14 +14,7 @@ pub struct FrameReader<const N: usize> {
 
 impl<const N: usize> FrameReader<N> {
     pub const fn new() -> Self {
-        Self {
-            buf: [0u8; N],
-            head: 0,
-            tail: 0,
-            len: 0,
-            dropped_bytes: 0,
-            scratch: [0u8; N],
-        }
+        Self { buf: [0u8; N], head: 0, tail: 0, len: 0, dropped_bytes: 0, scratch: [0u8; N] }
     }
 
     pub fn dropped_bytes(&self) -> usize {

@@ -5,7 +5,9 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use stem::syscall::{argv_get, exit, vfs::vfs_lstat, vfs_close, vfs_open, vfs_readdir, vfs_write};
+
+use stem::syscall::vfs::vfs_lstat;
+use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_readdir, vfs_write};
 
 const S_IFDIR: u32 = 0o040000;
 const S_IFMT: u32 = 0o170000;
@@ -86,10 +88,7 @@ fn walk(path: &str, filter: TypeFilter, has_error: &mut bool) {
     let fd = match vfs_open(path, O_RDONLY) {
         Ok(fd) => fd,
         Err(e) => {
-            write_to_fd(
-                2,
-                &alloc::format!("find: cannot open directory '{}': {:?}\n", path, e),
-            );
+            write_to_fd(2, &alloc::format!("find: cannot open directory '{}': {:?}\n", path, e));
             *has_error = true;
             return;
         }
@@ -120,7 +119,10 @@ fn walk(path: &str, filter: TypeFilter, has_error: &mut bool) {
                 }
             }
             Err(e) => {
-                write_to_fd(2, &alloc::format!("find: cannot read directory '{}': {:?}\n", path, e));
+                write_to_fd(
+                    2,
+                    &alloc::format!("find: cannot read directory '{}': {:?}\n", path, e),
+                );
                 *has_error = true;
                 break;
             }

@@ -1,9 +1,9 @@
-use crate::time::Duration;
 use abi::errors::Errno;
+use abi::syscall::SYS_WAIT_MANY;
 use abi::wait::{WaitResult, WaitSpec};
 
 use super::arch::raw_syscall6;
-use abi::syscall::SYS_WAIT_MANY;
+use crate::time::Duration;
 
 pub fn wait_many(
     specs: &[WaitSpec],

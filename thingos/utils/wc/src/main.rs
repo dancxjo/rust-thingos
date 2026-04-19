@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::abi::syscall::vfs_flags;
 use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_read, vfs_write};
 
@@ -29,8 +30,7 @@ fn get_args() -> Vec<String> {
             if offset + 4 > buf.len() {
                 break;
             }
-            let str_len =
-                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+            let str_len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + str_len > buf.len() {
                 break;
@@ -92,7 +92,13 @@ fn count_fd(in_fd: u32) -> Counts {
     Counts { lines, words, bytes }
 }
 
-fn print_counts(counts: &Counts, show_lines: bool, show_words: bool, show_bytes: bool, label: &str) {
+fn print_counts(
+    counts: &Counts,
+    show_lines: bool,
+    show_words: bool,
+    show_bytes: bool,
+    label: &str,
+) {
     let mut out = String::new();
     if show_lines {
         out.push_str(&alloc::format!("{:>8}", counts.lines));

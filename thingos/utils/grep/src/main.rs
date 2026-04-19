@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::abi::syscall::vfs_flags;
 use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_read, vfs_write};
 
@@ -29,8 +30,7 @@ fn get_args() -> Vec<String> {
             if offset + 4 > buf.len() {
                 break;
             }
-            let str_len =
-                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+            let str_len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + str_len > buf.len() {
                 break;
@@ -79,22 +79,14 @@ fn grep_data(
     show_filename: bool,
     filename: &str,
 ) -> usize {
-    let pat: String = if ignore_case {
-        pattern.to_lowercase()
-    } else {
-        String::from(pattern)
-    };
+    let pat: String = if ignore_case { pattern.to_lowercase() } else { String::from(pattern) };
 
     let mut matches = 0usize;
     let mut lineno = 0usize;
     for line_bytes in data.split(|&b| b == b'\n') {
         lineno += 1;
         let line = core::str::from_utf8(line_bytes).unwrap_or("");
-        let haystack: String = if ignore_case {
-            line.to_lowercase()
-        } else {
-            String::from(line)
-        };
+        let haystack: String = if ignore_case { line.to_lowercase() } else { String::from(line) };
         let matched = haystack.contains(pat.as_str());
         let print_it = matched != invert;
         if print_it {
@@ -126,15 +118,7 @@ fn grep_fd(
     filename: &str,
 ) -> usize {
     let data = read_all(fd);
-    grep_data(
-        &data,
-        pattern,
-        invert,
-        ignore_case,
-        line_number,
-        show_filename,
-        filename,
-    )
+    grep_data(&data, pattern, invert, ignore_case, line_number, show_filename, filename)
 }
 
 #[stem::main]
@@ -176,7 +160,10 @@ fn main(_arg: usize) -> ! {
     let pattern_idx = match pattern_idx {
         Some(idx) => idx,
         None => {
-            write_str(2, "grep: missing pattern\nusage: grep [-v] [-i] [-n] [-c] pattern [file ...]\n");
+            write_str(
+                2,
+                "grep: missing pattern\nusage: grep [-v] [-i] [-n] [-c] pattern [file ...]\n",
+            );
             stem::syscall::exit(1);
         }
     };
@@ -197,15 +184,8 @@ fn main(_arg: usize) -> ! {
             let path = args[fidx].as_str();
             match vfs_open(path, vfs_flags::O_RDONLY) {
                 Ok(fd) => {
-                    let matches = grep_fd(
-                        fd,
-                        pattern,
-                        invert,
-                        ignore_case,
-                        line_number,
-                        show_filename,
-                        path,
-                    );
+                    let matches =
+                        grep_fd(fd, pattern, invert, ignore_case, line_number, show_filename, path);
                     let _ = vfs_close(fd);
                     if count_only {
                         if show_filename {
@@ -225,9 +205,5 @@ fn main(_arg: usize) -> ! {
     }
 
     // Exit 0 if any match was found, 1 if no match.
-    if total_matches > 0 {
-        stem::syscall::exit(0)
-    } else {
-        stem::syscall::exit(1)
-    }
+    if total_matches > 0 { stem::syscall::exit(0) } else { stem::syscall::exit(1) }
 }

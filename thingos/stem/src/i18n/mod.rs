@@ -25,6 +25,7 @@
 
 use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
 use spin::Mutex;
 
 /// A stable identifier for a translatable string.
@@ -87,10 +88,7 @@ pub struct LocalizedText {
 impl LocalizedText {
     /// Create a new localized text.
     pub const fn new(key: &'static str, fallback: &'static str) -> Self {
-        Self {
-            key: TextKey::new(key),
-            fallback,
-        }
+        Self { key: TextKey::new(key), fallback }
     }
 
     /// Get the translated string for the current locale.
@@ -135,10 +133,7 @@ pub struct Catalog {
 impl Catalog {
     /// Create a new empty catalog for a locale.
     pub const fn new(locale: LocaleId) -> Self {
-        Self {
-            locale,
-            translations: BTreeMap::new(),
-        }
+        Self { locale, translations: BTreeMap::new() }
     }
 
     /// Create a catalog from a static translation table.
@@ -187,10 +182,7 @@ impl Translator {
         catalogs.insert(LocaleId::EN_US, Catalog::from_table(LocaleId::EN_US, &[]));
 
         // Latin catalog
-        catalogs.insert(
-            LocaleId::LA,
-            Catalog::from_table(LocaleId::LA, &LATIN_CATALOG),
-        );
+        catalogs.insert(LocaleId::LA, Catalog::from_table(LocaleId::LA, &LATIN_CATALOG));
 
         // Syriac catalog (placeholder for future)
         catalogs.insert(LocaleId::SYC, Catalog::from_table(LocaleId::SYC, &[]));
@@ -320,10 +312,7 @@ const LATIN_CATALOG: &[(&str, &str)] = &[
     ("ui.window.minimize", "Minuere"),
     ("ui.window.maximize", "Augere"),
     // Sample text for font display
-    (
-        "ui.fonts.sample",
-        "Sphinx Iovis dura lex sed lex. 0123456789",
-    ),
+    ("ui.fonts.sample", "Sphinx Iovis dura lex sed lex. 0123456789"),
 ];
 
 #[cfg(test)]
@@ -414,9 +403,6 @@ mod tests {
 
         // Latin (has translation)
         translator.set_locale(LocaleId::LA);
-        assert_eq!(
-            translator.translate(TextKey::new("ui.fonts.title")),
-            Some("Litterae")
-        );
+        assert_eq!(translator.translate(TextKey::new("ui.fonts.title")), Some("Litterae"));
     }
 }

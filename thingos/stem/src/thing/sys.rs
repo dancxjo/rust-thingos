@@ -5,5 +5,4 @@ pub use crate::syscall::vfs::{
     vfs_close as close, vfs_open as open, vfs_read as read, vfs_seek as seek, vfs_stat as stat,
     vfs_write as write,
 };
-
 pub use crate::syscall::{memfd_create, shared_memory_phys, vm_map};

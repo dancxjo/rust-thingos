@@ -19,11 +19,7 @@ const READDIR_BUFFER_SIZE: usize = 4096;
 const WATCH_BUFFER_SIZE: usize = 1024;
 
 pub fn derive_policy(presence_count: usize) -> (&'static str, &'static str) {
-    if presence_count > 0 {
-        ("true", "inhabited")
-    } else {
-        ("false", "ambient")
-    }
+    if presence_count > 0 { ("true", "inhabited") } else { ("false", "ambient") }
 }
 
 fn count_presences(dir_fd: u32) -> Result<usize, abi::errors::Errno> {
@@ -99,11 +95,8 @@ fn main(_arg: usize) -> ! {
 
     loop {
         if let Some(fd) = watch_fd {
-            let mut fds = [PollHandle {
-                handle: fd as i32,
-                events: poll_flags::POLLIN as u16,
-                revents: 0,
-            }];
+            let mut fds =
+                [PollHandle { handle: fd as i32, events: poll_flags::POLLIN as u16, revents: 0 }];
             match vfs_poll(&mut fds, WATCH_POLL_TIMEOUT_MS) {
                 Ok(n) if n > 0 => {
                     // Drain pending watch payload so future poll calls can block again.

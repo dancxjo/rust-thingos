@@ -42,16 +42,7 @@ impl Arena {
         generation: u64,
         tag: &'static str,
     ) -> Self {
-        Self {
-            base,
-            size,
-            cursor: 0,
-            flags,
-            generation,
-            tag,
-            next: None,
-            prev: None,
-        }
+        Self { base, size, cursor: 0, flags, generation, tag, next: None, prev: None }
     }
 
     pub fn alloc(&mut self, layout: Layout) -> Result<NonNull<u8>, ()> {
@@ -240,10 +231,8 @@ impl ArenaHeap {
         // Update stats
         self.stats.eviction_count += 1;
         self.stats.bytes_freed_by_eviction += arena.size;
-        self.stats.total_evictable_bytes = self
-            .stats
-            .total_evictable_bytes
-            .saturating_sub(arena.used());
+        self.stats.total_evictable_bytes =
+            self.stats.total_evictable_bytes.saturating_sub(arena.used());
 
         // Unlink from the arena itself (clean state)
         arena.next = None;
@@ -259,10 +248,7 @@ impl ArenaHeap {
     pub fn mark_current(&self) -> Option<Mark> {
         let id = self.pinned_tail?;
         let arena = self.arenas.get(id.0 as usize)?.as_ref()?;
-        Some(Mark {
-            arena_id: id,
-            cursor: arena.cursor,
-        })
+        Some(Mark { arena_id: id, cursor: arena.cursor })
     }
 
     pub fn rewind(&mut self, mark: Mark) {
@@ -285,29 +271,19 @@ impl ArenaHeap {
 pub fn alloc_evictable<R: crate::BootRuntime>(
     layout: Layout,
 ) -> Result<crate::memory::handle::EvictHandle, ()> {
-    crate::memory::kheap::kernel_heap()
-        .lock()
-        .alloc_evictable::<R>(layout)
+    crate::memory::kheap::kernel_heap().lock().alloc_evictable::<R>(layout)
 }
 
 pub fn evict_until<R: crate::BootRuntime>(bytes_needed: usize) -> usize {
-    crate::memory::kheap::kernel_heap()
-        .lock()
-        .evict_until::<R>(bytes_needed)
+    crate::memory::kheap::kernel_heap().lock().evict_until::<R>(bytes_needed)
 }
 
 pub fn mark() -> Option<Mark> {
-    crate::memory::kheap::kernel_heap()
-        .lock()
-        .arena_system
-        .mark_current()
+    crate::memory::kheap::kernel_heap().lock().arena_system.mark_current()
 }
 
 pub fn rewind(mark: Mark) {
-    crate::memory::kheap::kernel_heap()
-        .lock()
-        .arena_system
-        .rewind(mark)
+    crate::memory::kheap::kernel_heap().lock().arena_system.rewind(mark)
 }
 
 pub fn heap_status() {
@@ -358,9 +334,8 @@ mod tests {
         let layout = Layout::from_size_align(20, 1).unwrap();
 
         // Allocate should go to the tail (arena2)
-        let (id, generation, offset, ptr) = heap
-            .alloc_evictable(layout)
-            .expect("Should alloc evictable");
+        let (id, generation, offset, ptr) =
+            heap.alloc_evictable(layout).expect("Should alloc evictable");
         assert_eq!(generation, 2);
         assert_eq!(ptr.as_ptr() as u64, base2);
         assert_eq!(offset, 0);

@@ -1,5 +1,6 @@
-use super::*;
 use core::mem::{align_of, size_of};
+
+use super::*;
 
 // Key::from_raw tests
 #[test]
@@ -105,38 +106,22 @@ fn mods_roundtrip_byte() {
 // KeyEventPayload tests
 #[test]
 fn key_event_payload_is_repeat() {
-    let payload = KeyEventPayload {
-        key: 0x04,
-        mods: 0,
-        flags: 0,
-    };
+    let payload = KeyEventPayload { key: 0x04, mods: 0, flags: 0 };
     assert!(!payload.is_repeat());
 
-    let payload_repeat = KeyEventPayload {
-        key: 0x04,
-        mods: 0,
-        flags: 1,
-    };
+    let payload_repeat = KeyEventPayload { key: 0x04, mods: 0, flags: 1 };
     assert!(payload_repeat.is_repeat());
 }
 
 #[test]
 fn key_event_payload_key() {
-    let payload = KeyEventPayload {
-        key: 0x04,
-        mods: 0,
-        flags: 0,
-    };
+    let payload = KeyEventPayload { key: 0x04, mods: 0, flags: 0 };
     assert_eq!(payload.key(), Key::A);
 }
 
 #[test]
 fn key_event_payload_mods() {
-    let payload = KeyEventPayload {
-        key: 0x04,
-        mods: Mods::SHIFT | Mods::CTRL,
-        flags: 0,
-    };
+    let payload = KeyEventPayload { key: 0x04, mods: Mods::SHIFT | Mods::CTRL, flags: 0 };
     let mods = payload.mods();
     assert!(mods.has_shift());
     assert!(mods.has_ctrl());
@@ -251,10 +236,7 @@ fn bristle_event_header_rejects_bad_magic_and_version() {
     .to_bytes();
 
     bytes[0] ^= 0xFF;
-    assert!(matches!(
-        BristleEventHeader::from_bytes(&bytes),
-        Err(HidParseError::BadMagic)
-    ));
+    assert!(matches!(BristleEventHeader::from_bytes(&bytes), Err(HidParseError::BadMagic)));
 
     let mut bytes = BristleEventHeader {
         magic: BRISTLE_EVENT_MAGIC,
@@ -265,10 +247,7 @@ fn bristle_event_header_rejects_bad_magic_and_version() {
     }
     .to_bytes();
     bytes[4] = 1;
-    assert!(matches!(
-        BristleEventHeader::from_bytes(&bytes),
-        Err(HidParseError::BadVersion)
-    ));
+    assert!(matches!(BristleEventHeader::from_bytes(&bytes), Err(HidParseError::BadVersion)));
 }
 
 #[test]
@@ -281,19 +260,12 @@ fn bristle_event_header_versioning_policy() {
         payload_len: 0,
     }
     .to_bytes();
-    assert!(matches!(
-        BristleEventHeader::from_bytes(&bytes),
-        Err(HidParseError::BadVersion)
-    ));
+    assert!(matches!(BristleEventHeader::from_bytes(&bytes), Err(HidParseError::BadVersion)));
 }
 
 #[test]
 fn payload_golden_bytes() {
-    let key_payload = KeyEventPayload {
-        key: 0x04,
-        mods: Mods::SHIFT | Mods::CTRL,
-        flags: 1,
-    };
+    let key_payload = KeyEventPayload { key: 0x04, mods: Mods::SHIFT | Mods::CTRL, flags: 1 };
     assert_eq!(key_payload.to_bytes(), [0x04, 0x00, 0x03, 0x01]);
     let parsed = KeyEventPayload::from_bytes(&key_payload.to_bytes());
     assert_eq!(parsed.key(), Key::A);
@@ -340,17 +312,11 @@ fn raw_input_envelope_invariants() {
     assert_eq!(payload, &[0xaa, 0xbb]);
 
     let bad = &bytes[..TOTAL_LEN - 1];
-    assert!(matches!(
-        RawInputEnvelope::from_bytes(&bad),
-        Err(HidParseError::LengthMismatch)
-    ));
+    assert!(matches!(RawInputEnvelope::from_bytes(&bad), Err(HidParseError::LengthMismatch)));
 
     let mut bad_kind = bytes;
     bad_kind[16] = 0xff;
-    assert!(matches!(
-        RawInputEnvelope::from_bytes(&bad_kind),
-        Err(HidParseError::BadKind)
-    ));
+    assert!(matches!(RawInputEnvelope::from_bytes(&bad_kind), Err(HidParseError::BadKind)));
 }
 
 #[test]
@@ -361,10 +327,7 @@ fn raw_input_envelope_length_bounds() {
     assert!(RawInputEnvelope::from_bytes(&bytes).is_ok());
 
     bytes[17] = 1;
-    assert!(matches!(
-        RawInputEnvelope::from_bytes(&bytes),
-        Err(HidParseError::LengthMismatch)
-    ));
+    assert!(matches!(RawInputEnvelope::from_bytes(&bytes), Err(HidParseError::LengthMismatch)));
 
     let mut max_payload = [0u8; RawInputEnvelope::SIZE + 255];
     max_payload[16] = InputDeviceKind::Keyboard as u8;
@@ -373,10 +336,7 @@ fn raw_input_envelope_length_bounds() {
 
     let mut too_long = [0u8; RawInputEnvelope::SIZE + 256];
     too_long[..RawInputEnvelope::SIZE + 255].copy_from_slice(&max_payload);
-    assert!(matches!(
-        RawInputEnvelope::from_bytes(&too_long),
-        Err(HidParseError::LengthMismatch)
-    ));
+    assert!(matches!(RawInputEnvelope::from_bytes(&too_long), Err(HidParseError::LengthMismatch)));
 }
 
 #[test]

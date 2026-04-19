@@ -1,6 +1,6 @@
 use abi::pixel::PixelFormat;
+use libdl::{RTLD_NOW, dlopen_str, dlsym_bytes};
 use pistil::Texture;
-use libdl::{dlopen_str, dlsym_bytes, RTLD_NOW};
 
 use crate::display::DisplayBackend;
 
@@ -34,13 +34,18 @@ impl CompositorVisuals {
             let err_ptr = unsafe { libdl::dlerror() };
             let err_msg = if !err_ptr.is_null() {
                 let mut len = 0;
-                while unsafe { *err_ptr.add(len) } != 0 { len += 1; }
+                while unsafe { *err_ptr.add(len) } != 0 {
+                    len += 1;
+                }
                 let slice = unsafe { core::slice::from_raw_parts(err_ptr as *const u8, len) };
                 core::str::from_utf8(slice).unwrap_or("non-utf8 error")
             } else {
                 "unknown error"
             };
-            stem::error!("bloom: failed to load /lib/libpistil.so: {} (falling back to periwinkle)", err_msg);
+            stem::error!(
+                "bloom: failed to load /lib/libpistil.so: {} (falling back to periwinkle)",
+                err_msg
+            );
             return Self { background: None, pistil: None };
         }
         let pistil = {
@@ -56,19 +61,17 @@ impl CompositorVisuals {
             }
         };
 
-        Self {
-            background: None,
-            pistil,
-        }
+        Self { background: None, pistil }
     }
 
     pub fn prepare_background(&mut self, display: &DisplayBackend, wallpaper_path: &str) {
         let (width, height) = display.output_size();
 
-        let mut texture: Texture = match Texture::new("bloom.compositor.background", width, height, 4) {
-            Some(t) => t,
-            None => return,
-        };
+        let mut texture: Texture =
+            match Texture::new("bloom.compositor.background", width, height, 4) {
+                Some(t) => t,
+                None => return,
+            };
 
         let success = if let Some(ref lib) = self.pistil {
             let mut path_c = alloc::vec::Vec::from(wallpaper_path.as_bytes());
@@ -106,10 +109,7 @@ impl CompositorVisuals {
             display.release_buffer(old.buffer_id);
         }
 
-        self.background = Some(ServerBuffer {
-            _texture: texture,
-            buffer_id,
-        });
+        self.background = Some(ServerBuffer { _texture: texture, buffer_id });
     }
 
     pub fn fallback_buffer_id(&self) -> Option<u32> {

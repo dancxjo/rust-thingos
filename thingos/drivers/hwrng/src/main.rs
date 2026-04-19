@@ -8,9 +8,7 @@ use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
     ProbeResult, Status,
 };
-use abi::seed::{
-    HOST_DRIVER, INTERFACE_DRIVER_V1, SEED_ABI_VERSION, Seed, SeedInterface,
-};
+use abi::seed::{HOST_DRIVER, INTERFACE_DRIVER_V1, SEED_ABI_VERSION, Seed, SeedInterface};
 use stem::abi::driver_ctx::DriverCtx;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::{debug, info};

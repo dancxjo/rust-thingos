@@ -39,12 +39,7 @@ pub fn blit_centered_nearest(
             let src_span = &src[src_row..src_row + src_w];
             copy_row_u32_fast(dst_span, src_span);
         }
-        return BlitRect {
-            x: offset_x,
-            y: offset_y,
-            width: scaled_w,
-            height: scaled_h,
-        };
+        return BlitRect { x: offset_x, y: offset_y, width: scaled_w, height: scaled_h };
     }
 
     let mut sx_lut = Vec::with_capacity(scaled_w);
@@ -68,12 +63,7 @@ pub fn blit_centered_nearest(
         }
     }
 
-    BlitRect {
-        x: offset_x,
-        y: offset_y,
-        width: scaled_w,
-        height: scaled_h,
-    }
+    BlitRect { x: offset_x, y: offset_y, width: scaled_w, height: scaled_h }
 }
 
 pub fn blit_cover_nearest(
@@ -172,9 +162,8 @@ pub extern "C" fn pistil_prepare_background(
         return -2;
     };
 
-    let dst = unsafe {
-        core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize)
-    };
+    let dst =
+        unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
 
     // Paint periwinkle first as diagnostic baseline
     dst.fill(0xFFCCCCFF);

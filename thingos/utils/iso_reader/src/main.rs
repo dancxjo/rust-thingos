@@ -8,19 +8,17 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::time::Duration;
-use iso9660::{IsoFs, ISO_SECTOR_SIZE};
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
+
+use iso9660::{ISO_SECTOR_SIZE, IsoFs};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::abi::schema::{keys, kinds, rels};
 use stem::block::{BlockDevice, BlockError};
 use stem::syscall::{ioport_read, ioport_write};
-use stem::thing::sys as thingsys;
-use stem::thing::ThingId;
+use stem::thing::{ThingId, sys as thingsys};
 use stem::{info, warn};
 
 #[unsafe(link_section = ".thing_manifest")]
@@ -95,9 +93,7 @@ struct PublishIndex {
 
 impl PublishIndex {
     fn new() -> Self {
-        Self {
-            by_key: BTreeMap::new(),
-        }
+        Self { by_key: BTreeMap::new() }
     }
 
     fn insert(&mut self, key: FileKey, thing_id: ThingId) {
@@ -181,10 +177,7 @@ impl BlockDevice for AtapiDevice {
         // Set byte count limit
         let byte_count = bytes_needed as u16;
         self.ata_outb(self.io_base + ATA_REG_LBA_MID, (byte_count & 0xFF) as u8);
-        self.ata_outb(
-            self.io_base + ATA_REG_LBA_HI,
-            ((byte_count >> 8) & 0xFF) as u8,
-        );
+        self.ata_outb(self.io_base + ATA_REG_LBA_HI, ((byte_count >> 8) & 0xFF) as u8);
 
         // Send PACKET command
         self.ata_outb(self.io_base + ATA_REG_COMMAND, ATA_CMD_PACKET);
@@ -247,11 +240,7 @@ impl BlockDevice for AtapiDevice {
 
 /// Try to detect ATAPI device on a port.
 fn probe_atapi(io_base: u16, ctrl_base: u16, is_slave: bool) -> Option<AtapiDevice> {
-    let dev = AtapiDevice {
-        io_base,
-        ctrl_base,
-        is_slave,
-    };
+    let dev = AtapiDevice { io_base, ctrl_base, is_slave };
 
     // Select drive
     let drive_sel = if is_slave { 0xB0 } else { 0xA0 };
@@ -419,10 +408,7 @@ fn scan_and_publish(
             // Check if this file should be in the hot-set (loaded eagerly)
             let in_hot_set = is_in_hot_set(&path_with_slash);
 
-            let file = iso9660::IsoFile {
-                extent_lba: entry.extent_lba,
-                size: entry.size,
-            };
+            let file = iso9660::IsoFile { extent_lba: entry.extent_lba, size: entry.size };
 
             if in_hot_set {
                 // Hot-set: read content immediately
@@ -470,10 +456,7 @@ fn scan_and_publish(
                         *index += 1;
                     }
                     Err(e) => {
-                        warn!(
-                            "ISO_READER: Failed to publish metadata for '{}': {}",
-                            full_path, e
-                        );
+                        warn!("ISO_READER: Failed to publish metadata for '{}': {}", full_path, e);
                     }
                 }
             }
@@ -601,10 +584,7 @@ fn main(_arg: usize) -> ! {
         "ISO_READER: Content: {} files materialized, {} KB read",
         stats.content_materialized, bytes_read_kb
     );
-    info!(
-        "ISO_READER: Published {} total entries from ISO to graph",
-        published
-    );
+    info!("ISO_READER: Published {} total entries from ISO to graph", published);
 
     // Service loop
     info!("ISO_READER: Entering service loop");

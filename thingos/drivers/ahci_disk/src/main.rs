@@ -14,20 +14,18 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use alloc::vec::Vec;
-use abi::driver_interface::{
-    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
-};
 use core::time::Duration;
+
+use abi::driver_interface::{
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
+    DriverStartContext, ProbeResult, Status,
+};
 use stem::abi::block_device_protocol::*;
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
-use stem::syscall::{port_create, port_send, port_try_recv, PortHandle};
-use stem::syscall::vfs::vfs_handle_from_port;
+use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_open, vfs_read, vfs_readdir};
+use stem::syscall::{PortHandle, port_create, port_send, port_try_recv};
 use stem::{debug, error, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"ahci_disk";
 
@@ -310,7 +308,7 @@ impl AhciAtapiDevice {
             tbl.cfis[5] = (ds as u32 & 0xFF) as u8; // LBA Mid (Byte Count Low)
             tbl.cfis[6] = ((ds as u32 >> 8) & 0xFF) as u8; // LBA High (Byte Count High)
             tbl.cfis[7] = 0; // Device
-                             // Rest 0
+            // Rest 0
 
             // Setup ATAPI CDB (SCSI READ10)
             // Clear ACDB first to avoid garbage
@@ -445,17 +443,14 @@ fn register_disk(port: &mut AhciPort) {
     use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
     let _ = vfs_mkdir("/services/storage");
     let name = alloc::format!("/services/storage/ahci{}", port.port_num);
-    if let Ok(fd) = vfs_open(
-        &name,
-        abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR,
-    ) {
+    if let Ok(fd) =
+        vfs_open(&name, abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR)
+    {
         let _ = vfs_write(fd, alloc::format!("{}", write_handle).as_bytes());
         let _ = vfs_close(fd);
     }
 
-    let model_str = core::str::from_utf8(&port.model)
-        .unwrap_or("Unknown")
-        .trim();
+    let model_str = core::str::from_utf8(&port.model).unwrap_or("Unknown").trim();
 
     info!(
         "AHCI: Registered block device port={} sectors={} lba48={} model='{}' rpc_port={}",
@@ -478,17 +473,14 @@ fn register_atapi_disk(port: &mut AhciPort) {
     use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
     let _ = vfs_mkdir("/services/storage");
     let name = alloc::format!("/services/storage/atapi{}", port.port_num);
-    if let Ok(fd) = vfs_open(
-        &name,
-        abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR,
-    ) {
+    if let Ok(fd) =
+        vfs_open(&name, abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR)
+    {
         let _ = vfs_write(fd, alloc::format!("{}", write_handle).as_bytes());
         let _ = vfs_close(fd);
     }
 
-    let model_str = core::str::from_utf8(&port.model)
-        .unwrap_or("ATAPI Device")
-        .trim();
+    let model_str = core::str::from_utf8(&port.model).unwrap_or("ATAPI Device").trim();
 
     debug!(
         "AHCI: Registered ATAPI block device port={} model='{}' rpc_port={}",
@@ -814,9 +806,7 @@ fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<alloc::string::Str
 
         // Legacy fallback: NUL-terminated path starts at offset 0.
         let ptr = resp.addr as *const u8;
-        let len = (0..128)
-            .find(|&i| unsafe { *ptr.add(i) == 0 })
-            .unwrap_or(128);
+        let len = (0..128).find(|&i| unsafe { *ptr.add(i) == 0 }).unwrap_or(128);
         let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
         let s = core::str::from_utf8(bytes).unwrap_or("");
         if !s.is_empty() {
@@ -830,20 +820,14 @@ fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<alloc::string::Str
 /// Handle a block device RPC request
 fn handle_block_device_request(port: &AhciPort, request_data: &[u8], _service_port: PortHandle) {
     if request_data.len() < 5 {
-        error!(
-            "AHCI: Request too short from client (len={})",
-            request_data.len()
-        );
+        error!("AHCI: Request too short from client (len={})", request_data.len());
         return;
     }
 
     // Extract response port from header [4: response_port][1: request_type][payload...]
-    let response_port = u32::from_le_bytes([
-        request_data[0],
-        request_data[1],
-        request_data[2],
-        request_data[3],
-    ]) as PortHandle;
+    let response_port =
+        u32::from_le_bytes([request_data[0], request_data[1], request_data[2], request_data[3]])
+            as PortHandle;
 
     let request_type = request_data[4];
 
@@ -863,11 +847,7 @@ fn handle_identify(port: &AhciPort, port_handle: PortHandle) {
         sector_count: port.sector_count,
         model: port.model,
         serial: port.serial,
-        flags: if port.supports_lba48 {
-            device_flags::LBA48
-        } else {
-            0
-        },
+        flags: if port.supports_lba48 { device_flags::LBA48 } else { 0 },
     };
 
     let mut response_buf = [0u8; core::mem::size_of::<IdentifyResponse>() + 1];
@@ -897,11 +877,8 @@ fn handle_read(port: &AhciPort, request_data: &[u8], port_handle: PortHandle) {
         unsafe { core::ptr::read_unaligned(request_data.as_ptr() as *const ReadRequest) };
 
     // Validate sector count based on sector size to ensure response fits in port buffer
-    let max_sectors = if port.sector_size == 2048 {
-        MAX_SECTORS_PER_READ_2048
-    } else {
-        MAX_SECTORS_PER_READ_512
-    };
+    let max_sectors =
+        if port.sector_size == 2048 { MAX_SECTORS_PER_READ_2048 } else { MAX_SECTORS_PER_READ_512 };
 
     if req.sector_count == 0 || req.sector_count > max_sectors {
         send_error_response(port_handle, BlockDeviceError::InvalidParam);
@@ -942,9 +919,7 @@ fn handle_read(port: &AhciPort, request_data: &[u8], port_handle: PortHandle) {
 
 /// Send a Read success response
 fn send_read_response(port_handle: PortHandle, data: &[u8]) {
-    let header = ReadResponse {
-        data_len: data.len() as u32,
-    };
+    let header = ReadResponse { data_len: data.len() as u32 };
 
     let response_size = 1 + core::mem::size_of::<ReadResponse>() + data.len();
     let mut response_buf = Vec::with_capacity(response_size);
@@ -967,10 +942,7 @@ fn send_read_response(port_handle: PortHandle, data: &[u8]) {
 
 /// Send an error response
 fn send_error_response(port_handle: PortHandle, error_code: BlockDeviceError) {
-    let error_resp = ErrorResponse {
-        error_code: error_code as u8,
-        _reserved: [0; 3],
-    };
+    let error_resp = ErrorResponse { error_code: error_code as u8, _reserved: [0; 3] };
 
     let mut response_buf = [0u8; 1 + core::mem::size_of::<ErrorResponse>()];
     response_buf[0] = BlockDeviceResponse::Error as u8;
@@ -1011,11 +983,7 @@ fn find_ahci_device() -> Option<alloc::string::String> {
     let mut pos = 0;
     while pos < n {
         let entry_buf = &buf[pos..n];
-        let name = core::str::from_utf8(entry_buf)
-            .unwrap_or("")
-            .split('\0')
-            .next()
-            .unwrap_or("");
+        let name = core::str::from_utf8(entry_buf).unwrap_or("").split('\0').next().unwrap_or("");
         if name.is_empty() {
             break;
         }
@@ -1045,9 +1013,5 @@ fn read_sys_string(path: &str) -> Option<alloc::string::String> {
     let n = vfs_read(fd, &mut buf).ok()?;
     let _ = vfs_close(fd);
 
-    Some(
-        alloc::string::String::from_utf8_lossy(&buf[..n])
-            .trim()
-            .to_string(),
-    )
+    Some(alloc::string::String::from_utf8_lossy(&buf[..n]).trim().to_string())
 }

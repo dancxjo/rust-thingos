@@ -8,20 +8,18 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use alloc::vec;
 use alloc::vec::Vec;
-use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
-};
 use core::time::Duration;
+
+use abi::driver_interface::{
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
+};
 use stem::abi::block_device_protocol::*;
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
-use stem::syscall::{port_create, port_send, port_try_recv, PortHandle};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::syscall::vfs::vfs_handle_from_port;
-use stem::syscall::{ioport_read, ioport_write};
+use stem::syscall::{PortHandle, ioport_read, ioport_write, port_create, port_send, port_try_recv};
 use stem::{error, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"ata_disk";
 
@@ -70,7 +68,10 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -
     thingos_driver_start(ctx)
 }
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
@@ -303,10 +304,7 @@ fn read_sectors(
         ata_outb(disk.io_base + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS_EXT);
     } else {
         let lba28 = lba as u32;
-        ata_outb(
-            disk.io_base + ATA_REG_DRIVE,
-            drive_sel | ((lba28 >> 24) & 0x0F) as u8,
-        );
+        ata_outb(disk.io_base + ATA_REG_DRIVE, drive_sel | ((lba28 >> 24) & 0x0F) as u8);
         ata_outb(disk.io_base + ATA_REG_SECCOUNT, count as u8);
         ata_outb(disk.io_base + ATA_REG_LBA_LO, (lba28 & 0xFF) as u8);
         ata_outb(disk.io_base + ATA_REG_LBA_MID, ((lba28 >> 8) & 0xFF) as u8);
@@ -352,17 +350,14 @@ fn register_disk(disk: &mut AtaDisk, port: &str, drive: &str) {
     use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
     let _ = vfs_mkdir("/services/storage");
     let name = alloc::format!("/services/storage/ata_{}_{}", port, drive);
-    if let Ok(fd) = vfs_open(
-        &name,
-        abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR,
-    ) {
+    if let Ok(fd) =
+        vfs_open(&name, abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR)
+    {
         let _ = vfs_write(fd, alloc::format!("{}", write_handle).as_bytes());
         let _ = vfs_close(fd);
     }
 
-    let model_str = core::str::from_utf8(&disk.model)
-        .unwrap_or("Unknown")
-        .trim();
+    let model_str = core::str::from_utf8(&disk.model).unwrap_or("Unknown").trim();
 
     info!(
         "ATA_DISK: Registered disk ch={} drv={} sectors={} lba48={} model='{}' rpc_port={}",
@@ -482,10 +477,7 @@ pub fn atapi_read_sectors(
     // Set byte count limit (max transfer size)
     let byte_count = bytes_needed as u16;
     ata_outb(dev.io_base + ATA_REG_LBA_MID, (byte_count & 0xFF) as u8);
-    ata_outb(
-        dev.io_base + ATA_REG_LBA_HI,
-        ((byte_count >> 8) & 0xFF) as u8,
-    );
+    ata_outb(dev.io_base + ATA_REG_LBA_HI, ((byte_count >> 8) & 0xFF) as u8);
 
     // Send PACKET command
     ata_outb(dev.io_base + ATA_REG_COMMAND, ATA_CMD_PACKET);
@@ -563,17 +555,14 @@ fn register_atapi(dev: &mut AtapiDevice, port: &str, drive: &str) {
     use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
     let _ = vfs_mkdir("/services/storage");
     let name = alloc::format!("/services/storage/atapi_{}_{}", port, drive);
-    if let Ok(fd) = vfs_open(
-        &name,
-        abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR,
-    ) {
+    if let Ok(fd) =
+        vfs_open(&name, abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR)
+    {
         let _ = vfs_write(fd, alloc::format!("{}", write_handle).as_bytes());
         let _ = vfs_close(fd);
     }
 
-    let model_str = core::str::from_utf8(&dev.model)
-        .unwrap_or("ATAPI Device")
-        .trim();
+    let model_str = core::str::from_utf8(&dev.model).unwrap_or("ATAPI Device").trim();
 
     info!(
         "ATA_DISK: Registered ATAPI ch={} drv={} model='{}' rpc_port={}",
@@ -633,11 +622,7 @@ fn main(_arg: usize) -> ! {
     }
 
     // Summary
-    info!(
-        "ATA_DISK: Found {} ATA disk(s), {} ATAPI device(s)",
-        disks.len(),
-        atapi_devs.len()
-    );
+    info!("ATA_DISK: Found {} ATA disk(s), {} ATAPI device(s)", disks.len(), atapi_devs.len());
 
     info!("ATA_DISK: Entering RPC service loop");
 
@@ -759,11 +744,7 @@ fn handle_ata_identify(disk: &AtaDisk, port_handle: PortHandle) {
         sector_count: disk.sector_count,
         model: disk.model,
         serial: disk.serial,
-        flags: if disk.supports_lba48 {
-            device_flags::LBA48
-        } else {
-            0
-        },
+        flags: if disk.supports_lba48 { device_flags::LBA48 } else { 0 },
     };
 
     let mut response_buf = [0u8; core::mem::size_of::<IdentifyResponse>() + 1];
@@ -891,9 +872,7 @@ fn handle_atapi_read(dev: &AtapiDevice, request_data: &[u8], port_handle: PortHa
 
 /// Send a Read success response
 fn send_read_response(port_handle: PortHandle, data: &[u8]) {
-    let header = ReadResponse {
-        data_len: data.len() as u32,
-    };
+    let header = ReadResponse { data_len: data.len() as u32 };
 
     let response_size = 1 + core::mem::size_of::<ReadResponse>() + data.len();
     let mut response_buf = vec![0u8; response_size];
@@ -916,10 +895,7 @@ fn send_read_response(port_handle: PortHandle, data: &[u8]) {
 
 /// Send an error response
 fn send_error_response(port_handle: PortHandle, error_code: BlockDeviceError) {
-    let error_resp = ErrorResponse {
-        error_code: error_code as u8,
-        _reserved: [0; 3],
-    };
+    let error_resp = ErrorResponse { error_code: error_code as u8, _reserved: [0; 3] };
 
     let mut response_buf = [0u8; 1 + core::mem::size_of::<ErrorResponse>()];
     response_buf[0] = BlockDeviceResponse::Error as u8;

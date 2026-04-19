@@ -965,6 +965,9 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
                     node.remove_waiter(tid);
                 }
             }
+            if deadline.is_some() {
+                crate::sched::unregister_timeout_wake_current(tid);
+            }
             unsafe {
                 copyout(
                     pollfds_ptr,
@@ -982,6 +985,9 @@ pub fn sys_fs_poll(pollfds_ptr: usize, nfds: usize, timeout_ms: usize) -> SysRes
             if let Some(ref node) = entry.node {
                 node.remove_waiter(tid);
             }
+        }
+        if deadline.is_some() {
+            crate::sched::unregister_timeout_wake_current(tid);
         }
 
         if crate::sched::take_pending_interrupt_current() {
@@ -1652,12 +1658,14 @@ pub fn sys_fs_flock(fd: usize, how: usize) -> SysResult<usize> {
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use abi::errors::SysResult;
     use abi::syscall::{PollHandle, poll_flags};
     use spin::Mutex;
 
     use super::*;
+    use crate::sched::blocking::BLOCK_CURRENT_HOOK;
     use crate::sched::hooks::CURRENT_TID_HOOK;
     use crate::vfs::handle_table::HandleTable;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
@@ -1708,6 +1716,10 @@ mod tests {
     // Holds the current test's ProcessInfo while inside the critical section.
     static TEST_PROCESS_INFO: spin::Mutex<Option<Arc<Mutex<crate::task::ProcessInfo>>>> =
         spin::Mutex::new(None);
+    static REGISTER_TIMEOUT_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static UNREGISTER_TIMEOUT_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LAST_REGISTERED_TID: AtomicU64 = AtomicU64::new(0);
+    static LAST_REGISTERED_DEADLINE: AtomicU64 = AtomicU64::new(0);
 
     fn process_info_hook() -> Option<Arc<Mutex<crate::task::ProcessInfo>>> {
         TEST_PROCESS_INFO.lock().clone()
@@ -1715,6 +1727,25 @@ mod tests {
 
     fn test_current_tid() -> u64 {
         42
+    }
+
+    fn test_take_interrupt() -> bool {
+        false
+    }
+
+    fn test_register_timeout(tid: u64, wake_tick: u64) {
+        REGISTER_TIMEOUT_CALLS.fetch_add(1, Ordering::SeqCst);
+        LAST_REGISTERED_TID.store(tid, Ordering::SeqCst);
+        LAST_REGISTERED_DEADLINE.store(wake_tick, Ordering::SeqCst);
+    }
+
+    fn test_unregister_timeout(_tid: u64) {
+        UNREGISTER_TIMEOUT_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn advance_past_timeout_on_block() {
+        let deadline = LAST_REGISTERED_DEADLINE.load(Ordering::SeqCst);
+        crate::sched::TICK_COUNT.store(deadline.saturating_add(1), Ordering::SeqCst);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1775,6 +1806,13 @@ mod tests {
 
         res
         // _guard released here
+    }
+
+    fn reset_timeout_hooks() {
+        REGISTER_TIMEOUT_CALLS.store(0, Ordering::SeqCst);
+        UNREGISTER_TIMEOUT_CALLS.store(0, Ordering::SeqCst);
+        LAST_REGISTERED_TID.store(0, Ordering::SeqCst);
+        LAST_REGISTERED_DEADLINE.store(0, Ordering::SeqCst);
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -2184,5 +2222,43 @@ mod tests {
     fn chdir_path_too_long_returns_einval() {
         let result = sys_fs_chdir(0x1000, 4097);
         assert_eq!(result, Err(Errno::EINVAL));
+    }
+
+    #[test]
+    fn poll_unregisters_timeout_after_blocking_timeout() {
+        let _guard = TEST_POLL_GUARD.lock();
+        let node: Arc<dyn VfsNode> = Arc::new(NeverReadyNode);
+        let pinfo = make_process_info_with_nodes(&[(3, node)]);
+        let mut fds = [PollHandle { handle: 3, events: poll_flags::POLLIN, revents: 0 }];
+
+        reset_timeout_hooks();
+        crate::sched::TICK_COUNT.store(100, Ordering::SeqCst);
+
+        unsafe {
+            CURRENT_TID_HOOK = Some(test_current_tid);
+            crate::sched::hooks::PROCESS_INFO_HOOK = Some(process_info_hook);
+            crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK = Some(test_take_interrupt);
+            crate::sched::hooks::REGISTER_TIMEOUT_WAKE_HOOK = Some(test_register_timeout);
+            crate::sched::hooks::UNREGISTER_TIMEOUT_WAKE_HOOK = Some(test_unregister_timeout);
+        }
+        BLOCK_CURRENT_HOOK.store(advance_past_timeout_on_block as *mut (), Ordering::SeqCst);
+        TEST_PROCESS_INFO.lock().replace(pinfo);
+
+        let res = sys_fs_poll(fds.as_mut_ptr() as usize, fds.len(), 1);
+
+        unsafe {
+            crate::sched::hooks::UNREGISTER_TIMEOUT_WAKE_HOOK = None;
+            crate::sched::hooks::REGISTER_TIMEOUT_WAKE_HOOK = None;
+            crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK = None;
+            crate::sched::hooks::PROCESS_INFO_HOOK = None;
+            CURRENT_TID_HOOK = None;
+        }
+        BLOCK_CURRENT_HOOK.store(core::ptr::null_mut(), Ordering::SeqCst);
+        TEST_PROCESS_INFO.lock().take();
+
+        assert_eq!(res, Ok(0), "poll should time out cleanly");
+        assert_eq!(REGISTER_TIMEOUT_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(UNREGISTER_TIMEOUT_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(LAST_REGISTERED_TID.load(Ordering::SeqCst), 42);
     }
 }

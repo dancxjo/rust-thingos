@@ -1,7 +1,8 @@
 //! Heap management - delegates to platform abstraction layer.
 
-use crate::pal;
 use abi::errors::Errno;
+
+use crate::pal;
 
 /// Grow the heap by at least `min_bytes`.
 ///

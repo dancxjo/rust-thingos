@@ -1,4 +1,4 @@
-use abi::errors::{errno, Errno};
+use abi::errors::{Errno, errno};
 use abi::syscall::{SYS_VM_ADVISE, SYS_VM_MAP, SYS_VM_PROTECT, SYS_VM_QUERY, SYS_VM_UNMAP};
 pub use abi::vm::*;
 
@@ -37,32 +37,13 @@ pub fn vm_unmap(req: &VmUnmapReq) -> Result<VmUnmapResp, Errno> {
 }
 
 pub fn vm_protect(req: &VmProtectReq) -> Result<(), Errno> {
-    let ret = unsafe {
-        syscall6(
-            SYS_VM_PROTECT,
-            req as *const VmProtectReq as usize,
-            0,
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { syscall6(SYS_VM_PROTECT, req as *const VmProtectReq as usize, 0, 0, 0, 0, 0) };
     errno(ret).map(|_| ())
 }
 
 pub fn vm_advise(req: &VmAdviseReq) -> Result<(), Errno> {
-    let ret = unsafe {
-        syscall6(
-            SYS_VM_ADVISE,
-            req as *const VmAdviseReq as usize,
-            0,
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret = unsafe { syscall6(SYS_VM_ADVISE, req as *const VmAdviseReq as usize, 0, 0, 0, 0, 0) };
     errno(ret).map(|_| ())
 }
 

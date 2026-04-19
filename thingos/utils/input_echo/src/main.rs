@@ -7,9 +7,9 @@ extern crate alloc;
 use abi::hid::{
     BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
-use stem::info;
-use stem::syscall::{port_recv, vfs_handle_from_port, vfs_poll, PortHandle};
 use abi::syscall::{PollHandle, poll_flags};
+use stem::info;
+use stem::syscall::{PortHandle, port_recv, vfs_handle_from_port, vfs_poll};
 
 fn log_event(buf: &[u8]) {
     if buf.len() < BristleEventHeader::SIZE {
@@ -33,11 +33,7 @@ fn log_event(buf: &[u8]) {
             let mut bytes = [0u8; KeyEventPayload::SIZE];
             bytes.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
             let event = KeyEventPayload::from_bytes(&bytes);
-            let edge = if header.event_type == EventType::KeyDown as u16 {
-                "down"
-            } else {
-                "up"
-            };
+            let edge = if header.event_type == EventType::KeyDown as u16 { "down" } else { "up" };
             info!(
                 "input_echo: key={} edge={} mods=0x{:02x} repeat={}",
                 event.key().name(),
@@ -92,7 +88,8 @@ fn main(arg: usize) -> ! {
 
     let mut buf = [0u8; 256];
     loop {
-        let mut pollfds = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
+        let mut pollfds =
+            [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
         match vfs_poll(&mut pollfds, u64::MAX) {
             Ok(_) => match port_recv(handle, &mut buf) {
                 Ok(n) if n > 0 => log_event(&buf[..n]),

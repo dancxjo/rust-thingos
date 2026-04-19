@@ -28,15 +28,17 @@
 //!
 //! Top-level errors (`EINVAL`, `EFAULT`) are still returned as negative errno.
 
+use alloc::vec;
+
+use abi::errors::{Errno, SysResult};
+
 use super::copyin;
 use crate::message::KindId;
 use crate::message::delivery::{
-    DeliveryFailureReason, GroupBroadcastError, deliver_typed_to_process,
-    broadcast_typed_to_group_snapshot,
+    DeliveryFailureReason, GroupBroadcastError, broadcast_typed_to_group_snapshot,
+    deliver_typed_to_process,
 };
-use crate::syscall::validate::{validate_user_range, copyout};
-use abi::errors::{Errno, SysResult};
-use alloc::vec;
+use crate::syscall::validate::{copyout, validate_user_range};
 
 /// Maximum payload accepted through the syscall boundary.
 ///
@@ -133,10 +135,9 @@ pub fn sys_msg_broadcast(
     let pgid = pgid as u32;
     let (message,) = copyin_message(kind_id_ptr, payload_ptr, payload_len)?;
 
-    let report =
-        broadcast_typed_to_group_snapshot(pgid, &message).map_err(|e| match e {
-            GroupBroadcastError::InvalidGroupId => Errno::EINVAL,
-        })?;
+    let report = broadcast_typed_to_group_snapshot(pgid, &message).map_err(|e| match e {
+        GroupBroadcastError::InvalidGroupId => Errno::EINVAL,
+    })?;
 
     // Pack (failures, successes) into the usize return value.
     let successes = report.succeeded.min(0xFFFF) as usize;

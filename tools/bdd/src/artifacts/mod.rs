@@ -5,6 +5,7 @@
 //! with markdown summaries at each level.
 
 use std::sync::OnceLock;
+
 use tokio::sync::Mutex;
 
 mod collector;
@@ -32,9 +33,7 @@ pub fn init_global(arch: &str) {
 
 /// Get the global artifact collector.
 pub fn global() -> &'static Mutex<ArtifactCollector> {
-    COLLECTOR
-        .get()
-        .expect("ArtifactCollector not initialized - call init_global first")
+    COLLECTOR.get().expect("ArtifactCollector not initialized - call init_global first")
 }
 
 /// Update the global serial log cache (called from world).
@@ -47,9 +46,5 @@ pub async fn set_latest_serial(log: &str) {
 
 /// Get the latest serial log (for reporter to use).
 pub async fn get_latest_serial() -> String {
-    if let Some(cache) = SERIAL_LOG.get() {
-        cache.lock().await.clone()
-    } else {
-        String::new()
-    }
+    if let Some(cache) = SERIAL_LOG.get() { cache.lock().await.clone() } else { String::new() }
 }

@@ -4,6 +4,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::syscall::{argv_get, exit, vfs_write};
 
 fn get_args() -> Vec<String> {
@@ -41,11 +42,7 @@ fn write_all(fd: u32, mut data: &[u8]) -> bool {
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let args = get_args();
-    let mut line = if args.is_empty() {
-        String::from("y")
-    } else {
-        args.join(" ")
-    };
+    let mut line = if args.is_empty() { String::from("y") } else { args.join(" ") };
     line.push('\n');
     let line_bytes = line.as_bytes();
 

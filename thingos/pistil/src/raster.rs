@@ -1,7 +1,8 @@
-use crate::blit::PixelBuffer;
-use crate::geometry::{FillRule, Path2D, PathVerb, PointF, Rect, Transform2D};
 use alloc::vec;
 use alloc::vec::Vec;
+
+use crate::blit::PixelBuffer;
+use crate::geometry::{FillRule, Path2D, PathVerb, PointF, Rect, Transform2D};
 
 const SUPERSAMPLE_SCALE: i32 = 4;
 
@@ -203,11 +204,8 @@ fn add_edge(
         return;
     }
 
-    let (p1, p2, winding) = if y1 < y2 {
-        ((x1, y1), (x2, y2), 1)
-    } else {
-        ((x2, y2), (x1, y1), -1)
-    };
+    let (p1, p2, winding) =
+        if y1 < y2 { ((x1, y1), (x2, y2), 1) } else { ((x2, y2), (x1, y1), -1) };
 
     let dx_dy = ((p2.0 - p1.0) / (p2.1 - p1.1) * 65536.0) as i32;
     edges.push(Edge {

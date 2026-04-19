@@ -11,15 +11,15 @@
 //! Unlike the old out-of-tree setup, this repository is the Rust source tree.
 //! There is no `vendor/rust` indirection here.
 
-use anyhow::{Context, Result, bail};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use xshell::{Shell, cmd};
-
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
+use xshell::{Shell, cmd};
 
 const RUSTC_BINARY: &str = "target/rustc-thingos/rustc";
 const RUSTC_WRAPPER: &str = "target/rustc-thingos/rustc-wrapper";
@@ -183,7 +183,12 @@ fn cache_rustlib_tree(sh: &Shell, cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cache_thingos_rustc_tree(sh: &Shell, cwd: &Path, thingos_rustc: &Path, thingos_cargo: Option<&Path>) -> Result<()> {
+fn cache_thingos_rustc_tree(
+    sh: &Shell,
+    cwd: &Path,
+    thingos_rustc: &Path,
+    thingos_cargo: Option<&Path>,
+) -> Result<()> {
     let cached_dir = cwd.join(THINGOS_RUSTLIB_CACHE_DIR);
 
     sh.remove_path(&cached_dir)?;
@@ -288,10 +293,8 @@ fn seed_stage0_thingos_sysroot(cwd: &Path) -> Result<()> {
     for entry in std::fs::read_dir(&src)? {
         let entry = entry?;
         let path = entry.path();
-        let keep = matches!(
-            path.extension().and_then(|ext| ext.to_str()),
-            Some("rlib") | Some("rmeta")
-        );
+        let keep =
+            matches!(path.extension().and_then(|ext| ext.to_str()), Some("rlib") | Some("rmeta"));
         if keep {
             let file_name = path.file_name().context("missing stage0 rustlib file name")?;
             std::fs::copy(&path, dst.join(file_name))?;
@@ -332,7 +335,9 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
     let target_dir = cwd.join("targets");
     let target_dir_str = target_dir.to_str().context("non-utf8 target dir")?;
 
-    let linker_path = cwd.join("build/x86_64-unknown-linux-gnu/stage0/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld");
+    let linker_path = cwd.join(
+        "build/x86_64-unknown-linux-gnu/stage0/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld",
+    );
     std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(true, true, &linker_path))?;
     seed_stage0_thingos_sysroot(cwd)?;
 
@@ -357,14 +362,20 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
                 thingos_cargo.is_some(),
                 OUTPUT_DIR
             );
-            std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true, &linker_path))?;
+            std::fs::write(
+                cwd.join(ROOT_CONFIG_TOML),
+                bootstrap_config(false, true, &linker_path),
+            )?;
             Ok(true)
         }
         None => {
             println!(
                 "rustc-thingos: warning: native rustc build finished but artifact was not found; ISO will not include a native compiler."
             );
-            std::fs::write(cwd.join(ROOT_CONFIG_TOML), bootstrap_config(false, true, &linker_path))?;
+            std::fs::write(
+                cwd.join(ROOT_CONFIG_TOML),
+                bootstrap_config(false, true, &linker_path),
+            )?;
             Ok(false)
         }
     }
@@ -436,10 +447,7 @@ pub fn build_rustc_thingos(sh: &Shell, arch: &str) -> Result<Option<PathBuf>> {
         }
 
         write_cache_key()?;
-        println!(
-            "rustc-thingos: Linux-hosted binary cached at {}",
-            RUSTC_BINARY
-        );
+        println!("rustc-thingos: Linux-hosted binary cached at {}", RUSTC_BINARY);
         Ok(Some(PathBuf::from(RUSTC_BINARY)))
     })();
 

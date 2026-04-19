@@ -1,7 +1,9 @@
-use super::types::*;
-use chrono::{DateTime, Local};
 use std::fs;
 use std::path::PathBuf;
+
+use chrono::{DateTime, Local};
+
+use super::types::*;
 
 mod writer;
 
@@ -75,8 +77,7 @@ impl ArtifactCollector {
 
     /// Get directory for current step.
     pub fn step_dir(&self) -> PathBuf {
-        self.scenario_dir()
-            .join(format!("{:02}", self.step_counter))
+        self.scenario_dir().join(format!("{:02}", self.step_counter))
     }
 
     /// Called when a feature starts.
@@ -85,11 +86,7 @@ impl ArtifactCollector {
         let dir = self.feature_dir();
         let _ = fs::create_dir_all(&dir);
 
-        self.features.push(FeatureArtifacts {
-            name: name.to_string(),
-            dir,
-            scenarios: Vec::new(),
-        });
+        self.features.push(FeatureArtifacts { name: name.to_string(), dir, scenarios: Vec::new() });
     }
 
     /// Called when a feature ends.
@@ -214,10 +211,7 @@ impl ArtifactCollector {
         registers: Option<PathBuf>,
         full_serial: &str,
     ) {
-        let duration_ms = self
-            .step_start_time
-            .map(|t| t.elapsed().as_millis() as u64)
-            .unwrap_or(0);
+        let duration_ms = self.step_start_time.map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
 
         let step_serial = if self.step_start_serial_len < full_serial.len() {
             full_serial[self.step_start_serial_len..].to_string()
@@ -238,11 +232,7 @@ impl ArtifactCollector {
                     step.screenshot_before = screenshot_before;
                     step.screenshot_after = screenshot_after;
                     step.registers = registers;
-                    step.serial_log = if log_path.exists() {
-                        Some(log_path.clone())
-                    } else {
-                        None
-                    };
+                    step.serial_log = if log_path.exists() { Some(log_path.clone()) } else { None };
                     step.serial_excerpt = step_serial;
                     step.duration_ms = duration_ms;
                 }
@@ -256,11 +246,7 @@ impl ArtifactCollector {
     }
 
     pub fn count_features(&self) -> (usize, usize) {
-        let passed = self
-            .features
-            .iter()
-            .filter(|f| f.scenarios.iter().all(|s| s.passed))
-            .count();
+        let passed = self.features.iter().filter(|f| f.scenarios.iter().all(|s| s.passed)).count();
         (passed, self.features.len() - passed)
     }
 

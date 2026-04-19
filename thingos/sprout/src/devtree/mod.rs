@@ -7,9 +7,9 @@ pub mod loongarch64;
 pub mod riscv64;
 pub mod x86_64;
 
+use alloc::vec;
 
 use abi::schema::{confidence, keys, source};
-use alloc::vec;
 use stem::{debug, info};
 
 pub fn set_str_prop(_id: abi::types::ThingId, _key: &str, _val: &str) -> Result<(), ()> {

@@ -69,8 +69,7 @@ extern crate alloc;
 /// need to distinguish an `Authority`-shaped message payload can compare
 /// against this constant.
 pub const KIND_ID_THINGOS_AUTHORITY: [u8; 16] = [
-    0xc7, 0x7d, 0x6d, 0x64, 0xb9, 0xfd, 0x54, 0x04,
-    0x23, 0x53, 0xfc, 0x38, 0x1c, 0x8c, 0xee, 0xbc,
+    0xc7, 0x7d, 0x6d, 0x64, 0xb9, 0xfd, 0x54, 0x04, 0x23, 0x53, 0xfc, 0x38, 0x1c, 0x8c, 0xee, 0xbc,
 ];
 
 /// Canonical permission context for a running unit in ThingOS.
@@ -147,8 +146,8 @@ mod tests {
     fn test_kind_id_thingos_authority_constant() {
         // Verify the constant matches the kindc-generated value.
         let expected: [u8; 16] = [
-            0xc7, 0x7d, 0x6d, 0x64, 0xb9, 0xfd, 0x54, 0x04,
-            0x23, 0x53, 0xfc, 0x38, 0x1c, 0x8c, 0xee, 0xbc,
+            0xc7, 0x7d, 0x6d, 0x64, 0xb9, 0xfd, 0x54, 0x04, 0x23, 0x53, 0xfc, 0x38, 0x1c, 0x8c,
+            0xee, 0xbc,
         ];
         assert_eq!(KIND_ID_THINGOS_AUTHORITY, expected);
     }
@@ -218,10 +217,7 @@ mod tests {
         let text = a.as_text();
         assert!(text.contains("name: my-service"), "unexpected: {text}");
         assert!(text.contains("capability_mask: 0x3"), "unexpected: {text}");
-        assert!(
-            text.contains("capabilities: [net_bind, read_fs]"),
-            "unexpected: {text}"
-        );
+        assert!(text.contains("capabilities: [net_bind, read_fs]"), "unexpected: {text}");
     }
 
     #[test]

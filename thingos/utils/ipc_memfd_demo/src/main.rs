@@ -93,10 +93,7 @@ fn main(_arg: usize) -> ! {
             *b = pattern;
         }
     }
-    info!(
-        "ipc_memfd_demo: filled buffer with pattern 0x{:02X}",
-        pattern
-    );
+    info!("ipc_memfd_demo: filled buffer with pattern 0x{:02X}", pattern);
 
     // ── 4. Unmap the RW mapping ───────────────────────────────────────────
     //
@@ -138,10 +135,7 @@ fn main(_arg: usize) -> ! {
     };
 
     if ok {
-        info!(
-            "ipc_memfd_demo: PASS — all {} bytes match 0x{:02X}",
-            BUF_SIZE, pattern
-        );
+        info!("ipc_memfd_demo: PASS — all {} bytes match 0x{:02X}", BUF_SIZE, pattern);
     } else {
         warn!("ipc_memfd_demo: FAIL — buffer mismatch!");
     }

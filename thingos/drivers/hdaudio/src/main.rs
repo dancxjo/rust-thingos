@@ -16,22 +16,23 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use abi::device::DeviceKind;
-use abi::driver_interface::{
-    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
-};
-use abi::sound::{
-    AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo, AUDIO_DRAIN,
-    AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START, AUDIO_STOP,
-    format_bit,
-};
-use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader, VFS_RPC_MAX_REQ};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_volatile};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
+
+use abi::device::DeviceKind;
+use abi::driver_interface::{
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
+    DriverStartContext, ProbeResult, Status,
+};
+use abi::sound::{
+    AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START,
+    AUDIO_STOP, AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo,
+    format_bit,
+};
+use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp, VfsRpcReqHeader};
 use stem::syscall::port::{port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
@@ -217,9 +218,7 @@ fn main(boot_fd: usize) -> ! {
     };
 
     let path_str = if path_len > 0 {
-        core::str::from_utf8(&path_buf[..path_len])
-            .unwrap_or("")
-            .trim_matches(char::from(0))
+        core::str::from_utf8(&path_buf[..path_len]).unwrap_or("").trim_matches(char::from(0))
     } else {
         ""
     };
@@ -300,10 +299,7 @@ fn main(boot_fd: usize) -> ! {
             }
         }
     };
-    debug!(
-        "HDAUDIO: path AFG=0x{:02x} OUT=0x{:02x} PIN=0x{:02x}",
-        afg, out_nid, pin_nid
-    );
+    debug!("HDAUDIO: path AFG=0x{:02x} OUT=0x{:02x} PIN=0x{:02x}", afg, out_nid, pin_nid);
 
     if let Err(e) = hda.configure_codec(codec_addr, afg, out_nid, pin_nid) {
         warn!("HDAUDIO: codec config failed: {:?}", e);
@@ -431,8 +427,12 @@ impl HdaRingBuf {
         data.resize(cap, 0u8);
         Self { data, head: 0, tail: 0, len: 0, cap }
     }
-    fn free_space(&self) -> usize { self.cap - self.len }
-    fn available(&self) -> usize { self.len }
+    fn free_space(&self) -> usize {
+        self.cap - self.len
+    }
+    fn available(&self) -> usize {
+        self.len
+    }
     fn enqueue(&mut self, src: &[u8]) -> usize {
         let n = src.len().min(self.free_space());
         for i in 0..n {
@@ -556,12 +556,16 @@ fn hda_resp_ok_dc(ret: u32, out: &[u8]) -> Vec<u8> {
     b
 }
 
-fn hda_resp_err(e: u8) -> Vec<u8> { vec![e] }
+fn hda_resp_err(e: u8) -> Vec<u8> {
+    vec![e]
+}
 
 fn hda_encode_readdir(names: &[(&str, u32, u64)], offset: u64) -> Vec<u8> {
     let mut out = Vec::new();
     for (i, (name, ftype, ino)) in names.iter().enumerate() {
-        if (i as u64) < offset { continue; }
+        if (i as u64) < offset {
+            continue;
+        }
         let nb = name.as_bytes();
         let nl = nb.len().min(255) as u8;
         out.extend_from_slice(&ino.to_le_bytes());
@@ -575,101 +579,177 @@ fn hda_encode_readdir(names: &[(&str, u32, u64)], offset: u64) -> Vec<u8> {
 fn hda_dispatch_rpc(op: VfsRpcOp, payload: &[u8], card: &mut HdaAudioCard) -> Vec<u8> {
     match op {
         VfsRpcOp::Lookup => {
-            if payload.len() < 4 { return hda_resp_err(22); }
-            let plen = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+            if payload.len() < 4 {
+                return hda_resp_err(22);
+            }
+            let plen =
+                u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
             let path = if payload.len() >= 4 + plen {
                 core::str::from_utf8(&payload[4..4 + plen]).unwrap_or("")
-            } else { "" };
-            let h = match path { "" => HANDLE_ROOT, "ctl" => HANDLE_CTL, "out0" => HANDLE_OUT0, _ => return hda_resp_err(2) };
+            } else {
+                ""
+            };
+            let h = match path {
+                "" => HANDLE_ROOT,
+                "ctl" => HANDLE_CTL,
+                "out0" => HANDLE_OUT0,
+                _ => return hda_resp_err(2),
+            };
             hda_resp_ok_u64(h)
         }
         VfsRpcOp::Stat => {
-            if payload.len() < 8 { return hda_resp_err(22); }
-            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0;8]));
+            if payload.len() < 8 {
+                return hda_resp_err(22);
+            }
+            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
             match h {
                 HANDLE_ROOT => hda_resp_ok_stat(S_IFDIR | 0o755, 0, 1),
-                HANDLE_CTL  => hda_resp_ok_stat(S_IFREG | 0o444, 0, 2),
+                HANDLE_CTL => hda_resp_ok_stat(S_IFREG | 0o444, 0, 2),
                 HANDLE_OUT0 => hda_resp_ok_stat(S_IFREG | 0o222, 0, 3),
                 _ => hda_resp_err(2),
             }
         }
         VfsRpcOp::Readdir => {
-            if payload.len() < 20 { return hda_resp_err(22); }
-            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0;8]));
-            let off = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0;8]));
-            if h != HANDLE_ROOT { return hda_resp_err(20); }
+            if payload.len() < 20 {
+                return hda_resp_err(22);
+            }
+            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+            let off = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8]));
+            if h != HANDLE_ROOT {
+                return hda_resp_err(20);
+            }
             let entries: &[(&str, u32, u64)] = &[("ctl", S_IFREG, 2), ("out0", S_IFREG, 3)];
             hda_resp_ok_read(&hda_encode_readdir(entries, off))
         }
         VfsRpcOp::Read => hda_resp_ok_read(&[]),
         VfsRpcOp::Write => {
-            if payload.len() < 20 { return hda_resp_err(22); }
-            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0;8]));
-            if h != HANDLE_OUT0 { return hda_resp_err(30); }
-            let dlen = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0;4])) as usize;
-            let data = if payload.len() >= 20 + dlen { &payload[20..20+dlen] } else { &payload[20..] };
+            if payload.len() < 20 {
+                return hda_resp_err(22);
+            }
+            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+            if h != HANDLE_OUT0 {
+                return hda_resp_err(30);
+            }
+            let dlen = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
+            let data =
+                if payload.len() >= 20 + dlen { &payload[20..20 + dlen] } else { &payload[20..] };
             let n = card.ring.enqueue(data);
             hda_resp_ok_written(n as u32)
         }
         VfsRpcOp::Poll => {
-            if payload.len() < 8 { return hda_resp_err(22); }
-            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0;8]));
-            if h != HANDLE_OUT0 { return hda_resp_ok_poll(abi::syscall::poll_flags::POLLOUT as u32); }
-            let rev = if card.ring.free_space() > 0 { abi::syscall::poll_flags::POLLOUT as u32 } else { 0 };
+            if payload.len() < 8 {
+                return hda_resp_err(22);
+            }
+            let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+            if h != HANDLE_OUT0 {
+                return hda_resp_ok_poll(abi::syscall::poll_flags::POLLOUT as u32);
+            }
+            let rev = if card.ring.free_space() > 0 {
+                abi::syscall::poll_flags::POLLOUT as u32
+            } else {
+                0
+            };
             hda_resp_ok_poll(rev)
         }
         VfsRpcOp::DeviceCall => {
             let dc_size = size_of::<abi::device::DeviceCall>();
-            if payload.len() < 8 + dc_size { return hda_resp_err(22); }
+            if payload.len() < 8 + dc_size {
+                return hda_resp_err(22);
+            }
             let dc: abi::device::DeviceCall = unsafe {
                 core::ptr::read_unaligned(payload[8..].as_ptr() as *const abi::device::DeviceCall)
             };
-            if dc.kind != DeviceKind::Audio { return hda_resp_err(38); }
+            if dc.kind != DeviceKind::Audio {
+                return hda_resp_err(38);
+            }
             let in_data = &payload[8 + dc_size..];
             match dc.op {
                 AUDIO_GET_INFO => {
                     let info = card.stream_info();
-                    let bytes = unsafe { core::slice::from_raw_parts(&info as *const AudioStreamInfo as *const u8, size_of::<AudioStreamInfo>()) };
+                    let bytes = unsafe {
+                        core::slice::from_raw_parts(
+                            &info as *const AudioStreamInfo as *const u8,
+                            size_of::<AudioStreamInfo>(),
+                        )
+                    };
                     hda_resp_ok_dc(0, bytes)
                 }
                 AUDIO_SET_PARAMS => {
                     if in_data.len() >= size_of::<AudioParams>() {
-                        let req: AudioParams = unsafe { core::ptr::read_unaligned(in_data.as_ptr() as *const AudioParams) };
-                        card.params = AudioParams { sample_format: req.sample_format, rate: req.rate.clamp(44100, 48000), ports: req.ports.clamp(1,2), period_frames: req.period_frames.max(64), buffer_frames: req.buffer_frames.max(256), _reserved: [0;3] };
+                        let req: AudioParams = unsafe {
+                            core::ptr::read_unaligned(in_data.as_ptr() as *const AudioParams)
+                        };
+                        card.params = AudioParams {
+                            sample_format: req.sample_format,
+                            rate: req.rate.clamp(44100, 48000),
+                            ports: req.ports.clamp(1, 2),
+                            period_frames: req.period_frames.max(64),
+                            buffer_frames: req.buffer_frames.max(256),
+                            _reserved: [0; 3],
+                        };
                     }
-                    let bytes = unsafe { core::slice::from_raw_parts(&card.params as *const AudioParams as *const u8, size_of::<AudioParams>()) };
+                    let bytes = unsafe {
+                        core::slice::from_raw_parts(
+                            &card.params as *const AudioParams as *const u8,
+                            size_of::<AudioParams>(),
+                        )
+                    };
                     hda_resp_ok_dc(0, bytes)
                 }
                 AUDIO_GET_PARAMS => {
-                    let bytes = unsafe { core::slice::from_raw_parts(&card.params as *const AudioParams as *const u8, size_of::<AudioParams>()) };
+                    let bytes = unsafe {
+                        core::slice::from_raw_parts(
+                            &card.params as *const AudioParams as *const u8,
+                            size_of::<AudioParams>(),
+                        )
+                    };
                     hda_resp_ok_dc(0, bytes)
                 }
                 AUDIO_GET_STATUS => {
                     let st = card.status();
-                    let bytes = unsafe { core::slice::from_raw_parts(&st as *const AudioStatus as *const u8, size_of::<AudioStatus>()) };
+                    let bytes = unsafe {
+                        core::slice::from_raw_parts(
+                            &st as *const AudioStatus as *const u8,
+                            size_of::<AudioStatus>(),
+                        )
+                    };
                     hda_resp_ok_dc(0, bytes)
                 }
-                AUDIO_START   => { card.state = AudioState::Running as u32;  hda_resp_ok_dc(0, &[]) }
-                AUDIO_STOP    => { card.state = AudioState::Stopped as u32; card.ring = HdaRingBuf::new(64*1024); hda_resp_ok_dc(0, &[]) }
-                AUDIO_DRAIN   => { card.state = AudioState::Draining as u32; hda_resp_ok_dc(0, &[]) }
-                _             => hda_resp_err(38),
+                AUDIO_START => {
+                    card.state = AudioState::Running as u32;
+                    hda_resp_ok_dc(0, &[])
+                }
+                AUDIO_STOP => {
+                    card.state = AudioState::Stopped as u32;
+                    card.ring = HdaRingBuf::new(64 * 1024);
+                    hda_resp_ok_dc(0, &[])
+                }
+                AUDIO_DRAIN => {
+                    card.state = AudioState::Draining as u32;
+                    hda_resp_ok_dc(0, &[])
+                }
+                _ => hda_resp_err(38),
             }
         }
         VfsRpcOp::SubscribeReady => {
             if payload.len() >= 8 {
-                let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0;8]));
-                if h == HANDLE_OUT0 { card.out0_subscribed = true; }
+                let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                if h == HANDLE_OUT0 {
+                    card.out0_subscribed = true;
+                }
             }
             vec![0u8]
         }
         VfsRpcOp::UnsubscribeReady => {
             if payload.len() >= 8 {
-                let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0;8]));
-                if h == HANDLE_OUT0 { card.out0_subscribed = false; }
+                let h = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+                if h == HANDLE_OUT0 {
+                    card.out0_subscribed = false;
+                }
             }
             vec![0u8]
         }
-        VfsRpcOp::Close  => vec![0u8],
+        VfsRpcOp::Close => vec![0u8],
         VfsRpcOp::Rename => hda_resp_err(30),
     }
 }
@@ -748,11 +828,7 @@ impl HdaController {
         let root_nc = self.get_param(cad, 0x00, PARAM_NODE_COUNT)?;
         let root_start = ((root_nc >> 16) & 0x7f) as u8;
         let root_count = (root_nc & 0x7f) as u8;
-        stem::debug!(
-            "HDAUDIO: root nodes: start={} count={}",
-            root_start,
-            root_count
-        );
+        stem::debug!("HDAUDIO: root nodes: start={} count={}", root_start, root_count);
 
         let mut afg = None;
         for nid in root_start..root_start.saturating_add(root_count) {
@@ -1086,11 +1162,7 @@ fn find_hda_device() -> Option<alloc::string::String> {
     let mut pos = 0;
     while pos < n {
         let entry_buf = &buf[pos..n];
-        let name = core::str::from_utf8(entry_buf)
-            .unwrap_or("")
-            .split('\0')
-            .next()
-            .unwrap_or("");
+        let name = core::str::from_utf8(entry_buf).unwrap_or("").split('\0').next().unwrap_or("");
         if name.is_empty() {
             break;
         }
@@ -1099,11 +1171,7 @@ fn find_hda_device() -> Option<alloc::string::String> {
             let class_path = alloc::format!("/sys/devices/{}/class", name);
             let class_str = read_sys_string(&class_path).unwrap_or("".to_string());
 
-            stem::debug!(
-                "HDAUDIO: Checking device {} class={}",
-                name,
-                class_str.trim()
-            );
+            stem::debug!("HDAUDIO: Checking device {} class={}", name, class_str.trim());
 
             if class_str.trim().starts_with("0x0403") {
                 let dev_path = alloc::format!("/sys/devices/{}", name);
@@ -1126,9 +1194,5 @@ fn read_sys_string(path: &str) -> Option<alloc::string::String> {
     let n = vfs_read(fd, &mut buf).ok()?;
     let _ = vfs_close(fd);
 
-    Some(
-        alloc::string::String::from_utf8_lossy(&buf[..n])
-            .trim()
-            .to_string(),
-    )
+    Some(alloc::string::String::from_utf8_lossy(&buf[..n]).trim().to_string())
 }

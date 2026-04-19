@@ -209,10 +209,7 @@ mod tests {
             boot_assumptions: &[],
         };
 
-        assert_eq!(
-            contract.validate(),
-            Err("Service must watch and/or publish resources")
-        );
+        assert_eq!(contract.validate(), Err("Service must watch and/or publish resources"));
     }
 
     #[test]

@@ -6,9 +6,10 @@
 
 extern crate alloc;
 
-use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, Ipv4Address};
 use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_read, vfs_write};
@@ -40,8 +41,7 @@ fn get_args() -> Vec<String> {
             if offset + 4 > buf.len() {
                 break;
             }
-            let str_len =
-                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+            let str_len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + str_len > buf.len() {
                 break;
@@ -136,11 +136,7 @@ fn write_ctl(path: &str, cmd: &str) -> Result<(), &'static str> {
 
 fn build_echo_request(ident: u16, seq_no: u16, payload_len: usize) -> Vec<u8> {
     let payload: Vec<u8> = (0..payload_len).map(|i| (i & 0xff) as u8).collect();
-    let repr = Icmpv4Repr::EchoRequest {
-        ident,
-        seq_no,
-        data: &payload,
-    };
+    let repr = Icmpv4Repr::EchoRequest { ident, seq_no, data: &payload };
     let mut packet_bytes = alloc::vec![0u8; repr.buffer_len()];
     let mut packet = Icmpv4Packet::new_unchecked(&mut packet_bytes[..]);
     repr.emit(&mut packet, &ChecksumCapabilities::default());
@@ -187,11 +183,9 @@ fn is_matching_echo_reply(packet_bytes: &[u8], ident: u16, seq_no: u16) -> bool 
         Err(_) => return false,
     };
     match Icmpv4Repr::parse(&packet, &ChecksumCapabilities::default()) {
-        Ok(Icmpv4Repr::EchoReply {
-            ident: reply_ident,
-            seq_no: reply_seq,
-            ..
-        }) => reply_ident == ident && reply_seq == seq_no,
+        Ok(Icmpv4Repr::EchoReply { ident: reply_ident, seq_no: reply_seq, .. }) => {
+            reply_ident == ident && reply_seq == seq_no
+        }
         _ => false,
     }
 }
@@ -279,10 +273,7 @@ fn main(_arg: usize) -> ! {
     };
     let data_path = alloc::format!("/net/icmp/{}/data", socket_id);
 
-    let header = alloc::format!(
-        "PING {} ({}) {} bytes of data\n",
-        host, ip, DEFAULT_PAYLOAD_LEN
-    );
+    let header = alloc::format!("PING {} ({}) {} bytes of data\n", host, ip, DEFAULT_PAYLOAD_LEN);
     print(1, &header);
 
     let mut transmitted = 0u32;
@@ -325,15 +316,14 @@ fn main(_arg: usize) -> ! {
 
     close_icmp_socket(&ctl_path);
 
-    let loss = if transmitted > 0 {
-        100 * (transmitted - received) / transmitted
-    } else {
-        100
-    };
+    let loss = if transmitted > 0 { 100 * (transmitted - received) / transmitted } else { 100 };
 
     let summary = alloc::format!(
         "\n--- {} ping statistics ---\n{} packets transmitted, {} received, {}% packet loss\n",
-        host, transmitted, received, loss
+        host,
+        transmitted,
+        received,
+        loss
     );
     print(1, &summary);
 

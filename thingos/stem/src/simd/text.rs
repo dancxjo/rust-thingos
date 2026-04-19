@@ -75,11 +75,7 @@ impl Rect {
         let x2 = (self.x + self.w).min(other.x + other.w);
         let y2 = (self.y + self.h).min(other.y + other.h);
 
-        if x1 < x2 && y1 < y2 {
-            Some(Rect::new(x1, y1, x2 - x1, y2 - y1))
-        } else {
-            None
-        }
+        if x1 < x2 && y1 < y2 { Some(Rect::new(x1, y1, x2 - x1, y2 - y1)) } else { None }
     }
 }
 
@@ -259,12 +255,7 @@ pub fn create_glyph_run(
     atlas_width: u32,
     atlas_height: u32,
 ) -> GlyphRun {
-    GlyphRun {
-        glyphs,
-        atlas_width,
-        atlas_height,
-        placements,
-    }
+    GlyphRun { glyphs, atlas_width, atlas_height, placements }
 }
 
 #[cfg(test)]
@@ -344,12 +335,8 @@ mod tests {
         };
 
         // Create a glyph run with one glyph at (10, 10)
-        let glyph = PositionedGlyph {
-            x_subpixel: float_to_subpixel(10.0),
-            y: 10,
-            glyph_id: 42,
-            phase: 0,
-        };
+        let glyph =
+            PositionedGlyph { x_subpixel: float_to_subpixel(10.0), y: 10, glyph_id: 42, phase: 0 };
 
         let run = create_glyph_run(vec![glyph], vec![placement], atlas_w, atlas_h);
 
@@ -365,15 +352,7 @@ mod tests {
         let clip = Rect::new(0, 0, dst_w as i32, dst_h as i32);
 
         // Draw the glyph run
-        draw_glyph_run(
-            &mut dst,
-            dst_w as usize,
-            &atlas,
-            atlas_w as usize,
-            &run,
-            &clip,
-            color,
-        );
+        draw_glyph_run(&mut dst, dst_w as usize, &atlas, atlas_w as usize, &run, &clip, color);
 
         // Verify pixels at (10, 10) through (13, 13) are white
         for y in 10..14 {
@@ -428,15 +407,7 @@ mod tests {
         let clip = Rect::new(0, 0, 16, 16);
 
         // Draw (should be clipped to 2x2)
-        draw_glyph_run(
-            &mut dst,
-            dst_w as usize,
-            &atlas,
-            atlas_w as usize,
-            &run,
-            &clip,
-            0xFFFFFFFF,
-        );
+        draw_glyph_run(&mut dst, dst_w as usize, &atlas, atlas_w as usize, &run, &clip, 0xFFFFFFFF);
 
         // Verify that only (14,14), (15,14), (14,15), (15,15) are drawn
         let valid_coords = [(14, 14), (15, 14), (14, 15), (15, 15)];
@@ -477,11 +448,7 @@ mod tests {
         // Glyph 'A' (id=65) at (0, 0)
         for y in 0..5 {
             for x in 0..5 {
-                let val = if y == 0 || x == 0 || x == 4 || y == 2 {
-                    200
-                } else {
-                    0
-                };
+                let val = if y == 0 || x == 0 || x == 4 || y == 2 { 200 } else { 0 };
                 atlas[(y * atlas_w + x) as usize] = val;
             }
         }
@@ -495,12 +462,8 @@ mod tests {
         };
 
         // Render "A" at x=10, y=10
-        let glyph = PositionedGlyph {
-            x_subpixel: float_to_subpixel(10.0),
-            y: 10,
-            glyph_id: 65,
-            phase: 0,
-        };
+        let glyph =
+            PositionedGlyph { x_subpixel: float_to_subpixel(10.0), y: 10, glyph_id: 65, phase: 0 };
 
         let run = create_glyph_run(vec![glyph], vec![placement_a], atlas_w, atlas_h);
 
@@ -509,15 +472,7 @@ mod tests {
         let mut dst = vec![0u32; (dst_w * dst_h) as usize];
 
         let clip = Rect::new(0, 0, 32, 32);
-        draw_glyph_run(
-            &mut dst,
-            dst_w as usize,
-            &atlas,
-            atlas_w as usize,
-            &run,
-            &clip,
-            0xFFFFFFFF,
-        );
+        draw_glyph_run(&mut dst, dst_w as usize, &atlas, atlas_w as usize, &run, &clip, 0xFFFFFFFF);
 
         // Compute simple checksum
         let mut checksum = 0u64;
@@ -578,12 +533,7 @@ mod tests {
         let frac = subpixel_frac(x_pos);
         let phase = compute_phase(frac); // Should be phase 1 (0.25 -> 64/256 -> phase 1)
 
-        let glyph = PositionedGlyph {
-            x_subpixel: x_pos,
-            y: 20,
-            glyph_id: b'H' as u32,
-            phase,
-        };
+        let glyph = PositionedGlyph { x_subpixel: x_pos, y: 20, glyph_id: b'H' as u32, phase };
 
         let run = create_glyph_run(vec![glyph], vec![placement], atlas_w, atlas_h);
 

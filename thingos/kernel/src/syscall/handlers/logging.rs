@@ -1,8 +1,9 @@
 //! Logging and debug output syscalls
 
+use abi::errors::{Errno, SysResult};
+
 use super::copyin;
 use crate::syscall::validate::validate_user_range;
-use abi::errors::{Errno, SysResult};
 
 pub fn sys_log_write(ptr: usize, len: usize, level_arg: usize) -> SysResult<usize> {
     let _ = validate_user_range(ptr, len, false)?;
@@ -40,12 +41,7 @@ pub fn sys_log_write(ptr: usize, len: usize, level_arg: usize) -> SysResult<usiz
             };
 
             crate::logging::_log_event(
-                crate::logging::LogMetadata {
-                    level,
-                    file: "userspace",
-                    line: 0,
-                    module: "user",
-                },
+                crate::logging::LogMetadata { level, file: "userspace", line: 0, module: "user" },
                 provenance,
                 format_args!("{}", msg_body),
                 &[],

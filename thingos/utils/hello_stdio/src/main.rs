@@ -9,9 +9,7 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use abi::seed::{
-    HOST_PROGRAM, INTERFACE_PROGRAM_V1, SEED_ABI_VERSION, Seed, SeedInterface,
-};
+use abi::seed::{HOST_PROGRAM, INTERFACE_PROGRAM_V1, SEED_ABI_VERSION, Seed, SeedInterface};
 
 const SEED_NAME: &[u8] = b"hello_stdio";
 

@@ -7,10 +7,9 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
@@ -65,7 +64,10 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -
     thingos_driver_start(ctx)
 }
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
@@ -206,10 +208,7 @@ fn init_mouse() {
 
     if new_cfg != cfg {
         write_controller_config(new_cfg);
-        debug!(
-            "ps2_mouse: updated controller cfg 0x{:02x} -> 0x{:02x}",
-            cfg, new_cfg
-        );
+        debug!("ps2_mouse: updated controller cfg 0x{:02x} -> 0x{:02x}", cfg, new_cfg);
     } else {
         debug!("ps2_mouse: controller cfg already correct (0x{:02x})", cfg);
     }
@@ -222,10 +221,7 @@ fn init_mouse() {
         debug!("ps2_mouse: reset ACK received (0xfa)");
         let bat = read_data_filtered(true, "BAT byte (0xAA)").unwrap_or(0);
         let id = read_data_filtered(true, "Device ID (0x00)").unwrap_or(1);
-        debug!(
-            "ps2_mouse: BAT passed (0x{:02x}), ID 0x{:02x} confirmed",
-            bat, id
-        );
+        debug!("ps2_mouse: BAT passed (0x{:02x}), ID 0x{:02x} confirmed", bat, id);
     }
 
     debug!("ps2_mouse: setting sample rate (100)");
@@ -245,10 +241,7 @@ fn init_mouse() {
     let b1 = read_data_filtered(true, "status byte 1").unwrap_or(0);
     let b2 = read_data_filtered(true, "status byte 2").unwrap_or(0);
     let b3 = read_data_filtered(true, "status byte 3").unwrap_or(0);
-    debug!(
-        "ps2_mouse: status result = Some({}) Some({}) Some({})",
-        b1, b2, b3
-    );
+    debug!("ps2_mouse: status result = Some({}) Some({}) Some({})", b1, b2, b3);
 
     // Bit 5 indicates Enable/Disable status (1 = Enabled, 0 = Disabled).
     // If it is 0, data reporting is disabled, so we must enable it.
@@ -298,15 +291,9 @@ fn main(raw_write_handle: usize) -> ! {
 
     // Subscribe to mouse interrupt
     match irq_subscribe(MOUSE_VECTOR) {
-        Ok(()) => debug!(
-            "ps2_mouse: subscribed to IRQ12 (vector 0x{:02x})",
-            MOUSE_VECTOR
-        ),
+        Ok(()) => debug!("ps2_mouse: subscribed to IRQ12 (vector 0x{:02x})", MOUSE_VECTOR),
         Err(e) => {
-            debug!(
-                "ps2_mouse: IRQ subscribe failed ({:?}), falling back to polling",
-                e
-            );
+            debug!("ps2_mouse: IRQ subscribe failed ({:?}), falling back to polling", e);
             polling_loop(fd);
         }
     }
@@ -323,12 +310,7 @@ use abi::hid::{
 };
 use mouse::{MouseState, PointerEvent};
 
-fn send_mouse_events(
-    fd: u32,
-    state: &mut MouseState,
-    packet: &[u8; 3],
-    drop_counter: &mut u32,
-) {
+fn send_mouse_events(fd: u32, state: &mut MouseState, packet: &[u8; 3], drop_counter: &mut u32) {
     let (events, count) = state.process_packet(packet);
     for i in 0..count {
         if let Some(evt) = events[i] {
@@ -378,9 +360,7 @@ fn send_mouse_events(
                 }
             }
             // Publish the event through the VFS-first message path.
-            let send_ok = len > 0 && vfs_write(fd, &buf[..len])
-                .map(|n| n == len)
-                .unwrap_or(false);
+            let send_ok = len > 0 && vfs_write(fd, &buf[..len]).map(|n| n == len).unwrap_or(false);
             if !send_ok && len > 0 {
                 *drop_counter = drop_counter.wrapping_add(1);
                 if *drop_counter <= 4 || *drop_counter % 100 == 0 {
@@ -434,10 +414,7 @@ fn drain_mouse_data(
 
 /// Fallback polling loop
 fn polling_loop(fd: u32) -> ! {
-    stem::debug!(
-        "ps2_mouse: using cooperative polling loop ({}ms interval)",
-        POLLING_INTERVAL_MS
-    );
+    stem::debug!("ps2_mouse: using cooperative polling loop ({}ms interval)", POLLING_INTERVAL_MS);
 
     let mut packet = [0u8; 3];
     let mut idx = 0usize;
@@ -449,13 +426,7 @@ fn polling_loop(fd: u32) -> ! {
 
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA != 0 {
-                drain_mouse_data(
-                    fd,
-                    &mut mouse_state,
-                    &mut packet,
-                    &mut idx,
-                    &mut drop_counter,
-                );
+                drain_mouse_data(fd, &mut mouse_state, &mut packet, &mut idx, &mut drop_counter);
             } else {
                 // Leave keyboard bytes queued for ps2_kbd.
                 stem::sleep_ms(POLLING_INTERVAL_MS);

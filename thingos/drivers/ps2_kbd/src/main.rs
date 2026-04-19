@@ -5,13 +5,13 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::vfs::{vfs_handle_from_port, vfs_write};
 use stem::syscall::{ioport_read, irq_subscribe, irq_wait};
-use stem::{error, info, debug, warn};
+use stem::{debug, error, info, warn};
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_kbd";
 
 #[cfg(target_arch = "x86_64")]
@@ -59,7 +59,10 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -
     thingos_driver_start(ctx)
 }
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }

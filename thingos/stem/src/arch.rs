@@ -36,25 +36,11 @@ pub fn whoami() -> WhoAmI {
         );
     }
 
-    WhoAmI {
-        cs,
-        ss,
-        cpl: (cs & 0x3) as u8,
-        rsp,
-        rip,
-        rflags,
-    }
+    WhoAmI { cs, ss, cpl: (cs & 0x3) as u8, rsp, rip, rflags }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
 #[inline(always)]
 pub fn whoami() -> WhoAmI {
-    WhoAmI {
-        cs: 0,
-        ss: 0,
-        cpl: 0,
-        rsp: 0,
-        rip: 0,
-        rflags: 0,
-    }
+    WhoAmI { cs: 0, ss: 0, cpl: 0, rsp: 0, rip: 0, rflags: 0 }
 }

@@ -4,9 +4,9 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::syscall::{argv_get, exit, sleep_ns, vfs_write};
 
 fn get_args() -> Vec<String> {
@@ -62,11 +62,7 @@ fn parse_duration_ns(s: &str) -> Option<u64> {
 
     // Try floating point parse
     if let Some(dot) = num_str.find('.') {
-        let int_part: u64 = if dot == 0 {
-            0
-        } else {
-            num_str[..dot].parse().ok()?
-        };
+        let int_part: u64 = if dot == 0 { 0 } else { num_str[..dot].parse().ok()? };
         let frac_str = &num_str[dot + 1..];
         if frac_str.is_empty() {
             return Some(int_part.saturating_mul(multiplier_ns));
@@ -81,11 +77,8 @@ fn parse_duration_ns(s: &str) -> Option<u64> {
         // Convert fractional ns to the actual suffix unit via:
         //   frac_real_ns = frac_ns * multiplier_ns / 1_000_000_000
         // Use u128 to avoid overflow / premature truncation (e.g. for "ms" suffix).
-        let frac_real_ns =
-            (frac_ns as u128 * multiplier_ns as u128 / 1_000_000_000u128) as u64;
-        let total_ns = int_part
-            .saturating_mul(multiplier_ns)
-            .saturating_add(frac_real_ns);
+        let frac_real_ns = (frac_ns as u128 * multiplier_ns as u128 / 1_000_000_000u128) as u64;
+        let total_ns = int_part.saturating_mul(multiplier_ns).saturating_add(frac_real_ns);
         return Some(total_ns);
     }
 

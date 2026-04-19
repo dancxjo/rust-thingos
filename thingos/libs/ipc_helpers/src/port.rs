@@ -4,9 +4,7 @@
 //! add framing, polling, and ergonomic error handling.
 
 use abi::errors::Errno;
-use stem::syscall::port::{
-    port_close, port_recv, port_send_all, port_try_recv, PortHandle,
-};
+use stem::syscall::port::{PortHandle, port_close, port_recv, port_send_all, port_try_recv};
 
 /// Send `data` over `handle`, retrying on `EAGAIN` until the ring has space.
 /// Yields the current task between retries to avoid a busy-wait.
@@ -24,10 +22,7 @@ pub fn send_all_blocking(handle: PortHandle, data: &[u8]) -> Result<(), Errno> {
 
 /// Attempt a non-blocking receive.  Returns `Ok(None)` when no data is ready
 /// instead of `Err(Errno::EAGAIN)`.
-pub fn try_recv_opt(
-    handle: PortHandle,
-    buf: &mut [u8],
-) -> Result<Option<usize>, Errno> {
+pub fn try_recv_opt(handle: PortHandle, buf: &mut [u8]) -> Result<Option<usize>, Errno> {
     match port_try_recv(handle, buf) {
         Ok(n) => Ok(Some(n)),
         Err(Errno::EAGAIN) => Ok(None),

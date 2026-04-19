@@ -147,10 +147,7 @@ impl DrawListBuilder {
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         debug_assert_eq!(bytes.len(), DRAWLIST_HEADER_BYTES);
-        Self {
-            bytes,
-            cmd_count: 0,
-        }
+        Self { bytes, cmd_count: 0 }
     }
 
     pub fn push_fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
@@ -313,8 +310,7 @@ impl DrawListBuilder {
 
     fn push_cmd(&mut self, tag: DrawCmdTag, payload: &[u8]) {
         self.bytes.extend_from_slice(&tag.as_raw().to_le_bytes());
-        self.bytes
-            .extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        self.bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         self.bytes.extend_from_slice(payload);
         self.cmd_count += 1;
     }
@@ -346,11 +342,7 @@ impl<'a> DrawListReader<'a> {
             return None;
         }
         let cmd_count = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
-        Some(Self {
-            bytes,
-            offset: 16,
-            remaining: cmd_count,
-        })
+        Some(Self { bytes, offset: 16, remaining: cmd_count })
     }
 
     /// Returns the next known command in the stream, skipping unknown tags.
@@ -362,11 +354,8 @@ impl<'a> DrawListReader<'a> {
             }
             let raw_tag =
                 u32::from_le_bytes(self.bytes[self.offset..self.offset + 4].try_into().ok()?);
-            let len = u32::from_le_bytes(
-                self.bytes[self.offset + 4..self.offset + 8]
-                    .try_into()
-                    .ok()?,
-            );
+            let len =
+                u32::from_le_bytes(self.bytes[self.offset + 4..self.offset + 8].try_into().ok()?);
             self.offset += 8;
             let end = self.offset + len as usize;
             if end > self.bytes.len() {
@@ -398,21 +387,15 @@ impl<'a> DrawListReader<'a> {
                     .map_err(|_| DrawListError::TruncatedCommand)?,
             );
             reader.offset += 8;
-            let end = reader
-                .offset
-                .checked_add(len as usize)
-                .ok_or(DrawListError::TruncatedCommand)?;
+            let end =
+                reader.offset.checked_add(len as usize).ok_or(DrawListError::TruncatedCommand)?;
             if end > reader.bytes.len() {
                 return Err(DrawListError::TruncatedCommand);
             }
             reader.offset = end;
             reader.remaining -= 1;
         }
-        if reader.offset == reader.bytes.len() {
-            Ok(())
-        } else {
-            Err(DrawListError::TrailingBytes)
-        }
+        if reader.offset == reader.bytes.len() { Ok(()) } else { Err(DrawListError::TrailingBytes) }
     }
 }
 
@@ -457,11 +440,7 @@ pub fn decode_fill_path(payload: &[u8]) -> Option<DecodedFillPath> {
         return None;
     }
     let verbs = decode_path(&payload[12..12 + path_len])?;
-    Some(DecodedFillPath {
-        fill_rule,
-        color,
-        verbs,
-    })
+    Some(DecodedFillPath { fill_rule, color, verbs })
 }
 
 pub fn decode_line(payload: &[u8]) -> Option<(PointF, PointF, u32, f32)> {
@@ -494,11 +473,7 @@ pub fn decode_stroke_path(payload: &[u8]) -> Option<DecodedStrokePath> {
         return None;
     }
     let verbs = decode_path(&payload[12..12 + path_len])?;
-    Some(DecodedStrokePath {
-        width,
-        color,
-        verbs,
-    })
+    Some(DecodedStrokePath { width, color, verbs })
 }
 
 pub struct DecodedTextSpan {
@@ -521,16 +496,8 @@ pub fn decode_text_span(payload: &[u8]) -> Option<DecodedTextSpan> {
     if payload.len() != 20 + text_len {
         return None;
     }
-    let text = core::str::from_utf8(&payload[20..20 + text_len])
-        .ok()?
-        .into();
-    Some(DecodedTextSpan {
-        x,
-        y,
-        size,
-        color,
-        text,
-    })
+    let text = core::str::from_utf8(&payload[20..20 + text_len]).ok()?.into();
+    Some(DecodedTextSpan { x, y, size, color, text })
 }
 
 pub fn decode_draw_icon(payload: &[u8]) -> Option<(i32, i32, i32, i32, u32)> {
@@ -547,20 +514,12 @@ pub fn decode_draw_icon(payload: &[u8]) -> Option<(i32, i32, i32, i32, u32)> {
 
 /// Decode Save command (no payload).
 pub fn decode_save(payload: &[u8]) -> Option<()> {
-    if payload.is_empty() {
-        Some(())
-    } else {
-        None
-    }
+    if payload.is_empty() { Some(()) } else { None }
 }
 
 /// Decode Restore command (no payload).
 pub fn decode_restore(payload: &[u8]) -> Option<()> {
-    if payload.is_empty() {
-        Some(())
-    } else {
-        None
-    }
+    if payload.is_empty() { Some(()) } else { None }
 }
 
 /// Decode SetClipRect command.
@@ -627,17 +586,7 @@ pub fn decode_draw_image_rect(payload: &[u8]) -> Option<DecodedDrawImageRect> {
     let dst_y = i32::from_le_bytes(payload[36..40].try_into().ok()?);
     let dst_w = i32::from_le_bytes(payload[40..44].try_into().ok()?);
     let dst_h = i32::from_le_bytes(payload[44..48].try_into().ok()?);
-    Some(DecodedDrawImageRect {
-        image_id,
-        src_x,
-        src_y,
-        src_w,
-        src_h,
-        dst_x,
-        dst_y,
-        dst_w,
-        dst_h,
-    })
+    Some(DecodedDrawImageRect { image_id, src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h })
 }
 
 fn encode_path(verbs: &[PathVerb]) -> Vec<u8> {
@@ -801,10 +750,7 @@ mod tests {
         builder.push_fill_rect(1, 2, 3, 4, 0xff00ff00);
         let mut bytes = builder.finish();
         bytes.truncate(bytes.len() - 2);
-        assert_eq!(
-            DrawListReader::validate(&bytes),
-            Err(DrawListError::TruncatedCommand)
-        );
+        assert_eq!(DrawListReader::validate(&bytes), Err(DrawListError::TruncatedCommand));
     }
 
     #[test]
@@ -814,10 +760,7 @@ mod tests {
         let mut bytes = builder.finish();
         bytes[DRAWLIST_CMD_COUNT_OFFSET..DRAWLIST_CMD_COUNT_OFFSET + 4]
             .copy_from_slice(&2u32.to_le_bytes());
-        assert_eq!(
-            DrawListReader::validate(&bytes),
-            Err(DrawListError::TruncatedCommand)
-        );
+        assert_eq!(DrawListReader::validate(&bytes), Err(DrawListError::TruncatedCommand));
     }
 
     #[test]
@@ -826,10 +769,7 @@ mod tests {
         builder.push_fill_rect(1, 2, 3, 4, 0xff00ff00);
         let mut bytes = builder.finish();
         bytes.push(0);
-        assert_eq!(
-            DrawListReader::validate(&bytes),
-            Err(DrawListError::TrailingBytes)
-        );
+        assert_eq!(DrawListReader::validate(&bytes), Err(DrawListError::TrailingBytes));
     }
 
     #[test]
@@ -910,12 +850,7 @@ mod tests {
         builder.push_set_clip_rect(0, 0, 200, 200);
         builder.push_set_transform(0.8, 0.0, 0.0, 0.8, 20.0, 20.0);
         builder.push_fill_rect(10, 10, 50, 50, 0xff00ff00);
-        builder.push_line(
-            PointF::new(0.0, 0.0),
-            PointF::new(100.0, 100.0),
-            0xffff0000,
-            2.0,
-        );
+        builder.push_line(PointF::new(0.0, 0.0), PointF::new(100.0, 100.0), 0xffff0000, 2.0);
         builder.push_restore();
         let bytes = builder.finish();
 

@@ -66,9 +66,10 @@ pub fn sys_time_anchor(unix_secs: u64) -> SysResult<usize> {
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
     use super::*;
     use crate::sched::hooks::{SLEEP_TICKS_HOOK, TAKE_PENDING_INTERRUPT_HOOK};
-    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     static INTERRUPT_PENDING: AtomicBool = AtomicBool::new(false);
     static SLEPT_TICKS: AtomicU64 = AtomicU64::new(0);

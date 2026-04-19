@@ -7,15 +7,8 @@ use cargo_metadata::MetadataCommand;
 
 use crate::common::Result;
 
-const ALLOWED_STD_CRATES: &[&str] = &[
-    "xtask",
-    "pciids",
-    "bdd",
-    "unifont-gen",
-    "display_proto_tests",
-    "abi-macros",
-    "stem-macros",
-];
+const ALLOWED_STD_CRATES: &[&str] =
+    &["xtask", "pciids", "bdd", "unifont-gen", "display_proto_tests", "abi-macros", "stem-macros"];
 
 const REQUIRED_NOSTD_CRATES: &[&str] =
     &["kernel", "stem", "stem-macros", "abi", "abi-macros", "bran"];
@@ -25,9 +18,7 @@ pub fn audit() -> Result<()> {
     println!("Platform Boundary Audit");
     println!("============================================================");
 
-    let metadata = MetadataCommand::new()
-        .exec()
-        .context("failed to run cargo metadata")?;
+    let metadata = MetadataCommand::new().exec().context("failed to run cargo metadata")?;
 
     let mut errors = Vec::new();
     let mut count = 0;
@@ -48,10 +39,9 @@ pub fn audit() -> Result<()> {
         }
 
         let manifest_path = package.manifest_path.as_std_path();
-        let is_userspace = manifest_path
-            .components()
-            .any(|component| component.as_os_str() == "utils")
-            || ROOT_USERSPACE_CRATES.contains(&name);
+        let is_userspace =
+            manifest_path.components().any(|component| component.as_os_str() == "utils")
+                || ROOT_USERSPACE_CRATES.contains(&name);
         let is_kernel_or_core = required_nostd.contains(name);
 
         if is_userspace || is_kernel_or_core {
@@ -91,9 +81,7 @@ fn is_nostd_crate(crate_path: &Path) -> bool {
 
         if let Ok(content) = fs::read_to_string(&file_path) {
             for line in content.lines().take(120) {
-                if line.contains("#![no_std]")
-                    || line.contains("#![cfg_attr(not(test), no_std)]")
-                {
+                if line.contains("#![no_std]") || line.contains("#![cfg_attr(not(test), no_std)]") {
                     return true;
                 }
             }

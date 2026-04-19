@@ -32,8 +32,9 @@ impl core::fmt::Display for PciIdDisplay {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::string::ToString;
+
+    use super::*;
 
     #[test]
     fn display_fallbacks() {

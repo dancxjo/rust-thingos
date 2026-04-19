@@ -21,7 +21,7 @@ use protocol::{
 use render::CompositorVisuals;
 use scene::{Scene, SurfaceBuffer};
 use stem::syscall::vfs::{
-    vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_handle_from_port, vfs_watch_fd, vfs_watch_path,
+    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_fd, vfs_watch_path,
     vfs_write,
 };
 use stem::syscall::{port_create, port_send_all};
@@ -58,10 +58,7 @@ fn main(arg: usize) -> ! {
         }
     }
     let mut primary = outputs[0];
-    info!(
-        "bloom: output0 {}x{} @ {}mHz",
-        primary.width, primary.height, primary.refresh_mhz
-    );
+    info!("bloom: output0 {}x{} @ {}mHz", primary.width, primary.height, primary.refresh_mhz);
 
     info!("bloom: creating service port...");
     let (service_write, service_read) = match port_create(65536) {
@@ -99,11 +96,8 @@ fn main(arg: usize) -> ! {
     }
 
     let service_fd = vfs_handle_from_port(service_read).ok();
-    let bristle_fd = if bristle_evt_read != 0 {
-        vfs_handle_from_port(bristle_evt_read).ok()
-    } else {
-        None
-    };
+    let bristle_fd =
+        if bristle_evt_read != 0 { vfs_handle_from_port(bristle_evt_read).ok() } else { None };
 
     let mut ws = stem::wait_set::WaitSet::new();
     let service_token = service_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
@@ -119,7 +113,8 @@ fn main(arg: usize) -> ! {
         if needs_redraw && damage.is_dirty() {
             let composition = scene.collect_composition();
             let pending_damage = damage.take();
-            let present = display.present(&composition, &pending_damage, visuals.fallback_buffer_id());
+            let present =
+                display.present(&composition, &pending_damage, visuals.fallback_buffer_id());
             if present.success {
                 let ts = stem::monotonic_ns();
                 for entry in composition {
@@ -193,7 +188,7 @@ fn main(arg: usize) -> ! {
                 if visuals.fallback_buffer_id().is_none() {
                     visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
                 }
-                
+
                 damage.mark_full(primary.width, primary.height);
                 needs_redraw = true;
             }
@@ -214,11 +209,8 @@ fn process_client_message(
 
     match req {
         ClientRequest::Connect(req) => {
-            let client_id = if req.event_port == 0 {
-                0
-            } else {
-                scene.register_client(req.event_port)
-            };
+            let client_id =
+                if req.event_port == 0 { 0 } else { scene.register_client(req.event_port) };
             send_ack(req.reply_port, 0, client_id, 0);
             client_id != 0
         }
@@ -360,12 +352,7 @@ fn send_ack(reply_port: u32, status: u32, value: u32, serial: u64) {
     if reply_port == 0 {
         return;
     }
-    let ack = AckEvent {
-        header: msg_header(EVT_ACK),
-        status,
-        value,
-        serial,
-    };
+    let ack = AckEvent { header: msg_header(EVT_ACK), status, value, serial };
     let _ = port_send_all(reply_port, &to_vec(&ack));
 }
 

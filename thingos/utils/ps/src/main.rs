@@ -78,7 +78,10 @@ fn main(_arg: usize) -> ! {
 
                                 print(&alloc::format!(
                                     "{:>5} {:>5} {:<4} {}\n",
-                                    pid, ppid, stat, cmd_display
+                                    pid,
+                                    ppid,
+                                    stat,
+                                    cmd_display
                                 ));
                             }
                         }

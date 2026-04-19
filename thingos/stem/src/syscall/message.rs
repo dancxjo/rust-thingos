@@ -21,16 +21,15 @@
 //! task between retries.  For poll-based multiplexing, convert the inbox to an
 //! FD (see `docs/ipc/convergence_strategy.md` Phase C) and use `SYS_FS_POLL`.
 
-use crate::syscall::arch::raw_syscall6;
-use abi::errors::Errno;
-use abi::syscall::{SYS_MSG_BROADCAST, SYS_MSG_RECV, SYS_MSG_SEND};
-
 // ── KindId re-export ─────────────────────────────────────────────────────────
-
 /// A 16-byte identifier for the semantic type (schema kind) of a message payload.
 ///
 /// Re-exported from `abi` so callers do not need to import `abi` separately.
 pub use abi::KindId;
+use abi::errors::Errno;
+use abi::syscall::{SYS_MSG_BROADCAST, SYS_MSG_RECV, SYS_MSG_SEND};
+
+use crate::syscall::arch::raw_syscall6;
 
 // ── Broadcast result ─────────────────────────────────────────────────────────
 
@@ -51,10 +50,7 @@ pub struct BroadcastResult {
 
 impl BroadcastResult {
     fn from_packed(word: usize) -> Self {
-        Self {
-            succeeded: word & 0xFFFF,
-            failed: (word >> 16) & 0xFFFF,
-        }
+        Self { succeeded: word & 0xFFFF, failed: (word >> 16) & 0xFFFF }
     }
 }
 
@@ -160,11 +156,7 @@ pub fn msg_recv_blocking(max_payload: usize) -> ReceivedMessage {
 ///
 /// - `Errno::EINVAL` — `pgid == 0` or invalid pointer arguments.
 /// - `Errno::EFAULT` — user pointer is not accessible.
-pub fn msg_broadcast(
-    pgid: u32,
-    kind: KindId,
-    payload: &[u8],
-) -> Result<BroadcastResult, Errno> {
+pub fn msg_broadcast(pgid: u32, kind: KindId, payload: &[u8]) -> Result<BroadcastResult, Errno> {
     let ret = unsafe {
         raw_syscall6(
             SYS_MSG_BROADCAST,

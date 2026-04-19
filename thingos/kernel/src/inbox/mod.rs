@@ -57,6 +57,7 @@
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
 use spin::Mutex;
 
 use crate::message::Message;
@@ -95,18 +96,12 @@ pub struct MessageEnvelope {
 impl MessageEnvelope {
     /// Construct an envelope with a known sender TID.
     pub fn with_sender(message: Message, sender_tid: u64) -> Self {
-        Self {
-            message,
-            sender: Some(sender_tid),
-        }
+        Self { message, sender: Some(sender_tid) }
     }
 
     /// Construct an anonymous envelope (no sender attribution).
     pub fn anonymous(message: Message) -> Self {
-        Self {
-            message,
-            sender: None,
-        }
+        Self { message, sender: None }
     }
 }
 
@@ -147,11 +142,7 @@ struct InboxInner {
 impl InboxInner {
     fn new(capacity: usize) -> Self {
         let capacity = capacity.max(1);
-        Self {
-            queue: VecDeque::with_capacity(capacity.min(64)),
-            capacity,
-            closed: false,
-        }
+        Self { queue: VecDeque::with_capacity(capacity.min(64)), capacity, closed: false }
     }
 }
 
@@ -184,10 +175,7 @@ impl Inbox {
     /// Callers that do not have a specific capacity requirement should use
     /// [`DEFAULT_INBOX_CAPACITY`].
     pub fn new(capacity: usize) -> Self {
-        Self {
-            inner: Mutex::new(InboxInner::new(capacity)),
-            waiters: WaitQueue::new(),
-        }
+        Self { inner: Mutex::new(InboxInner::new(capacity)), waiters: WaitQueue::new() }
     }
 
     // -----------------------------------------------------------------------
@@ -210,15 +198,10 @@ impl Inbox {
                 return Err(SendError::Closed);
             }
             if inner.queue.len() >= inner.capacity {
-                return Err(SendError::Full {
-                    capacity: inner.capacity,
-                });
+                return Err(SendError::Full { capacity: inner.capacity });
             }
             inner.queue.push_back(envelope);
-            crate::kdebug!(
-                "inbox::send: enqueued message, depth={}",
-                inner.queue.len()
-            );
+            crate::kdebug!("inbox::send: enqueued message, depth={}", inner.queue.len());
         }
         // Wake one waiter outside the lock to avoid priority inversion.
         self.waiters.wake_one();
@@ -238,10 +221,7 @@ impl Inbox {
     pub fn try_recv(&self) -> Result<Option<MessageEnvelope>, RecvError> {
         let mut inner = self.inner.lock();
         if let Some(envelope) = inner.queue.pop_front() {
-            crate::kdebug!(
-                "inbox::try_recv: dequeued message, depth={}",
-                inner.queue.len()
-            );
+            crate::kdebug!("inbox::try_recv: dequeued message, depth={}", inner.queue.len());
             return Ok(Some(envelope));
         }
         if inner.closed {
@@ -362,9 +342,7 @@ pub fn create_inbox(capacity: usize) -> InboxId {
 /// removed from the registry via [`close_inbox`].
 pub fn get_inbox(id: InboxId) -> Option<Arc<Inbox>> {
     let registry = INBOX_REGISTRY.lock();
-    registry
-        .get(id.0 as usize)
-        .and_then(|slot| slot.clone())
+    registry.get(id.0 as usize).and_then(|slot| slot.clone())
 }
 
 /// Close and remove an [`Inbox`] from the global registry.
@@ -378,11 +356,7 @@ pub fn get_inbox(id: InboxId) -> Option<Arc<Inbox>> {
 pub fn close_inbox(id: InboxId) {
     let inbox = {
         let mut registry = INBOX_REGISTRY.lock();
-        if let Some(slot) = registry.get_mut(id.0 as usize) {
-            slot.take()
-        } else {
-            None
-        }
+        if let Some(slot) = registry.get_mut(id.0 as usize) { slot.take() } else { None }
     };
     if let Some(inbox) = inbox {
         inbox.close();
@@ -400,10 +374,11 @@ pub fn inbox_count() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
     use super::*;
     use crate::message::KindId;
     use crate::sched::blocking::WAKE_TASK_HOOK;
-    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     // -----------------------------------------------------------------------
     // Test helpers
@@ -444,9 +419,7 @@ mod tests {
 
     fn wake_log() -> alloc::vec::Vec<u64> {
         let len = WOKEN_LEN.load(Ordering::SeqCst).min(WOKEN_IDS.len());
-        (0..len)
-            .map(|idx| WOKEN_IDS[idx].load(Ordering::SeqCst))
-            .collect()
+        (0..len).map(|idx| WOKEN_IDS[idx].load(Ordering::SeqCst)).collect()
     }
 
     // -----------------------------------------------------------------------
@@ -508,11 +481,7 @@ mod tests {
         }
         for i in 0u8..4 {
             let got = inbox.try_recv().unwrap().unwrap();
-            assert_eq!(
-                got.message.payload[0], i,
-                "FIFO order violated at index {}",
-                i
-            );
+            assert_eq!(got.message.payload[0], i, "FIFO order violated at index {}", i);
         }
     }
 

@@ -763,7 +763,9 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
     let module = modules
         .iter()
         .find(|m| m.name == basename)
-        .or_else(|| modules.iter().find(|m| m.name.rsplit('/').next().unwrap_or(m.name) == basename))
+        .or_else(|| {
+            modules.iter().find(|m| m.name.rsplit('/').next().unwrap_or(m.name) == basename)
+        })
         .or_else(|| modules.iter().find(|m| m.name.contains(basename)))?;
 
     let aspace = rt.tasking().make_user_address_space();
@@ -978,8 +980,12 @@ fn setup_stdio_fds<R: BootRuntime>(
             }
         }
         StdioSpec::Null => {
-            let _ =
-                handle_table.insert_at(1, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+            let _ = handle_table.insert_at(
+                1,
+                null.clone(),
+                OpenFlags::write_only(),
+                "/dev/null".into(),
+            );
         }
         StdioSpec::Pipe => {
             let id = crate::ipc::pipe::create(4096, 0);
@@ -1042,7 +1048,8 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let path = alloc::format!("fd:{}", fd);
                 let _ = handle_table.insert_at(2, node, flags, path);
             } else {
-                let _ = handle_table.insert_at(2, null, OpenFlags::write_only(), "/dev/null".into());
+                let _ =
+                    handle_table.insert_at(2, null, OpenFlags::write_only(), "/dev/null".into());
             }
         }
     }

@@ -1,8 +1,9 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use super::{VfsDriver, VfsNode};
 use abi::errors::{Errno, SysResult};
+
+use super::{VfsDriver, VfsNode};
 use crate::vfs::ramfs::RamFs;
 
 /// A generic copy-on-read overlay filesystem driver.
@@ -16,14 +17,14 @@ pub struct OverlayFs {
 
 impl OverlayFs {
     pub fn new(lower: Arc<dyn VfsDriver>) -> Self {
-        Self {
-            lower,
-            upper: Arc::new(RamFs::new()),
-        }
+        Self { lower, upper: Arc::new(RamFs::new()) }
     }
 
     /// Read the entire file from the lower node and write it into the upper node.
-    fn populate_upper(lower_node: &Arc<dyn VfsNode>, upper_node: &Arc<dyn VfsNode>) -> SysResult<()> {
+    fn populate_upper(
+        lower_node: &Arc<dyn VfsNode>,
+        upper_node: &Arc<dyn VfsNode>,
+    ) -> SysResult<()> {
         let mut offset = 0;
         let mut buf = alloc::vec![0u8; 4096];
         loop {
@@ -114,7 +115,8 @@ impl VfsDriver for OverlayFs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::{VfsStat, ramfs::RamFs};
+    use crate::vfs::VfsStat;
+    use crate::vfs::ramfs::RamFs;
 
     #[test]
     fn test_overlay_copy_on_read() {

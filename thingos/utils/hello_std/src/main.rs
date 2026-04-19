@@ -9,7 +9,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 extern crate std;
 
 use std::collections::{HashMap, VecDeque};
@@ -51,12 +50,7 @@ fn run_all(tests: &[Test]) -> i32 {
 
     println!();
     println!("═══════════════════════════════════════════════════");
-    println!(
-        "SUMMARY: {} passed, {} failed, {} total",
-        passed,
-        failed,
-        passed + failed
-    );
+    println!("SUMMARY: {} passed, {} failed, {} total", passed, failed, passed + failed);
     if failed == 0 {
         println!("STATUS: ALL TESTS PASSED ✓");
     } else {
@@ -64,11 +58,7 @@ fn run_all(tests: &[Test]) -> i32 {
     }
     println!("═══════════════════════════════════════════════════");
 
-    if failed > 0 {
-        1
-    } else {
-        0
-    }
+    if failed > 0 { 1 } else { 0 }
 }
 
 // ── Flag parsing ─────────────────────────────────────────────────────
@@ -137,12 +127,8 @@ fn parse_flags() -> Flags {
 fn child_echo_mode() -> ! {
     let args: Vec<String> = std::env::args().collect();
     // Skip program name and --child-echo flag
-    let payload: Vec<&str> = args
-        .iter()
-        .skip(1)
-        .filter(|a| *a != "--child-echo")
-        .map(|s| s.as_str())
-        .collect();
+    let payload: Vec<&str> =
+        args.iter().skip(1).filter(|a| *a != "--child-echo").map(|s| s.as_str()).collect();
     for a in &payload {
         println!("{}", a);
     }
@@ -258,16 +244,11 @@ fn test_alloc() -> Result<(), String> {
 fn test_time() -> Result<(), String> {
     let mono0 = stem::syscall::time_now(abi::time::ClockId::Monotonic)
         .map_err(|e| alloc::format!("monotonic clock read failed: {:?}", e))?;
-    let mono0_ns = mono0
-        .as_nanos()
-        .ok_or_else(|| "monotonic timespec was invalid".to_string())?;
+    let mono0_ns = mono0.as_nanos().ok_or_else(|| "monotonic timespec was invalid".to_string())?;
 
     if let Err(e) = stem::syscall::time_now_raw(0) {
         if e != abi::errors::Errno::EINVAL {
-            return Err(alloc::format!(
-                "invalid clock id returned {:?}, expected EINVAL",
-                e
-            ));
+            return Err(alloc::format!("invalid clock id returned {:?}, expected EINVAL", e));
         }
     } else {
         return Err("invalid clock id unexpectedly succeeded".into());
@@ -280,21 +261,18 @@ fn test_time() -> Result<(), String> {
     let elapsed = t1.duration_since(t0);
     // Tolerate jitter — just check it advanced at all (>= 1ms)
     if elapsed < Duration::from_millis(1) {
-        return Err(alloc::format!(
-            "Instant elapsed {:?} < 1ms after 10ms sleep",
-            elapsed
-        ));
+        return Err(alloc::format!("Instant elapsed {:?} < 1ms after 10ms sleep", elapsed));
     }
 
     let mono1 = stem::syscall::time_now(abi::time::ClockId::Monotonic)
         .map_err(|e| alloc::format!("second monotonic clock read failed: {:?}", e))?;
-    let mono1_ns = mono1
-        .as_nanos()
-        .ok_or_else(|| "second monotonic timespec was invalid".to_string())?;
+    let mono1_ns =
+        mono1.as_nanos().ok_or_else(|| "second monotonic timespec was invalid".to_string())?;
     if mono1_ns < mono0_ns {
         return Err(alloc::format!(
             "monotonic clock moved backwards: {} -> {}",
-            mono0_ns, mono1_ns
+            mono0_ns,
+            mono1_ns
         ));
     }
 
@@ -356,12 +334,7 @@ fn test_env_args() -> Result<(), String> {
     std::env::set_var(key, "smoke_test_value");
     match std::env::var(key) {
         Ok(v) if v == "smoke_test_value" => {}
-        Ok(v) => {
-            return Err(alloc::format!(
-                "var({}) = '{}', expected 'smoke_test_value'",
-                key, v
-            ))
-        }
+        Ok(v) => return Err(alloc::format!("var({}) = '{}', expected 'smoke_test_value'", key, v)),
         Err(e) => return Err(alloc::format!("var({}) missing after set_var: {}", key, e)),
     }
     std::env::remove_var(key);
@@ -389,16 +362,15 @@ fn test_fs() -> Result<(), String> {
     {
         let mut f =
             std::fs::File::create(&file_path).map_err(|e| alloc::format!("File::create: {}", e))?;
-        f.write_all(content)
-            .map_err(|e| alloc::format!("write_all: {}", e))?;
+        f.write_all(content).map_err(|e| alloc::format!("write_all: {}", e))?;
     }
 
     // Read it back
     {
-        let mut f = std::fs::File::open(&file_path).map_err(|e| alloc::format!("File::open: {}", e))?;
+        let mut f =
+            std::fs::File::open(&file_path).map_err(|e| alloc::format!("File::open: {}", e))?;
         let mut buf = Vec::new();
-        f.read_to_end(&mut buf)
-            .map_err(|e| alloc::format!("read_to_end: {}", e))?;
+        f.read_to_end(&mut buf).map_err(|e| alloc::format!("read_to_end: {}", e))?;
         if buf != content {
             return Err(alloc::format!(
                 "read-back mismatch: got {} bytes, expected {}",
@@ -410,13 +382,11 @@ fn test_fs() -> Result<(), String> {
 
     // Seek test
     {
-        let mut f =
-            std::fs::File::open(&file_path).map_err(|e| alloc::format!("File::open for seek: {}", e))?;
-        f.seek(SeekFrom::Start(6))
-            .map_err(|e| alloc::format!("seek: {}", e))?;
+        let mut f = std::fs::File::open(&file_path)
+            .map_err(|e| alloc::format!("File::open for seek: {}", e))?;
+        f.seek(SeekFrom::Start(6)).map_err(|e| alloc::format!("seek: {}", e))?;
         let mut partial = [0u8; 4];
-        f.read_exact(&mut partial)
-            .map_err(|e| alloc::format!("read_exact after seek: {}", e))?;
+        f.read_exact(&mut partial).map_err(|e| alloc::format!("read_exact after seek: {}", e))?;
         if &partial != b"from" {
             return Err(alloc::format!(
                 "seek+read: expected 'from', got '{}'",
@@ -428,11 +398,7 @@ fn test_fs() -> Result<(), String> {
     // Metadata — check file length
     let meta = std::fs::metadata(&file_path).map_err(|e| alloc::format!("metadata: {}", e))?;
     if meta.len() != content.len() as u64 {
-        return Err(alloc::format!(
-            "metadata.len() = {}, expected {}",
-            meta.len(),
-            content.len()
-        ));
+        return Err(alloc::format!("metadata.len() = {}, expected {}", meta.len(), content.len()));
     }
 
     // read_dir — should list test.txt
@@ -440,14 +406,10 @@ fn test_fs() -> Result<(), String> {
         .map_err(|e| alloc::format!("read_dir: {}", e))?
         .filter_map(|e| e.ok())
         .collect();
-    let found = entries
-        .iter()
-        .any(|e| e.file_name().to_str().map_or(false, |n| n == "test.txt"));
+    let found = entries.iter().any(|e| e.file_name().to_str().map_or(false, |n| n == "test.txt"));
     if !found {
-        let names: Vec<_> = entries
-            .iter()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
+        let names: Vec<_> =
+            entries.iter().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         return Err(alloc::format!("read_dir: 'test.txt' not found in {:?}", names));
     }
 
@@ -509,16 +471,11 @@ fn test_threads() -> Result<(), String> {
         }));
     }
     for h in handles2 {
-        h.join()
-            .map_err(|_| "mutex thread join panicked".to_string())?;
+        h.join().map_err(|_| "mutex thread join panicked".to_string())?;
     }
     let mx_total = *mx.lock().unwrap();
     if mx_total != (nthreads as u64) * 1000 {
-        return Err(alloc::format!(
-            "Mutex total {} != expected {}",
-            mx_total,
-            nthreads * 1000
-        ));
+        return Err(alloc::format!("Mutex total {} != expected {}", mx_total, nthreads * 1000));
     }
 
     // Condvar test — one thread waits, another signals
@@ -541,9 +498,7 @@ fn test_threads() -> Result<(), String> {
         *started = true;
         cvar.notify_one();
     }
-    let woke = waiter
-        .join()
-        .map_err(|_| "condvar waiter panicked".to_string())?;
+    let woke = waiter.join().map_err(|_| "condvar waiter panicked".to_string())?;
     if !woke {
         return Err("Condvar: waiter did not wake".into());
     }
@@ -567,8 +522,7 @@ fn test_pipes() -> Result<(), String> {
 
     let mut r = reader;
     let mut buf = Vec::new();
-    r.read_to_end(&mut buf)
-        .map_err(|e| alloc::format!("pipe read_to_end: {}", e))?;
+    r.read_to_end(&mut buf).map_err(|e| alloc::format!("pipe read_to_end: {}", e))?;
     if buf != msg {
         return Err(alloc::format!(
             "pipe: read '{}', expected '{}'",
@@ -577,9 +531,7 @@ fn test_pipes() -> Result<(), String> {
         ));
     }
 
-    writer_handle
-        .join()
-        .map_err(|_| "pipe writer panicked".to_string())??;
+    writer_handle.join().map_err(|_| "pipe writer panicked".to_string())??;
 
     // Broken pipe test: drop reader, then writer should get error
     let (reader2, writer2) = std::io::pipe().map_err(|e| alloc::format!("io::pipe() #2: {}", e))?;
@@ -618,20 +570,15 @@ fn test_net_tcp() -> Result<(), String> {
     let addr = "10.0.2.2:8081";
     match TcpStream::connect(addr) {
         Ok(mut stream) => {
-            let peer = stream
-                .peer_addr()
-                .map_err(|e| alloc::format!("peer_addr: {}", e))?;
+            let peer = stream.peer_addr().map_err(|e| alloc::format!("peer_addr: {}", e))?;
             eprintln!("[test_net_tcp] connected to {} (peer={:?})", addr, peer);
 
             let req = b"GET /?url=http://example.com/ HTTP/1.1\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n";
-            stream
-                .write_all(req)
-                .map_err(|e| alloc::format!("write_all HTTP request: {}", e))?;
+            stream.write_all(req).map_err(|e| alloc::format!("write_all HTTP request: {}", e))?;
 
             let mut buf = [0u8; 256];
-            let n = stream
-                .read(&mut buf)
-                .map_err(|e| alloc::format!("read HTTP response: {}", e))?;
+            let n =
+                stream.read(&mut buf).map_err(|e| alloc::format!("read HTTP response: {}", e))?;
             if n == 0 {
                 return Err("HTTP GET returned EOF without response bytes".into());
             }
@@ -651,10 +598,7 @@ fn test_net_tcp() -> Result<(), String> {
                 || alloc::format!("{}", e).contains("failed")
                 || alloc::format!("{}", e).contains("timed out")
             {
-                eprintln!(
-                    "[test_net_tcp] connect/write path to {} returned: {}",
-                    addr, e
-                );
+                eprintln!("[test_net_tcp] connect/write path to {} returned: {}", addr, e);
                 Ok(())
             } else {
                 Err(alloc::format!("TcpStream::connect({}): {}", addr, e))
@@ -694,9 +638,7 @@ fn test_net_tcp_listener() -> Result<(), String> {
         Err(e) => return Err(alloc::format!("TcpListener::bind: {}", e)),
     };
 
-    let local_addr = listener
-        .local_addr()
-        .map_err(|e| alloc::format!("local_addr: {}", e))?;
+    let local_addr = listener.local_addr().map_err(|e| alloc::format!("local_addr: {}", e))?;
     eprintln!("[test_net_tcp_listener] listening on {}", local_addr);
 
     // Connect a client.
@@ -704,32 +646,22 @@ fn test_net_tcp_listener() -> Result<(), String> {
         TcpStream::connect(local_addr).map_err(|e| alloc::format!("client connect: {}", e))?;
 
     // Accept the connection.
-    let (mut server, peer_addr) = listener
-        .accept()
-        .map_err(|e| alloc::format!("accept: {}", e))?;
+    let (mut server, peer_addr) = listener.accept().map_err(|e| alloc::format!("accept: {}", e))?;
     eprintln!("[test_net_tcp_listener] accepted peer {}", peer_addr);
 
     // Exchange data client→server.
-    client
-        .write_all(b"ping")
-        .map_err(|e| alloc::format!("client write: {}", e))?;
+    client.write_all(b"ping").map_err(|e| alloc::format!("client write: {}", e))?;
 
     let mut buf = [0u8; 8];
-    let n = server
-        .read(&mut buf)
-        .map_err(|e| alloc::format!("server read: {}", e))?;
+    let n = server.read(&mut buf).map_err(|e| alloc::format!("server read: {}", e))?;
     if &buf[..n] != b"ping" {
         return Err(alloc::format!("server read got {:?}, want b\"ping\"", &buf[..n]));
     }
 
     // Exchange data server→client.
-    server
-        .write_all(b"pong")
-        .map_err(|e| alloc::format!("server write: {}", e))?;
+    server.write_all(b"pong").map_err(|e| alloc::format!("server write: {}", e))?;
 
-    let n = client
-        .read(&mut buf)
-        .map_err(|e| alloc::format!("client read: {}", e))?;
+    let n = client.read(&mut buf).map_err(|e| alloc::format!("client read: {}", e))?;
     if &buf[..n] != b"pong" {
         return Err(alloc::format!("client read got {:?}, want b\"pong\"", &buf[..n]));
     }
@@ -745,13 +677,10 @@ fn test_net_tcp_accept_multiple() -> Result<(), String> {
         Ok(l) => l,
         Err(e) => return Err(alloc::format!("TcpListener::bind: {}", e)),
     };
-    let local_addr = listener
-        .local_addr()
-        .map_err(|e| alloc::format!("local_addr: {}", e))?;
+    let local_addr = listener.local_addr().map_err(|e| alloc::format!("local_addr: {}", e))?;
 
     // First client.
-    let mut c1 =
-        TcpStream::connect(local_addr).map_err(|e| alloc::format!("c1 connect: {}", e))?;
+    let mut c1 = TcpStream::connect(local_addr).map_err(|e| alloc::format!("c1 connect: {}", e))?;
     let (mut s1, _) = listener.accept().map_err(|e| alloc::format!("accept 1: {}", e))?;
     c1.write_all(b"A").map_err(|e| alloc::format!("c1 write: {}", e))?;
     let mut buf = [0u8; 4];
@@ -763,8 +692,7 @@ fn test_net_tcp_accept_multiple() -> Result<(), String> {
     drop(s1);
 
     // Second client — listener must still be usable.
-    let mut c2 =
-        TcpStream::connect(local_addr).map_err(|e| alloc::format!("c2 connect: {}", e))?;
+    let mut c2 = TcpStream::connect(local_addr).map_err(|e| alloc::format!("c2 connect: {}", e))?;
     let (mut s2, _) = listener.accept().map_err(|e| alloc::format!("accept 2: {}", e))?;
     c2.write_all(b"B").map_err(|e| alloc::format!("c2 write: {}", e))?;
     let n = s2.read(&mut buf).map_err(|e| alloc::format!("s2 read: {}", e))?;
@@ -783,9 +711,7 @@ fn test_net_tcp_nonblocking() -> Result<(), String> {
         Ok(l) => l,
         Err(e) => return Err(alloc::format!("TcpListener::bind: {}", e)),
     };
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| alloc::format!("set_nonblocking: {}", e))?;
+    listener.set_nonblocking(true).map_err(|e| alloc::format!("set_nonblocking: {}", e))?;
 
     // In nonblocking mode, accept() with no incoming connection must
     // return WouldBlock / EAGAIN immediately.
@@ -804,40 +730,28 @@ fn test_net_tcp_nonblocking() -> Result<(), String> {
 fn test_net_udp_loopback() -> Result<(), String> {
     use std::net::UdpSocket;
 
-    let recv_sock = UdpSocket::bind("127.0.0.1:0")
-        .map_err(|e| alloc::format!("recv bind: {}", e))?;
-    let recv_addr = recv_sock
-        .local_addr()
-        .map_err(|e| alloc::format!("recv local_addr: {}", e))?;
+    let recv_sock =
+        UdpSocket::bind("127.0.0.1:0").map_err(|e| alloc::format!("recv bind: {}", e))?;
+    let recv_addr = recv_sock.local_addr().map_err(|e| alloc::format!("recv local_addr: {}", e))?;
 
-    let send_sock = UdpSocket::bind("127.0.0.1:0")
-        .map_err(|e| alloc::format!("send bind: {}", e))?;
+    let send_sock =
+        UdpSocket::bind("127.0.0.1:0").map_err(|e| alloc::format!("send bind: {}", e))?;
 
     let msg = b"hello udp";
-    let sent = send_sock
-        .send_to(msg, recv_addr)
-        .map_err(|e| alloc::format!("send_to: {}", e))?;
+    let sent = send_sock.send_to(msg, recv_addr).map_err(|e| alloc::format!("send_to: {}", e))?;
     if sent != msg.len() {
         return Err(alloc::format!("send_to: sent {} bytes, want {}", sent, msg.len()));
     }
 
     let mut buf = [0u8; 64];
-    let (n, src_addr) = recv_sock
-        .recv_from(&mut buf)
-        .map_err(|e| alloc::format!("recv_from: {}", e))?;
+    let (n, src_addr) =
+        recv_sock.recv_from(&mut buf).map_err(|e| alloc::format!("recv_from: {}", e))?;
 
     if &buf[..n] != msg {
-        return Err(alloc::format!(
-            "recv_from: got {:?}, want {:?}",
-            &buf[..n],
-            msg
-        ));
+        return Err(alloc::format!("recv_from: got {:?}, want {:?}", &buf[..n], msg));
     }
 
-    eprintln!(
-        "[test_net_udp_loopback] received {} bytes from {}",
-        n, src_addr
-    );
+    eprintln!("[test_net_udp_loopback] received {} bytes from {}", n, src_addr);
     Ok(())
 }
 
@@ -897,9 +811,7 @@ fn test_spawn() -> Result<(), String> {
     use std::process::Command;
 
     // Get our own executable path from args
-    let self_name = std::env::args()
-        .next()
-        .ok_or_else(|| "no arg0 for self-exec".to_string())?;
+    let self_name = std::env::args().next().ok_or_else(|| "no arg0 for self-exec".to_string())?;
 
     // Test 1: echo child — pass args, capture output
     let output = Command::new(&self_name)
@@ -951,8 +863,7 @@ fn test_stress() -> Result<(), String> {
             }));
         }
         for h in handles {
-            h.join()
-                .map_err(|_| alloc::format!("stress iter {}: thread panicked", i))?;
+            h.join().map_err(|_| alloc::format!("stress iter {}: thread panicked", i))?;
         }
         let total = counter.load(Ordering::SeqCst);
         if total != 4000 {
@@ -969,10 +880,8 @@ fn test_stress() -> Result<(), String> {
         });
         let mut r = reader;
         let mut buf = Vec::new();
-        r.read_to_end(&mut buf)
-            .map_err(|e| alloc::format!("stress iter {}: read: {}", i, e))?;
-        wh.join()
-            .map_err(|_| alloc::format!("stress iter {}: writer panicked", i))?;
+        r.read_to_end(&mut buf).map_err(|e| alloc::format!("stress iter {}: read: {}", i, e))?;
+        wh.join().map_err(|_| alloc::format!("stress iter {}: writer panicked", i))?;
         if buf != b"stress" {
             return Err(alloc::format!("stress iter {}: data mismatch", i));
         }

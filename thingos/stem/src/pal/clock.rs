@@ -3,8 +3,9 @@
 //! Provides monotonic time access via the platform syscall layer.
 //! All time values are in nanoseconds.
 
-use crate::syscall;
 use abi::time::ClockId;
+
+use crate::syscall;
 
 /// Returns raw monotonic nanoseconds since boot.
 ///
@@ -27,8 +28,5 @@ pub fn sleep_ns(ns: u64) {
 ///
 /// Returns 0 if the system clock is not yet anchored to real time.
 pub fn unix_time_ns() -> u64 {
-    syscall::time_now(ClockId::Realtime)
-        .ok()
-        .and_then(|spec| spec.as_nanos())
-        .unwrap_or(0)
+    syscall::time_now(ClockId::Realtime).ok().and_then(|spec| spec.as_nanos()).unwrap_or(0)
 }

@@ -1,13 +1,12 @@
-use alloc::{boxed::Box, collections::BTreeMap};
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use core::ffi::{c_int, c_void};
 
 use abi::errors::Errno;
 use spin::Mutex;
 
-use crate::{
-    stack::{Stack, StackSpec},
-    syscall,
-};
+use crate::stack::{Stack, StackSpec};
+use crate::syscall;
 
 #[allow(non_camel_case_types)]
 pub type pthread_t = u64;
@@ -83,14 +82,7 @@ pub unsafe extern "C" fn pthread_create(
         }
     };
 
-    THREADS.lock().insert(
-        tid,
-        ThreadRecord {
-            _stack: stack,
-            retval: 0,
-            join_in_progress: false,
-        },
-    );
+    THREADS.lock().insert(tid, ThreadRecord { _stack: stack, retval: 0, join_in_progress: false });
 
     *thread = tid;
     0

@@ -1,4 +1,4 @@
-use abi::symbols::{SymbolRefWire, SYMBOL_REF_TAG_ID, SYMBOL_REF_TAG_STR};
+use abi::symbols::{SYMBOL_REF_TAG_ID, SYMBOL_REF_TAG_STR, SymbolRefWire};
 
 pub trait IntoSymbolRef {
     fn to_wire(&self) -> SymbolRefWire;
@@ -18,21 +18,13 @@ impl<'a> IntoSymbolRef for &'a str {
 // Impl for u32 (SymbolId)
 impl IntoSymbolRef for u32 {
     fn to_wire(&self) -> SymbolRefWire {
-        SymbolRefWire {
-            tag: SYMBOL_REF_TAG_ID,
-            ptr_or_id: *self as u64,
-            len: 0,
-        }
+        SymbolRefWire { tag: SYMBOL_REF_TAG_ID, ptr_or_id: *self as u64, len: 0 }
     }
 }
 
 // Impl for u64 (Legacy/Lazy SymbolId)
 impl IntoSymbolRef for u64 {
     fn to_wire(&self) -> SymbolRefWire {
-        SymbolRefWire {
-            tag: SYMBOL_REF_TAG_ID,
-            ptr_or_id: *self,
-            len: 0,
-        }
+        SymbolRefWire { tag: SYMBOL_REF_TAG_ID, ptr_or_id: *self, len: 0 }
     }
 }

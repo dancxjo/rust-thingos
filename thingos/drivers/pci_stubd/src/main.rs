@@ -4,11 +4,11 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use alloc::string::String;
+
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::{info, warn};
@@ -60,7 +60,10 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -
     thingos_driver_start(ctx)
 }
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }

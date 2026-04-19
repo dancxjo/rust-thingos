@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::abi::syscall::vfs_flags;
 use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_read, vfs_write};
 
@@ -29,8 +30,7 @@ fn get_args() -> Vec<String> {
             if offset + 4 > buf.len() {
                 break;
             }
-            let str_len =
-                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+            let str_len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + str_len > buf.len() {
                 break;
@@ -71,11 +71,8 @@ fn tail_fd(in_fd: u32, n: usize) {
     let mut start_offset = 0usize;
 
     // If data ends with a newline, don't count that as a line separator for our purposes
-    let search_end = if data.last() == Some(&b'\n') && data.len() > 1 {
-        data.len() - 1
-    } else {
-        data.len()
-    };
+    let search_end =
+        if data.last() == Some(&b'\n') && data.len() > 1 { data.len() - 1 } else { data.len() };
 
     let mut i = search_end;
     loop {

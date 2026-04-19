@@ -52,6 +52,7 @@ pub mod bridge;
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
+
 use spin::Mutex;
 use thingos::space::SpaceId;
 
@@ -125,9 +126,7 @@ impl Space {
     pub fn new_empty() -> Arc<Self> {
         Arc::new(Space {
             id: alloc_space_id(),
-            mappings: Arc::new(Mutex::new(
-                crate::memory::mappings::MappingList::new(),
-            )),
+            mappings: Arc::new(Mutex::new(crate::memory::mappings::MappingList::new())),
             aspace_raw: AtomicU64::new(0),
         })
     }
@@ -137,11 +136,7 @@ impl Space {
         mappings: Arc<Mutex<crate::memory::mappings::MappingList>>,
         aspace_raw: u64,
     ) -> Arc<Self> {
-        Arc::new(Space {
-            id: alloc_space_id(),
-            mappings,
-            aspace_raw: AtomicU64::new(aspace_raw),
-        })
+        Arc::new(Space { id: alloc_space_id(), mappings, aspace_raw: AtomicU64::new(aspace_raw) })
     }
 
     /// Create a `Space` from existing `ProcessAddressSpace` fields plus a new
@@ -155,9 +150,7 @@ impl Space {
     /// `MappingList` is owned by both the caller's `ProcessAddressSpace` and
     /// this `Space`, so mutations through either path are immediately visible
     /// through both.
-    pub fn from_process_address_space(
-        pas: &crate::task::ProcessAddressSpace,
-    ) -> Arc<Self> {
+    pub fn from_process_address_space(pas: &crate::task::ProcessAddressSpace) -> Arc<Self> {
         Space::from_parts(pas.mappings_arc(), pas.aspace_raw())
     }
 
@@ -235,10 +228,8 @@ mod tests {
     #[test]
     fn test_from_process_address_space_shares_mappings_arc() {
         let mappings_arc = Arc::new(Mutex::new(MappingList::new()));
-        let pas = crate::task::ProcessAddressSpace::from_parts(
-            Arc::clone(&mappings_arc),
-            0xDEAD_BEEF,
-        );
+        let pas =
+            crate::task::ProcessAddressSpace::from_parts(Arc::clone(&mappings_arc), 0xDEAD_BEEF);
         let space = Space::from_process_address_space(&pas);
 
         // The two Arcs should point to the same allocation.
@@ -286,10 +277,7 @@ mod tests {
     #[test]
     fn test_shared_arc_mutations_visible_from_space() {
         let mappings_arc = Arc::new(Mutex::new(MappingList::new()));
-        let pas = crate::task::ProcessAddressSpace::from_parts(
-            Arc::clone(&mappings_arc),
-            0,
-        );
+        let pas = crate::task::ProcessAddressSpace::from_parts(Arc::clone(&mappings_arc), 0);
         let space = Space::from_process_address_space(&pas);
 
         // Mutate through the ProcessAddressSpace mappings arc.

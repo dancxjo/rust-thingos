@@ -21,7 +21,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 extern crate std;
 
 #[cfg(not(panic = "abort"))]
@@ -188,7 +187,9 @@ fn test_panic_join_no_panic() {
     assert!(result.is_ok(), "expected Ok from non-panicking thread");
     assert_eq!(result.unwrap(), "success");
 
-    std::println!("[test_thread_std] test_panic_join_no_panic: PASS (panic=abort model: child panics abort the process)");
+    std::println!(
+        "[test_thread_std] test_panic_join_no_panic: PASS (panic=abort model: child panics abort the process)"
+    );
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────────

@@ -1,5 +1,4 @@
-use crate::PhysRange;
-use crate::PhysRangeKind;
+use crate::{PhysRange, PhysRangeKind};
 
 pub fn init(map: &'static [PhysRange], hhdm: u64) -> &'static mut [u64] {
     let mut largest_start = 0;

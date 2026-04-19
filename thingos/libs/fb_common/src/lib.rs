@@ -42,11 +42,7 @@ pub const fn calc_stride_bytes(width: u32, bpp: u32, reported_stride: u32) -> u3
     }
 
     let scaled = reported_stride.saturating_mul(bpp);
-    if scaled >= row_bytes {
-        scaled
-    } else {
-        row_bytes
-    }
+    if scaled >= row_bytes { scaled } else { row_bytes }
 }
 
 #[cfg(test)]

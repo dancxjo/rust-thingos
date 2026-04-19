@@ -15,21 +15,13 @@ pub struct ProcessPool {
 
 impl ProcessPool {
     pub fn new() -> Self {
-        Self {
-            processes: Vec::new(),
-            last_exit_code: None,
-            foreground_only: false,
-        }
+        Self { processes: Vec::new(), last_exit_code: None, foreground_only: false }
     }
 
     pub fn add(&mut self, cwd: &Path, program: &str, args: Vec<String>) -> io::Result<()> {
         let backgrounded = matches!(args.last().map(String::as_str), Some("&"));
         let allow_background = backgrounded && !self.foreground_only;
-        let args_len = if backgrounded {
-            args.len().saturating_sub(1)
-        } else {
-            args.len()
-        };
+        let args_len = if backgrounded { args.len().saturating_sub(1) } else { args.len() };
         let parsed = ParsedCommand::from_args(args[..args_len].to_vec())?;
         let resolved_program = resolve_program(cwd, program);
 
@@ -138,11 +130,7 @@ impl ParsedCommand {
             }
         }
 
-        Ok(Self {
-            args: cleaned,
-            input,
-            output,
-        })
+        Ok(Self { args: cleaned, input, output })
     }
 }
 
@@ -163,9 +151,5 @@ fn resolve_program(cwd: &Path, program: &str) -> PathBuf {
 
 fn resolve_io_path(cwd: &Path, path: &str) -> PathBuf {
     let path = Path::new(path);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    }
+    if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) }
 }

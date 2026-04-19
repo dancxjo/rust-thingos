@@ -10,10 +10,10 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
+use core::ptr::{read_volatile, write_volatile};
 
 use abi::errors::Errno;
 use abi::schema::keys;
-use core::ptr::{read_volatile, write_volatile};
 use stem::info;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
 
@@ -58,10 +58,13 @@ impl VirtioDevice {
 
         // Read VirtIO capability offsets from sysfs
         let common_bar = read_sys_u32(&alloc::format!("{}/virtio/common_bar", sys_path))? as usize;
-        let common_offset = read_sys_u32(&alloc::format!("{}/virtio/common_offset", sys_path))? as u64;
+        let common_offset =
+            read_sys_u32(&alloc::format!("{}/virtio/common_offset", sys_path))? as u64;
         let notify_bar = read_sys_u32(&alloc::format!("{}/virtio/notify_bar", sys_path))? as usize;
-        let notify_offset = read_sys_u32(&alloc::format!("{}/virtio/notify_offset", sys_path))? as u64;
-        let notify_multiplier = read_sys_u32(&alloc::format!("{}/virtio/notify_multiplier", sys_path))?;
+        let notify_offset =
+            read_sys_u32(&alloc::format!("{}/virtio/notify_offset", sys_path))? as u64;
+        let notify_multiplier =
+            read_sys_u32(&alloc::format!("{}/virtio/notify_multiplier", sys_path))?;
 
         stem::debug!(
             "VirtIO: common_bar={} common_off=0x{:x} notify_bar={} notify_off=0x{:x} mult={}",
@@ -73,7 +76,8 @@ impl VirtioDevice {
         );
 
         // Device config is optional (0xFF if not present)
-        let device_bar = read_sys_u32(&alloc::format!("{}/virtio/device_bar", sys_path)).unwrap_or(0xFF);
+        let device_bar =
+            read_sys_u32(&alloc::format!("{}/virtio/device_bar", sys_path)).unwrap_or(0xFF);
         let device_offset =
             read_sys_u32(&alloc::format!("{}/virtio/device_offset", sys_path)).unwrap_or(0);
 
@@ -113,11 +117,7 @@ impl VirtioDevice {
         stem::debug!("VirtIO: allocating DMA command buffer...");
         let cmd_buf = device_alloc_dma(claim_handle, 1).map_err(|_| Errno::ENOMEM)?;
         let cmd_buf_phys = device_dma_phys(cmd_buf).map_err(|_| Errno::EFAULT)?;
-        stem::info!(
-            "VirtIO: cmd_buf virt=0x{:x} phys=0x{:x}",
-            cmd_buf,
-            cmd_buf_phys
-        );
+        stem::info!("VirtIO: cmd_buf virt=0x{:x} phys=0x{:x}", cmd_buf, cmd_buf_phys);
 
         stem::debug!("VirtIO: device::new complete");
         Ok(Self {
@@ -220,10 +220,7 @@ impl VirtioDevice {
 
         let avail_offset = (size as u64) * 16;
         let avail_phys = vq_phys + avail_offset;
-        self.write_common(
-            VIRTIO_COMMON_QUEUE_AVAIL_LO,
-            (avail_phys & 0xFFFFFFFF) as u32,
-        );
+        self.write_common(VIRTIO_COMMON_QUEUE_AVAIL_LO, (avail_phys & 0xFFFFFFFF) as u32);
         self.write_common(VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
 
         // Used ring must be 4-byte aligned (VirtIO 1.0 spec)
@@ -279,14 +276,12 @@ impl VirtioDevice {
 
     /// Read from device-specific config space
     pub fn read_device_config(&self, offset: u32) -> Option<u32> {
-        self.device_cfg
-            .map(|base| unsafe { read_volatile((base + offset as u64) as *const u32) })
+        self.device_cfg.map(|base| unsafe { read_volatile((base + offset as u64) as *const u32) })
     }
 
     /// Read u8 from device-specific config space
     pub fn read_device_config_u8(&self, offset: u32) -> Option<u8> {
-        self.device_cfg
-            .map(|base| unsafe { read_volatile((base + offset as u64) as *const u8) })
+        self.device_cfg.map(|base| unsafe { read_volatile((base + offset as u64) as *const u8) })
     }
 
     /// Get claim handle for additional device operations  

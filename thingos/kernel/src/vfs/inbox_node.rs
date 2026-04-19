@@ -32,11 +32,13 @@
 //!   on closed.  The kind-id is set to all-zeros (opaque raw delivery); use
 //!   `Inbox::send` directly for typed delivery with a proper `KindId`.
 
+use alloc::sync::Arc;
+
+use abi::errors::{Errno, SysResult};
+
 use super::{VfsNode, VfsStat};
 use crate::inbox::{Inbox, MessageEnvelope, SendError};
 use crate::message::{KindId, Message};
-use abi::errors::{Errno, SysResult};
-use alloc::sync::Arc;
 
 /// VFS node backed by an [`Inbox`].
 ///
@@ -142,9 +144,11 @@ impl VfsNode for InboxNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use abi::syscall::poll_flags;
     use alloc::sync::Arc;
+
+    use abi::syscall::poll_flags;
+
+    use super::*;
 
     fn make_inbox(capacity: usize) -> Arc<Inbox> {
         Arc::new(Inbox::new(capacity))

@@ -29,9 +29,8 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use alloc::vec::Vec;
+
 use abi::vm::{VmBacking, VmMapFlags, VmProt};
 use spin::Mutex;
 use stem::syscall::{vfs_close, vfs_open, vfs_read, vfs_seek, vfs_stat};
@@ -141,10 +140,7 @@ struct HandleTable {
 impl HandleTable {
     const fn new() -> Self {
         const E: HandleEntry = HandleEntry::empty();
-        HandleTable {
-            slots: [E; MAX_HANDLES],
-            next_base: 0x5000_0000,
-        }
+        HandleTable { slots: [E; MAX_HANDLES], next_base: 0x5000_0000 }
     }
 
     /// Allocate the next available slot, returning its 1-based index or 0 on
@@ -160,7 +156,9 @@ impl HandleTable {
     }
 
     fn free(&mut self, idx: usize) {
-        if idx == 0 { return; }
+        if idx == 0 {
+            return;
+        }
         let i = idx - 1;
         if i < MAX_HANDLES {
             self.slots[i] = HandleEntry::empty();
@@ -246,12 +244,7 @@ unsafe fn read_u16_ptr(p: *const u8, off: usize) -> u16 {
 }
 
 unsafe fn read_u32_ptr(p: *const u8, off: usize) -> u32 {
-    u32::from_le_bytes([
-        *p.add(off),
-        *p.add(off + 1),
-        *p.add(off + 2),
-        *p.add(off + 3),
-    ])
+    u32::from_le_bytes([*p.add(off), *p.add(off + 1), *p.add(off + 2), *p.add(off + 3)])
 }
 
 unsafe fn read_u64_ptr(p: *const u8, off: usize) -> u64 {
@@ -366,12 +359,9 @@ fn map_elf(
     }
 
     let e_type = read_u16_le(elf_bytes, 16).ok_or(b"truncated ELF header" as &[u8])?;
-    let e_phoff =
-        read_u64_le(elf_bytes, 32).ok_or(b"truncated ELF header" as &[u8])? as usize;
-    let e_phentsize =
-        read_u16_le(elf_bytes, 54).ok_or(b"truncated ELF header" as &[u8])? as usize;
-    let e_phnum =
-        read_u16_le(elf_bytes, 56).ok_or(b"truncated ELF header" as &[u8])? as usize;
+    let e_phoff = read_u64_le(elf_bytes, 32).ok_or(b"truncated ELF header" as &[u8])? as usize;
+    let e_phentsize = read_u16_le(elf_bytes, 54).ok_or(b"truncated ELF header" as &[u8])? as usize;
+    let e_phnum = read_u16_le(elf_bytes, 56).ok_or(b"truncated ELF header" as &[u8])? as usize;
     if e_phentsize == 0 || e_phnum == 0 {
         return Err(b"no program headers");
     }
@@ -544,8 +534,7 @@ fn process_rela_for_handle(
             // Each Elf64_Sym is `syment` bytes; st_name is the first u32.
             let sym_ptr = (symtab_va + r_sym * syment) as *const u8;
             let st_name = unsafe { read_u32_ptr(sym_ptr, 0) } as usize;
-            let name =
-                unsafe { strtab_str(strtab_va, st_name, strsz.saturating_sub(st_name)) };
+            let name = unsafe { strtab_str(strtab_va, st_name, strsz.saturating_sub(st_name)) };
             lookup(name).unwrap_or(0)
         } else {
             0
@@ -681,20 +670,10 @@ pub fn dlopen_str(path: &str, _flags: i32) -> *mut core::ffi::c_void {
             for i in 0..e_phnum {
                 let off = e_phoff + i * e_phentsize;
                 if read_u32_le(&elf_bytes, off).unwrap_or(0) == PT_DYNAMIC {
-                    let dyn_vaddr =
-                        read_u64_le(&elf_bytes, off + 16).unwrap_or(0) as usize;
-                    let dyn_va = if e_type == 3 {
-                        dyn_vaddr.wrapping_add(bias)
-                    } else {
-                        dyn_vaddr
-                    };
-                    let dyn_filesz =
-                        read_u64_le(&elf_bytes, off + 32).unwrap_or(0) as usize;
-                    let entry_count = if dyn_filesz > 0 {
-                        dyn_filesz / 16
-                    } else {
-                        256
-                    };
+                    let dyn_vaddr = read_u64_le(&elf_bytes, off + 16).unwrap_or(0) as usize;
+                    let dyn_va = if e_type == 3 { dyn_vaddr.wrapping_add(bias) } else { dyn_vaddr };
+                    let dyn_filesz = read_u64_le(&elf_bytes, off + 32).unwrap_or(0) as usize;
+                    let entry_count = if dyn_filesz > 0 { dyn_filesz / 16 } else { 256 };
 
                     let mut rela = 0usize;
                     let mut relasz = 0usize;
@@ -720,8 +699,12 @@ pub fn dlopen_str(path: &str, _flags: i32) -> *mut core::ffi::c_void {
 
                     // Apply bias to rela/jmprel for ET_DYN.
                     if e_type == 3 {
-                        if rela != 0 { rela = rela.wrapping_add(bias); }
-                        if jmprel != 0 { jmprel = jmprel.wrapping_add(bias); }
+                        if rela != 0 {
+                            rela = rela.wrapping_add(bias);
+                        }
+                        if jmprel != 0 {
+                            jmprel = jmprel.wrapping_add(bias);
+                        }
                     }
 
                     // Build a temporary lookup closure that searches all
@@ -731,7 +714,9 @@ pub fn dlopen_str(path: &str, _flags: i32) -> *mut core::ffi::c_void {
                     let lookup = |name: &[u8]| -> Option<u64> {
                         let ht = HANDLES.lock();
                         for slot in &ht.slots {
-                            if slot.state != SLOT_USED { continue; }
+                            if slot.state != SLOT_USED {
+                                continue;
+                            }
                             if let Some(addr) = lookup_in_handle(slot, name) {
                                 return Some(addr as u64);
                             }
@@ -741,15 +726,13 @@ pub fn dlopen_str(path: &str, _flags: i32) -> *mut core::ffi::c_void {
 
                     if rela != 0 {
                         process_rela_for_handle(
-                            rela, relasz, relaent, bias,
-                            symtab_va, strtab_va, strsz, syment,
+                            rela, relasz, relaent, bias, symtab_va, strtab_va, strsz, syment,
                             &lookup,
                         );
                     }
                     if jmprel != 0 {
                         process_rela_for_handle(
-                            jmprel, pltrelsz, relaent, bias,
-                            symtab_va, strtab_va, strsz, syment,
+                            jmprel, pltrelsz, relaent, bias, symtab_va, strtab_va, strsz, syment,
                             &lookup,
                         );
                     }
@@ -794,10 +777,7 @@ pub fn dlopen_str(path: &str, _flags: i32) -> *mut core::ffi::c_void {
 ///
 /// # Safety
 /// `name` must be a valid NUL-terminated C string.
-pub unsafe fn dlsym(
-    handle: *mut core::ffi::c_void,
-    name: *const u8,
-) -> *mut core::ffi::c_void {
+pub unsafe fn dlsym(handle: *mut core::ffi::c_void, name: *const u8) -> *mut core::ffi::c_void {
     if name.is_null() {
         set_error(b"dlsym: null symbol name");
         return core::ptr::null_mut();
@@ -814,10 +794,7 @@ pub unsafe fn dlsym(
 
 /// Resolve symbol `name` (as a byte slice) in the library identified by
 /// `handle`.
-pub fn dlsym_bytes(
-    handle: *mut core::ffi::c_void,
-    name: &[u8],
-) -> *mut core::ffi::c_void {
+pub fn dlsym_bytes(handle: *mut core::ffi::c_void, name: &[u8]) -> *mut core::ffi::c_void {
     let ht = HANDLES.lock();
 
     if handle == RTLD_DEFAULT || handle == RTLD_NEXT {

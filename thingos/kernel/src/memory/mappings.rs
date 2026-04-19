@@ -1,6 +1,7 @@
-use abi::vm::{VmProt, VmRegionInfo};
 use alloc::vec::Vec;
 use core::cmp;
+
+use abi::vm::{VmProt, VmRegionInfo};
 
 #[derive(Debug, Clone, Default)]
 pub struct MappingList {
@@ -9,9 +10,7 @@ pub struct MappingList {
 
 impl MappingList {
     pub fn new() -> Self {
-        MappingList {
-            regions: Vec::new(),
-        }
+        MappingList { regions: Vec::new() }
     }
 
     /// Insert a new region, merging with adjacent regions if possible.
@@ -258,18 +257,10 @@ mod tests {
     #[test]
     fn test_insert_merge() {
         let mut list = MappingList::new();
-        let r1 = VmRegionInfo {
-            start: 0x1000,
-            end: 0x2000,
-            prot: VmProt::READ,
-            ..Default::default()
-        };
-        let r2 = VmRegionInfo {
-            start: 0x2000,
-            end: 0x3000,
-            prot: VmProt::READ,
-            ..Default::default()
-        };
+        let r1 =
+            VmRegionInfo { start: 0x1000, end: 0x2000, prot: VmProt::READ, ..Default::default() };
+        let r2 =
+            VmRegionInfo { start: 0x2000, end: 0x3000, prot: VmProt::READ, ..Default::default() };
 
         list.insert(r1);
         list.insert(r2);
@@ -282,12 +273,8 @@ mod tests {
     #[test]
     fn test_remove_split() {
         let mut list = MappingList::new();
-        let r1 = VmRegionInfo {
-            start: 0x1000,
-            end: 0x4000,
-            prot: VmProt::READ,
-            ..Default::default()
-        };
+        let r1 =
+            VmRegionInfo { start: 0x1000, end: 0x4000, prot: VmProt::READ, ..Default::default() };
         list.insert(r1);
 
         let removed = list.remove(0x2000, 0x1000);
@@ -305,12 +292,8 @@ mod tests {
     #[test]
     fn test_check() {
         let mut list = MappingList::new();
-        let r1 = VmRegionInfo {
-            start: 0x1000,
-            end: 0x2000,
-            prot: VmProt::READ,
-            ..Default::default()
-        };
+        let r1 =
+            VmRegionInfo { start: 0x1000, end: 0x2000, prot: VmProt::READ, ..Default::default() };
         let r2 = VmRegionInfo {
             start: 0x2000,
             end: 0x3000,

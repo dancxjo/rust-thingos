@@ -12,6 +12,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
 use spin::Mutex;
 
 use crate::ipc::msgqueue::{KernelMessageQueue, MqSendError};
@@ -95,10 +96,7 @@ impl Port {
             waiters_write: crate::sched::WaitQueue::new(),
             send_lock: Mutex::new(()),
             recv_lock: Mutex::new(()),
-            endpoints: Mutex::new(PortEndpoints {
-                readers: 0,
-                writers: 0,
-            }),
+            endpoints: Mutex::new(PortEndpoints { readers: 0, writers: 0 }),
             msgs: KernelMessageQueue::new(DEFAULT_MSG_CAPACITY),
             sender_tid: AtomicU64::new(0),
             receiver_tid: AtomicU64::new(0),
@@ -164,8 +162,7 @@ impl Port {
             }
         }
 
-        self.head
-            .store(head.wrapping_add(to_write), Ordering::Release);
+        self.head.store(head.wrapping_add(to_write), Ordering::Release);
 
         // One queued message should wake one receiver.
         self.waiters_read.wake_one();
@@ -203,8 +200,7 @@ impl Port {
             }
         }
 
-        self.head
-            .store(head.wrapping_add(data.len()), Ordering::Release);
+        self.head.store(head.wrapping_add(data.len()), Ordering::Release);
         self.waiters_read.wake_one();
         true
     }
@@ -309,8 +305,7 @@ impl Port {
             buf[i] = self.buf[idx];
         }
 
-        self.tail
-            .store(tail.wrapping_add(to_read), Ordering::Release);
+        self.tail.store(tail.wrapping_add(to_read), Ordering::Release);
 
         // Wake up one writer (pacing/flow control)
         self.waiters_write.wake_one();
@@ -397,11 +392,7 @@ impl Port {
             return; // Allow kernel/idle access
         }
 
-        let target = if is_sender {
-            &self.sender_tid
-        } else {
-            &self.receiver_tid
-        };
+        let target = if is_sender { &self.sender_tid } else { &self.receiver_tid };
         let owner = target.load(Ordering::Acquire);
 
         if let Err(owner) = target.compare_exchange(0, current, Ordering::AcqRel, Ordering::Acquire)
@@ -512,10 +503,11 @@ impl Clone for Receiver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::sync::Arc;
-    use crate::sched::blocking::WAKE_TASK_HOOK;
     use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::sched::blocking::WAKE_TASK_HOOK;
 
     // ── Wake-hook helpers (serialised by WAKE_TEST_GUARD) ──────────────────────
 
@@ -539,9 +531,7 @@ mod tests {
 
     fn wake_log() -> alloc::vec::Vec<u64> {
         let len = WOKEN_LEN.load(Ordering::SeqCst).min(WOKEN_IDS.len());
-        (0..len)
-            .map(|i| WOKEN_IDS[i].load(Ordering::SeqCst))
-            .collect()
+        (0..len).map(|i| WOKEN_IDS[i].load(Ordering::SeqCst)).collect()
     }
 
     /// Test basic send/receive on a Port
@@ -932,10 +922,7 @@ mod tests {
 
         // Drop the port → the KernelMessageQueue<KernelMessage> is dropped → Arc is freed.
         drop(port);
-        assert!(
-            weak.upgrade().is_none(),
-            "cap must be freed when port is dropped"
-        );
+        assert!(weak.upgrade().is_none(), "cap must be freed when port is dropped");
     }
 
     /// Multiple caps in a single message are all released when the port drops.

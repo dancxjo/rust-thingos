@@ -68,8 +68,7 @@ extern crate alloc;
 /// to distinguish a `Space`-shaped message payload can compare against this
 /// constant.
 pub const KIND_ID_THINGOS_SPACE: [u8; 16] = [
-    0x75, 0xe1, 0xf6, 0x50, 0x3f, 0x95, 0xec, 0xf8,
-    0x5b, 0x91, 0xa7, 0x10, 0x69, 0xbf, 0x3d, 0x4d,
+    0x75, 0xe1, 0xf6, 0x50, 0x3f, 0x95, 0xec, 0xf8, 0x5b, 0x91, 0xa7, 0x10, 0x69, 0xbf, 0x3d, 0x4d,
 ];
 
 /// Opaque identifier for a `Space` kernel object.
@@ -156,11 +155,7 @@ mod tests {
     use super::*;
 
     fn make_space(id: u64, mapping_count: u32, sharing_count: u32) -> Space {
-        Space {
-            id: SpaceId(id),
-            mapping_count,
-            sharing_count,
-        }
+        Space { id: SpaceId(id), mapping_count, sharing_count }
     }
 
     // ── SpaceId ───────────────────────────────────────────────────────────────

@@ -4,7 +4,10 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use stem::syscall::{argv_get, exit, sleep_ns, vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_write};
+
+use stem::syscall::{
+    argv_get, exit, sleep_ns, vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_write,
+};
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 const MAX_DELAY_SECS: u64 = 86_400;
@@ -99,7 +102,11 @@ fn collect_processes() -> Vec<ProcRow> {
                                             }
                                             normalized.push_str(part);
                                         }
-                                        if normalized.is_empty() { name.to_string() } else { normalized }
+                                        if normalized.is_empty() {
+                                            name.to_string()
+                                        } else {
+                                            normalized
+                                        }
                                     } else {
                                         name.to_string()
                                     };
@@ -228,10 +235,7 @@ fn main(_argc: usize) -> ! {
         print("  PID  PPID STAT COMMAND\n");
 
         for row in &rows {
-            print(&alloc::format!(
-                "{:>5} {:>5} {:<4} {}\n",
-                row.pid, row.ppid, row.state, row.cmd
-            ));
+            print(&alloc::format!("{:>5} {:>5} {:<4} {}\n", row.pid, row.ppid, row.state, row.cmd));
         }
 
         refresh_count = refresh_count.saturating_add(1);

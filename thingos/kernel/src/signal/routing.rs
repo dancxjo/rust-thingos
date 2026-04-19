@@ -111,27 +111,16 @@ pub struct SignalRoutingReport {
 }
 
 impl SignalRoutingReport {
-    fn build(
-        target_kind: SignalTargetKind,
-        outcomes: Vec<(u64, SignalDeliveryOutcome)>,
-    ) -> Self {
+    fn build(target_kind: SignalTargetKind, outcomes: Vec<(u64, SignalDeliveryOutcome)>) -> Self {
         let targeted = outcomes.len();
-        let failed: usize = outcomes
-            .iter()
-            .filter(|(_, o)| *o == SignalDeliveryOutcome::RecipientNotFound)
-            .count();
+        let failed: usize =
+            outcomes.iter().filter(|(_, o)| *o == SignalDeliveryOutcome::RecipientNotFound).count();
         let succeeded = targeted.saturating_sub(failed);
         let failures = outcomes
             .into_iter()
             .filter(|(_, o)| *o == SignalDeliveryOutcome::RecipientNotFound)
             .collect();
-        Self {
-            target_kind,
-            targeted,
-            succeeded,
-            failed,
-            failures,
-        }
+        Self { target_kind, targeted, succeeded, failed, failures }
     }
 }
 
@@ -193,24 +182,14 @@ pub fn route_signal(route: SignalRoute) -> SignalRoutingReport {
 fn route_to_process(route: SignalRoute) -> Vec<(u64, SignalDeliveryOutcome)> {
     let pid = route.target_id as u32;
     let outcome = deliver_to_recipient(pid, route.signal);
-    crate::kdebug!(
-        "signal::route process pid={} sig={} outcome={:?}",
-        pid,
-        route.signal,
-        outcome,
-    );
+    crate::kdebug!("signal::route process pid={} sig={} outcome={:?}", pid, route.signal, outcome,);
     alloc::vec![(route.target_id, outcome)]
 }
 
 fn route_to_thread(route: SignalRoute) -> Vec<(u64, SignalDeliveryOutcome)> {
     let tid = route.target_id;
     let outcome = deliver_to_thread_recipient(tid, route.signal);
-    crate::kdebug!(
-        "signal::route thread tid={} sig={} outcome={:?}",
-        tid,
-        route.signal,
-        outcome,
-    );
+    crate::kdebug!("signal::route thread tid={} sig={} outcome={:?}", tid, route.signal, outcome,);
     alloc::vec![(tid, outcome)]
 }
 
@@ -344,8 +323,9 @@ fn snapshot_group_pids(pgid: u32) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
 
     // ── Unit tests for routing report construction ────────────────────────────
     //
@@ -510,10 +490,7 @@ mod tests {
     #[test]
     fn delivery_outcome_equality_is_correct() {
         assert_eq!(SignalDeliveryOutcome::Delivered, SignalDeliveryOutcome::Delivered);
-        assert_ne!(
-            SignalDeliveryOutcome::Delivered,
-            SignalDeliveryOutcome::RecipientNotFound
-        );
+        assert_ne!(SignalDeliveryOutcome::Delivered, SignalDeliveryOutcome::RecipientNotFound);
         assert_ne!(
             SignalDeliveryOutcome::ExistenceConfirmed,
             SignalDeliveryOutcome::RecipientNotFound

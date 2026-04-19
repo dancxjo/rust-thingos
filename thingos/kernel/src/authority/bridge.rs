@@ -90,12 +90,7 @@ fn capability_name(bit: u64) -> Option<&'static str> {
 
 fn capabilities_from_mask(mask: u64) -> alloc::vec::Vec<alloc::string::String> {
     let mut out = alloc::vec::Vec::new();
-    for bit in [
-        CAP_REBOOT,
-        CAP_SIGNAL,
-        CAP_KILL,
-        CAP_REALTIME_PRIORITY,
-    ] {
+    for bit in [CAP_REBOOT, CAP_SIGNAL, CAP_KILL, CAP_REALTIME_PRIORITY] {
         if (mask & bit) != 0 {
             if let Some(name) = capability_name(bit) {
                 out.push(alloc::string::String::from(name));
@@ -130,9 +125,7 @@ fn required_capability(privilege: &str) -> Option<u64> {
 /// service-account fields.  All credential/permission state in `Process` is
 /// therefore **provisional** — it backs the canonical `Authority` through this
 /// bridge but has not yet been fully extracted into `Authority`-shaped storage.
-pub fn authority_from_snapshot(
-    snapshot: &crate::sched::hooks::ProcessSnapshot,
-) -> Authority {
+pub fn authority_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> Authority {
     // Prefer the human-readable thread/process name; fall back to exec_path when
     // the name has not been set (i.e., it is empty).
     //
@@ -140,11 +133,8 @@ pub fn authority_from_snapshot(
     // name.  Future phases will replace this with a stable principal identifier
     // once uid/gid-like fields or a service-account concept are introduced into
     // the Process struct.
-    let name = if snapshot.name.is_empty() {
-        snapshot.exec_path.clone()
-    } else {
-        snapshot.name.clone()
-    };
+    let name =
+        if snapshot.name.is_empty() { snapshot.exec_path.clone() } else { snapshot.name.clone() };
 
     // PROVISIONAL: capabilities is always empty in Phase 7.  The current
     // `Process` struct carries no capability mask.  When a capability field is
@@ -240,11 +230,7 @@ pub fn check_privilege(authority: &Authority, privilege: &str) -> SysResult<()> 
     }
 
     let required = required_capability(privilege).ok_or(Errno::EPERM)?;
-    if (authority.capability_mask & required) != 0 {
-        Ok(())
-    } else {
-        Err(Errno::EPERM)
-    }
+    if (authority.capability_mask & required) != 0 { Ok(()) } else { Err(Errno::EPERM) }
 }
 
 #[cfg(test)]

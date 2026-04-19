@@ -4,9 +4,10 @@
 //! This is the backbone for Rust std's sync primitives (Mutex, Condvar,
 //! RwLock, thread parking).
 
-use abi::errors::{Errno, SysResult};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+
+use abi::errors::{Errno, SysResult};
 use spin::Mutex;
 
 use crate::syscall::validate::validate_user_range;

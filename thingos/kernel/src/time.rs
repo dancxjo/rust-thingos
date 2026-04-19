@@ -48,11 +48,7 @@ pub fn anchor_system_clock(unix_secs: u64, mono_ns: u64) {
 /// This is the canonical time source for VFS node timestamps.
 pub fn now_timespec() -> (u64, u32) {
     let mono_ns = monotonic_now_ns();
-    let sys_ns = if is_anchored() {
-        get_system_time_ns(mono_ns)
-    } else {
-        0
-    };
+    let sys_ns = if is_anchored() { get_system_time_ns(mono_ns) } else { 0 };
     let sec = sys_ns / NANOS_PER_SEC;
     let nsec = (sys_ns % NANOS_PER_SEC) as u32;
     (sec, nsec)
@@ -95,17 +91,14 @@ pub struct MonotonicClamp {
 
 impl MonotonicClamp {
     pub const fn new() -> Self {
-        Self {
-            last: AtomicU64::new(0),
-        }
+        Self { last: AtomicU64::new(0) }
     }
 
     pub fn clamp(&self, raw: u64) -> u64 {
         let last = self.last.load(Ordering::Relaxed);
         if raw > last {
             if let Err(actual) =
-                self.last
-                    .compare_exchange(last, raw, Ordering::Relaxed, Ordering::Relaxed)
+                self.last.compare_exchange(last, raw, Ordering::Relaxed, Ordering::Relaxed)
             {
                 if actual > raw { actual } else { raw }
             } else {

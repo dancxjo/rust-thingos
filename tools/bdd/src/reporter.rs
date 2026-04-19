@@ -3,12 +3,9 @@
 //! Custom cucumber reporter with Thing-OS formatting
 //! and artifact collection integration.
 
-use cucumber::{
-    Event, Writer, cli,
-    event::{self, Cucumber},
-    gherkin, parser,
-    writer::{NonTransforming, Normalized},
-};
+use cucumber::event::{self, Cucumber};
+use cucumber::writer::{NonTransforming, Normalized};
+use cucumber::{Event, Writer, cli, gherkin, parser};
 
 use crate::artifacts::{self, StepResult};
 

@@ -107,10 +107,7 @@ impl Virtqueue {
     /// * `phys_addr` - Physical base address of queue memory
     /// * `virt_addr` - Virtual address mapping of queue memory
     pub fn new(queue_size: u16, phys_addr: u64, virt_addr: u64) -> Self {
-        assert!(
-            queue_size.is_power_of_two(),
-            "Queue size must be power of 2"
-        );
+        assert!(queue_size.is_power_of_two(), "Queue size must be power of 2");
         assert!(queue_size <= 32768, "Queue size too large");
 
         let desc_size = core::mem::size_of::<VirtqueueDescriptor>() * queue_size as usize;
@@ -232,10 +229,7 @@ impl Virtqueue {
 
         // Add descriptor to available ring
         unsafe {
-            write_volatile(
-                ring_ptr.add((idx as usize) % self.queue_size as usize),
-                desc_idx,
-            );
+            write_volatile(ring_ptr.add((idx as usize) % self.queue_size as usize), desc_idx);
         }
 
         // Update index

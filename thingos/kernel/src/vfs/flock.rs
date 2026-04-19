@@ -25,6 +25,7 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+
 use abi::errors::{Errno, SysResult};
 use abi::syscall::flock_flags::{LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN};
 use spin::Mutex;
@@ -84,11 +85,7 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
                 // holding `table` so that a concurrent `release` cannot
                 // miss us.
                 let tid = unsafe { crate::sched::current_tid_current() };
-                FLOCK_WAIT_QUEUE
-                    .lock()
-                    .entry(ino)
-                    .or_insert_with(Vec::new)
-                    .push(tid);
+                FLOCK_WAIT_QUEUE.lock().entry(ino).or_insert_with(Vec::new).push(tid);
                 drop(table);
                 // Sleep until woken by `release`.  If the lock was already
                 // freed between dropping `table` and this call, the
@@ -121,11 +118,7 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
                 }
                 // Blocking: same wait-queue pattern as LOCK_SH above.
                 let tid = unsafe { crate::sched::current_tid_current() };
-                FLOCK_WAIT_QUEUE
-                    .lock()
-                    .entry(ino)
-                    .or_insert_with(Vec::new)
-                    .push(tid);
+                FLOCK_WAIT_QUEUE.lock().entry(ino).or_insert_with(Vec::new).push(tid);
                 drop(table);
                 unsafe { crate::sched::block_current_erased() };
                 let mut wq = FLOCK_WAIT_QUEUE.lock();
@@ -162,9 +155,10 @@ pub fn release(ino: u64, pid: u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use abi::errors::Errno;
     use abi::syscall::flock_flags::{LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN};
+
+    use super::*;
 
     /// Remove any existing state for the given (ino, pid) pair so tests do
     /// not interfere with each other.
@@ -268,11 +262,7 @@ mod tests {
     fn release_wakes_and_clears_wait_queue() {
         let ino = 0xF00B;
         // Manually insert a fake waiter TID to simulate a blocked thread.
-        FLOCK_WAIT_QUEUE
-            .lock()
-            .entry(ino)
-            .or_insert_with(alloc::vec::Vec::new)
-            .push(9999);
+        FLOCK_WAIT_QUEUE.lock().entry(ino).or_insert_with(alloc::vec::Vec::new).push(9999);
         // Acquire a lock so release has something to remove.
         flock(ino, 50, LOCK_EX).unwrap();
         // Release should drain the wait queue (wake_task_erased is a no-op

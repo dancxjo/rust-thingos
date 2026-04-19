@@ -6,11 +6,8 @@ pub struct BootHeap {
     pub used: usize,
 }
 
-static mut BOOT_HEAP: BootHeap = BootHeap {
-    base: 0xffffffffd0000000,
-    size: 64 * 1024 * 1024,
-    used: 0,
-};
+static mut BOOT_HEAP: BootHeap =
+    BootHeap { base: 0xffffffffd0000000, size: 64 * 1024 * 1024, used: 0 };
 
 pub fn alloc_page<R: BootRuntime>() -> u64 {
     unsafe {

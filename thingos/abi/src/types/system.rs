@@ -191,12 +191,7 @@ pub struct BulkPropsRequest {
 
 impl Default for BulkPropsRequest {
     fn default() -> Self {
-        Self {
-            node_id: 0,
-            keys: [0; BULK_PROPS_MAX_KEYS],
-            key_count: 0,
-            _pad: [0; 3],
-        }
+        Self { node_id: 0, keys: [0; BULK_PROPS_MAX_KEYS], key_count: 0, _pad: [0; 3] }
     }
 }
 
@@ -215,12 +210,7 @@ pub struct BulkPropsResponse {
 
 impl Default for BulkPropsResponse {
     fn default() -> Self {
-        Self {
-            node_id: 0,
-            values: [0; BULK_PROPS_MAX_KEYS],
-            present_mask: 0,
-            _pad: 0,
-        }
+        Self { node_id: 0, values: [0; BULK_PROPS_MAX_KEYS], present_mask: 0, _pad: 0 }
     }
 }
 
@@ -256,11 +246,7 @@ pub mod stdio_mode {
     /// Decode an explicit parent handle, if `mode` encodes one.
     #[inline]
     pub const fn explicit_handle(mode: u32) -> Option<u32> {
-        if (mode & HANDLE_BIT) != 0 {
-            Some(mode & !HANDLE_BIT)
-        } else {
-            None
-        }
+        if (mode & HANDLE_BIT) != 0 { Some(mode & !HANDLE_BIT) } else { None }
     }
 }
 

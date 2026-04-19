@@ -5,6 +5,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+
 use stem::syscall::{argv_get, env_get, exit, vfs_close, vfs_open, vfs_stat, vfs_write};
 
 fn get_args() -> Vec<String> {
@@ -81,11 +82,8 @@ fn get_path_entries() -> Vec<String> {
         Err(_) => return vec![String::from("/bin")],
     };
 
-    let mut entries: Vec<String> = path
-        .split(':')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
+    let mut entries: Vec<String> =
+        path.split(':').filter(|s| !s.is_empty()).map(String::from).collect();
     if entries.is_empty() {
         entries.push(String::from("/bin"));
         entries.push(String::from("/drivers"));

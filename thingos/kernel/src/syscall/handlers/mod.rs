@@ -34,6 +34,10 @@ pub mod vfs;
 mod wait;
 
 // Re-export all syscall handlers
+use alloc::string::String;
+use core::sync::atomic::Ordering;
+
+use abi::errors::{Errno, SysResult};
 pub use device::*;
 pub use futex::*;
 pub use logging::*;
@@ -51,9 +55,6 @@ pub use wait::*;
 
 // Shared utilities used by multiple handlers
 use crate::syscall::validate::{copyin, copyout};
-use abi::errors::{Errno, SysResult};
-use alloc::string::String;
-use core::sync::atomic::Ordering;
 
 /// Blocking call to Root service (REMOVED)
 pub(crate) fn root_call(_op: usize) -> SysResult<usize> {

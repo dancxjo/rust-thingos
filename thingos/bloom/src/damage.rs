@@ -1,5 +1,6 @@
-use abi::display_protocol::Rect;
 use alloc::vec::Vec;
+
+use abi::display_protocol::Rect;
 
 pub struct DamageTracker {
     dirty: bool,
@@ -8,10 +9,7 @@ pub struct DamageTracker {
 
 impl DamageTracker {
     pub fn new() -> Self {
-        Self {
-            dirty: true,
-            regions: Vec::new(),
-        }
+        Self { dirty: true, regions: Vec::new() }
     }
 
     pub fn mark_rect(&mut self, rect: Rect) {
@@ -20,12 +18,7 @@ impl DamageTracker {
     }
 
     pub fn mark_full(&mut self, width: u32, height: u32) {
-        self.mark_rect(Rect {
-            x: 0,
-            y: 0,
-            w: width,
-            h: height,
-        });
+        self.mark_rect(Rect { x: 0, y: 0, w: width, h: height });
     }
 
     pub fn mark_dirty(&mut self) {

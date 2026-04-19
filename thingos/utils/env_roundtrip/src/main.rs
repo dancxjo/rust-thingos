@@ -12,7 +12,9 @@ fn main() -> ! {
         Ok(_) => stem::println!("[env_roundtrip] set {}={:?}", key, value),
         Err(e) => {
             stem::println!("[env_roundtrip] FAIL: could not set var: {:?}", e);
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     }
 
@@ -25,12 +27,16 @@ fn main() -> ! {
                 stem::println!("[env_roundtrip] get OK: {:?}", v);
             } else {
                 stem::println!("[env_roundtrip] FAIL: expected {:?} got {:?}", value, v);
-                loop { stem::syscall::exit(1); }
+                loop {
+                    stem::syscall::exit(1);
+                }
             }
         }
         Err(e) => {
             stem::println!("[env_roundtrip] FAIL: var not found: {:?}", e);
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     }
 
@@ -43,13 +49,15 @@ fn main() -> ! {
             let mut found = false;
             let mut offset = 4;
             for _ in 0..count {
-                let k_len = u32::from_le_bytes(list_buf[offset..offset+4].try_into().unwrap()) as usize;
+                let k_len =
+                    u32::from_le_bytes(list_buf[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
-                let k = core::str::from_utf8(&list_buf[offset..offset+k_len]).unwrap_or("");
+                let k = core::str::from_utf8(&list_buf[offset..offset + k_len]).unwrap_or("");
                 offset += k_len;
-                let v_len = u32::from_le_bytes(list_buf[offset..offset+4].try_into().unwrap()) as usize;
+                let v_len =
+                    u32::from_le_bytes(list_buf[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
-                let v = core::str::from_utf8(&list_buf[offset..offset+v_len]).unwrap_or("");
+                let v = core::str::from_utf8(&list_buf[offset..offset + v_len]).unwrap_or("");
                 offset += v_len;
 
                 if k == key && v == value {
@@ -62,12 +70,16 @@ fn main() -> ! {
                 stem::println!("[env_roundtrip] list OK: found key in {} vars", count);
             } else {
                 stem::println!("[env_roundtrip] FAIL: key not found in vars() (total: {})", count);
-                loop { stem::syscall::exit(1); }
+                loop {
+                    stem::syscall::exit(1);
+                }
             }
         }
         Err(e) => {
             stem::println!("[env_roundtrip] FAIL: could not list vars: {:?}", e);
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     }
 
@@ -76,7 +88,9 @@ fn main() -> ! {
         Ok(_) => stem::println!("[env_roundtrip] unset OK"),
         Err(e) => {
             stem::println!("[env_roundtrip] FAIL: could not unset var: {:?}", e);
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     }
 
@@ -85,10 +99,14 @@ fn main() -> ! {
         Err(_) => stem::println!("[env_roundtrip] verify unset OK"),
         Ok(_) => {
             stem::println!("[env_roundtrip] FAIL: var still present after remove");
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     }
 
     stem::println!("[env_roundtrip] PASS");
-    loop { stem::syscall::exit(0); }
+    loop {
+        stem::syscall::exit(0);
+    }
 }

@@ -1,10 +1,11 @@
 //! Memory and stack allocation syscalls
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use abi::errors::{Errno, SysResult};
 use abi::vm::{
     VmBacking, VmBackingKind, VmMapReq, VmMapResp, VmProt, VmRegionInfo, VmUnmapReq, VmUnmapResp,
 };
-use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Base address for anonymous VM mappings (stacks, etc).
 /// Uses high user VA space to avoid collision with bytespace mappings at 0x1000_0000.
@@ -102,7 +103,12 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                         return Err(Errno::EINVAL);
                     }
                     if total_size > 1024 * 1024 {
-                        crate::kinfo!("sys_vm_map: large backing file mapping offset={} len={} total_size={}", offset, len, total_size);
+                        crate::kinfo!(
+                            "sys_vm_map: large backing file mapping offset={} len={} total_size={}",
+                            offset,
+                            len,
+                            total_size
+                        );
                     }
                     Some((phys_base, total_size))
                 } else {
@@ -127,7 +133,11 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                     // 0-copy path
                     let current_offset = *file_offset + (virt - addr as u64);
                     if current_offset >= *total_size as u64 {
-                        crate::kwarn!("sys_vm_map: offset out of bounds: {} >= {}", current_offset, total_size);
+                        crate::kwarn!(
+                            "sys_vm_map: offset out of bounds: {} >= {}",
+                            current_offset,
+                            total_size
+                        );
                         return Err(Errno::EINVAL);
                     }
                     phys_base + current_offset
@@ -174,7 +184,12 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                 };
 
             if let Err(e) = unsafe { crate::memory::map_user_page_with_perms(virt, phys, perms) } {
-                crate::kwarn!("sys_vm_map: failed to map page virt=0x{:x} phys=0x{:x}: {:?}", virt, phys, e);
+                crate::kwarn!(
+                    "sys_vm_map: failed to map page virt=0x{:x} phys=0x{:x}: {:?}",
+                    virt,
+                    phys,
+                    e
+                );
                 return Err(e);
             }
             virt += page_size as u64;
@@ -267,8 +282,9 @@ pub fn sys_vm_unmap(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
 }
 
 pub fn sys_vm_protect(req_ptr: usize) -> SysResult<usize> {
-    use crate::syscall::validate::copyin;
     use abi::vm::VmProtectReq;
+
+    use crate::syscall::validate::copyin;
 
     let mut req: VmProtectReq = unsafe { core::mem::zeroed() };
     let req_slice = unsafe {
@@ -319,11 +335,8 @@ pub fn sys_shared_memory_create(name_ptr: usize, name_len: usize, size: usize) -
     // Install in FD table
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let mut pinfo = pinfo_arc.lock();
-    let thing = pinfo.handle_table.open(
-        node_arc,
-        crate::vfs::OpenFlags::read_write(),
-        "memfd".into(),
-    )?;
+    let thing =
+        pinfo.handle_table.open(node_arc, crate::vfs::OpenFlags::read_write(), "memfd".into())?;
     Ok(thing as usize)
 }
 

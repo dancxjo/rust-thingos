@@ -1,7 +1,9 @@
+use alloc::boxed::Box;
+
+use abi::wait::{WaitKind, WaitSpec};
+
 use crate::errors::Errno;
 use crate::stack::{Stack, StackSpec};
-use abi::wait::{WaitKind, WaitSpec};
-use alloc::boxed::Box;
 
 pub type ThreadId = u64;
 
@@ -104,12 +106,7 @@ impl TaskExitWatch {
     /// When the spec fires, `WaitResult::value` contains the task's exit code and
     /// `WaitResult::flags` has [`abi::wait::ready::EXITED`](abi::wait::ready::EXITED) set.
     pub fn wait_spec(&self, token: u64) -> WaitSpec {
-        WaitSpec {
-            kind: WaitKind::TaskExit as u32,
-            flags: 0,
-            object: self.tid,
-            token,
-        }
+        WaitSpec { kind: WaitKind::TaskExit as u32, flags: 0, object: self.tid, token }
     }
 }
 

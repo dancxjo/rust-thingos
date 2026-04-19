@@ -4,8 +4,9 @@
 //! syscall mechanism. This allows the logging implementation to evolve
 //! independently of consumers.
 
-use crate::syscall::log_write;
 use core::fmt;
+
+use crate::syscall::log_write;
 
 /// Log levels matching ABI definitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,11 +51,7 @@ struct BufConsole {
 
 impl BufConsole {
     fn new(level: usize) -> Self {
-        BufConsole {
-            buf: [0u8; 256],
-            len: 0,
-            level,
-        }
+        BufConsole { buf: [0u8; 256], len: 0, level }
     }
 
     fn flush(&mut self) {

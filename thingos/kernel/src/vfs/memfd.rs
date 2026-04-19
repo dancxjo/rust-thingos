@@ -1,7 +1,9 @@
-use super::{SysResult, VfsNode, VfsStat};
-use abi::errors::Errno;
 use alloc::sync::Arc;
+
+use abi::errors::Errno;
 use spin::Mutex;
+
+use super::{SysResult, VfsNode, VfsStat};
 
 /// A memory-backed file descriptor (MemFD).
 /// Allocates a contiguous physical memory region at creation.

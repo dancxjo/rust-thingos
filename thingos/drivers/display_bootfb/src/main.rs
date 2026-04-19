@@ -4,15 +4,14 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 mod driver;
 mod vfs_provider;
 
-use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
 };
+use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::BootFbDriver;
 use ipc_helpers::provider::ProviderLoop;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
@@ -42,7 +41,10 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     start: thingos_driver_start,
 };
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
@@ -98,7 +100,11 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 fn main(boot_fd: usize) -> ! {
     let self_tid = stem::syscall::get_tid().unwrap_or(0);
     let self_pid = stem::syscall::getpid();
-    stem::info!("display_bootfb: Starting VFS-native bootfb driver (v0.4.1) TID={} PID={}", self_tid, self_pid);
+    stem::info!(
+        "display_bootfb: Starting VFS-native bootfb driver (v0.4.1) TID={} PID={}",
+        self_tid,
+        self_pid
+    );
     stem::info!("display_bootfb: boot_arg={}", boot_fd);
 
     // 1. Map bootstrap memfd to get handles
@@ -176,7 +182,11 @@ fn main(boot_fd: usize) -> ! {
                 );
             }
             Err(e) => {
-                stem::info!("display_bootfb: ERROR: Failed to vm_map bootstrap memfd {}: {:?}", boot_fd, e);
+                stem::info!(
+                    "display_bootfb: ERROR: Failed to vm_map bootstrap memfd {}: {:?}",
+                    boot_fd,
+                    e
+                );
             }
         }
     } else {
@@ -185,8 +195,13 @@ fn main(boot_fd: usize) -> ! {
     }
 
     if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {
-        stem::debug!("display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
-            drv_req_read, drv_resp_write, supervisor_port, bind_instance_id);
+        stem::debug!(
+            "display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
+            drv_req_read,
+            drv_resp_write,
+            supervisor_port,
+            bind_instance_id
+        );
         stem::syscall::exit(1);
     }
 
@@ -196,14 +211,13 @@ fn main(boot_fd: usize) -> ! {
                 "display_bootfb: Driver initialized successfully ({}x{})",
                 d.fb.width, d.fb.height
             );
-            debug!(
-                "display_bootfb: Mapping framebuffer (backing fd={})...",
-                boot_fd
-            );
+            debug!("display_bootfb: Mapping framebuffer (backing fd={})...", boot_fd);
             d
         }
         None => {
-            stem::error!("display_bootfb: ERROR: Failed to acquire hardware framebuffer (find_framebuffer returned None)");
+            stem::error!(
+                "display_bootfb: ERROR: Failed to acquire hardware framebuffer (find_framebuffer returned None)"
+            );
             stem::syscall::exit(1);
         }
     };
@@ -212,10 +226,7 @@ fn main(boot_fd: usize) -> ! {
     let (vfs_write, vfs_read) = match port_create(VFS_RPC_MAX_REQ * 8) {
         Ok(handles) => handles,
         Err(e) => {
-            debug!(
-                "display_bootfb: ERROR: Failed to create provider port: {:?}",
-                e
-            );
+            debug!("display_bootfb: ERROR: Failed to create provider port: {:?}", e);
             stem::syscall::exit(1);
         }
     };
@@ -242,14 +253,17 @@ fn main(boot_fd: usize) -> ! {
             supervisor_protocol::MSG_BIND_READY,
             &ready_bytes[..len],
         ) {
-            info!("display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x})...", ready.class_mask);
-            // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let res = stem::syscall::socket::sendmsg(
-                drv_resp_write_fd,
-                &buf[..total_len],
-                &[vfs_write],
+            info!(
+                "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x})...",
+                ready.class_mask
             );
-            info!("display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...", res);
+            // Bundle the VFS provider handle and the BIND_READY notification atomically.
+            let res =
+                stem::syscall::socket::sendmsg(drv_resp_write_fd, &buf[..total_len], &[vfs_write]);
+            info!(
+                "display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...",
+                res
+            );
         }
     }
 
@@ -261,19 +275,18 @@ fn main(boot_fd: usize) -> ! {
         // spin so the CPU can schedule unrelated work while the driver waits.
         match port_recv(drv_req_read, &mut wait_buf) {
             Ok(n) => {
-                if let Some((header, payload)) = display_driver_protocol::parse_message(&wait_buf[..n])
+                if let Some((header, payload)) =
+                    display_driver_protocol::parse_message(&wait_buf[..n])
                 {
                     if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
-                        if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload)
+                        if let Some(assigned) =
+                            supervisor_protocol::decode_bind_assigned_le(payload)
                         {
                             bind_instance_id_confirmed = assigned.bind_instance_id;
-                            let path_len = assigned
-                                .primary_path
-                                .iter()
-                                .position(|&b| b == 0)
-                                .unwrap_or(64);
-                            let path =
-                                core::str::from_utf8(&assigned.primary_path[..path_len]).unwrap_or("?");
+                            let path_len =
+                                assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
+                            let path = core::str::from_utf8(&assigned.primary_path[..path_len])
+                                .unwrap_or("?");
                             debug!(
                                 "display_bootfb: Sovereign registration COMPLETE. Assigned: {}",
                                 path
@@ -282,10 +295,14 @@ fn main(boot_fd: usize) -> ! {
                         }
                     } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
                         if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
-                            let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
+                            let reason_len =
+                                failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
                             let reason =
                                 core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
-                            warn!("display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Exiting.", failed.error_code, reason);
+                            warn!(
+                                "display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Exiting.",
+                                failed.error_code, reason
+                            );
                             stem::syscall::exit(1);
                         }
                     }
@@ -314,11 +331,8 @@ fn main(boot_fd: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ = stem::syscall::socket::sendmsg(
-                    drv_resp_write_fd,
-                    &svc_buf[..total_len],
-                    &[],
-                );
+                let _ =
+                    stem::syscall::socket::sendmsg(drv_resp_write_fd, &svc_buf[..total_len], &[]);
                 debug!("display_bootfb: Sent MSG_SERVICE_READY.");
             }
         }

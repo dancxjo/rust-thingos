@@ -47,7 +47,7 @@
 extern crate alloc;
 
 use abi::KindId;
-use ipc_helpers::inbox::{InboxReceiver, send_typed, broadcast_typed};
+use ipc_helpers::inbox::{InboxReceiver, broadcast_typed, send_typed};
 use stem::{info, warn};
 
 /// KindId used for the demo payload (all-zeros = untyped / raw delivery).

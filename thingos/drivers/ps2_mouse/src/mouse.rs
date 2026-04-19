@@ -46,18 +46,10 @@ impl MouseState {
         let x_sign = (flags & 0x10) != 0;
         let y_sign = (flags & 0x20) != 0;
 
-        let dx: i16 = if x_sign {
-            (x_raw as i16) - 256
-        } else {
-            x_raw as i16
-        };
+        let dx: i16 = if x_sign { (x_raw as i16) - 256 } else { x_raw as i16 };
 
         // Note: PS/2 Y axis is inverted (negative = up)
-        let dy: i16 = if y_sign {
-            -((y_raw as i16) - 256)
-        } else {
-            -(y_raw as i16)
-        };
+        let dy: i16 = if y_sign { -((y_raw as i16) - 256) } else { -(y_raw as i16) };
 
         // Emit move event if there's movement
         if dx != 0 || dy != 0 {

@@ -72,7 +72,6 @@ pub enum Errno {
     ENOTSOCK = 88,
     /// Transport endpoint is not connected.
     ENOTCONN = 107,
-
     // Custom/Extension
 }
 

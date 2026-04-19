@@ -4,13 +4,12 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 
-use abi::display_driver_protocol::{BindPayload, FbInfoPayload, FB_INFO_PAYLOAD_SIZE};
+use abi::display_driver_protocol::{BindPayload, FB_INFO_PAYLOAD_SIZE, FbInfoPayload};
 use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_WRONLY};
 use abi::vfs_watch::mask;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat, vfs_watch_path, vfs_write};
@@ -28,15 +27,15 @@ struct Font {
 
 impl Font {
     fn load(path: &str) -> Result<Self, String> {
-        let fd =
-            vfs_open(path, O_RDONLY).map_err(|e| alloc::format!("failed to open font file: {:?}", e))?;
+        let fd = vfs_open(path, O_RDONLY)
+            .map_err(|e| alloc::format!("failed to open font file: {:?}", e))?;
         let stat = vfs_stat(fd).map_err(|e| alloc::format!("failed to stat font file: {:?}", e))?;
         let size = stat.size;
 
         let mut data = Vec::with_capacity(size as usize);
         data.resize(size as usize, 0);
-        let n =
-            vfs_read(fd, &mut data).map_err(|e| alloc::format!("failed to read font file: {:?}", e))?;
+        let n = vfs_read(fd, &mut data)
+            .map_err(|e| alloc::format!("failed to read font file: {:?}", e))?;
         data.truncate(n);
         let _ = vfs_close(fd);
 
@@ -123,7 +122,13 @@ impl Terminal {
             5 => 0xFFFF00FF, // Magenta
             6 => 0xFF00FFFF, // Cyan
             7 => 0xFFFFFFFF, // White
-            _ => if is_bg { 0xFF000000 } else { 0xFFFFFFFF },
+            _ => {
+                if is_bg {
+                    0xFF000000
+                } else {
+                    0xFFFFFFFF
+                }
+            }
         }
     }
 
@@ -146,12 +151,13 @@ impl Terminal {
                     self.cursor_x = 0;
                     return;
                 }
-                if c == '\x08' { // Backspace
-                     let width = 8; // Assuming standard width for backspace for now
-                     if self.cursor_x >= width {
-                         self.cursor_x -= width;
-                     }
-                     return;
+                if c == '\x08' {
+                    // Backspace
+                    let width = 8; // Assuming standard width for backspace for now
+                    if self.cursor_x >= width {
+                        self.cursor_x -= width;
+                    }
+                    return;
                 }
                 // Handle tab as 4 spaces
                 if c == '\t' {
@@ -192,7 +198,7 @@ impl Terminal {
                             self.current_bg = Self::ansi_color_to_u32(p, true);
                         } else if (90..=97).contains(&p) {
                             // Bright fg
-                             self.current_fg = Self::ansi_color_to_u32(p - 60, false) | 0xFF888888; // Hacky bright
+                            self.current_fg = Self::ansi_color_to_u32(p - 60, false) | 0xFF888888; // Hacky bright
                         }
                     }
                     self.ansi_state = AnsiState::Normal;
@@ -227,11 +233,8 @@ impl Terminal {
             self.putc('\n');
         }
 
-        let bitmap = self
-            .font
-            .get_glyph(c)
-            .or_else(|| self.font.get_glyph('?'))
-            .map(|g| g.bitmap.clone());
+        let bitmap =
+            self.font.get_glyph(c).or_else(|| self.font.get_glyph('?')).map(|g| g.bitmap.clone());
 
         if let Some(bitmap) = bitmap {
             self.draw_glyph_internal(
@@ -286,11 +289,7 @@ impl Terminal {
         let total_pixels = (self.height as usize) * stride_pixels;
 
         unsafe {
-            core::ptr::copy(
-                self.fb_ptr.add(row_pixels),
-                self.fb_ptr,
-                total_pixels - row_pixels,
-            );
+            core::ptr::copy(self.fb_ptr.add(row_pixels), self.fb_ptr, total_pixels - row_pixels);
             let last_lines = core::slice::from_raw_parts_mut(
                 self.fb_ptr.add(total_pixels - row_pixels),
                 row_pixels,
@@ -340,9 +339,7 @@ fn main(arg: usize) -> ! {
             len: 4096,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File { thing: boot_fd,
-                offset: 0,
-            },
+            backing: VmBacking::File { thing: boot_fd, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
             let ptr = resp.addr as *const u32;
@@ -402,10 +399,7 @@ fn main(arg: usize) -> ! {
         }
     };
 
-    info!(
-        "Terminal: Display {}x{}, stride={}",
-        fb_info.width, fb_info.height, fb_info.stride
-    );
+    info!("Terminal: Display {}x{}, stride={}", fb_info.width, fb_info.height, fb_info.stride);
 
     let fb_ptr = {
         use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
@@ -414,9 +408,7 @@ fn main(arg: usize) -> ! {
             len: (fb_info.stride as usize) * (fb_info.height as usize),
             prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File { thing: fb_id,
-                offset: 0,
-            },
+            backing: VmBacking::File { thing: fb_id, offset: 0 },
         };
         match stem::syscall::vm_map(&req) {
             Ok(resp) => resp.addr as *mut u32,
@@ -481,8 +473,7 @@ fn main(arg: usize) -> ! {
                 abi::display_driver_protocol::MSG_PRESENT,
                 &payload,
             ) {
-                let _ =
-                    stem::syscall::port_send_all(display_req_write, &present_header[..total]);
+                let _ = stem::syscall::port_send_all(display_req_write, &present_header[..total]);
             }
         }
 
@@ -502,7 +493,8 @@ fn main(arg: usize) -> ! {
 
         // Check for focus change
         if focus_watch != 0 {
-            let mut fds = [abi::syscall::PollHandle { handle: focus_watch as i32,
+            let mut fds = [abi::syscall::PollHandle {
+                handle: focus_watch as i32,
                 events: abi::syscall::poll_flags::POLLIN as u16,
                 revents: 0,
             }];
@@ -520,7 +512,7 @@ fn main(arg: usize) -> ! {
                         } else {
                             info!("Terminal: Lost focus. Blanking screen.");
                             term.clear(0xFF000000); // Black
-                                                    // Send one last present to show the black screen
+                            // Send one last present to show the black screen
                             if display_req_write != 0 {
                                 let mut present_header = [0u8;
                                     abi::display_driver_protocol::HEADER_SIZE

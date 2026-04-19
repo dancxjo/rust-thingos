@@ -1,8 +1,9 @@
 //! Port IPC syscall wrappers for userspace
 
-use crate::syscall::arch::raw_syscall6;
 use abi::errors::Errno;
 use abi::syscall::*;
+
+use crate::syscall::arch::raw_syscall6;
 
 /// A handle referring to a port endpoint for IPC.
 pub type PortHandle = u32;
@@ -31,15 +32,7 @@ pub fn port_create_fds(capacity: usize) -> Result<(u32, u32), Errno> {
 
 pub fn port_send(handle: PortHandle, data: &[u8]) -> Result<usize, Errno> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_PORT_SEND,
-            handle as usize,
-            data.as_ptr() as usize,
-            data.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_PORT_SEND, handle as usize, data.as_ptr() as usize, data.len(), 0, 0, 0)
     };
     abi::errors::errno(ret)
 }
@@ -61,15 +54,7 @@ pub fn port_send_all(handle: PortHandle, data: &[u8]) -> Result<usize, Errno> {
 
 pub fn port_recv(handle: PortHandle, buf: &mut [u8]) -> Result<usize, Errno> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_PORT_RECV,
-            handle as usize,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_PORT_RECV, handle as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0)
     };
     abi::errors::errno(ret)
 }

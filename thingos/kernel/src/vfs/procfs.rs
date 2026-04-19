@@ -349,10 +349,8 @@ fn lookup_pid_task(pid: u32, tid_and_rest: &str) -> SysResult<Arc<dyn VfsNode>> 
                 Some(n) => alloc::string::String::from(n),
                 None => alloc::string::String::from("-"),
             };
-            let text = alloc::format!(
-                "state: {}\njob: {}\nname: {}\n",
-                state_name, job_str, name_str
-            );
+            let text =
+                alloc::format!("state: {}\njob: {}\nname: {}\n", state_name, job_str, name_str);
             let ino = 0xD000_0000_0000_0000u64 | ((pid as u64) << 28) | (tid & 0x0FFF_FFFF);
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
         }

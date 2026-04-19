@@ -2,10 +2,11 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use crate::device::HostState;
-use crate::syscalls;
 use anyhow::Result;
 use wasmi::Linker;
+
+use crate::device::HostState;
+use crate::syscalls;
 
 pub fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
     linker.func_wrap("thing.sys", "log", syscalls::log)?;

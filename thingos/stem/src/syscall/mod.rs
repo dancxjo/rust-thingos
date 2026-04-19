@@ -1,18 +1,18 @@
 pub mod arch;
-pub mod port;
 pub mod message;
+pub mod port;
 pub mod signal;
 pub mod socket;
 pub mod vfs;
 pub mod wait;
 
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+
 use abi::device::{DEVICE_IRQ_SUBSCRIBE_DEVICE, DEVICE_IRQ_SUBSCRIBE_VECTOR};
 use abi::errors::Errno;
 pub use abi::syscall::*;
 use abi::time::{ClockId, TimeSpec};
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
-
 use arch::raw_syscall6;
 
 /// Helper to expose raw syscalls safely to other modules if needed.
@@ -57,17 +57,8 @@ pub fn shutdown() -> ! {
 }
 
 pub fn log_write(msg: &str, level: usize) -> Result<usize, Errno> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_LOG_WRITE,
-            msg.as_ptr() as usize,
-            msg.len(),
-            level,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_LOG_WRITE, msg.as_ptr() as usize, msg.len(), level, 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
@@ -79,7 +70,8 @@ pub fn log_set_level(level: u8) -> Result<(), Errno> {
 }
 
 pub fn read(thing: usize, buf: &mut [u8]) -> Result<usize, Errno> {
-    let ret = unsafe { raw_syscall6(SYS_READ, thing, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0) };
+    let ret =
+        unsafe { raw_syscall6(SYS_READ, thing, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
@@ -89,21 +81,21 @@ pub fn write(thing: usize, buf: &[u8]) -> Result<usize, Errno> {
 }
 
 pub use port::{
-    port_capacity, port_close, port_create, port_create_fds, port_len, port_recv,
-    port_send, port_send_all, port_try_recv, PortHandle,
+    PortHandle, port_capacity, port_close, port_create, port_create_fds, port_len, port_recv,
+    port_send, port_send_all, port_try_recv,
 };
-pub use vfs::{
-    dup, dup2, pipe, tcgetattr, tcsetattr, vfs_chdir, vfs_chmod, vfs_close, vfs_fchmod, vfs_fcntl,
-    vfs_handle_from_port, vfs_fsync, vfs_futimes,
-    vfs_getcwd, vfs_isatty, vfs_mkdir, vfs_mount, vfs_open, vfs_poll, vfs_read, vfs_readdir,
-    vfs_readv, vfs_realpath, vfs_rename, vfs_seek, vfs_stat, vfs_umount, vfs_unlink, vfs_utimes,
-    vfs_watch_fd, vfs_watch_path, vfs_write, vfs_writev,
-};
-pub use wait::wait_many;
 pub use signal::{
     alarm, kill, pause, raise, sig_block, sig_setmask, sig_unblock, sigaction, sigpending,
     sigprocmask, sigsuspend,
 };
+pub use vfs::{
+    dup, dup2, pipe, tcgetattr, tcsetattr, vfs_chdir, vfs_chmod, vfs_close, vfs_fchmod, vfs_fcntl,
+    vfs_fsync, vfs_futimes, vfs_getcwd, vfs_handle_from_port, vfs_isatty, vfs_mkdir, vfs_mount,
+    vfs_open, vfs_poll, vfs_read, vfs_readdir, vfs_readv, vfs_realpath, vfs_rename, vfs_seek,
+    vfs_stat, vfs_umount, vfs_unlink, vfs_utimes, vfs_watch_fd, vfs_watch_path, vfs_write,
+    vfs_writev,
+};
+pub use wait::wait_many;
 
 // ============================================================================
 // Futex (fast userspace mutex) syscall wrappers
@@ -197,17 +189,8 @@ pub fn getpgrp() -> u32 {
 /// Retrieve the process argv into `buf`. Returns total bytes needed.
 /// First call with an empty/small buffer to learn the size, then retry.
 pub fn argv_get(buf: &mut [u8]) -> Result<usize, Errno> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_ARGV_GET,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_ARGV_GET, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
@@ -251,17 +234,8 @@ pub fn env_unset(key: &[u8]) -> Result<(), Errno> {
 
 /// List all environment variables. Returns total bytes needed.
 pub fn env_list(buf: &mut [u8]) -> Result<usize, Errno> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_ENV_LIST,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_ENV_LIST, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
@@ -276,25 +250,13 @@ pub fn env_list(buf: &mut [u8]) -> Result<usize, Errno> {
 ///
 /// The last entry is always `(AT_NULL=0, 0)`.
 pub fn auxv_get(buf: &mut [u8]) -> Result<usize, Errno> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_AUXV_GET,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_AUXV_GET, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
 pub fn monotonic_ns() -> u64 {
-    time_now(ClockId::Monotonic)
-        .ok()
-        .and_then(|spec| spec.as_nanos())
-        .unwrap_or(0)
+    time_now(ClockId::Monotonic).ok().and_then(|spec| spec.as_nanos()).unwrap_or(0)
 }
 
 pub fn time_now(clock_id: ClockId) -> Result<TimeSpec, Errno> {
@@ -320,22 +282,18 @@ pub fn time_now_raw(clock_id: u32) -> Result<TimeSpec, Errno> {
 
 pub fn spawn_process(name: &str, arg: usize) -> Result<u64, abi::errors::Errno> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_SPAWN_PROCESS,
-            name.as_ptr() as usize,
-            name.len(),
-            arg,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_SPAWN_PROCESS, name.as_ptr() as usize, name.len(), arg, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|v| v as u64)
 }
 
 /// Replace the current process image with a new executable from the given FD.
 /// PID and things are preserved.
-pub fn task_exec(thing: u32, argv: &[&[u8]], env: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<(), Errno> {
+pub fn task_exec(
+    thing: u32,
+    argv: &[&[u8]],
+    env: &BTreeMap<Vec<u8>, Vec<u8>>,
+) -> Result<(), Errno> {
     let argv_blob = serialize_argv(argv);
     let env_blob = serialize_env(env);
 
@@ -386,10 +344,7 @@ pub fn parse_shebang(header: &[u8]) -> Option<(&str, Option<&str>)> {
 
     // Find the end of the shebang line (CR or LF).
     let rest = &header[2..];
-    let line_len = rest
-        .iter()
-        .position(|&b| b == b'\n' || b == b'\r')
-        .unwrap_or(rest.len());
+    let line_len = rest.iter().position(|&b| b == b'\n' || b == b'\r').unwrap_or(rest.len());
     let line = core::str::from_utf8(&rest[..line_len]).ok()?.trim();
 
     if line.is_empty() {
@@ -689,17 +644,8 @@ pub fn task_get_tls_base() -> Result<usize, Errno> {
 /// `/proc/<pid>/task/<tid>/name`.  Names longer than 31 bytes are
 /// silently truncated by the kernel.
 pub fn task_set_name(name: &[u8]) -> Result<(), Errno> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_TASK_SET_NAME,
-            name.as_ptr() as usize,
-            name.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_TASK_SET_NAME, name.as_ptr() as usize, name.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
 
@@ -954,11 +900,7 @@ pub fn time_anchor(unix_secs: u64) {
 
 pub fn ioport_read(port: usize, width: usize) -> usize {
     let ret = unsafe { raw_syscall6(SYS_DEVICE_IOPORT_READ, port, width, 0, 0, 0, 0) };
-    if ret < 0 {
-        0
-    } else {
-        ret as usize
-    }
+    if ret < 0 { 0 } else { ret as usize }
 }
 
 pub fn ioport_write(port: usize, value: usize, width: usize) {
@@ -1044,17 +986,8 @@ pub fn console_disable() {
 /// capability handle. Use the handle for `device_map_mmio`, `device_alloc_dma`,
 /// and related calls.
 pub fn device_claim(path: &str) -> Result<usize, Errno> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_DEVICE_CLAIM,
-            path.as_ptr() as usize,
-            path.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_DEVICE_CLAIM, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
@@ -1148,15 +1081,7 @@ pub fn device_irq_wait(claim_handle: usize, irq_index: u8) -> Result<u32, Errno>
 
 pub fn memfd_create(name: &str, size: usize) -> Result<u32, Errno> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_SHARED_MEMORY_CREATE,
-            name.as_ptr() as usize,
-            name.len(),
-            size,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_SHARED_MEMORY_CREATE, name.as_ptr() as usize, name.len(), size, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|v| v as u32)
 }
@@ -1181,15 +1106,7 @@ pub fn getrandom(buf: &mut [u8]) -> Result<(), Errno> {
     while offset < buf.len() {
         let chunk = &mut buf[offset..];
         let ret = unsafe {
-            raw_syscall6(
-                SYS_GETRANDOM,
-                chunk.as_mut_ptr() as usize,
-                chunk.len(),
-                0,
-                0,
-                0,
-                0,
-            )
+            raw_syscall6(SYS_GETRANDOM, chunk.as_mut_ptr() as usize, chunk.len(), 0, 0, 0, 0)
         };
         if ret < 0 {
             return Err(unsafe { core::mem::transmute(-(ret as i32)) });
@@ -1224,11 +1141,7 @@ pub fn vm_map(req: &abi::vm::VmMapReq) -> Result<abi::vm::VmMapResp, Errno> {
     let req_ptr = req as *const _ as usize;
     let resp_ptr = &mut resp as *mut _ as usize;
     let ret = unsafe { raw_syscall6(SYS_VM_MAP, req_ptr, resp_ptr, 0, 0, 0, 0) };
-    if ret < 0 {
-        Err(unsafe { core::mem::transmute(-(ret as i32)) })
-    } else {
-        Ok(resp)
-    }
+    if ret < 0 { Err(unsafe { core::mem::transmute(-(ret as i32)) }) } else { Ok(resp) }
 }
 
 pub fn vm_unmap(addr: usize, len: usize) -> Result<(), Errno> {

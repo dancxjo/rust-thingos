@@ -4,7 +4,6 @@
 use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
-
 use core::sync::atomic::{AtomicU8, Ordering};
 
 // Cached AVX2 availability: 0 = unknown, 1 = not available, 2 = available

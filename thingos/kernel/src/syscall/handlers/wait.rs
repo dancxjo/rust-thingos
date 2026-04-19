@@ -154,7 +154,11 @@ fn timeout_expired(timeout_tick: Option<u64>) -> bool {
     }
 }
 
-fn collect_ready(pinfo: &crate::task::ProcessInfo, specs: &[WaitSpec], out: &mut [WaitResult]) -> SysResult<usize> {
+fn collect_ready(
+    pinfo: &crate::task::ProcessInfo,
+    specs: &[WaitSpec],
+    out: &mut [WaitResult],
+) -> SysResult<usize> {
     let mut count = 0usize;
     for spec in specs {
         if count >= out.len() {
@@ -339,7 +343,8 @@ fn register_all(
                     }
                 }
                 if (spec.flags & wait::interest::WRITABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcHandleMode::Write).cloned()
+                    if let Some(entry) =
+                        table.get(handle, crate::ipc::IpcHandleMode::Write).cloned()
                     {
                         entry.port.add_waiter_write(tid);
                         regs.push(Registration::PortWrite(entry.port.clone()));
@@ -348,7 +353,8 @@ fn register_all(
             }
             WaitKind::Fd => {
                 let node = {
-                    let file = pinfo.handle_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
+                    let file =
+                        pinfo.handle_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
                     file.node.clone()
                 };
                 node.add_waiter(tid);
@@ -405,14 +411,19 @@ mod tests {
 
     use super::*;
 
-    fn alloc_port_pair(pinfo: &Arc<Mutex<crate::task::ProcessInfo>>, capacity: usize) -> (u32, u32) {
+    fn alloc_port_pair(
+        pinfo: &Arc<Mutex<crate::task::ProcessInfo>>,
+        capacity: usize,
+    ) -> (u32, u32) {
         let port_id = crate::ipc::create_port(capacity);
         let port = crate::ipc::get_port(port_id).expect("port");
         let mut lock = pinfo.lock();
-        let write = lock.ipc_table
+        let write = lock
+            .ipc_table
             .alloc(port.clone(), crate::ipc::IpcHandleMode::Write)
             .expect("write handle");
-        let read = lock.ipc_table.alloc(port, crate::ipc::IpcHandleMode::Read).expect("read handle");
+        let read =
+            lock.ipc_table.alloc(port, crate::ipc::IpcHandleMode::Read).expect("read handle");
         (write.0, read.0)
     }
 
@@ -486,7 +497,8 @@ mod tests {
         let (write_handle, read_handle) = alloc_port_pair(&pinfo, 64);
         let port = {
             let lock = pinfo.lock();
-            let entry = lock.ipc_table
+            let entry = lock
+                .ipc_table
                 .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
                 .cloned()
                 .expect("entry");
@@ -494,24 +506,30 @@ mod tests {
         };
 
         assert!(port.send_all(b"abc"));
-        let readable = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
-            kind: WaitKind::Port as u32,
-            flags: wait::interest::READABLE,
-            object: read_handle as u64,
-            token: 11,
-        })
+        let readable = poll_spec_with_pinfo(
+            pinfo.clone(),
+            &WaitSpec {
+                kind: WaitKind::Port as u32,
+                flags: wait::interest::READABLE,
+                object: read_handle as u64,
+                token: 11,
+            },
+        )
         .expect("poll")
         .expect("ready");
         assert_ne!(readable.flags & wait::ready::READABLE, 0);
         assert_eq!(readable.token, 11);
 
         assert!(!port.close_writer());
-        let hangup = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
-            kind: WaitKind::Port as u32,
-            flags: wait::interest::READABLE,
-            object: read_handle as u64,
-            token: 12,
-        })
+        let hangup = poll_spec_with_pinfo(
+            pinfo.clone(),
+            &WaitSpec {
+                kind: WaitKind::Port as u32,
+                flags: wait::interest::READABLE,
+                object: read_handle as u64,
+                token: 12,
+            },
+        )
         .expect("poll")
         .expect("ready");
         assert_ne!(hangup.flags & wait::ready::READABLE, 0);
@@ -519,12 +537,15 @@ mod tests {
         let mut drain = [0u8; 8];
         assert_eq!(port.try_recv(&mut drain), 3);
 
-        let hangup_only = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
-            kind: WaitKind::Port as u32,
-            flags: wait::interest::READABLE,
-            object: read_handle as u64,
-            token: 13,
-        })
+        let hangup_only = poll_spec_with_pinfo(
+            pinfo.clone(),
+            &WaitSpec {
+                kind: WaitKind::Port as u32,
+                flags: wait::interest::READABLE,
+                object: read_handle as u64,
+                token: 13,
+            },
+        )
         .expect("poll")
         .expect("ready");
         assert_eq!(hangup_only.flags, wait::ready::HANGUP);
@@ -536,41 +557,51 @@ mod tests {
         let (write_handle, _read_handle) = alloc_port_pair(&pinfo, 4);
         let port = {
             let lock = pinfo.lock();
-            let entry = lock.ipc_table
+            let entry = lock
+                .ipc_table
                 .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
                 .cloned()
                 .expect("entry");
             entry.port
         };
 
-        let writable = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
-            kind: WaitKind::Port as u32,
-            flags: wait::interest::WRITABLE,
-            object: write_handle as u64,
-            token: 21,
-        })
+        let writable = poll_spec_with_pinfo(
+            pinfo.clone(),
+            &WaitSpec {
+                kind: WaitKind::Port as u32,
+                flags: wait::interest::WRITABLE,
+                object: write_handle as u64,
+                token: 21,
+            },
+        )
         .expect("poll")
         .expect("ready");
         assert_eq!(writable.flags, wait::ready::WRITABLE);
         assert_eq!(writable.value, 16);
 
         assert!(port.send_all(&[0u8; 16]));
-        let not_writable = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
-            kind: WaitKind::Port as u32,
-            flags: wait::interest::WRITABLE,
-            object: write_handle as u64,
-            token: 22,
-        })
+        let not_writable = poll_spec_with_pinfo(
+            pinfo.clone(),
+            &WaitSpec {
+                kind: WaitKind::Port as u32,
+                flags: wait::interest::WRITABLE,
+                object: write_handle as u64,
+                token: 22,
+            },
+        )
         .expect("poll");
         assert!(not_writable.is_none());
 
         assert!(!port.close_reader());
-        let hangup = poll_spec_with_pinfo(pinfo.clone(), &WaitSpec {
-            kind: WaitKind::Port as u32,
-            flags: wait::interest::WRITABLE,
-            object: write_handle as u64,
-            token: 23,
-        })
+        let hangup = poll_spec_with_pinfo(
+            pinfo.clone(),
+            &WaitSpec {
+                kind: WaitKind::Port as u32,
+                flags: wait::interest::WRITABLE,
+                object: write_handle as u64,
+                token: 23,
+            },
+        )
         .expect("poll")
         .expect("ready");
         assert_eq!(hangup.flags, wait::ready::HANGUP);
@@ -584,7 +615,8 @@ mod tests {
 
         let port_a = {
             let lock = pinfo.lock();
-            let entry = lock.ipc_table
+            let entry = lock
+                .ipc_table
                 .get(crate::ipc::IpcHandle(write_a), crate::ipc::IpcHandleMode::Write)
                 .cloned()
                 .expect("entry a");
@@ -592,7 +624,8 @@ mod tests {
         };
         let port_b = {
             let lock = pinfo.lock();
-            let entry = lock.ipc_table
+            let entry = lock
+                .ipc_table
                 .get(crate::ipc::IpcHandle(write_b), crate::ipc::IpcHandleMode::Write)
                 .cloned()
                 .expect("entry b");
@@ -631,7 +664,8 @@ mod tests {
 
         let port_a = {
             let lock = pinfo.lock();
-            let entry = lock.ipc_table
+            let entry = lock
+                .ipc_table
                 .get(crate::ipc::IpcHandle(write_a), crate::ipc::IpcHandleMode::Write)
                 .cloned()
                 .expect("entry a");
@@ -639,7 +673,8 @@ mod tests {
         };
         let port_b = {
             let lock = pinfo.lock();
-            let entry = lock.ipc_table
+            let entry = lock
+                .ipc_table
                 .get(crate::ipc::IpcHandle(write_b), crate::ipc::IpcHandleMode::Write)
                 .cloned()
                 .expect("entry b");
@@ -689,7 +724,8 @@ mod tests {
         let (write_handle, read_handle) = alloc_port_pair(&pinfo, 64);
         let port = {
             let lock = pinfo.lock();
-            let entry = lock.ipc_table
+            let entry = lock
+                .ipc_table
                 .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
                 .cloned()
                 .expect("entry");
@@ -721,7 +757,8 @@ mod tests {
             object: read_handle as u64,
             token: 10,
         };
-        let port_result = poll_spec_with_pinfo(pinfo.clone(), &port_spec).expect("port poll").expect("ready");
+        let port_result =
+            poll_spec_with_pinfo(pinfo.clone(), &port_spec).expect("port poll").expect("ready");
         assert_ne!(port_result.flags & wait::ready::READABLE, 0);
         assert_eq!(port_result.token, 10);
 

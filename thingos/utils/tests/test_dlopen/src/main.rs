@@ -23,8 +23,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use libdl::{RTLD_DEFAULT, RTLD_LAZY, RTLD_NOW, dlclose, dlerror, dlopen_str, dlsym_bytes};
 use stem::println;
 
@@ -181,8 +179,7 @@ fn test_dlopen_pistil_shared_library() {
 
     let pack_sym = dlsym_bytes(handle, b"pistil_pack_rgba8");
     assert!(!pack_sym.is_null(), "expected exported symbol pistil_pack_rgba8");
-    let pack_fn: extern "C" fn(u8, u8, u8, u8) -> u32 =
-        unsafe { core::mem::transmute(pack_sym) };
+    let pack_fn: extern "C" fn(u8, u8, u8, u8) -> u32 = unsafe { core::mem::transmute(pack_sym) };
     let packed = pack_fn(0x12, 0x34, 0x56, 0x78);
     // `pistil_pack_rgba8` returns 0xAARRGGBB.
     assert_eq!(packed, 0x78123456, "unexpected RGBA packing result");

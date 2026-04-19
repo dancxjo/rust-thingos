@@ -4,11 +4,12 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use abi::syscall::vfs_flags::O_RDWR;
 use alloc::vec::Vec;
+
+use abi::syscall::vfs_flags::O_RDWR;
 use stem::info;
 use stem::syscall::{sleep_ms, vfs_open, vfs_read, vfs_write};
-use stem::thing::{sys as thingsys, ThingId};
+use stem::thing::{ThingId, sys as thingsys};
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -60,18 +61,8 @@ fn main(_arg: usize) -> ! {
     set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.wayland_hello");
     commit_surface(fd, TOP_SURFACE_ID);
 
-    let mut top_pending = PendingSurface {
-        serial: None,
-        width: 480,
-        height: 320,
-        dirty: false,
-    };
-    let mut popup_pending = PendingSurface {
-        serial: None,
-        width: 160,
-        height: 96,
-        dirty: false,
-    };
+    let mut top_pending = PendingSurface { serial: None, width: 480, height: 320, dirty: false };
+    let mut popup_pending = PendingSurface { serial: None, width: 160, height: 96, dirty: false };
     let mut top_buffer: Option<BufferState> = None;
     let mut popup_buffer: Option<BufferState> = None;
     let mut popup_created = false;
@@ -162,13 +153,7 @@ fn main(_arg: usize) -> ! {
                 positioner_set_size(fd, POSITIONER_ID, 160, 96);
                 positioner_set_anchor_rect(fd, POSITIONER_ID, 24, 24, 100, 24);
                 positioner_set_offset(fd, POSITIONER_ID, 0, 6);
-                get_popup(
-                    fd,
-                    TOP_XDG_SURFACE_ID,
-                    POPUP_XDG_SURFACE_ID,
-                    POPUP_ID,
-                    POSITIONER_ID,
-                );
+                get_popup(fd, TOP_XDG_SURFACE_ID, POPUP_XDG_SURFACE_ID, POPUP_ID, POSITIONER_ID);
                 commit_surface(fd, POPUP_SURFACE_ID);
             }
         }
@@ -239,9 +224,7 @@ fn ensure_buffer(
         len: size as usize,
         prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
         flags: abi::vm::VmMapFlags::empty(),
-        backing: VmBacking::File { thing: fd_buf,
-            offset: 0,
-        },
+        backing: VmBacking::File { thing: fd_buf, offset: 0 },
     };
     let resp = thingsys::vm_map(&req).expect("map memfd");
     let ptr = resp.addr as *mut u8;
@@ -277,15 +260,7 @@ fn render_window(buffer: BufferState, title: &str) {
             }
         }
         draw_text(pixels, buffer.width as usize, 16, 12, title, 0xFFFFFFFF, 3);
-        draw_text(
-            pixels,
-            buffer.width as usize,
-            16,
-            72,
-            "RESIZE ME FROM THE FRAME",
-            0xFF9AD1FF,
-            2,
-        );
+        draw_text(pixels, buffer.width as usize, 16, 72, "RESIZE ME FROM THE FRAME", 0xFF9AD1FF, 2);
         draw_text(
             pixels,
             buffer.width as usize,

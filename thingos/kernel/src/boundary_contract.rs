@@ -81,50 +81,29 @@ fn kind_ids_match_kindc_generated_constants() {
     );
 
     // ── task ──────────────────────────────────────────────────────────────────
-    assert_eq!(
-        thingos::task::KIND_ID_THINGOS_TASK,
-        thingos::kinds::KIND_ID_THINGOS_TASK,
-    );
+    assert_eq!(thingos::task::KIND_ID_THINGOS_TASK, thingos::kinds::KIND_ID_THINGOS_TASK,);
     assert_eq!(
         thingos::task::KIND_ID_THINGOS_TASK_STATE,
         thingos::kinds::KIND_ID_THINGOS_TASK_STATE,
     );
 
     // ── job ───────────────────────────────────────────────────────────────────
-    assert_eq!(
-        thingos::job::KIND_ID_THINGOS_JOB,
-        thingos::kinds::KIND_ID_THINGOS_JOB,
-    );
-    assert_eq!(
-        thingos::job::KIND_ID_THINGOS_JOB_STATE,
-        thingos::kinds::KIND_ID_THINGOS_JOB_STATE,
-    );
-    assert_eq!(
-        thingos::job::KIND_ID_THINGOS_JOB_EXIT,
-        thingos::kinds::KIND_ID_THINGOS_JOB_EXIT,
-    );
+    assert_eq!(thingos::job::KIND_ID_THINGOS_JOB, thingos::kinds::KIND_ID_THINGOS_JOB,);
+    assert_eq!(thingos::job::KIND_ID_THINGOS_JOB_STATE, thingos::kinds::KIND_ID_THINGOS_JOB_STATE,);
+    assert_eq!(thingos::job::KIND_ID_THINGOS_JOB_EXIT, thingos::kinds::KIND_ID_THINGOS_JOB_EXIT,);
     assert_eq!(
         thingos::job::KIND_ID_THINGOS_JOB_WAIT_RESULT,
         thingos::kinds::KIND_ID_THINGOS_JOB_WAIT_RESULT,
     );
 
     // ── group ─────────────────────────────────────────────────────────────────
-    assert_eq!(
-        thingos::group::KIND_ID_THINGOS_GROUP,
-        thingos::kinds::KIND_ID_THINGOS_GROUP,
-    );
+    assert_eq!(thingos::group::KIND_ID_THINGOS_GROUP, thingos::kinds::KIND_ID_THINGOS_GROUP,);
 
     // ── place ─────────────────────────────────────────────────────────────────
-    assert_eq!(
-        thingos::place::KIND_ID_THINGOS_PLACE,
-        thingos::kinds::KIND_ID_THINGOS_PLACE,
-    );
+    assert_eq!(thingos::place::KIND_ID_THINGOS_PLACE, thingos::kinds::KIND_ID_THINGOS_PLACE,);
 
     // ── space ─────────────────────────────────────────────────────────────────
-    assert_eq!(
-        thingos::space::KIND_ID_THINGOS_SPACE,
-        thingos::kinds::KIND_ID_THINGOS_SPACE,
-    );
+    assert_eq!(thingos::space::KIND_ID_THINGOS_SPACE, thingos::kinds::KIND_ID_THINGOS_SPACE,);
 
     // ── presence ──────────────────────────────────────────────────────────────
     assert_eq!(

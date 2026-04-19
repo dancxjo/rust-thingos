@@ -1,6 +1,7 @@
-use crate::ast::*;
 use std::iter::Peekable;
 use std::str::Chars;
+
+use crate::ast::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
@@ -34,13 +35,7 @@ pub struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     pub fn new(file: String, input: &'a str) -> Self {
-        Self {
-            input,
-            chars: input.chars().peekable(),
-            line: 1,
-            col: 1,
-            file,
-        }
+        Self { input, chars: input.chars().peekable(), line: 1, col: 1, file }
     }
 
     fn peek(&mut self) -> Option<char> {
@@ -77,11 +72,7 @@ impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> Result<(Token, Span), String> {
         self.skip_whitespace();
 
-        let span = Span {
-            file: self.file.clone(),
-            line: self.line,
-            col: self.col,
-        };
+        let span = Span { file: self.file.clone(), line: self.line, col: self.col };
 
         let c = match self.next() {
             Some(c) => c,
@@ -181,10 +172,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok(span)
         } else {
-            Err(format!(
-                "Expected {:?}, found {:?} at {:?}",
-                expected, self.curr.0, self.curr.1
-            ))
+            Err(format!("Expected {:?}, found {:?} at {:?}", expected, self.curr.0, self.curr.1))
         }
     }
 
@@ -246,12 +234,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_ident()?;
         self.expect(Token::Colon)?;
         let ty = self.parse_type_expr()?;
-        Ok(FieldDecl {
-            doc,
-            name,
-            ty,
-            span,
-        })
+        Ok(FieldDecl { doc, name, ty, span })
     }
 
     fn parse_variant_decl(&mut self) -> Result<VariantDecl, String> {
@@ -293,12 +276,7 @@ impl<'a> Parser<'a> {
             _ => VariantPayload::Unit,
         };
 
-        Ok(VariantDecl {
-            doc,
-            name,
-            payload,
-            span,
-        })
+        Ok(VariantDecl { doc, name, payload, span })
     }
 
     pub fn parse_file(&mut self) -> Result<File, String> {
@@ -325,7 +303,9 @@ impl<'a> Parser<'a> {
                             version = Some(v);
                             self.advance()?;
                         }
-                        _ => return Err(format!("Expected version number, found {:?}", self.curr.0)),
+                        _ => {
+                            return Err(format!("Expected version number, found {:?}", self.curr.0));
+                        }
                     }
                 }
                 Token::Kind => {
@@ -338,13 +318,21 @@ impl<'a> Parser<'a> {
                         while self.curr.0 != Token::RAngle {
                             match &self.curr.0 {
                                 Token::Ident(s) => type_params.push(s.clone()),
-                                _ => return Err(format!("Expected type parameter name, found {:?}", self.curr.0)),
+                                _ => {
+                                    return Err(format!(
+                                        "Expected type parameter name, found {:?}",
+                                        self.curr.0
+                                    ));
+                                }
                             }
                             self.advance()?;
                             if let Token::Comma = self.curr.0 {
                                 self.advance()?;
                             } else if self.curr.0 != Token::RAngle {
-                                return Err(format!("Expected ',' or '>', found {:?}", self.curr.0));
+                                return Err(format!(
+                                    "Expected ',' or '>', found {:?}",
+                                    self.curr.0
+                                ));
                             }
                         }
                         self.expect(Token::RAngle)?;
@@ -363,7 +351,10 @@ impl<'a> Parser<'a> {
                                     if let Token::Comma = self.curr.0 {
                                         self.advance()?;
                                     } else if self.curr.0 != Token::RBrace {
-                                        return Err(format!("Expected ',' or '}}', found {:?}", self.curr.0));
+                                        return Err(format!(
+                                            "Expected ',' or '}}', found {:?}",
+                                            self.curr.0
+                                        ));
                                     }
                                 }
                                 self.expect(Token::RBrace)?;
@@ -378,7 +369,10 @@ impl<'a> Parser<'a> {
                                     if let Token::Comma = self.curr.0 {
                                         self.advance()?;
                                     } else if self.curr.0 != Token::RBrace {
-                                        return Err(format!("Expected ',' or '}}', found {:?}", self.curr.0));
+                                        return Err(format!(
+                                            "Expected ',' or '}}', found {:?}",
+                                            self.curr.0
+                                        ));
                                     }
                                 }
                                 self.expect(Token::RBrace)?;
@@ -390,21 +384,12 @@ impl<'a> Parser<'a> {
                         }
                     }
 
-                    declarations.push(KindDecl {
-                        doc,
-                        name,
-                        type_params,
-                        body,
-                        span: decl_span,
-                    });
+                    declarations.push(KindDecl { doc, name, type_params, body, span: decl_span });
                 }
                 _ => return Err(format!("Expected 'kind' or 'version', found {:?}", self.curr.0)),
             }
         }
 
-        Ok(File {
-            version,
-            declarations,
-        })
+        Ok(File { version, declarations })
     }
 }

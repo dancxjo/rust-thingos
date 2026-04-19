@@ -54,6 +54,7 @@
 //! | Needs the current task's space            | `space_for_current`                 |
 
 use alloc::sync::Arc;
+
 use thingos::space::{Space as PublicSpace, SpaceId};
 
 // ── space_from_arc ────────────────────────────────────────────────────────────
@@ -77,11 +78,7 @@ pub fn space_from_arc(space: &Arc<crate::space::Space>) -> PublicSpace {
     let sharing_count = (Arc::strong_count(space) as u32).saturating_sub(1);
     let mapping_count = space.mapping_count() as u32;
 
-    PublicSpace {
-        id: space.id,
-        mapping_count,
-        sharing_count,
-    }
+    PublicSpace { id: space.id, mapping_count, sharing_count }
 }
 
 // ── space_from_process_address_space ─────────────────────────────────────────
@@ -106,14 +103,9 @@ pub fn space_from_process_address_space(
     let mapping_count = pas.space_obj.mapping_count() as u32;
     // strong_count includes: Process.space.space_obj and every Thread.mappings.
     // We use saturating_sub(1) to represent "other holders besides this one".
-    let sharing_count =
-        (Arc::strong_count(&pas.space_obj.mappings) as u32).saturating_sub(1);
+    let sharing_count = (Arc::strong_count(&pas.space_obj.mappings) as u32).saturating_sub(1);
 
-    PublicSpace {
-        id: space_id,
-        mapping_count,
-        sharing_count,
-    }
+    PublicSpace { id: space_id, mapping_count, sharing_count }
 }
 
 // ── space_from_snapshot ───────────────────────────────────────────────────────
@@ -127,9 +119,7 @@ pub fn space_from_process_address_space(
 /// In Phase 1 the snapshot carries `space_id`, `space_mapping_count`, and
 /// `space_sharing_count` fields that are populated at snapshot time from
 /// `Process.space_obj` and `Process.space`.
-pub fn space_from_snapshot(
-    snapshot: &crate::sched::hooks::ProcessSnapshot,
-) -> PublicSpace {
+pub fn space_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> PublicSpace {
     PublicSpace {
         id: snapshot.space_id,
         mapping_count: snapshot.space_mapping_count,
@@ -150,11 +140,7 @@ pub fn space_for_current() -> PublicSpace {
         space_from_arc(&pinfo.space.space_obj)
     } else {
         // Kernel thread — no user address space.
-        PublicSpace {
-            id: SpaceId::NONE,
-            mapping_count: 0,
-            sharing_count: 0,
-        }
+        PublicSpace { id: SpaceId::NONE, mapping_count: 0, sharing_count: 0 }
     }
 }
 

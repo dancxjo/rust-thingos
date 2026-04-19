@@ -1,7 +1,8 @@
 //! Limine bootloader setup.
 
-use crate::common::Result;
 use xshell::{Shell, cmd};
+
+use crate::common::Result;
 
 /// Clone and build Limine bootloader if not present.
 pub fn limine(sh: &Shell) -> Result<()> {

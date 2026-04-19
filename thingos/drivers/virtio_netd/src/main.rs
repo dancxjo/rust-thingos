@@ -258,9 +258,8 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     };
 
     if let Some(bootstrap) = bootstrap {
-        let drv_resp_write_fd =
-            stem::syscall::vfs::vfs_handle_from_port(bootstrap.drv_resp_write)
-                .expect("virtio_netd: vfs_handle_from_port(drv_resp_write)");
+        let drv_resp_write_fd = stem::syscall::vfs::vfs_handle_from_port(bootstrap.drv_resp_write)
+            .expect("virtio_netd: vfs_handle_from_port(drv_resp_write)");
 
         // Sovereign Handshake
         use abi::display_driver_protocol;
@@ -360,10 +359,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
 
     // Initialize shared VFS state.
     let mut state = NetVfsState::new(mac, initial_link_up, features);
-    stem::debug!(
-        "VIRTIO_NETD: Entering VFS provider service loop at {}",
-        DEFAULT_MOUNT_PATH
-    );
+    stem::debug!("VIRTIO_NETD: Entering VFS provider service loop at {}", DEFAULT_MOUNT_PATH);
 
     // Main loop: interleave hardware polling with VFS RPC handling.
     let mut provider_loop = ProviderLoop::new(req_read);

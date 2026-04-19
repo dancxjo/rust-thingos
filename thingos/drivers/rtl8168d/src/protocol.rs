@@ -46,9 +46,6 @@ impl<'a> NetDriverMsg<'a> {
         if data.len() < 4 + len {
             return None;
         }
-        Some(Self {
-            msg_type,
-            payload: &data[4..4 + len],
-        })
+        Some(Self { msg_type, payload: &data[4..4 + len] })
     }
 }

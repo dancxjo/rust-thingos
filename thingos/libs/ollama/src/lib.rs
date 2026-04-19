@@ -5,9 +5,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::task::{Context, Poll};
 
-use serde::{Deserialize, Serialize};
-
 use llm::{ChatDelta, ChatRequest, ChatStream, FinishReason, LlmError, Role, StreamingLlmClient};
+use serde::{Deserialize, Serialize};
 
 // ── Ollama API wire types ────────────────────────────────────────────
 
@@ -44,10 +43,7 @@ pub struct OllamaClient {
 
 impl OllamaClient {
     pub fn new(base_url: &str, model: &str) -> Self {
-        Self {
-            base_url: base_url.to_string(),
-            model: model.to_string(),
-        }
+        Self { base_url: base_url.to_string(), model: model.to_string() }
     }
 }
 
@@ -66,11 +62,7 @@ impl StreamingLlmClient for OllamaClient {
             })
             .collect();
 
-        let ollama_req = OllamaRequest {
-            model: &self.model,
-            messages,
-            stream: true,
-        };
+        let ollama_req = OllamaRequest { model: &self.model, messages, stream: true };
 
         let body = serde_json::to_string(&ollama_req)
             .map_err(|_| LlmError::Other("Serialize error".to_string()))?;
@@ -78,11 +70,7 @@ impl StreamingLlmClient for OllamaClient {
 
         let (stream, leftover) = http_post(&url, &body).map_err(LlmError::Transport)?;
 
-        Ok(Box::new(OllamaChatStream {
-            stream,
-            buffer: leftover,
-            done: false,
-        }))
+        Ok(Box::new(OllamaChatStream { stream, buffer: leftover, done: false }))
     }
 }
 
@@ -126,18 +114,13 @@ impl ChatStream for OllamaChatStream {
 
                 if resp.done {
                     self.done = true;
-                    result = Some(ChatDelta {
-                        text: String::new(),
-                        finish: Some(FinishReason::Stop),
-                    });
+                    result =
+                        Some(ChatDelta { text: String::new(), finish: Some(FinishReason::Stop) });
                     break;
                 }
 
                 if let Some(msg) = resp.message {
-                    result = Some(ChatDelta {
-                        text: msg.content,
-                        finish: None,
-                    });
+                    result = Some(ChatDelta { text: msg.content, finish: None });
                     break;
                 }
             }
@@ -171,9 +154,8 @@ fn parse_url(url: &str) -> Result<(String, u16, String), String> {
         };
         let (host, port) = match host_port.find(':') {
             Some(idx) => {
-                let port = host_port[idx + 1..]
-                    .parse::<u16>()
-                    .map_err(|_| "Invalid port".to_string())?;
+                let port =
+                    host_port[idx + 1..].parse::<u16>().map_err(|_| "Invalid port".to_string())?;
                 (&host_port[..idx], port)
             }
             None => (host_port, 80),
@@ -206,18 +188,14 @@ fn http_post(url: &str, body: &str) -> Result<(TcpStream, Vec<u8>), String> {
     write!(req, "\r\n").ok();
     req.push_str(body);
 
-    stream
-        .write_all(req.as_bytes())
-        .map_err(|e| format!("HTTP write: {}", e))?;
+    stream.write_all(req.as_bytes()).map_err(|e| format!("HTTP write: {}", e))?;
 
     // Read until we find the header/body separator (\r\n\r\n)
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1024];
 
     for _ in 0..40 {
-        let n = stream
-            .read(&mut tmp)
-            .map_err(|e| format!("HTTP read: {}", e))?;
+        let n = stream.read(&mut tmp).map_err(|e| format!("HTTP read: {}", e))?;
         if n == 0 {
             break;
         }

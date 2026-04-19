@@ -66,7 +66,7 @@
 #![no_std]
 extern crate alloc;
 
-pub mod port;
 pub mod inbox;
+pub mod port;
 pub mod provider;
 pub mod rpc;

@@ -27,10 +27,7 @@ impl SpawnRecord {
 
     /// Empty spawn metadata record.
     pub fn empty() -> Self {
-        Self {
-            argv: Vec::new(),
-            auxv: Vec::new(),
-        }
+        Self { argv: Vec::new(), auxv: Vec::new() }
     }
 
     /// Borrow spawn argument vector.
@@ -55,8 +52,10 @@ mod tests {
 
     #[test]
     fn spawn_record_holds_argv_and_auxv() {
-        let record =
-            SpawnRecord::new(alloc::vec![b"init".to_vec()], alloc::vec![(abi::auxv::AT_PAGESZ, 4096)]);
+        let record = SpawnRecord::new(
+            alloc::vec![b"init".to_vec()],
+            alloc::vec![(abi::auxv::AT_PAGESZ, 4096)],
+        );
         assert_eq!(record.argv(), [b"init".to_vec()]);
         assert_eq!(record.auxv(), &[(abi::auxv::AT_PAGESZ, 4096)]);
     }

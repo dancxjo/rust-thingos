@@ -2,7 +2,7 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, FnArg, ItemFn, ReturnType, Type};
+use syn::{FnArg, ItemFn, ReturnType, Type, parse_macro_input};
 
 #[proc_macro_attribute]
 pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -50,9 +50,7 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     if let Some(msg) = arg_error {
-        return syn::Error::new_spanned(&func.sig.inputs, msg)
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(&func.sig.inputs, msg).to_compile_error().into();
     }
 
     let call_user = if accepts_arg {

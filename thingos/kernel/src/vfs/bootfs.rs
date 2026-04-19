@@ -5,13 +5,14 @@
 //!
 //! The boot filesystem is mounted at `/boot` by [`crate::vfs::init`].
 
-use crate::BootModuleDesc;
-use abi::errors::{Errno, SysResult};
 use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 
+use abi::errors::{Errno, SysResult};
+
 use super::{VfsDriver, VfsNode, VfsStat};
+use crate::BootModuleDesc;
 
 // ── Embedded file contents ────────────────────────────────────────────────────
 
@@ -35,10 +36,7 @@ impl VfsDriver for BootFs {
     fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
         let path = path.strip_prefix('/').unwrap_or(path);
         if path.is_empty() {
-            return Ok(Arc::new(BootDirNode {
-                prefix: String::new(),
-                modules: self.modules,
-            }));
+            return Ok(Arc::new(BootDirNode { prefix: String::new(), modules: self.modules }));
         }
 
         if path == "version" {
@@ -60,11 +58,8 @@ impl VfsDriver for BootFs {
         }
 
         // Check if `path` is a directory prefix
-        let dir_prefix = if path.ends_with('/') {
-            path.to_string()
-        } else {
-            alloc::format!("{}/", path)
-        };
+        let dir_prefix =
+            if path.ends_with('/') { path.to_string() } else { alloc::format!("{}/", path) };
         let mut found_subdir = false;
         for m in self.modules {
             let name = m.name.trim_matches('\0').trim();
@@ -76,10 +71,7 @@ impl VfsDriver for BootFs {
         }
 
         if found_subdir {
-            return Ok(Arc::new(BootDirNode {
-                prefix: path.to_string(),
-                modules: self.modules,
-            }));
+            return Ok(Arc::new(BootDirNode { prefix: path.to_string(), modules: self.modules }));
         }
 
         Err(Errno::ENOENT)
@@ -101,12 +93,7 @@ impl VfsNode for BootDirNode {
         Err(Errno::EISDIR)
     }
     fn stat(&self) -> SysResult<VfsStat> {
-        Ok(VfsStat {
-            mode: VfsStat::S_IFDIR | 0o555,
-            size: 0,
-            ino: 9,
-            ..Default::default()
-        })
+        Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 9, ..Default::default() })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let mut components = BTreeSet::new();

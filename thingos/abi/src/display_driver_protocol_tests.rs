@@ -7,18 +7,12 @@ mod tests {
 
     #[test]
     fn round_trip_payloads_and_golden_bytes() {
-        let hello = drvproto::HelloPayload {
-            proto_major: 1,
-            proto_minor: 2,
-            want_caps: 0x0D0C0B0A,
-        };
+        let hello =
+            drvproto::HelloPayload { proto_major: 1, proto_minor: 2, want_caps: 0x0D0C0B0A };
         let mut hello_bytes = [0u8; drvproto::HELLO_PAYLOAD_WIRE_SIZE];
         let len = drvproto::encode_hello_payload_le(&hello, &mut hello_bytes).unwrap();
         assert_eq!(len, drvproto::HELLO_PAYLOAD_WIRE_SIZE);
-        assert_eq!(
-            hello_bytes,
-            [0x01, 0x00, 0x02, 0x00, 0x0A, 0x0B, 0x0C, 0x0D]
-        );
+        assert_eq!(hello_bytes, [0x01, 0x00, 0x02, 0x00, 0x0A, 0x0B, 0x0C, 0x0D]);
         let decoded_hello = drvproto::decode_hello_payload_le(&hello_bytes).unwrap();
         assert_eq!(decoded_hello.proto_major, 1);
         assert_eq!(decoded_hello.proto_minor, 2);
@@ -77,28 +71,13 @@ mod tests {
             &mut present_header,
         )
         .unwrap();
-        assert_eq!(
-            present_header,
-            [0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]
-        );
+        assert_eq!(present_header, [0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]);
         let decoded_header = drvproto::decode_present_header_le(&present_header).unwrap();
         assert_eq!(decoded_header.rect_count, 2);
         assert_eq!(decoded_header._pad, drvproto::PRESENT_FLAG_FULLFRAME);
 
-        let rects = [
-            drvproto::Rect {
-                x: 1,
-                y: 2,
-                w: 3,
-                h: 4,
-            },
-            drvproto::Rect {
-                x: 5,
-                y: 6,
-                w: 7,
-                h: 8,
-            },
-        ];
+        let rects =
+            [drvproto::Rect { x: 1, y: 2, w: 3, h: 4 }, drvproto::Rect { x: 5, y: 6, w: 7, h: 8 }];
         let mut present_payload = [0u8; 8 + 2 * 16];
         let len = drvproto::encode_present_payload_with_flags_le(
             2,
@@ -108,18 +87,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(len, present_payload.len());
-        assert_eq!(
-            present_payload[0..8],
-            [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-        );
-        assert_eq!(
-            present_payload[8..24],
-            [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0]
-        );
-        assert_eq!(
-            present_payload[24..40],
-            [5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0]
-        );
+        assert_eq!(present_payload[0..8], [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(present_payload[8..24], [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0]);
+        assert_eq!(present_payload[24..40], [5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0]);
 
         let mut msg = [0u8; 64];
         let msg_len =
@@ -134,11 +104,8 @@ mod tests {
 
     #[test]
     fn frame_reader_partial_reads_and_resync() {
-        let hello = drvproto::HelloPayload {
-            proto_major: 1,
-            proto_minor: 0,
-            want_caps: 0x00000003,
-        };
+        let hello =
+            drvproto::HelloPayload { proto_major: 1, proto_minor: 0, want_caps: 0x00000003 };
         let mut hello_bytes = [0u8; drvproto::HELLO_PAYLOAD_WIRE_SIZE];
         drvproto::encode_hello_payload_le(&hello, &mut hello_bytes).unwrap();
         let mut msg = [0u8; 64];

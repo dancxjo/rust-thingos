@@ -102,20 +102,17 @@ extern crate alloc;
 /// need to distinguish a `Presence`-shaped message payload can compare against
 /// this constant.
 pub const KIND_ID_THINGOS_PRESENCE: [u8; 16] = [
-    0xde, 0xfd, 0xa1, 0x99, 0x59, 0x72, 0x8f, 0x20,
-    0xaf, 0xbe, 0x09, 0xd0, 0x94, 0x72, 0xa4, 0xac,
+    0xde, 0xfd, 0xa1, 0x99, 0x59, 0x72, 0x8f, 0x20, 0xaf, 0xbe, 0x09, 0xd0, 0x94, 0x72, 0xa4, 0xac,
 ];
 
 /// The KindId generated for `thingos.presence.mode` by `kindc`.
 pub const KIND_ID_THINGOS_PRESENCE_MODE: [u8; 16] = [
-    0x9b, 0xaa, 0x44, 0x76, 0x79, 0xec, 0x7d, 0xbc,
-    0xf3, 0x4f, 0x82, 0x74, 0xb6, 0xec, 0x96, 0xdf,
+    0x9b, 0xaa, 0x44, 0x76, 0x79, 0xec, 0x7d, 0xbc, 0xf3, 0x4f, 0x82, 0x74, 0xb6, 0xec, 0x96, 0xdf,
 ];
 
 /// The KindId generated for `thingos.presence.embodiment_kind` by `kindc`.
 pub const KIND_ID_THINGOS_PRESENCE_EMBODIMENT_KIND: [u8; 16] = [
-    0x94, 0xa8, 0xe7, 0x82, 0x46, 0x4a, 0xb3, 0xd1,
-    0xa6, 0x64, 0x78, 0xc2, 0x2f, 0x5d, 0x3b, 0x97,
+    0x94, 0xa8, 0xe7, 0x82, 0x46, 0x4a, 0xb3, 0xd1, 0xa6, 0x64, 0x78, 0xc2, 0x2f, 0x5d, 0x3b, 0x97,
 ];
 
 /// How an entity is present: the mode of its situated existence.
@@ -304,15 +301,11 @@ impl Presence {
     /// ```
     pub fn as_text(&self) -> alloc::string::String {
         let subject = hex_id(&self.subject.0);
-        let place = self
-            .place
-            .map_or_else(|| alloc::string::String::from("none"), |p| hex_id(&p.0));
-        let group = self
-            .group
-            .map_or_else(|| alloc::string::String::from("none"), |g| hex_id(&g.0));
-        let embodiment = self
-            .embodiment
-            .map_or("none", |e| e.as_str());
+        let place =
+            self.place.map_or_else(|| alloc::string::String::from("none"), |p| hex_id(&p.0));
+        let group =
+            self.group.map_or_else(|| alloc::string::String::from("none"), |g| hex_id(&g.0));
+        let embodiment = self.embodiment.map_or("none", |e| e.as_str());
         let observed = self
             .observed_at
             .map_or_else(|| alloc::string::String::from("none"), |t| alloc::format!("{}", t));
@@ -601,10 +594,7 @@ mod tests {
 
     #[test]
     fn test_as_text_with_observed_at() {
-        let p = Presence {
-            observed_at: Some(1_000),
-            ..make_presence_active()
-        };
+        let p = Presence { observed_at: Some(1_000), ..make_presence_active() };
         assert!(p.as_text().contains("observed_at: 1000"));
     }
 
@@ -615,10 +605,7 @@ mod tests {
 
     #[test]
     fn test_as_text_contains_embodiment_when_set() {
-        let p = Presence {
-            embodiment: Some(EmbodimentKind::Symbolic),
-            ..make_presence_active()
-        };
+        let p = Presence { embodiment: Some(EmbodimentKind::Symbolic), ..make_presence_active() };
         assert!(p.as_text().contains("embodiment: Symbolic"));
     }
 
@@ -636,8 +623,8 @@ mod tests {
     #[test]
     fn test_kind_id_presence_constant() {
         let expected: [u8; 16] = [
-            0xde, 0xfd, 0xa1, 0x99, 0x59, 0x72, 0x8f, 0x20,
-            0xaf, 0xbe, 0x09, 0xd0, 0x94, 0x72, 0xa4, 0xac,
+            0xde, 0xfd, 0xa1, 0x99, 0x59, 0x72, 0x8f, 0x20, 0xaf, 0xbe, 0x09, 0xd0, 0x94, 0x72,
+            0xa4, 0xac,
         ];
         assert_eq!(KIND_ID_THINGOS_PRESENCE, expected);
     }
@@ -645,8 +632,8 @@ mod tests {
     #[test]
     fn test_kind_id_presence_mode_constant() {
         let expected: [u8; 16] = [
-            0x9b, 0xaa, 0x44, 0x76, 0x79, 0xec, 0x7d, 0xbc,
-            0xf3, 0x4f, 0x82, 0x74, 0xb6, 0xec, 0x96, 0xdf,
+            0x9b, 0xaa, 0x44, 0x76, 0x79, 0xec, 0x7d, 0xbc, 0xf3, 0x4f, 0x82, 0x74, 0xb6, 0xec,
+            0x96, 0xdf,
         ];
         assert_eq!(KIND_ID_THINGOS_PRESENCE_MODE, expected);
     }
@@ -654,8 +641,8 @@ mod tests {
     #[test]
     fn test_kind_id_presence_embodiment_kind_constant() {
         let expected: [u8; 16] = [
-            0x94, 0xa8, 0xe7, 0x82, 0x46, 0x4a, 0xb3, 0xd1,
-            0xa6, 0x64, 0x78, 0xc2, 0x2f, 0x5d, 0x3b, 0x97,
+            0x94, 0xa8, 0xe7, 0x82, 0x46, 0x4a, 0xb3, 0xd1, 0xa6, 0x64, 0x78, 0xc2, 0x2f, 0x5d,
+            0x3b, 0x97,
         ];
         assert_eq!(KIND_ID_THINGOS_PRESENCE_EMBODIMENT_KIND, expected);
     }

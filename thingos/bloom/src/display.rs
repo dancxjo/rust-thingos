@@ -1,11 +1,12 @@
+use alloc::vec::Vec;
+
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
-    BufferHandle, CommitFlags, CommitRequest, DisplayInfo, PlaneCommit, PlaneId, DISPLAY_OP_COMMIT,
-    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER,
+    BufferHandle, CommitFlags, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
+    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayInfo, PlaneCommit, PlaneId,
 };
 use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
-use alloc::vec::Vec;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open};
 
 use crate::scene::CompositionEntry;
@@ -41,11 +42,7 @@ impl DisplayBackend {
             fd,
             info: DisplayInfo {
                 card_id: 0,
-                preferred_mode: abi::display::DisplayMode {
-                    width: 0,
-                    height: 0,
-                    refresh_mhz: 0,
-                },
+                preferred_mode: abi::display::DisplayMode { width: 0, height: 0, refresh_mhz: 0 },
                 plane_count: 0,
                 max_buffers: 0,
                 supported_formats: 0,
@@ -83,15 +80,8 @@ impl DisplayBackend {
         format: PixelFormat,
         modifier: u64,
     ) -> Option<u32> {
-        let handle = BufferHandle {
-            handle: thing,
-            offset: 0,
-            width,
-            height,
-            stride,
-            format,
-            modifier,
-        };
+        let handle =
+            BufferHandle { handle: thing, offset: 0, width, height, stride, format, modifier };
         device_call::<BufferHandle, ()>(self.fd, DISPLAY_OP_IMPORT_BUFFER, &handle, None)
     }
 
@@ -109,27 +99,13 @@ impl DisplayBackend {
         let selected = composition_list
             .iter()
             .max_by_key(|entry| entry.z_order)
-            .map(|entry| (entry.buffer_id, entry.src_rect, entry.dest_rect, entry.z_order, entry.alpha))
+            .map(|entry| {
+                (entry.buffer_id, entry.src_rect, entry.dest_rect, entry.z_order, entry.alpha)
+            })
             .or_else(|| {
                 fallback_buffer.map(|id| {
                     let (w, h) = self.output_size();
-                    (
-                        id,
-                        Rect {
-                            x: 0,
-                            y: 0,
-                            w,
-                            h,
-                        },
-                        Rect {
-                            x: 0,
-                            y: 0,
-                            w,
-                            h,
-                        },
-                        0,
-                        255,
-                    )
+                    (id, Rect { x: 0, y: 0, w, h }, Rect { x: 0, y: 0, w, h }, 0, 255)
                 })
             });
 
@@ -146,18 +122,12 @@ impl DisplayBackend {
             alpha,
             _reserved: [0; 7],
         };
-        PresentResult {
-            success: commit_display_planes(self.fd, &[plane], CommitFlags::VSYNC),
-        }
+        PresentResult { success: commit_display_planes(self.fd, &[plane], CommitFlags::VSYNC) }
     }
 }
 
 fn commit_display_planes(fd: u32, planes: &[PlaneCommit], flags: CommitFlags) -> bool {
-    let req = CommitRequest {
-        commit_count: planes.len() as u32,
-        flags,
-        commits_ptr: 0,
-    };
+    let req = CommitRequest { commit_count: planes.len() as u32, flags, commits_ptr: 0 };
 
     let req_size = core::mem::size_of::<CommitRequest>();
     let planes_size = core::mem::size_of_val(planes);
@@ -185,11 +155,7 @@ fn commit_display_planes(fd: u32, planes: &[PlaneCommit], flags: CommitFlags) ->
 fn get_display_info(fd: u32) -> Option<DisplayInfo> {
     let mut info = DisplayInfo {
         card_id: 0,
-        preferred_mode: abi::display::DisplayMode {
-            width: 0,
-            height: 0,
-            refresh_mhz: 0,
-        },
+        preferred_mode: abi::display::DisplayMode { width: 0, height: 0, refresh_mhz: 0 },
         plane_count: 0,
         max_buffers: 0,
         supported_formats: 0,

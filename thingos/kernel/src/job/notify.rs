@@ -29,10 +29,11 @@
 //! * Payload encoding (`JobExit::encode_as_notification`) is defined in
 //!   `thingos::job` and is the canonical wire format.
 
-use crate::inbox::{get_inbox, InboxId, MessageEnvelope};
-use crate::message::bridge::message_from_parts;
-use crate::message::KindId;
 use thingos::job::{JobExit, JobState};
+
+use crate::inbox::{InboxId, MessageEnvelope, get_inbox};
+use crate::message::KindId;
+use crate::message::bridge::message_from_parts;
 
 // ---------------------------------------------------------------------------
 // Emission
@@ -57,10 +58,7 @@ use thingos::job::{JobExit, JobState};
 /// * If the inbox is closed: delivery failure is logged.  Lifecycle state
 ///   is not affected.
 pub fn emit_job_exit(inbox_id: InboxId, job_id: u32, exit_code: i32) {
-    let job_exit = JobExit {
-        state: JobState::Exited,
-        code: Some(exit_code),
-    };
+    let job_exit = JobExit { state: JobState::Exited, code: Some(exit_code) };
     let payload = job_exit.encode_as_notification(job_id);
     let message = message_from_parts(KindId::THINGOS_JOB_EXIT, payload);
     let envelope = MessageEnvelope::anonymous(message);
@@ -121,10 +119,11 @@ pub fn register_exit_observer(pid: u32, inbox_id: InboxId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::inbox::{create_inbox, DEFAULT_INBOX_CAPACITY};
-    use crate::message::KindId;
     use thingos::job::JobExit;
+
+    use super::*;
+    use crate::inbox::{DEFAULT_INBOX_CAPACITY, create_inbox};
+    use crate::message::KindId;
 
     // ── emit_job_exit: basic delivery ────────────────────────────────────────
 
@@ -249,16 +248,13 @@ mod tests {
         let inbox = get_inbox(inbox_id).unwrap();
 
         let env0 = inbox.try_recv().expect("no recv error").expect("should have a message");
-        let (id0, exit0) =
-            JobExit::decode_notification(&env0.message.payload).unwrap();
+        let (id0, exit0) = JobExit::decode_notification(&env0.message.payload).unwrap();
 
         let env1 = inbox.try_recv().expect("no recv error").expect("should have a message");
-        let (id1, exit1) =
-            JobExit::decode_notification(&env1.message.payload).unwrap();
+        let (id1, exit1) = JobExit::decode_notification(&env1.message.payload).unwrap();
 
         let env2 = inbox.try_recv().expect("no recv error").expect("should have a message");
-        let (id2, exit2) =
-            JobExit::decode_notification(&env2.message.payload).unwrap();
+        let (id2, exit2) = JobExit::decode_notification(&env2.message.payload).unwrap();
 
         assert!(inbox.try_recv().ok().flatten().is_none());
 
@@ -284,8 +280,10 @@ mod tests {
         let envelope = inbox.try_recv().expect("no recv error").expect("should have a message");
         assert_eq!(
             envelope.message.kind.0,
-            [0xc2, 0x60, 0x8e, 0x30, 0xff, 0xa2, 0xa2, 0xda,
-             0x8b, 0x96, 0x22, 0x8d, 0x3e, 0xd0, 0x11, 0x74],
+            [
+                0xc2, 0x60, 0x8e, 0x30, 0xff, 0xa2, 0xa2, 0xda, 0x8b, 0x96, 0x22, 0x8d, 0x3e, 0xd0,
+                0x11, 0x74
+            ],
             "kind bytes must match KIND_ID_THINGOS_JOB_EXIT"
         );
 
@@ -301,15 +299,18 @@ mod tests {
     fn payload_is_well_formed_even_when_inbox_full() {
         // Use capacity 1; fill with a known message, then attempt a second.
         let inbox_id = create_inbox(1);
-        emit_job_exit(inbox_id, 11, 5);   // succeeds
-        emit_job_exit(inbox_id, 22, 99);  // fails (full) but must not corrupt state
+        emit_job_exit(inbox_id, 11, 5); // succeeds
+        emit_job_exit(inbox_id, 22, 99); // fails (full) but must not corrupt state
 
         let inbox = get_inbox(inbox_id).unwrap();
         let env = inbox.try_recv().expect("no recv error").expect("should have a message");
         let (id, exit) = JobExit::decode_notification(&env.message.payload).unwrap();
         assert_eq!(id, 11);
         assert_eq!(exit.code, Some(5));
-        assert!(inbox.try_recv().ok().flatten().is_none(), "only the first message should be present");
+        assert!(
+            inbox.try_recv().ok().flatten().is_none(),
+            "only the first message should be present"
+        );
 
         crate::inbox::close_inbox(inbox_id);
     }

@@ -80,8 +80,9 @@
 //! that will allow this bridge to read from a first-class `Job` object instead
 //! of a `Process`-shaped snapshot.
 
-use crate::sched::state::ThreadState;
 use thingos::job::{Job, JobExit, JobState, JobWaitResult};
+
+use crate::sched::state::ThreadState;
 
 // ── JobState / Job ────────────────────────────────────────────────────────────
 
@@ -96,11 +97,7 @@ pub fn job_state_from_thread_states(thread_states: &[ThreadState]) -> JobState {
     }
 
     let all_dead = thread_states.iter().all(|s| *s == ThreadState::Dead);
-    if all_dead {
-        JobState::Exited
-    } else {
-        JobState::Running
-    }
+    if all_dead { JobState::Exited } else { JobState::Running }
 }
 
 /// Build a canonical `Job` value from the lifecycle of a process's threads.
@@ -117,9 +114,7 @@ pub fn job_from_thread_states(thread_states: &[ThreadState]) -> Job {
 /// `JobState` for multi-threaded processes.  Falls back to `[snapshot.state]`
 /// (the thread-group leader's state alone) for legacy test helpers or code
 /// paths that have not yet been updated.
-pub fn job_state_from_snapshot(
-    snapshot: &crate::sched::hooks::ProcessSnapshot,
-) -> JobState {
+pub fn job_state_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> JobState {
     if !snapshot.thread_states.is_empty() {
         job_state_from_thread_states(&snapshot.thread_states)
     } else {
@@ -183,9 +178,7 @@ pub fn job_state_from_lifecycle(
 /// |---------------------|-----------------|
 /// | `snapshot.state`    | `state` (via `job_state_from_snapshot`) |
 /// | `snapshot.exit_code`| `code`          |
-pub fn job_exit_from_snapshot(
-    snapshot: &crate::sched::hooks::ProcessSnapshot,
-) -> JobExit {
+pub fn job_exit_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> JobExit {
     let state = job_state_from_snapshot(snapshot);
     // Only forward exit_code when the job has actually exited.  The kernel may
     // still carry a stale exit_code field on a thread that has been reused or
@@ -249,7 +242,8 @@ pub fn publish_leader_exit(
 
     if parent_pid != 0 {
         let wait_status = wait_status_from_runtime_exit(runtime_exit_code);
-        parent_waiters = crate::signal::queue_parent_child_event(parent_pid, child_pid, wait_status);
+        parent_waiters =
+            crate::signal::queue_parent_child_event(parent_pid, child_pid, wait_status);
     }
 
     if child_pid != 0
@@ -305,26 +299,17 @@ mod tests {
 
     #[test]
     fn test_job_state_runnable_thread_is_running() {
-        assert_eq!(
-            job_state_from_thread_states(&[ThreadState::Runnable]),
-            JobState::Running
-        );
+        assert_eq!(job_state_from_thread_states(&[ThreadState::Runnable]), JobState::Running);
     }
 
     #[test]
     fn test_job_state_running_thread_is_running() {
-        assert_eq!(
-            job_state_from_thread_states(&[ThreadState::Running]),
-            JobState::Running
-        );
+        assert_eq!(job_state_from_thread_states(&[ThreadState::Running]), JobState::Running);
     }
 
     #[test]
     fn test_job_state_blocked_thread_is_running() {
-        assert_eq!(
-            job_state_from_thread_states(&[ThreadState::Blocked]),
-            JobState::Running
-        );
+        assert_eq!(job_state_from_thread_states(&[ThreadState::Blocked]), JobState::Running);
     }
 
     #[test]
@@ -388,32 +373,17 @@ mod tests {
 
     #[test]
     fn test_poll_some_is_exited_with_code() {
-        assert_eq!(
-            job_wait_result_from_poll(Some(0)),
-            JobWaitResult::Exited { code: Some(0) }
-        );
-        assert_eq!(
-            job_wait_result_from_poll(Some(1)),
-            JobWaitResult::Exited { code: Some(1) }
-        );
-        assert_eq!(
-            job_wait_result_from_poll(Some(-1)),
-            JobWaitResult::Exited { code: Some(-1) }
-        );
+        assert_eq!(job_wait_result_from_poll(Some(0)), JobWaitResult::Exited { code: Some(0) });
+        assert_eq!(job_wait_result_from_poll(Some(1)), JobWaitResult::Exited { code: Some(1) });
+        assert_eq!(job_wait_result_from_poll(Some(-1)), JobWaitResult::Exited { code: Some(-1) });
     }
 
     // ── job_wait_result_from_waitpid ─────────────────────────────────────────
 
     #[test]
     fn test_waitpid_produces_exited_with_code() {
-        assert_eq!(
-            job_wait_result_from_waitpid(0),
-            JobWaitResult::Exited { code: Some(0) }
-        );
-        assert_eq!(
-            job_wait_result_from_waitpid(127),
-            JobWaitResult::Exited { code: Some(127) }
-        );
+        assert_eq!(job_wait_result_from_waitpid(0), JobWaitResult::Exited { code: Some(0) });
+        assert_eq!(job_wait_result_from_waitpid(127), JobWaitResult::Exited { code: Some(127) });
     }
 
     // ── wait-status projection ───────────────────────────────────────────────
@@ -492,10 +462,7 @@ mod tests {
     #[test]
     fn test_job_state_from_lifecycle_all_dead_is_exited() {
         let lifecycle = crate::task::ProcessLifecycle::new(0, 1);
-        assert_eq!(
-            job_state_from_lifecycle(&lifecycle, &[ThreadState::Dead]),
-            JobState::Exited
-        );
+        assert_eq!(job_state_from_lifecycle(&lifecycle, &[ThreadState::Dead]), JobState::Exited);
     }
 
     #[test]

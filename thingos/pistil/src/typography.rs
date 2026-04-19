@@ -30,10 +30,7 @@ pub struct RectI {
 
 impl RectI {
     pub const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            origin: PointI { x, y },
-            size: SizeI { width, height },
-        }
+        Self { origin: PointI { x, y }, size: SizeI { width, height } }
     }
 }
 
@@ -146,12 +143,7 @@ pub struct StrokeStyle {
 
 impl Default for StrokeStyle {
     fn default() -> Self {
-        Self {
-            width: 1.0,
-            line_cap: LineCap::Butt,
-            line_join: LineJoin::Miter,
-            miter_limit: 4.0,
-        }
+        Self { width: 1.0, line_cap: LineCap::Butt, line_join: LineJoin::Miter, miter_limit: 4.0 }
     }
 }
 
@@ -198,12 +190,7 @@ pub struct Paint {
 impl Default for Paint {
     fn default() -> Self {
         Self {
-            fill: Some(FillStyle::Solid(ColorRgba8 {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 255,
-            })),
+            fill: Some(FillStyle::Solid(ColorRgba8 { r: 255, g: 255, b: 255, a: 255 })),
             stroke: None,
             blend: BlendMode::SrcOver,
         }
@@ -269,59 +256,19 @@ pub struct GlyphRun {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Primitive {
-    Pixel {
-        point: PointI,
-        color: ColorRgba8,
-    },
-    Line {
-        shape: LineSegment,
-        paint: Paint,
-    },
-    Rect {
-        shape: RectI,
-        paint: Paint,
-    },
-    RoundedRect {
-        shape: RoundedRect,
-        paint: Paint,
-    },
-    Triangle {
-        shape: Triangle,
-        paint: Paint,
-    },
-    Circle {
-        shape: Circle,
-        paint: Paint,
-    },
-    Ellipse {
-        shape: Ellipse,
-        paint: Paint,
-    },
-    Arc {
-        shape: Arc,
-        paint: Paint,
-    },
-    Path {
-        shape: Path2D,
-        fill_rule: FillRule,
-        paint: Paint,
-    },
-    QuadBezier {
-        shape: QuadBezier,
-        paint: Paint,
-    },
-    CubicBezier {
-        shape: CubicBezier,
-        paint: Paint,
-    },
-    Mesh {
-        shape: Mesh2D,
-        paint: Paint,
-    },
-    GlyphRun {
-        run: GlyphRun,
-        paint: Paint,
-    },
+    Pixel { point: PointI, color: ColorRgba8 },
+    Line { shape: LineSegment, paint: Paint },
+    Rect { shape: RectI, paint: Paint },
+    RoundedRect { shape: RoundedRect, paint: Paint },
+    Triangle { shape: Triangle, paint: Paint },
+    Circle { shape: Circle, paint: Paint },
+    Ellipse { shape: Ellipse, paint: Paint },
+    Arc { shape: Arc, paint: Paint },
+    Path { shape: Path2D, fill_rule: FillRule, paint: Paint },
+    QuadBezier { shape: QuadBezier, paint: Paint },
+    CubicBezier { shape: CubicBezier, paint: Paint },
+    Mesh { shape: Mesh2D, paint: Paint },
+    GlyphRun { run: GlyphRun, paint: Paint },
 }
 
 pub const PISTIL_TYPOGRAPHY_ABI_VERSION: u32 = 1;

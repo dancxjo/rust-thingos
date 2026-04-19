@@ -26,10 +26,7 @@ unsafe impl<T> Sync for OnceCell<T> {}
 impl<T> OnceCell<T> {
     /// Creates a new uninitialized `OnceCell`.
     pub const fn new() -> Self {
-        Self {
-            initialized: AtomicBool::new(false),
-            value: UnsafeCell::new(None),
-        }
+        Self { initialized: AtomicBool::new(false), value: UnsafeCell::new(None) }
     }
 
     /// Sets the value exactly once.

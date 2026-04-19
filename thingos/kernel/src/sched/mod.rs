@@ -1126,11 +1126,9 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                 apply_deferred_registry_syncs::<R>(deferred_registry_syncs);
                 let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
                 let mut ghost_fs_base = 0;
-                let Some(switch) = resolve_switch_params::<R>(
-                    switch_decision,
-                    &mut ghost_ctx,
-                    &mut ghost_fs_base,
-                ) else {
+                let Some(switch) =
+                    resolve_switch_params::<R>(switch_decision, &mut ghost_ctx, &mut ghost_fs_base)
+                else {
                     rt.irq_restore(irq);
                     return;
                 };
@@ -1393,7 +1391,7 @@ pub(crate) fn resolve_switch_params<R: BootRuntime>(
             decision.to_tid
         );
         let to_task = &mut registry.threads[to_idx];
-        
+
         crate::sched::vm::CURRENT_MAPPINGS[decision.cpu_idx]
             .store(alloc::sync::Arc::as_ptr(&to_task.mappings) as *mut _, Ordering::Release);
         to_task.simd.restore(crate::runtime::<R>());

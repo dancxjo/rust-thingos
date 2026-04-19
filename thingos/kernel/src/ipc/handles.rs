@@ -105,9 +105,7 @@ impl IpcHandleTable {
         if idx >= MAX_IPC_HANDLES {
             return None;
         }
-        self.entries[idx]
-            .as_ref()
-            .filter(|e| e.mode == required_mode)
+        self.entries[idx].as_ref().filter(|e| e.mode == required_mode)
     }
 
     /// Get the entry for a handle without mode validation
@@ -140,7 +138,6 @@ impl IpcHandleTable {
         Ok(())
     }
 }
-
 
 impl Default for IpcHandleTable {
     fn default() -> Self {

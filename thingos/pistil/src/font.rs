@@ -1,9 +1,11 @@
-use crate::Canvas;
-use abi::syscall::vfs_flags::O_RDONLY;
 use alloc::vec;
 use alloc::vec::Vec;
+
+use abi::syscall::vfs_flags::O_RDONLY;
 use fontdue::{Font, FontSettings};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat};
+
+use crate::Canvas;
 
 pub struct TextRenderer {
     pub font: Font,

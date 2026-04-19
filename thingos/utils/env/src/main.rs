@@ -4,9 +4,9 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::syscall::{env_list, exit, vfs_write};
 
 fn print(msg: &str) {
@@ -42,8 +42,7 @@ fn parse_env_blob(blob: &[u8]) -> Vec<(String, String)> {
         if offset + key_len > blob.len() {
             break;
         }
-        let key =
-            core::str::from_utf8(&blob[offset..offset + key_len]).unwrap_or("").to_string();
+        let key = core::str::from_utf8(&blob[offset..offset + key_len]).unwrap_or("").to_string();
         offset += key_len;
 
         if offset + 4 > blob.len() {
@@ -55,8 +54,7 @@ fn parse_env_blob(blob: &[u8]) -> Vec<(String, String)> {
         if offset + val_len > blob.len() {
             break;
         }
-        let val =
-            core::str::from_utf8(&blob[offset..offset + val_len]).unwrap_or("").to_string();
+        let val = core::str::from_utf8(&blob[offset..offset + val_len]).unwrap_or("").to_string();
         offset += val_len;
 
         result.push((key, val));

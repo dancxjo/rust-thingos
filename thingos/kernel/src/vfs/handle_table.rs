@@ -12,9 +12,10 @@
 //! # Limits
 //! `MAX_HANDLES` open handles per process.  This is intentionally small for now.
 
-use abi::errors::{Errno, SysResult};
 use alloc::string::String;
 use alloc::sync::Arc;
+
+use abi::errors::{Errno, SysResult};
 use spin::Mutex;
 
 use super::{OpenFlags, VfsNode};
@@ -228,10 +229,8 @@ impl HandleTable {
     /// descriptors without `HANDLE_CLOEXEC` are preserved across the exec.
     pub fn close_on_exec(&mut self) {
         for slot in self.entries.iter_mut() {
-            let should_close = slot
-                .as_ref()
-                .map(|e| e.handle_flags & HANDLE_CLOEXEC != 0)
-                .unwrap_or(false);
+            let should_close =
+                slot.as_ref().map(|e| e.handle_flags & HANDLE_CLOEXEC != 0).unwrap_or(false);
             if should_close {
                 if let Some(entry) = slot.take() {
                     entry.node.close();
@@ -249,10 +248,12 @@ impl Default for HandleTable {
 
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Arc;
+
+    use abi::errors::Errno;
+
     use super::*;
     use crate::vfs::{VfsNode, VfsStat};
-    use abi::errors::Errno;
-    use alloc::sync::Arc;
 
     struct NullNode;
     impl VfsNode for NullNode {
@@ -263,12 +264,7 @@ mod tests {
             Ok(buf.len())
         }
         fn stat(&self) -> SysResult<VfsStat> {
-            Ok(VfsStat {
-                mode: VfsStat::S_IFCHR | 0o666,
-                size: 0,
-                ino: 1,
-                ..Default::default()
-            })
+            Ok(VfsStat { mode: VfsStat::S_IFCHR | 0o666, size: 0, ino: 1, ..Default::default() })
         }
     }
 
@@ -279,9 +275,7 @@ mod tests {
     #[test]
     fn test_open_allocates_from_0_when_empty() {
         let mut table = HandleTable::new();
-        let thing = table
-            .open(null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        let thing = table.open(null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         assert_eq!(thing, 0, "first thing in empty table should be 0");
     }
 
@@ -289,18 +283,10 @@ mod tests {
     fn test_open_skips_occupied_slots() {
         let mut table = HandleTable::new();
         // Pre-populate slots 0-2 (simulate stdio setup).
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
-            .unwrap();
-        table
-            .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
-            .unwrap();
-        table
-            .insert_at(2, null_node(), OpenFlags::write_only(), "/err".into())
-            .unwrap();
-        let thing = table
-            .open(null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/in".into()).unwrap();
+        table.insert_at(1, null_node(), OpenFlags::write_only(), "/out".into()).unwrap();
+        table.insert_at(2, null_node(), OpenFlags::write_only(), "/err".into()).unwrap();
+        let thing = table.open(null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         assert_eq!(thing, 3, "first non-stdio VFS thing should be 3");
     }
 
@@ -308,21 +294,11 @@ mod tests {
     fn test_open_sequential_fds() {
         let mut table = HandleTable::new();
         // Pre-populate slots 0-2 (simulate stdio setup).
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
-            .unwrap();
-        table
-            .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
-            .unwrap();
-        table
-            .insert_at(2, null_node(), OpenFlags::write_only(), "/err".into())
-            .unwrap();
-        let fd1 = table
-            .open(null_node(), OpenFlags::read_only(), "/f1".into())
-            .unwrap();
-        let fd2 = table
-            .open(null_node(), OpenFlags::read_only(), "/f2".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/in".into()).unwrap();
+        table.insert_at(1, null_node(), OpenFlags::write_only(), "/out".into()).unwrap();
+        table.insert_at(2, null_node(), OpenFlags::write_only(), "/err".into()).unwrap();
+        let fd1 = table.open(null_node(), OpenFlags::read_only(), "/f1".into()).unwrap();
+        let fd2 = table.open(null_node(), OpenFlags::read_only(), "/f2".into()).unwrap();
         assert_eq!(fd1, 3);
         assert_eq!(fd2, 4);
     }
@@ -336,9 +312,7 @@ mod tests {
     #[test]
     fn test_close_frees_slot() {
         let mut table = HandleTable::new();
-        let thing = table
-            .open(null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        let thing = table.open(null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         table.close(thing).unwrap();
         assert!(matches!(table.get(thing), Err(Errno::EBADF)));
     }
@@ -346,13 +320,9 @@ mod tests {
     #[test]
     fn test_close_reuses_slot() {
         let mut table = HandleTable::new();
-        let fd1 = table
-            .open(null_node(), OpenFlags::read_only(), "/f1".into())
-            .unwrap();
+        let fd1 = table.open(null_node(), OpenFlags::read_only(), "/f1".into()).unwrap();
         table.close(fd1).unwrap();
-        let fd2 = table
-            .open(null_node(), OpenFlags::read_only(), "/f2".into())
-            .unwrap();
+        let fd2 = table.open(null_node(), OpenFlags::read_only(), "/f2".into()).unwrap();
         // Slot 0 was freed, so it should be reused.
         assert_eq!(fd2, 0);
     }
@@ -366,15 +336,9 @@ mod tests {
     #[test]
     fn test_insert_at_populates_specific_slot() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
-            .unwrap();
-        table
-            .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
-            .unwrap();
-        table
-            .insert_at(2, null_node(), OpenFlags::write_only(), "/err".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/in".into()).unwrap();
+        table.insert_at(1, null_node(), OpenFlags::write_only(), "/out".into()).unwrap();
+        table.insert_at(2, null_node(), OpenFlags::write_only(), "/err".into()).unwrap();
         assert!(table.get(0).is_ok());
         assert!(table.get(1).is_ok());
         assert!(table.get(2).is_ok());
@@ -383,9 +347,7 @@ mod tests {
     #[test]
     fn test_insert_at_rejects_occupied_slot() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         assert!(matches!(
             table.insert_at(0, null_node(), OpenFlags::read_only(), "/null".into()),
             Err(Errno::EBADF)
@@ -409,9 +371,7 @@ mod tests {
     #[test]
     fn test_dup_clones_to_next_free() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         let new_handle = table.dup(0).unwrap();
         assert_eq!(new_handle, 1, "dup should use first free slot after 0");
         assert!(table.get(1).is_ok());
@@ -426,9 +386,7 @@ mod tests {
     #[test]
     fn test_dup2_creates_alias() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         let result = table.dup2(0, 5).unwrap();
         assert_eq!(result, 5);
         assert!(table.get(5).is_ok());
@@ -439,12 +397,8 @@ mod tests {
     #[test]
     fn test_dup2_closes_existing_target() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
-            .unwrap();
-        table
-            .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/in".into()).unwrap();
+        table.insert_at(1, null_node(), OpenFlags::write_only(), "/out".into()).unwrap();
         // dup2(0, 1) should close slot 1 and replace it with a dup of slot 0.
         table.dup2(0, 1).unwrap();
         assert!(table.get(1).is_ok());
@@ -453,9 +407,7 @@ mod tests {
     #[test]
     fn test_dup2_same_fd_is_noop() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(3, null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(3, null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         let result = table.dup2(3, 3).unwrap();
         assert_eq!(result, 3);
         assert!(table.get(3).is_ok());
@@ -470,9 +422,7 @@ mod tests {
     #[test]
     fn test_dup_shares_offset() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         let new_handle = table.dup(0).unwrap();
         // Advance the original fd's offset.
         *table.get(0).unwrap().offset.lock() = 42;
@@ -484,9 +434,7 @@ mod tests {
     #[test]
     fn test_dup2_shares_offset() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         table.dup2(0, 5).unwrap();
         // Advance via thing 5.
         *table.get(5).unwrap().offset.lock() = 100;
@@ -499,12 +447,7 @@ mod tests {
     fn test_dup_shares_status_flags() {
         let mut table = HandleTable::new();
         table
-            .insert_at(
-                0,
-                null_node(),
-                OpenFlags(abi::syscall::vfs_flags::O_RDONLY),
-                "/null".into(),
-            )
+            .insert_at(0, null_node(), OpenFlags(abi::syscall::vfs_flags::O_RDONLY), "/null".into())
             .unwrap();
         let new_handle = table.dup(0).unwrap();
 
@@ -518,9 +461,7 @@ mod tests {
     #[test]
     fn test_dup_clears_descriptor_flags() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/null".into()).unwrap();
         table.set_handle_flags(0, HANDLE_CLOEXEC).unwrap();
 
         let new_handle = table.dup(0).unwrap();
@@ -555,18 +496,12 @@ mod tests {
     fn test_close_on_exec_closes_flagged_fds() {
         let mut table = HandleTable::new();
         // thing 0: no flag → should survive exec
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/in".into()).unwrap();
         // thing 1: HANDLE_CLOEXEC → should be closed on exec
-        table
-            .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
-            .unwrap();
+        table.insert_at(1, null_node(), OpenFlags::write_only(), "/out".into()).unwrap();
         table.set_handle_flags(1, HANDLE_CLOEXEC).unwrap();
         // thing 3: HANDLE_CLOEXEC → should be closed on exec
-        table
-            .insert_at(3, null_node(), OpenFlags::read_only(), "/extra".into())
-            .unwrap();
+        table.insert_at(3, null_node(), OpenFlags::read_only(), "/extra".into()).unwrap();
         table.set_handle_flags(3, HANDLE_CLOEXEC).unwrap();
 
         table.close_on_exec();
@@ -586,12 +521,8 @@ mod tests {
     #[test]
     fn test_close_on_exec_preserves_unflagged_fds() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
-            .unwrap();
-        table
-            .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/in".into()).unwrap();
+        table.insert_at(1, null_node(), OpenFlags::write_only(), "/out".into()).unwrap();
 
         table.close_on_exec();
 
@@ -611,17 +542,13 @@ mod tests {
     #[test]
     fn test_close_on_exec_slot_reuse() {
         let mut table = HandleTable::new();
-        table
-            .insert_at(0, null_node(), OpenFlags::read_only(), "/f".into())
-            .unwrap();
+        table.insert_at(0, null_node(), OpenFlags::read_only(), "/f".into()).unwrap();
         table.set_handle_flags(0, HANDLE_CLOEXEC).unwrap();
 
         table.close_on_exec();
 
         // Slot 0 is now free; the next open() should reuse it.
-        let new_handle = table
-            .open(null_node(), OpenFlags::read_only(), "/new".into())
-            .unwrap();
+        let new_handle = table.open(null_node(), OpenFlags::read_only(), "/new".into()).unwrap();
         assert_eq!(new_handle, 0, "freed cloexec slot should be reusable");
     }
 }

@@ -3,6 +3,7 @@
 //! Manages interrupt routing and userspace IRQ subscriptions.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+
 use spin::Mutex;
 
 pub mod msi;
@@ -61,9 +62,7 @@ pub struct IrqRegistry {
 
 impl IrqRegistry {
     pub const fn new() -> Self {
-        Self {
-            slots: [const { IrqSlot::new() }; MAX_VECTORS],
-        }
+        Self { slots: [const { IrqSlot::new() }; MAX_VECTORS] }
     }
 
     /// Subscribe a task to receive interrupts for a vector
@@ -248,8 +247,9 @@ pub fn poll(vector: u8) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
 
     static WAKE_COUNT: AtomicU32 = AtomicU32::new(0);
 

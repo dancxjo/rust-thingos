@@ -1,5 +1,6 @@
-use crate::common::Result;
 use clap::Args;
+
+use crate::common::Result;
 
 #[derive(Args, Clone, Debug)]
 pub struct ScanArgs {

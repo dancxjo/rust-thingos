@@ -40,8 +40,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
@@ -76,10 +74,7 @@ fn main(_arg: usize) -> ! {
             stem::syscall::exit(1);
         }
     };
-    info!(
-        "ipc_provider_demo: port pair write_h={} read_h={}",
-        write_h, read_h
-    );
+    info!("ipc_provider_demo: port pair write_h={} read_h={}", write_h, read_h);
 
     // ── 2. Mount the provider at MOUNT_POINT ─────────────────────────────
     //
@@ -88,10 +83,7 @@ fn main(_arg: usize) -> ! {
     match vfs_mount(write_h, MOUNT_POINT) {
         Ok(()) => info!("ipc_provider_demo: mounted at {}", MOUNT_POINT),
         Err(e) => {
-            warn!(
-                "ipc_provider_demo: vfs_mount failed: {:?} (continuing anyway for demo)",
-                e
-            );
+            warn!("ipc_provider_demo: vfs_mount failed: {:?} (continuing anyway for demo)", e);
             // Continue so the provider loop still demonstrates the dispatch logic.
         }
     }
@@ -117,10 +109,7 @@ fn main(_arg: usize) -> ! {
         };
 
         request_count += 1;
-        info!(
-            "ipc_provider_demo: request #{} op={:?}",
-            request_count, req.op
-        );
+        info!("ipc_provider_demo: request #{} op={:?}", request_count, req.op);
 
         let resp = dispatch(&req.op, &req.payload);
         if let Err(e) = lp.send_response(req.resp_port, resp) {

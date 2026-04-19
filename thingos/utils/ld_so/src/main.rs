@@ -45,9 +45,8 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use alloc::vec::Vec;
+
 use abi::auxv;
 use abi::vm::{VmBacking, VmMapFlags, VmProt};
 use stem::println;
@@ -108,44 +107,44 @@ fn write_u64_le(buf: &mut [u8], off: usize, val: u64) {
 // ── ELF constants ────────────────────────────────────────────────────────────
 
 // Program-header types
-const PT_LOAD:    u32 = 1;
+const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 
 // Dynamic-section tags
-const DT_NULL:       i64 = 0;
-const DT_NEEDED:     i64 = 1;
-const DT_PLTRELSZ:   i64 = 2;
-const DT_PLTGOT:     i64 = 3;
-const DT_HASH:       i64 = 4;
-const DT_STRTAB:     i64 = 5;
-const DT_SYMTAB:     i64 = 6;
-const DT_RELA:       i64 = 7;
-const DT_RELASZ:     i64 = 8;
-const DT_RELAENT:    i64 = 9;
-const DT_STRSZ:      i64 = 10;
-const DT_SYMENT:     i64 = 11;
-const DT_INIT:       i64 = 12;
-const DT_FINI:       i64 = 13;
-const DT_JMPREL:     i64 = 23;
-const DT_BIND_NOW:   i64 = 24;
+const DT_NULL: i64 = 0;
+const DT_NEEDED: i64 = 1;
+const DT_PLTRELSZ: i64 = 2;
+const DT_PLTGOT: i64 = 3;
+const DT_HASH: i64 = 4;
+const DT_STRTAB: i64 = 5;
+const DT_SYMTAB: i64 = 6;
+const DT_RELA: i64 = 7;
+const DT_RELASZ: i64 = 8;
+const DT_RELAENT: i64 = 9;
+const DT_STRSZ: i64 = 10;
+const DT_SYMENT: i64 = 11;
+const DT_INIT: i64 = 12;
+const DT_FINI: i64 = 13;
+const DT_JMPREL: i64 = 23;
+const DT_BIND_NOW: i64 = 24;
 const DT_INIT_ARRAY: i64 = 25;
 const DT_FINI_ARRAY: i64 = 26;
 const DT_INIT_ARRAYSZ: i64 = 27;
 const DT_FINI_ARRAYSZ: i64 = 28;
-const DT_FLAGS_1:    i64 = 0x6ffffffb_u32 as i64;
+const DT_FLAGS_1: i64 = 0x6ffffffb_u32 as i64;
 
 // Relocation types (x86_64 / R_X86_64_*)
-const R_X86_64_NONE:      u32 = 0;
-const R_X86_64_64:        u32 = 1;
-const R_X86_64_RELATIVE:  u32 = 8;
-const R_X86_64_GLOB_DAT:  u32 = 6;
+const R_X86_64_NONE: u32 = 0;
+const R_X86_64_64: u32 = 1;
+const R_X86_64_RELATIVE: u32 = 8;
+const R_X86_64_GLOB_DAT: u32 = 6;
 const R_X86_64_JUMP_SLOT: u32 = 7;
-const R_X86_64_COPY:      u32 = 5;
+const R_X86_64_COPY: u32 = 5;
 
 // ELF symbol bind
-const STB_LOCAL:  u8 = 0;
+const STB_LOCAL: u8 = 0;
 const STB_GLOBAL: u8 = 1;
-const STB_WEAK:   u8 = 2;
+const STB_WEAK: u8 = 2;
 
 // ── Loaded-object representation ─────────────────────────────────────────────
 
@@ -196,16 +195,15 @@ impl SymbolTable {
         // Can't use array-repeat expressions for non-Copy types in const
         // contexts on stable; hand-initialise.
         const E: SymEntry = SymEntry::empty();
-        SymbolTable {
-            entries: [E; MAX_SYMBOLS],
-            count: 0,
-        }
+        SymbolTable { entries: [E; MAX_SYMBOLS], count: 0 }
     }
 
     fn fnv1a(name: &[u8]) -> u64 {
         let mut h: u64 = 0xcbf29ce4_84222325;
         for &b in name {
-            if b == 0 { break; }
+            if b == 0 {
+                break;
+            }
             h ^= b as u64;
             h = h.wrapping_mul(0x00000100_000001b3);
         }
@@ -253,8 +251,12 @@ impl SymbolTable {
 
 fn name_eq(stored: &[u8; 64], name: &[u8]) -> bool {
     for (i, &b) in name.iter().enumerate() {
-        if b == 0 { break; }
-        if i >= 64 || stored[i] != b { return false; }
+        if b == 0 {
+            break;
+        }
+        if i >= 64 || stored[i] != b {
+            return false;
+        }
     }
     // ensure the stored name ends at the same position
     let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
@@ -297,7 +299,9 @@ fn read_file(path: &str) -> Option<Vec<u8>> {
     let mut pos = 0;
     while pos < size {
         let n = pread(fd, &mut buf[pos..], pos as u64);
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         pos += n;
     }
     let _ = vfs_close(fd);
@@ -308,8 +312,12 @@ fn read_file(path: &str) -> Option<Vec<u8>> {
 
 const PAGE_SIZE: usize = 4096;
 
-fn align_down(v: usize, a: usize) -> usize { v & !(a - 1) }
-fn align_up(v: usize, a: usize) -> usize { (v + a - 1) & !(a - 1) }
+fn align_down(v: usize, a: usize) -> usize {
+    v & !(a - 1)
+}
+fn align_up(v: usize, a: usize) -> usize {
+    (v + a - 1) & !(a - 1)
+}
 
 /// Map all PT_LOAD segments of `elf_bytes` into the current address space
 /// starting at `load_base`.  Returns the effective load bias (for PIE) or
@@ -318,15 +326,23 @@ fn align_up(v: usize, a: usize) -> usize { (v + a - 1) & !(a - 1) }
 /// # Safety
 /// Writes to the current process address space via `vm_map`.
 fn map_elf_segments(elf_bytes: &[u8], load_base: usize) -> Option<usize> {
-    if elf_bytes.len() < 64 { return None; }
-    if &elf_bytes[0..4] != b"\x7fELF" { return None; }
-    if elf_bytes[4] != 2 || elf_bytes[5] != 1 { return None; } // ELF64 LE only
+    if elf_bytes.len() < 64 {
+        return None;
+    }
+    if &elf_bytes[0..4] != b"\x7fELF" {
+        return None;
+    }
+    if elf_bytes[4] != 2 || elf_bytes[5] != 1 {
+        return None;
+    } // ELF64 LE only
 
-    let e_type    = read_u16_le(elf_bytes, 16)?; // ET_DYN == 3, ET_EXEC == 2
-    let e_phoff   = read_u64_le(elf_bytes, 32)? as usize;
+    let e_type = read_u16_le(elf_bytes, 16)?; // ET_DYN == 3, ET_EXEC == 2
+    let e_phoff = read_u64_le(elf_bytes, 32)? as usize;
     let e_phentsize = read_u16_le(elf_bytes, 54)? as usize;
-    let e_phnum   = read_u16_le(elf_bytes, 56)? as usize;
-    if e_phentsize == 0 || e_phnum == 0 { return None; }
+    let e_phnum = read_u16_le(elf_bytes, 56)? as usize;
+    if e_phentsize == 0 || e_phnum == 0 {
+        return None;
+    }
 
     // Determine the minimum virtual address across all PT_LOAD segments
     // so we can compute the bias for PIE objects.
@@ -336,10 +352,14 @@ fn map_elf_segments(elf_bytes: &[u8], load_base: usize) -> Option<usize> {
         let p_type = read_u32_le(elf_bytes, off)?;
         if p_type == PT_LOAD {
             let p_vaddr = read_u64_le(elf_bytes, off + 16)? as usize;
-            if p_vaddr < min_vaddr { min_vaddr = p_vaddr; }
+            if p_vaddr < min_vaddr {
+                min_vaddr = p_vaddr;
+            }
         }
     }
-    if min_vaddr == usize::MAX { return None; }
+    if min_vaddr == usize::MAX {
+        return None;
+    }
 
     // For ET_DYN, bias = load_base - min_vaddr.
     // For ET_EXEC, we ignore load_base and load at the fixed vaddrs.
@@ -351,29 +371,39 @@ fn map_elf_segments(elf_bytes: &[u8], load_base: usize) -> Option<usize> {
 
     for i in 0..e_phnum {
         let off = e_phoff + i * e_phentsize;
-        let p_type   = read_u32_le(elf_bytes, off)?;
-        if p_type != PT_LOAD { continue; }
+        let p_type = read_u32_le(elf_bytes, off)?;
+        if p_type != PT_LOAD {
+            continue;
+        }
 
-        let p_flags  = read_u32_le(elf_bytes, off + 4)?;
+        let p_flags = read_u32_le(elf_bytes, off + 4)?;
         let p_offset = read_u64_le(elf_bytes, off + 8)? as usize;
-        let p_vaddr  = read_u64_le(elf_bytes, off + 16)? as usize;
+        let p_vaddr = read_u64_le(elf_bytes, off + 16)? as usize;
         let p_filesz = read_u64_le(elf_bytes, off + 32)? as usize;
-        let p_memsz  = read_u64_le(elf_bytes, off + 40)? as usize;
-        let p_align  = read_u64_le(elf_bytes, off + 48)? as usize;
-        let align    = if p_align < PAGE_SIZE { PAGE_SIZE } else { p_align };
+        let p_memsz = read_u64_le(elf_bytes, off + 40)? as usize;
+        let p_align = read_u64_le(elf_bytes, off + 48)? as usize;
+        let align = if p_align < PAGE_SIZE { PAGE_SIZE } else { p_align };
 
-        if p_memsz == 0 { continue; }
+        if p_memsz == 0 {
+            continue;
+        }
 
         let seg_vaddr = p_vaddr.wrapping_add(bias);
         let seg_start = align_down(seg_vaddr, align);
-        let seg_end   = align_up(seg_vaddr + p_memsz, PAGE_SIZE);
-        let map_len   = seg_end - seg_start;
+        let seg_end = align_up(seg_vaddr + p_memsz, PAGE_SIZE);
+        let map_len = seg_end - seg_start;
 
         // Build protection flags
         let mut prot = VmProt::USER;
-        if p_flags & 0x4 != 0 { prot |= VmProt::READ; }
-        if p_flags & 0x2 != 0 { prot |= VmProt::WRITE; }
-        if p_flags & 0x1 != 0 { prot |= VmProt::EXEC; }
+        if p_flags & 0x4 != 0 {
+            prot |= VmProt::READ;
+        }
+        if p_flags & 0x2 != 0 {
+            prot |= VmProt::WRITE;
+        }
+        if p_flags & 0x1 != 0 {
+            prot |= VmProt::EXEC;
+        }
         // Need write to copy data in; we'll re-protect after if needed.
         let map_prot = prot | VmProt::READ | VmProt::WRITE;
 
@@ -416,9 +446,9 @@ fn map_elf_segments(elf_bytes: &[u8], load_base: usize) -> Option<usize> {
 
 /// Find the virtual address (already biased) of PT_DYNAMIC in a loaded ELF.
 fn find_dynamic_va(elf_bytes: &[u8], bias: usize) -> Option<usize> {
-    let e_phoff     = read_u64_le(elf_bytes, 32)? as usize;
+    let e_phoff = read_u64_le(elf_bytes, 32)? as usize;
     let e_phentsize = read_u16_le(elf_bytes, 54)? as usize;
-    let e_phnum     = read_u16_le(elf_bytes, 56)? as usize;
+    let e_phnum = read_u16_le(elf_bytes, 56)? as usize;
     for i in 0..e_phnum {
         let off = e_phoff + i * e_phentsize;
         if read_u32_le(elf_bytes, off)? == PT_DYNAMIC {
@@ -432,53 +462,62 @@ fn find_dynamic_va(elf_bytes: &[u8], bias: usize) -> Option<usize> {
 /// Read the `PT_DYNAMIC` section (at virtual address `dynamic_va`) and return
 /// the relevant `DT_*` values.
 struct DynInfo {
-    strtab:      usize, // virtual address of DT_STRTAB
-    strsz:       usize,
-    symtab:      usize, // virtual address of DT_SYMTAB
-    syment:      usize, // size of one Elf64_Sym entry (usually 24)
-    rela:        usize, // DT_RELA
-    relasz:      usize, // DT_RELASZ
-    relaent:     usize, // DT_RELAENT (usually 24)
-    jmprel:      usize, // DT_JMPREL
-    pltrelsz:    usize, // DT_PLTRELSZ
-    init:        usize,
-    fini:        usize,
-    init_array:  usize,
-    init_arraysz:usize,
-    needed:      Vec<usize>, // offsets into strtab for each DT_NEEDED
+    strtab: usize, // virtual address of DT_STRTAB
+    strsz: usize,
+    symtab: usize,   // virtual address of DT_SYMTAB
+    syment: usize,   // size of one Elf64_Sym entry (usually 24)
+    rela: usize,     // DT_RELA
+    relasz: usize,   // DT_RELASZ
+    relaent: usize,  // DT_RELAENT (usually 24)
+    jmprel: usize,   // DT_JMPREL
+    pltrelsz: usize, // DT_PLTRELSZ
+    init: usize,
+    fini: usize,
+    init_array: usize,
+    init_arraysz: usize,
+    needed: Vec<usize>, // offsets into strtab for each DT_NEEDED
 }
 
 fn read_dyn_info(dynamic_va: usize) -> DynInfo {
     let mut di = DynInfo {
-        strtab: 0, strsz: 0, symtab: 0, syment: 24,
-        rela: 0, relasz: 0, relaent: 24,
-        jmprel: 0, pltrelsz: 0,
-        init: 0, fini: 0, init_array: 0, init_arraysz: 0,
+        strtab: 0,
+        strsz: 0,
+        symtab: 0,
+        syment: 24,
+        rela: 0,
+        relasz: 0,
+        relaent: 24,
+        jmprel: 0,
+        pltrelsz: 0,
+        init: 0,
+        fini: 0,
+        init_array: 0,
+        init_arraysz: 0,
         needed: Vec::new(),
     };
 
     let mut ptr = dynamic_va as *const u64;
     loop {
-        let tag  = unsafe { ptr.read_unaligned() } as i64;
-        let val  = unsafe { ptr.add(1).read_unaligned() } as usize;
+        let tag = unsafe { ptr.read_unaligned() } as i64;
+        let val = unsafe { ptr.add(1).read_unaligned() } as usize;
         ptr = unsafe { ptr.add(2) };
 
         match tag {
-            t if t == DT_NULL       => break,
-            t if t == DT_STRTAB     => di.strtab = val,
-            t if t == DT_STRSZ      => di.strsz  = val,
-            t if t == DT_SYMTAB     => di.symtab = val,
-            t if t == DT_SYMENT     => di.syment = val,
-            t if t == DT_RELA       => di.rela    = val,
-            t if t == DT_RELASZ     => di.relasz  = val,
-            t if t == DT_RELAENT    => di.relaent = val,
-            t if t == DT_JMPREL     => di.jmprel  = val,
-            t if t == DT_PLTRELSZ   => di.pltrelsz = val,
-            t if t == DT_INIT       => di.init      = val,
-            t if t == DT_FINI       => di.fini      = val,
+            t if t == DT_NULL => break,
+            t if t == DT_STRTAB => di.strtab = val,
+            t if t == DT_STRSZ => di.strsz = val,
+            t if t == DT_SYMTAB => di.symtab = val,
+            t if t == DT_SYMENT => di.syment = val,
+            t if t == DT_RELA => di.rela = val,
+            t if t == DT_RELASZ => di.relasz = val,
+            t if t == DT_RELAENT => di.relaent = val,
+            t if t == DT_JMPREL => di.jmprel = val,
+            t if t == DT_PLTRELSZ => di.pltrelsz = val,
+            t if t == DT_INIT => di.init = val,
+            t if t == DT_FINI => di.fini = val,
             t if t == DT_INIT_ARRAY => di.init_array = val,
             t if t == DT_INIT_ARRAYSZ => di.init_arraysz = val,
-            t if t == DT_NEEDED     => di.needed.push(val),
+            t if t == DT_NEEDED => di.needed.push(val),
             _ => {}
         }
     }
@@ -493,7 +532,9 @@ fn strtab_str(strtab_va: usize, offset: usize, max_len: usize) -> &'static [u8] 
     let ptr = (strtab_va + offset) as *const u8;
     let mut len = 0;
     while len < max_len {
-        if unsafe { ptr.add(len).read() } == 0 { break; }
+        if unsafe { ptr.add(len).read() } == 0 {
+            break;
+        }
         len += 1;
     }
     unsafe { core::slice::from_raw_parts(ptr, len) }
@@ -518,8 +559,8 @@ fn lookup_in_symtab(
     let mut ptr = symtab_va as *const u8;
     loop {
         // Elf64_Sym: st_name(4) st_info(1) st_other(1) st_shndx(2) st_value(8) st_size(8)
-        let st_name  = unsafe { read_u32_from_ptr(ptr, 0) } as usize;
-        let st_info  = unsafe { ptr.add(4).read() };
+        let st_name = unsafe { read_u32_from_ptr(ptr, 0) } as usize;
+        let st_info = unsafe { ptr.add(4).read() };
         let st_shndx = unsafe { read_u16_from_ptr(ptr, 6) };
         let st_value = unsafe { read_u64_from_ptr(ptr, 8) };
 
@@ -558,8 +599,14 @@ unsafe fn read_u32_from_ptr(p: *const u8, off: usize) -> u32 {
 
 unsafe fn read_u64_from_ptr(p: *const u8, off: usize) -> u64 {
     u64::from_le_bytes([
-        *p.add(off), *p.add(off+1), *p.add(off+2), *p.add(off+3),
-        *p.add(off+4), *p.add(off+5), *p.add(off+6), *p.add(off+7),
+        *p.add(off),
+        *p.add(off + 1),
+        *p.add(off + 2),
+        *p.add(off + 3),
+        *p.add(off + 4),
+        *p.add(off + 5),
+        *p.add(off + 6),
+        *p.add(off + 7),
     ])
 }
 
@@ -580,16 +627,18 @@ fn process_rela(
     strsz: usize,
     syment: usize,
 ) {
-    if relasz == 0 || relaent == 0 { return; }
+    if relasz == 0 || relaent == 0 {
+        return;
+    }
     let count = relasz / relaent;
     for i in 0..count {
         let entry = (rela_va + i * relaent) as *const u8;
         // Elf64_Rela: r_offset(8) r_info(8) r_addend(8)
         let r_offset = unsafe { read_u64_from_ptr(entry, 0) } as usize;
-        let r_info   = unsafe { read_u64_from_ptr(entry, 8) };
+        let r_info = unsafe { read_u64_from_ptr(entry, 8) };
         let r_addend = unsafe { read_u64_from_ptr(entry, 16) } as i64;
 
-        let r_sym  = (r_info >> 32) as usize;
+        let r_sym = (r_info >> 32) as usize;
         let r_type = (r_info & 0xFFFF_FFFF) as u32;
 
         let target = (r_offset.wrapping_add(bias)) as *mut u64;
@@ -600,14 +649,18 @@ fn process_rela(
             R_X86_64_RELATIVE => {
                 // *target = bias + addend
                 let val = (bias as i64).wrapping_add(r_addend) as u64;
-                unsafe { target.write_unaligned(val); }
+                unsafe {
+                    target.write_unaligned(val);
+                }
             }
 
             R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT | R_X86_64_64 => {
                 if r_sym == 0 {
                     // No symbol — treat as relative.
                     let val = (bias as i64).wrapping_add(r_addend) as u64;
-                    unsafe { target.write_unaligned(val); }
+                    unsafe {
+                        target.write_unaligned(val);
+                    }
                     continue;
                 }
                 // Resolve symbol.
@@ -622,7 +675,9 @@ fn process_rela(
 
                 if let Some(addr) = sym_val {
                     let val = (addr as i64).wrapping_add(r_addend) as u64;
-                    unsafe { target.write_unaligned(val); }
+                    unsafe {
+                        target.write_unaligned(val);
+                    }
                 } else {
                     println!(
                         "[ld.so] warning: unresolved symbol '{}'",
@@ -635,7 +690,9 @@ fn process_rela(
                 // Copy data from the shared-library's symbol into the BSS
                 // placeholder in the executable.  Rarely used in modern code.
                 // We simply zero the target for now.
-                unsafe { target.write_unaligned(0); }
+                unsafe {
+                    target.write_unaligned(0);
+                }
             }
 
             _ => {
@@ -656,7 +713,9 @@ static mut NEXT_LIB_BASE: usize = 0x6000_0000;
 
 fn next_lib_base(map_size: usize) -> usize {
     let base = unsafe { NEXT_LIB_BASE };
-    unsafe { NEXT_LIB_BASE = NEXT_LIB_BASE + align_up(map_size, PAGE_SIZE) + PAGE_SIZE; }
+    unsafe {
+        NEXT_LIB_BASE = NEXT_LIB_BASE + align_up(map_size, PAGE_SIZE) + PAGE_SIZE;
+    }
     base
 }
 
@@ -673,7 +732,9 @@ fn load_library(soname: &[u8]) -> Option<usize> {
         let mut path = [0u8; 256];
         let dlen = dir.len();
         let nlen = name_str.len();
-        if dlen + 1 + nlen + 1 > 255 { continue; }
+        if dlen + 1 + nlen + 1 > 255 {
+            continue;
+        }
         path[..dlen].copy_from_slice(dir.as_bytes());
         path[dlen] = b'/';
         path[dlen + 1..dlen + 1 + nlen].copy_from_slice(soname);
@@ -696,14 +757,20 @@ fn load_library(soname: &[u8]) -> Option<usize> {
                     // Process the library's own relocations.
                     if di.rela != 0 {
                         process_rela(
-                            di.rela, di.relasz, di.relaent,
-                            bias, di.symtab, di.strtab, di.strsz, di.syment,
+                            di.rela, di.relasz, di.relaent, bias, di.symtab, di.strtab, di.strsz,
+                            di.syment,
                         );
                     }
                     if di.jmprel != 0 {
                         process_rela(
-                            di.jmprel, di.pltrelsz, di.relaent,
-                            bias, di.symtab, di.strtab, di.strsz, di.syment,
+                            di.jmprel,
+                            di.pltrelsz,
+                            di.relaent,
+                            bias,
+                            di.symtab,
+                            di.strtab,
+                            di.strsz,
+                            di.syment,
                         );
                     }
 
@@ -732,8 +799,8 @@ fn export_symbols(symtab_va: usize, strtab_va: usize, strsz: usize, syment: usiz
     let end_heuristic = symtab_va + 1 * 1024 * 1024; // 1 MiB safeguard
 
     loop {
-        let st_name  = unsafe { read_u32_from_ptr(ptr, 0) } as usize;
-        let st_info  = unsafe { ptr.add(4).read() };
+        let st_name = unsafe { read_u32_from_ptr(ptr, 0) } as usize;
+        let st_info = unsafe { ptr.add(4).read() };
         let st_shndx = unsafe { read_u16_from_ptr(ptr, 6) };
         let st_value = unsafe { read_u64_from_ptr(ptr, 8) };
 
@@ -747,17 +814,21 @@ fn export_symbols(symtab_va: usize, strtab_va: usize, strsz: usize, syment: usiz
         }
 
         ptr = unsafe { ptr.add(syment) };
-        if ptr as usize > end_heuristic { break; }
+        if ptr as usize > end_heuristic {
+            break;
+        }
     }
 }
 
 /// Compute the total virtual address span of all PT_LOAD segments, which gives
 /// an upper bound on how much memory the ELF will use.
 fn elf_load_size(bytes: &[u8]) -> Option<usize> {
-    if bytes.len() < 64 { return None; }
-    let e_phoff     = read_u64_le(bytes, 32)? as usize;
+    if bytes.len() < 64 {
+        return None;
+    }
+    let e_phoff = read_u64_le(bytes, 32)? as usize;
     let e_phentsize = read_u16_le(bytes, 54)? as usize;
-    let e_phnum     = read_u16_le(bytes, 56)? as usize;
+    let e_phnum = read_u16_le(bytes, 56)? as usize;
     let mut lo = usize::MAX;
     let mut hi = 0usize;
     for i in 0..e_phnum {
@@ -765,8 +836,12 @@ fn elf_load_size(bytes: &[u8]) -> Option<usize> {
         if read_u32_le(bytes, off)? == PT_LOAD {
             let vaddr = read_u64_le(bytes, off + 16)? as usize;
             let memsz = read_u64_le(bytes, off + 40)? as usize;
-            if vaddr < lo { lo = vaddr; }
-            if vaddr + memsz > hi { hi = vaddr + memsz; }
+            if vaddr < lo {
+                lo = vaddr;
+            }
+            if vaddr + memsz > hi {
+                hi = vaddr + memsz;
+            }
         }
     }
     if hi > lo { Some(hi - lo) } else { None }
@@ -776,7 +851,9 @@ fn elf_load_size(bytes: &[u8]) -> Option<usize> {
 
 /// Call all functions in the `DT_INIT_ARRAY`.
 fn run_init_array(init_array_va: usize, arraysz: usize) {
-    if init_array_va == 0 || arraysz == 0 { return; }
+    if init_array_va == 0 || arraysz == 0 {
+        return;
+    }
     let count = arraysz / 8;
     for i in 0..count {
         let fn_ptr_va = (init_array_va + i * 8) as *const usize;
@@ -790,7 +867,9 @@ fn run_init_array(init_array_va: usize, arraysz: usize) {
 
 /// Call a single DT_INIT function if its address is non-zero.
 fn run_init(init_va: usize) {
-    if init_va == 0 { return; }
+    if init_va == 0 {
+        return;
+    }
     let f: extern "C" fn() = unsafe { core::mem::transmute(init_va) };
     f();
 }
@@ -807,11 +886,11 @@ fn main(_arg: usize) -> ! {
     let _ = auxv_get(&mut auxv_buf);
     let auxv_entries = parse_auxv(&auxv_buf);
 
-    let at_phdr  = auxv_find(&auxv_entries, auxv::AT_PHDR)  as usize;
+    let at_phdr = auxv_find(&auxv_entries, auxv::AT_PHDR) as usize;
     let at_phent = auxv_find(&auxv_entries, auxv::AT_PHENT) as usize;
     let at_phnum = auxv_find(&auxv_entries, auxv::AT_PHNUM) as usize;
     let at_entry = auxv_find(&auxv_entries, auxv::AT_ENTRY) as usize;
-    let at_base  = auxv_find(&auxv_entries, auxv::AT_BASE)  as usize;
+    let at_base = auxv_find(&auxv_entries, auxv::AT_BASE) as usize;
 
     println!(
         "[ld.so] AT_PHDR=0x{:x}  AT_PHNUM={}  AT_ENTRY=0x{:x}  AT_BASE=0x{:x}",
@@ -834,7 +913,7 @@ fn main(_arg: usize) -> ! {
     let mut main_exec_bias: usize = 0; // best-effort; 0 for ET_EXEC
     for i in 0..at_phnum {
         let off = at_phdr + i * at_phent;
-        let p_type  = unsafe { read_u32_le_from_va(off, 0) };
+        let p_type = unsafe { read_u32_le_from_va(off, 0) };
         let p_vaddr = unsafe { read_u64_le_from_va(off, 16) } as usize;
         if p_type == PT_DYNAMIC {
             dynamic_va = p_vaddr;
@@ -874,14 +953,26 @@ fn main(_arg: usize) -> ! {
     // ── Step 6: Relocate the main executable ──────────────────────────────────
     if di.rela != 0 {
         process_rela(
-            di.rela, di.relasz, di.relaent,
-            main_exec_bias, di.symtab, di.strtab, di.strsz, di.syment,
+            di.rela,
+            di.relasz,
+            di.relaent,
+            main_exec_bias,
+            di.symtab,
+            di.strtab,
+            di.strsz,
+            di.syment,
         );
     }
     if di.jmprel != 0 {
         process_rela(
-            di.jmprel, di.pltrelsz, di.relaent,
-            main_exec_bias, di.symtab, di.strtab, di.strsz, di.syment,
+            di.jmprel,
+            di.pltrelsz,
+            di.relaent,
+            main_exec_bias,
+            di.symtab,
+            di.strtab,
+            di.strsz,
+            di.syment,
         );
     }
 
@@ -910,7 +1001,13 @@ unsafe fn read_u32_le_from_va(base: usize, off: usize) -> u32 {
 unsafe fn read_u64_le_from_va(base: usize, off: usize) -> u64 {
     let p = (base + off) as *const u8;
     u64::from_le_bytes([
-        *p, *p.add(1), *p.add(2), *p.add(3),
-        *p.add(4), *p.add(5), *p.add(6), *p.add(7),
+        *p,
+        *p.add(1),
+        *p.add(2),
+        *p.add(3),
+        *p.add(4),
+        *p.add(5),
+        *p.add(6),
+        *p.add(7),
     ])
 }

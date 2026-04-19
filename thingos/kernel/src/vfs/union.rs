@@ -20,11 +20,12 @@
 //!
 //! [`VfsDriver`]: super::VfsDriver
 
-use abi::errors::{Errno, SysResult};
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+use abi::errors::{Errno, SysResult};
 
 use super::{VfsDriver, VfsNode};
 
@@ -49,18 +50,12 @@ pub struct UnionFs {
 impl UnionFs {
     /// Create an empty union with no layers.
     pub fn new() -> Self {
-        Self {
-            layers: Vec::new(),
-            fallthrough: false,
-        }
+        Self { layers: Vec::new(), fallthrough: false }
     }
 
     /// Create a union with `fallthrough` behaviour enabled.
     pub fn new_fallthrough() -> Self {
-        Self {
-            layers: Vec::new(),
-            fallthrough: true,
-        }
+        Self { layers: Vec::new(), fallthrough: true }
     }
 
     /// Add `driver` as the **topmost** (highest-priority) layer.
@@ -117,9 +112,7 @@ impl VfsDriver for UnionFs {
         }
 
         // Multiple nodes found (must all be directories because of the !is_dir break above).
-        Ok(Arc::new(UnionDirNode {
-            layers: found_nodes,
-        }))
+        Ok(Arc::new(UnionDirNode { layers: found_nodes }))
     }
 }
 
@@ -197,9 +190,10 @@ impl super::VfsNode for UnionDirNode {
 
 #[cfg(test)]
 mod tests {
+    use abi::errors::Errno;
+
     use super::*;
     use crate::vfs::{VfsNode, VfsStat};
-    use abi::errors::Errno;
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -218,10 +212,7 @@ mod tests {
     impl VfsDriver for SingleFileFs {
         fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
             if path == self.name {
-                Ok(Arc::new(StaticNode {
-                    content: self.content,
-                    ino: self.ino,
-                }))
+                Ok(Arc::new(StaticNode { content: self.content, ino: self.ino }))
             } else {
                 Err(Errno::ENOENT)
             }

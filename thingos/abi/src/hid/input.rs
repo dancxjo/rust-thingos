@@ -88,9 +88,6 @@ impl Ps2KeyPayload {
     }
 
     pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
-        Self {
-            scancode: bytes[0],
-            flags: bytes[1],
-        }
+        Self { scancode: bytes[0], flags: bytes[1] }
     }
 }

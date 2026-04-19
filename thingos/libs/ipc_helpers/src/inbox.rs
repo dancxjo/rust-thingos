@@ -41,11 +41,11 @@
 //! ```
 
 use abi::errors::Errno;
-use stem::syscall::message::{msg_broadcast, msg_recv, msg_recv_blocking as stem_recv_blocking,
-                              msg_send};
-
 // Re-export types callers need so they only import from this module.
 pub use stem::syscall::message::{BroadcastResult, KindId, ReceivedMessage};
+use stem::syscall::message::{
+    msg_broadcast, msg_recv, msg_recv_blocking as stem_recv_blocking, msg_send,
+};
 
 // ── InboxReceiver ─────────────────────────────────────────────────────────────
 
@@ -132,10 +132,6 @@ pub fn send_typed_blocking(pid: u32, kind: KindId, payload: &[u8]) -> Result<(),
 ///
 /// Thin wrapper around [`stem::syscall::message::msg_broadcast`] that unpacks
 /// the compact status word into a [`BroadcastResult`].
-pub fn broadcast_typed(
-    pgid: u32,
-    kind: KindId,
-    payload: &[u8],
-) -> Result<BroadcastResult, Errno> {
+pub fn broadcast_typed(pgid: u32, kind: KindId, payload: &[u8]) -> Result<BroadcastResult, Errno> {
     msg_broadcast(pgid, kind, payload)
 }

@@ -5,17 +5,17 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::display_driver_protocol as drvproto;
-use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
-};
 use abi::driver_frame::FrameReader;
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
+use abi::driver_interface::{
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
+};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::info;
 use stem::syscall::vfs::vfs_handle_from_port;
-use stem::syscall::{port_recv, port_send, PortHandle};
-use stem::wait_set::WaitSet;
+use stem::syscall::{PortHandle, port_recv, port_send};
 use stem::thing::ThingId;
+use stem::wait_set::WaitSet;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_fake";
 
 #[unsafe(no_mangle)]
@@ -30,7 +30,10 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     start: thingos_driver_start,
 };
 
-unsafe extern "C" fn thingos_driver_probe(_dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
+unsafe extern "C" fn thingos_driver_probe(
+    _dev: *const DeviceInfo,
+    out: *mut ProbeResult,
+) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
@@ -92,12 +95,7 @@ fn parse_config(arg: usize) -> FakeConfig {
     let split_writes = cfg & (1 << 16) != 0;
     let burst = cfg & (1 << 17) != 0;
 
-    FakeConfig {
-        caps,
-        max_rects,
-        split_writes,
-        burst,
-    }
+    FakeConfig { caps, max_rects, split_writes, burst }
 }
 
 fn send_msg(handle: PortHandle, msg_type: u16, payload: &[u8]) {

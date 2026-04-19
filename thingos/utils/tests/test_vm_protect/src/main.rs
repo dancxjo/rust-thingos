@@ -33,11 +33,8 @@ fn main(_arg0: usize) -> ! {
     println!("Verified writable");
 
     // 3. Downgrade middle page to RO
-    let prot_req = VmProtectReq {
-        addr: 0x4000_1000,
-        len: 0x1000,
-        prot: VmProt::READ | VmProt::USER,
-    };
+    let prot_req =
+        VmProtectReq { addr: 0x4000_1000, len: 0x1000, prot: VmProt::READ | VmProt::USER };
     vm_protect(&prot_req).expect("vm_protect failed");
     println!("Downgraded middle page to RO");
 

@@ -5,9 +5,10 @@ use stem::syscall::port_send_all;
 
 use crate::damage::DamageTracker;
 use crate::protocol::{
-    KeyboardEnterEvent, KeyboardKeyEvent, KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent,
-    PointerLeaveEvent, PointerMotionEvent, EVT_KEYBOARD_ENTER, EVT_KEYBOARD_KEY, EVT_KEYBOARD_LEAVE,
-    EVT_POINTER_BUTTON, EVT_POINTER_ENTER, EVT_POINTER_LEAVE, EVT_POINTER_MOTION, msg_header, to_vec,
+    EVT_KEYBOARD_ENTER, EVT_KEYBOARD_KEY, EVT_KEYBOARD_LEAVE, EVT_POINTER_BUTTON,
+    EVT_POINTER_ENTER, EVT_POINTER_LEAVE, EVT_POINTER_MOTION, KeyboardEnterEvent, KeyboardKeyEvent,
+    KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent, PointerLeaveEvent,
+    PointerMotionEvent, msg_header, to_vec,
 };
 use crate::scene::Scene;
 
@@ -20,12 +21,7 @@ pub struct InputState {
 
 impl InputState {
     pub fn new(output_w: u32, output_h: u32) -> Self {
-        Self {
-            pointer_x: 0,
-            pointer_y: 0,
-            output_w: output_w as i32,
-            output_h: output_h as i32,
-        }
+        Self { pointer_x: 0, pointer_y: 0, output_w: output_w as i32, output_h: output_h as i32 }
     }
 
     pub fn update_dimensions(&mut self, output_w: u32, output_h: u32) {
@@ -33,7 +29,12 @@ impl InputState {
         self.output_h = output_h as i32;
     }
 
-    pub fn handle_bristle_event(&mut self, bytes: &[u8], scene: &mut Scene, damage: &mut DamageTracker) {
+    pub fn handle_bristle_event(
+        &mut self,
+        bytes: &[u8],
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+    ) {
         if bytes.len() < BristleEventHeader::SIZE {
             return;
         }
@@ -49,8 +50,10 @@ impl InputState {
                 let mut p = [0u8; PointerMovePayload::SIZE];
                 p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
                 let move_ev = PointerMovePayload::from_bytes(&p);
-                self.pointer_x = (self.pointer_x + move_ev.dx as i32).clamp(0, self.output_w.saturating_sub(1));
-                self.pointer_y = (self.pointer_y + move_ev.dy as i32).clamp(0, self.output_h.saturating_sub(1));
+                self.pointer_x =
+                    (self.pointer_x + move_ev.dx as i32).clamp(0, self.output_w.saturating_sub(1));
+                self.pointer_y =
+                    (self.pointer_y + move_ev.dy as i32).clamp(0, self.output_h.saturating_sub(1));
                 self.update_pointer_focus(scene);
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(ch) = scene
@@ -175,9 +178,8 @@ impl InputState {
         }
 
         if let Some(old_surface) = scene.pointer_focus {
-            if let Some(ch) = scene
-                .surface_client(old_surface)
-                .and_then(|client| scene.client_event_port(client))
+            if let Some(ch) =
+                scene.surface_client(old_surface).and_then(|client| scene.client_event_port(client))
             {
                 let ev = PointerLeaveEvent {
                     header: msg_header(EVT_POINTER_LEAVE),
@@ -189,9 +191,8 @@ impl InputState {
 
         scene.pointer_focus = new_focus;
         if let Some(surface_id) = new_focus {
-            if let Some(ch) = scene
-                .surface_client(surface_id)
-                .and_then(|client| scene.client_event_port(client))
+            if let Some(ch) =
+                scene.surface_client(surface_id).and_then(|client| scene.client_event_port(client))
             {
                 let ev = PointerEnterEvent {
                     header: msg_header(EVT_POINTER_ENTER),
@@ -215,9 +216,8 @@ impl InputState {
         }
 
         if let Some(old_surface) = old_focus {
-            if let Some(ch) = scene
-                .surface_client(old_surface)
-                .and_then(|client| scene.client_event_port(client))
+            if let Some(ch) =
+                scene.surface_client(old_surface).and_then(|client| scene.client_event_port(client))
             {
                 let ev = KeyboardLeaveEvent {
                     header: msg_header(EVT_KEYBOARD_LEAVE),
@@ -228,9 +228,8 @@ impl InputState {
         }
 
         if let Some(new_surface) = new_focus {
-            if let Some(ch) = scene
-                .surface_client(new_surface)
-                .and_then(|client| scene.client_event_port(client))
+            if let Some(ch) =
+                scene.surface_client(new_surface).and_then(|client| scene.client_event_port(client))
             {
                 let ev = KeyboardEnterEvent {
                     header: msg_header(EVT_KEYBOARD_ENTER),

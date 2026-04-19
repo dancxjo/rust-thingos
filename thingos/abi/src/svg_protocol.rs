@@ -5,9 +5,9 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 
 use crate::wire::ThingId;
-use alloc::vec::Vec;
 
 /// Source of SVG data for rasterization
 #[derive(Debug, Clone)]
@@ -211,13 +211,7 @@ impl RasterizeSvgRequest {
         pos += 1;
         let flags = u32::from_le_bytes(buf[pos..pos + 4].try_into().ok()?);
 
-        Some(Self {
-            source,
-            width,
-            height,
-            pixel_format,
-            flags,
-        })
+        Some(Self { source, width, height, pixel_format, flags })
     }
 }
 
@@ -272,15 +266,7 @@ impl RasterizeSvgResponse {
         pos += 1;
         let variant_hash = u64::from_le_bytes(buf[pos..pos + 8].try_into().ok()?);
 
-        Some(Self {
-            status,
-            raster_thing,
-            width,
-            height,
-            stride_bytes,
-            pixel_format,
-            variant_hash,
-        })
+        Some(Self { status, raster_thing, width, height, stride_bytes, pixel_format, variant_hash })
     }
 }
 

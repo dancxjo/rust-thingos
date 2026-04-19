@@ -55,11 +55,7 @@
 use thingos::place::Place;
 
 fn normalize_namespace(namespace: &str) -> alloc::string::String {
-    if namespace.is_empty() {
-        alloc::string::String::from("global")
-    } else {
-        namespace.into()
-    }
+    if namespace.is_empty() { alloc::string::String::from("global") } else { namespace.into() }
 }
 
 fn normalize_root(root: &str) -> alloc::string::String {
@@ -91,17 +87,10 @@ fn normalize_root(root: &str) -> alloc::string::String {
 pub fn place_for_current() -> Place {
     if let Some(pinfo) = crate::sched::process_info_current() {
         let pinfo = pinfo.lock();
-        let cwd = if pinfo.cwd.is_empty() {
-            alloc::string::String::from("/")
-        } else {
-            pinfo.cwd.clone()
-        };
+        let cwd =
+            if pinfo.cwd.is_empty() { alloc::string::String::from("/") } else { pinfo.cwd.clone() };
         let root = normalize_root(&pinfo.root);
-        return Place {
-            cwd,
-            namespace: normalize_namespace(&pinfo.namespace.label()),
-            root,
-        };
+        return Place { cwd, namespace: normalize_namespace(&pinfo.namespace.label()), root };
     }
 
     Place {
@@ -132,9 +121,7 @@ pub fn place_for_current() -> Place {
 /// `Place`.  Those belong to `Presence`, which has not yet been introduced.
 /// This function deliberately omits any terminal/session/console fields from
 /// `ProcessSnapshot` even if they were available.
-pub fn place_from_snapshot(
-    snapshot: &crate::sched::hooks::ProcessSnapshot,
-) -> Place {
+pub fn place_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> Place {
     // PROVISIONAL: cwd is taken directly from Process::cwd.  Future phases
     // will replace this raw path string with a stable VFS-node reference once
     // cwd tracking migrates out of Process into a Place-shaped substructure.

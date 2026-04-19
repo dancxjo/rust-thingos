@@ -11,9 +11,7 @@ pub struct DeviceLedger {
 
 impl DeviceLedger {
     pub fn new() -> Self {
-        Self {
-            units: BTreeMap::new(),
-        }
+        Self { units: BTreeMap::new() }
     }
 
     pub fn get(&self, class: &str) -> Option<&u32> {

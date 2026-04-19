@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
 use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_read, vfs_write};
@@ -31,8 +32,7 @@ fn get_args() -> Vec<String> {
             if offset + 4 > buf.len() {
                 break;
             }
-            let str_len =
-                u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+            let str_len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + str_len > buf.len() {
                 break;
@@ -230,8 +230,7 @@ fn lookup(name: &str, server_ip: &str) -> Result<Vec<[u8; 4]>, &'static str> {
             Ok(n) if n >= 10 => {
                 // /net/udp/<id>/data read format:
                 // [4: src_ipv4][2: src_port_le][4: payload_len_le][payload]
-                let payload_len =
-                    u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]) as usize;
+                let payload_len = u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]) as usize;
                 if n < 10 + payload_len {
                     return Err("short udp response");
                 }

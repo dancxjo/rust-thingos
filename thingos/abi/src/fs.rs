@@ -23,11 +23,7 @@ pub struct Timespec {
 
 impl Timespec {
     /// The zero/epoch timestamp (1970-01-01 00:00:00 UTC).
-    pub const ZERO: Self = Self {
-        sec: 0,
-        nsec: 0,
-        _pad: 0,
-    };
+    pub const ZERO: Self = Self { sec: 0, nsec: 0, _pad: 0 };
 
     /// Create a `Timespec` from seconds and nanoseconds.
     #[inline]

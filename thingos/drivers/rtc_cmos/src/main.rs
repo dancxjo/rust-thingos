@@ -5,11 +5,11 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::driver_interface::{
-    DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    ProbeResult, Status,
 };
 use stem::abi::driver_ctx::DriverCtx;
-use stem::abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::{debug, error, info, warn};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"rtc_cmos";
@@ -159,11 +159,7 @@ fn read_rtc() -> (u16, u8, u8, u8, u8, u8) {
     };
 
     // Assume century is 20xx for year < 70, 19xx for >= 70
-    let full_year = if y < 70 {
-        2000 + y as u16
-    } else {
-        1900 + y as u16
-    };
+    let full_year = if y < 70 { 2000 + y as u16 } else { 1900 + y as u16 };
 
     (full_year, mo, d, h, m, s)
 }

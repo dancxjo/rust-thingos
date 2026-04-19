@@ -1,8 +1,10 @@
-use super::Thread;
-use crate::BootRuntime;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+
 use spin::Mutex;
+
+use super::Thread;
+use crate::BootRuntime;
 
 /// Registry of all live kernel threads for a given runtime.
 pub struct ThreadRegistry<R: BootRuntime> {
@@ -13,9 +15,7 @@ pub type TaskRegistry<R> = ThreadRegistry<R>;
 
 impl<R: BootRuntime> ThreadRegistry<R> {
     pub fn new() -> Self {
-        Self {
-            threads: Vec::with_capacity(1024),
-        }
+        Self { threads: Vec::with_capacity(1024) }
     }
 
     pub fn insert(&mut self, thread: Box<Thread<R>>) {
@@ -27,10 +27,7 @@ impl<R: BootRuntime> ThreadRegistry<R> {
     }
 
     pub fn get(&self, id: u64) -> Option<&Thread<R>> {
-        self.threads
-            .binary_search_by_key(&id, |t| t.id)
-            .ok()
-            .map(|idx| &*self.threads[idx])
+        self.threads.binary_search_by_key(&id, |t| t.id).ok().map(|idx| &*self.threads[idx])
     }
 
     pub fn get_mut(&mut self, id: u64) -> Option<&mut Thread<R>> {
@@ -75,33 +72,21 @@ impl<R: BootRuntime> Drop for RegistryGuard<R> {
 impl<R: BootRuntime> core::ops::Deref for RegistryGuard<R> {
     type Target = ThreadRegistry<R>;
     fn deref(&self) -> &Self::Target {
-        let ptr = self
-            .guard
-            .as_ref()
-            .unwrap()
-            .expect("ThreadRegistry not initialized");
+        let ptr = self.guard.as_ref().unwrap().expect("ThreadRegistry not initialized");
         unsafe { &*(ptr as *const ThreadRegistry<R>) }
     }
 }
 
 impl<R: BootRuntime> core::ops::DerefMut for RegistryGuard<R> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let ptr = self
-            .guard
-            .as_mut()
-            .unwrap()
-            .expect("ThreadRegistry not initialized");
+        let ptr = self.guard.as_mut().unwrap().expect("ThreadRegistry not initialized");
         unsafe { &mut *(ptr as *mut ThreadRegistry<R>) }
     }
 }
 
 pub fn get_registry<R: BootRuntime>() -> RegistryGuard<R> {
     let irq_state = unsafe { crate::irq::irq_disable_erased() };
-    RegistryGuard {
-        guard: Some(REGISTRY.lock()),
-        irq_state,
-        _marker: core::marker::PhantomData,
-    }
+    RegistryGuard { guard: Some(REGISTRY.lock()), irq_state, _marker: core::marker::PhantomData }
 }
 
 pub struct ThreadRef<R: BootRuntime> {

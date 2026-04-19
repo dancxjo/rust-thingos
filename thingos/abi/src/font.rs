@@ -70,12 +70,7 @@ impl FontRequest {
                 buf[0] = 0;
                 Some(1)
             }
-            FontRequest::RenderText {
-                face,
-                size_px,
-                text,
-                color,
-            } => {
+            FontRequest::RenderText { face, size_px, text, color } => {
                 buf[0] = 1;
                 let mut offset = 1;
                 // face: FontId(u64) + index(u32) = 12 bytes
@@ -97,11 +92,7 @@ impl FontRequest {
                 offset += text.len();
                 Some(offset)
             }
-            FontRequest::MeasureText {
-                face,
-                size_px,
-                text,
-            } => {
+            FontRequest::MeasureText { face, size_px, text } => {
                 buf[0] = 2;
                 let mut offset = 1;
                 if buf.len() < offset + 12 + 4 + 4 + text.len() {
@@ -152,10 +143,7 @@ impl FontRequest {
                 ))
                 .ok()?;
                 Some(FontRequest::RenderText {
-                    face: FaceId {
-                        font_id: FontId(font_id),
-                        index,
-                    },
+                    face: FaceId { font_id: FontId(font_id), index },
                     size_px,
                     text,
                     color,
@@ -182,10 +170,7 @@ impl FontRequest {
                 ))
                 .ok()?;
                 Some(FontRequest::MeasureText {
-                    face: FaceId {
-                        font_id: FontId(font_id),
-                        index,
-                    },
+                    face: FaceId { font_id: FontId(font_id), index },
                     size_px,
                     text,
                 })
@@ -329,10 +314,7 @@ impl FontResponse {
                     .ok()?;
                     offset += s_len;
                     list.push(FontInfo {
-                        face_id: FaceId {
-                            font_id: FontId(font_id),
-                            index,
-                        },
+                        face_id: FaceId { font_id: FontId(font_id), index },
                         family,
                         style,
                     });
@@ -377,12 +359,7 @@ impl FontResponse {
                 let baseline_y = i32::from_le_bytes(buf[offset..offset + 4].try_into().ok()?);
                 offset += 4;
                 let advance_x = i32::from_le_bytes(buf[offset..offset + 4].try_into().ok()?);
-                Some(FontResponse::Measured(TextMetrics {
-                    width,
-                    height,
-                    baseline_y,
-                    advance_x,
-                }))
+                Some(FontResponse::Measured(TextMetrics { width, height, baseline_y, advance_x }))
             }
             3 => {
                 let mut offset = 1;

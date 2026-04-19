@@ -9,16 +9,14 @@
 #![no_std]
 #![no_main]
 use alloc::string::ToString;
-use core::ffi::c_void;
 use core::default::Default;
+use core::ffi::c_void;
 extern crate alloc;
 
-
-
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use stem::println;
-use stem::pthread;
+
 use stem::syscall::{exit, get_tid, getpid, spawn_thread, task_wait, yield_now};
+use stem::{println, pthread};
 
 // ============================================================================
 // Test 1 – Basic spawn and join
@@ -112,9 +110,8 @@ fn test_multi_thread_counter() {
     let mut stacks = alloc::vec::Vec::new();
 
     for _ in 0..N_THREADS {
-        let stack =
-            stem::stack::Stack::alloc_growing_stack(stem::stack::StackSpec::default())
-                .expect("stack alloc");
+        let stack = stem::stack::Stack::alloc_growing_stack(stem::stack::StackSpec::default())
+            .expect("stack alloc");
         let tid = spawn_thread(counter_thread as usize, 0, &stack).expect("spawn");
         tids.push(tid);
         stacks.push(stack);
@@ -126,11 +123,7 @@ fn test_multi_thread_counter() {
 
     let expected = N_THREADS as u32 * M_ITERS;
     let actual = COUNTER.load(Ordering::SeqCst);
-    assert_eq!(
-        actual, expected,
-        "counter mismatch: got {}, expected {}",
-        actual, expected
-    );
+    assert_eq!(actual, expected, "counter mismatch: got {}, expected {}", actual, expected);
 
     println!("[test_threads] test_multi_thread_counter: PASS");
 }
@@ -144,16 +137,10 @@ fn test_multi_thread_counter() {
 //   • every thread sees the same TGID (getpid() == main thread's getpid()).
 
 const TID_THREADS: usize = 3;
-static RECORDED_TIDS: [AtomicU64; TID_THREADS] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
-static RECORDED_TGIDS: [AtomicU64; TID_THREADS] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
+static RECORDED_TIDS: [AtomicU64; TID_THREADS] =
+    [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+static RECORDED_TGIDS: [AtomicU64; TID_THREADS] =
+    [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 static TID_SLOT: AtomicU32 = AtomicU32::new(0);
 
 extern "C" fn record_tid_thread(_arg: usize) -> ! {
@@ -182,9 +169,8 @@ fn test_tid_uniqueness_and_tgid_identity() {
     let mut stacks = alloc::vec::Vec::new();
 
     for _ in 0..TID_THREADS {
-        let stack =
-            stem::stack::Stack::alloc_growing_stack(stem::stack::StackSpec::default())
-                .expect("stack alloc");
+        let stack = stem::stack::Stack::alloc_growing_stack(stem::stack::StackSpec::default())
+            .expect("stack alloc");
         let tid = spawn_thread(record_tid_thread as usize, 0, &stack).expect("spawn");
         tids.push(tid);
         stacks.push(stack);
@@ -211,11 +197,7 @@ fn test_tid_uniqueness_and_tgid_identity() {
     // Verify all threads saw the same TGID as the main thread.
     for (i, r) in RECORDED_TGIDS.iter().enumerate() {
         let tgid = r.load(Ordering::Acquire);
-        assert_eq!(
-            tgid, main_tgid,
-            "thread {} reported TGID {} instead of {}",
-            i, tgid, main_tgid
-        );
+        assert_eq!(tgid, main_tgid, "thread {} reported TGID {} instead of {}", i, tgid, main_tgid);
     }
 
     println!("[test_threads] test_tid_uniqueness_and_tgid_identity: PASS");
@@ -247,11 +229,7 @@ fn test_thread_arg_passing() {
     task_wait(tid).expect("task_wait");
 
     let received = RECEIVED_ARG.load(Ordering::Acquire);
-    assert_eq!(
-        received, ARG_VAL as u64,
-        "arg not received: got {} expected {}",
-        received, ARG_VAL
-    );
+    assert_eq!(received, ARG_VAL as u64, "arg not received: got {} expected {}", received, ARG_VAL);
 
     println!("[test_threads] test_thread_arg_passing: PASS");
 }
@@ -286,12 +264,7 @@ fn test_pthread_baseline_surface() {
     let mut tid: pthread::pthread_t = 0;
     let payload = 0x1234usize as *mut c_void;
     let rc = unsafe {
-        pthread::pthread_create(
-            &raw mut tid,
-            core::ptr::null(),
-            pthread_return_arg,
-            payload,
-        )
+        pthread::pthread_create(&raw mut tid, core::ptr::null(), pthread_return_arg, payload)
     };
     assert_eq!(rc, 0, "pthread_create failed with {}", rc);
     assert!(tid != 0, "pthread_create returned invalid pthread_t");
@@ -305,22 +278,14 @@ fn test_pthread_baseline_surface() {
     let mut tid2: pthread::pthread_t = 0;
     let payload2 = 0x2222usize as *mut c_void;
     let rc = unsafe {
-        pthread::pthread_create(
-            &raw mut tid2,
-            core::ptr::null(),
-            pthread_exit_arg,
-            payload2,
-        )
+        pthread::pthread_create(&raw mut tid2, core::ptr::null(), pthread_exit_arg, payload2)
     };
     assert_eq!(rc, 0, "pthread_create (pthread_exit path) failed with {}", rc);
 
     let mut joined_ret2: *mut c_void = core::ptr::null_mut();
     let rc = unsafe { pthread::pthread_join(tid2, &raw mut joined_ret2) };
     assert_eq!(rc, 0, "pthread_join (pthread_exit path) failed with {}", rc);
-    assert_eq!(
-        joined_ret2, payload2,
-        "pthread_exit retval mismatch against return-path behavior"
-    );
+    assert_eq!(joined_ret2, payload2, "pthread_exit retval mismatch against return-path behavior");
 
     // self/equal identity behavior.
     let main_self = pthread::pthread_self();

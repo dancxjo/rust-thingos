@@ -29,8 +29,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use stem::syscall::vfs::{pipe, vfs_close, vfs_read, vfs_write};
 use stem::{info, warn};
 

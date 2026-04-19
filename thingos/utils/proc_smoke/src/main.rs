@@ -19,7 +19,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use std::process::Command;
 
 // ─── child modes ─────────────────────────────────────────────────────────────
@@ -31,11 +30,7 @@ fn child_dispatch() -> bool {
     }
     match args[1].as_str() {
         "--child-exit" => {
-            let code: i32 = if args.len() > 2 {
-                args[2].parse().unwrap_or(1)
-            } else {
-                0
-            };
+            let code: i32 = if args.len() > 2 { args[2].parse().unwrap_or(1) } else { 0 };
             std::process::exit(code);
         }
         "--child-echo" => {
@@ -308,16 +303,16 @@ fn main() {
     let exe = self_exe();
 
     let tests: &[Test] = &[
-        Test { name: "proc_status",        run: test_proc_status },
-        Test { name: "proc_exit_code",     run: test_proc_exit_code },
-        Test { name: "proc_args",          run: test_proc_args },
-        Test { name: "proc_env",           run: test_proc_env },
-        Test { name: "proc_stdout_pipe",   run: test_proc_stdout_pipe },
-        Test { name: "proc_stdin_pipe",    run: test_proc_stdin_pipe },
+        Test { name: "proc_status", run: test_proc_status },
+        Test { name: "proc_exit_code", run: test_proc_exit_code },
+        Test { name: "proc_args", run: test_proc_args },
+        Test { name: "proc_env", run: test_proc_env },
+        Test { name: "proc_stdout_pipe", run: test_proc_stdout_pipe },
+        Test { name: "proc_stdin_pipe", run: test_proc_stdin_pipe },
         Test { name: "proc_inherit_stdio", run: test_proc_inherit_stdio },
-        Test { name: "proc_try_wait",      run: test_proc_try_wait },
-        Test { name: "proc_deadlock",      run: test_proc_deadlock },
-        Test { name: "proc_pipeline",      run: test_proc_pipeline },
+        Test { name: "proc_try_wait", run: test_proc_try_wait },
+        Test { name: "proc_deadlock", run: test_proc_deadlock },
+        Test { name: "proc_pipeline", run: test_proc_pipeline },
     ];
 
     let args: Vec<String> = std::env::args().collect();

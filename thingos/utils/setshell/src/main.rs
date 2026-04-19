@@ -4,6 +4,7 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
 use stem::abi::syscall::vfs_flags;
 use stem::syscall::{argv_get, exit, vfs_close, vfs_mkdir, vfs_open, vfs_stat, vfs_write};
 
@@ -66,11 +67,9 @@ fn validate_shell_path(path: &str) -> Result<(), &'static str> {
 fn write_runtime_shell(path: &str) -> Result<(), &'static str> {
     ensure_parent_dirs();
 
-    let fd = vfs_open(
-        RUNTIME_SHELL_PATH,
-        vfs_flags::O_WRONLY | vfs_flags::O_CREAT | vfs_flags::O_TRUNC,
-    )
-    .map_err(|_| "failed to open /run/sprout/shell")?;
+    let fd =
+        vfs_open(RUNTIME_SHELL_PATH, vfs_flags::O_WRONLY | vfs_flags::O_CREAT | vfs_flags::O_TRUNC)
+            .map_err(|_| "failed to open /run/sprout/shell")?;
 
     let mut line = path.to_string();
     line.push('\n');
@@ -103,9 +102,6 @@ fn main(_arg: usize) -> ! {
         exit(1)
     }
 
-    print(&alloc::format!(
-        "sprout shell set to '{}' (applies on next shell restart)\n",
-        candidate
-    ));
+    print(&alloc::format!("sprout shell set to '{}' (applies on next shell restart)\n", candidate));
     exit(0)
 }

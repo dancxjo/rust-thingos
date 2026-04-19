@@ -8,13 +8,14 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
 use abi::hid::{
     BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, BristleEventHeader, EventType, Key,
     KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
-use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write};
+use stem::syscall::vfs::{
+    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write,
+};
 use stem::syscall::{PortHandle, port_send_all};
 use stem::{debug, info};
 
@@ -43,9 +44,7 @@ fn get_active_ui() -> alloc::string::String {
             if let Ok(n) = vfs_read(fd, &mut buf) {
                 buf.truncate(n);
                 let _ = vfs_close(fd);
-                return alloc::string::String::from_utf8_lossy(&buf)
-                    .trim()
-                    .to_string();
+                return alloc::string::String::from_utf8_lossy(&buf).trim().to_string();
             }
         }
         let _ = vfs_close(fd);
@@ -204,8 +203,7 @@ fn main(packed_handles: usize) -> ! {
                                     }
 
                                     if evt_input_echo_write != 0
-                                        && port_send_all(evt_input_echo_write, event_bytes)
-                                            .is_err()
+                                        && port_send_all(evt_input_echo_write, event_bytes).is_err()
                                     {
                                         drop_counter += 1;
                                     }

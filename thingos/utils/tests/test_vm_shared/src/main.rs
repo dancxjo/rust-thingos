@@ -54,28 +54,13 @@ fn main(_arg0: usize) -> ! {
         let s = map_shared_rw_a.addr as *const u8;
         p.write_volatile(0xA5);
         let seen_shared = s.read_volatile();
-        assert_eq!(
-            seen_shared, 0x5A,
-            "private map write leaked into shared mapping"
-        );
+        assert_eq!(seen_shared, 0x5A, "private map write leaked into shared mapping");
     }
     println!("private mapping isolation: PASS");
 
-    vm_unmap(&VmUnmapReq {
-        addr: map_shared_rw_a.addr,
-        len: SIZE,
-    })
-    .expect("unmap shared a failed");
-    vm_unmap(&VmUnmapReq {
-        addr: map_shared_rw_b.addr,
-        len: SIZE,
-    })
-    .expect("unmap shared b failed");
-    vm_unmap(&VmUnmapReq {
-        addr: map_private.addr,
-        len: SIZE,
-    })
-    .expect("unmap private failed");
+    vm_unmap(&VmUnmapReq { addr: map_shared_rw_a.addr, len: SIZE }).expect("unmap shared a failed");
+    vm_unmap(&VmUnmapReq { addr: map_shared_rw_b.addr, len: SIZE }).expect("unmap shared b failed");
+    vm_unmap(&VmUnmapReq { addr: map_private.addr, len: SIZE }).expect("unmap private failed");
 
     vfs_close(fd).expect("close memfd failed");
     println!("--- test_vm_shared: PASS ---");

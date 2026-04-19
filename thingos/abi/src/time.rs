@@ -28,11 +28,7 @@ pub struct TimeSpec {
 }
 
 impl TimeSpec {
-    pub const ZERO: Self = Self {
-        secs: 0,
-        nanos: 0,
-        reserved: 0,
-    };
+    pub const ZERO: Self = Self { secs: 0, nanos: 0, reserved: 0 };
 
     pub const fn is_valid(&self) -> bool {
         self.nanos < 1_000_000_000
@@ -80,11 +76,7 @@ mod tests {
 
     #[test]
     fn timespec_rejects_invalid_nanoseconds_field() {
-        let spec = TimeSpec {
-            secs: 1,
-            nanos: 1_000_000_000,
-            reserved: 0,
-        };
+        let spec = TimeSpec { secs: 1, nanos: 1_000_000_000, reserved: 0 };
         assert!(!spec.is_valid());
         assert_eq!(spec.as_nanos(), None);
     }

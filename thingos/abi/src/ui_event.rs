@@ -102,62 +102,28 @@ pub enum UiEvent {
     /// Pointer moved (no target — global within window).
     PointerMove { window: u64, x: i32, y: i32 },
     /// Pointer button pressed on a target.
-    PointerDown {
-        window: u64,
-        target: u64,
-        button: u8,
-        x: i32,
-        y: i32,
-        mods: u16,
-    },
+    PointerDown { window: u64, target: u64, button: u8, x: i32, y: i32, mods: u16 },
     /// Pointer button released on a target.
-    PointerUp {
-        window: u64,
-        target: u64,
-        button: u8,
-        x: i32,
-        y: i32,
-        mods: u16,
-    },
+    PointerUp { window: u64, target: u64, button: u8, x: i32, y: i32, mods: u16 },
     /// Scroll wheel on a target.
-    Scroll {
-        window: u64,
-        target: u64,
-        dx: i32,
-        dy: i32,
-        mods: u16,
-    },
+    Scroll { window: u64, target: u64, dx: i32, dy: i32, mods: u16 },
 
     /// Raw key press.
     KeyDown { window: u64, key: u32, mods: u16 },
     /// Raw key release.
     KeyUp { window: u64, key: u32, mods: u16 },
     /// Insert text at cursor (composition result / printable chars).
-    TextInput {
-        window: u64,
-        target: u64,
-        text_len: u8,
-        text: [u8; TEXT_MAX],
-    },
+    TextInput { window: u64, target: u64, text_len: u8, text: [u8; TEXT_MAX] },
     /// Delete one character before cursor.
     TextBackspace { window: u64, target: u64 },
     /// Delete one character after cursor.
     TextDelete { window: u64, target: u64 },
     /// Move cursor by delta characters.
-    CursorMove {
-        window: u64,
-        target: u64,
-        delta: i32,
-    },
+    CursorMove { window: u64, target: u64, delta: i32 },
     /// Set cursor to absolute position.
     CursorSet { window: u64, target: u64, pos: u32 },
     /// Set text selection range.
-    Select {
-        window: u64,
-        target: u64,
-        start: u32,
-        end: u32,
-    },
+    Select { window: u64, target: u64, start: u32, end: u32 },
 
     /// Window resized.
     Resize { window: u64, w: u32, h: u32 },
@@ -165,18 +131,9 @@ pub enum UiEvent {
     CloseRequested { window: u64 },
 
     /// Legacy: button clicked.
-    Clicked {
-        window: u64,
-        target: u64,
-        action_id: u64,
-    },
+    Clicked { window: u64, target: u64, action_id: u64 },
     /// Legacy: checkbox toggled.
-    Toggled {
-        window: u64,
-        target: u64,
-        checked: u8,
-        value_id: u64,
-    },
+    Toggled { window: u64, target: u64, checked: u8, value_id: u64 },
 
     /// An event kind we don't recognize (forward compat).
     Unknown { kind: u16, payload_len: u32 },
@@ -304,22 +261,8 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── PointerDown / PointerUp (28 bytes) ──
-        UiEvent::PointerDown {
-            window,
-            target,
-            button,
-            x,
-            y,
-            mods,
-        }
-        | UiEvent::PointerUp {
-            window,
-            target,
-            button,
-            x,
-            y,
-            mods,
-        } => {
+        UiEvent::PointerDown { window, target, button, x, y, mods }
+        | UiEvent::PointerUp { window, target, button, x, y, mods } => {
             let kind = if matches!(event, UiEvent::PointerDown { .. }) {
                 UiEventKind::PointerDown
             } else {
@@ -342,13 +285,7 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── Scroll (28 bytes) ──
-        UiEvent::Scroll {
-            window,
-            target,
-            dx,
-            dy,
-            mods,
-        } => {
+        UiEvent::Scroll { window, target, dx, dy, mods } => {
             let plen: u32 = 28;
             let total = HEADER_SIZE + plen as usize;
             if out.len() < total {
@@ -387,12 +324,7 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── TextInput (16 + 1 + 1 + text bytes, padded) ──
-        UiEvent::TextInput {
-            window,
-            target,
-            text_len,
-            text,
-        } => {
+        UiEvent::TextInput { window, target, text_len, text } => {
             let tlen = core::cmp::min(*text_len as usize, TEXT_MAX);
             // payload = window(8) + target(8) + text_len(1) + pad(1) + text(tlen)
             let raw_plen = 8 + 8 + 1 + 1 + tlen;
@@ -416,11 +348,7 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── CursorMove (20 bytes) ──
-        UiEvent::CursorMove {
-            window,
-            target,
-            delta,
-        } => {
+        UiEvent::CursorMove { window, target, delta } => {
             let plen: u32 = 20;
             let total = HEADER_SIZE + plen as usize;
             if out.len() < total {
@@ -434,11 +362,7 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── CursorSet (20 bytes) ──
-        UiEvent::CursorSet {
-            window,
-            target,
-            pos,
-        } => {
+        UiEvent::CursorSet { window, target, pos } => {
             let plen: u32 = 20;
             let total = HEADER_SIZE + plen as usize;
             if out.len() < total {
@@ -452,12 +376,7 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── Select (24 bytes) ──
-        UiEvent::Select {
-            window,
-            target,
-            start,
-            end,
-        } => {
+        UiEvent::Select { window, target, start, end } => {
             let plen: u32 = 24;
             let total = HEADER_SIZE + plen as usize;
             if out.len() < total {
@@ -498,11 +417,7 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── Clicked (24 bytes) ──
-        UiEvent::Clicked {
-            window,
-            target,
-            action_id,
-        } => {
+        UiEvent::Clicked { window, target, action_id } => {
             let plen: u32 = 24;
             let total = HEADER_SIZE + plen as usize;
             if out.len() < total {
@@ -516,12 +431,7 @@ pub fn encode(event: &UiEvent, out: &mut [u8]) -> Option<usize> {
         }
 
         // ── Toggled (28 bytes) ──
-        UiEvent::Toggled {
-            window,
-            target,
-            checked,
-            value_id,
-        } => {
+        UiEvent::Toggled { window, target, checked, value_id } => {
             let plen: u32 = 24;
             let total = HEADER_SIZE + plen as usize;
             if out.len() < total {
@@ -592,36 +502,28 @@ pub fn decode_one(bytes: &[u8]) -> Result<(UiEvent, usize), DecodeError> {
     let p = &bytes[HEADER_SIZE..total];
 
     let event = match UiEventKind::from_raw(kind_raw) {
-        Some(UiEventKind::Focus) if payload_len >= 16 => UiEvent::Focus {
-            window: get_u64(p, 0),
-            target: get_u64(p, 8),
-        },
-        Some(UiEventKind::Blur) if payload_len >= 16 => UiEvent::Blur {
-            window: get_u64(p, 0),
-            target: get_u64(p, 8),
-        },
-        Some(UiEventKind::Activate) if payload_len >= 16 => UiEvent::Activate {
-            window: get_u64(p, 0),
-            target: get_u64(p, 8),
-        },
-        Some(UiEventKind::Submit) if payload_len >= 16 => UiEvent::Submit {
-            window: get_u64(p, 0),
-            target: get_u64(p, 8),
-        },
-        Some(UiEventKind::TextBackspace) if payload_len >= 16 => UiEvent::TextBackspace {
-            window: get_u64(p, 0),
-            target: get_u64(p, 8),
-        },
-        Some(UiEventKind::TextDelete) if payload_len >= 16 => UiEvent::TextDelete {
-            window: get_u64(p, 0),
-            target: get_u64(p, 8),
-        },
+        Some(UiEventKind::Focus) if payload_len >= 16 => {
+            UiEvent::Focus { window: get_u64(p, 0), target: get_u64(p, 8) }
+        }
+        Some(UiEventKind::Blur) if payload_len >= 16 => {
+            UiEvent::Blur { window: get_u64(p, 0), target: get_u64(p, 8) }
+        }
+        Some(UiEventKind::Activate) if payload_len >= 16 => {
+            UiEvent::Activate { window: get_u64(p, 0), target: get_u64(p, 8) }
+        }
+        Some(UiEventKind::Submit) if payload_len >= 16 => {
+            UiEvent::Submit { window: get_u64(p, 0), target: get_u64(p, 8) }
+        }
+        Some(UiEventKind::TextBackspace) if payload_len >= 16 => {
+            UiEvent::TextBackspace { window: get_u64(p, 0), target: get_u64(p, 8) }
+        }
+        Some(UiEventKind::TextDelete) if payload_len >= 16 => {
+            UiEvent::TextDelete { window: get_u64(p, 0), target: get_u64(p, 8) }
+        }
 
-        Some(UiEventKind::PointerMove) if payload_len >= 16 => UiEvent::PointerMove {
-            window: get_u64(p, 0),
-            x: get_i32(p, 8),
-            y: get_i32(p, 12),
-        },
+        Some(UiEventKind::PointerMove) if payload_len >= 16 => {
+            UiEvent::PointerMove { window: get_u64(p, 0), x: get_i32(p, 8), y: get_i32(p, 12) }
+        }
 
         Some(UiEventKind::PointerDown) if payload_len >= 28 => UiEvent::PointerDown {
             window: get_u64(p, 0),
@@ -648,16 +550,12 @@ pub fn decode_one(bytes: &[u8]) -> Result<(UiEvent, usize), DecodeError> {
             mods: get_u16(p, 24),
         },
 
-        Some(UiEventKind::KeyDown) if payload_len >= 16 => UiEvent::KeyDown {
-            window: get_u64(p, 0),
-            key: get_u32(p, 8),
-            mods: get_u16(p, 12),
-        },
-        Some(UiEventKind::KeyUp) if payload_len >= 16 => UiEvent::KeyUp {
-            window: get_u64(p, 0),
-            key: get_u32(p, 8),
-            mods: get_u16(p, 12),
-        },
+        Some(UiEventKind::KeyDown) if payload_len >= 16 => {
+            UiEvent::KeyDown { window: get_u64(p, 0), key: get_u32(p, 8), mods: get_u16(p, 12) }
+        }
+        Some(UiEventKind::KeyUp) if payload_len >= 16 => {
+            UiEvent::KeyUp { window: get_u64(p, 0), key: get_u32(p, 8), mods: get_u16(p, 12) }
+        }
 
         Some(UiEventKind::TextInput) if payload_len >= 18 => {
             let tlen = core::cmp::min(p[16] as usize, TEXT_MAX);
@@ -678,11 +576,9 @@ pub fn decode_one(bytes: &[u8]) -> Result<(UiEvent, usize), DecodeError> {
             delta: get_i32(p, 16),
         },
 
-        Some(UiEventKind::CursorSet) if payload_len >= 20 => UiEvent::CursorSet {
-            window: get_u64(p, 0),
-            target: get_u64(p, 8),
-            pos: get_u32(p, 16),
-        },
+        Some(UiEventKind::CursorSet) if payload_len >= 20 => {
+            UiEvent::CursorSet { window: get_u64(p, 0), target: get_u64(p, 8), pos: get_u32(p, 16) }
+        }
 
         Some(UiEventKind::Select) if payload_len >= 24 => UiEvent::Select {
             window: get_u64(p, 0),
@@ -691,15 +587,13 @@ pub fn decode_one(bytes: &[u8]) -> Result<(UiEvent, usize), DecodeError> {
             end: get_u32(p, 20),
         },
 
-        Some(UiEventKind::Resize) if payload_len >= 16 => UiEvent::Resize {
-            window: get_u64(p, 0),
-            w: get_u32(p, 8),
-            h: get_u32(p, 12),
-        },
+        Some(UiEventKind::Resize) if payload_len >= 16 => {
+            UiEvent::Resize { window: get_u64(p, 0), w: get_u32(p, 8), h: get_u32(p, 12) }
+        }
 
-        Some(UiEventKind::CloseRequested) if payload_len >= 8 => UiEvent::CloseRequested {
-            window: get_u64(p, 0),
-        },
+        Some(UiEventKind::CloseRequested) if payload_len >= 8 => {
+            UiEvent::CloseRequested { window: get_u64(p, 0) }
+        }
 
         Some(UiEventKind::Clicked) if payload_len >= 24 => UiEvent::Clicked {
             window: get_u64(p, 0),
@@ -715,10 +609,7 @@ pub fn decode_one(bytes: &[u8]) -> Result<(UiEvent, usize), DecodeError> {
         },
 
         // Unknown kind OR known kind with too-short payload — skip safely.
-        _ => UiEvent::Unknown {
-            kind: kind_raw,
-            payload_len: payload_len as u32,
-        },
+        _ => UiEvent::Unknown { kind: kind_raw, payload_len: payload_len as u32 },
     };
 
     Ok((event, total))
@@ -749,34 +640,16 @@ impl UiEvent {
         let len = core::cmp::min(bytes.len(), TEXT_MAX);
         let mut text = [0u8; TEXT_MAX];
         text[..len].copy_from_slice(&bytes[..len]);
-        Self::TextInput {
-            window,
-            target,
-            text_len: len as u8,
-            text,
-        }
+        Self::TextInput { window, target, text_len: len as u8, text }
     }
     pub fn cursor_move(window: u64, target: u64, delta: i32) -> Self {
-        Self::CursorMove {
-            window,
-            target,
-            delta,
-        }
+        Self::CursorMove { window, target, delta }
     }
     pub fn clicked(window: u64, target: u64, action_id: u64) -> Self {
-        Self::Clicked {
-            window,
-            target,
-            action_id,
-        }
+        Self::Clicked { window, target, action_id }
     }
     pub fn toggled(window: u64, target: u64, checked: bool, value_id: u64) -> Self {
-        Self::Toggled {
-            window,
-            target,
-            checked: if checked { 1 } else { 0 },
-            value_id,
-        }
+        Self::Toggled { window, target, checked: if checked { 1 } else { 0 }, value_id }
     }
 }
 
@@ -792,49 +665,31 @@ pub struct UiEventWire {
 #[allow(deprecated)]
 impl UiEventWire {
     pub fn new_clicked(window_id: u64, target_id: u64, action_id: u64) -> Self {
-        Self {
-            event: UiEvent::clicked(window_id, target_id, action_id),
-        }
+        Self { event: UiEvent::clicked(window_id, target_id, action_id) }
     }
     pub fn new_toggled(window_id: u64, target_id: u64, checked: bool, value_id: u64) -> Self {
-        Self {
-            event: UiEvent::toggled(window_id, target_id, checked, value_id),
-        }
+        Self { event: UiEvent::toggled(window_id, target_id, checked, value_id) }
     }
     pub fn new_focus(window_id: u64, target_id: u64) -> Self {
-        Self {
-            event: UiEvent::focus(window_id, target_id),
-        }
+        Self { event: UiEvent::focus(window_id, target_id) }
     }
     pub fn new_blur(window_id: u64, target_id: u64) -> Self {
-        Self {
-            event: UiEvent::blur(window_id, target_id),
-        }
+        Self { event: UiEvent::blur(window_id, target_id) }
     }
     pub fn new_text_insert(window_id: u64, target_id: u64, text: &[u8]) -> Self {
-        Self {
-            event: UiEvent::text_input(window_id, target_id, text),
-        }
+        Self { event: UiEvent::text_input(window_id, target_id, text) }
     }
     pub fn new_text_backspace(window_id: u64, target_id: u64) -> Self {
-        Self {
-            event: UiEvent::text_backspace(window_id, target_id),
-        }
+        Self { event: UiEvent::text_backspace(window_id, target_id) }
     }
     pub fn new_text_delete(window_id: u64, target_id: u64) -> Self {
-        Self {
-            event: UiEvent::text_delete(window_id, target_id),
-        }
+        Self { event: UiEvent::text_delete(window_id, target_id) }
     }
     pub fn new_cursor_move(window_id: u64, target_id: u64, delta: i32) -> Self {
-        Self {
-            event: UiEvent::cursor_move(window_id, target_id, delta),
-        }
+        Self { event: UiEvent::cursor_move(window_id, target_id, delta) }
     }
     pub fn new_submit(window_id: u64, target_id: u64) -> Self {
-        Self {
-            event: UiEvent::submit(window_id, target_id),
-        }
+        Self { event: UiEvent::submit(window_id, target_id) }
     }
     pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
         encode(&self.event, out)
@@ -877,11 +732,7 @@ mod tests {
 
     #[test]
     fn roundtrip_pointer_move() {
-        roundtrip(UiEvent::PointerMove {
-            window: 5,
-            x: -100,
-            y: 200,
-        });
+        roundtrip(UiEvent::PointerMove { window: 5, x: -100, y: 200 });
     }
 
     #[test]
@@ -898,43 +749,22 @@ mod tests {
 
     #[test]
     fn roundtrip_pointer_up() {
-        roundtrip(UiEvent::PointerUp {
-            window: 1,
-            target: 2,
-            button: 1,
-            x: 30,
-            y: 40,
-            mods: 0,
-        });
+        roundtrip(UiEvent::PointerUp { window: 1, target: 2, button: 1, x: 30, y: 40, mods: 0 });
     }
 
     #[test]
     fn roundtrip_scroll() {
-        roundtrip(UiEvent::Scroll {
-            window: 7,
-            target: 8,
-            dx: -3,
-            dy: 5,
-            mods: 0,
-        });
+        roundtrip(UiEvent::Scroll { window: 7, target: 8, dx: -3, dy: 5, mods: 0 });
     }
 
     #[test]
     fn roundtrip_key_down() {
-        roundtrip(UiEvent::KeyDown {
-            window: 1,
-            key: 0x41,
-            mods: 0x01,
-        });
+        roundtrip(UiEvent::KeyDown { window: 1, key: 0x41, mods: 0x01 });
     }
 
     #[test]
     fn roundtrip_key_up() {
-        roundtrip(UiEvent::KeyUp {
-            window: 1,
-            key: 0x41,
-            mods: 0,
-        });
+        roundtrip(UiEvent::KeyUp { window: 1, key: 0x41, mods: 0 });
     }
 
     #[test]
@@ -959,30 +789,17 @@ mod tests {
 
     #[test]
     fn roundtrip_cursor_set() {
-        roundtrip(UiEvent::CursorSet {
-            window: 1,
-            target: 2,
-            pos: 42,
-        });
+        roundtrip(UiEvent::CursorSet { window: 1, target: 2, pos: 42 });
     }
 
     #[test]
     fn roundtrip_select() {
-        roundtrip(UiEvent::Select {
-            window: 1,
-            target: 2,
-            start: 3,
-            end: 10,
-        });
+        roundtrip(UiEvent::Select { window: 1, target: 2, start: 3, end: 10 });
     }
 
     #[test]
     fn roundtrip_resize() {
-        roundtrip(UiEvent::Resize {
-            window: 1,
-            w: 800,
-            h: 600,
-        });
+        roundtrip(UiEvent::Resize { window: 1, w: 800, h: 600 });
     }
 
     #[test]
@@ -1013,13 +830,7 @@ mod tests {
 
         let (event, consumed) = decode_one(&buf).unwrap();
         assert_eq!(consumed, 16);
-        assert_eq!(
-            event,
-            UiEvent::Unknown {
-                kind: 999,
-                payload_len: 4
-            }
-        );
+        assert_eq!(event, UiEvent::Unknown { kind: 999, payload_len: 4 });
     }
 
     #[test]

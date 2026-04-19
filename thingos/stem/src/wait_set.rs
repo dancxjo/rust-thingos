@@ -32,8 +32,9 @@
 //! }
 //! ```
 
-use abi::wait::{interest, WaitKind, WaitResult, WaitSpec, WAIT_MANY_MAX_ITEMS};
 use alloc::vec::Vec;
+
+use abi::wait::{WAIT_MANY_MAX_ITEMS, WaitKind, WaitResult, WaitSpec, interest};
 
 use crate::errors::Errno;
 use crate::syscall;
@@ -198,10 +199,7 @@ pub struct WaitSet {
 impl WaitSet {
     /// Create an empty `WaitSet`.
     pub fn new() -> Self {
-        Self {
-            specs: Vec::new(),
-            next_token: 1,
-        }
+        Self { specs: Vec::new(), next_token: 1 }
     }
 
     // ── internal helpers ───────────────────────────────────────────────────
@@ -223,12 +221,7 @@ impl WaitSet {
             return Err(Errno::ENOSPC);
         }
         let tok = self.alloc_token();
-        self.specs.push(WaitSpec {
-            kind: kind as u32,
-            flags,
-            object,
-            token: tok.0,
-        });
+        self.specs.push(WaitSpec { kind: kind as u32, flags, object, token: tok.0 });
         Ok(tok)
     }
 
@@ -244,9 +237,7 @@ impl WaitSet {
     /// Port-handle waits are superseded by FD-based readiness.  Bridge the
     /// port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
     /// `vfs_fd_from_handle`) and then use [`add_fd_readable`][Self::add_fd_readable].
-    #[deprecated(
-        note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead"
-    )]
+    #[deprecated(note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead")]
     pub fn add_port_readable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
         #[allow(deprecated)]
         self.push_spec(WaitKind::Port, interest::READABLE, handle)
@@ -261,9 +252,7 @@ impl WaitSet {
     /// Port-handle waits are superseded by FD-based readiness.  Bridge the
     /// port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
     /// `vfs_fd_from_handle`) and then use [`add_fd_writable`][Self::add_fd_writable].
-    #[deprecated(
-        note = "Use vfs_fd_from_handle to bridge the port then add_fd_writable instead"
-    )]
+    #[deprecated(note = "Use vfs_fd_from_handle to bridge the port then add_fd_writable instead")]
     pub fn add_port_writable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
         #[allow(deprecated)]
         self.push_spec(WaitKind::Port, interest::WRITABLE, handle)
@@ -322,7 +311,9 @@ impl WaitSet {
     /// Graph operations are removed.  The kernel returns `ENOSYS` for
     /// `WaitKind::GraphOp`.  There is no direct replacement: async I/O should
     /// be modelled as FD readiness via [`add_fd_readable`][Self::add_fd_readable].
-    #[deprecated(note = "Graph ops are removed; model async I/O as FD readiness with add_fd_readable")]
+    #[deprecated(
+        note = "Graph ops are removed; model async I/O as FD readiness with add_fd_readable"
+    )]
     pub fn add_graph_op(&mut self, op_handle: u64) -> Result<WaitToken, Errno> {
         #[allow(deprecated)]
         self.push_spec(WaitKind::GraphOp, 0, op_handle)
@@ -384,10 +375,7 @@ impl WaitSet {
             return Err(Errno::EIO);
         }
 
-        let events = results[..n]
-            .iter()
-            .map(|r| WaitEvent { result: *r })
-            .collect();
+        let events = results[..n].iter().map(|r| WaitEvent { result: *r }).collect();
         Ok(WaitEvents(events))
     }
 }
@@ -403,8 +391,9 @@ impl Default for WaitSet {
 #[cfg(test)]
 #[allow(deprecated)] // add_port_readable / add_port_writable / WaitKind::Port deprecated; tests exercise backward compat
 mod tests {
-    use super::*;
     use abi::wait::WaitKind;
+
+    use super::*;
 
     #[test]
     fn new_set_is_empty() {

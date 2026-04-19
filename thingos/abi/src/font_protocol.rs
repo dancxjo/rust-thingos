@@ -5,9 +5,9 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 
 use crate::wire::ThingId;
-use alloc::vec::Vec;
 
 /// Atlas pixel format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,11 +204,7 @@ impl EnsureGlyphs {
             glyph_ids.push(u32::from_le_bytes(buf[offset..offset + 4].try_into().ok()?));
             offset += 4;
         }
-        Some(Self {
-            face_id,
-            px_size,
-            glyph_ids,
-        })
+        Some(Self { face_id, px_size, glyph_ids })
     }
 }
 

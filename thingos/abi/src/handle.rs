@@ -13,10 +13,7 @@ pub struct Handle<T> {
 impl<T> Handle<T> {
     /// Create a new Handle with a default (zeroed) `ThingId`.
     pub fn new(value: T) -> Self {
-        Self {
-            id: ThingId::default(),
-            value,
-        }
+        Self { id: ThingId::default(), value }
     }
 
     /// Create a new Handle with a specific ID.

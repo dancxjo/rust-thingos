@@ -1,5 +1,6 @@
-use crate::common::Result;
 use xshell::Shell;
+
+use crate::common::Result;
 
 pub fn bdd(
     _sh: &Shell,

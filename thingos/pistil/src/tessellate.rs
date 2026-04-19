@@ -1,5 +1,6 @@
-use crate::geometry::{Color, LineCap, LineJoin, PointF};
 use alloc::vec::Vec;
+
+use crate::geometry::{Color, LineCap, LineJoin, PointF};
 
 /// Flatten a quadratic bezier curve into line segments using adaptive subdivision.
 pub fn flatten_quad(p0: PointF, cp: PointF, p1: PointF, tolerance: f32, output: &mut Vec<PointF>) {
@@ -43,10 +44,7 @@ fn eval_quad(p0: PointF, cp: PointF, p1: PointF, t: f32) -> PointF {
     let b0 = t2 * t2;
     let b1 = 2.0 * t2 * t;
     let b2 = t * t;
-    PointF::new(
-        b0 * p0.x + b1 * cp.x + b2 * p1.x,
-        b0 * p0.y + b1 * cp.y + b2 * p1.y,
-    )
+    PointF::new(b0 * p0.x + b1 * cp.x + b2 * p1.x, b0 * p0.y + b1 * cp.y + b2 * p1.y)
 }
 
 /// Flatten a cubic bezier curve into line segments.
@@ -125,12 +123,7 @@ pub struct StrokeStyle {
 
 impl Default for StrokeStyle {
     fn default() -> Self {
-        Self {
-            width: 1.0,
-            line_cap: LineCap::Butt,
-            line_join: LineJoin::Miter,
-            miter_limit: 4.0,
-        }
+        Self { width: 1.0, line_cap: LineCap::Butt, line_join: LineJoin::Miter, miter_limit: 4.0 }
     }
 }
 
@@ -146,10 +139,7 @@ pub struct Contour {
 
 impl TessellatedPath {
     pub fn new() -> Self {
-        Self {
-            vertices: Vec::new(),
-            contours: Vec::new(),
-        }
+        Self { vertices: Vec::new(), contours: Vec::new() }
     }
 }
 
@@ -184,10 +174,9 @@ pub fn expand_stroke(path: &TessellatedPath, style: &StrokeStyle) -> Tessellated
             result.vertices.push(PointF::new(curr.x + px, curr.y + py));
             result.vertices.push(PointF::new(curr.x - px, curr.y - py));
         }
-        result.contours.push(Contour {
-            start: start_idx,
-            count: result.vertices.len() - start_idx,
-        });
+        result
+            .contours
+            .push(Contour { start: start_idx, count: result.vertices.len() - start_idx });
     }
 
     result

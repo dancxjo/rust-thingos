@@ -36,11 +36,7 @@ mod tests {
 
             // Verify the upper 8 bytes are zero (padding)
             // The layout is [thing_bytes(8) | 0...0]
-            assert_eq!(
-                &thing_id.0[8..16],
-                &[0u8; 8],
-                "Upper bytes must be zero-padded"
-            );
+            assert_eq!(&thing_id.0[8..16], &[0u8; 8], "Upper bytes must be zero-padded");
         }
     }
 

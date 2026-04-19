@@ -1,4 +1,4 @@
-use super::{EventType, HidParseError, Key, Mods, BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION};
+use super::{BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, EventType, HidParseError, Key, Mods};
 
 // ============================================================================
 // Wire Format: Bristle Event (Bristle → Apps)
@@ -115,10 +115,5 @@ pub enum KeyboardMessage {
     ///
     /// `pressed = true` for key-down, `false` for key-up.
     /// `repeat = true` when the key was already held (auto-repeat).
-    Key {
-        key: Key,
-        pressed: bool,
-        modifiers: Mods,
-        repeat: bool,
-    },
+    Key { key: Key, pressed: bool, modifiers: Mods, repeat: bool },
 }

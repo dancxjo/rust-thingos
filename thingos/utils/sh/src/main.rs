@@ -779,9 +779,7 @@ fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineRes
                         }
                         let b2 = one[0];
                         if b2.is_ascii_digit() {
-                            param = param
-                                .saturating_mul(10)
-                                .saturating_add((b2 - b'0') as u32);
+                            param = param.saturating_mul(10).saturating_add((b2 - b'0') as u32);
                         } else {
                             final_byte = b2;
                             break;

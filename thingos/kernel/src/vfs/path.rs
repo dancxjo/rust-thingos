@@ -18,8 +18,9 @@
 //! - [`resolve_no_follow`] — resolve the path without following the final symlink
 //!   (for `readlink`, `lstat`-style operations)
 
-use abi::errors::{Errno, SysResult};
 use alloc::string::String;
+
+use abi::errors::{Errno, SysResult};
 
 /// Maximum number of components allowed in a path before returning `ENAMETOOLONG`.
 const MAX_COMPONENTS: usize = 64;
@@ -51,10 +52,8 @@ pub fn resolve_no_follow(path: &str) -> SysResult<alloc::sync::Arc<dyn crate::vf
     let normalised = normalise(path)?;
     // Walk all but the last component with symlink following, then do a plain
     // lookup for the last component.
-    let components: alloc::vec::Vec<&str> = normalised[1..]
-        .split('/')
-        .filter(|c| !c.is_empty())
-        .collect();
+    let components: alloc::vec::Vec<&str> =
+        normalised[1..].split('/').filter(|c| !c.is_empty()).collect();
 
     if components.is_empty() {
         // Path is "/".
@@ -90,10 +89,8 @@ fn resolve_at(path: &str, depth: usize) -> SysResult<alloc::sync::Arc<dyn crate:
     let normalised = normalise(path)?;
 
     // Walk path component by component so we can follow symlinks at each step.
-    let components: alloc::vec::Vec<&str> = normalised[1..]
-        .split('/')
-        .filter(|c| !c.is_empty())
-        .collect();
+    let components: alloc::vec::Vec<&str> =
+        normalised[1..].split('/').filter(|c| !c.is_empty()).collect();
 
     if components.is_empty() {
         // Root directory — never a symlink.

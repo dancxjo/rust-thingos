@@ -1,6 +1,7 @@
-use abi::display_protocol::Rect;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+
+use abi::display_protocol::Rect;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Client {
@@ -168,7 +169,12 @@ impl Scene {
         true
     }
 
-    pub fn set_pending_input_region(&mut self, client_id: u32, surface_id: u32, rect: Rect) -> bool {
+    pub fn set_pending_input_region(
+        &mut self,
+        client_id: u32,
+        surface_id: u32,
+        rect: Rect,
+    ) -> bool {
         let Some(surface) = self.surfaces.get_mut(&surface_id) else {
             return false;
         };
@@ -179,7 +185,12 @@ impl Scene {
         true
     }
 
-    pub fn set_pending_opaque_region(&mut self, client_id: u32, surface_id: u32, rect: Rect) -> bool {
+    pub fn set_pending_opaque_region(
+        &mut self,
+        client_id: u32,
+        surface_id: u32,
+        rect: Rect,
+    ) -> bool {
         let Some(surface) = self.surfaces.get_mut(&surface_id) else {
             return false;
         };
@@ -230,12 +241,8 @@ impl Scene {
                 }
             }
             if pending_dest.is_none() && !had_current {
-                surface.current.dest_rect = Rect {
-                    x: 0,
-                    y: 0,
-                    w: pending_buf.width,
-                    h: pending_buf.height,
-                };
+                surface.current.dest_rect =
+                    Rect { x: 0, y: 0, w: pending_buf.width, h: pending_buf.height };
             }
             surface.current.buffer = Some(pending_buf);
             surface.mapped = true;
@@ -283,12 +290,7 @@ impl Scene {
             list.push(CompositionEntry {
                 surface_id: surface.id,
                 buffer_id: buf.buffer_id,
-                src_rect: Rect {
-                    x: 0,
-                    y: 0,
-                    w: buf.width,
-                    h: buf.height,
-                },
+                src_rect: Rect { x: 0, y: 0, w: buf.width, h: buf.height },
                 dest_rect: surface.current.dest_rect,
                 z_order: surface.current.z_order,
                 alpha: 255,
@@ -307,10 +309,7 @@ impl Scene {
             let rect = surface.current.input_region.unwrap_or(surface.current.dest_rect);
             let max_x = rect.x.saturating_add(rect.w) as i32;
             let max_y = rect.y.saturating_add(rect.h) as i32;
-            let inside = x >= rect.x as i32
-                && y >= rect.y as i32
-                && x < max_x
-                && y < max_y;
+            let inside = x >= rect.x as i32 && y >= rect.y as i32 && x < max_x && y < max_y;
             if !inside {
                 continue;
             }

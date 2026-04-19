@@ -1,7 +1,8 @@
-use crate::ast;
-use crate::ir;
-use indexmap::IndexMap;
 use std::collections::HashMap;
+
+use indexmap::IndexMap;
+
+use crate::{ast, ir};
 
 pub struct Resolver {
     kinds: IndexMap<String, ir::ResolvedKind>,
@@ -60,7 +61,10 @@ impl Resolver {
                     if decl.body.is_none() {
                         continue;
                     }
-                    return Err(format!("Duplicate kind definition: {} at {:?}", canonical, decl.span));
+                    return Err(format!(
+                        "Duplicate kind definition: {} at {:?}",
+                        canonical, decl.span
+                    ));
                 }
                 // Placeholder for now
                 self.kinds.insert(
@@ -121,9 +125,7 @@ impl Resolver {
                             }
                             ir::KindShape::Enum(resolved_variants)
                         }
-                        ast::KindBody::Alias(ty) => {
-                            ir::KindShape::Alias(self.resolve_type(ty)?)
-                        }
+                        ast::KindBody::Alias(ty) => ir::KindShape::Alias(self.resolve_type(ty)?),
                     };
 
                     let kind_id = self.compute_kind_id_with_shape(&canonical, &shape);
@@ -151,10 +153,7 @@ impl Resolver {
             args.push(self.resolve_type(arg)?);
         }
 
-        Ok(ir::ResolvedType {
-            kind_ref: name,
-            args,
-        })
+        Ok(ir::ResolvedType { kind_ref: name, args })
     }
 
     fn compute_kind_id_with_shape(&self, canonical_name: &str, shape: &ir::KindShape) -> [u8; 16] {
@@ -180,7 +179,9 @@ impl Resolver {
                 for v in variants {
                     hasher.update(v.name.as_bytes());
                     match &v.payload {
-                        ir::ResolvedVariantPayload::Unit => { hasher.update(&[0]); },
+                        ir::ResolvedVariantPayload::Unit => {
+                            hasher.update(&[0]);
+                        }
                         ir::ResolvedVariantPayload::Tuple(ty) => {
                             hasher.update(&[1]);
                             self.hash_type(&mut hasher, ty);

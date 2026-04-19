@@ -27,11 +27,12 @@
 
 pub mod bootfs;
 pub mod devfs;
-pub mod handle_table;
 pub mod flock;
+pub mod handle_table;
 pub mod inbox_node;
 pub mod memfd;
 pub mod mount;
+pub mod overlay;
 pub mod path;
 pub mod port_node;
 pub mod procfs;
@@ -40,10 +41,10 @@ pub mod ramfs;
 pub mod sysfs;
 pub mod union;
 pub mod watch;
-pub mod overlay;
+
+use alloc::sync::Arc;
 
 use abi::errors::{Errno, SysResult};
-use alloc::sync::Arc;
 
 // ── Open flags ─────────────────────────────────────────────────────────────
 
@@ -112,11 +113,7 @@ impl OpenFlags {
     }
 
     pub fn effective_write_offset(self, current_offset: u64, file_size: u64) -> u64 {
-        if self.is_append() {
-            file_size
-        } else {
-            current_offset
-        }
+        if self.is_append() { file_size } else { current_offset }
     }
 }
 
@@ -216,11 +213,8 @@ impl VfsStat {
     pub fn to_abi_stat(self) -> abi::fs::FileStat {
         // Derive blksize/blocks when the node hasn't set them explicitly.
         let blksize = if self.blksize == 0 { 4096 } else { self.blksize };
-        let blocks = if self.blocks == 0 && self.size > 0 {
-            (self.size + 511) / 512
-        } else {
-            self.blocks
-        };
+        let blocks =
+            if self.blocks == 0 && self.size > 0 { (self.size + 511) / 512 } else { self.blocks };
         abi::fs::FileStat {
             mode: self.mode,
             nlink: self.nlink,
@@ -339,11 +333,7 @@ pub trait VfsNode: Send + Sync {
     /// receiver will have each one installed into its own FD table.
     ///
     /// Returns `ENOSYS` on nodes that do not support message-with-FDs.
-    fn sock_sendmsg(
-        &self,
-        _data: &[u8],
-        _fds: alloc::vec::Vec<Arc<dyn VfsNode>>,
-    ) -> SysResult<()> {
+    fn sock_sendmsg(&self, _data: &[u8], _fds: alloc::vec::Vec<Arc<dyn VfsNode>>) -> SysResult<()> {
         Err(abi::errors::Errno::ENOSYS)
     }
 
@@ -518,9 +508,7 @@ impl NamespaceRef {
     /// namespace backed by a clone of the system-wide mount table, and this
     /// function will return the root (initial) namespace.
     pub fn global() -> Self {
-        Self {
-            id: GLOBAL_NAMESPACE_ID,
-        }
+        Self { id: GLOBAL_NAMESPACE_ID }
     }
 
     /// Create a new isolated namespace identity.
@@ -662,11 +650,8 @@ pub fn write_readdir_entries<'a>(
 
         if entry_end > offset {
             // This entry (or part of it) is within the requested range.
-            let start_in_entry = if offset > entry_start {
-                (offset - entry_start) as usize
-            } else {
-                0
-            };
+            let start_in_entry =
+                if offset > entry_start { (offset - entry_start) as usize } else { 0 };
 
             if start_in_entry < name.len() {
                 let copy_from_entry = &name[start_in_entry..];
@@ -697,8 +682,9 @@ pub fn write_readdir_entries<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
+
+    use super::*;
 
     // A trivial in-memory node for unit-testing the VFS layer.
     struct MemNode {
@@ -793,40 +779,23 @@ mod tests {
 
     #[test]
     fn test_vfs_stat_type_bits() {
-        let dir = VfsStat {
-            mode: VfsStat::S_IFDIR | 0o755,
-            size: 0,
-            ino: 1,
-            ..Default::default()
-        };
+        let dir = VfsStat { mode: VfsStat::S_IFDIR | 0o755, size: 0, ino: 1, ..Default::default() };
         assert!(dir.is_dir());
         assert!(!dir.is_reg());
         assert!(!dir.is_chr());
 
-        let chr = VfsStat {
-            mode: VfsStat::S_IFCHR | 0o666,
-            size: 0,
-            ino: 2,
-            ..Default::default()
-        };
+        let chr = VfsStat { mode: VfsStat::S_IFCHR | 0o666, size: 0, ino: 2, ..Default::default() };
         assert!(chr.is_chr());
         assert!(!chr.is_dir());
 
-        let reg = VfsStat {
-            mode: VfsStat::S_IFREG | 0o644,
-            size: 42,
-            ino: 3,
-            ..Default::default()
-        };
+        let reg =
+            VfsStat { mode: VfsStat::S_IFREG | 0o644, size: 42, ino: 3, ..Default::default() };
         assert!(reg.is_reg());
     }
 
     #[test]
     fn test_mem_node_read_partial() {
-        let node = MemNode {
-            data: vec![1, 2, 3, 4, 5],
-            mode: VfsStat::S_IFREG | 0o444,
-        };
+        let node = MemNode { data: vec![1, 2, 3, 4, 5], mode: VfsStat::S_IFREG | 0o444 };
         let mut buf = [0u8; 3];
         let n = node.read(0, &mut buf).unwrap();
         assert_eq!(n, 3);
@@ -835,10 +804,7 @@ mod tests {
 
     #[test]
     fn test_mem_node_read_at_offset() {
-        let node = MemNode {
-            data: vec![10, 20, 30],
-            mode: VfsStat::S_IFREG | 0o444,
-        };
+        let node = MemNode { data: vec![10, 20, 30], mode: VfsStat::S_IFREG | 0o444 };
         let mut buf = [0u8; 2];
         let n = node.read(1, &mut buf).unwrap();
         assert_eq!(n, 2);
@@ -847,10 +813,7 @@ mod tests {
 
     #[test]
     fn test_mem_node_read_eof() {
-        let node = MemNode {
-            data: vec![],
-            mode: VfsStat::S_IFREG | 0o444,
-        };
+        let node = MemNode { data: vec![], mode: VfsStat::S_IFREG | 0o444 };
         let mut buf = [0u8; 4];
         let n = node.read(0, &mut buf).unwrap();
         assert_eq!(n, 0);
@@ -858,19 +821,13 @@ mod tests {
 
     #[test]
     fn test_vfs_node_sync_default_is_ok_for_file_like_nodes() {
-        let node = MemNode {
-            data: vec![1, 2, 3],
-            mode: VfsStat::S_IFREG | 0o644,
-        };
+        let node = MemNode { data: vec![1, 2, 3], mode: VfsStat::S_IFREG | 0o644 };
         assert_eq!(node.sync(), Ok(()));
     }
 
     #[test]
     fn test_vfs_node_sync_default_is_ok_for_dir_like_nodes() {
-        let node = MemNode {
-            data: vec![],
-            mode: VfsStat::S_IFDIR | 0o755,
-        };
+        let node = MemNode { data: vec![], mode: VfsStat::S_IFDIR | 0o755 };
         assert_eq!(node.sync(), Ok(()));
     }
 

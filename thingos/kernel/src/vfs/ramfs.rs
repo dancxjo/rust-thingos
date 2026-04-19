@@ -17,9 +17,9 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use spin::Mutex;
 
 use abi::errors::{Errno, SysResult};
+use spin::Mutex;
 
 use super::{VfsDriver, VfsNode, VfsStat};
 
@@ -63,14 +63,7 @@ struct RamfsFileInner {
 impl RamfsFileInner {
     fn new(data: Vec<u8>) -> Self {
         let ts = now();
-        Self {
-            data,
-            mode: 0o644,
-            nlink: 1,
-            atime: ts,
-            mtime: ts,
-            ctime: ts,
-        }
+        Self { data, mode: 0o644, nlink: 1, atime: ts, mtime: ts, ctime: ts }
     }
 }
 
@@ -90,13 +83,7 @@ struct RamfsDirInner {
 impl RamfsDirInner {
     fn new() -> Self {
         let ts = now();
-        Self {
-            children: BTreeMap::new(),
-            mode: 0o755,
-            atime: ts,
-            mtime: ts,
-            ctime: ts,
-        }
+        Self { children: BTreeMap::new(), mode: 0o755, atime: ts, mtime: ts, ctime: ts }
     }
 }
 
@@ -109,17 +96,11 @@ enum RamfsEntry {
 
 impl RamfsEntry {
     fn new_dir() -> Arc<Self> {
-        Arc::new(RamfsEntry::Dir(
-            Mutex::new(RamfsDirInner::new()),
-            alloc_ino(),
-        ))
+        Arc::new(RamfsEntry::Dir(Mutex::new(RamfsDirInner::new()), alloc_ino()))
     }
 
     fn new_file(data: Vec<u8>) -> Arc<Self> {
-        Arc::new(RamfsEntry::File(
-            Mutex::new(RamfsFileInner::new(data)),
-            alloc_ino(),
-        ))
+        Arc::new(RamfsEntry::File(Mutex::new(RamfsFileInner::new(data)), alloc_ino()))
     }
 
     fn new_symlink(target: String) -> Arc<Self> {
@@ -137,12 +118,9 @@ impl RamfsEntry {
     /// Look up a child by name inside a directory entry.
     fn lookup_child(&self, name: &str) -> SysResult<Arc<RamfsEntry>> {
         match self {
-            RamfsEntry::Dir(inner, _) => inner
-                .lock()
-                .children
-                .get(name)
-                .cloned()
-                .ok_or(Errno::ENOENT),
+            RamfsEntry::Dir(inner, _) => {
+                inner.lock().children.get(name).cloned().ok_or(Errno::ENOENT)
+            }
             _ => Err(Errno::ENOTDIR),
         }
     }
@@ -373,9 +351,7 @@ pub struct RamFs {
 impl RamFs {
     /// Create a new, empty ramfs with a root directory.
     pub fn new() -> Self {
-        Self {
-            root: RamfsEntry::new_dir(),
-        }
+        Self { root: RamfsEntry::new_dir() }
     }
 
     /// Create a subdirectory `path` (relative to this filesystem's root).
@@ -487,8 +463,7 @@ impl VfsDriver for RamFs {
     fn mkdir(&self, path: &str) -> SysResult<()> {
         // Inline the inherent mkdir logic to avoid ambiguous self.mkdir() dispatch.
         let mut current = self.root.clone();
-        let components: alloc::vec::Vec<&str> =
-            path.split('/').filter(|c| !c.is_empty()).collect();
+        let components: alloc::vec::Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
         let last_idx = components.len().saturating_sub(1);
         for (i, component) in components.iter().enumerate() {
             let next = match current.lookup_child(component) {
@@ -614,11 +589,7 @@ fn split_last(path: &str) -> Option<(&str, &str)> {
         Some(idx) => {
             let parent = &trimmed[..idx]; // parent dir (no trailing slash)
             let name = &trimmed[idx + 1..];
-            if name.is_empty() {
-                None
-            } else {
-                Some((parent, name))
-            }
+            if name.is_empty() { None } else { Some((parent, name)) }
         }
         None => Some(("", trimmed)),
     }
@@ -628,8 +599,9 @@ fn split_last(path: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
+
+    use super::*;
 
     #[test]
     fn test_lookup_root_is_dir() {

@@ -9,8 +9,6 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
-
 use stem::println;
 use stem::syscall::{argv_get, auxv_get, env_get, env_list, env_set};
 
@@ -126,9 +124,7 @@ fn test_env_list_includes_key() {
     env_list(&mut buf).expect("env_list failed");
 
     // Search the raw blob for the key bytes.
-    let found = buf
-        .windows(key.len())
-        .any(|w| w == key);
+    let found = buf.windows(key.len()).any(|w| w == key);
     assert!(found, "key not found in env_list output");
 
     println!("[test_exec_env] test_env_list_includes_key: PASS");
@@ -159,8 +155,7 @@ fn test_auxv_has_pagesz_and_null() {
     let pagesz_entry = entries.iter().find(|&&(k, _)| k == AT_PAGESZ);
     assert!(pagesz_entry.is_some(), "AT_PAGESZ missing from auxv");
     let pagesz = pagesz_entry.unwrap().1;
-    assert!(pagesz >= 4096 && pagesz.is_power_of_two(),
-        "AT_PAGESZ invalid: {}", pagesz);
+    assert!(pagesz >= 4096 && pagesz.is_power_of_two(), "AT_PAGESZ invalid: {}", pagesz);
 
     println!(
         "[test_exec_env] test_auxv_has_pagesz_and_null: PASS ({} entries, AT_PAGESZ={})",

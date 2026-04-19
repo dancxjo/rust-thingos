@@ -1,6 +1,7 @@
-use std::{env, fs, path::PathBuf};
+use std::path::PathBuf;
+use std::{env, fs};
 
-use pciids::{build_tables, filter_vendors, parse_pci_ids, render_rust, Mode};
+use pciids::{Mode, build_tables, filter_vendors, parse_pci_ids, render_rust};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PCI_IDS_MODE");

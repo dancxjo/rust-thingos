@@ -48,8 +48,7 @@ fn fs_syscall_numbers_are_unique() {
         let mut inner_index = outer_index + 1;
         while inner_index < fs_syscalls.len() {
             assert_ne!(
-                fs_syscalls[outer_index],
-                fs_syscalls[inner_index],
+                fs_syscalls[outer_index], fs_syscalls[inner_index],
                 "duplicate FS syscall number: 0x{:04X}",
                 fs_syscalls[outer_index]
             );

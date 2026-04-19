@@ -25,15 +25,7 @@ use super::arch::raw_syscall6;
 /// ```
 pub fn socket(domain: u32, type_: u32, protocol: u32) -> SysResult<u32> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_SOCKET,
-            domain as usize,
-            type_ as usize,
-            protocol as usize,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_SOCKET, domain as usize, type_ as usize, protocol as usize, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|v| v as u32)
 }
@@ -43,15 +35,7 @@ pub fn socket(domain: u32, type_: u32, protocol: u32) -> SysResult<u32> {
 /// The path should be absolute (e.g. `/run/my.sock`).
 pub fn bind(thing: u32, path: &str) -> SysResult<()> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_BIND,
-            thing as usize,
-            path.as_ptr() as usize,
-            path.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_BIND, thing as usize, path.as_ptr() as usize, path.len(), 0, 0, 0)
     };
     abi::errors::errno(ret).map(|_| ())
 }
@@ -61,9 +45,7 @@ pub fn bind(thing: u32, path: &str) -> SysResult<()> {
 /// `backlog` is the maximum number of queued connections; 0 uses the
 /// kernel default (currently clamped to 1..128).
 pub fn listen(thing: u32, backlog: usize) -> SysResult<()> {
-    let ret = unsafe {
-        raw_syscall6(SYS_LISTEN, thing as usize, backlog, 0, 0, 0, 0)
-    };
+    let ret = unsafe { raw_syscall6(SYS_LISTEN, thing as usize, backlog, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
 
@@ -81,15 +63,7 @@ pub fn accept(thing: u32) -> SysResult<u32> {
 /// Blocks until the connection is established.
 pub fn connect(thing: u32, path: &str) -> SysResult<()> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_CONNECT,
-            thing as usize,
-            path.as_ptr() as usize,
-            path.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_CONNECT, thing as usize, path.as_ptr() as usize, path.len(), 0, 0, 0)
     };
     abi::errors::errno(ret).map(|_| ())
 }

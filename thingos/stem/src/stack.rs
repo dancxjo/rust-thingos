@@ -188,11 +188,7 @@ pub fn current_sp() -> usize {
     sp
 }
 
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
-)))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
 #[inline(always)]
 pub fn current_sp() -> usize {
     0 // Fallback for unsupported architectures
@@ -239,10 +235,7 @@ mod tests {
 
     #[test]
     fn test_guard_page_placement() {
-        let spec = StackSpec {
-            guard_pages: 2,
-            ..StackSpec::default()
-        };
+        let spec = StackSpec { guard_pages: 2, ..StackSpec::default() };
         let guard_bytes = spec.guard_pages * 4096;
         assert_eq!(guard_bytes, 8192);
     }

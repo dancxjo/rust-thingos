@@ -68,8 +68,9 @@ pub trait StreamingLlmClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::task::{RawWaker, RawWakerVTable, Waker};
+
+    use super::*;
 
     fn noop_waker() -> Waker {
         unsafe fn clone(_: *const ()) -> RawWaker {
@@ -97,10 +98,7 @@ mod tests {
                 _ => None,
             };
             self.idx += 1;
-            let out = item.map(|text| ChatDelta {
-                text: text.into(),
-                finish: None,
-            });
+            let out = item.map(|text| ChatDelta { text: text.into(), finish: None });
             Poll::Ready(Ok(out))
         }
     }

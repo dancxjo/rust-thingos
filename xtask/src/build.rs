@@ -1,7 +1,8 @@
 //! Build task - compiles the kernel for target architectures.
 
-use crate::common::{Result, profile_subdir, rust_target};
 use xshell::{Shell, cmd};
+
+use crate::common::{Result, profile_subdir, rust_target};
 
 /// Build the kernel for a target architecture.
 pub fn build(sh: &Shell, arch: &str, profile: &str) -> Result<()> {
@@ -10,10 +11,7 @@ pub fn build(sh: &Shell, arch: &str, profile: &str) -> Result<()> {
 
     println!("Building bran kernel for {} ({} profile)...", arch, profile);
 
-    let mut cmd = cmd!(
-        sh,
-        "cargo build --target {target} --profile {profile} -p bran"
-    );
+    let mut cmd = cmd!(sh, "cargo build --target {target} --profile {profile} -p bran");
     if cfg!(feature = "diagnostic-apps") {
         cmd = cmd.arg("--features").arg("diagnostic-apps");
     }
@@ -23,11 +21,7 @@ pub fn build(sh: &Shell, arch: &str, profile: &str) -> Result<()> {
         println!("sched-telemetry: enabled (histogram buckets active)");
         cmd = cmd.arg("--features").arg("sched-telemetry");
     }
-    cmd.env(
-        "RUSTFLAGS",
-        "-Awarnings -C relocation-model=static -C panic=abort",
-    )
-    .run()?;
+    cmd.env("RUSTFLAGS", "-Awarnings -C relocation-model=static -C panic=abort").run()?;
 
     let bin_dir = format!("thingos/bran/bin-{}", arch);
     sh.create_dir(&bin_dir)?;

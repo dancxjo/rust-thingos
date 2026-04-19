@@ -234,7 +234,8 @@ pub struct DriverHostVtable {
         path_len: usize,
         service_handle: Handle,
     ) -> Status,
-    pub create_port: unsafe extern "C" fn(out_server: *mut Handle, out_client: *mut Handle) -> Status,
+    pub create_port:
+        unsafe extern "C" fn(out_server: *mut Handle, out_client: *mut Handle) -> Status,
     pub create_stream_pair: unsafe extern "C" fn(out_a: *mut Handle, out_b: *mut Handle) -> Status,
     pub wait: unsafe extern "C" fn(
         handles_ptr: *const Handle,
@@ -271,7 +272,6 @@ pub struct DriverDescriptor {
 
 unsafe impl Sync for DriverDescriptor {}
 unsafe impl Send for DriverDescriptor {}
-
 
 /// Marker struct exported as `THING_DRIVER_V1` by driver-capable binaries.
 ///
@@ -341,8 +341,10 @@ impl DriverInterfaceV1 {
             return false;
         }
         if self.class_code != DRIVER_MATCH_ANY_CLASS {
-            let masked_class = class & if self.class_mask != 0 { self.class_mask } else { 0xFFFFFF };
-            let masked_expected = self.class_code & if self.class_mask != 0 { self.class_mask } else { 0xFFFFFF };
+            let masked_class =
+                class & if self.class_mask != 0 { self.class_mask } else { 0xFFFFFF };
+            let masked_expected =
+                self.class_code & if self.class_mask != 0 { self.class_mask } else { 0xFFFFFF };
             if masked_class != masked_expected {
                 return false;
             }

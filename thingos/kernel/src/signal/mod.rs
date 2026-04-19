@@ -211,10 +211,7 @@ pub struct ThreadSignals {
 
 impl ThreadSignals {
     pub fn new() -> Self {
-        Self {
-            mask: SigSet::EMPTY,
-            pending: SigSet::EMPTY,
-        }
+        Self { mask: SigSet::EMPTY, pending: SigSet::EMPTY }
     }
 
     /// Apply the effective mask (strip SIGKILL/SIGSTOP which cannot be blocked).
@@ -244,7 +241,7 @@ impl ThreadSignals {
 /// Any process can send SIGCONT to a process in the same session.  For now
 /// ThingOS grants kill permission freely (no UID/GID checks yet).
 pub fn send_signal_to_process(pid: u32, sig: u8) -> bool {
-    use routing::{SignalRoute, SignalTargetKind, SignalDeliveryOutcome};
+    use routing::{SignalDeliveryOutcome, SignalRoute, SignalTargetKind};
     let route = SignalRoute {
         signal: sig,
         sender_tid: Some(unsafe { crate::sched::current_tid_current() }),

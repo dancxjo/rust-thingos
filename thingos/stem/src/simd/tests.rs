@@ -1,12 +1,13 @@
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use crate::simd::scalar::{
         blit_rgba8888_over_scalar, composite_solid_masked_over_scalar,
         composite_src_masked_over_scalar,
     };
     use crate::simd::{blit_rgba8888_over, composite_solid_masked_over, composite_src_masked_over};
-    use alloc::vec;
-    use alloc::vec::Vec;
 
     // Simple deterministic pattern
     fn make_pattern(len: usize) -> (Vec<u32>, Vec<u32>) {
@@ -289,13 +290,7 @@ mod tests {
             }
             // Verify pixels beyond rect_w are untouched
             for x in w..dst_stride {
-                assert_eq!(
-                    dst[y * dst_stride + x],
-                    0xFF_80_80_80,
-                    "untouched at ({},{})",
-                    x,
-                    y
-                );
+                assert_eq!(dst[y * dst_stride + x], 0xFF_80_80_80, "untouched at ({},{})", x, y);
             }
         }
     }
@@ -323,11 +318,7 @@ mod tests {
         composite_solid_masked_over(&mut dst_simd, w, &mask, w, w, h, color);
 
         for i in 0..(w * h) {
-            assert_eq!(
-                dst_scalar[i], dst_simd[i],
-                "solid masked SIMD mismatch at idx {}",
-                i
-            );
+            assert_eq!(dst_scalar[i], dst_simd[i], "solid masked SIMD mismatch at idx {}", i);
         }
     }
 
@@ -354,11 +345,7 @@ mod tests {
         composite_src_masked_over(&mut dst_simd, w, &src, w, &mask, w, w, h);
 
         for i in 0..(w * h) {
-            assert_eq!(
-                dst_scalar[i], dst_simd[i],
-                "src masked SIMD mismatch at idx {}",
-                i
-            );
+            assert_eq!(dst_scalar[i], dst_simd[i], "src masked SIMD mismatch at idx {}", i);
         }
     }
 
@@ -382,10 +369,7 @@ mod tests {
 
         // Verify result is correct (not all pixels are unchanged)
         let unchanged_count = dst.iter().filter(|&&p| p == 0xFF_80_80_80).count();
-        assert!(
-            unchanged_count < w * h,
-            "SSE2 implementation should have modified some pixels"
-        );
+        assert!(unchanged_count < w * h, "SSE2 implementation should have modified some pixels");
     }
 
     #[test]
@@ -402,10 +386,7 @@ mod tests {
 
         // Verify result is correct (not all pixels are unchanged)
         let unchanged_count = dst.iter().filter(|&&p| p == 0xFF_80_80_80).count();
-        assert!(
-            unchanged_count < w * h,
-            "SSE2 implementation should have modified some pixels"
-        );
+        assert!(unchanged_count < w * h, "SSE2 implementation should have modified some pixels");
     }
 
     // Test to verify NEON implementation works correctly
@@ -428,10 +409,7 @@ mod tests {
 
         // Verify result is correct (not all pixels are unchanged)
         let unchanged_count = dst.iter().filter(|&&p| p == 0xFF_80_80_80).count();
-        assert!(
-            unchanged_count < w * h,
-            "NEON implementation should have modified some pixels"
-        );
+        assert!(unchanged_count < w * h, "NEON implementation should have modified some pixels");
     }
 
     #[test]
@@ -448,10 +426,7 @@ mod tests {
 
         // Verify result is correct (not all pixels are unchanged)
         let unchanged_count = dst.iter().filter(|&&p| p == 0xFF_80_80_80).count();
-        assert!(
-            unchanged_count < w * h,
-            "NEON implementation should have modified some pixels"
-        );
+        assert!(unchanged_count < w * h, "NEON implementation should have modified some pixels");
     }
 
     // Test AVX2 backend directly when available
@@ -479,11 +454,7 @@ mod tests {
 
         // Verify bit-exact match with scalar
         for i in 0..(w * h) {
-            assert_eq!(
-                dst[i], dst_scalar[i],
-                "AVX2 solid masked mismatch at index {}",
-                i
-            );
+            assert_eq!(dst[i], dst_scalar[i], "AVX2 solid masked mismatch at index {}", i);
         }
     }
 
@@ -511,11 +482,7 @@ mod tests {
 
         // Verify bit-exact match with scalar
         for i in 0..(w * h) {
-            assert_eq!(
-                dst[i], dst_scalar[i],
-                "AVX2 src masked mismatch at index {}",
-                i
-            );
+            assert_eq!(dst[i], dst_scalar[i], "AVX2 src masked mismatch at index {}", i);
         }
     }
 
@@ -551,11 +518,7 @@ mod tests {
             composite_solid_masked_over_scalar(&mut dst_scalar, w, &mask, w, w, h, color);
 
             for i in 0..(w * h) {
-                assert_eq!(
-                    dst_avx2[i], dst_scalar[i],
-                    "AVX2 solid fuzz mismatch at index {}",
-                    i
-                );
+                assert_eq!(dst_avx2[i], dst_scalar[i], "AVX2 solid fuzz mismatch at index {}", i);
             }
 
             // Test src masked
@@ -565,11 +528,7 @@ mod tests {
             composite_src_masked_over_scalar(&mut dst_scalar, w, &src, w, &mask, w, w, h);
 
             for i in 0..(w * h) {
-                assert_eq!(
-                    dst_avx2[i], dst_scalar[i],
-                    "AVX2 src fuzz mismatch at index {}",
-                    i
-                );
+                assert_eq!(dst_avx2[i], dst_scalar[i], "AVX2 src fuzz mismatch at index {}", i);
             }
         }
     }

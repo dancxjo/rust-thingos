@@ -22,13 +22,17 @@ fn main() -> ! {
         }
         Err(e) => {
             stem::println!("[cwd_test] FAIL: vfs_getcwd() error: {:?}", e);
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     };
 
     if initial.is_empty() {
         stem::println!("[cwd_test] FAIL: initial cwd is empty");
-        loop { stem::syscall::exit(1); }
+        loop {
+            stem::syscall::exit(1);
+        }
     }
 
     // Change to /tmp (always exists as a ramfs mount on ThingOS)
@@ -36,7 +40,9 @@ fn main() -> ! {
         Ok(()) => stem::println!("[cwd_test] chdir /tmp OK"),
         Err(e) => {
             stem::println!("[cwd_test] FAIL: vfs_chdir(/tmp): {:?}", e);
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     }
 
@@ -47,15 +53,21 @@ fn main() -> ! {
             stem::println!("[cwd_test] new cwd: {:?}", p);
             if p != "/tmp" {
                 stem::println!("[cwd_test] FAIL: expected /tmp, got {:?}", p);
-                loop { stem::syscall::exit(1); }
+                loop {
+                    stem::syscall::exit(1);
+                }
             }
         }
         Err(e) => {
             stem::println!("[cwd_test] FAIL: vfs_getcwd() after chdir: {:?}", e);
-            loop { stem::syscall::exit(1); }
+            loop {
+                stem::syscall::exit(1);
+            }
         }
     }
 
     stem::println!("[cwd_test] PASS");
-    loop { stem::syscall::exit(0); }
+    loop {
+        stem::syscall::exit(0);
+    }
 }

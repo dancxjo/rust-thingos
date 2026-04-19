@@ -2,26 +2,21 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
+use std::str;
+
+use wasmi::{Caller, Memory};
+
 use crate::device::HostState;
 use crate::trace::{TraceEntry, TraceMode};
-use std::str;
-use wasmi::{Caller, Memory};
 
 // Helper to get memory
 fn get_memory(caller: &Caller<'_, HostState>) -> Memory {
-    caller
-        .get_export("memory")
-        .and_then(|e| e.into_memory())
-        .expect("Module must export 'memory'")
+    caller.get_export("memory").and_then(|e| e.into_memory()).expect("Module must export 'memory'")
 }
 
 fn record_trace(state: &mut HostState, func: &str, args: Vec<u64>, result: u64) {
     if let TraceMode::Record(ref mut log) = state.trace {
-        log.push(TraceEntry {
-            func_name: func.to_string(),
-            args,
-            result,
-        });
+        log.push(TraceEntry { func_name: func.to_string(), args, result });
     }
 }
 
@@ -29,16 +24,10 @@ fn replay_trace(state: &mut HostState, func: &str, args: &[u64]) -> Option<u64> 
     if let TraceMode::Replay(ref mut iter) = state.trace {
         let entry = iter.next().expect("Replay: Unexpected end of trace");
         if entry.func_name != func {
-            panic!(
-                "Replay: Function mismatch. Expected {}, got {}",
-                entry.func_name, func
-            );
+            panic!("Replay: Function mismatch. Expected {}, got {}", entry.func_name, func);
         }
         if entry.args != args {
-            panic!(
-                "Replay: Args mismatch for {}. Expected {:?}, got {:?}",
-                func, entry.args, args
-            );
+            panic!("Replay: Args mismatch for {}. Expected {:?}, got {:?}", func, entry.args, args);
         }
         return Some(entry.result);
     }

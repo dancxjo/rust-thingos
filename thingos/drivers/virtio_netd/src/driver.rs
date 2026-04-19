@@ -82,14 +82,9 @@ impl VirtioNetDriver {
 
         // Initialize with NET features
         let desired_features = VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS;
-        device
-            .init(desired_features)
-            .map_err(|_| Errno::NotSupported)?;
+        device.init(desired_features).map_err(|_| Errno::NotSupported)?;
 
-        stem::debug!(
-            "VirtIO-NET: Device features 0x{:08x}",
-            device.device_features()
-        );
+        stem::debug!("VirtIO-NET: Device features 0x{:08x}", device.device_features());
 
         // Read MAC address from device config
         let mac = if device.has_feature(5) {
@@ -128,15 +123,11 @@ impl VirtioNetDriver {
         stem::debug!("VirtIO-NET: Link {}", if link_up { "UP" } else { "DOWN" });
 
         // Setup RX queue (queue 0)
-        device
-            .setup_queue(0, QUEUE_SIZE)
-            .map_err(|_| Errno::ENOMEM)?;
+        device.setup_queue(0, QUEUE_SIZE).map_err(|_| Errno::ENOMEM)?;
         stem::debug!("VirtIO-NET: RX queue 0 setup (size={})", QUEUE_SIZE);
 
         // Setup TX queue (queue 1)
-        device
-            .setup_queue(1, QUEUE_SIZE)
-            .map_err(|_| Errno::ENOMEM)?;
+        device.setup_queue(1, QUEUE_SIZE).map_err(|_| Errno::ENOMEM)?;
         stem::debug!("VirtIO-NET: TX queue 1 setup (size={})", QUEUE_SIZE);
 
         // Allocate RX buffers in bulk (32 pages = 128KB for 64 x 2KB buffers)
@@ -187,10 +178,7 @@ impl VirtioNetDriver {
         // Fill RX queue with buffers BEFORE setting DRIVER_OK
         // This is critical: device won't receive until buffers are posted
         driver.refill_rx_queue();
-        stem::debug!(
-            "VirtIO-NET: RX queue filled with {} buffers",
-            driver.rx_active
-        );
+        stem::debug!("VirtIO-NET: RX queue filled with {} buffers", driver.rx_active);
 
         // NOW mark device ready - it will start receiving
         driver.device.driver_ok();
@@ -209,10 +197,7 @@ impl VirtioNetDriver {
             for i in self.rx_active..QUEUE_SIZE {
                 let phys = self.rx_buffers_phys[i as usize];
                 // Add buffer as device-writable
-                if rxq
-                    .add_buffer(&[(phys, RX_BUFFER_SIZE as u32, true)])
-                    .is_none()
-                {
+                if rxq.add_buffer(&[(phys, RX_BUFFER_SIZE as u32, true)]).is_none() {
                     break;
                 }
                 self.rx_active += 1;
@@ -240,10 +225,9 @@ impl VirtioNetDriver {
     /// Poll device config and report link-state changes.
     pub fn poll_link_change(&mut self) -> Option<bool> {
         let next = if self.device.has_feature(16) {
-            let status = self
-                .device
-                .read_device_config(6)
-                .unwrap_or(if self.link_up { 1 } else { 0 }) as u16;
+            let status =
+                self.device.read_device_config(6).unwrap_or(if self.link_up { 1 } else { 0 })
+                    as u16;
             (status & 1) != 0
         } else {
             true

@@ -22,9 +22,12 @@ pub fn sys_port_create(capacity: usize) -> SysResult<usize> {
     port.set_primary_reader_pid(pid as u64);
 
     let mut table = pinfo_arc.lock();
-    let write_handle =
-        table.ipc_table.alloc(port.clone(), crate::ipc::IpcHandleMode::Write).ok_or(Errno::ENOMEM)?;
-    let read_handle = table.ipc_table.alloc(port, crate::ipc::IpcHandleMode::Read).ok_or(Errno::ENOMEM)?;
+    let write_handle = table
+        .ipc_table
+        .alloc(port.clone(), crate::ipc::IpcHandleMode::Write)
+        .ok_or(Errno::ENOMEM)?;
+    let read_handle =
+        table.ipc_table.alloc(port, crate::ipc::IpcHandleMode::Read).ok_or(Errno::ENOMEM)?;
 
     let packed = ((write_handle.0 as usize) << 16) | (read_handle.0 as usize);
     Ok(packed)
@@ -105,12 +108,7 @@ pub fn sys_port_send_all(handle: usize, ptr: usize, len: usize) -> SysResult<usi
     }
 }
 
-fn sys_port_recv_impl(
-    handle: usize,
-    ptr: usize,
-    len: usize,
-    blocking: bool,
-) -> SysResult<usize> {
+fn sys_port_recv_impl(handle: usize, ptr: usize, len: usize, blocking: bool) -> SysResult<usize> {
     let len = len.min(65536);
     if len == 0 {
         return Ok(0);
@@ -144,8 +142,7 @@ fn sys_port_recv_impl(
         }
 
         if !port.has_writers() {
-            crate::ipc::diag::PORT_PEER_DEATHS
-                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            crate::ipc::diag::PORT_PEER_DEATHS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             return Err(Errno::EPIPE);
         }
 
@@ -175,8 +172,7 @@ fn sys_port_recv_impl(
 
         if !port.has_writers() {
             port.remove_waiter_read(tid);
-            crate::ipc::diag::PORT_PEER_DEATHS
-                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            crate::ipc::diag::PORT_PEER_DEATHS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             return Err(Errno::EPIPE);
         }
 
@@ -206,7 +202,7 @@ pub fn sys_port_close(handle: usize) -> SysResult<usize> {
         let mut table = pinfo_arc.lock();
         table.ipc_table.close(handle).ok_or(Errno::EBADF)?
     };
-    
+
     if entry.port.has_readers() == false && entry.port.has_writers() == false {
         let port_id = crate::ipc::find_port_id(&entry.port).unwrap();
         crate::ipc::close_port(port_id);
@@ -218,7 +214,8 @@ pub fn sys_port_info(handle: usize) -> SysResult<usize> {
     let handle = crate::ipc::IpcHandle(handle as u32);
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let lock = pinfo_arc.lock();
-    let entry = lock.ipc_table
+    let entry = lock
+        .ipc_table
         .get(handle, crate::ipc::IpcHandleMode::Read)
         .or_else(|| lock.ipc_table.get(handle, crate::ipc::IpcHandleMode::Write))
         .cloned()

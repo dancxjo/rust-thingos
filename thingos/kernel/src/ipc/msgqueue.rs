@@ -38,6 +38,7 @@
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
+
 use spin::Mutex;
 
 use crate::sched::WaitQueue;
@@ -80,11 +81,7 @@ struct Inner<M> {
 impl<M> Inner<M> {
     fn new(capacity: usize) -> Self {
         let capacity = capacity.max(1);
-        Self {
-            queue: VecDeque::with_capacity(capacity.min(64)),
-            capacity,
-            closed: false,
-        }
+        Self { queue: VecDeque::with_capacity(capacity.min(64)), capacity, closed: false }
     }
 }
 
@@ -128,10 +125,7 @@ impl<M> KernelMessageQueue<M> {
     ///
     /// A `capacity` of 0 is silently raised to 1.
     pub fn new(capacity: usize) -> Self {
-        Self {
-            inner: Mutex::new(Inner::new(capacity)),
-            waiters: WaitQueue::new(),
-        }
+        Self { inner: Mutex::new(Inner::new(capacity)), waiters: WaitQueue::new() }
     }
 
     // -----------------------------------------------------------------------
@@ -153,9 +147,7 @@ impl<M> KernelMessageQueue<M> {
                 return Err(MqSendError::Closed);
             }
             if inner.queue.len() >= inner.capacity {
-                return Err(MqSendError::Full {
-                    capacity: inner.capacity,
-                });
+                return Err(MqSendError::Full { capacity: inner.capacity });
             }
             inner.queue.push_back(msg);
         }
@@ -382,8 +374,7 @@ impl PortMsgView {
         data: alloc::vec::Vec<u8>,
         caps: alloc::vec::Vec<alloc::sync::Arc<dyn crate::vfs::VfsNode>>,
     ) -> Result<(), MqSendError> {
-        self.queue
-            .enqueue(crate::ipc::port::KernelMessage { data, caps })
+        self.queue.enqueue(crate::ipc::port::KernelMessage { data, caps })
     }
 
     /// Non-blocking dequeue of a structured message (port-semantic `try_recv_msg`).
@@ -408,11 +399,12 @@ impl PortMsgView {
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
     use super::*;
     use crate::inbox::{MessageEnvelope, SendError};
     use crate::message::{KindId, Message};
     use crate::sched::blocking::WAKE_TASK_HOOK;
-    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     // ── Wake-recording helpers ─────────────────────────────────────────────
 
@@ -436,9 +428,7 @@ mod tests {
 
     fn wake_log() -> alloc::vec::Vec<u64> {
         let len = WOKEN_LEN.load(Ordering::SeqCst).min(WOKEN_IDS.len());
-        (0..len)
-            .map(|i| WOKEN_IDS[i].load(Ordering::SeqCst))
-            .collect()
+        (0..len).map(|i| WOKEN_IDS[i].load(Ordering::SeqCst)).collect()
     }
 
     fn make_envelope(tag: u8) -> MessageEnvelope {
@@ -622,10 +612,8 @@ mod tests {
         let env = make_envelope(0xFF);
         inbox_view.send(env.clone()).expect("inbox send should succeed");
 
-        let received = port_receiver
-            .try_dequeue()
-            .expect("no error")
-            .expect("message should be present");
+        let received =
+            port_receiver.try_dequeue().expect("no error").expect("message should be present");
         assert_eq!(received, env, "port receiver sees same message inbox enqueued");
     }
 

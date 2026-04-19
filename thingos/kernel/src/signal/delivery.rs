@@ -46,10 +46,12 @@ use abi::errors::{Errno, SysResult};
 
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64 {
-    use super::*;
-    use abi::signal::{SIG_DFL, SIG_IGN, SigAction};
     use alloc::sync::Arc;
-    use crate::signal::{UNCATCHABLE, default_action, DefaultAction};
+
+    use abi::signal::{SIG_DFL, SIG_IGN, SigAction};
+
+    use super::*;
+    use crate::signal::{DefaultAction, UNCATCHABLE, default_action};
     use crate::syscall::validate::validate_user_range;
 
     /// Layout of the kernel-side saved user register state.
@@ -76,10 +78,10 @@ pub mod x86_64 {
         pub rax: u64,
         pub error_code: u64,
         pub int_no: u64,
-        pub rip: u64,  // user return instruction pointer
+        pub rip: u64, // user return instruction pointer
         pub cs: u64,
         pub rflags: u64,
-        pub rsp: u64,  // user stack pointer
+        pub rsp: u64, // user stack pointer
         pub ss: u64,
     }
 
@@ -127,8 +129,8 @@ pub mod x86_64 {
         let nb = n.to_le_bytes();
         [
             0xb8, nb[0], nb[1], nb[2], nb[3], // mov $SYS_SIGRETURN, %eax
-            0x0f, 0x05,                        // syscall
-            0x0f, 0x0b,                        // ud2 (if return is somehow reached)
+            0x0f, 0x05, // syscall
+            0x0f, 0x0b, // ud2 (if return is somehow reached)
             0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, // nop padding
         ]
     }
@@ -154,8 +156,8 @@ pub mod x86_64 {
         let (sig, action) = {
             let mut p = pinfo_arc.lock();
             let combined = thread_pending.union(p.unix_compat.signals.pending);
-            let deliverable = combined.difference(thread_mask)
-                .union(combined.intersection(UNCATCHABLE));
+            let deliverable =
+                combined.difference(thread_mask).union(combined.intersection(UNCATCHABLE));
             let sig = deliverable.lowest();
             if sig == 0 {
                 return;
@@ -341,10 +343,7 @@ pub mod x86_64 {
         // leave it alone for now (the handler may clobber it anyway).
     }
 
-    fn stop_current_process(
-        pinfo_arc: &Arc<spin::Mutex<crate::task::Process>>,
-        sig: u8,
-    ) {
+    fn stop_current_process(pinfo_arc: &Arc<spin::Mutex<crate::task::Process>>, sig: u8) {
         {
             let mut p = pinfo_arc.lock();
             p.unix_compat.signals.stopped = true;
@@ -451,9 +450,7 @@ pub mod stub {
 pub unsafe extern "C" fn kernel_post_syscall_signal_check(frame: *mut u8) {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        x86_64::post_syscall_signal_check(
-            frame as *mut x86_64::SyscallFrame,
-        );
+        x86_64::post_syscall_signal_check(frame as *mut x86_64::SyscallFrame);
     }
     #[cfg(not(target_arch = "x86_64"))]
     let _ = frame;

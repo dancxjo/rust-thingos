@@ -43,13 +43,17 @@ pub struct TaskIdentityLayers {
 
 /// Runtime task ID ⇄ canonical task ID is a stable 1:1 mapping.
 #[inline]
-pub const fn canonical_task_id_from_runtime_task_id(runtime_task_id: RuntimeTaskId) -> CanonicalTaskId {
+pub const fn canonical_task_id_from_runtime_task_id(
+    runtime_task_id: RuntimeTaskId,
+) -> CanonicalTaskId {
     runtime_task_id
 }
 
 /// Runtime task ID ⇄ canonical task ID is a stable 1:1 mapping.
 #[inline]
-pub const fn runtime_task_id_from_canonical_task_id(canonical_task_id: CanonicalTaskId) -> RuntimeTaskId {
+pub const fn runtime_task_id_from_canonical_task_id(
+    canonical_task_id: CanonicalTaskId,
+) -> RuntimeTaskId {
     canonical_task_id
 }
 
@@ -157,12 +161,7 @@ mod tests {
         assert_eq!(layers.canonical_task_id, 7);
         assert_eq!(
             layers.canonical_relations,
-            Some(CanonicalTaskRelations {
-                job: 7,
-                group: 8,
-                session: 9,
-                space: 11,
-            })
+            Some(CanonicalTaskRelations { job: 7, group: 8, session: 9, space: 11 })
         );
         assert!(layers.is_job_leader());
     }

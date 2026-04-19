@@ -2,14 +2,15 @@
 
 extern crate alloc;
 
-use super::{copyin, copyout};
-use crate::syscall::validate::validate_user_range;
 use abi::device::{
     DEVICE_IRQ_SUBSCRIBE_DEVICE, DEVICE_IRQ_SUBSCRIBE_VECTOR, DeviceCall, DeviceKind,
     PCI_IRQ_MODE_MSI, PCI_IRQ_MODE_MSIX, PCI_OP_ENABLE_MSI, PciEnableMsiRequest,
     PciEnableMsiResponse,
 };
 use abi::errors::{Errno, SysResult};
+
+use super::{copyin, copyout};
+use crate::syscall::validate::validate_user_range;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -83,9 +84,7 @@ pub fn sys_device_claim(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let full_path = core::str::from_utf8(&buf).map_err(|_| Errno::EINVAL)?;
 
     // Accept either a full sysfs path (/sys/devices/<slot>) or a bare slot name.
-    let slot = full_path
-        .trim_start_matches("/sys/devices/")
-        .trim_matches('/');
+    let slot = full_path.trim_start_matches("/sys/devices/").trim_matches('/');
 
     let task_id = unsafe { crate::sched::current_tid_current() };
 
@@ -113,10 +112,7 @@ pub fn sys_device_claim(path_ptr: usize, path_len: usize) -> SysResult<usize> {
             Ok(claim_handle)
         }
         Err(Errno::EBUSY) => {
-            crate::kdebug!(
-                "DEVICE: claim failed - device '{}' is already claimed",
-                slot
-            );
+            crate::kdebug!("DEVICE: claim failed - device '{}' is already claimed", slot);
             Err(Errno::EBUSY)
         }
         Err(e) => {
@@ -140,8 +136,7 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         if !reg.verify_claim(claim_handle, task_id) {
             Err(Errno::EPERM)
         } else {
-            reg.get_bar_info(claim_handle, bar_index)
-                .ok_or(Errno::ENODEV)
+            reg.get_bar_info(claim_handle, bar_index).ok_or(Errno::ENODEV)
         }
     };
 
@@ -247,8 +242,7 @@ pub fn sys_device_irq_subscribe(arg0: usize, arg1: usize, mode: usize) -> SysRes
                 if !reg.verify_claim(claim_handle, task_id) {
                     return Err(Errno::EPERM);
                 }
-                reg.get_irq_vector(claim_handle, irq_index)
-                    .ok_or(Errno::ENODEV)?
+                reg.get_irq_vector(claim_handle, irq_index).ok_or(Errno::ENODEV)?
             };
             crate::irq::subscribe(vector).map_err(|_| Errno::EBUSY)?;
             crate::kdebug!(
@@ -287,8 +281,7 @@ pub fn sys_device_irq_wait(arg0: usize, arg1: usize, mode: usize) -> SysResult<u
                 if !reg.verify_claim(claim_handle, task_id) {
                     return Err(Errno::EPERM);
                 }
-                reg.get_irq_vector(claim_handle, irq_index)
-                    .ok_or(Errno::ENODEV)?
+                reg.get_irq_vector(claim_handle, irq_index).ok_or(Errno::ENODEV)?
             };
             vector
         }
@@ -338,11 +331,7 @@ fn sys_pci_call(call: &DeviceCall) -> SysResult<usize> {
                 crate::device_registry::IrqMode::Msix => PCI_IRQ_MODE_MSIX,
                 crate::device_registry::IrqMode::Legacy => 0,
             };
-            let out = PciEnableMsiResponse {
-                vector: res.vector,
-                irq_mode,
-                _reserved: [0; 2],
-            };
+            let out = PciEnableMsiResponse { vector: res.vector, irq_mode, _reserved: [0; 2] };
             let out_slice = unsafe {
                 core::slice::from_raw_parts(
                     &out as *const _ as *const u8,
@@ -380,10 +369,7 @@ pub fn sys_device_alloc_dma(claim_handle: usize, page_count: usize) -> SysResult
     let phys_base = match crate::memory::alloc_contiguous_frames(page_count) {
         Some(phys) => phys,
         None => {
-            crate::kinfo!(
-                "DEVICE: DMA alloc failed ({} pages) - no contiguous memory",
-                page_count
-            );
+            crate::kinfo!("DEVICE: DMA alloc failed ({} pages) - no contiguous memory", page_count);
             return Err(Errno::ENOMEM);
         }
     };
@@ -413,8 +399,7 @@ pub fn sys_device_alloc_dma(claim_handle: usize, page_count: usize) -> SysResult
     // Track the DMA allocation for later phys lookups
     let slot_res = {
         let mut reg = REGISTRY.lock();
-        reg.alloc_dma_slot(claim_handle, phys_base, user_va, page_count)
-            .ok_or(Errno::ENOMEM)
+        reg.alloc_dma_slot(claim_handle, phys_base, user_va, page_count).ok_or(Errno::ENOMEM)
     };
 
     if let Err(e) = slot_res {

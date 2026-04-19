@@ -25,9 +25,7 @@ pub extern "C" fn kernel_dispatch_flat(
 
     // SYS_SIGRETURN needs direct access to the trap frame to restore registers.
     if n as u32 == SYS_SIGRETURN {
-        let result = unsafe {
-            crate::signal::delivery::sys_sigreturn_inner(frame_ptr as *mut u8)
-        };
+        let result = unsafe { crate::signal::delivery::sys_sigreturn_inner(frame_ptr as *mut u8) };
         // Do NOT run signal check after sigreturn: we just restored user state.
         return match result {
             Ok(v) => v as isize,

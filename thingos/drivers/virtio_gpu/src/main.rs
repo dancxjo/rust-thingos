@@ -4,20 +4,18 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
+use core::ptr::write_volatile;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use abi::device::PCI_IRQ_MODE_MSIX;
 use abi::driver_interface::{
-    BusKind, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext, ProbeResult, Status,
-    DRIVER_DESCRIPTOR_ABI_VERSION,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
+    DriverStartContext, ProbeResult, Status,
 };
-use core::ptr::write_volatile;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::device::device_enable_msi;
 use stem::syscall::{device_alloc_dma, device_dma_phys, device_irq_subscribe, device_irq_wait};
-use stem::thread;
-use stem::{error, info, warn};
-
+use stem::{error, info, thread, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"virtio_gpu";
 
@@ -80,15 +78,11 @@ fn main(boot_fd: usize) -> ! {
             len: 4096,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File { thing: boot_fd as u32,
-                offset: 0,
-            },
+            backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
             let ptr = resp.addr as *const u8;
-            let len = (0..128)
-                .find(|&i| unsafe { *ptr.add(i) == 0 })
-                .unwrap_or(128);
+            let len = (0..128).find(|&i| unsafe { *ptr.add(i) == 0 }).unwrap_or(128);
             unsafe { core::slice::from_raw_parts(ptr, len) }
         } else {
             b"/sys/devices/pci-00:02.0" // Fallback
@@ -112,9 +106,7 @@ fn main(boot_fd: usize) -> ! {
             len: 4096,
             prot: VmProt::READ | VmProt::USER,
             flags: VmMapFlags::empty(),
-            backing: VmBacking::File { thing: boot_fd as u32,
-                offset: 0,
-            },
+            backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
             let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
@@ -149,10 +141,7 @@ fn main(boot_fd: usize) -> ! {
     // Enable MSI-X if available
     match device_enable_msi(gpu.claim_handle(), true) {
         Ok(resp) => {
-            info!(
-                "VIRTIO_GPU: IRQ mode {} vector=0x{:02x}",
-                resp.irq_mode, resp.vector
-            );
+            info!("VIRTIO_GPU: IRQ mode {} vector=0x{:02x}", resp.irq_mode, resp.vector);
             if resp.irq_mode == PCI_IRQ_MODE_MSIX {
                 configure_msix(&gpu);
             }
@@ -196,16 +185,10 @@ fn main(boot_fd: usize) -> ! {
             supervisor_protocol::MSG_BIND_READY,
             &ready_bytes[..len],
         ) {
-            info!(
-                "VIRTIO_GPU: Sending MSG_BIND_READY handshake (ID: {})...",
-                bind_instance_id
-            );
+            info!("VIRTIO_GPU: Sending MSG_BIND_READY handshake (ID: {})...", bind_instance_id);
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let _ = stem::syscall::socket::sendmsg(
-                drv_resp_write_fd,
-                &buf[..total_len],
-                &[vfs_write],
-            );
+            let _ =
+                stem::syscall::socket::sendmsg(drv_resp_write_fd, &buf[..total_len], &[vfs_write]);
         }
     }
 
@@ -217,17 +200,11 @@ fn main(boot_fd: usize) -> ! {
             {
                 if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
                     if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
-                        let path_len = assigned
-                            .primary_path
-                            .iter()
-                            .position(|&b| b == 0)
-                            .unwrap_or(64);
+                        let path_len =
+                            assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
                         let path =
                             core::str::from_utf8(&assigned.primary_path[..path_len]).unwrap_or("?");
-                        info!(
-                            "VIRTIO_GPU: Sovereign registration COMPLETE. Assigned: {}",
-                            path
-                        );
+                        info!("VIRTIO_GPU: Sovereign registration COMPLETE. Assigned: {}", path);
                         break;
                     }
                 }
@@ -314,12 +291,7 @@ fn create_demo_framebuffer(gpu: &mut VirtioGpu) -> Result<u64, &'static str> {
     gpu.set_scanout(DEMO_RESOURCE_ID, width, height)?;
 
     // Initial transfer + flush
-    let full_rect = Rect {
-        x: 0,
-        y: 0,
-        w: width,
-        h: height,
-    };
+    let full_rect = Rect { x: 0, y: 0, w: width, h: height };
     gpu.present_rect(DEMO_RESOURCE_ID, full_rect)?;
 
     Ok(framebuffer)

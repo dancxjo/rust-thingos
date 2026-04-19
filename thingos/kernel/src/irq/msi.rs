@@ -1,7 +1,6 @@
+use alloc::string::String;
 #[allow(unused_imports)]
 use core::ptr::{read_volatile, write_volatile};
-
-use alloc::string::String;
 
 use abi::errors::Errno;
 
@@ -27,9 +26,7 @@ pub fn enable_for_claim(
         let reg = REGISTRY.lock();
         let (location, msi_cap, msix_cap) = reg.get_pci_info(claim_handle).ok_or(Errno::ENODEV)?;
         let bars = reg.get_bars(claim_handle).ok_or(Errno::ENODEV)?;
-        let resource_id = reg
-            .get_resource_id_for_claim(claim_handle)
-            .ok_or(Errno::ENODEV)?;
+        let resource_id = reg.get_resource_id_for_claim(claim_handle).ok_or(Errno::ENODEV)?;
         (location, msi_cap, msix_cap, resource_id, bars)
     };
 
@@ -41,31 +38,19 @@ pub fn enable_for_claim(
     let result = if prefer_msix {
         if let Some(msix) = msix_cap {
             program_msix(location, msix, vector, bars)?;
-            Ok(EnableResult {
-                vector,
-                mode: IrqMode::Msix,
-            })
+            Ok(EnableResult { vector, mode: IrqMode::Msix })
         } else if let Some(msi) = msi_cap {
             program_msi(location, msi, vector)?;
-            Ok(EnableResult {
-                vector,
-                mode: IrqMode::Msi,
-            })
+            Ok(EnableResult { vector, mode: IrqMode::Msi })
         } else {
             Err(Errno::ENOSYS)
         }
     } else if let Some(msi) = msi_cap {
         program_msi(location, msi, vector)?;
-        Ok(EnableResult {
-            vector,
-            mode: IrqMode::Msi,
-        })
+        Ok(EnableResult { vector, mode: IrqMode::Msi })
     } else if let Some(msix) = msix_cap {
         program_msix(location, msix, vector, bars)?;
-        Ok(EnableResult {
-            vector,
-            mode: IrqMode::Msix,
-        })
+        Ok(EnableResult { vector, mode: IrqMode::Msix })
     } else {
         Err(Errno::ENOSYS)
     };
@@ -91,23 +76,11 @@ fn program_msi(location: PciLocation, msi: MsiCapability, vector: u8) -> Result<
 
     unsafe {
         runtime_base()
-            .pci_cfg_write32(
-                location.bus,
-                location.dev,
-                location.func,
-                msi.offset + 0x4,
-                addr,
-            )
+            .pci_cfg_write32(location.bus, location.dev, location.func, msi.offset + 0x4, addr)
             .ok();
         if msi.is_64bit {
             runtime_base()
-                .pci_cfg_write32(
-                    location.bus,
-                    location.dev,
-                    location.func,
-                    msi.offset + 0x8,
-                    0,
-                )
+                .pci_cfg_write32(location.bus, location.dev, location.func, msi.offset + 0x8, 0)
                 .ok();
             pci_write_config_u16(location, msi.offset + 0xC, data as u16);
         } else {
@@ -184,9 +157,7 @@ fn pci_write_config_u16(location: PciLocation, offset: u8, value: u16) {
         .unwrap_or(0);
     val &= !(0xFFFF << shift);
     val |= (value as u32) << shift;
-    runtime_base()
-        .pci_cfg_write32(location.bus, location.dev, location.func, aligned, val)
-        .ok();
+    runtime_base().pci_cfg_write32(location.bus, location.dev, location.func, aligned, val).ok();
 }
 
 fn update_device_irq(_resource_id: u64, _mode: IrqMode, _vector: u8) {

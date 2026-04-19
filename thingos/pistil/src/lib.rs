@@ -3,18 +3,19 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+
 use abi::seed::{SEED_ABI_VERSION, Seed, SeedInterface};
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use stem::syscall::{memfd_create, vm_map, vm_unmap};
 
 pub mod blit;
 pub mod bmp;
+pub mod compositor;
 pub mod font;
 pub mod geometry;
 pub mod raster;
 pub mod tessellate;
 pub mod typography;
-pub mod compositor;
 
 const SEED_NAME: &[u8] = b"pistil";
 

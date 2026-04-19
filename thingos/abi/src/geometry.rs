@@ -53,14 +53,7 @@ pub struct Mat3x2fWire {
 
 impl Mat3x2fWire {
     pub const fn identity() -> Self {
-        Self {
-            m11: 1.0,
-            m12: 0.0,
-            m21: 0.0,
-            m22: 1.0,
-            dx: 0.0,
-            dy: 0.0,
-        }
+        Self { m11: 1.0, m12: 0.0, m21: 0.0, m22: 1.0, dx: 0.0, dy: 0.0 }
     }
 
     pub fn as_bytes(&self) -> [u8; 24] {
@@ -87,14 +80,7 @@ impl Mat3x2fWire {
         let m22 = f32::from_le_bytes(bytes[12..16].try_into().ok()?);
         let dx = f32::from_le_bytes(bytes[16..20].try_into().ok()?);
         let dy = f32::from_le_bytes(bytes[20..24].try_into().ok()?);
-        Some(Self {
-            m11,
-            m12,
-            m21,
-            m22,
-            dx,
-            dy,
-        })
+        Some(Self { m11, m12, m21, m22, dx, dy })
     }
 }
 
@@ -112,14 +98,7 @@ mod tests {
 
     #[test]
     fn mat3x2_roundtrip() {
-        let mat = Mat3x2fWire {
-            m11: 1.0,
-            m12: 2.0,
-            m21: 3.0,
-            m22: 4.0,
-            dx: 5.0,
-            dy: 6.0,
-        };
+        let mat = Mat3x2fWire { m11: 1.0, m12: 2.0, m21: 3.0, m22: 4.0, dx: 5.0, dy: 6.0 };
         let bytes = mat.as_bytes();
         let decoded = Mat3x2fWire::from_bytes(&bytes).expect("decode");
         assert_eq!(mat, decoded);

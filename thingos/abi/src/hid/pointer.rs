@@ -90,10 +90,7 @@ impl PointerButtonPayload {
     }
 
     pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
-        Self {
-            button: bytes[0],
-            _pad: bytes[1],
-        }
+        Self { button: bytes[0], _pad: bytes[1] }
     }
 }
 

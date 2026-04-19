@@ -3,8 +3,6 @@
 //! Provides a cooperative executor that natively integrates with `WaitSet`.
 //! Operations return `Poll::Pending` and register their `WaitSpec` dynamically.
 
-use crate::errors::Errno;
-use crate::wait_set::{WaitEvents, WaitSet, WaitToken};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -12,6 +10,9 @@ use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+use crate::errors::Errno;
+use crate::wait_set::{WaitEvents, WaitSet, WaitToken};
 
 /// A global pointer to the currently running reactor.
 /// While ThingOS is mostly single-threaded, `AtomicPtr` safe-guards concurrent
@@ -35,11 +36,7 @@ impl Reactor {
     /// Access the current thread-local reactor.
     pub fn current() -> Option<&'static Reactor> {
         let ptr = CURRENT_REACTOR.load(Ordering::SeqCst);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(unsafe { &*ptr })
-        }
+        if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
     }
 
     /// Register a read interest on a port, saving the waker.
@@ -49,9 +46,7 @@ impl Reactor {
     /// Port-handle waits are superseded by FD-based readiness.  Bridge the
     /// port to a VFS file descriptor with `vfs_fd_from_handle` and then use
     /// `add_fd_readable` instead.
-    #[deprecated(
-        note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead"
-    )]
+    #[deprecated(note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead")]
     pub fn add_port_readable(&self, handle: u64, waker: Waker) -> Result<WaitToken, Errno> {
         let mut ws = self.wait_set.borrow_mut();
         #[allow(deprecated)]
@@ -119,8 +114,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
                 continue;
             }
             // Block until event
-            ws.wait(None::<crate::time::Duration>)
-                .expect("WaitSet failure")
+            ws.wait(None::<crate::time::Duration>).expect("WaitSet failure")
         };
 
         // For each fired token, we trigger the wakers via wake() and remove the token.
@@ -150,9 +144,7 @@ use crate::syscall;
 ///
 /// `AsyncPort` is superseded by FD-based async I/O.  Bridge the port handle
 /// via `vfs_fd_from_handle` and use an async FD reader instead.
-#[deprecated(
-    note = "Use vfs_fd_from_handle to bridge the port then read from a VFS FD instead"
-)]
+#[deprecated(note = "Use vfs_fd_from_handle to bridge the port then read from a VFS FD instead")]
 pub struct AsyncPort {
     handle: u64,
 }
@@ -174,11 +166,7 @@ impl AsyncPort {
     /// `AsyncPort` is superseded by FD-based async I/O.  Bridge the port handle
     /// via `vfs_fd_from_handle` and use an async FD reader instead.
     pub fn recv<'a>(&'a self, buf: &'a mut [u8]) -> RecvFuture<'a> {
-        RecvFuture {
-            port: self,
-            buf,
-            registered_token: None,
-        }
+        RecvFuture { port: self, buf, registered_token: None }
     }
 }
 

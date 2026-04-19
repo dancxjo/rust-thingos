@@ -9,10 +9,7 @@ pub struct Bitset {
 impl Bitset {
     pub fn new(size: usize) -> Self {
         let words = (size + 63) / 64;
-        Self {
-            bits: vec![0; words],
-            size,
-        }
+        Self { bits: vec![0; words], size }
     }
 
     pub fn set(&mut self, index: usize) {
@@ -28,11 +25,7 @@ impl Bitset {
     }
 
     pub fn test(&self, index: usize) -> bool {
-        if index < self.size {
-            (self.bits[index / 64] & (1 << (index % 64))) != 0
-        } else {
-            false
-        }
+        if index < self.size { (self.bits[index / 64] & (1 << (index % 64))) != 0 } else { false }
     }
 
     pub fn find_first_zero(&self) -> Option<usize> {

@@ -34,23 +34,20 @@ pub mod diag;
 mod handles;
 pub mod msgqueue;
 pub mod pipe;
-pub mod unix_socket;
 mod port;
-
-pub use handles::{
-    IpcHandle, IpcHandleEntry, IpcHandleMode, IpcHandleTable, MAX_IPC_HANDLES,
-};
-pub use port::{Port, PortId, Receiver, Sender};
+pub mod unix_socket;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+pub use handles::{IpcHandle, IpcHandleEntry, IpcHandleMode, IpcHandleTable, MAX_IPC_HANDLES};
+pub use port::{Port, PortId, Receiver, Sender};
 use spin::Mutex;
 
 /// Global port registry
 static PORTS: Mutex<Vec<Option<Arc<Port>>>> = Mutex::new(Vec::new());
 
 /// Global Handle Table (Single Process Model for v0)
-
 
 /// Create a new port and return its ID
 pub fn create_port(capacity: usize) -> PortId {

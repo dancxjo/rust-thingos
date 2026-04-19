@@ -1,5 +1,6 @@
-use crate::ir;
 use std::collections::HashSet;
+
+use crate::ir;
 
 pub fn validate(schema: &ir::Schema) -> Result<(), String> {
     for kind in schema.kinds.values() {

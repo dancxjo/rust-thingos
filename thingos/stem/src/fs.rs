@@ -1,9 +1,11 @@
 //! High-level VFS utilities.
 
-use crate::syscall::{vfs_close, vfs_read, vfs_watch_path};
-use abi::errors::{Errno, SysResult};
-use abi::vfs_watch::{flags, mask, WatchEvent};
 use alloc::vec;
+
+use abi::errors::{Errno, SysResult};
+use abi::vfs_watch::{WatchEvent, flags, mask};
+
+use crate::syscall::{vfs_close, vfs_read, vfs_watch_path};
 
 /// A file system event watcher.
 pub struct Watcher {
@@ -64,11 +66,7 @@ pub fn wait_until_exists(path: &str) -> SysResult<()> {
 
     // Identify parent directory
     let (parent, name) = if let Some(idx) = path.rfind('/') {
-        if idx == 0 {
-            ("/", &path[1..])
-        } else {
-            (&path[..idx], &path[idx + 1..])
-        }
+        if idx == 0 { ("/", &path[1..]) } else { (&path[..idx], &path[idx + 1..]) }
     } else {
         (".", path)
     };

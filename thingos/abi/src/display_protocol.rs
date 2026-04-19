@@ -112,12 +112,7 @@ pub fn parse_message(buf: &[u8]) -> Option<(DisplayHeader, &[u8])> {
         return None;
     }
 
-    let header = DisplayHeader {
-        magic,
-        version,
-        msg_type,
-        payload_len,
-    };
+    let header = DisplayHeader { magic, version, msg_type, payload_len };
 
     Some((header, &buf[HEADER_SIZE..total]))
 }

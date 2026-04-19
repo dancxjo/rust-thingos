@@ -10,11 +10,12 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+use abi::errors::{Errno, SysResult};
+use abi::syscall::mount_flags;
 use spin::Mutex;
 
 use super::VfsDriver;
-use abi::errors::{Errno, SysResult};
-use abi::syscall::mount_flags;
 
 struct MountLayer {
     driver: Arc<dyn VfsDriver>,
@@ -75,11 +76,7 @@ pub fn umount(mount_point: &str) -> SysResult<()> {
     let mut table = MOUNT_TABLE.lock();
     let before = table.len();
     table.retain(|e| e.prefix != prefix);
-    if table.len() == before {
-        Err(Errno::ENOENT)
-    } else {
-        Ok(())
-    }
+    if table.len() == before { Err(Errno::ENOENT) } else { Ok(()) }
 }
 
 /// Resolve `path` to a VFS node by finding the best-matching mount and
@@ -204,7 +201,10 @@ pub fn create(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
             .iter()
             .find_map(|entry| {
                 strip_prefix(path, &entry.prefix).and_then(|rel| {
-                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                    let layer = entry
+                        .stack
+                        .iter()
+                        .find(|l| (l.flags & mount_flags::MCREATE) != 0)
                         .or_else(|| entry.stack.first())?;
                     Some((rel.to_string(), Arc::clone(&layer.driver)))
                 })
@@ -227,7 +227,10 @@ pub fn mkdir(path: &str) -> SysResult<()> {
             .iter()
             .find_map(|entry| {
                 strip_prefix(path, &entry.prefix).and_then(|rel| {
-                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                    let layer = entry
+                        .stack
+                        .iter()
+                        .find(|l| (l.flags & mount_flags::MCREATE) != 0)
                         .or_else(|| entry.stack.first())?;
                     Some((rel.to_string(), Arc::clone(&layer.driver)))
                 })
@@ -250,7 +253,10 @@ pub fn unlink(path: &str) -> SysResult<()> {
             .iter()
             .find_map(|entry| {
                 strip_prefix(path, &entry.prefix).and_then(|rel| {
-                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                    let layer = entry
+                        .stack
+                        .iter()
+                        .find(|l| (l.flags & mount_flags::MCREATE) != 0)
                         .or_else(|| entry.stack.first())?;
                     Some((rel.to_string(), Arc::clone(&layer.driver)))
                 })
@@ -273,7 +279,10 @@ pub fn symlink(target: &str, link_path: &str) -> SysResult<()> {
             .iter()
             .find_map(|entry| {
                 strip_prefix(link_path, &entry.prefix).and_then(|rel| {
-                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                    let layer = entry
+                        .stack
+                        .iter()
+                        .find(|l| (l.flags & mount_flags::MCREATE) != 0)
                         .or_else(|| entry.stack.first())?;
                     Some((rel.to_string(), Arc::clone(&layer.driver)))
                 })
@@ -298,7 +307,10 @@ pub fn link(src_path: &str, dst_path: &str) -> SysResult<()> {
             .iter()
             .find_map(|entry| {
                 strip_prefix(src_path, &entry.prefix).and_then(|rel| {
-                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                    let layer = entry
+                        .stack
+                        .iter()
+                        .find(|l| (l.flags & mount_flags::MCREATE) != 0)
                         .or_else(|| entry.stack.first())?;
                     Some((rel.to_string(), Arc::clone(&layer.driver)))
                 })
@@ -308,7 +320,10 @@ pub fn link(src_path: &str, dst_path: &str) -> SysResult<()> {
             .iter()
             .find_map(|entry| {
                 strip_prefix(dst_path, &entry.prefix).and_then(|rel| {
-                    let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                    let layer = entry
+                        .stack
+                        .iter()
+                        .find(|l| (l.flags & mount_flags::MCREATE) != 0)
                         .or_else(|| entry.stack.first())?;
                     Some((rel.to_string(), Arc::clone(&layer.driver)))
                 })
@@ -336,13 +351,12 @@ pub fn rename(old_path: &str, new_path: &str) -> SysResult<()> {
             .find_map(|entry| {
                 let old_rel = strip_prefix(old_path, &entry.prefix)?;
                 let new_rel = strip_prefix(new_path, &entry.prefix)?;
-                let layer = entry.stack.iter().find(|l| (l.flags & mount_flags::MCREATE) != 0)
+                let layer = entry
+                    .stack
+                    .iter()
+                    .find(|l| (l.flags & mount_flags::MCREATE) != 0)
                     .or_else(|| entry.stack.first())?;
-                Some((
-                    old_rel.to_string(),
-                    new_rel.to_string(),
-                    Arc::clone(&layer.driver),
-                ))
+                Some((old_rel.to_string(), new_rel.to_string(), Arc::clone(&layer.driver)))
             })
             .ok_or(Errno::EXDEV)?
     };
@@ -371,11 +385,7 @@ pub fn mounts_text() -> alloc::string::String {
 fn normalise(p: &str) -> String {
     // Strip trailing slash unless it is the root itself.
     let s = p.trim_end_matches('/');
-    if s.is_empty() {
-        String::from("/")
-    } else {
-        String::from(s)
-    }
+    if s.is_empty() { String::from("/") } else { String::from(s) }
 }
 
 /// Returns the relative portion of `path` after `prefix`, if `path` starts
@@ -396,11 +406,13 @@ fn strip_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::vfs::{VfsDriver, VfsNode, VfsStat};
-    use abi::errors::Errno;
     use alloc::sync::Arc;
     use alloc::vec;
+
+    use abi::errors::Errno;
+
+    use super::*;
+    use crate::vfs::{VfsDriver, VfsNode, VfsStat};
 
     struct DummyNode;
     impl VfsNode for DummyNode {
@@ -411,23 +423,14 @@ mod tests {
             Ok(0)
         }
         fn stat(&self) -> abi::errors::SysResult<VfsStat> {
-            Ok(VfsStat {
-                mode: VfsStat::S_IFCHR | 0o666,
-                size: 0,
-                ino: 99,
-                ..Default::default()
-            })
+            Ok(VfsStat { mode: VfsStat::S_IFCHR | 0o666, size: 0, ino: 99, ..Default::default() })
         }
     }
 
     struct DummyFs;
     impl VfsDriver for DummyFs {
         fn lookup(&self, path: &str) -> abi::errors::SysResult<Arc<dyn VfsNode>> {
-            if path == "thing" {
-                Ok(Arc::new(DummyNode))
-            } else {
-                Err(Errno::ENOENT)
-            }
+            if path == "thing" { Ok(Arc::new(DummyNode)) } else { Err(Errno::ENOENT) }
         }
     }
 

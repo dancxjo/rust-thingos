@@ -38,11 +38,6 @@ pub struct ManagedTask {
 
 impl ManagedTask {
     pub fn new(name: String, kind: TaskKind) -> Self {
-        Self {
-            name,
-            kind,
-            resp_fd: None,
-            ..Default::default()
-        }
+        Self { name, kind, resp_fd: None, ..Default::default() }
     }
 }

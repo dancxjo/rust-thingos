@@ -97,11 +97,7 @@ impl Instant {
     /// Returns the duration between two instants (absolute difference).
     #[inline]
     pub const fn abs_diff(self, other: Instant) -> Duration {
-        if self.0 >= other.0 {
-            Duration(self.0 - other.0)
-        } else {
-            Duration(other.0 - self.0)
-        }
+        if self.0 >= other.0 { Duration(self.0 - other.0) } else { Duration(other.0 - self.0) }
     }
 }
 

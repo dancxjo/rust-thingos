@@ -1,8 +1,9 @@
+use core::alloc::Layout;
+use core::ptr::NonNull;
+
 use super::arena::{AllocatorStats, Arena, ArenaFlags, ArenaHeap};
 use super::handle::EvictHandle;
 use crate::{BootRuntime, BootTasking, MapKind, MapPerms, runtime};
-use core::alloc::Layout;
-use core::ptr::NonNull;
 
 pub struct KernelHeap {
     /// Start of the kernel dynamic heap virtual address range

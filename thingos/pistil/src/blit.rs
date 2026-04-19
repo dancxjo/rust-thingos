@@ -1,5 +1,6 @@
-use crate::geometry::Rect;
 use stem::simd;
+
+use crate::geometry::Rect;
 
 /// A raw pointer-based pixel buffer with dimensions and stride.
 #[derive(Clone, Copy)]
@@ -12,12 +13,7 @@ pub struct PixelBuffer {
 
 impl PixelBuffer {
     pub unsafe fn new(ptr: *mut u32, width: u32, height: u32, stride_bytes: u32) -> Self {
-        Self {
-            ptr,
-            width,
-            height,
-            stride_bytes,
-        }
+        Self { ptr, width, height, stride_bytes }
     }
 
     pub fn as_slice_mut(&mut self) -> &mut [u32] {

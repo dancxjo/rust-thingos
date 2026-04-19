@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use abi::ThingId;
     use std::collections::HashSet;
+
+    use abi::ThingId;
 
     #[test]
     fn test_thing_id_uniqueness() {

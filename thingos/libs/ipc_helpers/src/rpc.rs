@@ -26,10 +26,11 @@
 //! let reply_payload = client.call(b"ping").unwrap();
 //! ```
 
-use abi::errors::Errno;
-use abi::rpc::{RpcHeader, RPC_FLAG_ERROR, RPC_FLAG_REPLY};
 use core::sync::atomic::{AtomicU64, Ordering};
-use stem::syscall::port::{port_recv, port_send_all, PortHandle};
+
+use abi::errors::Errno;
+use abi::rpc::{RPC_FLAG_ERROR, RPC_FLAG_REPLY, RpcHeader};
+use stem::syscall::port::{PortHandle, port_recv, port_send_all};
 
 // ── RpcRequest ────────────────────────────────────────────────────────────────
 
@@ -54,10 +55,7 @@ pub struct RpcServer {
 impl RpcServer {
     /// Create a new server reading from `read_handle`.
     pub fn new(read_handle: PortHandle) -> Self {
-        Self {
-            read_handle,
-            buf: alloc::vec![0u8; 4096],
-        }
+        Self { read_handle, buf: alloc::vec![0u8; 4096] }
     }
 
     /// Block until the next request arrives and decode it.
@@ -66,16 +64,12 @@ impl RpcServer {
         if n < RpcHeader::WIRE_SIZE {
             return Err(Errno::EINVAL);
         }
-        let hdr = RpcHeader::decode_le(&self.buf[..RpcHeader::WIRE_SIZE])
-            .ok_or(Errno::EINVAL)?;
+        let hdr = RpcHeader::decode_le(&self.buf[..RpcHeader::WIRE_SIZE]).ok_or(Errno::EINVAL)?;
         if !hdr.is_request() {
             return Err(Errno::EINVAL);
         }
         let payload = self.buf[RpcHeader::WIRE_SIZE..n].to_vec();
-        Ok(RpcRequest {
-            request_id: hdr.request_id,
-            payload,
-        })
+        Ok(RpcRequest { request_id: hdr.request_id, payload })
     }
 
     /// Send a successful reply for `request_id` with `payload`.
@@ -96,12 +90,7 @@ impl RpcServer {
         errno: Errno,
     ) -> Result<(), Errno> {
         let code = (errno as u32).to_le_bytes();
-        send_reply(
-            write_handle,
-            request_id,
-            RPC_FLAG_REPLY | RPC_FLAG_ERROR,
-            &code,
-        )
+        send_reply(write_handle, request_id, RPC_FLAG_REPLY | RPC_FLAG_ERROR, &code)
     }
 }
 
@@ -152,10 +141,7 @@ impl RpcClient {
 
     /// Like `call` but returns the raw `(RpcHeader, payload)` pair so the
     /// caller can inspect flags directly.
-    pub fn call_raw(
-        &self,
-        payload: &[u8],
-    ) -> Result<(RpcHeader, alloc::vec::Vec<u8>), Errno> {
+    pub fn call_raw(&self, payload: &[u8]) -> Result<(RpcHeader, alloc::vec::Vec<u8>), Errno> {
         let request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         // Encode request.
@@ -193,11 +179,7 @@ fn send_reply(
     payload: &[u8],
 ) -> Result<(), Errno> {
     let mut msg = alloc::vec![0u8; RpcHeader::WIRE_SIZE + payload.len()];
-    let hdr = RpcHeader {
-        request_id,
-        flags,
-        _pad: [0; 5],
-    };
+    let hdr = RpcHeader { request_id, flags, _pad: [0; 5] };
     hdr.encode_le(&mut msg[..RpcHeader::WIRE_SIZE]).unwrap();
     msg[RpcHeader::WIRE_SIZE..].copy_from_slice(payload);
     port_send_all(write_handle, &msg).map(|_| ())

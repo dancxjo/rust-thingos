@@ -32,10 +32,7 @@ pub struct Rect {
 
 impl Rect {
     pub const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            origin: Point::new(x, y),
-            size: Size::new(width, height),
-        }
+        Self { origin: Point::new(x, y), size: Size::new(width, height) }
     }
 
     pub fn x(&self) -> i32 {
@@ -57,11 +54,7 @@ impl Rect {
         let x1 = (self.x() + self.width()).min(other.x() + other.width());
         let y1 = (self.y() + self.height()).min(other.y() + other.height());
 
-        if x1 > x0 && y1 > y0 {
-            Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
-        } else {
-            None
-        }
+        if x1 > x0 && y1 > y0 { Some(Rect::new(x0, y0, x1 - x0, y1 - y0)) } else { None }
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -74,11 +67,7 @@ impl Rect {
         let x1 = (self.x() + self.width()).min(bounds.x() + bounds.width());
         let y1 = (self.y() + self.height()).min(bounds.y() + bounds.height());
 
-        if x1 <= x0 || y1 <= y0 {
-            Self::default()
-        } else {
-            Self::new(x0, y0, x1 - x0, y1 - y0)
-        }
+        if x1 <= x0 || y1 <= y0 { Self::default() } else { Self::new(x0, y0, x1 - x0, y1 - y0) }
     }
 
     pub fn intersect(self, other: Rect) -> Self {
@@ -86,12 +75,7 @@ impl Rect {
     }
 
     pub fn expand(self, px: i32) -> Self {
-        Self::new(
-            self.x() - px,
-            self.y() - px,
-            self.width() + px * 2,
-            self.height() + px * 2,
-        )
+        Self::new(self.x() - px, self.y() - px, self.width() + px * 2, self.height() + px * 2)
     }
 
     pub fn contains(&self, x: i32, y: i32) -> bool {
@@ -154,21 +138,11 @@ impl Default for Transform2D {
 
 impl Transform2D {
     pub const fn identity() -> Self {
-        Self {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            tx: 0.0,
-            ty: 0.0,
-        }
+        Self { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0 }
     }
 
     pub fn transform_point_f(&self, x: f32, y: f32) -> (f32, f32) {
-        (
-            self.a * x + self.c * y + self.tx,
-            self.b * x + self.d * y + self.ty,
-        )
+        (self.a * x + self.c * y + self.tx, self.b * x + self.d * y + self.ty)
     }
 }
 

@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Type};
+use syn::{Data, DeriveInput, Fields, Type, parse_macro_input};
 
 #[proc_macro_derive(Graphable)]
 pub fn derive_graphable(input: TokenStream) -> TokenStream {
@@ -13,7 +13,7 @@ pub fn derive_graphable(input: TokenStream) -> TokenStream {
         _ => {
             return syn::Error::new_spanned(name, "Graphable only supported on structs")
                 .to_compile_error()
-                .into()
+                .into();
         }
     };
 
@@ -31,7 +31,7 @@ pub fn derive_graphable(input: TokenStream) -> TokenStream {
         _ => {
             return syn::Error::new_spanned(name, "Graphable only supported on named structs")
                 .to_compile_error()
-                .into()
+                .into();
         }
     };
 

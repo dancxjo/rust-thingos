@@ -5,6 +5,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+
 use stem::abi::syscall::vfs_flags;
 use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_read, vfs_write};
 
@@ -134,9 +135,5 @@ fn main(_arg: usize) -> ! {
         let _ = vfs_close(output.fd);
     }
 
-    if had_error {
-        exit(1)
-    } else {
-        exit(0)
-    }
+    if had_error { exit(1) } else { exit(0) }
 }

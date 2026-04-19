@@ -23,17 +23,11 @@ pub fn change_directory(current: &Path, dir: Option<&str>) -> io::Result<PathBuf
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
 fn normalize_path(base: &Path, input: &Path) -> PathBuf {
-    let mut out = if input.is_absolute() {
-        PathBuf::from("/")
-    } else {
-        base.to_path_buf()
-    };
+    let mut out = if input.is_absolute() { PathBuf::from("/") } else { base.to_path_buf() };
 
     for component in input.components() {
         match component {
@@ -47,9 +41,5 @@ fn normalize_path(base: &Path, input: &Path) -> PathBuf {
         }
     }
 
-    if out.as_os_str().is_empty() {
-        PathBuf::from("/")
-    } else {
-        out
-    }
+    if out.as_os_str().is_empty() { PathBuf::from("/") } else { out }
 }

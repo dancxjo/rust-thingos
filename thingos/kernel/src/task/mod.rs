@@ -863,11 +863,9 @@ pub fn preempt_enable<R: BootRuntime>() {
     if let Some(decision) = switch_decision {
         let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
         let mut ghost_fs_base = 0;
-        let Some(switch) = crate::sched::resolve_switch_params::<R>(
-            decision,
-            &mut ghost_ctx,
-            &mut ghost_fs_base,
-        ) else {
+        let Some(switch) =
+            crate::sched::resolve_switch_params::<R>(decision, &mut ghost_ctx, &mut ghost_fs_base)
+        else {
             rt.irq_restore(irq);
             return;
         };
@@ -917,11 +915,9 @@ pub fn resched_if_needed<R: BootRuntime>() {
     if let Some(decision) = switch_decision {
         let mut ghost_ctx = <R::Tasking as BootTasking>::Context::default();
         let mut ghost_fs_base = 0;
-        let Some(switch) = crate::sched::resolve_switch_params::<R>(
-            decision,
-            &mut ghost_ctx,
-            &mut ghost_fs_base,
-        ) else {
+        let Some(switch) =
+            crate::sched::resolve_switch_params::<R>(decision, &mut ghost_ctx, &mut ghost_fs_base)
+        else {
             rt.irq_restore(irq);
             return;
         };

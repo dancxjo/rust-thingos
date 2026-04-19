@@ -6,10 +6,11 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use abi::errors::Errno;
 use core::cmp::Ord;
 use core::iter::Iterator;
 use core::ptr::{read_volatile, write_volatile};
+
+use abi::errors::Errno;
 
 pub mod commands;
 pub mod virtio;
@@ -135,17 +136,11 @@ impl VirtioGpu {
         self.write_common(virtio::VIRTIO_COMMON_STATUS, 0);
 
         // 2. Set ACKNOWLEDGE status
-        self.write_common(
-            virtio::VIRTIO_COMMON_STATUS,
-            virtio::VIRTIO_STATUS_ACKNOWLEDGE,
-        );
+        self.write_common(virtio::VIRTIO_COMMON_STATUS, virtio::VIRTIO_STATUS_ACKNOWLEDGE);
 
         // 3. Set DRIVER status
         let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(
-            virtio::VIRTIO_COMMON_STATUS,
-            status | virtio::VIRTIO_STATUS_DRIVER,
-        );
+        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_DRIVER);
 
         // 4. Read device features (feature bank 0 for GPU-specific features)
         self.write_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE_SELECT, 0);
@@ -161,19 +156,13 @@ impl VirtioGpu {
 
         // 5. Write driver features - request virgl if available
         self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE_SELECT, 0);
-        let driver_features = if self.virgl_supported {
-            1 << virtio::VIRTIO_GPU_F_VIRGL
-        } else {
-            0
-        };
+        let driver_features =
+            if self.virgl_supported { 1 << virtio::VIRTIO_GPU_F_VIRGL } else { 0 };
         self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE, driver_features);
 
         // 6. Set FEATURES_OK
         let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(
-            virtio::VIRTIO_COMMON_STATUS,
-            status | virtio::VIRTIO_STATUS_FEATURES_OK,
-        );
+        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_FEATURES_OK);
 
         // 7. Verify FEATURES_OK
         let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
@@ -186,10 +175,7 @@ impl VirtioGpu {
 
         // 9. Set DRIVER_OK
         let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(
-            virtio::VIRTIO_COMMON_STATUS,
-            status | virtio::VIRTIO_STATUS_DRIVER_OK,
-        );
+        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_DRIVER_OK);
 
         Ok(())
     }
@@ -263,11 +249,7 @@ impl VirtioGpu {
             },
             resource_id,
             nr_entries: 1,
-            entry: VirtioGpuMemEntry {
-                addr: phys_addr,
-                length: size as u32,
-                padding: 0,
-            },
+            entry: VirtioGpuMemEntry { addr: phys_addr, length: size as u32, padding: 0 },
         };
 
         let cmd_bytes = unsafe {
@@ -402,12 +384,7 @@ impl VirtioGpu {
             let y1 = union.y.min(r.y);
             let x2 = (union.x + union.w).max(r.x + r.w);
             let y2 = (union.y + union.h).max(r.y + r.h);
-            union = Rect {
-                x: x1,
-                y: y1,
-                w: x2.saturating_sub(x1),
-                h: y2.saturating_sub(y1),
-            };
+            union = Rect { x: x1, y: y1, w: x2.saturating_sub(x1), h: y2.saturating_sub(y1) };
         }
 
         // Clamp to bounds
@@ -415,12 +392,7 @@ impl VirtioGpu {
         let y = union.y.min(bounds.1);
         let max_w = bounds.0.saturating_sub(x);
         let max_h = bounds.1.saturating_sub(y);
-        let clamped = Rect {
-            x,
-            y,
-            w: union.w.min(max_w),
-            h: union.h.min(max_h),
-        };
+        let clamped = Rect { x, y, w: union.w.min(max_w), h: union.h.min(max_h) };
 
         // Skip empty rect
         if clamped.w == 0 || clamped.h == 0 {
@@ -593,12 +565,8 @@ impl VirtioGpu {
             if completed {
                 let resp_ptr = (self.cmd_buf + resp_offset as u64) as *const u8;
                 let resp_type = unsafe {
-                    let type_bytes: [u8; 4] = [
-                        *resp_ptr,
-                        *resp_ptr.add(1),
-                        *resp_ptr.add(2),
-                        *resp_ptr.add(3),
-                    ];
+                    let type_bytes: [u8; 4] =
+                        [*resp_ptr, *resp_ptr.add(1), *resp_ptr.add(2), *resp_ptr.add(3)];
                     u32::from_le_bytes(type_bytes)
                 };
 
@@ -692,11 +660,7 @@ impl VirtioGpu {
                 resource_id,
                 nr_entries: 1,
             },
-            entry: VirtioGpuMemEntry {
-                addr: phys_addr,
-                length: size as u32,
-                padding: 0,
-            },
+            entry: VirtioGpuMemEntry { addr: phys_addr, length: size as u32, padding: 0 },
         };
 
         let cmd_bytes = unsafe {
@@ -766,33 +730,18 @@ impl VirtioGpu {
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_SIZE, 128);
 
         // Write queue addresses
-        self.write_common(
-            virtio::VIRTIO_COMMON_QUEUE_DESC_LO,
-            (vq_phys & 0xFFFFFFFF) as u32,
-        );
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_LO, (vq_phys & 0xFFFFFFFF) as u32);
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_HI, (vq_phys >> 32) as u32);
 
         let avail_offset = 128 * 16;
         let avail_phys = vq_phys + avail_offset as u64;
-        self.write_common(
-            virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO,
-            (avail_phys & 0xFFFFFFFF) as u32,
-        );
-        self.write_common(
-            virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI,
-            (avail_phys >> 32) as u32,
-        );
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO, (avail_phys & 0xFFFFFFFF) as u32);
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
 
         let used_offset = avail_offset + 6 + 128 * 2;
         let used_phys = vq_phys + used_offset as u64;
-        self.write_common(
-            virtio::VIRTIO_COMMON_QUEUE_USED_LO,
-            (used_phys & 0xFFFFFFFF) as u32,
-        );
-        self.write_common(
-            virtio::VIRTIO_COMMON_QUEUE_USED_HI,
-            (used_phys >> 32) as u32,
-        );
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_LO, (used_phys & 0xFFFFFFFF) as u32);
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_HI, (used_phys >> 32) as u32);
 
         // Enable the queue
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_ENABLE, 1);
@@ -834,10 +783,8 @@ impl VirtioGpu {
             let vq = self.controlq.as_mut().ok_or("No controlq")?;
 
             // Add buffer chain: command (read by device), response (written by device)
-            let bufs = [
-                (self.cmd_buf_phys, cmd.len() as u32, false),
-                (resp_phys, resp_size as u32, true),
-            ];
+            let bufs =
+                [(self.cmd_buf_phys, cmd.len() as u32, false), (resp_phys, resp_size as u32, true)];
 
             vq.add_buffer(&bufs).ok_or("Queue full")?;
         }
@@ -856,12 +803,8 @@ impl VirtioGpu {
                 // Read response type safely from packed struct
                 let resp_ptr = (self.cmd_buf + resp_offset as u64) as *const u8;
                 let resp_type = unsafe {
-                    let type_bytes: [u8; 4] = [
-                        *resp_ptr,
-                        *resp_ptr.add(1),
-                        *resp_ptr.add(2),
-                        *resp_ptr.add(3),
-                    ];
+                    let type_bytes: [u8; 4] =
+                        [*resp_ptr, *resp_ptr.add(1), *resp_ptr.add(2), *resp_ptr.add(3)];
                     u32::from_le_bytes(type_bytes)
                 };
 

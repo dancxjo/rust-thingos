@@ -3,11 +3,11 @@
 //! All time in Thing-OS derives from a single monotonic timebase.
 //! Use `now()` to get the current `Instant`.
 
-use crate::pal;
-
 // Re-export the ABI types for convenience
 pub use abi::time::{ClockId, TimeSpec};
 pub use abi::types::instant::{Duration, Instant};
+
+use crate::pal;
 
 /// Returns the current monotonic instant.
 ///

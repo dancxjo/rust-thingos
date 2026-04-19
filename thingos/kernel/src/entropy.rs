@@ -4,8 +4,9 @@
 //! on x86_64) and provides cryptographically-mixed random bytes to userspace
 //! via the `SYS_GETRANDOM` syscall.
 
-use abi::errors::Errno;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use abi::errors::Errno;
 
 /// Internal pool state: 64 bytes mixed via simple hash accumulation.
 /// Protected by atomic seeded flag; writes are append-only mixing so
@@ -44,9 +45,7 @@ impl Pool {
         // Simple but effective: rotate and XOR each state word with a mixed sample
         for (i, word) in self.state.iter().enumerate() {
             let old = word.load(Ordering::Relaxed);
-            let mixed = old
-                .wrapping_add(sample)
-                .rotate_left((i as u32 * 7 + 13) & 63)
+            let mixed = old.wrapping_add(sample).rotate_left((i as u32 * 7 + 13) & 63)
                 ^ sample.wrapping_mul(0x517cc1b727220a95);
             word.store(mixed, Ordering::Relaxed);
         }

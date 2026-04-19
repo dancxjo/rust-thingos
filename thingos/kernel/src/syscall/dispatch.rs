@@ -1,6 +1,6 @@
-use crate::syscall::handlers;
-
 use abi::syscall::*;
+
+use crate::syscall::handlers;
 
 pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
     let syscall_id = n as u32;
@@ -118,8 +118,12 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_FS_CHDIR => handlers::vfs::sys_fs_chdir(args[0], args[1]),
         SYS_FS_GETCWD => handlers::vfs::sys_fs_getcwd(args[0], args[1]),
         SYS_FS_MOUNT => handlers::vfs::sys_fs_mount(args[0], args[1], args[2]),
-        SYS_FS_MOUNT_EX => handlers::vfs::sys_fs_mount_ex(args[0], args[1], args[2], args[3] as u32),
-        SYS_FS_BIND => handlers::vfs::sys_fs_bind(args[0], args[1], args[2], args[3], args[4] as u32),
+        SYS_FS_MOUNT_EX => {
+            handlers::vfs::sys_fs_mount_ex(args[0], args[1], args[2], args[3] as u32)
+        }
+        SYS_FS_BIND => {
+            handlers::vfs::sys_fs_bind(args[0], args[1], args[2], args[3], args[4] as u32)
+        }
         SYS_FS_UMOUNT => handlers::vfs::sys_fs_umount(args[0], args[1]),
         SYS_FS_STAT => handlers::vfs::sys_fs_stat(args[0], args[1], args[2], args[3]),
         SYS_FS_READDIR => handlers::vfs::sys_fs_readdir(args[0], args[1], args[2]),
@@ -157,9 +161,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_SHUTDOWN => handlers::sys_shutdown(args[0], args[1]),
         SYS_SOCKETPAIR => handlers::sys_socketpair(args[0], args[1], args[2], args[3]),
         SYS_SENDMSG => handlers::sys_sendmsg(args[0], args[1], args[2], args[3], args[4]),
-        SYS_RECVMSG => {
-            handlers::sys_recvmsg(args[0], args[1], args[2], args[3], args[4], args[5])
-        }
+        SYS_RECVMSG => handlers::sys_recvmsg(args[0], args[1], args[2], args[3], args[4], args[5]),
 
         // ── Typed message delivery ────────────────────────────────────────
         SYS_MSG_SEND => handlers::sys_msg_send(args[0], args[1], args[2], args[3]),

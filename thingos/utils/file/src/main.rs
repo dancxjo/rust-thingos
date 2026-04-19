@@ -5,8 +5,9 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_read, vfs_stat, vfs_write};
+
 use abi::fs::FileStat;
+use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_read, vfs_stat, vfs_write};
 
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;

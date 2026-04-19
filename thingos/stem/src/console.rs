@@ -1,7 +1,8 @@
 //! Console output - delegates to platform abstraction layer.
 
-use crate::pal;
 use core::fmt;
+
+use crate::pal;
 
 pub fn log(level: usize, args: fmt::Arguments) {
     let pal_level = match level {

@@ -37,9 +37,10 @@ impl RustGenerator {
             }
 
             let rust_name = self.to_pascal_case(&kind.canonical_name);
-            
+
             // Generate KIND_ID
-            let id_name = format!("KIND_ID_{}", kind.canonical_name.replace(".", "_").to_uppercase());
+            let id_name =
+                format!("KIND_ID_{}", kind.canonical_name.replace(".", "_").to_uppercase());
             out.push_str(&format!("pub const {}: [u8; 16] = [", id_name));
             for (i, byte) in kind.kind_id.iter().enumerate() {
                 out.push_str(&format!("0x{:02x}", byte));
@@ -88,7 +89,11 @@ impl RustGenerator {
                                             out.push_str(&format!("        /// {}\n", line));
                                         }
                                     }
-                                    out.push_str(&format!("        {}: {},\n", f.name, self.map_type(&f.ty)));
+                                    out.push_str(&format!(
+                                        "        {}: {},\n",
+                                        f.name,
+                                        self.map_type(&f.ty)
+                                    ));
                                 }
                                 out.push_str("    },\n");
                             }
@@ -109,9 +114,11 @@ impl RustGenerator {
     fn to_pascal_case(&self, s: &str) -> String {
         let segments: Vec<&str> = s.split('.').collect();
         let last = *segments.last().unwrap_or(&s);
-        
+
         // If the last segment is a generic suffix, prepend the parent segment
-        let name_to_use = if segments.len() > 1 && matches!(last, "exit" | "kind" | "state" | "args" | "result") {
+        let name_to_use = if segments.len() > 1
+            && matches!(last, "exit" | "kind" | "state" | "args" | "result")
+        {
             let parent = segments[segments.len() - 2];
             format!("{}_{}", parent, last)
         } else {
@@ -148,7 +155,9 @@ impl RustGenerator {
             "bytes" => "Vec<u8>".to_string(),
             "list" => format!("Vec<{}>", self.map_type(&ty.args[0])),
             "option" => format!("Option<{}>", self.map_type(&ty.args[0])),
-            "result" => format!("Result<{}, {}>", self.map_type(&ty.args[0]), self.map_type(&ty.args[1])),
+            "result" => {
+                format!("Result<{}, {}>", self.map_type(&ty.args[0]), self.map_type(&ty.args[1]))
+            }
             "ref" => "ThingId".to_string(),
             _ => self.to_pascal_case(&ty.kind_ref),
         }

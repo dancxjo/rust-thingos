@@ -4,6 +4,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::prelude::v1::*;
+
 use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_readdir, vfs_stat, vfs_write};
 
 #[derive(Debug, Default)]
@@ -98,10 +99,7 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
         Ok(fd) => fd,
         Err(e) => {
             stem::error!("ls: failed to open '{}': {:?}", path, e);
-            print(&alloc::format!(
-                "ls: cannot access '{}': No such file or directory\n",
-                path
-            ));
+            print(&alloc::format!("ls: cannot access '{}': No such file or directory\n", path));
             return;
         }
     };
@@ -141,7 +139,12 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
                 if color.is_empty() { "" } else { COLOR_RESET }
             ));
         } else {
-            print(&alloc::format!("{}{}{}\n", color, path, if color.is_empty() { "" } else { COLOR_RESET }));
+            print(&alloc::format!(
+                "{}{}{}\n",
+                color,
+                path,
+                if color.is_empty() { "" } else { COLOR_RESET }
+            ));
         }
         let _ = vfs_close(fd);
         return;
@@ -192,7 +195,8 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
                 if let Ok(child_stat) = vfs_stat(child_fd) {
                     let c_is_dir = (child_stat.mode & 0o170000) == 0o040000;
                     let c_is_exe = (child_stat.mode & 0o111) != 0 && !c_is_dir;
-                    let c_is_dev = (child_stat.mode & 0o020000) != 0 || (child_stat.mode & 0o060000) != 0;
+                    let c_is_dev =
+                        (child_stat.mode & 0o020000) != 0 || (child_stat.mode & 0o060000) != 0;
 
                     let c_color = if c_is_dir {
                         COLOR_DIR
@@ -214,14 +218,15 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
                             if c_color.is_empty() { "" } else { COLOR_RESET }
                         ));
                     } else {
-                        print(&alloc::format!("{}{}{}  ", c_color, name, if c_color.is_empty() { "" } else { COLOR_RESET }));
+                        print(&alloc::format!(
+                            "{}{}{}  ",
+                            c_color,
+                            name,
+                            if c_color.is_empty() { "" } else { COLOR_RESET }
+                        ));
                     }
 
-                    if flags.recursive
-                        && c_is_dir
-                        && name != "."
-                        && name != ".."
-                    {
+                    if flags.recursive && c_is_dir && name != "." && name != ".." {
                         subdirs.push(full_path);
                     }
                 }

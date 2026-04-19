@@ -12,7 +12,8 @@ use std::path::PathBuf;
 mod builtins;
 mod process_pool;
 
-use self::builtins::{cd::change_directory, status::status};
+use self::builtins::cd::change_directory;
+use self::builtins::status::status;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -82,8 +83,5 @@ fn prompt() -> Option<String> {
 
 fn expand_pid_tokens(command: &str) -> Vec<String> {
     let pid = std::process::id().to_string();
-    command
-        .split_whitespace()
-        .map(|part| part.replace("$$", &pid))
-        .collect()
+    command.split_whitespace().map(|part| part.replace("$$", &pid)).collect()
 }

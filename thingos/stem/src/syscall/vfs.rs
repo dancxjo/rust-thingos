@@ -6,13 +6,13 @@
 
 use abi::errors::SysResult;
 use abi::syscall::{
-    PollHandle, SYS_HANDLE_FROM_PORT, SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL,
-    SYS_FS_DUP, SYS_FS_DUP2, SYS_FS_FCHMOD, SYS_FS_FCNTL, SYS_FS_FLOCK, SYS_FS_FTRUNCATE,
-    SYS_FS_FUTIMES, SYS_FS_GETCWD, SYS_FS_ISATTY, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_MKDIR,
-    SYS_FS_MOUNT, SYS_FS_NOTIFY, SYS_FS_OPEN, SYS_FS_POLL, SYS_FS_READ, SYS_FS_READDIR,
-    SYS_FS_READLINK, SYS_FS_READV, SYS_FS_REALPATH, SYS_FS_RENAME, SYS_FS_SEEK, SYS_FS_STAT,
-    SYS_FS_SYMLINK, SYS_FS_SYNC, SYS_FS_UMOUNT, SYS_FS_UNLINK, SYS_FS_UTIMES, SYS_FS_WATCH_THING,
-    SYS_FS_WATCH_PATH, SYS_FS_WRITE, SYS_FS_WRITEV, SYS_PIPE,
+    PollHandle, SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL, SYS_FS_DUP,
+    SYS_FS_DUP2, SYS_FS_FCHMOD, SYS_FS_FCNTL, SYS_FS_FLOCK, SYS_FS_FTRUNCATE, SYS_FS_FUTIMES,
+    SYS_FS_GETCWD, SYS_FS_ISATTY, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_MKDIR, SYS_FS_MOUNT,
+    SYS_FS_NOTIFY, SYS_FS_OPEN, SYS_FS_POLL, SYS_FS_READ, SYS_FS_READDIR, SYS_FS_READLINK,
+    SYS_FS_READV, SYS_FS_REALPATH, SYS_FS_RENAME, SYS_FS_SEEK, SYS_FS_STAT, SYS_FS_SYMLINK,
+    SYS_FS_SYNC, SYS_FS_UMOUNT, SYS_FS_UNLINK, SYS_FS_UTIMES, SYS_FS_WATCH_PATH,
+    SYS_FS_WATCH_THING, SYS_FS_WRITE, SYS_FS_WRITEV, SYS_HANDLE_FROM_PORT, SYS_PIPE,
 };
 
 use super::arch::raw_syscall6;
@@ -23,15 +23,7 @@ use super::arch::raw_syscall6;
 /// Returns a thing on success, or an [`Errno`] on failure.
 pub fn vfs_open(path: &str, flags: u32) -> SysResult<u32> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_OPEN,
-            path.as_ptr() as usize,
-            path.len(),
-            flags as usize,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_OPEN, path.as_ptr() as usize, path.len(), flags as usize, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|v| v as u32)
 }
@@ -47,15 +39,7 @@ pub fn vfs_close(thing: u32) -> SysResult<()> {
 /// Returns the number of bytes actually read (may be 0 at EOF).
 pub fn vfs_read(thing: u32, buf: &mut [u8]) -> SysResult<usize> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_READ,
-            thing as usize,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_READ, thing as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0)
     };
     abi::errors::errno(ret)
 }
@@ -65,15 +49,7 @@ pub fn vfs_read(thing: u32, buf: &mut [u8]) -> SysResult<usize> {
 /// Returns the number of bytes actually read (0 at EOF).
 pub fn vfs_readdir(thing: u32, buf: &mut [u8]) -> SysResult<usize> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_READDIR,
-            thing as usize,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_READDIR, thing as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0)
     };
     abi::errors::errno(ret)
 }
@@ -83,15 +59,7 @@ pub fn vfs_readdir(thing: u32, buf: &mut [u8]) -> SysResult<usize> {
 /// Returns the number of bytes written.
 pub fn vfs_write(thing: u32, buf: &[u8]) -> SysResult<usize> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_WRITE,
-            thing as usize,
-            buf.as_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_WRITE, thing as usize, buf.as_ptr() as usize, buf.len(), 0, 0, 0)
     };
     abi::errors::errno(ret)
 }
@@ -105,15 +73,7 @@ pub fn vfs_write(thing: u32, buf: &[u8]) -> SysResult<usize> {
 /// Returns the total number of bytes read across all buffers.
 pub fn vfs_readv(thing: u32, iovecs: &[abi::syscall::IoVec]) -> SysResult<usize> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_READV,
-            thing as usize,
-            iovecs.as_ptr() as usize,
-            iovecs.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_READV, thing as usize, iovecs.as_ptr() as usize, iovecs.len(), 0, 0, 0)
     };
     abi::errors::errno(ret)
 }
@@ -126,15 +86,7 @@ pub fn vfs_readv(thing: u32, iovecs: &[abi::syscall::IoVec]) -> SysResult<usize>
 /// Returns the total number of bytes written across all buffers.
 pub fn vfs_writev(thing: u32, iovecs: &[abi::syscall::IoVec]) -> SysResult<usize> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_WRITEV,
-            thing as usize,
-            iovecs.as_ptr() as usize,
-            iovecs.len(),
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_WRITEV, thing as usize, iovecs.as_ptr() as usize, iovecs.len(), 0, 0, 0)
     };
     abi::errors::errno(ret)
 }
@@ -145,15 +97,7 @@ pub fn vfs_writev(thing: u32, iovecs: &[abi::syscall::IoVec]) -> SysResult<usize
 /// Returns the new absolute offset from the start of the file.
 pub fn vfs_seek(thing: u32, offset: i64, whence: u32) -> SysResult<u64> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_SEEK,
-            thing as usize,
-            offset as usize,
-            whence as usize,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_SEEK, thing as usize, offset as usize, whence as usize, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|v| v as u64)
 }
@@ -214,17 +158,8 @@ pub fn vfs_isatty(thing: u32) -> SysResult<bool> {
 ///
 /// Returns `Ok(())` on success, or an [`Errno`] on failure.
 pub fn vfs_unlink(path: &str) -> SysResult<()> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_UNLINK,
-            path.as_ptr() as usize,
-            path.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_FS_UNLINK, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
 
@@ -262,17 +197,8 @@ pub fn vfs_mount(provider_write_handle: u32, path: &str) -> SysResult<()> {
 ///
 /// Returns `Ok(())` on success, or an [`Errno`] on failure.
 pub fn vfs_umount(path: &str) -> SysResult<()> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_UMOUNT,
-            path.as_ptr() as usize,
-            path.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_FS_UMOUNT, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
 
@@ -288,7 +214,8 @@ pub fn dup(old_handle: u32) -> SysResult<u32> {
 ///
 /// Returns `new_handle` on success.
 pub fn dup2(old_handle: u32, new_handle: u32) -> SysResult<u32> {
-    let ret = unsafe { raw_syscall6(SYS_FS_DUP2, old_handle as usize, new_handle as usize, 0, 0, 0, 0) };
+    let ret =
+        unsafe { raw_syscall6(SYS_FS_DUP2, old_handle as usize, new_handle as usize, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
@@ -296,17 +223,8 @@ pub fn dup2(old_handle: u32, new_handle: u32) -> SysResult<u32> {
 ///
 /// Supports `F_GETFL`, `F_SETFL`, `F_GETFD`, and `F_SETFD`.
 pub fn vfs_fcntl(thing: u32, cmd: u32, arg: u32) -> SysResult<u32> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_FCNTL,
-            thing as usize,
-            cmd as usize,
-            arg as usize,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_FS_FCNTL, thing as usize, cmd as usize, arg as usize, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
@@ -358,15 +276,7 @@ pub fn vfs_poll(pollfds: &mut [PollHandle], timeout_ms: u64) -> SysResult<usize>
 /// Returns a new watch thing.
 pub fn vfs_watch_fd(thing: u32, mask: u32, flags: u32) -> SysResult<u32> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_WATCH_THING,
-            thing as usize,
-            mask as usize,
-            flags as usize,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_WATCH_THING, thing as usize, mask as usize, flags as usize, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|v| v as u32)
 }
@@ -415,14 +325,7 @@ pub fn vfs_device_call(
     op: u32,
     arg: u64,
 ) -> SysResult<u64> {
-    let call = abi::device::DeviceCall {
-        kind,
-        op,
-        in_ptr: arg,
-        in_len: 0,
-        out_ptr: 0,
-        out_len: 0,
-    };
+    let call = abi::device::DeviceCall { kind, op, in_ptr: arg, in_len: 0, out_ptr: 0, out_len: 0 };
     vfs_device_call_raw(thing, &call)
 }
 
@@ -451,17 +354,8 @@ pub fn vfs_chdir(path: &str) -> SysResult<()> {
 /// Get the current working directory of the process.
 /// Writes the path into `buf` and returns the number of bytes written.
 pub fn vfs_getcwd(buf: &mut [u8]) -> SysResult<usize> {
-    let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_GETCWD,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            0,
-            0,
-            0,
-            0,
-        )
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_FS_GETCWD, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret)
 }
 
@@ -711,15 +605,7 @@ pub fn vfs_chmod(path: &str, mode: u32) -> SysResult<()> {
 /// not support permission mutation, or another errno on failure.
 pub fn vfs_fchmod(thing: u32, mode: u32) -> SysResult<()> {
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_FCHMOD,
-            thing as usize,
-            (mode & 0o7777) as usize,
-            0,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_FCHMOD, thing as usize, (mode & 0o7777) as usize, 0, 0, 0, 0)
     };
     abi::errors::errno(ret).map(|_| ())
 }

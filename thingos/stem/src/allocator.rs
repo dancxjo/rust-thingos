@@ -9,9 +9,7 @@ pub struct VmHeapAllocator {
 
 impl VmHeapAllocator {
     pub const fn new() -> Self {
-        Self {
-            heap: LockedHeap::empty(),
-        }
+        Self { heap: LockedHeap::empty() }
     }
 
     pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
@@ -23,10 +21,7 @@ impl VmHeapAllocator {
     }
 }
 
-#[cfg(all(
-    not(test),
-    any(target_os = "none", any(target_os = "thingos", target_env = "thingos"))
-))]
+#[cfg(all(not(test), any(target_os = "none", any(target_os = "thingos", target_env = "thingos"))))]
 #[global_allocator]
 static ALLOCATOR: VmHeapAllocator = VmHeapAllocator::new();
 

@@ -51,12 +51,7 @@ impl GroupBroadcastReport {
     fn from_failures(targeted: usize, failures: Vec<RecipientFailure>) -> Self {
         let failed = failures.len();
         let succeeded = targeted.saturating_sub(failed);
-        Self {
-            targeted,
-            succeeded,
-            failed,
-            failures,
-        }
+        Self { targeted, succeeded, failed, failures }
     }
 }
 
@@ -130,10 +125,7 @@ struct SenderContext {
 fn sender_context() -> SenderContext {
     let sender_tid = unsafe { crate::sched::current_tid_current() };
     let sender_job = crate::sched::process_info_current().map(|p| p.lock().pid);
-    SenderContext {
-        sender_tid,
-        sender_job,
-    }
+    SenderContext { sender_tid, sender_job }
 }
 
 fn enqueue_to_process(
@@ -146,12 +138,11 @@ fn enqueue_to_process(
     };
 
     let mut process = pinfo.lock();
-    process
-        .unix_compat
-        .enqueue_message(ProcessMessage { message, metadata })
-        .map_err(|err| match err {
+    process.unix_compat.enqueue_message(ProcessMessage { message, metadata }).map_err(|err| {
+        match err {
             MessageEnqueueError::InboxFull { .. } => DeliveryFailureReason::InboxFull,
-        })?;
+        }
+    })?;
     let tids = process.job.thread_ids.clone();
     drop(process);
 
@@ -246,7 +237,8 @@ mod tests {
     #[test]
     fn fanout_empty_group_is_clean_success() {
         let recipients: [u32; 0] = [];
-        let report = fanout_snapshot(&recipients, |idx| make_meta(idx, 2), |_pid, _metadata| Ok(()));
+        let report =
+            fanout_snapshot(&recipients, |idx| make_meta(idx, 2), |_pid, _metadata| Ok(()));
 
         assert_eq!(report.targeted, 0);
         assert_eq!(report.succeeded, 0);

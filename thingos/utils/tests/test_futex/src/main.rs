@@ -9,10 +9,9 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::errors::Errno;
-use core::sync::atomic::{AtomicU32, Ordering};
 use stem::println;
 use stem::syscall::{futex_wait, futex_wake, get_tid, spawn_thread, task_wait};
 
@@ -32,9 +31,7 @@ struct FutexMutex {
 
 impl FutexMutex {
     const fn new() -> Self {
-        Self {
-            state: AtomicU32::new(0),
-        }
+        Self { state: AtomicU32::new(0) }
     }
 
     fn lock(&self) {
@@ -103,10 +100,7 @@ fn test_eagain_when_value_changed() {
     let result = futex_wait(&atom, 0, 0);
     match result {
         Err(Errno::EAGAIN) => {}
-        other => panic!(
-            "expected EAGAIN, got {:?}",
-            other
-        ),
+        other => panic!("expected EAGAIN, got {:?}", other),
     }
     println!("[test_futex] test_eagain_when_value_changed: PASS");
 }
@@ -148,10 +142,8 @@ fn test_wake_ordering() {
     let stack2 = stem::stack::Stack::alloc_growing_stack(stem::stack::StackSpec::default())
         .expect("stack alloc 2");
 
-    let tid1 =
-        spawn_thread(waiter_thread_fn as usize, 0, &stack1).expect("spawn thread 1");
-    let tid2 =
-        spawn_thread(waiter_thread_fn as usize, 0, &stack2).expect("spawn thread 2");
+    let tid1 = spawn_thread(waiter_thread_fn as usize, 0, &stack1).expect("spawn thread 1");
+    let tid2 = spawn_thread(waiter_thread_fn as usize, 0, &stack2).expect("spawn thread 2");
 
     // Yield a few times so both threads have a chance to reach futex_wait.
     // This is best-effort: the threads may still be racing toward futex_wait
@@ -215,8 +207,8 @@ fn test_contention() {
     for _ in 0..CONTENTION_THREADS {
         let stack = stem::stack::Stack::alloc_growing_stack(stem::stack::StackSpec::default())
             .expect("stack alloc");
-        let tid =
-            spawn_thread(contention_thread_fn as usize, 0, &stack).expect("spawn contention thread");
+        let tid = spawn_thread(contention_thread_fn as usize, 0, &stack)
+            .expect("spawn contention thread");
         tids.push(tid);
         stacks.push(stack);
     }
@@ -227,11 +219,7 @@ fn test_contention() {
 
     let expected = CONTENTION_THREADS as u32 * CONTENTION_ITERS;
     let actual = SHARED_COUNTER.load(Ordering::SeqCst);
-    assert_eq!(
-        actual, expected,
-        "counter mismatch: got {}, expected {}",
-        actual, expected
-    );
+    assert_eq!(actual, expected, "counter mismatch: got {}, expected {}", actual, expected);
 
     println!("[test_futex] test_contention: PASS");
 }

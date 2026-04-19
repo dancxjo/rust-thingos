@@ -19,8 +19,7 @@
 pub mod bridge;
 pub mod delivery;
 
-/// Re-export of the canonical [`thingos::message::Message`] type.
-pub use thingos::message::Message;
-
 /// Re-export of the canonical [`thingos::message::KindId`] type.
 pub use thingos::message::KindId;
+/// Re-export of the canonical [`thingos::message::Message`] type.
+pub use thingos::message::Message;

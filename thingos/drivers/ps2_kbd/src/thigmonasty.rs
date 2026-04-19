@@ -10,8 +10,9 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use crate::normalizer::ps2_to_key;
 use abi::hid::{Key, Mods};
+
+use crate::normalizer::ps2_to_key;
 
 /// Keyboard state tracker
 pub struct KeyboardState {
@@ -32,11 +33,7 @@ pub enum KeyEdge {
 
 impl KeyboardState {
     pub fn new() -> Self {
-        Self {
-            mods: 0,
-            e0_prefix: false,
-            pressed: [0; 4],
-        }
+        Self { mods: 0, e0_prefix: false, pressed: [0; 4] }
     }
 
     /// Process a raw PS/2 scancode byte, returning edge event if any
@@ -74,16 +71,9 @@ impl KeyboardState {
 
         // Emit edge event
         if is_break {
-            Some(KeyEdge::Up {
-                key,
-                mods: Mods(self.mods),
-            })
+            Some(KeyEdge::Up { key, mods: Mods(self.mods) })
         } else {
-            Some(KeyEdge::Down {
-                key,
-                mods: Mods(self.mods),
-                repeat: was_pressed,
-            })
+            Some(KeyEdge::Down { key, mods: Mods(self.mods), repeat: was_pressed })
         }
     }
 
@@ -144,11 +134,7 @@ impl KeyboardState {
         let key_idx = key as u16 as usize;
         let word_idx = key_idx / 64;
         let bit_idx = key_idx % 64;
-        if word_idx < 4 {
-            (self.pressed[word_idx] & (1 << bit_idx)) != 0
-        } else {
-            false
-        }
+        if word_idx < 4 { (self.pressed[word_idx] & (1 << bit_idx)) != 0 } else { false }
     }
 
     #[allow(dead_code)]
@@ -159,8 +145,9 @@ impl KeyboardState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use abi::hid::{Key, Mods};
+
+    use super::*;
 
     #[test]
     fn test_shift_modifier() {

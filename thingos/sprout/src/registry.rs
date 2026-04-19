@@ -3,14 +3,14 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
-use abi::module_manifest::{ManifestHeader, ModuleKind, MANIFEST_MAGIC, SECTION_NAME};
-use abi::schema::kinds;
 use alloc::collections::BTreeMap;
-use alloc::string::{String};
+use alloc::string::String;
+
+use abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, SECTION_NAME};
+use abi::schema::kinds;
 use stem::info;
 use stem::syscall::vfs::{vfs_close, vfs_open};
-use stem::thing::sys as thingsys;
-use stem::thing::ThingId;
+use stem::thing::{ThingId, sys as thingsys};
 
 pub struct Registry {
     drivers: BTreeMap<String, String>,
@@ -18,9 +18,7 @@ pub struct Registry {
 
 impl Registry {
     pub fn new() -> Self {
-        Self {
-            drivers: BTreeMap::new(),
-        }
+        Self { drivers: BTreeMap::new() }
     }
 
     pub fn scan(&mut self) {
@@ -59,10 +57,7 @@ impl Registry {
             offset = end.saturating_add(1);
         }
 
-        info!(
-            "SPROUT: Registry scan complete. Found {} drivers.",
-            self.drivers.len()
-        );
+        info!("SPROUT: Registry scan complete. Found {} drivers.", self.drivers.len());
     }
 
     fn scan_module_name(&mut self, mod_name: &str) {
@@ -74,8 +69,7 @@ impl Registry {
                     let end = raw.iter().position(|&c| c == 0).unwrap_or(raw.len());
                     if let Ok(dk_str) = core::str::from_utf8(&raw[..end]) {
                         info!("SPROUT: Registering driver '{}' -> '{}'", dk_str, mod_name);
-                        self.drivers
-                            .insert(dk_str.to_string(), mod_name.to_string());
+                        self.drivers.insert(dk_str.to_string(), mod_name.to_string());
                     }
                 }
             }
@@ -83,12 +77,8 @@ impl Registry {
         } else {
             // Fallback for v0 if parsing fails
             if mod_name.contains("rtc_cmos") {
-                info!(
-                    "SPROUT: Registering driver 'dev.rtc.Cmos' -> '{}' (fallback)",
-                    mod_name
-                );
-                self.drivers
-                    .insert("dev.rtc.Cmos".to_string(), mod_name.to_string());
+                info!("SPROUT: Registering driver 'dev.rtc.Cmos' -> '{}' (fallback)", mod_name);
+                self.drivers.insert("dev.rtc.Cmos".to_string(), mod_name.to_string());
             }
         }
     }
@@ -173,9 +163,7 @@ impl Registry {
         if end == 0 {
             return None;
         }
-        core::str::from_utf8(&buf[..end])
-            .ok()
-            .map(|s| s.to_string())
+        core::str::from_utf8(&buf[..end]).ok().map(|s| s.to_string())
     }
 
     pub fn find_driver(&self, device_kind: &str) -> Option<&str> {

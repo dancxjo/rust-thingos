@@ -1,4 +1,3 @@
-
 use crate::types::ThingId;
 
 #[repr(C)]
@@ -15,8 +14,6 @@ impl DriverCtx {
     }
 
     pub fn from_raw(arg: usize) -> Self {
-        Self {
-            device_id: ThingId::from_u64(arg as u64),
-        }
+        Self { device_id: ThingId::from_u64(arg as u64) }
     }
 }

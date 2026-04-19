@@ -8,11 +8,12 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
+
+use abi::errors::{Errno, SysResult};
+use abi::vfs_watch::{self, WatchEvent};
 use spin::Mutex;
 
 use super::{VfsNode, VfsStat};
-use abi::errors::{Errno, SysResult};
-use abi::vfs_watch::{self, WatchEvent};
 
 /// A ring buffer of VFS events.
 pub struct EventQueue {
@@ -25,32 +26,37 @@ pub struct EventQueue {
 
 impl EventQueue {
     pub fn new(max_size: usize) -> Self {
-        Self {
-            events: Mutex::new(VecDeque::new()),
-            max_size,
-            waiters: Mutex::new(Vec::new()),
-        }
+        Self { events: Mutex::new(VecDeque::new()), max_size, waiters: Mutex::new(Vec::new()) }
     }
 
     pub fn push(&self, mut event: WatchEvent, name: Option<&str>) {
-        let mut lock = self.events.lock();
-        if lock.len() >= self.max_size {
-            // Check if last event was an overflow to avoid flooding
-            if let Some((last, _)) = lock.back() {
-                if last.mask & vfs_watch::mask::OVERFLOW != 0 {
-                    return;
+        {
+            let mut lock = self.events.lock();
+            if lock.len() >= self.max_size {
+                // Check if last event was an overflow to avoid flooding.
+                // In that case the queue state does not change, so there is
+                // nothing new to wake waiters for.
+                if let Some((last, _)) = lock.back() {
+                    if last.mask & vfs_watch::mask::OVERFLOW != 0 {
+                        return;
+                    }
                 }
+                // Queue one overflow marker and then wake readers after all
+                // queue locks have been released.
+                event.mask = vfs_watch::mask::OVERFLOW;
+                lock.push_back((event, None));
+            } else {
+                lock.push_back((event, name.map(|s| s.into())));
             }
-            // Push overflow event
-            event.mask = vfs_watch::mask::OVERFLOW;
-            lock.push_back((event, None));
-            return;
         }
-        lock.push_back((event, name.map(|s| s.into())));
 
-        // Wake up waiters
-        let waiters = self.waiters.lock();
-        for &tid in waiters.iter() {
+        // Wake waiters after dropping the queue lock so a woken task can read
+        // immediately without inverting the queue/registry lock order.
+        let waiters: Vec<u64> = {
+            let waiters = self.waiters.lock();
+            waiters.iter().copied().collect()
+        };
+        for tid in waiters {
             unsafe {
                 crate::sched::wake_task_erased(tid);
             }
@@ -98,11 +104,7 @@ pub struct Watch {
 
 impl Watch {
     pub fn new(mask: u32, flags: u32) -> Self {
-        Self {
-            queue: Arc::new(EventQueue::new(1024)),
-            mask,
-            flags,
-        }
+        Self { queue: Arc::new(EventQueue::new(1024)), mask, flags }
     }
 }
 
@@ -152,12 +154,7 @@ impl VfsNode for Watch {
     }
 
     fn stat(&self) -> SysResult<VfsStat> {
-        Ok(VfsStat {
-            mode: VfsStat::S_IFCHR | 0o666,
-            size: 0,
-            ino: 0,
-            ..Default::default()
-        })
+        Ok(VfsStat { mode: VfsStat::S_IFCHR | 0o666, size: 0, ino: 0, ..Default::default() })
     }
 
     fn poll(&self) -> u16 {
@@ -199,12 +196,7 @@ pub fn register_watch(node: &Arc<dyn VfsNode>, watch: Arc<Watch>, mount_id: u64)
     let stat = node.stat()?;
     let subject_id = NEXT_WATCH_ID.fetch_add(1, Ordering::Relaxed);
     let mut lock = REGISTRY.lock();
-    lock.push(WatchRecord {
-        watch,
-        target_ino: stat.ino,
-        mount_id,
-        subject_id,
-    });
+    lock.push(WatchRecord { watch, target_ino: stat.ino, mount_id, subject_id });
     Ok(())
 }
 
@@ -214,12 +206,14 @@ pub fn emit_event(node: &dyn VfsNode, mask: u32, name: Option<&str>, cookie: u32
         Err(_) => return,
     };
 
-    let mut lock = REGISTRY.lock();
-    // Use a temporary list to avoid holding the lock while calling watch.queue.push (which might wake tasks)
-    // Actually, EventQueue::push uses its own lock, so it's fine.
-    for record in lock.iter() {
-        if record.target_ino == stat.ino && record.mount_id == mount_id {
-            if record.watch.mask & mask != 0 {
+    let pending: Vec<(Arc<Watch>, WatchEvent)> = {
+        let lock = REGISTRY.lock();
+        let mut pending = Vec::new();
+        for record in lock.iter() {
+            if record.target_ino == stat.ino
+                && record.mount_id == mount_id
+                && record.watch.mask & mask != 0
+            {
                 let mut event = WatchEvent::default();
                 event.mask = mask;
                 event.cookie = cookie;
@@ -227,16 +221,22 @@ pub fn emit_event(node: &dyn VfsNode, mask: u32, name: Option<&str>, cookie: u32
                 if stat.is_dir() {
                     event.flags |= vfs_watch::event_flags::IS_DIR;
                 }
-                record.watch.queue.push(event, name);
+                pending.push((record.watch.clone(), event));
             }
         }
+        pending
+    };
+
+    for (watch, event) in pending {
+        watch.queue.push(event, name);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use abi::vfs_watch::WatchEvent;
+
+    use super::*;
 
     fn make_event(mask: u32) -> WatchEvent {
         let mut e = WatchEvent::default();
@@ -312,8 +312,12 @@ mod tests {
     struct FixedInoNode(u64);
 
     impl VfsNode for FixedInoNode {
-        fn read(&self, _: u64, _: &mut [u8]) -> SysResult<usize> { Ok(0) }
-        fn write(&self, _: u64, _: &[u8]) -> SysResult<usize> { Ok(0) }
+        fn read(&self, _: u64, _: &mut [u8]) -> SysResult<usize> {
+            Ok(0)
+        }
+        fn write(&self, _: u64, _: &[u8]) -> SysResult<usize> {
+            Ok(0)
+        }
         fn stat(&self) -> SysResult<VfsStat> {
             Ok(VfsStat { ino: self.0, mode: VfsStat::S_IFREG | 0o644, ..Default::default() })
         }

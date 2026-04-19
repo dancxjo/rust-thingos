@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
 use stem::abi::syscall::vfs_flags;
 use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_read, vfs_write};
 
@@ -38,14 +39,11 @@ fn copy_file(src: &str, dst: &str) -> Result<(), ()> {
         print(&alloc::format!("cp: cannot open '{}'\n", src));
     })?;
 
-    let out_fd = vfs_open(
-        dst,
-        vfs_flags::O_WRONLY | vfs_flags::O_CREAT | vfs_flags::O_TRUNC,
-    )
-    .map_err(|_| {
-        let _ = vfs_close(in_fd);
-        print(&alloc::format!("cp: cannot create '{}'\n", dst));
-    })?;
+    let out_fd = vfs_open(dst, vfs_flags::O_WRONLY | vfs_flags::O_CREAT | vfs_flags::O_TRUNC)
+        .map_err(|_| {
+            let _ = vfs_close(in_fd);
+            print(&alloc::format!("cp: cannot create '{}'\n", dst));
+        })?;
 
     let mut buf = alloc::vec![0u8; 32768];
     let result = 'copy: loop {

@@ -34,10 +34,7 @@ impl StubChatStream {
     }
 
     fn delta(text: &str, finish: Option<FinishReason>) -> ChatDelta {
-        ChatDelta {
-            text: String::from(text),
-            finish,
-        }
+        ChatDelta { text: String::from(text), finish }
     }
 }
 
@@ -64,8 +61,9 @@ impl ChatStream for StubChatStream {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::task::{RawWaker, RawWakerVTable, Waker};
+
+    use super::*;
 
     fn noop_waker() -> Waker {
         unsafe fn clone(_: *const ()) -> RawWaker {

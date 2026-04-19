@@ -8,17 +8,13 @@
 /// ```
 #[macro_export]
 macro_rules! handle {
-    ($val:expr) => {{
-        $crate::Handle::new($val)
-    }};
+    ($val:expr) => {{ $crate::Handle::new($val) }};
 }
 
 /// Backward-compatible alias for [`handle!`].
 #[macro_export]
 macro_rules! thing {
-    ($val:expr) => {{
-        $crate::handle!($val)
-    }};
+    ($val:expr) => {{ $crate::handle!($val) }};
 }
 
 /// Create a Handle<Edge>.

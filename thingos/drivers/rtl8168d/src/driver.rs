@@ -2,11 +2,12 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use abi::device::{PCI_IRQ_MODE_MSI, PCI_IRQ_MODE_MSIX};
-use abi::errors::Errno;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{Ordering, fence};
+
+use abi::device::{PCI_IRQ_MODE_MSI, PCI_IRQ_MODE_MSIX};
+use abi::errors::Errno;
 use stem::device::device_enable_msi;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
 use stem::{info, warn};
@@ -322,26 +323,17 @@ impl Rtl8168Driver {
                         self.irq_enabled = true;
                         self.write_u16(REG_ISR, 0xffff);
                         self.write_u16(REG_IMR, IRQ_MASK);
-                        info!(
-                            "RTL8168: IRQ enabled via {} vector=0x{:02x}",
-                            mode, resp.vector
-                        );
+                        info!("RTL8168: IRQ enabled via {} vector=0x{:02x}", mode, resp.vector);
                     }
                     Err(e) => {
-                        warn!(
-                            "RTL8168: irq subscribe failed after {} setup: {:?}",
-                            mode, e
-                        );
+                        warn!("RTL8168: irq subscribe failed after {} setup: {:?}", mode, e);
                         self.irq_enabled = false;
                         self.write_u16(REG_IMR, 0);
                     }
                 }
             }
             Err(e) => {
-                warn!(
-                    "RTL8168: MSI/MSI-X unavailable, using polling mode: {:?}",
-                    e
-                );
+                warn!("RTL8168: MSI/MSI-X unavailable, using polling mode: {:?}", e);
                 self.irq_enabled = false;
                 self.write_u16(REG_IMR, 0);
             }

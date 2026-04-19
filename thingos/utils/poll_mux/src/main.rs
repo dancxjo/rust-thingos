@@ -2,7 +2,7 @@
 #![no_main]
 extern crate alloc;
 
-use abi::syscall::{poll_flags, PollHandle};
+use abi::syscall::{PollHandle, poll_flags};
 use stem::syscall::vfs::*;
 
 #[stem::main]
@@ -18,12 +18,7 @@ fn main(_arg: usize) -> ! {
     // 2. Create a port and bridge it to a VFS fd
     let (c_write, c_read) = stem::syscall::port_create(1024).expect("port create failed");
     let c_read_fd = vfs_handle_from_port(c_read).expect("vfs_handle_from_port failed");
-    stem::println!(
-        "Port created: write={}, read={}, bridged_fd={}",
-        c_write,
-        c_read,
-        c_read_fd
-    );
+    stem::println!("Port created: write={}, read={}, bridged_fd={}", c_write, c_read, c_read_fd);
 
     // 3. Open a regular device file (/dev/null is always present).
     //    Regular VFS files report POLLIN|POLLOUT immediately (they are
@@ -34,28 +29,19 @@ fn main(_arg: usize) -> ! {
 
     // 4. Test timeout — pipe and port are both empty so poll should expire.
     let mut fds = [
-        PollHandle { handle: pr as i32,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        },
-        PollHandle { handle: c_read_fd as i32,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        },
+        PollHandle { handle: pr as i32, events: poll_flags::POLLIN, revents: 0 },
+        PollHandle { handle: c_read_fd as i32, events: poll_flags::POLLIN, revents: 0 },
     ];
     stem::println!("Polling pipe+port for 100ms (should timeout)...");
     let start = stem::syscall::monotonic_ns();
     let n = vfs_poll(&mut fds, 100).expect("poll failed");
     let end = stem::syscall::monotonic_ns();
-    stem::println!(
-        "Poll returned {} entries, took {} ms",
-        n,
-        (end - start) / 1_000_000
-    );
+    stem::println!("Poll returned {} entries, took {} ms", n, (end - start) / 1_000_000);
     assert!(n == 0, "Expected timeout, got {}", n);
 
     // 5. VFS regular files are always POLLIN-ready.
-    let mut vfs_fds = [PollHandle { handle: dev_null_fd as i32,
+    let mut vfs_fds = [PollHandle {
+        handle: dev_null_fd as i32,
         events: poll_flags::POLLIN | poll_flags::POLLOUT,
         revents: 0,
     }];
@@ -63,14 +49,8 @@ fn main(_arg: usize) -> ! {
     let n = vfs_poll(&mut vfs_fds, 0).expect("poll vfs failed");
     stem::println!("Poll returned {} entries", n);
     assert!(n == 1, "Expected 1 ready entry for VFS file, got {}", n);
-    assert!(
-        vfs_fds[0].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on VFS file"
-    );
-    assert!(
-        vfs_fds[0].revents & poll_flags::POLLOUT != 0,
-        "Expected POLLOUT on VFS file"
-    );
+    assert!(vfs_fds[0].revents & poll_flags::POLLIN != 0, "Expected POLLIN on VFS file");
+    assert!(vfs_fds[0].revents & poll_flags::POLLOUT != 0, "Expected POLLOUT on VFS file");
 
     // 6. Test pipe readiness (write before poll)
     vfs_write(pw, b"hello").expect("write to pipe failed");
@@ -80,10 +60,7 @@ fn main(_arg: usize) -> ! {
     let n = vfs_poll(&mut fds, 100).expect("poll failed");
     stem::println!("Poll returned {} entries", n);
     assert!(n == 1, "Expected 1 ready entry, got {}", n);
-    assert!(
-        fds[0].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on pipe"
-    );
+    assert!(fds[0].revents & poll_flags::POLLIN != 0, "Expected POLLIN on pipe");
 
     // 7. Test port readiness (write before poll)
     stem::syscall::port_send(c_write, b"world").expect("send to port failed");
@@ -93,48 +70,27 @@ fn main(_arg: usize) -> ! {
     let n = vfs_poll(&mut fds, 100).expect("poll failed");
     stem::println!("Poll returned {} entries", n);
     // Both should be ready now if order is preserved
-    assert!(
-        fds[0].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on pipe"
-    );
-    assert!(
-        fds[1].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on port"
-    );
+    assert!(fds[0].revents & poll_flags::POLLIN != 0, "Expected POLLIN on pipe");
+    assert!(fds[1].revents & poll_flags::POLLIN != 0, "Expected POLLIN on port");
 
     // 8. Mixed poll: port + pipe + VFS file all at once.
     //    Pipe (index 0) and port (index 1) still have unread data;
     //    VFS file (index 2) is always ready.  All three should fire.
     stem::println!("Mixed poll: pipe + port + VFS file...");
     let mut mixed = [
-        PollHandle { handle: pr as i32,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        },
-        PollHandle { handle: c_read_fd as i32,
-            events: poll_flags::POLLIN,
-            revents: 0,
-        },
-        PollHandle { handle: dev_null_fd as i32,
+        PollHandle { handle: pr as i32, events: poll_flags::POLLIN, revents: 0 },
+        PollHandle { handle: c_read_fd as i32, events: poll_flags::POLLIN, revents: 0 },
+        PollHandle {
+            handle: dev_null_fd as i32,
             events: poll_flags::POLLIN | poll_flags::POLLOUT,
             revents: 0,
         },
     ];
     let n = vfs_poll(&mut mixed, 0).expect("mixed poll failed");
     stem::println!("Mixed poll returned {} entries", n);
-    assert!(
-        n == 3,
-        "Expected all 3 fds ready (pipe + port + VFS file), got {}",
-        n
-    );
-    assert!(
-        mixed[0].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on pipe in mixed"
-    );
-    assert!(
-        mixed[1].revents & poll_flags::POLLIN != 0,
-        "Expected POLLIN on port in mixed"
-    );
+    assert!(n == 3, "Expected all 3 fds ready (pipe + port + VFS file), got {}", n);
+    assert!(mixed[0].revents & poll_flags::POLLIN != 0, "Expected POLLIN on pipe in mixed");
+    assert!(mixed[1].revents & poll_flags::POLLIN != 0, "Expected POLLIN on port in mixed");
     assert!(
         mixed[2].revents & (poll_flags::POLLIN | poll_flags::POLLOUT) != 0,
         "Expected readiness on VFS file in mixed"

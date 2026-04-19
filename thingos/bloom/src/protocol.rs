@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
+use alloc::vec::Vec;
+
 use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
-use alloc::vec::Vec;
 
 pub const BLOOM_PROTOCOL_MAGIC: u32 = 0x424C_4F4F; // "BLOO"
 pub const BLOOM_PROTOCOL_VERSION: u16 = 1;
@@ -256,11 +257,7 @@ pub struct KeyboardKeyEvent {
 }
 
 pub fn msg_header(msg_type: u16) -> MessageHeader {
-    MessageHeader {
-        magic: BLOOM_PROTOCOL_MAGIC,
-        version: BLOOM_PROTOCOL_VERSION,
-        msg_type,
-    }
+    MessageHeader { magic: BLOOM_PROTOCOL_MAGIC, version: BLOOM_PROTOCOL_VERSION, msg_type }
 }
 
 pub fn as_bytes<T>(value: &T) -> &[u8] {

@@ -1,8 +1,9 @@
-use super::super::types::*;
-use super::ArtifactCollector;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+
+use super::super::types::*;
+use super::ArtifactCollector;
 
 /// Architecture-level README generation.
 pub fn generate_arch_readme(collector: &ArtifactCollector) -> std::io::Result<PathBuf> {
@@ -11,11 +12,7 @@ pub fn generate_arch_readme(collector: &ArtifactCollector) -> std::io::Result<Pa
 
     writeln!(file, "# BDD Test Results: {}", collector.arch)?;
     writeln!(file)?;
-    writeln!(
-        file,
-        "> Last run: {}",
-        collector.start_time.format("%Y-%m-%d %H:%M:%S")
-    )?;
+    writeln!(file, "> Last run: {}", collector.start_time.format("%Y-%m-%d %H:%M:%S"))?;
     writeln!(file)?;
 
     writeln!(file, "## Features")?;
@@ -34,11 +31,7 @@ pub fn generate_arch_readme(collector: &ArtifactCollector) -> std::io::Result<Pa
         let rel_path = ArtifactCollector::slugify(&feature.name); // Using simple slugify for link
         let link = format!("[{}]({}/README.md)", feature.name, rel_path);
 
-        writeln!(
-            file,
-            "| {} | {}/{} | {} |",
-            link, passed_scenarios, total_scenarios, icon
-        )?;
+        writeln!(file, "| {} | {}/{} | {} |", link, passed_scenarios, total_scenarios, icon)?;
     }
 
     Ok(readme_path)
@@ -54,11 +47,7 @@ pub fn write_feature_readme(
 
     writeln!(file, "# Feature: {}", feature.name)?;
     writeln!(file)?;
-    writeln!(
-        file,
-        "> Last run: {}",
-        collector.start_time.format("%Y-%m-%d %H:%M:%S")
-    )?;
+    writeln!(file, "> Last run: {}", collector.start_time.format("%Y-%m-%d %H:%M:%S"))?;
     writeln!(file)?;
 
     writeln!(file, "## Scenarios")?;
@@ -67,11 +56,7 @@ pub fn write_feature_readme(
     writeln!(file, "|----------|-------|--------|------|")?;
 
     for scenario in &feature.scenarios {
-        let passed_steps = scenario
-            .steps
-            .iter()
-            .filter(|s| s.result == StepResult::Passed)
-            .count();
+        let passed_steps = scenario.steps.iter().filter(|s| s.result == StepResult::Passed).count();
         let total_steps = scenario.steps.len();
         let icon = if scenario.passed { "✅" } else { "❌" };
 
@@ -98,11 +83,7 @@ pub fn write_scenario_readme(
 
     writeln!(file, "# {} Scenario: {}", icon, scenario.name)?;
     writeln!(file)?;
-    writeln!(
-        file,
-        "> Last run: {}",
-        collector.start_time.format("%Y-%m-%d %H:%M:%S")
-    )?;
+    writeln!(file, "> Last run: {}", collector.start_time.format("%Y-%m-%d %H:%M:%S"))?;
     writeln!(file)?;
 
     writeln!(file, "## Steps")?;
