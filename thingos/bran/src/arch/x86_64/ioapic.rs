@@ -247,7 +247,11 @@ pub fn calibrate_lapic_timer(hz: u32) -> (u32, u64) {
         ioport_write_u8(0x61, ioport_read_u8(0x61) & !0x01);
 
         let delta = start_lapic.saturating_sub(end_lapic);
-        let (ticks_per_sec, calibrated) = (1_000_000_000u64, false);
+        let (ticks_per_sec, calibrated) = if delta > 1000 {
+            ((delta as u64) * 100, true)
+        } else {
+            (1_000_000_000, false)
+        };
         let init_cnt = (ticks_per_sec / hz as u64) as u32;
 
         kernel::kprintln!("LAPIC: calibrated {} ticks/sec (delta={}, ok={}) -> init_cnt={}", ticks_per_sec, delta, calibrated, init_cnt);
