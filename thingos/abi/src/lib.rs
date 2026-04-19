@@ -48,7 +48,7 @@ pub mod svg_protocol;
 pub mod macros;
 pub mod packed;
 pub mod rpc;
-pub mod thing;
+pub mod handle;
 pub mod vfs_rpc;
 pub mod vfs_watch;
 pub mod wire;
@@ -56,7 +56,7 @@ pub mod wire_schema;
 
 pub use abi_macros::Graphable;
 pub use errors::{Error, Result};
-pub use thing::Thing;
+pub use handle::Handle;
 pub use wire::{BlobId, KindId, PredicateId, SymbolId, ThingId, WireSafe};
 pub use wire_schema::{Field, Schema, WireType};
 

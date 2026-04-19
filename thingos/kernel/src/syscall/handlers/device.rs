@@ -328,7 +328,7 @@ fn sys_pci_call(call: &DeviceCall) -> SysResult<usize> {
             }
 
             let res = crate::irq::msi::enable_for_claim(
-                req.claim_thing as usize,
+                req.claim_handle as usize,
                 req.requested_vectors,
                 req.prefer_msix != 0,
             )?;

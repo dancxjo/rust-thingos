@@ -271,7 +271,7 @@ impl WaitSet {
 
     /// Watch a VFS thing for readability.
     ///
-    /// `fd` is any open thing: a pipe read-end, a socket, a port
+    /// `fd` is any open handle: a pipe read-end, a socket, a port
     /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLIN`.
     ///
@@ -283,7 +283,7 @@ impl WaitSet {
 
     /// Watch a VFS thing for writability.
     ///
-    /// `fd` is any open thing: a pipe write-end, a socket, a port
+    /// `fd` is any open handle: a pipe write-end, a socket, a port
     /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLOUT`.
     pub fn add_fd_writable(&mut self, fd: u32) -> Result<WaitToken, Errno> {

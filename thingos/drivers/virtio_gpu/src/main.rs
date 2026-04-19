@@ -147,7 +147,7 @@ fn main(boot_fd: usize) -> ! {
     }
 
     // Enable MSI-X if available
-    match device_enable_msi(gpu.claim_thing(), true) {
+    match device_enable_msi(gpu.claim_handle(), true) {
         Ok(resp) => {
             info!(
                 "VIRTIO_GPU: IRQ mode {} vector=0x{:02x}",
@@ -156,10 +156,10 @@ fn main(boot_fd: usize) -> ! {
             if resp.irq_mode == PCI_IRQ_MODE_MSIX {
                 configure_msix(&gpu);
             }
-            if let Err(e) = device_irq_subscribe(gpu.claim_thing(), 0) {
+            if let Err(e) = device_irq_subscribe(gpu.claim_handle(), 0) {
                 warn!("VIRTIO_GPU: device IRQ subscribe failed: {:?}", e);
             } else {
-                IRQ_HANDLE.store(gpu.claim_thing(), Ordering::Release);
+                IRQ_HANDLE.store(gpu.claim_handle(), Ordering::Release);
                 let _ = thread::spawn(irq_thread);
             }
         }
@@ -293,7 +293,7 @@ fn create_demo_framebuffer(gpu: &mut VirtioGpu) -> Result<u64, &'static str> {
     let pages = (fb_size + 4095) / 4096;
 
     let framebuffer =
-        device_alloc_dma(gpu.claim_thing(), pages).map_err(|_| "Failed to alloc framebuffer")?;
+        device_alloc_dma(gpu.claim_handle(), pages).map_err(|_| "Failed to alloc framebuffer")?;
     let fb_phys = device_dma_phys(framebuffer).map_err(|_| "Failed to get fb phys")?;
 
     info!(
@@ -333,9 +333,9 @@ fn configure_msix(gpu: &VirtioGpu) {
 }
 
 extern "C" fn irq_thread() -> ! {
-    let claim_thing = IRQ_HANDLE.load(Ordering::Acquire);
+    let claim_handle = IRQ_HANDLE.load(Ordering::Acquire);
     loop {
-        match device_irq_wait(claim_thing, 0) {
+        match device_irq_wait(claim_handle, 0) {
             Ok(count) => info!("VIRTIO_GPU: IRQ fired ({})", count),
             Err(e) => {
                 warn!("VIRTIO_GPU: IRQ wait error {:?}", e);

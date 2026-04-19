@@ -131,7 +131,7 @@ pub struct WatchSpec {
 pub struct WatchEvent {
     pub kind: u32, // 1=Found, 2=Lost
     pub node_id: u64,
-    pub thing: u64,
+    pub handle: u64,
     pub size: u64,
 }
 
@@ -231,33 +231,33 @@ impl Default for BulkPropsResponse {
 /// Mapping from a parent thing to a destination thing in the child.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ThingRemap {
-    pub src_thing: u32,
-    pub dst_thing: u32,
+pub struct HandleRemap {
+    pub src_handle: u32,
+    pub dst_handle: u32,
 }
 
 /// Stdio mode for child streams in SpawnProcessExReq.
 pub mod stdio_mode {
-    /// Inherit the parent's thing for this stream.
+    /// Inherit the parent's handle for this stream.
     pub const INHERIT: u32 = 0;
     /// Attach to a null sink/source (discard output, empty input).
     pub const NULL: u32 = 1;
     /// Create a kernel pipe; parent gets the opposite end.
     pub const PIPE: u32 = 2;
 
-    const THING_BIT: u32 = 1 << 31;
+    const HANDLE_BIT: u32 = 1 << 31;
 
-    /// Use an explicitly inherited parent thing for this stream.
+    /// Use an explicitly inherited parent handle for this stream.
     #[inline]
-    pub const fn thing(thing: u32) -> u32 {
-        THING_BIT | thing
+    pub const fn handle(handle: u32) -> u32 {
+        HANDLE_BIT | handle
     }
 
-    /// Decode an explicit parent thing, if `mode` encodes one.
+    /// Decode an explicit parent handle, if `mode` encodes one.
     #[inline]
-    pub const fn explicit_thing(mode: u32) -> Option<u32> {
-        if (mode & THING_BIT) != 0 {
-            Some(mode & !THING_BIT)
+    pub const fn explicit_handle(mode: u32) -> Option<u32> {
+        if (mode & HANDLE_BIT) != 0 {
+            Some(mode & !HANDLE_BIT)
         } else {
             None
         }
@@ -305,7 +305,7 @@ pub struct SpawnProcessExReq {
     pub cwd_ptr: u64,
     pub cwd_len: u32,
     pub _pad4: u32,
-    /// Pointer to an array of [`ThingRemap`] entries.
+    /// Pointer to an array of [`HandleRemap`] entries.
     pub thing_remap_ptr: u64,
     /// Number of entries in the `thing_remap_ptr` array.
     pub thing_remap_len: u32,

@@ -40,7 +40,7 @@ pub const PCI_OP_ENABLE_MSI: u32 = 1;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct PciEnableMsiRequest {
-    pub claim_thing: u32,
+    pub claim_handle: u32,
     pub requested_vectors: u16,
     pub prefer_msix: u8,
     pub _reserved: u8,

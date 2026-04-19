@@ -10,8 +10,6 @@ use super::PortId;
 pub struct IpcHandle(pub u32);
 
 /// Backward-compatible alias.
-pub type IpcThing = IpcHandle;
-/// Backward-compatible alias.
 pub type Handle = IpcHandle;
 
 /// Access mode for a handle
@@ -20,8 +18,6 @@ pub enum IpcHandleMode {
     Read,
     Write,
 }
-/// Backward-compatible alias.
-pub type IpcThingMode = IpcHandleMode;
 
 use alloc::sync::Arc;
 
@@ -31,8 +27,6 @@ pub struct IpcHandleEntry {
     pub port: Arc<super::Port>,
     pub mode: IpcHandleMode,
 }
-/// Backward-compatible alias.
-pub type IpcThingEntry = IpcHandleEntry;
 
 impl Clone for IpcHandleEntry {
     fn clone(&self) -> Self {
@@ -75,8 +69,6 @@ pub const MAX_IPC_HANDLES: usize = 1024;
 pub struct IpcHandleTable {
     entries: alloc::vec::Vec<Option<IpcHandleEntry>>,
 }
-/// Backward-compatible alias.
-pub type IpcThingTable = IpcHandleTable;
 
 impl IpcHandleTable {
     pub fn new() -> Self {

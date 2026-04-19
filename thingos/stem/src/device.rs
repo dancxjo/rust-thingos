@@ -27,7 +27,7 @@ pub fn rtc_read_time() -> Result<RtcTime, Errno> {
 }
 
 pub fn device_enable_msi(
-    claim_thing: usize,
+    claim_handle: usize,
     prefer_msix: bool,
 ) -> Result<PciEnableMsiResponse, Errno> {
     let mut response = PciEnableMsiResponse {
@@ -36,7 +36,7 @@ pub fn device_enable_msi(
         _reserved: [0; 2],
     };
     let req = PciEnableMsiRequest {
-        claim_thing: claim_thing as u32,
+        claim_handle: claim_handle as u32,
         requested_vectors: 1,
         prefer_msix: prefer_msix as u8,
         _reserved: 0,

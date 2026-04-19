@@ -336,9 +336,9 @@ impl Supervisor {
                         "/dev/console",
                         abi::syscall::vfs_flags::O_RDWR,
                     ) {
-                        stdin_mode = stem::abi::types::stdio_mode::thing(console_fd);
-                        stdout_mode = stem::abi::types::stdio_mode::thing(console_fd);
-                        stderr_mode = stem::abi::types::stdio_mode::thing(console_fd);
+                        stdin_mode = stem::abi::types::stdio_mode::handle(console_fd);
+                        stdout_mode = stem::abi::types::stdio_mode::handle(console_fd);
+                        stderr_mode = stem::abi::types::stdio_mode::handle(console_fd);
                         console_fd_to_close = Some(console_fd);
                     }
                 }
@@ -400,7 +400,7 @@ impl Supervisor {
 
         let mut pollfds = tasks_to_poll
             .iter()
-            .map(|(resp_fd, _, _)| abi::syscall::PollThing {
+            .map(|(resp_fd, _, _)| abi::syscall::PollHandle {
                 thing: *resp_fd as i32,
                 events: abi::syscall::poll_flags::POLLIN
                     | abi::syscall::poll_flags::POLLHUP

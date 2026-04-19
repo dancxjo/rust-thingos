@@ -37,7 +37,7 @@ pub struct InfoResp {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct BufferResp {
-    pub thing: u32,
+    pub handle: u32,
     pub _pad: u32,
     pub size: u64,
     pub stride: u32,

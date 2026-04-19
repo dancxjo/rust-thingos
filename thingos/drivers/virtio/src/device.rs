@@ -23,7 +23,7 @@ use crate::virtqueue::Virtqueue;
 /// A generic VirtIO PCI device
 pub struct VirtioDevice {
     /// Device claim handle for syscalls
-    claim_thing: usize,
+    claim_handle: usize,
     /// Common config virtual address
     common_cfg: u64,
     /// Notify config virtual address
@@ -53,8 +53,8 @@ impl VirtioDevice {
 
         // Claim the device using its sysfs path as the primary key.
         stem::debug!("VirtIO: claiming '{}'...", sys_path);
-        let claim_thing = device_claim(sys_path)?;
-        stem::debug!("VirtIO: claimed, handle={}", claim_thing);
+        let claim_handle = device_claim(sys_path)?;
+        stem::debug!("VirtIO: claimed, handle={}", claim_handle);
 
         // Read VirtIO capability offsets from sysfs
         let common_bar = read_sys_u32(&alloc::format!("{}/virtio/common_bar", sys_path))? as usize;
@@ -79,7 +79,7 @@ impl VirtioDevice {
 
         // Map the BAR containing common config
         stem::debug!("VirtIO: mapping common BAR{}...", common_bar);
-        let common_bar_base = device_map_mmio(claim_thing, common_bar)?;
+        let common_bar_base = device_map_mmio(claim_handle, common_bar)?;
         let common_cfg = common_bar_base + common_offset;
         stem::debug!("VirtIO: common_cfg at 0x{:x}", common_cfg);
 
@@ -88,7 +88,7 @@ impl VirtioDevice {
             common_bar_base + notify_offset
         } else {
             stem::info!("VirtIO: mapping notify BAR{}...", notify_bar);
-            let notify_bar_base = device_map_mmio(claim_thing, notify_bar)?;
+            let notify_bar_base = device_map_mmio(claim_handle, notify_bar)?;
             notify_bar_base + notify_offset
         };
         stem::debug!("VirtIO: notify_cfg at 0x{:x}", notify_cfg);
@@ -101,7 +101,7 @@ impl VirtioDevice {
             } else if bar_idx == notify_bar {
                 notify_cfg - notify_offset // Already mapped
             } else {
-                device_map_mmio(claim_thing, bar_idx)?
+                device_map_mmio(claim_handle, bar_idx)?
             };
             Some(bar_base + device_offset as u64)
         } else {
@@ -111,7 +111,7 @@ impl VirtioDevice {
 
         // Allocate command buffer (1 page for commands + responses)
         stem::debug!("VirtIO: allocating DMA command buffer...");
-        let cmd_buf = device_alloc_dma(claim_thing, 1).map_err(|_| Errno::ENOMEM)?;
+        let cmd_buf = device_alloc_dma(claim_handle, 1).map_err(|_| Errno::ENOMEM)?;
         let cmd_buf_phys = device_dma_phys(cmd_buf).map_err(|_| Errno::EFAULT)?;
         stem::info!(
             "VirtIO: cmd_buf virt=0x{:x} phys=0x{:x}",
@@ -121,7 +121,7 @@ impl VirtioDevice {
 
         stem::debug!("VirtIO: device::new complete");
         Ok(Self {
-            claim_thing,
+            claim_handle,
             common_cfg,
             notify_cfg,
             device_cfg,
@@ -205,7 +205,7 @@ impl VirtioDevice {
         }
 
         let vq_virt =
-            device_alloc_dma(self.claim_thing, 4).map_err(|_| "Failed to alloc virtqueue")?;
+            device_alloc_dma(self.claim_handle, 4).map_err(|_| "Failed to alloc virtqueue")?;
         let vq_phys = device_dma_phys(vq_virt).map_err(|_| "Failed to get vq phys")?;
 
         let vq = Virtqueue::new(vq_virt, vq_phys, size);
@@ -290,8 +290,8 @@ impl VirtioDevice {
     }
 
     /// Get claim handle for additional device operations  
-    pub fn claim_thing(&self) -> usize {
-        self.claim_thing
+    pub fn claim_handle(&self) -> usize {
+        self.claim_handle
     }
 
     /// Get negotiated device features

@@ -189,7 +189,7 @@ fn find_framebuffer() -> Option<Framebuffer> {
     };
 
     let mut payload = FbInfoPayload {
-        device_thing: 0,
+        device_handle: 0,
         width: 0,
         height: 0,
         stride: 0,

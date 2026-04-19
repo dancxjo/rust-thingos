@@ -141,7 +141,7 @@ impl VirtioNetDriver {
 
         // Allocate RX buffers in bulk (32 pages = 128KB for 64 x 2KB buffers)
         // This dramatically reduces syscall overhead compared to 64 separate allocations
-        let claim_thing = device.claim_thing();
+        let claim_handle = device.claim_handle();
         let mut rx_buffers_virt = [0u64; QUEUE_SIZE as usize];
         let mut rx_buffers_phys = [0u64; QUEUE_SIZE as usize];
 
@@ -152,7 +152,7 @@ impl VirtioNetDriver {
             (QUEUE_SIZE as usize + BUFFERS_PER_PAGE - 1) / BUFFERS_PER_PAGE; // 32
 
         let rx_pool_virt =
-            device_alloc_dma(claim_thing, RX_PAGES_NEEDED).map_err(|_| Errno::ENOMEM)?;
+            device_alloc_dma(claim_handle, RX_PAGES_NEEDED).map_err(|_| Errno::ENOMEM)?;
         let rx_pool_phys = device_dma_phys(rx_pool_virt).map_err(|_| Errno::EFAULT)?;
         stem::debug!(
             "VirtIO-NET: Allocated RX pool ({} pages, {} buffers)",
@@ -168,7 +168,7 @@ impl VirtioNetDriver {
         }
 
         // Allocate TX buffer (single page is fine for 1 buffer)
-        let tx_buffer_virt = device_alloc_dma(claim_thing, 1).map_err(|_| Errno::ENOMEM)?;
+        let tx_buffer_virt = device_alloc_dma(claim_handle, 1).map_err(|_| Errno::ENOMEM)?;
         let tx_buffer_phys = device_dma_phys(tx_buffer_virt).map_err(|_| Errno::EFAULT)?;
         stem::debug!("VirtIO-NET: Allocated TX buffer (1 page)");
 

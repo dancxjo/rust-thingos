@@ -38,8 +38,7 @@ pub mod unix_socket;
 mod port;
 
 pub use handles::{
-    IpcHandle, IpcHandleEntry, IpcHandleMode, IpcHandleTable, IpcThing, IpcThingEntry,
-    IpcThingMode, IpcThingTable, MAX_IPC_HANDLES,
+    IpcHandle, IpcHandleEntry, IpcHandleMode, IpcHandleTable, MAX_IPC_HANDLES,
 };
 pub use port::{Port, PortId, Receiver, Sender};
 

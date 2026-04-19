@@ -547,7 +547,7 @@ fn main(boot_fd: usize) -> ! {
         }
     };
 
-    let claim_thing = match stem::syscall::device_claim(&dev_path) {
+    let claim_handle = match stem::syscall::device_claim(&dev_path) {
         Ok(h) => {
             debug!("AHCI: Claimed PCI device '{}' handle={}", dev_path, h);
             h
@@ -560,7 +560,7 @@ fn main(boot_fd: usize) -> ! {
         }
     };
 
-    let mapped_base = match stem::syscall::device_map_mmio(claim_thing, 5) {
+    let mapped_base = match stem::syscall::device_map_mmio(claim_handle, 5) {
         Ok(addr) => {
             debug!("AHCI: Mapped ABAR at 0x{:x}", addr);
             addr

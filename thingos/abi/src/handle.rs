@@ -5,13 +5,13 @@ use crate::wire::ThingId;
 /// A generic envelope that provides identity.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct Thing<T> {
+pub struct Handle<T> {
     pub id: ThingId,
     pub value: T,
 }
 
-impl<T> Thing<T> {
-    /// Create a new Thing with a default (zeroed) handle.
+impl<T> Handle<T> {
+    /// Create a new Handle with a default (zeroed) `ThingId`.
     pub fn new(value: T) -> Self {
         Self {
             id: ThingId::default(),
@@ -19,7 +19,7 @@ impl<T> Thing<T> {
         }
     }
 
-    /// Create a new Thing with a specific ID.
+    /// Create a new Handle with a specific ID.
     pub fn with_id(id: ThingId, value: T) -> Self {
         Self { id, value }
     }

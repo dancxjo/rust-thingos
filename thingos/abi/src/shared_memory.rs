@@ -23,11 +23,11 @@
 //! shared_memory_create("name", size) -> thing
 //! vm_map(thing, READ|WRITE)  -> ptr   (optional, if creator also writes)
 //! [fill data at ptr]
-//! sendmsg(thing, b"", &[thing]) --------->  recvmsg(thing) -> (b"", [new_thing])
-//!                                        vm_map(new_thing, READ) -> ptr
+//! sendmsg(thing, b"", &[thing]) --------->  recvmsg(thing) -> (b"", [new_handle])
+//!                                        vm_map(new_handle, READ) -> ptr
 //!                                        [read data at ptr]
 //!                                        vm_unmap(ptr, size)
-//!                                        vfs_close(new_thing)
+//!                                        vfs_close(new_handle)
 //! vm_unmap(ptr, size)
 //! vfs_close(thing)                    (thing dropped → physical memory freed)
 //! ```
@@ -76,7 +76,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedMemoryRef {
     /// Sender-local thing number.
-    pub thing: u32,
+    pub handle: u32,
     /// Reserved padding (must be zero).
     pub _pad: u32,
     /// Byte length of the valid data window within the shared memory.

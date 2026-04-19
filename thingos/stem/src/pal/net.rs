@@ -74,7 +74,7 @@ use super::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR, O_WRONLY};
 use crate::syscall;
 use crate::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 use abi::errors::{Errno, SysResult};
-use abi::syscall::{poll_flags, PollThing};
+use abi::syscall::{poll_flags, PollHandle};
 use spin::Mutex;
 
 /// A VFS thing returned by [`vfs_open`].
@@ -116,7 +116,7 @@ fn wait_fd(fd: Fd, events: u16, deadline_ns: u64) -> SysResult<()> {
             ns_to_timeout_ms(deadline_ns.saturating_sub(now))
         };
 
-        let mut pollfd = [PollThing {
+        let mut pollfd = [PollHandle {
             thing: fd as i32,
             events,
             revents: 0,

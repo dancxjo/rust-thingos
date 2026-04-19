@@ -23,7 +23,7 @@ mod vfs_device;
 mod vfs_provider;
 
 use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
-use abi::syscall::{poll_flags, PollThing};
+use abi::syscall::{poll_flags, PollHandle};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
@@ -216,15 +216,15 @@ fn main(arg: usize) -> ! {
     }
 }
 
-fn idle_pollfds(req_fd: u32, events_fd: u32) -> [PollThing; 2] {
+fn idle_pollfds(req_fd: u32, events_fd: u32) -> [PollHandle; 2] {
     [
-        PollThing {
-            thing: req_fd as i32,
+        PollHandle {
+            handle: req_fd as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
-        PollThing {
-            thing: events_fd as i32,
+        PollHandle {
+            handle: events_fd as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
@@ -407,8 +407,8 @@ mod tests {
     #[test]
     fn test_idle_pollfds_includes_request_and_events() {
         let pollfds = idle_pollfds(11, 22);
-        assert_eq!(pollfds[0].thing, 11);
-        assert_eq!(pollfds[1].thing, 22);
+        assert_eq!(pollfds[0].handle, 11);
+        assert_eq!(pollfds[1].handle, 22);
         assert_eq!(pollfds[0].events, poll_flags::POLLIN);
         assert_eq!(pollfds[1].events, poll_flags::POLLIN);
     }

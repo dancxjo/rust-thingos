@@ -82,7 +82,7 @@ pub fn mmio_read32(mut caller: Caller<'_, HostState>, handle: i32, offset: i32) 
     }
 
     let state = caller.data(); // shared borrow for check
-    if state.device_thing as i32 != handle {
+    if state.device_handle as i32 != handle {
         return -1; // EPERM
     }
     let offset_idx = offset as usize;
@@ -113,7 +113,7 @@ pub fn mmio_write32(
     }
 
     let state = caller.data_mut();
-    if state.device_thing as i32 != handle {
+    if state.device_handle as i32 != handle {
         return -1; // EPERM
     }
     let offset_idx = offset as usize;

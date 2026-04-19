@@ -586,9 +586,9 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
         if count > 64 {
             return Err(Errno::EINVAL);
         }
-        let remap_size = count * core::mem::size_of::<abi::types::ThingRemap>();
+        let remap_size = count * core::mem::size_of::<abi::types::HandleRemap>();
         validate_user_range(req.thing_remap_ptr as usize, remap_size, false)?;
-        let mut remaps = alloc::vec![abi::types::ThingRemap::default(); count];
+        let mut remaps = alloc::vec![abi::types::HandleRemap::default(); count];
         unsafe {
             copyin(
                 core::slice::from_raw_parts_mut(remaps.as_mut_ptr() as *mut u8, remap_size),
@@ -661,7 +661,7 @@ fn mode_to_spec(mode: u32) -> Result<StdioSpec, Errno> {
         stdio_mode::INHERIT => Ok(StdioSpec::Inherit),
         stdio_mode::NULL => Ok(StdioSpec::Null),
         stdio_mode::PIPE => Ok(StdioSpec::Pipe),
-        _ => match stdio_mode::explicit_thing(mode) {
+        _ => match stdio_mode::explicit_handle(mode) {
             Some(thing) => Ok(StdioSpec::Fd(thing)),
             None => Err(Errno::EINVAL),
         },

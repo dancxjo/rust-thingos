@@ -231,7 +231,7 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
         }
     };
     let mut payload = FbInfoPayload {
-        device_thing: 0,
+        device_handle: 0,
         width: 0,
         height: 0,
         stride: 0,
@@ -586,9 +586,9 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         &shell_path,
         &[shell_path.as_bytes()],
         &alloc::collections::BTreeMap::new(),
-        abi::types::stdio_mode::thing(console_fd), // stdin
-        abi::types::stdio_mode::thing(console_fd), // stdout
-        abi::types::stdio_mode::thing(console_fd), // stderr
+        abi::types::stdio_mode::handle(console_fd), // stdin
+        abi::types::stdio_mode::handle(console_fd), // stdout
+        abi::types::stdio_mode::handle(console_fd), // stderr
         0,
         &[],
     ) {
