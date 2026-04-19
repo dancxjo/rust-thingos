@@ -20,6 +20,7 @@ use stem::{info, warn, debug};
 
 const MOUNT_POINT: &str = "/https";
 const ROOT_HANDLE: u64 = 1;
+const BODY_WINDOW_CAP: usize = 64 * 1024;
 const SEED_NAME: &[u8] = b"httpsd";
 const HOOK_MOUNT_V1: &[u8] = b"thingos_vfs_mount_v1";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
@@ -91,12 +92,13 @@ struct HttpsHandle {
     node: HttpsNode,
     response: Option<Response>,
     body: Vec<u8>,
+    body_start_offset: usize,
     eof: bool,
 }
 
 impl HttpsHandle {
     fn new(node: HttpsNode, response: Option<Response>) -> Self {
-        Self { node, response, body: Vec::new(), eof: false }
+        Self { node, response, body: Vec::new(), body_start_offset: 0, eof: false }
     }
 }
 
@@ -149,12 +151,13 @@ impl HttpsProvider {
         };
 
         debug!(
-            "httpsd: read handle={} url={} offset={} len={} cached={} eof={}",
+            "httpsd: read handle={} url={} offset={} len={} cached={} start={} eof={}",
             handle,
             state.node.url(),
             offset,
             max_len,
             state.body.len(),
+            state.body_start_offset,
             state.eof
         );
 
@@ -172,10 +175,24 @@ impl HttpsProvider {
         }
 
         let needed_end = offset.saturating_add(max_len);
-        
-        // STREAMING FIX: If we already have ANY data starting at `offset`, return it immediately.
-        // We do not wait for `needed_end` to be satisfied unless we have no data at all for this offset.
-        while state.body.len() <= offset && !state.eof {
+        let mut body_end = state.body_start_offset.saturating_add(state.body.len());
+
+        // Offset reads are constrained to the retained body window.
+        // If the caller seeks behind `body_start_offset`, those bytes have been evicted.
+        if offset < state.body_start_offset {
+            debug!(
+                "httpsd: read handle={} offset={} before retained window start={} (cap={})",
+                handle,
+                offset,
+                state.body_start_offset,
+                BODY_WINDOW_CAP
+            );
+            return Err(Errno::EINVAL);
+        }
+
+        // Streaming reads only fetch until there is data at `offset` (or EOF),
+        // instead of caching the entire upstream response.
+        while body_end <= offset && !state.eof {
             let Some(response) = state.response.as_mut() else {
                 state.eof = true;
                 break;
@@ -198,19 +215,38 @@ impl HttpsProvider {
             }
             debug!("httpsd: upstream chunk handle={} bytes={}", handle, chunk.len());
             state.body.extend_from_slice(&chunk);
+            if state.body.len() > BODY_WINDOW_CAP {
+                let trim = state.body.len() - BODY_WINDOW_CAP;
+                state.body.drain(..trim);
+                state.body_start_offset = state.body_start_offset.saturating_add(trim);
+            }
+            body_end = state.body_start_offset.saturating_add(state.body.len());
         }
 
-        if offset >= state.body.len() {
+        body_end = state.body_start_offset.saturating_add(state.body.len());
+        if offset < state.body_start_offset {
+            debug!(
+                "httpsd: read handle={} offset={} evicted while streaming (start={})",
+                handle,
+                offset,
+                state.body_start_offset
+            );
+            return Err(Errno::EINVAL);
+        }
+
+        if offset >= body_end {
             debug!("httpsd: read handle={} -> EOF at offset {}", handle, offset);
             return Ok(Vec::new());
         }
-        let end = state.body.len().min(needed_end);
-        let out = state.body[offset..end].to_vec();
+        let start = offset - state.body_start_offset;
+        let end = state.body.len().min(needed_end.saturating_sub(state.body_start_offset));
+        let out = state.body[start..end].to_vec();
         debug!(
-            "httpsd: read handle={} -> returned {} bytes (cached={} eof={})",
+            "httpsd: read handle={} -> returned {} bytes (cached={} start={} eof={})",
             handle,
             out.len(),
             state.body.len(),
+            state.body_start_offset,
             state.eof
         );
         Ok(out)
@@ -370,6 +406,7 @@ fn dispatch_readdir(payload: &[u8]) -> ProviderResponse {
 
 #[cfg(test)]
 mod tests {
+    use abi::errors::Errno;
     use super::HttpsProvider;
     extern crate std;
 
@@ -384,5 +421,30 @@ mod tests {
     fn node_url_builds_https_paths() {
         let node = super::HttpsNode::new("en.wikipedia.org", "wiki/Dormouse");
         assert_eq!(node.url(), "https://en.wikipedia.org/wiki/Dormouse");
+    }
+
+    #[test]
+    fn read_node_rejects_offsets_before_retained_window() {
+        let mut provider = HttpsProvider::new();
+        let handle = provider.allocate_node("example.com", "", None);
+        let state = provider.handles.get_mut(&handle).expect("allocated handle");
+        state.body.extend_from_slice(b"abcdef");
+        state.body_start_offset = 3;
+        state.eof = true;
+
+        assert_eq!(provider.read_node(handle, 2, 4), Err(Errno::EINVAL));
+    }
+
+    #[test]
+    fn read_node_maps_offsets_within_retained_window() {
+        let mut provider = HttpsProvider::new();
+        let handle = provider.allocate_node("example.com", "", None);
+        let state = provider.handles.get_mut(&handle).expect("allocated handle");
+        state.body.extend_from_slice(b"abcdef");
+        state.body_start_offset = 3;
+        state.eof = true;
+
+        assert_eq!(provider.read_node(handle, 4, 3).expect("windowed read"), b"bcd");
+        assert_eq!(provider.read_node(handle, 9, 8).expect("eof read"), b"");
     }
 }
