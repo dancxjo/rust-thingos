@@ -70,12 +70,13 @@
 //! layer already supports via `sys_fs_poll`.  No structural changes are
 //! needed in this module; callers just poll the raw fds directly.
 
+use abi::errors::{Errno, SysResult};
+use abi::syscall::{PollHandle, poll_flags};
+use spin::Mutex;
+
 use super::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR, O_WRONLY};
 use crate::syscall;
 use crate::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
-use abi::errors::{Errno, SysResult};
-use abi::syscall::{poll_flags, PollHandle};
-use spin::Mutex;
 
 /// A VFS thing returned by [`vfs_open`].
 pub type Fd = u32;
@@ -116,11 +117,7 @@ fn wait_fd(fd: Fd, events: u16, deadline_ns: u64) -> SysResult<()> {
             ns_to_timeout_ms(deadline_ns.saturating_sub(now))
         };
 
-        let mut pollfd = [PollHandle {
-            thing: fd as i32,
-            events,
-            revents: 0,
-        }];
+        let mut pollfd = [PollHandle { handle: fd as i32, events, revents: 0 }];
 
         match vfs_poll(&mut pollfd, timeout_ms) {
             Ok(0) => {
@@ -148,11 +145,7 @@ fn ns_to_timeout_ms(ns: u64) -> u64 {
 /// parse to produce a clean, documented error rather than a mysterious
 /// parse failure.
 pub fn reject_ipv6(addr: &str) -> SysResult<()> {
-    if addr.contains(':') {
-        Err(Errno::EAFNOSUPPORT)
-    } else {
-        Ok(())
-    }
+    if addr.contains(':') { Err(Errno::EAFNOSUPPORT) } else { Ok(()) }
 }
 
 // TcpHandle
@@ -286,9 +279,7 @@ impl TcpListenerHandle {
             let mut buf = [0u8; 64];
             match vfs_read(self.accept_fd, &mut buf) {
                 Ok(n) if n > 0 => {
-                    let text = core::str::from_utf8(&buf[..n])
-                        .map_err(|_| Errno::EINVAL)?
-                        .trim();
+                    let text = core::str::from_utf8(&buf[..n]).map_err(|_| Errno::EINVAL)?.trim();
                     let (conn_id, remote_ip, remote_port) = parse_accept_response(text)?;
 
                     let data_path = format!("/net/tcp/{conn_id}/data");
@@ -358,17 +349,9 @@ impl TcpListenerHandle {
 /// Parse an accept-response line: `"<conn_id> <a>.<b>.<c>.<d> <port>"`.
 fn parse_accept_response(text: &str) -> SysResult<(u32, [u8; 4], u16)> {
     let mut parts = text.split_whitespace();
-    let conn_id: u32 = parts
-        .next()
-        .ok_or(Errno::EINVAL)?
-        .parse()
-        .map_err(|_| Errno::EINVAL)?;
+    let conn_id: u32 = parts.next().ok_or(Errno::EINVAL)?.parse().map_err(|_| Errno::EINVAL)?;
     let ip_str = parts.next().ok_or(Errno::EINVAL)?;
-    let port: u16 = parts
-        .next()
-        .ok_or(Errno::EINVAL)?
-        .parse()
-        .map_err(|_| Errno::EINVAL)?;
+    let port: u16 = parts.next().ok_or(Errno::EINVAL)?.parse().map_err(|_| Errno::EINVAL)?;
     let ip = parse_ipv4_bytes(ip_str)?;
     Ok((conn_id, ip, port))
 }
@@ -454,10 +437,7 @@ impl UdpHandle {
     /// Set the default remote address for `send()` / `recv()`.
     pub fn connect(&mut self, addr: [u8; 4], port: u16) -> SysResult<()> {
         use alloc::format;
-        let cmd = format!(
-            "connect {}.{}.{}.{} {}",
-            addr[0], addr[1], addr[2], addr[3], port
-        );
+        let cmd = format!("connect {}.{}.{}.{} {}", addr[0], addr[1], addr[2], addr[3], port);
         vfs_write(self.ctl_fd, cmd.as_bytes())?;
         self.connected_remote = Some((addr, port));
         Ok(())
@@ -542,9 +522,7 @@ pub fn tcp_connect(addr: &str, port: u16, deadline_ns: u64) -> SysResult<TcpHand
     let mut id_buf = [0u8; 32];
     let n = vfs_read(new_fd, &mut id_buf)?;
     vfs_close(new_fd)?;
-    let id_str = core::str::from_utf8(&id_buf[..n])
-        .map_err(|_| Errno::EINVAL)?
-        .trim();
+    let id_str = core::str::from_utf8(&id_buf[..n]).map_err(|_| Errno::EINVAL)?.trim();
     let id: u32 = id_str.parse().map_err(|_| Errno::EINVAL)?;
 
     // Step 2: open ctl fd
@@ -613,9 +591,7 @@ pub fn tcp_bind(addr: &str, port: u16, backlog: u16) -> SysResult<TcpListenerHan
     let mut id_buf = [0u8; 32];
     let n = vfs_read(new_fd, &mut id_buf)?;
     vfs_close(new_fd)?;
-    let id_str = core::str::from_utf8(&id_buf[..n])
-        .map_err(|_| Errno::EINVAL)?
-        .trim();
+    let id_str = core::str::from_utf8(&id_buf[..n]).map_err(|_| Errno::EINVAL)?.trim();
     let id: u32 = id_str.parse().map_err(|_| Errno::EINVAL)?;
 
     // Step 2: open ctl fd
@@ -641,13 +617,7 @@ pub fn tcp_bind(addr: &str, port: u16, backlog: u16) -> SysResult<TcpListenerHan
         }
     };
 
-    Ok(TcpListenerHandle {
-        id,
-        port,
-        ctl_fd,
-        accept_fd,
-        nonblocking: false,
-    })
+    Ok(TcpListenerHandle { id, port, ctl_fd, accept_fd, nonblocking: false })
 }
 
 /// Bind a UDP socket to `addr:port`.
@@ -664,9 +634,7 @@ pub fn udp_bind(addr: &str, port: u16) -> SysResult<UdpHandle> {
     let mut id_buf = [0u8; 32];
     let n = vfs_read(new_fd, &mut id_buf)?;
     vfs_close(new_fd)?;
-    let id_str = core::str::from_utf8(&id_buf[..n])
-        .map_err(|_| Errno::EINVAL)?
-        .trim();
+    let id_str = core::str::from_utf8(&id_buf[..n]).map_err(|_| Errno::EINVAL)?.trim();
     let id: u32 = id_str.parse().map_err(|_| Errno::EINVAL)?;
 
     // Step 2: open ctl fd
@@ -731,9 +699,7 @@ pub fn resolve_hostname(hostname: &str, deadline_ns: u64) -> SysResult<[u8; 4]> 
         match vfs_read(lookup_fd, &mut buf) {
             Ok(n) if n > 0 => {
                 let _ = vfs_close(lookup_fd);
-                let text = core::str::from_utf8(&buf[..n])
-                    .map_err(|_| Errno::EINVAL)?
-                    .trim();
+                let text = core::str::from_utf8(&buf[..n]).map_err(|_| Errno::EINVAL)?.trim();
                 return parse_ipv4_bytes(text);
             }
             Ok(_) | Err(Errno::EAGAIN) => {
@@ -804,10 +770,7 @@ mod tests {
     fn test_try_parse_ipv4_valid() {
         assert_eq!(try_parse_ipv4("127.0.0.1"), Some([127, 0, 0, 1]));
         assert_eq!(try_parse_ipv4("0.0.0.0"), Some([0, 0, 0, 0]));
-        assert_eq!(
-            try_parse_ipv4("255.255.255.255"),
-            Some([255, 255, 255, 255])
-        );
+        assert_eq!(try_parse_ipv4("255.255.255.255"), Some([255, 255, 255, 255]));
         assert_eq!(try_parse_ipv4("192.168.1.50"), Some([192, 168, 1, 50]));
         assert_eq!(try_parse_ipv4("  10.0.0.1  "), Some([10, 0, 0, 1]));
     }

@@ -316,7 +316,7 @@ fn teardown_mapped_ring(card: &mut AudioCard) {
 
 fn mapped_ring_session_dead(mapped: &MappedRing) -> bool {
     let mut pollfds = [abi::syscall::PollHandle {
-        thing: mapped.control_fd as i32,
+        handle: mapped.control_fd as i32,
         events: POLLHUP | POLLERR,
         revents: 0,
     }];
@@ -1025,7 +1025,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                 // Guard accept() with poll so a blocking socket backend cannot
                 // stall the entire provider/event loop.
                 let mut pollfds = [abi::syscall::PollHandle {
-                    thing: listener_fd as i32,
+                    handle: listener_fd as i32,
                     events: POLLIN | POLLERR | POLLHUP,
                     revents: 0,
                 }];

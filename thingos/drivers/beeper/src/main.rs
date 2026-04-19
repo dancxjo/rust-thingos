@@ -378,7 +378,7 @@ fn main(_arg: usize) -> ! {
                 Ok(0) | Err(_) => {
                     // No space — wait for POLLOUT.
                     let mut pollfds = [abi::syscall::PollHandle {
-                        thing: out_fd as i32,
+                        handle: out_fd as i32,
                         events: abi::syscall::poll_flags::POLLOUT,
                         revents: 0,
                     }];

@@ -84,7 +84,7 @@ impl DisplayBackend {
         modifier: u64,
     ) -> Option<u32> {
         let handle = BufferHandle {
-            thing,
+            handle: thing,
             offset: 0,
             width,
             height,
