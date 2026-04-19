@@ -286,7 +286,7 @@ fn read_piped_stdin() -> Option<Vec<u8>> {
         return None;
     }
 
-    let mut pollfds = [abi::syscall::PollThing { thing: 0, events: POLLIN, revents: 0 }];
+    let mut pollfds = [abi::syscall::PollHandle { thing: 0, events: POLLIN, revents: 0 }];
 
     if vfs_poll(&mut pollfds, 0).is_err() || (pollfds[0].revents & POLLIN) == 0 {
         return None;
@@ -307,7 +307,7 @@ fn read_piped_stdin() -> Option<Vec<u8>> {
 
 fn interrupted_while_waiting_for_audio() -> bool {
     use abi::errors::Errno;
-    use abi::syscall::PollThing;
+    use abi::syscall::PollHandle;
     use abi::syscall::poll_flags::POLLIN;
     use stem::syscall::vfs::{vfs_isatty, vfs_poll, vfs_read};
 
@@ -316,7 +316,7 @@ fn interrupted_while_waiting_for_audio() -> bool {
         return false;
     }
 
-    let mut pollfds = [PollThing { thing: 0, events: POLLIN, revents: 0 }];
+    let mut pollfds = [PollHandle { thing: 0, events: POLLIN, revents: 0 }];
     match vfs_poll(&mut pollfds, 0) {
         Ok(0) => false,
         Ok(_) => {
@@ -482,7 +482,7 @@ fn main(_arg: usize) -> ! {
             match vfs_write(out_fd, &buf[sent..]) {
                 Ok(0) | Err(_) => {
                     // No space — wait for POLLOUT.
-                    let mut pollfds = [abi::syscall::PollThing {
+                    let mut pollfds = [abi::syscall::PollHandle {
                         thing: out_fd as i32,
                         events: abi::syscall::poll_flags::POLLOUT,
                         revents: 0,

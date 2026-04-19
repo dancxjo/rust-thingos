@@ -244,7 +244,7 @@ fn poll_port(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Opt
 
 fn poll_fd(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     let node = {
-        let file = pinfo.thing_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
+        let file = pinfo.handle_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
         file.node.clone()
     };
 
@@ -348,7 +348,7 @@ fn register_all(
             }
             WaitKind::Fd => {
                 let node = {
-                    let file = pinfo.thing_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
+                    let file = pinfo.handle_table.get(spec.object as u32).map_err(|_| Errno::EBADF)?;
                     file.node.clone()
                 };
                 node.add_waiter(tid);
@@ -439,14 +439,14 @@ mod tests {
         node: Arc<dyn crate::vfs::VfsNode>,
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
         use crate::vfs::OpenFlags;
-        use crate::vfs::thing_table::ThingTable;
-        let mut table = ThingTable::new();
+        use crate::vfs::handle_table::HandleTable;
+        let mut table = HandleTable::new();
         table.insert_at(fd, node, OpenFlags::read_write(), "/test".into()).expect("insert_at");
         Arc::new(Mutex::new(crate::task::ProcessInfo {
             pid: 1,
             job: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
-            thing_table: table,
+            handle_table: table,
             ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
@@ -705,11 +705,11 @@ mod tests {
         let (read_node, write_node) = crate::ipc::pipe::create_fd_pair(0, false);
         write_node.write(0, b"x").expect("pipe write");
 
-        // Stash the pipe read node in a temporary ThingTable so we can look it
+        // Stash the pipe read node in a temporary HandleTable so we can look it
         // up through the Fd WaitKind path.
         use crate::vfs::OpenFlags;
-        use crate::vfs::thing_table::ThingTable;
-        let mut table = ThingTable::new();
+        use crate::vfs::handle_table::HandleTable;
+        let mut table = HandleTable::new();
         table
             .insert_at(0, read_node, OpenFlags::read_only(), "/pipe/read".into())
             .expect("insert pipe");

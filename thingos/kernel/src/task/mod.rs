@@ -472,10 +472,10 @@ pub struct Process {
     pub unix_compat: ProcessUnixCompat,
 
     // ── Resource table ────────────────────────────────────────────────────────
-    // Future: thing_table will move to a resource-authority domain.  For now it
+    // Future: handle_table will move to a resource-authority domain.  For now it
     // remains as transitional Process baggage.
     /// File descriptor table — fds 0/1/2 pre-populated at spawn time.
-    pub thing_table: crate::vfs::thing_table::ThingTable,
+    pub handle_table: crate::vfs::handle_table::HandleTable,
 
     /// Per-process IPC handle table.
     pub ipc_table: crate::ipc::IpcHandleTable,

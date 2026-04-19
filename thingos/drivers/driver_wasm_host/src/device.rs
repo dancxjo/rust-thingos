@@ -7,16 +7,16 @@ use wasmi::StoreLimits;
 
 pub struct HostState {
     pub limits: StoreLimits,
-    pub device_thing: u32,
+    pub device_handle: u32,
     pub mmio: Vec<u8>, // Fake MMIO memory (4KB)
     pub trace: TraceMode,
 }
 
 impl HostState {
-    pub fn new(device_thing: u32) -> Self {
+    pub fn new(device_handle: u32) -> Self {
         Self {
             limits: StoreLimits::default(),
-            device_thing,
+            device_handle,
             mmio: vec![0u8; 4096],
             trace: TraceMode::None,
         }

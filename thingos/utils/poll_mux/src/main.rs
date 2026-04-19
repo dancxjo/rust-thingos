@@ -2,7 +2,7 @@
 #![no_main]
 extern crate alloc;
 
-use abi::syscall::{poll_flags, PollThing};
+use abi::syscall::{poll_flags, PollHandle};
 use stem::syscall::vfs::*;
 
 #[stem::main]
@@ -34,11 +34,11 @@ fn main(_arg: usize) -> ! {
 
     // 4. Test timeout — pipe and port are both empty so poll should expire.
     let mut fds = [
-        PollThing { thing: pr as i32,
+        PollHandle { thing: pr as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
-        PollThing { thing: c_read_fd as i32,
+        PollHandle { thing: c_read_fd as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
@@ -55,7 +55,7 @@ fn main(_arg: usize) -> ! {
     assert!(n == 0, "Expected timeout, got {}", n);
 
     // 5. VFS regular files are always POLLIN-ready.
-    let mut vfs_fds = [PollThing { thing: dev_null_fd as i32,
+    let mut vfs_fds = [PollHandle { thing: dev_null_fd as i32,
         events: poll_flags::POLLIN | poll_flags::POLLOUT,
         revents: 0,
     }];
@@ -107,15 +107,15 @@ fn main(_arg: usize) -> ! {
     //    VFS file (index 2) is always ready.  All three should fire.
     stem::println!("Mixed poll: pipe + port + VFS file...");
     let mut mixed = [
-        PollThing { thing: pr as i32,
+        PollHandle { thing: pr as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
-        PollThing { thing: c_read_fd as i32,
+        PollHandle { thing: c_read_fd as i32,
             events: poll_flags::POLLIN,
             revents: 0,
         },
-        PollThing { thing: dev_null_fd as i32,
+        PollHandle { thing: dev_null_fd as i32,
             events: poll_flags::POLLIN | poll_flags::POLLOUT,
             revents: 0,
         },

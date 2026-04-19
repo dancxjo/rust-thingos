@@ -400,7 +400,7 @@ impl Supervisor {
 
         let mut pollfds = tasks_to_poll
             .iter()
-            .map(|(resp_fd, _, _)| abi::syscall::PollThing {
+            .map(|(resp_fd, _, _)| abi::syscall::PollHandle {
                 thing: *resp_fd as i32,
                 events: abi::syscall::poll_flags::POLLIN
                     | abi::syscall::poll_flags::POLLHUP

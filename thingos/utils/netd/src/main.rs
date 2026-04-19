@@ -199,7 +199,7 @@ fn main(arg: usize) -> ! {
         socket_api.gc_closed_sockets(&mut socket_set);
 
         if !did_work {
-            let mut pollfds = [abi::syscall::PollThing {
+            let mut pollfds = [abi::syscall::PollHandle {
                 thing: req_fd as i32,
                 events: abi::syscall::poll_flags::POLLIN,
                 revents: 0,

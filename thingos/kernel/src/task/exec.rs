@@ -71,7 +71,7 @@ pub fn task_exec_current<R: BootRuntime>(
     // 3. Resolve executable from FD
     let (node, exec_fd_path) = {
         let pinfo = pinfo_arc.lock();
-        let open_file = match pinfo.thing_table.get(fd) {
+        let open_file = match pinfo.handle_table.get(fd) {
             Ok(f) => f,
             Err(e) => abort_exec!(e),
         };
@@ -242,7 +242,7 @@ pub fn task_exec_current<R: BootRuntime>(
         // Record the executable path for /proc/self/exe.
         pinfo.exec_path = exec_fd_path;
         // Close all file descriptors marked THING_CLOEXEC before the new image runs.
-        pinfo.thing_table.close_on_exec();
+        pinfo.handle_table.close_on_exec();
         // Commit: caller is now the only thread; clear the flag.
         pinfo.job.exec_in_progress = false;
     }
@@ -503,7 +503,7 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(pid, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
@@ -572,7 +572,7 @@ mod tests {
                 leader_exit_waiters: crate::sched::WaitQueue::new(),
             },
             unix_compat: crate::task::ProcessUnixCompat::isolated(9230, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
@@ -605,7 +605,7 @@ mod tests {
             pid: 9240,
             job: crate::task::ProcessLifecycle::new(1, 9240),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9240, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
@@ -694,7 +694,7 @@ mod tests {
 
     // ── THING_CLOEXEC / close-on-exec unit tests ────────────────────────────────
 
-    use crate::vfs::thing_table::THING_CLOEXEC;
+    use crate::vfs::handle_table::THING_CLOEXEC;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
     use abi::errors::SysResult;
 
@@ -729,7 +729,7 @@ mod tests {
             pid: 9300,
             job: crate::task::ProcessLifecycle::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
@@ -742,30 +742,30 @@ mod tests {
         // Set up: fd 0 survives, fd 1 has THING_CLOEXEC.
         {
             let mut pi = pinfo.lock();
-            pi.thing_table
+            pi.handle_table
                 .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
                 .unwrap();
-            pi.thing_table
+            pi.handle_table
                 .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec".into())
                 .unwrap();
-            pi.thing_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
+            pi.handle_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
         }
 
         // Simulate exec commit phase.
         {
             let mut pi = pinfo.lock();
             pi.job.exec_in_progress = true;
-            pi.thing_table.close_on_exec();
+            pi.handle_table.close_on_exec();
             pi.job.exec_in_progress = false;
         }
 
         let pi = pinfo.lock();
         assert!(
-            pi.thing_table.get(0).is_ok(),
+            pi.handle_table.get(0).is_ok(),
             "fd 0 (no THING_CLOEXEC) must survive exec"
         );
         assert!(
-            matches!(pi.thing_table.get(1), Err(abi::errors::Errno::EBADF)),
+            matches!(pi.handle_table.get(1), Err(abi::errors::Errno::EBADF)),
             "fd 1 (THING_CLOEXEC) must be closed on exec"
         );
         assert!(!pi.job.exec_in_progress, "exec_in_progress cleared after commit");
@@ -779,7 +779,7 @@ mod tests {
             pid: 9310,
             job: crate::task::ProcessLifecycle::new(1, 9310),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9310, false),
-            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
@@ -791,20 +791,20 @@ mod tests {
 
         {
             let mut pi = pinfo.lock();
-            pi.thing_table
+            pi.handle_table
                 .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
                 .unwrap();
-            pi.thing_table
+            pi.handle_table
                 .insert_at(1, null_node(), OpenFlags::write_only(), "/out".into())
                 .unwrap();
         }
 
         // Exec commit with no THING_CLOEXEC flags set.
-        pinfo.lock().thing_table.close_on_exec();
+        pinfo.lock().handle_table.close_on_exec();
 
         let pi = pinfo.lock();
-        assert!(pi.thing_table.get(0).is_ok(), "fd 0 should survive");
-        assert!(pi.thing_table.get(1).is_ok(), "fd 1 should survive");
+        assert!(pi.handle_table.get(0).is_ok(), "fd 0 should survive");
+        assert!(pi.handle_table.get(1).is_ok(), "fd 1 should survive");
     }
 
     // ── VM ownership / process-scoped aspace tests ────────────────────────────
@@ -922,16 +922,16 @@ mod tests {
 
     /// Helper: build a ProcessInfo pre-loaded with realistic pre-exec metadata.
     fn make_pinfo_with_metadata(pid: u32) -> Arc<Mutex<ProcessInfo>> {
-        let mut thing_table = crate::vfs::thing_table::ThingTable::new();
+        let mut handle_table = crate::vfs::handle_table::HandleTable::new();
         // fd 0: stays open (no THING_CLOEXEC)
-        thing_table
+        handle_table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/stdin".into())
             .unwrap();
         // fd 1: marked THING_CLOEXEC, must be closed on exec
-        thing_table
+        handle_table
             .insert_at(1, null_node(), OpenFlags::write_only(), "/cloexec_fd".into())
             .unwrap();
-        thing_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
+        handle_table.set_thing_flags(1, THING_CLOEXEC).unwrap();
 
         Arc::new(Mutex::new(ProcessInfo {
             pid,
@@ -949,7 +949,7 @@ mod tests {
                 };
                 uc
             },
-            thing_table,
+            handle_table,
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/old/cwd"),
             root: alloc::string::String::from("/"),
@@ -1102,7 +1102,7 @@ mod tests {
             pi.unix_compat.set_spawn_context(new_argv.clone(), new_auxv.clone());
             pi.unix_compat.env = new_env.clone();
             pi.exec_path = alloc::string::String::from("/new/binary");
-            pi.thing_table.close_on_exec();
+            pi.handle_table.close_on_exec();
             pi.job.exec_in_progress = false;
             pi.space.set_aspace_raw(0x0000_C0DE_0000u64);
         }
@@ -1141,12 +1141,12 @@ mod tests {
             "new AT_ENTRY missing from auxv after exec"
         );
 
-        // thing_table: THING_CLOEXEC fd must be closed
+        // handle_table: THING_CLOEXEC fd must be closed
         assert!(
-            matches!(pi.thing_table.get(1), Err(abi::errors::Errno::EBADF)),
+            matches!(pi.handle_table.get(1), Err(abi::errors::Errno::EBADF)),
             "THING_CLOEXEC fd must be closed after exec"
         );
-        assert!(pi.thing_table.get(0).is_ok(), "non-cloexec fd must survive");
+        assert!(pi.handle_table.get(0).is_ok(), "non-cloexec fd must survive");
 
         // exec_in_progress: must be cleared
         assert!(!pi.job.exec_in_progress, "exec_in_progress must be cleared after commit");
@@ -1188,7 +1188,7 @@ mod tests {
                 uc.set_spawn_context(alloc::vec![b"old".to_vec()], alloc::vec![]);
                 uc
             },
-            thing_table: crate::vfs::thing_table::ThingTable::new(),
+            handle_table: crate::vfs::handle_table::HandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),

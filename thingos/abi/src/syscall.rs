@@ -31,7 +31,7 @@ pub struct IoVec {
 /// alias this directly.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
-pub struct PollThing {
+pub struct PollHandle {
     /// Thing to watch.
     pub thing: i32,
     /// Events to wait for (input, using [`poll_flags`]).

@@ -1060,15 +1060,15 @@ pub fn device_claim(path: &str) -> Result<usize, Errno> {
 
 /// Map a device MMIO BAR into memory
 /// Returns the virtual address where the BAR is mapped
-pub fn device_map_mmio(claim_thing: usize, bar_index: usize) -> Result<u64, Errno> {
-    let ret = unsafe { raw_syscall6(SYS_DEVICE_MAP_MMIO, claim_thing, bar_index, 0, 0, 0, 0) };
+pub fn device_map_mmio(claim_handle: usize, bar_index: usize) -> Result<u64, Errno> {
+    let ret = unsafe { raw_syscall6(SYS_DEVICE_MAP_MMIO, claim_handle, bar_index, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u64)
 }
 
 /// Allocate DMA-safe memory for a device
 /// Returns the virtual address of the allocated buffer
-pub fn device_alloc_dma(claim_thing: usize, page_count: usize) -> Result<u64, Errno> {
-    let ret = unsafe { raw_syscall6(SYS_DEVICE_ALLOC_DMA, claim_thing, page_count, 0, 0, 0, 0) };
+pub fn device_alloc_dma(claim_handle: usize, page_count: usize) -> Result<u64, Errno> {
+    let ret = unsafe { raw_syscall6(SYS_DEVICE_ALLOC_DMA, claim_handle, page_count, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u64)
 }
 
@@ -1099,11 +1099,11 @@ pub fn irq_subscribe(vector: u8) -> Result<(), Errno> {
     abi::errors::errno(ret).map(|_| ())
 }
 
-pub fn device_irq_subscribe(claim_thing: usize, irq_index: u8) -> Result<(), Errno> {
+pub fn device_irq_subscribe(claim_handle: usize, irq_index: u8) -> Result<(), Errno> {
     let ret = unsafe {
         raw_syscall6(
             SYS_DEVICE_IRQ_SUBSCRIBE,
-            claim_thing,
+            claim_handle,
             irq_index as usize,
             DEVICE_IRQ_SUBSCRIBE_DEVICE as usize,
             0,
@@ -1131,11 +1131,11 @@ pub fn irq_wait(vector: u8) -> Result<u32, Errno> {
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
-pub fn device_irq_wait(claim_thing: usize, irq_index: u8) -> Result<u32, Errno> {
+pub fn device_irq_wait(claim_handle: usize, irq_index: u8) -> Result<u32, Errno> {
     let ret = unsafe {
         raw_syscall6(
             SYS_DEVICE_IRQ_WAIT,
-            claim_thing,
+            claim_handle,
             irq_index as usize,
             DEVICE_IRQ_SUBSCRIBE_DEVICE as usize,
             0,

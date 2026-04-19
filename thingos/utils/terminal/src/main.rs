@@ -502,7 +502,7 @@ fn main(arg: usize) -> ! {
 
         // Check for focus change
         if focus_watch != 0 {
-            let mut fds = [abi::syscall::PollThing { thing: focus_watch as i32,
+            let mut fds = [abi::syscall::PollHandle { thing: focus_watch as i32,
                 events: abi::syscall::poll_flags::POLLIN as u16,
                 revents: 0,
             }];
@@ -556,7 +556,7 @@ fn main(arg: usize) -> ! {
 fn read_fb_info() -> Option<FbInfoPayload> {
     let fd = vfs_open("/dev/fb0", O_RDONLY).ok()?;
     let mut payload = FbInfoPayload {
-        device_thing: 0,
+        device_handle: 0,
         width: 0,
         height: 0,
         stride: 0,

@@ -41,7 +41,7 @@
 //! | `argv` / `auxv`       | Spawn-time invocation context         | **Legacy compat** (quarantine)| Provisional  |
 //! | `pgid` / `sid`        | Unix session/process-group            | `Group` (Phase 4 / 5)         | Provisional  |
 //! | `session_leader`      | Unix TTY foreground ownership         | `Group::kind` (Phase 4)       | Provisional  |
-//! | `thing_table`            | Open-file resource table              | Future resource authority     | Provisional  |
+//! | `handle_table`            | Open-file resource table              | Future resource authority     | Provisional  |
 //! | `signals`             | Signal state                          | Future authority concern      | Provisional  |
 //!
 //! # Quarantined legacy compatibility fields
@@ -55,7 +55,7 @@
 //! * `Process::argv` / `Process::auxv` — spawn-time invocation context
 //! * `Process::pgid` / `Process::sid` / `Process::session_leader` —
 //!   Unix session and process-group state (→ `Group`)
-//! * `Process::thing_table` — open-file descriptor table (→ future resource authority)
+//! * `Process::handle_table` — open-file descriptor table (→ future resource authority)
 //! * `Process::signals` — per-process signal state (→ future authority concern)
 //!
 //! # Transitional mapping

@@ -216,7 +216,7 @@ fn send_msg(handle: PortHandle, msg_type: u16, payload: &[u8]) {
         if let Err(abi::errors::Errno::EAGAIN) = status {
             // Bridge the handle to a VFS FD for FD-first write-readiness polling.
             if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(handle) {
-                let mut pollfds = [abi::syscall::PollThing {
+                let mut pollfds = [abi::syscall::PollHandle {
                     thing: fd as i32,
                     events: abi::syscall::poll_flags::POLLOUT,
                     revents: 0,

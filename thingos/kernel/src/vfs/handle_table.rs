@@ -1,13 +1,13 @@
 //! Per-process VFS thing table.
 //!
-//! Each process that uses VFS syscalls has an `ThingTable` embedded inside its
-//! `ProcessInfo`.  Kernel threads do not have an `ThingTable` and all VFS
+//! Each process that uses VFS syscalls has an `HandleTable` embedded inside its
+//! `ProcessInfo`.  Kernel threads do not have an `HandleTable` and all VFS
 //! syscalls return `ENOENT` for them.
 //!
 //! Things are non-negative integers starting at 0.  Descriptors 0,
 //! 1, and 2 are **stdio** (stdin / stdout / stderr) and are pre-populated at
-//! process spawn time via [`ThingTable::insert_at`].  All other descriptors are
-//! allocated by [`ThingTable::open`] which scans for the lowest free slot.
+//! process spawn time via [`HandleTable::insert_at`].  All other descriptors are
+//! allocated by [`HandleTable::open`] which scans for the lowest free slot.
 //!
 //! # Limits
 //! `MAX_HANDLES` open things per process.  This is intentionally small for now.
@@ -28,7 +28,7 @@ pub const THING_CLOEXEC: u32 = abi::syscall::thing_flags::THING_CLOEXEC;
 /// created by `dup` or `dup2` share the same file position, matching POSIX
 /// open-thing-description semantics.
 #[derive(Clone)]
-pub struct OpenThing {
+pub struct OpenHandle {
     pub node: Arc<dyn VfsNode>,
     pub status_flags: Arc<Mutex<OpenFlags>>,
     pub thing_flags: u32,
@@ -40,11 +40,11 @@ pub struct OpenThing {
 
 /// Per-process thing table.
 #[derive(Clone)]
-pub struct ThingTable {
-    entries: alloc::vec::Vec<Option<OpenThing>>,
+pub struct HandleTable {
+    entries: alloc::vec::Vec<Option<OpenHandle>>,
 }
 
-impl ThingTable {
+impl HandleTable {
     pub fn new() -> Self {
         let mut entries = alloc::vec::Vec::with_capacity(MAX_HANDLES);
         for _ in 0..MAX_HANDLES {
@@ -66,7 +66,7 @@ impl ThingTable {
     ) -> SysResult<u32> {
         for i in 0..MAX_HANDLES {
             if self.entries[i].is_none() {
-                self.entries[i] = Some(OpenThing {
+                self.entries[i] = Some(OpenHandle {
                     node,
                     status_flags: Arc::new(Mutex::new(flags)),
                     thing_flags: 0,
@@ -97,7 +97,7 @@ impl ThingTable {
         if self.entries[idx].is_some() {
             return Err(Errno::EBADF);
         }
-        self.entries[idx] = Some(OpenThing {
+        self.entries[idx] = Some(OpenHandle {
             node,
             status_flags: Arc::new(Mutex::new(flags)),
             thing_flags: 0,
@@ -107,13 +107,13 @@ impl ThingTable {
         Ok(())
     }
 
-    /// Duplicate `old_thing` to the lowest available descriptor.
+    /// Duplicate `old_handle` to the lowest available descriptor.
     ///
     /// The new descriptor shares the same `VfsNode` **and** file offset as
-    /// `old_thing`, matching POSIX open-thing-description semantics.
-    /// Returns the new thing, or `EBADF` if `old_thing` is not open.
-    pub fn dup(&mut self, old_thing: u32) -> SysResult<u32> {
-        let idx = old_thing as usize;
+    /// `old_handle`, matching POSIX open-thing-description semantics.
+    /// Returns the new thing, or `EBADF` if `old_handle` is not open.
+    pub fn dup(&mut self, old_handle: u32) -> SysResult<u32> {
+        let idx = old_handle as usize;
         if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
@@ -124,7 +124,7 @@ impl ThingTable {
         let shared_offset = entry.offset.clone(); // share offset with original
         for i in 0..MAX_HANDLES {
             if self.entries[i].is_none() {
-                self.entries[i] = Some(OpenThing {
+                self.entries[i] = Some(OpenHandle {
                     node: new_node,
                     status_flags: new_status_flags,
                     thing_flags: 0,
@@ -137,44 +137,44 @@ impl ThingTable {
         Err(Errno::EMFILE)
     }
 
-    /// Duplicate `old_thing` to `new_thing`.
+    /// Duplicate `old_handle` to `new_handle`.
     ///
-    /// If `new_thing` is already open it is closed first.  If `old_thing == new_thing`
-    /// this is a no-op that returns `new_thing`.  Both descriptors will share the
-    /// same file offset after this call.  Returns `EBADF` if `old_thing` is not
+    /// If `new_handle` is already open it is closed first.  If `old_handle == new_handle`
+    /// this is a no-op that returns `new_handle`.  Both descriptors will share the
+    /// same file offset after this call.  Returns `EBADF` if `old_handle` is not
     /// open or either thing is out of range.
-    pub fn dup2(&mut self, old_thing: u32, new_thing: u32) -> SysResult<u32> {
-        let old_idx = old_thing as usize;
-        let new_idx = new_thing as usize;
+    pub fn dup2(&mut self, old_handle: u32, new_handle: u32) -> SysResult<u32> {
+        let old_idx = old_handle as usize;
+        let new_idx = new_handle as usize;
         if old_idx >= MAX_HANDLES || new_idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
-        if old_thing == new_thing {
-            // Verify old_thing is open.
+        if old_handle == new_handle {
+            // Verify old_handle is open.
             self.entries[old_idx].as_ref().ok_or(Errno::EBADF)?;
-            return Ok(new_thing);
+            return Ok(new_handle);
         }
         let entry = self.entries[old_idx].as_ref().ok_or(Errno::EBADF)?;
         let new_node = entry.node.clone();
         let new_status_flags = entry.status_flags.clone();
         let new_path = entry.path.clone();
         let shared_offset = entry.offset.clone(); // share offset with original
-        // Close new_thing if open.
+        // Close new_handle if open.
         if let Some(old_entry) = self.entries[new_idx].take() {
             old_entry.node.close();
         }
-        self.entries[new_idx] = Some(OpenThing {
+        self.entries[new_idx] = Some(OpenHandle {
             node: new_node,
             status_flags: new_status_flags,
             thing_flags: 0,
             path: new_path,
             offset: shared_offset,
         });
-        Ok(new_thing)
+        Ok(new_handle)
     }
 
     /// Return a reference to the open-thing entry for `fd`, or `EBADF`.
-    pub fn get(&self, thing: u32) -> SysResult<&OpenThing> {
+    pub fn get(&self, thing: u32) -> SysResult<&OpenHandle> {
         let idx = thing as usize;
         if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
@@ -183,7 +183,7 @@ impl ThingTable {
     }
 
     /// Return a mutable reference to the open-thing entry for `fd`, or `EBADF`.
-    pub fn get_mut(&mut self, thing: u32) -> SysResult<&mut OpenThing> {
+    pub fn get_mut(&mut self, thing: u32) -> SysResult<&mut OpenHandle> {
         let idx = thing as usize;
         if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
@@ -241,7 +241,7 @@ impl ThingTable {
     }
 }
 
-impl Default for ThingTable {
+impl Default for HandleTable {
     fn default() -> Self {
         Self::new()
     }
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_open_allocates_from_0_when_empty() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         let thing = table
             .open(null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_open_skips_occupied_slots() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         // Pre-populate slots 0-2 (simulate stdio setup).
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_open_sequential_fds() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         // Pre-populate slots 0-2 (simulate stdio setup).
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
@@ -329,13 +329,13 @@ mod tests {
 
     #[test]
     fn test_get_unknown_fd_returns_ebadf() {
-        let table = ThingTable::new();
+        let table = HandleTable::new();
         assert!(matches!(table.get(10), Err(Errno::EBADF)));
     }
 
     #[test]
     fn test_close_frees_slot() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         let thing = table
             .open(null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_close_reuses_slot() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         let fd1 = table
             .open(null_node(), OpenFlags::read_only(), "/f1".into())
             .unwrap();
@@ -359,13 +359,13 @@ mod tests {
 
     #[test]
     fn test_close_ebadf_for_not_open() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         assert!(matches!(table.close(99), Err(Errno::EBADF)));
     }
 
     #[test]
     fn test_insert_at_populates_specific_slot() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
             .unwrap();
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_insert_at_rejects_occupied_slot() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_insert_at_rejects_out_of_range() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         assert!(matches!(
             table.insert_at(
                 MAX_HANDLES as u32,
@@ -408,24 +408,24 @@ mod tests {
 
     #[test]
     fn test_dup_clones_to_next_free() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
-        let new_thing = table.dup(0).unwrap();
-        assert_eq!(new_thing, 1, "dup should use first free slot after 0");
+        let new_handle = table.dup(0).unwrap();
+        assert_eq!(new_handle, 1, "dup should use first free slot after 0");
         assert!(table.get(1).is_ok());
     }
 
     #[test]
     fn test_dup_ebadf_for_closed_fd() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         assert!(matches!(table.dup(5), Err(Errno::EBADF)));
     }
 
     #[test]
     fn test_dup2_creates_alias() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_dup2_closes_existing_target() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
             .unwrap();
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_dup2_same_fd_is_noop() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(3, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
@@ -463,27 +463,27 @@ mod tests {
 
     #[test]
     fn test_dup2_ebadf_for_closed_old_thing() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         assert!(matches!(table.dup2(99, 5), Err(Errno::EBADF)));
     }
 
     #[test]
     fn test_dup_shares_offset() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
-        let new_thing = table.dup(0).unwrap();
+        let new_handle = table.dup(0).unwrap();
         // Advance the original fd's offset.
         *table.get(0).unwrap().offset.lock() = 42;
         // Duplicated thing should see the same offset.
-        let dup_offset = *table.get(new_thing).unwrap().offset.lock();
+        let dup_offset = *table.get(new_handle).unwrap().offset.lock();
         assert_eq!(dup_offset, 42, "dup should share file offset");
     }
 
     #[test]
     fn test_dup2_shares_offset() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn test_dup_shares_status_flags() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(
                 0,
@@ -506,28 +506,28 @@ mod tests {
                 "/null".into(),
             )
             .unwrap();
-        let new_thing = table.dup(0).unwrap();
+        let new_handle = table.dup(0).unwrap();
 
         *table.get(0).unwrap().status_flags.lock() =
             OpenFlags(abi::syscall::vfs_flags::O_RDONLY | abi::syscall::vfs_flags::O_NONBLOCK);
 
-        let dup_flags = *table.get(new_thing).unwrap().status_flags.lock();
+        let dup_flags = *table.get(new_handle).unwrap().status_flags.lock();
         assert!(dup_flags.is_nonblock(), "dup should share status flags");
     }
 
     #[test]
     fn test_dup_clears_descriptor_flags() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/null".into())
             .unwrap();
         table.set_thing_flags(0, THING_CLOEXEC).unwrap();
 
-        let new_thing = table.dup(0).unwrap();
+        let new_handle = table.dup(0).unwrap();
 
         assert_eq!(table.get_thing_flags(0).unwrap(), THING_CLOEXEC);
         assert_eq!(
-            table.get_thing_flags(new_thing).unwrap(),
+            table.get_thing_flags(new_handle).unwrap(),
             0,
             "dup should not inherit THING_CLOEXEC"
         );
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn test_emfile_when_full() {
         // Open MAX_HANDLES files and ensure EMFILE on the next open.
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         let mut count = 0usize;
         loop {
             match table.open(null_node(), OpenFlags::read_only(), "/null".to_string()) {
@@ -553,7 +553,7 @@ mod tests {
     /// FDs with THING_CLOEXEC set should be closed; others should survive.
     #[test]
     fn test_close_on_exec_closes_flagged_fds() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         // thing 0: no flag → should survive exec
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
@@ -585,7 +585,7 @@ mod tests {
     /// If no FDs are flagged, close_on_exec is a no-op.
     #[test]
     fn test_close_on_exec_preserves_unflagged_fds() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/in".into())
             .unwrap();
@@ -602,7 +602,7 @@ mod tests {
     /// An empty table is handled gracefully.
     #[test]
     fn test_close_on_exec_empty_table() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         // Should not panic.
         table.close_on_exec();
     }
@@ -610,7 +610,7 @@ mod tests {
     /// After close_on_exec the closed slot can be reused.
     #[test]
     fn test_close_on_exec_slot_reuse() {
-        let mut table = ThingTable::new();
+        let mut table = HandleTable::new();
         table
             .insert_at(0, null_node(), OpenFlags::read_only(), "/f".into())
             .unwrap();
@@ -619,9 +619,9 @@ mod tests {
         table.close_on_exec();
 
         // Slot 0 is now free; the next open() should reuse it.
-        let new_thing = table
+        let new_handle = table
             .open(null_node(), OpenFlags::read_only(), "/new".into())
             .unwrap();
-        assert_eq!(new_thing, 0, "freed cloexec slot should be reusable");
+        assert_eq!(new_handle, 0, "freed cloexec slot should be reusable");
     }
 }

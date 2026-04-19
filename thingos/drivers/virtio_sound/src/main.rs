@@ -315,7 +315,7 @@ fn teardown_mapped_ring(card: &mut AudioCard) {
 }
 
 fn mapped_ring_session_dead(mapped: &MappedRing) -> bool {
-    let mut pollfds = [abi::syscall::PollThing {
+    let mut pollfds = [abi::syscall::PollHandle {
         thing: mapped.control_fd as i32,
         events: POLLHUP | POLLERR,
         revents: 0,
@@ -898,7 +898,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     driver.driver_ok();
     info!("SND: Device initialised");
 
-    let dma_dev = driver.claim_thing();
+    let dma_dev = driver.claim_handle();
     let control_dma = match setup_control_dma(dma_dev) {
         Some(v) => v,
         None => {
@@ -1024,7 +1024,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
             if mapped_pending_fd.is_none() {
                 // Guard accept() with poll so a blocking socket backend cannot
                 // stall the entire provider/event loop.
-                let mut pollfds = [abi::syscall::PollThing {
+                let mut pollfds = [abi::syscall::PollHandle {
                     thing: listener_fd as i32,
                     events: POLLIN | POLLERR | POLLHUP,
                     revents: 0,
@@ -1382,8 +1382,8 @@ struct EventQueueState {
     desc_to_slot: [u8; QUEUE_SIZE as usize],
 }
 
-fn alloc_dma_page(claim_thing: usize, tag: &str) -> Option<DmaPage> {
-    let virt = match stem::syscall::device_alloc_dma(claim_thing, 1) {
+fn alloc_dma_page(claim_handle: usize, tag: &str) -> Option<DmaPage> {
+    let virt = match stem::syscall::device_alloc_dma(claim_handle, 1) {
         Ok(v) => v,
         Err(e) => {
             warn!("SND: DMA alloc failed for {}: {:?}", tag, e);
@@ -1400,13 +1400,13 @@ fn alloc_dma_page(claim_thing: usize, tag: &str) -> Option<DmaPage> {
     Some(DmaPage { virt: virt as usize, phys: phys as usize })
 }
 
-fn setup_control_dma(claim_thing: usize) -> Option<ControlDma> {
-    let req = alloc_dma_page(claim_thing, "control.req")?;
-    let resp = alloc_dma_page(claim_thing, "control.resp")?;
+fn setup_control_dma(claim_handle: usize) -> Option<ControlDma> {
+    let req = alloc_dma_page(claim_handle, "control.req")?;
+    let resp = alloc_dma_page(claim_handle, "control.resp")?;
     Some(ControlDma { req, resp })
 }
 
-fn setup_event_queue(driver: &mut VirtioDevice, claim_thing: usize) -> Option<EventQueueState> {
+fn setup_event_queue(driver: &mut VirtioDevice, claim_handle: usize) -> Option<EventQueueState> {
     let mut pages = [DmaPage::default(); EVENT_QUEUE_SLOTS];
     let mut desc_to_slot = [INVALID_EVENT_SLOT; QUEUE_SIZE as usize];
     let mut queued = 0usize;
@@ -1414,7 +1414,7 @@ fn setup_event_queue(driver: &mut VirtioDevice, claim_thing: usize) -> Option<Ev
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_EVENT).unwrap();
         for (slot, page) in pages.iter_mut().enumerate() {
-            let dma = match alloc_dma_page(claim_thing, "event") {
+            let dma = match alloc_dma_page(claim_handle, "event") {
                 Some(v) => v,
                 None => break,
             };

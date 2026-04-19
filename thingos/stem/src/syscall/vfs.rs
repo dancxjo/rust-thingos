@@ -6,7 +6,7 @@
 
 use abi::errors::SysResult;
 use abi::syscall::{
-    PollThing, SYS_HANDLE_FROM_PORT, SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL,
+    PollHandle, SYS_HANDLE_FROM_PORT, SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL,
     SYS_FS_DUP, SYS_FS_DUP2, SYS_FS_FCHMOD, SYS_FS_FCNTL, SYS_FS_FLOCK, SYS_FS_FTRUNCATE,
     SYS_FS_FUTIMES, SYS_FS_GETCWD, SYS_FS_ISATTY, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_MKDIR,
     SYS_FS_MOUNT, SYS_FS_NOTIFY, SYS_FS_OPEN, SYS_FS_POLL, SYS_FS_READ, SYS_FS_READDIR,
@@ -238,16 +238,16 @@ pub fn vfs_mkdir(path: &str) -> SysResult<()> {
 
 /// Mount a userland VFS provider at `path`.
 ///
-/// `provider_write_thing` is the write end of a port pair that the provider
+/// `provider_write_handle` is the write end of a port pair that the provider
 /// owns.  The kernel will send [`abi::vfs_rpc`] messages to that port whenever
 /// a VFS operation touches a path under `path`.
 ///
 /// Returns `Ok(())` on success, or an [`Errno`] on failure.
-pub fn vfs_mount(provider_write_thing: u32, path: &str) -> SysResult<()> {
+pub fn vfs_mount(provider_write_handle: u32, path: &str) -> SysResult<()> {
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_MOUNT,
-            provider_write_thing as usize,
+            provider_write_handle as usize,
             path.as_ptr() as usize,
             path.len(),
             0,
@@ -276,19 +276,19 @@ pub fn vfs_umount(path: &str) -> SysResult<()> {
     abi::errors::errno(ret).map(|_| ())
 }
 
-/// Duplicate `old_thing` to the lowest available thing.
+/// Duplicate `old_handle` to the lowest available thing.
 ///
 /// Returns the new thing on success.
-pub fn dup(old_thing: u32) -> SysResult<u32> {
-    let ret = unsafe { raw_syscall6(SYS_FS_DUP, old_thing as usize, 0, 0, 0, 0, 0) };
+pub fn dup(old_handle: u32) -> SysResult<u32> {
+    let ret = unsafe { raw_syscall6(SYS_FS_DUP, old_handle as usize, 0, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
-/// Duplicate `old_thing` to `new_thing`, closing `new_thing` first if it is open.
+/// Duplicate `old_handle` to `new_handle`, closing `new_handle` first if it is open.
 ///
-/// Returns `new_thing` on success.
-pub fn dup2(old_thing: u32, new_thing: u32) -> SysResult<u32> {
-    let ret = unsafe { raw_syscall6(SYS_FS_DUP2, old_thing as usize, new_thing as usize, 0, 0, 0, 0) };
+/// Returns `new_handle` on success.
+pub fn dup2(old_handle: u32, new_handle: u32) -> SysResult<u32> {
+    let ret = unsafe { raw_syscall6(SYS_FS_DUP2, old_handle as usize, new_handle as usize, 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|v| v as u32)
 }
 
@@ -327,13 +327,13 @@ pub fn pipe(pipefd: &mut [u32; 2]) -> SysResult<()> {
 ///
 /// # Example
 /// ```no_run
-/// use abi::syscall::{PollThing, poll_flags};
+/// use abi::syscall::{PollHandle, poll_flags};
 /// use stem::syscall::vfs_poll;
-/// let mut fds = [PollThing { thing: 0, events: poll_flags::POLLIN, revents: 0 }];
+/// let mut fds = [PollHandle { thing: 0, events: poll_flags::POLLIN, revents: 0 }];
 /// let n = vfs_poll(&mut fds, u64::MAX).unwrap();
 /// if n > 0 { /* fd 0 is readable */ }
 /// ```
-pub fn vfs_poll(pollfds: &mut [PollThing], timeout_ms: u64) -> SysResult<usize> {
+pub fn vfs_poll(pollfds: &mut [PollHandle], timeout_ms: u64) -> SysResult<usize> {
     if pollfds.is_empty() {
         return Ok(0);
     }
@@ -472,12 +472,12 @@ pub fn vfs_handle_from_port(port_handle: u32) -> SysResult<u32> {
 }
 
 /// Notify the kernel that a provider-backed node is ready.
-pub fn vfs_notify(req_thing: u32, node_thing: u64, revents: u16) -> SysResult<()> {
+pub fn vfs_notify(req_handle: u32, node_handle: u64, revents: u16) -> SysResult<()> {
     let ret = unsafe {
         raw_syscall6(
             SYS_FS_NOTIFY,
-            req_thing as usize,
-            node_thing as usize,
+            req_handle as usize,
+            node_handle as usize,
             revents as usize,
             0,
             0,

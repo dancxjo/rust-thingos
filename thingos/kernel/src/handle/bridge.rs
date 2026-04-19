@@ -4,10 +4,10 @@
 //!
 //! This module is the explicit compatibility boundary between:
 //! - canonical kernel `Handle` semantics, and
-//! - transitional raw-fd / `thing_table` / `IpcHandleTable` backing.
+//! - transitional raw-fd / `handle_table` / `IpcHandleTable` backing.
 //!
 //! New code should resolve resources through this bridge rather than manually
-//! probing `thing_table` and global IPC handle tables in syscall handlers.
+//! probing `handle_table` and global IPC handle tables in syscall handlers.
 
 use abi::errors::{Errno, SysResult};
 use alloc::sync::Arc;
@@ -95,7 +95,7 @@ pub fn resolve_handle(
     handle: Handle,
 ) -> SysResult<ResolvedHandle> {
     let lock = pinfo_arc.lock();
-    if let Ok(file) = lock.thing_table.get(handle.0) {
+    if let Ok(file) = lock.handle_table.get(handle.0) {
         let node = file.node.clone();
         return Ok(ResolvedHandle::FileLike {
             kind: classify_file_like(&node),
@@ -124,7 +124,7 @@ pub fn resolve_io_node_compat(
 }
 
 /// Explicit fd compatibility boundary: project an IPC port handle into a
-/// process `thing_table` slot so fd-based APIs can consume it.
+/// process `handle_table` slot so fd-based APIs can consume it.
 pub fn install_fd_compat_for_port_handle(
     pinfo_arc: &Arc<Mutex<crate::task::ProcessInfo>>,
     handle: Handle,
@@ -133,7 +133,7 @@ pub fn install_fd_compat_for_port_handle(
     let entry = lookup_ipc_entry_any(&lock.ipc_table, handle)?;
     let node = Arc::new(crate::vfs::port_node::PortNode::new(entry.port.clone(), entry.mode));
 
-    let fd = lock.thing_table.open(
+    let fd = lock.handle_table.open(
         node.clone(),
         match entry.mode {
             crate::ipc::IpcHandleMode::Read => crate::vfs::OpenFlags::read_only(),
@@ -153,7 +153,7 @@ pub fn resolve_write_port_compat(
     handle: Handle,
 ) -> SysResult<Arc<crate::ipc::Port>> {
     let lock = pinfo_arc.lock();
-    if let Ok(file) = lock.thing_table.get(handle.0) {
+    if let Ok(file) = lock.handle_table.get(handle.0) {
         if let Some(port) = file.node.as_port() {
             return Ok(port);
         }
@@ -166,7 +166,7 @@ pub fn resolve_write_port_compat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::thing_table::ThingTable;
+    use crate::vfs::handle_table::HandleTable;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
 
     struct NullNode;
@@ -188,9 +188,9 @@ mod tests {
     fn make_test_process_with_thing_table(
         thing_table_entries: &[(u32, Arc<dyn VfsNode>)],
     ) -> Arc<Mutex<crate::task::ProcessInfo>> {
-        let mut thing_table = ThingTable::new();
+        let mut handle_table = HandleTable::new();
         for (fd, node) in thing_table_entries {
-            thing_table
+            handle_table
                 .insert_at(*fd, node.clone(), OpenFlags::read_write(), "/test".into())
                 .expect("insert_at");
         }
@@ -198,7 +198,7 @@ mod tests {
             pid: 1,
             job: crate::task::ProcessLifecycle::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
-            thing_table,
+            handle_table,
             ipc_table: IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
@@ -223,7 +223,7 @@ mod tests {
                 .expect("allocate handle")
         };
 
-        // Re-create pinfo with the handle in thing_table to test preference
+        // Re-create pinfo with the handle in handle_table to test preference
         let node: Arc<dyn VfsNode> = Arc::new(NullNode);
         let pinfo = make_test_process_with_thing_table(&[(handle.0, node)]);
         // The handle must also be in the ipc_table of THIS pinfo for the fallback to work if preference fails
@@ -255,7 +255,7 @@ mod tests {
         let fd = install_fd_compat_for_port_handle(&pinfo, Handle(handle.0)).expect("fd");
 
         let lock = pinfo.lock();
-        let open = lock.thing_table.get(fd).expect("fd entry");
+        let open = lock.handle_table.get(fd).expect("fd entry");
         assert!(open.node.as_port().is_some(), "fd must wrap a port");
 
         drop(lock);

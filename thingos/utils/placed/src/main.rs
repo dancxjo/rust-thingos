@@ -4,7 +4,7 @@
 extern crate alloc;
 
 use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
-use abi::syscall::{PollThing, poll_flags};
+use abi::syscall::{PollHandle, poll_flags};
 use stem::syscall::vfs::{
     vfs_close, vfs_ftruncate, vfs_mkdir, vfs_open, vfs_poll, vfs_read, vfs_readdir, vfs_seek,
     vfs_watch_path, vfs_write,
@@ -99,7 +99,7 @@ fn main(_arg: usize) -> ! {
 
     loop {
         if let Some(fd) = watch_fd {
-            let mut fds = [PollThing {
+            let mut fds = [PollHandle {
                 thing: fd as i32,
                 events: poll_flags::POLLIN as u16,
                 revents: 0,

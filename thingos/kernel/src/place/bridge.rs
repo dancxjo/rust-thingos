@@ -18,7 +18,7 @@
 //! | `env`                                | Inherited Unix env blob       | Legacy compat (quarantined)   | Provisional  |
 //! | `argv` / `auxv`                      | Spawn-time invocation context | Legacy compat (quarantined)   | Provisional  |
 //! | `pgid` / `sid` / `session_leader`   | Unix session/process-group    | `Group` domain (Phase 4/5)    | Provisional  |
-//! | `thing_table`                           | Open-file resource table      | Future resource authority     | Provisional  |
+//! | `handle_table`                           | Open-file resource table      | Future resource authority     | Provisional  |
 //! | `signals`                            | Per-process signal state      | Future authority concern      | Provisional  |
 //!
 //! # Transitional mapping

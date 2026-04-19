@@ -50,7 +50,7 @@ pub fn sys_socket(domain: usize, type_: usize, _protocol: usize) -> SysResult<us
 
     let node = crate::ipc::unix_socket::UnixSocketNode::new();
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
-    let thing = pinfo_arc.lock().thing_table.open(
+    let thing = pinfo_arc.lock().handle_table.open(
         node as Arc<dyn crate::vfs::VfsNode>,
         OpenFlags::read_write(),
         alloc::string::String::from("socket:[unix]"),
@@ -71,7 +71,7 @@ pub fn sys_bind(thing: usize, path_ptr: usize, path_len: usize) -> SysResult<usi
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.thing_table.get(thing as u32)?.node.clone()
+        lock.handle_table.get(thing as u32)?.node.clone()
     };
     node.sock_bind(&path)?;
     Ok(0)
@@ -88,7 +88,7 @@ pub fn sys_listen(thing: usize, backlog: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.thing_table.get(thing as u32)?.node.clone()
+        lock.handle_table.get(thing as u32)?.node.clone()
     };
     node.sock_listen(backlog)?;
     Ok(0)
@@ -106,15 +106,15 @@ pub fn sys_accept(thing: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.thing_table.get(thing as u32)?.node.clone()
+        lock.handle_table.get(thing as u32)?.node.clone()
     };
     let accepted = node.sock_accept()?;
-    let new_thing = pinfo_arc.lock().thing_table.open(
+    let new_handle = pinfo_arc.lock().handle_table.open(
         accepted,
         OpenFlags::read_write(),
         alloc::string::String::from("socket:[unix/accepted]"),
     )?;
-    Ok(new_thing as usize)
+    Ok(new_handle as usize)
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ pub fn sys_connect(thing: usize, path_ptr: usize, path_len: usize) -> SysResult<
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.thing_table.get(thing as u32)?.node.clone()
+        lock.handle_table.get(thing as u32)?.node.clone()
     };
     node.sock_connect(&path)?;
     Ok(0)
@@ -150,7 +150,7 @@ pub fn sys_shutdown(thing: usize, how: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.thing_table.get(thing as u32)?.node.clone()
+        lock.handle_table.get(thing as u32)?.node.clone()
     };
     node.sock_shutdown(how as u32)?;
     Ok(0)
@@ -184,19 +184,19 @@ pub fn sys_socketpair(
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let (fd_a, fd_b) = {
         let mut lock = pinfo_arc.lock();
-        let fa = lock.thing_table.open(
+        let fa = lock.handle_table.open(
             a as Arc<dyn crate::vfs::VfsNode>,
             OpenFlags::read_write(),
             alloc::string::String::from("socketpair:[unix/a]"),
         )?;
-        match lock.thing_table.open(
+        match lock.handle_table.open(
             b as Arc<dyn crate::vfs::VfsNode>,
             OpenFlags::read_write(),
             alloc::string::String::from("socketpair:[unix/b]"),
         ) {
             Ok(fb) => (fa, fb),
             Err(e) => {
-                let _ = lock.thing_table.close(fa);
+                let _ = lock.handle_table.close(fa);
                 return Err(e);
             }
         }
@@ -276,7 +276,7 @@ pub fn sys_sendmsg(
     // Look up the destination FD and call sock_sendmsg.
     let node = {
         let lock = pinfo_arc.lock();
-        lock.thing_table.get(thing as u32)?.node.clone()
+        lock.handle_table.get(thing as u32)?.node.clone()
     };
     
     let caps_len = caps.len();
@@ -322,7 +322,7 @@ pub fn sys_recvmsg(
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     let node = {
         let lock = pinfo_arc.lock();
-        lock.thing_table.get(thing as u32)?.node.clone()
+        lock.handle_table.get(thing as u32)?.node.clone()
     };
 
     let msg = node.sock_recvmsg()?.ok_or(Errno::EAGAIN)?;
@@ -342,12 +342,12 @@ pub fn sys_recvmsg(
     {
         let mut pinfo = pinfo_arc.lock();
         for (i, cap) in fds.into_iter().take(install_count).enumerate() {
-            let new_thing = pinfo.thing_table.open(
+            let new_handle = pinfo.handle_table.open(
                 cap,
                 crate::vfs::OpenFlags::read_write(),
                 "recvmsg".into(),
             )?;
-            out_fds[i] = new_thing;
+            out_fds[i] = new_handle;
         }
     }
 

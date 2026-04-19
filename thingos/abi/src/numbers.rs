@@ -142,7 +142,7 @@ pub const SYS_SOCKET: u32 = 0x3020;
 pub const SYS_BIND: u32 = 0x3021;
 /// Mark a socket as listening for connections. Args: (thing, backlog)
 pub const SYS_LISTEN: u32 = 0x3022;
-/// Accept an incoming connection. Args: (thing) → new_thing
+/// Accept an incoming connection. Args: (thing) → new_handle
 pub const SYS_ACCEPT: u32 = 0x3023;
 /// Connect to a listening socket. Args: (thing, path_ptr, path_len)
 pub const SYS_CONNECT: u32 = 0x3024;
