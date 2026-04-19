@@ -112,8 +112,8 @@ impl TcpStream {
         let ctl_fd =
             vfs_open(&ctl_path, O_RDWR).map_err(|e| format!("failed to open ctl: {:?}", e))?;
         info!("http: opening data path {}", data_path);
-        let data_fd =
-            vfs_open(&data_path, O_RDWR).map_err(|e| format!("failed to open data: {:?}", e))?;
+        let data_fd = vfs_open(&data_path, O_RDWR | O_NONBLOCK)
+            .map_err(|e| format!("failed to open data: {:?}", e))?;
 
         // 3. Connect via ctl file
         let conn_cmd = format!("connect {} {}", host, port);
@@ -130,19 +130,6 @@ impl TcpStream {
         let mut waited_ms = 0;
         loop {
             let state = read_tcp_state(&self.socket_id);
-            if matches!(state, TcpConnectState::Created | TcpConnectState::Connecting) {
-                if waited_ms >= CONNECT_TIMEOUT_MS {
-                    return Err(format!(
-                        "write timed out waiting for connected state (state={:?})",
-                        state
-                    ));
-                }
-                let slice_ms = (CONNECT_TIMEOUT_MS - waited_ms).min(IO_POLL_SLICE_MS);
-                info!("http: write deferred while {:?}; sleeping for {} ms", state, slice_ms);
-                stem::time::sleep_ms(slice_ms);
-                waited_ms += slice_ms;
-                continue;
-            }
 
             match vfs_write(self.data_fd, data) {
                 Ok(n) => {
