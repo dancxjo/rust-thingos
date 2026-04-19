@@ -276,7 +276,7 @@ static KEEP_THINGOS_VFS_UNMOUNT_V1: extern "C" fn(usize) -> i32 = thingos_vfs_un
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
-    main(arg)
+    unsafe { stem::rt::entry_impl(arg) }
 }
 
 #[unsafe(no_mangle)]

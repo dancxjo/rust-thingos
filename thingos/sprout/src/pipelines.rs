@@ -349,7 +349,7 @@ pub fn setup_display_pipeline(
             pid: Some(pid),
             restarts: 0,
             spawn_arg: boot_fd as usize,
-            bind_instance_id: bind_instance_id as usize,
+            bind_instance_id,
             drv_req_write,
             drv_resp_read,
             boot_req_read: 0,

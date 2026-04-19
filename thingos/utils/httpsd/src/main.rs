@@ -284,9 +284,8 @@ static KEEP_THINGOS_VFS_MOUNT_V1: extern "C" fn(usize) -> ! = thingos_vfs_mount_
 static KEEP_THINGOS_VFS_UNMOUNT_V1: extern "C" fn(usize) -> i32 = thingos_vfs_unmount_v1;
 
 #[no_mangle]
-pub extern "C" fn thingos_vfs_mount_v1(_arg: usize) -> ! {
-    let mount_point = mount_point_from_args();
-    run_provider(&mount_point)
+pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
+    unsafe { stem::rt::entry_impl(arg) }
 }
 
 #[no_mangle]
