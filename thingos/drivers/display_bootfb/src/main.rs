@@ -64,12 +64,12 @@ core::arch::global_asm!(
     .section .text
     .global thingos_driver_start_safe
     thingos_driver_start_safe:
-        // RSP = 16n (kernel spawn)
+        // RSP = 16n (kernel spawn); sub+push keeps 16-byte alignment before call.
         sub rsp, 8
         push rdi
         // Call std initialization (TLS, etc)
         call thingos_runtime_setup
-        // Restore RDI and realign for the next call.
+        // pop undoes push; add undoes initial sub so next call enters with SysV alignment.
         pop rdi
         add rsp, 8
         // CALL will push 8 bytes, so inside Rust entry RSP = 16n + 8.
