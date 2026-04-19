@@ -21,6 +21,7 @@ use stem::{debug, info, warn};
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 const HEADER_READ_TIMEOUT_MS: u64 = 5_000;
+const PROVIDER_POLL_SLICE_MS: u64 = 100;
 const MAX_HEADER_READ_ITERATIONS: usize = 128;
 const HEADER_STAGING_CHUNK_SIZE: usize = 4_096;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -55,6 +56,9 @@ fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Resul
     loop {
         let timeout_ms = timeout_ms_until_deadline(deadline_ns)
             .map_err(|_| format!("{context}: timed out waiting for readiness"))?;
+        // Userland VFS providers do not always have a precise readiness wakeup path,
+        // so bound each wait and re-issue poll requests until the deadline.
+        let timeout_ms = timeout_ms.min(PROVIDER_POLL_SLICE_MS);
         let mut pollfd = [PollHandle { handle: thing, events, revents: 0 }];
         match vfs_poll(&mut pollfd, timeout_ms) {
             Ok(0) => return Err(format!("{context}: timed out waiting for readiness")),
@@ -541,8 +545,9 @@ where
                     }
                     return Err("Background thread reported unknown error".to_string());
                 }
-                
-                if let Some(start) = append_header_chunk_and_find_body_start(&mut response, chunk)? {
+
+                if let Some(start) = append_header_chunk_and_find_body_start(&mut response, chunk)?
+                {
                     body_start = start;
                     headers_done = true;
                     debug!("http: headers complete body_start={}", body_start);
@@ -843,9 +848,8 @@ mod tests {
             .unwrap(),
             None
         );
-        let body_start = append_header_chunk_and_find_body_start(&mut buffer, b"\r\nBody")
-            .unwrap()
-            .unwrap();
+        let body_start =
+            append_header_chunk_and_find_body_start(&mut buffer, b"\r\nBody").unwrap().unwrap();
         assert_eq!(body_start, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n".len());
         assert_eq!(&buffer[body_start..], b"Body");
     }
@@ -861,9 +865,8 @@ mod tests {
         chunk.extend_from_slice(suffix);
 
         let mut buffer = Vec::new();
-        let body_start = append_header_chunk_and_find_body_start(&mut buffer, &chunk)
-            .unwrap()
-            .unwrap();
+        let body_start =
+            append_header_chunk_and_find_body_start(&mut buffer, &chunk).unwrap().unwrap();
         assert_eq!(body_start, MAX_HEADER_BYTES);
     }
 
@@ -871,10 +874,7 @@ mod tests {
     fn test_append_header_chunk_rejects_header_over_max_boundary() {
         let mut buffer = Vec::new();
         let chunk = vec![b'a'; MAX_HEADER_BYTES];
-        assert_eq!(
-            append_header_chunk_and_find_body_start(&mut buffer, &chunk).unwrap(),
-            None
-        );
+        assert_eq!(append_header_chunk_and_find_body_start(&mut buffer, &chunk).unwrap(), None);
 
         let err = append_header_chunk_and_find_body_start(&mut buffer, b"b").unwrap_err();
         assert!(err.contains("response headers exceed max size"));

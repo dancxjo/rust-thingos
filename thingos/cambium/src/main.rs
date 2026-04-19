@@ -28,24 +28,6 @@ const CATALOG_RESCAN_TICKS: u32 = 300;
 /// `/sys/devices` every tick when the machine is idle.
 const DEVICE_RESCAN_TICKS: u32 = 50;
 
-fn is_network_device(device: &SysDevice) -> bool {
-    if device.kind.starts_with("dev.net") {
-        return true;
-    }
-
-    // PCI class major 0x02 == network controller.
-    ((device.class_code >> 16) & 0xff) == 0x02
-}
-
-fn is_network_catalog_entry(entry: &catalog::DriverEntry) -> bool {
-    if entry.driver_class == DriverClass::Net {
-        return true;
-    }
-
-    // Legacy hint fallback when class enum is not populated.
-    ((entry.class_code >> 16) & 0xff) == 0x02
-}
-
 #[stem::main]
 fn main(_arg: usize) -> ! {
     // ── Parse argv ──────────────────────────────────────────────────────────
@@ -108,14 +90,6 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         entry.start_symbol
     );
 
-    if !is_network_catalog_entry(&entry) {
-        error!(
-            "CAMBIUM: refusing to run non-network driver '{}' while network-only mode is active",
-            abs_path
-        );
-        stem::syscall::exit(1);
-    }
-
     // Find matching devices.
     let devices = match scan_devices() {
         Ok(d) => d,
@@ -129,7 +103,6 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         .into_iter()
         .filter(|d| {
             d.present
-                && is_network_device(d)
                 && slot_filter.map_or(true, |s| d.slot == s)
                 && entry.matches_pci(d.vendor_id, d.device_id, d.class_code)
         })
@@ -242,10 +215,6 @@ fn reconcile_devices(
             continue;
         }
 
-        if !is_network_device(&device) {
-            continue;
-        }
-
         // First try the symbol-based catalog (new path).
         let maybe_entry =
             if device.kind != "unknown" { catalog.find_for_kind(&device.kind) } else { None };
@@ -253,14 +222,6 @@ fn reconcile_devices(
         if let Some(entry) = maybe_entry
             .or_else(|| catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code))
         {
-            if !is_network_catalog_entry(entry) {
-                debug!(
-                    "CAMBIUM: ignoring non-network catalog driver '{}' for slot {}",
-                    entry.path, device.slot
-                );
-                continue;
-            }
-
             let managed = drivers.entry(device.slot.clone()).or_insert_with(|| {
                 ManagedDriver::new_from_catalog(
                     &device,

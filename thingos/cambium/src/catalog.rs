@@ -314,9 +314,7 @@ impl Catalog {
             .map(|m| {
                 let bytes = &m.device_kind;
                 let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-                core::str::from_utf8(&bytes[..len])
-                    .unwrap_or("unknown")
-                    .to_string()
+                core::str::from_utf8(&bytes[..len]).unwrap_or("unknown").to_string()
             })
             .unwrap_or_else(|| "unknown".into());
 

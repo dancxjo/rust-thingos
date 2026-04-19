@@ -1,10 +1,11 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use abi::errors::Errno;
-use abi::syscall::vfs_flags::O_RDONLY;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use abi::errors::Errno;
+use abi::syscall::vfs_flags::O_RDONLY;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir};
 
 #[derive(Clone)]
@@ -29,8 +30,10 @@ pub fn scan_devices() -> Result<Vec<SysDevice>, Errno> {
         let vendor_id = read_hex_u16(&alloc::format!("{}/vendor", base)).unwrap_or(0);
         let device_id = read_hex_u16(&alloc::format!("{}/device", base)).unwrap_or(0);
         let class_triplet = read_hex_u32(&alloc::format!("{}/class", base)).unwrap_or(0);
-        let status = read_string(&alloc::format!("{}/status", base)).unwrap_or_else(|_| "present".into());
-        let kind = read_string(&alloc::format!("{}/kind", base)).unwrap_or_else(|_| "unknown".into());
+        let status =
+            read_string(&alloc::format!("{}/status", base)).unwrap_or_else(|_| "present".into());
+        let kind =
+            read_string(&alloc::format!("{}/kind", base)).unwrap_or_else(|_| "unknown".into());
 
         devices.push(SysDevice {
             slot,

@@ -1,13 +1,14 @@
 extern crate alloc;
+use alloc::string::{String, ToString};
+
 use abi::driver_interface::DriverEntryCtx;
 use abi::types::TaskStatus;
-use alloc::string::{String, ToString};
 use stem::syscall::{task_poll, vfs_umount};
 use stem::time::monotonic_ns;
 use stem::{debug, warn};
 
 use crate::binding::Binding;
-use crate::sysfs::{device_present, SysDevice};
+use crate::sysfs::{SysDevice, device_present};
 
 const INITIAL_BACKOFF_MS: u64 = 100;
 const MAX_BACKOFF_MS: u64 = 5_000;
@@ -107,7 +108,11 @@ impl ManagedDriver {
             let _ = vfs_seek(boot_fd, 0, 0);
         }
 
-        let driver_path = if driver.starts_with('/') { driver.to_string() } else { alloc::format!("/drivers/{}", driver) };
+        let driver_path = if driver.starts_with('/') {
+            driver.to_string()
+        } else {
+            alloc::format!("/drivers/{}", driver)
+        };
 
         let boot_fd_str = alloc::format!("{}", boot_fd);
         let argv: &[&[u8]] = &[driver_path.as_bytes(), boot_fd_str.as_bytes()];
@@ -215,10 +220,7 @@ impl ManagedDriver {
 
         match task_poll(pid) {
             Ok((TaskStatus::Dead, code)) => {
-                warn!(
-                    "CAMBIUM: driver for {} exited with code {}",
-                    self.slot, code
-                );
+                warn!("CAMBIUM: driver for {} exited with code {}", self.slot, code);
                 self.pid = None;
                 self.cleanup_mount();
                 if device_present(&self.slot) {
@@ -228,10 +230,7 @@ impl ManagedDriver {
             }
             Ok(_) => {}
             Err(err) => {
-                warn!(
-                    "CAMBIUM: lost pid {} for {}: {:?}",
-                    pid, self.slot, err
-                );
+                warn!("CAMBIUM: lost pid {} for {}: {:?}", pid, self.slot, err);
                 self.pid = None;
                 self.cleanup_mount();
                 if device_present(&self.slot) {
