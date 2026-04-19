@@ -31,6 +31,8 @@ const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
 const TLS_RECORD_WRITE_BUF_SIZE: usize = 4_096;
 const DEFAULT_USER_AGENT: &str = "ThingOS-httpsd/0.1 (+https://github.com/dancxjo/thingos)";
 
+/// Use shorter sleeps early to reduce first-byte/first-write latency, then
+/// back off to avoid tight spinning during longer waits.
 fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
     let remaining = timeout_ms.saturating_sub(waited_ms);
     let preferred = if waited_ms < IO_POLL_EARLY_THRESHOLD_MS {
@@ -43,6 +45,8 @@ fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
     remaining.min(preferred)
 }
 
+/// Refresh state when we are in setup/terminal/unknown phases, or on the
+/// first wait iteration before we have a stable writable-state signal.
 fn should_refresh_tcp_state(last_state: TcpConnectState, waited_ms: u64) -> bool {
     matches!(
         last_state,
@@ -159,6 +163,7 @@ impl TcpStream {
     pub fn write(&mut self, data: &[u8]) -> Result<usize, String> {
         debug!("http: write {} bytes", data.len());
         let mut waited_ms = 0;
+        // Start at `Other` so the first loop iteration refreshes state.
         let mut last_state = TcpConnectState::Other;
         loop {
             match vfs_write(self.data_fd, data) {
