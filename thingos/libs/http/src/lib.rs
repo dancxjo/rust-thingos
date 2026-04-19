@@ -5,6 +5,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
+use abi::syscall::{poll_flags, PollThing};
 use stem::syscall::port::{port_close, port_create, port_recv, port_send_all, PortHandle};
 use stem::thread::spawn_task_detached;
 
@@ -14,15 +15,10 @@ use embedded_tls::blocking::{
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 use stem::{debug, info, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
-const IO_POLL_SLICE_EARLY_MS: u64 = 1;
-const IO_POLL_SLICE_MEDIUM_MS: u64 = 5;
-const IO_POLL_SLICE_LATE_MS: u64 = 25;
-const IO_POLL_EARLY_THRESHOLD_MS: u64 = 20;
-const IO_POLL_MEDIUM_THRESHOLD_MS: u64 = 200;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 const MAX_HEADER_READ_ITERATIONS: usize = 20;
 // Max TLS record payload + TLS overhead as recommended by embedded-tls docs.
@@ -31,76 +27,47 @@ const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
 const TLS_RECORD_WRITE_BUF_SIZE: usize = 4_096;
 const DEFAULT_USER_AGENT: &str = "ThingOS-httpsd/0.1 (+https://github.com/dancxjo/thingos)";
 
-/// Use shorter sleeps early to reduce first-byte/first-write latency, then
-/// back off to avoid tight spinning during longer waits.
-fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
-    let remaining = timeout_ms.saturating_sub(waited_ms);
-    let preferred = if waited_ms < IO_POLL_EARLY_THRESHOLD_MS {
-        IO_POLL_SLICE_EARLY_MS
-    } else if waited_ms < IO_POLL_MEDIUM_THRESHOLD_MS {
-        IO_POLL_SLICE_MEDIUM_MS
-    } else {
-        IO_POLL_SLICE_LATE_MS
-    };
-    remaining.min(preferred)
+fn deadline_after_ms(timeout_ms: u64) -> u64 {
+    let now = stem::syscall::monotonic_ns();
+    now.saturating_add(timeout_ms.saturating_mul(1_000_000))
 }
 
-/// Refresh state while the socket is unstable (`Created`/`Connecting`), closed
-/// for the current connection attempt (`Closed`), or unknown (`Other`), and
-/// also when no state has been observed yet (`None`).
-fn should_refresh_tcp_state(last_state: Option<TcpConnectState>) -> bool {
-    matches!(
-        last_state,
-        None | Some(TcpConnectState::Created)
-            | Some(TcpConnectState::Connecting)
-            | Some(TcpConnectState::Closed)
-            | Some(TcpConnectState::Other)
-    )
+fn timeout_ms_until_deadline(deadline_ns: u64) -> Result<u64, String> {
+    let now = stem::syscall::monotonic_ns();
+    if now >= deadline_ns {
+        return Err("timed out waiting for readiness".to_string());
+    }
+    let remaining_ns = deadline_ns.saturating_sub(now);
+    Ok(ns_to_timeout_ms(remaining_ns))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TcpConnectState {
-    Created,
-    Connecting,
-    Connected,
-    CloseWait,
-    Closed,
-    Other,
+fn ns_to_timeout_ms(ns: u64) -> u64 {
+    ((ns.saturating_add(999_999)) / 1_000_000).max(1)
 }
 
-fn read_tcp_state(socket_id: &str) -> TcpConnectState {
-    use abi::syscall::vfs_flags::O_RDONLY;
-
-    let status_path = format!("/net/tcp/{}/status", socket_id);
-    let Ok(fd) = vfs_open(&status_path, O_RDONLY) else {
-        return TcpConnectState::Other;
-    };
-    let mut buf = [0u8; 256];
-    let n = vfs_read(fd, &mut buf).unwrap_or(0);
-    let _ = vfs_close(fd);
-
-    let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
-    for line in text.lines() {
-        if let Some(state) = line.strip_prefix("state: ") {
-            return match state.trim() {
-                "created" => TcpConnectState::Created,
-                "bound" | "syn-sent" | "syn-received" => TcpConnectState::Connecting,
-                "connected" | "established" | "fin-wait-1" | "fin-wait-2" => {
-                    TcpConnectState::Connected
+fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Result<u16, String> {
+    let thing = i32::try_from(fd).map_err(|_| format!("{context}: fd out of range"))?;
+    loop {
+        let timeout_ms = timeout_ms_until_deadline(deadline_ns)
+            .map_err(|_| format!("{context}: timed out waiting for readiness"))?;
+        let mut pollfd = [PollThing { thing, events, revents: 0 }];
+        match vfs_poll(&mut pollfd, timeout_ms) {
+            Ok(0) => return Err(format!("{context}: timed out waiting for readiness")),
+            Ok(_) => {
+                if pollfd[0].revents == 0 {
+                    continue;
                 }
-                "close-wait" => TcpConnectState::CloseWait,
-                "closed" | "time-wait" | "closing" | "last-ack" => TcpConnectState::Closed,
-                _ => TcpConnectState::Other,
-            };
+                return Ok(pollfd[0].revents);
+            }
+            Err(abi::errors::Errno::EINTR) => continue,
+            Err(e) => return Err(format!("{context}: poll failed: {:?}", e)),
         }
     }
-    TcpConnectState::Other
 }
 
 pub struct TcpStream {
     data_fd: u32,
     ctl_fd: u32,
-    socket_id: String,
 }
 
 impl TcpStream {
@@ -114,19 +81,17 @@ impl TcpStream {
         let new_fd = vfs_open("/net/tcp/new", O_RDONLY | O_NONBLOCK)
             .map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
         let mut buf = [0u8; 16];
-        let mut waited_ms = 0;
+        let deadline_ns = deadline_after_ms(CONNECT_TIMEOUT_MS);
         let n = loop {
             match vfs_read(new_fd, &mut buf) {
                 Ok(n) if n > 0 => break n,
                 Ok(_) | Err(abi::errors::Errno::EAGAIN) => {
-                    if waited_ms >= CONNECT_TIMEOUT_MS {
+                    if let Err(e) =
+                        wait_fd_ready(new_fd, poll_flags::POLLIN, deadline_ns, "http connect new socket id")
+                    {
                         let _ = vfs_close(new_fd);
-                        return Err("timed out waiting for /net/tcp/new socket id".to_string());
+                        return Err(e);
                     }
-                    let slice_ms = poll_sleep_slice_ms(waited_ms, CONNECT_TIMEOUT_MS);
-                    debug!("http: waiting for /net/tcp/new socket id ({} ms elapsed)", waited_ms);
-                    stem::time::sleep_ms(slice_ms);
-                    waited_ms += slice_ms;
                 }
                 Err(e) => {
                     let _ = vfs_close(new_fd);
@@ -148,157 +113,79 @@ impl TcpStream {
         let ctl_fd =
             vfs_open(&ctl_path, O_RDWR).map_err(|e| format!("failed to open ctl: {:?}", e))?;
         debug!("http: opening data path {}", data_path);
-        let data_fd = vfs_open(&data_path, O_RDWR | O_NONBLOCK)
-            .map_err(|e| format!("failed to open data: {:?}", e))?;
+        let data_fd = match vfs_open(&data_path, O_RDWR | O_NONBLOCK) {
+            Ok(fd) => fd,
+            Err(e) => {
+                let _ = vfs_close(ctl_fd);
+                return Err(format!("failed to open data: {:?}", e));
+            }
+        };
 
         // 3. Connect via ctl file
         let conn_cmd = format!("connect {} {}", host, port);
-        vfs_write(ctl_fd, conn_cmd.as_bytes())
-            .map_err(|e| format!("connect command failed: {:?}", e))?;
+        if let Err(e) = vfs_write(ctl_fd, conn_cmd.as_bytes()) {
+            let _ = vfs_close(data_fd);
+            let _ = vfs_close(ctl_fd);
+            return Err(format!("connect command failed: {:?}", e));
+        }
+        let revents =
+            wait_fd_ready(data_fd, poll_flags::POLLOUT | poll_flags::POLLIN, deadline_after_ms(CONNECT_TIMEOUT_MS), "http connect socket")?;
+        if (revents & (poll_flags::POLLERR | poll_flags::POLLNVAL) != 0)
+            || ((revents & poll_flags::POLLHUP != 0) && (revents & poll_flags::POLLOUT == 0))
+        {
+            let _ = vfs_close(data_fd);
+            let _ = vfs_close(ctl_fd);
+            return Err(format!("connect failed: revents=0x{:x}", revents));
+        }
 
         debug!("http: connect command issued for socket id={}", socket_id);
 
-        Ok(Self { data_fd, ctl_fd, socket_id: socket_id.to_string() })
+        Ok(Self { data_fd, ctl_fd })
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<usize, String> {
         debug!("http: write {} bytes", data.len());
-        let mut waited_ms = 0;
-        let mut last_state: Option<TcpConnectState> = None;
+        let deadline_ns = deadline_after_ms(IO_POLL_TIMEOUT_MS);
         loop {
             match vfs_write(self.data_fd, data) {
-                Ok(n) => {
-                    if n == 0 {
-                        let state = read_tcp_state(&self.socket_id);
-                        last_state = Some(state);
-                        if waited_ms >= IO_POLL_TIMEOUT_MS {
-                            return Err(format!(
-                                "write returned 0 for {} ms (state={:?})",
-                                waited_ms, state
-                            ));
-                        }
-                        let slice_ms = poll_sleep_slice_ms(waited_ms, IO_POLL_TIMEOUT_MS);
-                        debug!(
-                            "http: write returned 0 while {:?}; sleeping for {} ms",
-                            state, slice_ms
-                        );
-                        stem::time::sleep_ms(slice_ms);
-                        waited_ms += slice_ms;
-                        continue;
+                Ok(n) if n > 0 => return Ok(n),
+                Ok(0) | Err(abi::errors::Errno::EAGAIN) => {
+                    let revents = wait_fd_ready(
+                        self.data_fd,
+                        poll_flags::POLLOUT | poll_flags::POLLIN,
+                        deadline_ns,
+                        "http write",
+                    )?;
+                    if (revents & (poll_flags::POLLERR | poll_flags::POLLNVAL) != 0)
+                        || ((revents & poll_flags::POLLHUP != 0)
+                            && (revents & poll_flags::POLLOUT == 0))
+                    {
+                        return Err(format!("write readiness failed: revents=0x{:x}", revents));
                     }
-                    if waited_ms != 0 {
-                        debug!("http: write completed after waiting {} ms", waited_ms);
-                    }
-                    return Ok(n);
                 }
-                Err(abi::errors::Errno::EAGAIN) => {
-                    let state = if should_refresh_tcp_state(last_state) {
-                        read_tcp_state(&self.socket_id)
-                    } else {
-                        last_state.expect("state must be set when refresh is not required")
-                    };
-                    last_state = Some(state);
-                    if matches!(state, TcpConnectState::Closed) {
-                        return Err("write failed: socket closed before writable".to_string());
-                    }
-
-                    let timeout_ms = if matches!(
-                        state,
-                        TcpConnectState::Created | TcpConnectState::Connecting
-                    ) {
-                        CONNECT_TIMEOUT_MS
-                    } else {
-                        IO_POLL_TIMEOUT_MS
-                    };
-
-                    if waited_ms >= timeout_ms {
-                        return Err(format!(
-                            "write timed out waiting for socket writable (state={:?}, waited={} ms)",
-                            state, waited_ms
-                        ));
-                    }
-
-                    let slice_ms = poll_sleep_slice_ms(waited_ms, timeout_ms);
-                    debug!(
-                        "http: write would block while {:?}; sleeping for {} ms",
-                        state, slice_ms
-                    );
-                    stem::time::sleep_ms(slice_ms);
-                    waited_ms += slice_ms;
-                }
-                Err(e) => {
-                    let state = read_tcp_state(&self.socket_id);
-                    if matches!(state, TcpConnectState::Created | TcpConnectState::Connecting) {
-                        if waited_ms >= CONNECT_TIMEOUT_MS {
-                            return Err(format!(
-                                "write failed while connecting: {:?} (state={:?})",
-                                e, state
-                            ));
-                        }
-                        let slice_ms = poll_sleep_slice_ms(waited_ms, CONNECT_TIMEOUT_MS);
-                        debug!("http: write while {:?}; sleeping for {} ms", state, slice_ms);
-                        stem::time::sleep_ms(slice_ms);
-                        waited_ms += slice_ms;
-                        continue;
-                    }
-                    return Err(format!("write failed: {:?} (state={:?})", e, state));
-                }
+                Err(e) => return Err(format!("write failed: {:?}", e)),
             }
         }
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
-        let mut waited_ms = 0;
+        let deadline_ns = deadline_after_ms(IO_POLL_TIMEOUT_MS);
         loop {
             match vfs_read(self.data_fd, buf) {
-                Ok(n) => {
-                    if n == 0 {
-                        // Some provider-backed TCP paths can transiently return 0
-                        // before payload bytes arrive. Treat that as "wait" while
-                        // the socket is still connected.
-                        let state = read_tcp_state(&self.socket_id);
-                        if matches!(state, TcpConnectState::Connected | TcpConnectState::Connecting)
-                        {
-                            if waited_ms >= IO_POLL_TIMEOUT_MS {
-                                warn!(
-                                    "http: read got 0 bytes while {:?}; timed out after {} ms",
-                                    state, waited_ms
-                                );
-                                return Err(
-                                    "read timed out waiting for socket data (zero-byte reads)"
-                                        .to_string(),
-                                );
-                            }
-
-                            let slice_ms = poll_sleep_slice_ms(waited_ms, IO_POLL_TIMEOUT_MS);
-                            debug!(
-                                "http: read returned 0 while {:?}; sleeping for {} ms",
-                                state, slice_ms
-                            );
-                            stem::time::sleep_ms(slice_ms);
-                            waited_ms += slice_ms;
-                            continue;
-                        }
+                Ok(n) if n > 0 => return Ok(n),
+                Ok(0) | Err(abi::errors::Errno::EAGAIN) => {
+                    let revents = wait_fd_ready(
+                        self.data_fd,
+                        poll_flags::POLLIN | poll_flags::POLLHUP,
+                        deadline_ns,
+                        "http read",
+                    )?;
+                    if revents & (poll_flags::POLLERR | poll_flags::POLLNVAL) != 0 {
+                        return Err(format!("read readiness failed: revents=0x{:x}", revents));
                     }
-                    debug!("http: read returned {} bytes after waiting {} ms", n, waited_ms);
-                    return Ok(n);
-                }
-                Err(abi::errors::Errno::EAGAIN) => {
-                    let state = read_tcp_state(&self.socket_id);
-                    if matches!(state, TcpConnectState::Closed | TcpConnectState::CloseWait) {
-                        debug!("http: read got EAGAIN but socket is closed/close-wait; treating as EOF");
+                    if (revents & poll_flags::POLLHUP != 0) && (revents & poll_flags::POLLIN == 0) {
                         return Ok(0);
                     }
-
-                    if waited_ms >= IO_POLL_TIMEOUT_MS {
-                        warn!("http: read timed out after {} ms", waited_ms);
-                        return Err("read timed out waiting for socket data".to_string());
-                    }
-
-                    let slice_ms = poll_sleep_slice_ms(waited_ms, IO_POLL_TIMEOUT_MS);
-                    debug!("http: read would block while {:?}; sleeping for {} ms", state, slice_ms);
-                    stem::time::sleep_ms(slice_ms);
-                    waited_ms += slice_ms;
                 }
                 Err(e) => return Err(format!("read failed: {:?}", e)),
             }
@@ -843,24 +730,17 @@ mod tests {
     }
 
     #[test]
-    fn test_poll_sleep_slice_ms_thresholds() {
-        assert_eq!(poll_sleep_slice_ms(0, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_EARLY_MS);
-        assert_eq!(poll_sleep_slice_ms(19, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_EARLY_MS);
-        assert_eq!(poll_sleep_slice_ms(20, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_MEDIUM_MS);
-        assert_eq!(poll_sleep_slice_ms(199, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_MEDIUM_MS);
-        assert_eq!(poll_sleep_slice_ms(200, IO_POLL_TIMEOUT_MS), IO_POLL_SLICE_LATE_MS);
-        assert_eq!(poll_sleep_slice_ms(IO_POLL_TIMEOUT_MS - 1, IO_POLL_TIMEOUT_MS), 1);
-        assert_eq!(poll_sleep_slice_ms(IO_POLL_TIMEOUT_MS, IO_POLL_TIMEOUT_MS), 0);
+    fn test_ns_to_timeout_ms_rounding() {
+        assert_eq!(ns_to_timeout_ms(0), 1);
+        assert_eq!(ns_to_timeout_ms(1), 1);
+        assert_eq!(ns_to_timeout_ms(999_999), 1);
+        assert_eq!(ns_to_timeout_ms(1_000_000), 1);
+        assert_eq!(ns_to_timeout_ms(1_000_001), 2);
     }
 
     #[test]
-    fn test_should_refresh_tcp_state() {
-        assert!(should_refresh_tcp_state(None));
-        assert!(should_refresh_tcp_state(Some(TcpConnectState::Created)));
-        assert!(should_refresh_tcp_state(Some(TcpConnectState::Connecting)));
-        assert!(!should_refresh_tcp_state(Some(TcpConnectState::Connected)));
-        assert!(!should_refresh_tcp_state(Some(TcpConnectState::CloseWait)));
-        assert!(should_refresh_tcp_state(Some(TcpConnectState::Closed)));
-        assert!(should_refresh_tcp_state(Some(TcpConnectState::Other)));
+    fn test_timeout_ms_until_deadline_errors_when_expired() {
+        let now = stem::syscall::monotonic_ns();
+        assert!(timeout_ms_until_deadline(now).is_err());
     }
 }
