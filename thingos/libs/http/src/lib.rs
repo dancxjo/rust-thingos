@@ -45,14 +45,13 @@ fn poll_sleep_slice_ms(waited_ms: u64, timeout_ms: u64) -> u64 {
     remaining.min(preferred)
 }
 
-/// Refresh state while the socket is unstable (`Created`/`Connecting`),
-/// closed for the current connection attempt (`Closed`), or unknown (`Other`), and also before the first
-/// write wait when no state has been observed yet.
+/// Refresh state while the socket is unstable (`Created`/`Connecting`), closed
+/// for the current connection attempt (`Closed`), or unknown (`Other`), and
+/// also before the first write wait when no state has been observed yet.
 fn should_refresh_tcp_state(last_state: Option<TcpConnectState>) -> bool {
     matches!(
         last_state,
-        None
-            | Some(TcpConnectState::Created)
+        None | Some(TcpConnectState::Created)
             | Some(TcpConnectState::Connecting)
             | Some(TcpConnectState::Closed)
             | Some(TcpConnectState::Other)
