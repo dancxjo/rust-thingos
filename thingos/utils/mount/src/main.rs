@@ -43,26 +43,28 @@ fn main(_arg: usize) -> ! {
     let args = get_args();
     if args.is_empty() {
         print_usage();
-        exit(2)
+        exit(2);
     }
 
     if args.len() == 1 && args[0] == "-a" {
         let status = mount_all_from_fstab("/etc/fstab");
-        exit(status)
+        exit(status);
     }
 
     if args.len() != 3 || args[0] != "-t" {
         print_usage();
-        exit(2)
+        exit(2);
     }
 
     let fs_type = args[1].as_str();
     let target = args[2].as_str();
     match mount_one(fs_type, target) {
-        Ok(()) => exit(0),
+        Ok(()) => {
+            exit(0);
+        }
         Err(e) => {
             err(&alloc::format!("mount: failed to mount {} on {}: {:?}\n", fs_type, target, e));
-            exit(1)
+            exit(1);
         }
     }
 }
