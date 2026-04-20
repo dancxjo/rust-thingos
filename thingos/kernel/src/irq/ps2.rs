@@ -59,6 +59,24 @@ static EXTENDED_PREFIX: AtomicBool = AtomicBool::new(false);
 static ALT_DOWN: AtomicBool = AtomicBool::new(false);
 static F12_DOWN: AtomicBool = AtomicBool::new(false);
 static TERMINAL_HOTKEY_PENDING: AtomicBool = AtomicBool::new(false);
+static FB_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
+
+static SHIFT_DOWN: AtomicBool = AtomicBool::new(false);
+static CTRL_DOWN: AtomicBool = AtomicBool::new(false);
+static CAPS_LOCK: AtomicBool = AtomicBool::new(false);
+
+static INPUT_QUEUE: Ps2Queue = Ps2Queue::new();
+
+pub fn set_fb_input_enabled(enabled: bool) {
+    FB_INPUT_ENABLED.store(enabled, Ordering::Release);
+}
+
+pub fn take_input_char() -> Option<u8> {
+    INPUT_QUEUE.pop()
+}
+
+const SCANCODE_MAP_NORMAL: &[u8] = b"\0\x1b1234567890-=\x08\tqwertyuiop[]\n\0asdfghjkl;'` \0zxcvbnm,./\0*\0 ";
+const SCANCODE_MAP_SHIFT: &[u8] = b"\0\x1b!@#$%^&*()_+\x08\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~ \0ZXCVBNM<>?\0*\0 ";
 
 pub fn buffer_scancode(byte: u8) -> bool {
     PS2_QUEUE.push(byte);
@@ -94,6 +112,14 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
     let released = (byte & 0x80) != 0;
     let scancode = byte & 0x7F;
 
+    // Track modifiers
+    match (extended, scancode) {
+        (false, 0x2A) | (false, 0x36) => { SHIFT_DOWN.store(!released, Ordering::Release); }
+        (false, 0x1D) | (true, 0x1D) => { CTRL_DOWN.store(!released, Ordering::Release); }
+        (false, 0x3A) => { if !released { CAPS_LOCK.fetch_xor(true, Ordering::Release); } }
+        _ => {}
+    }
+
     match (extended, scancode) {
         (false, 0x38) | (true, 0x38) => {
             ALT_DOWN.store(!released, Ordering::Release);
@@ -116,6 +142,26 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
                     false
                 }
             }
+        }
+        (false, s) if !released && FB_INPUT_ENABLED.load(Ordering::Acquire) => {
+            let shift = SHIFT_DOWN.load(Ordering::Acquire) ^ CAPS_LOCK.load(Ordering::Acquire);
+            let ctrl = CTRL_DOWN.load(Ordering::Acquire);
+            
+            let map = if SHIFT_DOWN.load(Ordering::Acquire) { SCANCODE_MAP_SHIFT } else { SCANCODE_MAP_NORMAL };
+            if (s as usize) < map.len() {
+                let mut c = map[s as usize];
+                if c != 0 {
+                    if ctrl {
+                        if (b'a'..=b'z').contains(&c) {
+                            c -= b'a' - 1;
+                        } else if (b'A'..=b'Z').contains(&c) {
+                            c -= b'A' - 1;
+                        }
+                    }
+                    INPUT_QUEUE.push(c);
+                }
+            }
+            false
         }
         _ => false,
     }

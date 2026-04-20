@@ -155,6 +155,7 @@ impl VfsDriver for DevFs {
             "urandom" => Ok(Arc::new(UrandomNode)),
             "kmsg" => Ok(Arc::new(KmsgNode)),
             "cmdline" => Ok(Arc::new(CmdlineNode)),
+            "tty0" => Ok(Arc::new(FbTerminalNode)),
             _ => Err(Errno::ENOENT),
         }
     }
@@ -239,6 +240,7 @@ impl VfsNode for DevDirNode {
         names.push("random".to_string());
         names.push("urandom".to_string());
         names.push("kmsg".to_string());
+        names.push("tty0".to_string());
         {
             let reg = DEVICE_REGISTRY.lock();
             for name in reg.keys() {
@@ -254,35 +256,62 @@ impl VfsNode for DevDirNode {
     }
 }
 
-static CONSOLE_BUF: Mutex<alloc::collections::VecDeque<u8>> =
-    Mutex::new(alloc::collections::VecDeque::new());
+/// Global tty line discipline for `/dev/console`.
+static CONSOLE_LD: once_cell::sync::Lazy<Arc<crate::vfs::tty::LineDiscipline>> =
+    once_cell::sync::Lazy::new(|| Arc::new(crate::vfs::tty::LineDiscipline::new()));
 
-/// Runtime tty state for `/dev/console`.
-#[derive(Clone, Copy)]
-struct ConsoleTtyState {
-    termios: abi::termios::Termios,
-}
+/// Global tty line discipline for `/dev/tty0` (framebuffer terminal).
+static FB_TTY_LD: once_cell::sync::Lazy<Arc<crate::vfs::tty::LineDiscipline>> =
+    once_cell::sync::Lazy::new(|| Arc::new(crate::vfs::tty::LineDiscipline::new()));
 
-impl Default for ConsoleTtyState {
-    fn default() -> Self {
-        Self { termios: abi::termios::DEFAULT_TERMIOS }
+struct SerialHardware;
+impl crate::vfs::tty::TtyHardware for SerialHardware {
+    fn read_byte(&self) -> Option<u8> {
+        crate::runtime_base().getchar()
+    }
+    fn write_byte(&self, byte: u8) {
+        crate::runtime_base().putchar(byte)
+    }
+    fn winsize(&self) -> abi::termios::Winsize {
+        derive_winsize_from_bootfb()
     }
 }
 
-#[derive(Clone, Copy)]
-struct ConsoleCaller {
-    sid: u32,
-    pgid: u32,
-    session_leader: bool,
+struct FbHardware;
+impl crate::vfs::tty::TtyHardware for FbHardware {
+    fn read_byte(&self) -> Option<u8> {
+        crate::irq::ps2::take_input_char()
+    }
+    fn write_byte(&self, byte: u8) {
+        // We need a way to write to FbConsole specifically.
+        // For now, use the runtime's putchar which goes to both serial and FB.
+        crate::runtime_base().putchar(byte);
+    }
+    fn winsize(&self) -> abi::termios::Winsize {
+        derive_winsize_from_bootfb()
+    }
 }
 
-/// Global tty state for `/dev/console`.
-static CONSOLE_TTY_STATE: Mutex<ConsoleTtyState> =
-    Mutex::new(ConsoleTtyState { termios: abi::termios::DEFAULT_TERMIOS });
+fn derive_winsize_from_bootfb() -> abi::termios::Winsize {
+    if let Some((fb, _)) = *BOOT_FB_INFO.lock() {
+        if fb.width > 0 && fb.height > 0 {
+            const CELL_WIDTH_PX: u32 = 8;
+            const CELL_HEIGHT_PX: u32 = 16;
+            let clamp_u16 = |value: u32| value.min(u16::MAX as u32) as u16;
+            let clamp_tty_cells = |value: u32| value.max(1).min(u16::MAX as u32) as u16;
+            return abi::termios::Winsize {
+                ws_row: clamp_tty_cells(fb.height / CELL_HEIGHT_PX),
+                ws_col: clamp_tty_cells(fb.width / CELL_WIDTH_PX),
+                ws_xpixel: clamp_u16(fb.width),
+                ws_ypixel: clamp_u16(fb.height),
+            };
+        }
+    }
+    abi::termios::Winsize::default()
+}
 
-/// Return the current `/dev/console` foreground process-group ID.
 pub(crate) fn console_foreground_pgid() -> Option<u32> {
-    crate::presence::console_foreground_pgid()
+    CONSOLE_LD.presence.lock().foreground_pgid
 }
 
 /// Character device node for `/dev/console`.
@@ -298,312 +327,38 @@ pub(crate) fn console_foreground_pgid() -> Option<u32> {
 pub struct ConsoleNode;
 
 impl ConsoleNode {
-    fn try_handle_signal_byte<R: crate::BootRuntimeBase + ?Sized>(
-        rt: &R,
-        termios: abi::termios::Termios,
-        foreground_pgid: Option<u32>,
-        c: u8,
-    ) -> bool {
-        use abi::termios::{ECHO, ISIG, VINTR, VQUIT, VSUSP};
-
-        if termios.c_lflag & ISIG == 0 {
-            return false;
-        }
-
-        let do_echo = termios.c_lflag & ECHO != 0;
-        let vintr = termios.c_cc[VINTR];
-        let vquit = termios.c_cc[VQUIT];
-        let vsusp = termios.c_cc[VSUSP];
-
-        let (sig, caret) = if c == vintr {
-            (abi::signal::SIGINT, b'C')
-        } else if c == vquit {
-            (abi::signal::SIGQUIT, b'\\')
-        } else if c == vsusp {
-            (abi::signal::SIGTSTP, b'Z')
-        } else {
-            return false;
-        };
-
-        if do_echo {
-            rt.putchar(b'^');
-            rt.putchar(caret);
-            rt.putchar(b'\r');
-            rt.putchar(b'\n');
-        }
-        CONSOLE_BUF.lock().clear();
-        if let Some(pgid) = foreground_pgid {
-            crate::signal::send_signal_to_group(pgid, sig);
-        }
-        true
+    pub fn handle_runtime_input_byte<R: crate::BootRuntimeBase + ?Sized>(_rt: &R, c: u8) -> bool {
+        CONSOLE_LD.drain_input(&SerialHardware)
     }
 
-    pub fn handle_runtime_input_byte<R: crate::BootRuntimeBase + ?Sized>(rt: &R, c: u8) -> bool {
-        let tty_state = CONSOLE_TTY_STATE.lock();
-        let termios = tty_state.termios;
-        let foreground_pgid = crate::presence::console_foreground_pgid();
-        drop(tty_state);
-
-        Self::try_handle_signal_byte(rt, termios, foreground_pgid, c)
-    }
-
-    fn current_caller() -> Option<ConsoleCaller> {
-        let pinfo = crate::sched::process_info_current()?;
-        let p = pinfo.lock();
-        Some(ConsoleCaller {
-            sid: p.unix_compat.sid,
-            pgid: p.unix_compat.pgid,
-            session_leader: p.unix_compat.session_leader,
-        })
-    }
-
-    fn maybe_acquire_controlling_tty(_state: &mut ConsoleTtyState, caller: Option<ConsoleCaller>) {
-        if let Some(c) = caller {
-            crate::presence::maybe_attach_console_presence(c.sid, c.pgid, c.session_leader);
-        }
-    }
-
-    fn is_background_caller(
-        caller: ConsoleCaller,
-        presence: &crate::presence::ConsolePresenceState,
-    ) -> bool {
-        match (presence.controlling_sid, presence.foreground_pgid) {
-            (Some(sid), Some(fg_pgid)) => caller.sid == sid && caller.pgid != fg_pgid,
-            _ => false,
-        }
-    }
-
-    fn enforce_job_control_before_read() -> SysResult<()> {
-        let caller = match Self::current_caller() {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-        let (is_background, controlling_sid, foreground_pgid) = {
-            let mut state = CONSOLE_TTY_STATE.lock();
-            Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
-            let presence = crate::presence::console_presence_state();
-            (
-                Self::is_background_caller(caller, &presence),
-                presence.controlling_sid,
-                presence.foreground_pgid,
-            )
-        };
-        if is_background {
-            crate::kwarn!(
-                "console read rejected by job control: pgid={} sid={} leader={} tty_sid={:?} tty_fg={:?}",
-                caller.pgid,
-                caller.sid,
-                caller.session_leader,
-                controlling_sid,
-                foreground_pgid
-            );
-            crate::signal::send_signal_to_group(caller.pgid, abi::signal::SIGTTIN);
-            return Err(Errno::EINTR);
-        }
-        Ok(())
-    }
-
-    fn enforce_job_control_before_write() -> SysResult<()> {
-        let caller = match Self::current_caller() {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-        let (is_background, tostop, controlling_sid, foreground_pgid) = {
-            let mut state = CONSOLE_TTY_STATE.lock();
-            Self::maybe_acquire_controlling_tty(&mut state, Some(caller));
-            let presence = crate::presence::console_presence_state();
-            (
-                Self::is_background_caller(caller, &presence),
-                (state.termios.c_lflag & abi::termios::TOSTOP) != 0,
-                presence.controlling_sid,
-                presence.foreground_pgid,
-            )
-        };
-        if is_background && tostop {
-            crate::kwarn!(
-                "console write rejected by job control: pgid={} sid={} leader={} tty_sid={:?} tty_fg={:?}",
-                caller.pgid,
-                caller.sid,
-                caller.session_leader,
-                controlling_sid,
-                foreground_pgid
-            );
-            crate::signal::send_signal_to_group(caller.pgid, abi::signal::SIGTTOU);
-            return Err(Errno::EINTR);
-        }
-        Ok(())
-    }
-
-    /// Return a copy of the current termios settings.
-    pub fn get_termios() -> abi::termios::Termios {
-        CONSOLE_TTY_STATE.lock().termios
-    }
-
-    /// Replace the current termios settings.
-    pub fn set_termios(t: abi::termios::Termios) {
-        CONSOLE_TTY_STATE.lock().termios = t;
-    }
-
-    /// Drain pending hardware input into the console line discipline.
-    ///
-    /// This keeps control characters such as `VINTR` responsive even when the
-    /// foreground program is not actively reading from stdin (for example,
-    /// `top` while sleeping between refreshes).
     pub fn poll_input() {
-        Self::drain_input(crate::runtime_base());
+        CONSOLE_LD.drain_input(&SerialHardware);
     }
 
-    #[cfg(test)]
-    fn set_tty_owner_for_test(sid: Option<u32>, fg_pgid: Option<u32>) {
-        crate::presence::set_console_presence_for_test(sid, fg_pgid);
+    pub fn get_termios() -> abi::termios::Termios {
+        *CONSOLE_LD.termios.lock()
     }
 
-    fn drain_input(rt: &'static dyn crate::BootRuntimeBase) -> bool {
-        use abi::termios::{ECHO, ECHOE, ICANON, ICRNL};
-
-        let tty_state = CONSOLE_TTY_STATE.lock();
-        let termios = tty_state.termios;
-        let foreground_pgid = crate::presence::console_foreground_pgid();
-        drop(tty_state);
-
-        let canonical = termios.c_lflag & ICANON != 0;
-        let do_echo = termios.c_lflag & ECHO != 0;
-        let do_echo_erase = termios.c_lflag & ECHOE != 0;
-        let icrnl = termios.c_iflag & ICRNL != 0;
-
-        let mut interrupted = false;
-
-        while let Some(c) = rt.getchar() {
-            if Self::try_handle_signal_byte(rt, termios, foreground_pgid, c) {
-                interrupted = true;
-                continue;
-            }
-
-            match c {
-                b'\r' | b'\n' => {
-                    let mapped = if icrnl { b'\n' } else { c };
-                    if do_echo {
-                        rt.putchar(b'\r');
-                        rt.putchar(b'\n');
-                    }
-                    CONSOLE_BUF.lock().push_back(mapped);
-                }
-                0x08 | 0x7f => {
-                    if canonical {
-                        let mut cb = CONSOLE_BUF.lock();
-                        let last = cb.back().copied();
-                        if last.is_some() && last != Some(b'\n') {
-                            cb.pop_back();
-                            if do_echo && do_echo_erase {
-                                rt.putchar(0x08);
-                                rt.putchar(b' ');
-                                rt.putchar(0x08);
-                            }
-                        }
-                    } else {
-                        CONSOLE_BUF.lock().push_back(c);
-                    }
-                }
-                0x04 => {
-                    if canonical {
-                        CONSOLE_BUF.lock().push_back(0x04);
-                    } else {
-                        CONSOLE_BUF.lock().push_back(c);
-                    }
-                }
-                0x20..=0x7e => {
-                    if do_echo {
-                        rt.putchar(c);
-                    }
-                    CONSOLE_BUF.lock().push_back(c);
-                }
-                _ => {
-                    if !canonical {
-                        CONSOLE_BUF.lock().push_back(c);
-                    }
-                }
-            }
-        }
-
-        interrupted
+    pub fn set_termios(t: abi::termios::Termios) {
+        *CONSOLE_LD.termios.lock() = t;
     }
 }
 
 impl VfsNode for ConsoleNode {
-    fn read(&self, _offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        use abi::termios::VMIN;
-
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        Self::enforce_job_control_before_read()?;
-        let mut read_bytes = 0;
-
-        loop {
-            // ── Check for a pending interrupt (e.g. from SYS_TASK_INTERRUPT) ──
-            if crate::sched::take_pending_interrupt_current() {
-                return Err(abi::errors::Errno::EINTR);
-            }
-
-            let rt = crate::runtime_base();
-
-            let tty_state = CONSOLE_TTY_STATE.lock();
-            let termios = tty_state.termios;
-            let canonical = termios.c_lflag & abi::termios::ICANON != 0;
-            drop(tty_state);
-
-            if Self::drain_input(rt) {
-                return Err(abi::errors::Errno::EINTR);
-            }
-
-            // ── Check whether enough data is available to satisfy the read ───
-            let vmin = termios.c_cc[VMIN] as usize;
-            let vmin_eff = vmin.max(1);
-
-            let mut cb = CONSOLE_BUF.lock();
-            let ready = if canonical {
-                // Canonical: a full line (terminated by NL or special char)
-                // is required, or the buffer is at least as large as `buf`.
-                cb.iter().any(|&b| b == b'\n' || b == 0x04) || cb.len() >= buf.len()
-            } else {
-                // Raw: VMIN bytes must be available.
-                cb.len() >= vmin_eff || cb.len() >= buf.len()
-            };
-
-            if ready {
-                while read_bytes < buf.len() {
-                    if let Some(b) = cb.pop_front() {
-                        buf[read_bytes] = b;
-                        read_bytes += 1;
-                        if canonical && (b == b'\n' || b == 0x04) {
-                            // Line complete.
-                            break;
-                        }
-                        if !canonical && read_bytes >= vmin_eff {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                return Ok(read_bytes);
-            }
-            drop(cb);
-
-            unsafe { crate::sched::yield_now_current() };
-        }
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let tty = crate::vfs::tty::TtyNode {
+            hw: Arc::new(SerialHardware),
+            ld: CONSOLE_LD.clone(),
+        };
+        tty.read(offset, buf)
     }
 
-    fn write(&self, _offset: u64, buf: &[u8]) -> SysResult<usize> {
-        Self::enforce_job_control_before_write()?;
-        let rt = crate::runtime_base();
-        for &b in buf {
-            if b == b'\n' {
-                rt.putchar(b'\r');
-            }
-            rt.putchar(b);
-        }
-        Ok(buf.len())
+    fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
+        let tty = crate::vfs::tty::TtyNode {
+            hw: Arc::new(SerialHardware),
+            ld: CONSOLE_LD.clone(),
+        };
+        tty.write(offset, buf)
     }
 
     fn stat(&self) -> SysResult<VfsStat> {
@@ -621,173 +376,55 @@ impl VfsNode for ConsoleNode {
         true
     }
 
-    /// Device-specific control for the console terminal.
-    ///
-    /// Supported operations (set `kind = DeviceKind::Terminal`):
-    ///
-    /// | `op`                    | Direction | Description                    |
-    /// |-------------------------|-----------|--------------------------------|
-    /// | `TERMINAL_OP_TCGETS`    | out       | Copy termios → `out_ptr`       |
-    /// | `TERMINAL_OP_TCSETS`    | in        | Copy `in_ptr` → termios        |
-    /// | `TERMINAL_OP_TCSETSW`   | in        | Same as `TCSETS` (no drain)    |
-    /// | `TERMINAL_OP_TCSETSF`   | in        | Same as `TCSETS` (no flush)    |
-    /// | `TERMINAL_OP_TIOCGWINSZ`| out       | Copy window size → `out_ptr`   |
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
-        use abi::device::DeviceKind;
-        use abi::termios::{
-            TERMINAL_OP_TCGETPGRP, TERMINAL_OP_TCGETS, TERMINAL_OP_TCSETPGRP, TERMINAL_OP_TCSETS,
-            TERMINAL_OP_TCSETSF, TERMINAL_OP_TCSETSW, TERMINAL_OP_TIOCGWINSZ,
+        let tty = crate::vfs::tty::TtyNode {
+            hw: Arc::new(SerialHardware),
+            ld: CONSOLE_LD.clone(),
         };
+        tty.device_call(call)
+    }
+}
 
-        if call.kind != DeviceKind::Terminal {
-            return Err(abi::errors::Errno::ENOSYS);
-        }
+pub struct FbTerminalNode;
 
-        let termios_size = core::mem::size_of::<abi::termios::Termios>();
-        let winsize_size = core::mem::size_of::<abi::termios::Winsize>();
-        let pgid_size = core::mem::size_of::<u32>();
+impl VfsNode for FbTerminalNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let tty = crate::vfs::tty::TtyNode {
+            hw: Arc::new(FbHardware),
+            ld: FB_TTY_LD.clone(),
+        };
+        tty.read(offset, buf)
+    }
 
-        let caller = Self::current_caller();
-        {
-            let mut st = CONSOLE_TTY_STATE.lock();
-            Self::maybe_acquire_controlling_tty(&mut st, caller);
-        }
+    fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
+        let tty = crate::vfs::tty::TtyNode {
+            hw: Arc::new(FbHardware),
+            ld: FB_TTY_LD.clone(),
+        };
+        tty.write(offset, buf)
+    }
 
-        match call.op {
-            TERMINAL_OP_TCGETS => {
-                // Write current termios to userspace out_ptr.
-                if call.out_len < termios_size as u32 || call.out_ptr == 0 {
-                    return Err(abi::errors::Errno::EINVAL);
-                }
-                let termios = CONSOLE_TTY_STATE.lock().termios;
-                let bytes = unsafe {
-                    core::slice::from_raw_parts(
-                        &termios as *const abi::termios::Termios as *const u8,
-                        termios_size,
-                    )
-                };
-                unsafe {
-                    crate::syscall::validate::copyout(call.out_ptr as usize, bytes)?;
-                }
-                Ok(0)
-            }
-            TERMINAL_OP_TCSETS | TERMINAL_OP_TCSETSW | TERMINAL_OP_TCSETSF => {
-                // Read new termios from userspace in_ptr.
-                if call.in_len < termios_size as u32 || call.in_ptr == 0 {
-                    return Err(abi::errors::Errno::EINVAL);
-                }
-                let mut new_termios = abi::termios::Termios::default();
-                let bytes = unsafe {
-                    core::slice::from_raw_parts_mut(
-                        &mut new_termios as *mut abi::termios::Termios as *mut u8,
-                        termios_size,
-                    )
-                };
-                unsafe {
-                    crate::syscall::validate::copyin(bytes, call.in_ptr as usize)?;
-                }
-                CONSOLE_TTY_STATE.lock().termios = new_termios;
-                Ok(0)
-            }
-            TERMINAL_OP_TCGETPGRP => {
-                if call.out_len < pgid_size as u32 || call.out_ptr == 0 {
-                    return Err(abi::errors::Errno::EINVAL);
-                }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFCHR | 0o666,
+            size: 0,
+            ino: 10,
+            nlink: 1,
+            rdev: VfsStat::makedev(4, 0),
+            ..Default::default()
+        })
+    }
 
-                let caller = caller.ok_or(abi::errors::Errno::ENOTTY)?;
-                let fg_pgid = {
-                    if !crate::presence::caller_in_controlling_console_session(caller.sid) {
-                        return Err(abi::errors::Errno::ENOTTY);
-                    }
-                    crate::presence::console_foreground_pgid().ok_or(abi::errors::Errno::ENOTTY)?
-                };
+    fn is_tty(&self) -> bool {
+        true
+    }
 
-                unsafe {
-                    crate::syscall::validate::copyout(
-                        call.out_ptr as usize,
-                        core::slice::from_raw_parts(&fg_pgid as *const u32 as *const u8, pgid_size),
-                    )?;
-                }
-                Ok(0)
-            }
-            TERMINAL_OP_TCSETPGRP => {
-                if call.in_len < pgid_size as u32 || call.in_ptr == 0 {
-                    return Err(abi::errors::Errno::EINVAL);
-                }
-
-                let caller = caller.ok_or(abi::errors::Errno::ENOTTY)?;
-                let mut new_pgid = 0u32;
-                unsafe {
-                    crate::syscall::validate::copyin(
-                        core::slice::from_raw_parts_mut(
-                            &mut new_pgid as *mut u32 as *mut u8,
-                            pgid_size,
-                        ),
-                        call.in_ptr as usize,
-                    )?;
-                }
-                if new_pgid == 0 {
-                    return Err(abi::errors::Errno::EINVAL);
-                }
-
-                {
-                    if !crate::presence::caller_in_controlling_console_session(caller.sid) {
-                        return Err(abi::errors::Errno::ENOTTY);
-                    }
-                }
-
-                if !crate::signal::process_group_exists_in_session(new_pgid, caller.sid) {
-                    return Err(abi::errors::Errno::EPERM);
-                }
-
-                crate::presence::set_console_foreground_pgid(new_pgid);
-                Ok(0)
-            }
-            TERMINAL_OP_TIOCGWINSZ => {
-                if call.out_len < winsize_size as u32 || call.out_ptr == 0 {
-                    return Err(abi::errors::Errno::EINVAL);
-                }
-
-                // Derive tty geometry from boot framebuffer state when usable.
-                // If no framebuffer is available (or it reports zero dimensions),
-                // treat winsize as unavailable for this terminal.
-                let Some((fb, _)) = *BOOT_FB_INFO.lock() else {
-                    return Err(abi::errors::Errno::ENOSYS);
-                };
-                if fb.width == 0 || fb.height == 0 {
-                    return Err(abi::errors::Errno::ENOSYS);
-                }
-                // Console geometry currently uses fixed 8x16 text cells from
-                // the boot console renderer contract (not a runtime font query).
-                const CELL_WIDTH_PX: u32 = 8;
-                const CELL_HEIGHT_PX: u32 = 16;
-                if fb.width < CELL_WIDTH_PX || fb.height < CELL_HEIGHT_PX {
-                    return Err(abi::errors::Errno::ENOSYS);
-                }
-                let clamp_u16 = |value: u32| value.min(u16::MAX as u32) as u16;
-                let clamp_tty_cells = |value: u32| value.max(1).min(u16::MAX as u32) as u16;
-
-                let ws = abi::termios::Winsize {
-                    ws_row: clamp_tty_cells(fb.height / CELL_HEIGHT_PX),
-                    ws_col: clamp_tty_cells(fb.width / CELL_WIDTH_PX),
-                    // POSIX winsize stores pixel dimensions as u16; clamp very
-                    // large framebuffers to preserve ABI compatibility.
-                    ws_xpixel: clamp_u16(fb.width),
-                    ws_ypixel: clamp_u16(fb.height),
-                };
-                unsafe {
-                    crate::syscall::validate::copyout(
-                        call.out_ptr as usize,
-                        core::slice::from_raw_parts(
-                            &ws as *const abi::termios::Winsize as *const u8,
-                            core::mem::size_of_val(&ws),
-                        ),
-                    )?;
-                }
-                Ok(0)
-            }
-            _ => Err(abi::errors::Errno::ENOSYS),
-        }
+    fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
+        let tty = crate::vfs::tty::TtyNode {
+            hw: Arc::new(FbHardware),
+            ld: FB_TTY_LD.clone(),
+        };
+        tty.device_call(call)
     }
 }
 

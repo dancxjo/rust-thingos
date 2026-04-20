@@ -40,6 +40,7 @@ pub mod provider;
 pub mod ramfs;
 pub mod sysfs;
 pub mod union;
+pub mod tty;
 pub mod watch;
 
 use alloc::sync::Arc;
