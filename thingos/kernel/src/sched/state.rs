@@ -122,8 +122,8 @@ impl Default for TaskRuntimeStats {
 /// - `timeslice_remaining` — ticks remaining before preemption; decremented
 ///   each timer tick in `schedule_point` without re-entering REGISTRY.
 /// - `enqueued_at_tick` — tick when this thread was last enqueued; used by
-///   the priority-aging fairness logic in `prepare_schedule` without
-///   re-entering REGISTRY.
+///   periodic aging maintenance in `schedule_point` to materialize promotions
+///   without re-entering REGISTRY.
 pub struct ThreadSchedFields {
     pub tid: ThreadId,
     pub runq_location: Option<(usize, usize)>,
@@ -142,6 +142,8 @@ pub struct ThreadSchedFields {
     /// Cached copy of `Thread<R>::timeslice_remaining`.
     pub timeslice_remaining: u32,
     /// Cached copy of `Thread<R>::enqueued_at_tick`.
+    /// Used by periodic scheduler aging maintenance to materialize promotion
+    /// into runnable priority buckets.
     pub enqueued_at_tick: u64,
     /// Cached copy of `Thread<R>::wake_pending`.
     ///

@@ -1907,6 +1907,53 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
 }
 
 impl<R: BootRuntime> types::Scheduler<R> {
+    fn materialize_priority_aging_for_cpu(&mut self, cpu_idx: usize, now: u64) {
+        if cpu_idx >= self.state.per_cpu.len() {
+            return;
+        }
+
+        let mut promotions: alloc::vec::Vec<(TaskId, usize, usize)> = alloc::vec::Vec::new();
+
+        // Periodically materialize aging into runnable buckets so pick can stay
+        // a simple highest-priority queue selector.
+        // Skip Realtime priority: fairness aging is bounded to non-realtime work.
+        for p in (TaskPriority::Low as usize)..(TaskPriority::Realtime as usize) {
+            for &id in self.state.per_cpu[cpu_idx].runq[p].iter() {
+                let Some(sf) = self.state.get_thread(id) else {
+                    continue;
+                };
+                if sf.state != TaskState::Runnable || sf.runq_location != Some((cpu_idx, p)) {
+                    continue;
+                }
+
+                let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
+                let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
+                let boost = boost.min(types::MAX_PRIORITY_BOOST);
+                // Never age into Realtime; preserve explicit realtime priority semantics.
+                let target = (p + boost).min(TaskPriority::High as usize);
+                if target > p {
+                    promotions.push((id, p, target));
+                }
+            }
+        }
+
+        for (id, from_prio, to_prio) in promotions {
+            let still_in_source = self
+                .state
+                .get_thread(id)
+                .and_then(|sf| sf.runq_location)
+                == Some((cpu_idx, from_prio));
+            if !still_in_source {
+                continue;
+            }
+            if self.state.remove_task_from_runq(id) {
+                // Promoted tasks append at the destination bucket tail, preserving
+                // FIFO among already-materialized peers at that effective priority.
+                self.state.enqueue_task(cpu_idx, to_prio, id);
+            }
+        }
+    }
+
     pub fn schedule_point(&mut self, reason: ScheduleReason) -> Option<SwitchDecision> {
         let cpu_idx = current_cpu_index::<R>();
         let global_requested = global_need_resched_swap(cpu_idx, false, Ordering::Acquire);
@@ -1923,6 +1970,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             ScheduleReason::PreemptTick => {
                 // Wake any sleeping tasks whose time has expired.
                 self.wake_sleepers();
+                self.materialize_priority_aging_for_cpu(cpu_idx, TICK_COUNT.load(Ordering::Relaxed));
 
                 // Check preemption watchdog
                 self.check_preempt_watchdog();
@@ -2436,42 +2484,16 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Sample run-queue depth for this CPU before we start dequeuing.
         sample_runq_len(self, cpu_idx);
-
-        // Snapshot tick count once per scheduling decision so aging is both
-        // consistent across this pick and free of repeated tick loads.
         let now = TICK_COUNT.load(Ordering::Relaxed);
 
         let mut next_id = None;
         let mut pick_attempts = 0usize;
-        // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick
+        // Priority scan — pick the highest runnable bucket; fairness aging is
+        // materialized periodically outside this hot path.
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
-            let mut best_q = None;
-            let mut best_eff = 0;
-
-            for p in (1..5).rev() {
-                if let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].front() {
-                    let mut eff = p; // Start with base priority (queue index)
-                    if p < 4 {
-                        // aging only applies up to High
-                        // Use the hot-field cache to avoid a nested REGISTRY lock.
-                        if let Some(sf) = self.state.get_thread(id) {
-                            let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
-                            let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
-                            let boost = boost.min(types::MAX_PRIORITY_BOOST);
-                            eff = (p + boost).min(4);
-                        }
-                    }
-                    // Use >= so that an aged lower-priority task wins the tie when its
-                    // boosted effective priority equals a higher-priority task's. We scan
-                    // from p=4 down to p=1; a later (lower-p) match with equal eff
-                    // replaces the earlier one, meaning the task that *needed* aging to
-                    // compete gets to run first, preventing indefinite starvation.
-                    if eff >= best_eff {
-                        best_eff = eff;
-                        best_q = Some(p);
-                    }
-                }
-            }
+            let best_q = ((TaskPriority::Low as usize)..=(TaskPriority::Realtime as usize))
+                .rev()
+                .find(|&p| self.state.per_cpu[cpu_idx].runq[p].front().is_some());
 
             if let Some(p) = best_q {
                 let Some(id) = self.state.dequeue_task_front(cpu_idx, p) else {
@@ -4813,17 +4835,23 @@ mod tests {
         // while the Normal task, enqueued at tick 600, only waits 400 ticks → no boost (eff = Normal=2).
         let now = types::AGING_THRESHOLD_TICKS * 2;
         TICK_COUNT.store(now, core::sync::atomic::Ordering::Relaxed);
+        sched.materialize_priority_aging_for_cpu(0, now);
+        assert_eq!(
+            sched.state.get_thread(1002).and_then(|t| t.runq_location),
+            Some((0, TaskPriority::High as usize)),
+            "aging sweep should promote the long-waiting low-priority task"
+        );
 
         // Request schedule. The Low task should be selected because its effective priority is higher
-        // than Normal due to wait time.
+        // than Normal due to materialized wait-time aging.
         let next_switch = sched.prepare_schedule().expect("Should find a task");
         assert_eq!(
             next_switch.to_tid, 1002,
             "Low priority task with aging should preempt normal task"
         );
 
-        // Verify it was popped from the Low queue, not moved to High queue
-        assert!(sched.state.per_cpu[0].runq[TaskPriority::Low as usize].is_empty());
+        // Verify aging promotion materialized in queue structure.
+        assert!(sched.state.get_thread(1002).and_then(|t| t.runq_location).is_none());
         assert!(!sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].is_empty());
     }
 
