@@ -15,7 +15,7 @@ self-hosting.
   `targets/*-unknown-thingos.json` (including `x86_64-unknown-thingos`).
 - **Large portion of `std` is implemented for ThingOS**: we are building with
   `-Z build-std=core,alloc,std,panic_abort` and exercising that surface through
-  in-tree programs/tests.
+  in-tree programs/tests, but this does **not** yet imply full POSIX parity.
 - **Std programs compile and run on target**: e.g. `hello_std`,
   `hello_stdio`, and thread/std tests are part of the workspace.
 - **Ecosystem std crate experiments are in progress**: including `runa`-style
@@ -25,6 +25,10 @@ self-hosting.
   targets ThingOS.
 - **Self-hosting is the goal**: we are actively working toward compiling and
   running `rustc` and `cargo` inside ThingOS itself.
+- **Milestone caveat**: top-level progress here is scoped to current bring-up.
+  The source of truth for readiness gates is
+  `docs/kernel/posix-checklist.toml`; `rust_boot`/`cargo_offline` still track
+  remaining blockers (for example `signals.eintr` and cross-arch TLS gaps).
 - **Busybox-style shell experiment added**: `just busybox` builds and stages a
   tiny busybox-compatible shell (`armybox` as `/bin/busybox` and `/bin/ash`) to
   validate that workflow.

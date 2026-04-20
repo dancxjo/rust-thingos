@@ -92,12 +92,12 @@ id = "proc.exec_replace"
 title = "In-place process image replacement"
 category = "process"
 priority = "p0"
-status = "missing"
+status = "present"
 owner = "kernel"
-rust_blocker = true
-cargo_blocker = true
+rust_blocker = false
+cargo_blocker = false
 posix = "execve"
-notes = "ThingOS-native fd/handle-based task_exec preferred over path-first execve."
+notes = "Implemented via SYS_TASK_EXEC/task_exec_current (fd-first image replacement); path wrappers are tracked separately."
 
 [[features]]
 id = "proc.exec_wrappers"
@@ -578,12 +578,12 @@ id = "tls.fs_base_switch"
 title = "Per-thread FS_BASE save/restore"
 category = "tls"
 priority = "p0"
-status = "missing"
+status = "partial"
 owner = "kernel"
-rust_blocker = true
+rust_blocker = false
 cargo_blocker = false
 posix = "thread-local runtime substrate"
-notes = "Audit identifies missing FS_BASE save/restore as critical."
+notes = "Implemented on x86_64 scheduler/runtime switch_with_tls path; non-x86 architectures currently use default no-op hooks."
 
 # ---- Dynamic loading ---------------------------------------------------------
 
