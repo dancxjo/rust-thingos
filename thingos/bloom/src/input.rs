@@ -233,6 +233,8 @@ fn pressed_flag(pressed: bool) -> u8 {
 ///
 /// Prefers typed inbox delivery when the client registered `input_pid`
 /// via `CONNECT_INBOX`; otherwise falls back to legacy event-port delivery.
+/// Send failures are intentionally best-effort and drop the event to keep
+/// compositor input handling non-blocking under backpressure.
 fn send_client_event(scene: &Scene, client_id: u32, kind: KindId, payload: &[u8]) {
     if let Some(pid) = scene.client_inbox_pid(client_id) {
         let _ = msg_send(pid, kind, payload);

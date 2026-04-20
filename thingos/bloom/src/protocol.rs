@@ -32,19 +32,19 @@ pub const EVT_KEYBOARD_LEAVE: u16 = 0x8202;
 pub const EVT_KEYBOARD_KEY: u16 = 0x8203;
 
 pub const KIND_POINTER_ENTER: KindId =
-    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'E', b'N', b'T', b'E', b'R', 0]);
+    KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 1]);
 pub const KIND_POINTER_LEAVE: KindId =
-    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'L', b'E', b'A', b'V', b'E', 0]);
+    KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 2]);
 pub const KIND_POINTER_MOTION: KindId =
-    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'M', b'O', b'V', b'E', 0, 0]);
+    KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 3]);
 pub const KIND_POINTER_BUTTON: KindId =
-    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'B', b'T', b'N', 0, 0, 0]);
+    KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 4]);
 pub const KIND_KEYBOARD_ENTER: KindId =
-    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'K', b'B', b'D', b':', b'E', b'N', b'T', b'E', b'R', 0]);
+    KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 5]);
 pub const KIND_KEYBOARD_LEAVE: KindId =
-    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'K', b'B', b'D', b':', b'L', b'E', b'A', b'V', b'E', 0]);
+    KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 6]);
 pub const KIND_KEYBOARD_KEY: KindId =
-    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'K', b'B', b'D', b':', b'K', b'E', b'Y', 0, 0, 0]);
+    KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 7]);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
