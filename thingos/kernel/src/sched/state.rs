@@ -278,8 +278,11 @@ fn per_cpu_runq_locks() -> &'static Vec<Mutex<()>> {
 }
 
 #[inline]
-fn lock_per_cpu_runq(cpu: usize) -> Option<spin::mutex::MutexGuard<'static, ()>> {
-    per_cpu_runq_locks().get(cpu).map(|lock| lock.lock())
+fn lock_per_cpu_runq(cpu: usize) -> spin::mutex::MutexGuard<'static, ()> {
+    per_cpu_runq_locks()
+        .get(cpu)
+        .expect("per-cpu runq lock index must be bounds-checked before locking")
+        .lock()
 }
 
 #[cfg(test)]
@@ -288,6 +291,11 @@ fn try_lock_per_cpu_runq(cpu: usize) -> Option<spin::mutex::MutexGuard<'static, 
 }
 
 impl SchedState {
+    #[inline]
+    fn has_valid_runq_cpu(&self, cpu: usize) -> bool {
+        cpu < crate::sched::types::MAX_CPUS && cpu < self.per_cpu.len()
+    }
+
     pub fn new() -> Self {
         SchedState {
             threads: BTreeMap::new(),
@@ -384,7 +392,7 @@ impl SchedState {
     }
 
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
-        if cpu >= self.per_cpu.len() {
+        if !self.has_valid_runq_cpu(cpu) {
             return;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
@@ -399,7 +407,7 @@ impl SchedState {
     }
 
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
-        if cpu >= self.per_cpu.len() {
+        if !self.has_valid_runq_cpu(cpu) {
             return None;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
@@ -443,7 +451,7 @@ impl SchedState {
     /// bounded lookahead paths (e.g. steal) that intentionally target a
     /// non-front candidate.
     pub fn dequeue_thread_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
-        if cpu >= self.per_cpu.len() {
+        if !self.has_valid_runq_cpu(cpu) {
             return None;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
@@ -479,7 +487,7 @@ impl SchedState {
             };
             (cpu, prio)
         };
-        if cpu >= self.per_cpu.len() {
+        if !self.has_valid_runq_cpu(cpu) {
             return true;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
