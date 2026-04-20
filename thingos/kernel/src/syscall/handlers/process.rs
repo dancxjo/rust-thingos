@@ -12,7 +12,7 @@ use crate::syscall::validate::validate_user_range;
 use crate::task::StartupArg;
 
 pub fn sys_exit(code: i32) -> SysResult<usize> {
-    // crate::kprintln!("SYSCALL EXIT: TID={} code={}", unsafe { crate::sched::current_tid_current() }, code);
+    // crate::kinfo!("SYSCALL EXIT: TID={} code={}", unsafe { crate::sched::current_tid_current() }, code);
     unsafe {
         crate::sched::exit_current(code);
     }
@@ -29,11 +29,11 @@ pub fn sys_reboot(cmd: usize) -> SysResult<usize> {
 
     match cmd as u32 {
         reboot_cmd::RESTART => {
-            crate::kprintln!("SYSCALL REBOOT: system reboot requested");
+            crate::kinfo!("SYSCALL REBOOT: system reboot requested");
             crate::runtime_base().reboot();
         }
         reboot_cmd::HALT | reboot_cmd::POWER_OFF => {
-            crate::kprintln!("SYSCALL SHUTDOWN: system shutdown requested");
+            crate::kinfo!("SYSCALL SHUTDOWN: system shutdown requested");
             crate::runtime_base().shutdown();
         }
         _ => Err(Errno::EINVAL),
@@ -147,13 +147,13 @@ pub fn sys_task_poll(pid: usize) -> SysResult<usize> {
 }
 
 pub fn sys_task_wait(tid: usize) -> SysResult<usize> {
-    crate::kprintln!(
+    crate::kdebug!(
         "SYSCALL TASK_WAIT: TID={} waiting for TargetTID={}",
         unsafe { crate::sched::current_tid_current() },
         tid
     );
     let code = unsafe { crate::sched::task_wait_current(tid as u64)? };
-    crate::kprintln!(
+    crate::kdebug!(
         "SYSCALL TASK_WAIT: TID={} wake up, TargetTID={} exited with {}",
         unsafe { crate::sched::current_tid_current() },
         tid,
@@ -644,7 +644,7 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
         };
     }
 
-    // crate::kprintln!("SYSCALL SPAWN_PROCESS_EX: name='{}' TID={} PID={}", name, result.child_tid, result.child_pid);
+    crate::kinfo!("SYSCALL SPAWN_PROCESS_EX: name='{}' TID={} PID={}", name, result.child_tid, result.child_pid);
 
     Ok(result.child_tid as usize)
 }
