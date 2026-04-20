@@ -1908,6 +1908,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// Wake any sleeping tasks whose sleep time has expired
     fn wake_sleepers(&mut self) {
         let now = TICK_COUNT.load(Ordering::Relaxed);
+        let current_cpu = current_cpu_index::<R>();
         let lock_start = crate::runtime::<R>().mono_ticks();
         let mut wake_budget = self
             .wake_sleepers_budget_carry
@@ -2029,12 +2030,17 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 .map(|sf| sf.priority as usize)
                 .unwrap_or(0);
             if priority > current_prio {
-                if actual_cpu == current_cpu_index::<R>() {
-                    self.state.per_cpu[current_cpu_index::<R>()].need_resched = true;
+                if actual_cpu == current_cpu {
+                    self.state.per_cpu[current_cpu].need_resched = true;
                 }
             }
 
-            if actual_cpu != current_cpu_index::<R>() {
+            if actual_cpu != current_cpu {
+                if actual_cpu < types::MAX_CPUS && (pending_ipi_bitmap & (1u64 << actual_cpu)) != 0
+                {
+                    PROF_IPI_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
                 // Suppress duplicate IPI if the pending flag was already
                 // set by a previous wakeup.  The in-flight IPI will pick
                 // up this task when it is processed.
@@ -4998,6 +5004,74 @@ mod tests {
         assert!(
             sched.pending_wake_ipis.is_empty(),
             "pending_wake_ipis should be empty after drain"
+        );
+    }
+
+    #[test]
+    fn test_wake_sleepers_coalesces_same_cpu_remote_ipi_within_batch() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.mark_cpu_online(1);
+
+        PROF_IPI_SUPPRESSED.store(0, Ordering::Relaxed);
+        clear_global_need_resched(1, Ordering::Relaxed);
+
+        let current_task = make_task(9_101, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current_task));
+        sched.state.per_cpu[0].current = Some(9_101);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9_101,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+
+        for tid in [9_102, 9_103] {
+            let sleeping_task = make_task(tid, TaskState::Blocked, TaskPriority::Normal);
+            crate::task::registry::get_registry::<MockRuntime>()
+                .insert(alloc::boxed::Box::new(sleeping_task));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Blocked,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Pinned(1),
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.add_task_to_sleep_queue(tid, 50);
+        }
+        TICK_COUNT.store(100, Ordering::Relaxed);
+
+        sched.wake_sleepers();
+
+        assert_eq!(
+            sched.pending_wake_ipis,
+            alloc::vec![1usize],
+            "waking multiple sleepers for the same remote CPU should queue only one deferred IPI"
+        );
+        assert_eq!(
+            PROF_IPI_SUPPRESSED.load(Ordering::Relaxed),
+            1,
+            "duplicate remote wake in one wake_sleepers batch should be counted as suppressed"
         );
     }
 
