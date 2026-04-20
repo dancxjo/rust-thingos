@@ -1713,6 +1713,9 @@ fn parse_ipv4(s: &str) -> Option<Ipv4Address> {
     ))
 }
 
+/// Decode the fixed-size VFS RPC request header and return `(resp_port, op, payload)`.
+///
+/// Returns `None` when `buf` is shorter than [`VfsRpcReqHeader`].
 fn parse_rpc_header(buf: &[u8]) -> Option<(PortHandle, u8, &[u8])> {
     let hdr_sz = core::mem::size_of::<VfsRpcReqHeader>();
     if buf.len() < hdr_sz {
