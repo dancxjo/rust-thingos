@@ -332,9 +332,75 @@ pub fn wake_task_locked<R: BootRuntime>(
     (None, deferred)
 }
 
+fn try_remote_wake_via_mailbox<R: BootRuntime>(id: u64) -> bool {
+    let rt = crate::runtime::<R>();
+    let current_cpu = rt.current_cpu_index();
+    let now_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+    let wake_mono = rt.mono_ticks();
+
+    let mut remote_wake: Option<(usize, usize)> = None;
+
+    if let Some(mut task) = crate::task::registry::get_task_mut::<R>(id) {
+        if task.state == TaskState::Runnable || task.state == TaskState::Dead {
+            return true;
+        }
+        if task.state != TaskState::Blocked {
+            return false;
+        }
+
+        let target_cpu = match task.affinity {
+            crate::task::Affinity::Pinned(cpu) => cpu,
+            crate::task::Affinity::Any => task.last_cpu.unwrap_or(current_cpu),
+        };
+        let cpu_total = rt.cpu_total_count().max(1);
+        let safe_cpu = target_cpu.min(cpu_total.saturating_sub(1));
+        if safe_cpu == current_cpu {
+            return false;
+        }
+
+        task.state = TaskState::Runnable;
+        task.enqueued_at_tick = now_tick;
+        task.wake_pending = false;
+        remote_wake = Some((safe_cpu, task.priority as usize));
+    } else {
+        return true;
+    }
+
+    let Some((safe_cpu, priority)) = remote_wake else {
+        return false;
+    };
+
+    super::PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let mailbox_cpu = super::enqueue_remote_wake_mailbox(
+        safe_cpu,
+        crate::sched::types::RemoteWakeMailboxEntry {
+            tid: id,
+            priority,
+            enqueued_at_tick: now_tick,
+            wake_mono,
+        },
+    );
+    let already_pending = super::set_global_need_resched(mailbox_cpu);
+    if !already_pending {
+        if super::should_send_remote_resched_ipi(mailbox_cpu) {
+            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            rt.send_ipi(mailbox_cpu, 0x30);
+        }
+    } else {
+        super::PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+    true
+}
+
 pub fn wake_task<R: BootRuntime>(id: u64) {
     let rt = crate::runtime::<R>();
     let _irq = rt.irq_disable();
+
+    if try_remote_wake_via_mailbox::<R>(id) {
+        rt.irq_restore(_irq);
+        return;
+    }
 
     // Keep the scheduler hot-cache as the source of truth for wake coalescing.
     // A lockless REGISTRY-only early return can observe stale state during the

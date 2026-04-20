@@ -432,6 +432,15 @@ static GLOBAL_NEED_RESCHED: [AtomicBool; types::MAX_CPUS] = {
     [ATOMIC_FALSE; types::MAX_CPUS]
 };
 
+static REMOTE_WAKE_MAILBOXES: [Mutex<alloc::collections::VecDeque<types::RemoteWakeMailboxEntry>>;
+    types::MAX_CPUS] = [const { Mutex::new(alloc::collections::VecDeque::new()) }; types::MAX_CPUS];
+
+static REMOTE_WAKE_MAILBOX_PENDING: [AtomicBool; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_FALSE: AtomicBool = AtomicBool::new(false);
+    [ATOMIC_FALSE; types::MAX_CPUS]
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum AnyWakeOverloadPolicy {
@@ -748,6 +757,38 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
         PROF_RESCHED_COALESCED.fetch_add(1, Ordering::Relaxed);
     }
     was_set
+}
+
+#[inline]
+pub(crate) fn enqueue_remote_wake_mailbox(
+    target_cpu: usize,
+    entry: types::RemoteWakeMailboxEntry,
+) -> usize {
+    let safe_cpu = target_cpu.min(types::MAX_CPUS.saturating_sub(1));
+    let mut mailbox = REMOTE_WAKE_MAILBOXES[safe_cpu].lock();
+    mailbox.push_back(entry);
+    REMOTE_WAKE_MAILBOX_PENDING[safe_cpu].store(true, Ordering::Release);
+    safe_cpu
+}
+
+#[inline]
+fn take_remote_wake_mailbox(cpu: usize) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
+    if cpu >= types::MAX_CPUS {
+        return alloc::collections::VecDeque::new();
+    }
+    if !REMOTE_WAKE_MAILBOX_PENDING[cpu].swap(false, Ordering::AcqRel) {
+        return alloc::collections::VecDeque::new();
+    }
+    let mut mailbox = REMOTE_WAKE_MAILBOXES[cpu].lock();
+    core::mem::take(&mut *mailbox)
+}
+
+#[cfg(test)]
+fn reset_remote_wake_mailboxes_for_tests() {
+    for cpu in 0..types::MAX_CPUS {
+        REMOTE_WAKE_MAILBOX_PENDING[cpu].store(false, Ordering::Relaxed);
+        REMOTE_WAKE_MAILBOXES[cpu].lock().clear();
+    }
 }
 
 /// Sample the run-queue depth for `cpu` and update the last/max statics.
@@ -1831,6 +1872,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
     pub fn schedule_point(&mut self, reason: ScheduleReason) -> Option<SwitchDecision> {
         let cpu_idx = current_cpu_index::<R>();
         let global_requested = global_need_resched_swap(cpu_idx, false, Ordering::Acquire);
+        self.drain_remote_wake_mailbox(cpu_idx);
 
         if self.state.per_cpu[cpu_idx].preempt_disable_depth > 0 {
             if global_requested {
@@ -1888,6 +1930,48 @@ impl<R: BootRuntime> types::Scheduler<R> {
             _ => {
                 // For other reasons (Unblock, etc), always attempt yield
                 return self.prepare_yield();
+            }
+        }
+    }
+
+    fn drain_remote_wake_mailbox(&mut self, cpu_idx: usize) {
+        let pending = take_remote_wake_mailbox(cpu_idx);
+        if pending.is_empty() {
+            return;
+        }
+
+        for wake in pending {
+            let tid = wake.tid;
+            let priority = wake.priority.min(TaskPriority::Realtime as usize);
+
+            self.state.unregister_waiter(tid);
+            let _ = self.state.remove_task_from_sleep_queue(tid);
+
+            if let Some(sf) = self.state.get_thread_mut(tid) {
+                sf.state = TaskState::Runnable;
+                sf.enqueued_at_tick = wake.enqueued_at_tick;
+                sf.wake_cpu = Some(cpu_idx);
+                sf.wake_pending = false;
+            } else {
+                continue;
+            }
+
+            self.state.wake_enqueued_at_mono.insert(tid, wake.wake_mono);
+            self.state.note_enqueue_cause(tid, crate::sched::state::EnqueueCause::Wake);
+            self.state.enqueue_task(cpu_idx, priority, tid);
+            if let Some(pc) = self.state.per_cpu.get_mut(cpu_idx) {
+                pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
+            }
+
+            let current_prio = self.state.per_cpu[cpu_idx]
+                .current
+                .and_then(|cid| self.state.get_thread(cid))
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(0);
+            let is_idle =
+                self.state.per_cpu[cpu_idx].current == self.state.per_cpu[cpu_idx].idle_task;
+            if priority >= current_prio || is_idle {
+                self.state.per_cpu[cpu_idx].need_resched = true;
             }
         }
     }
@@ -4278,6 +4362,7 @@ mod tests {
         SCHEDULER_LOCK_ACQUIRED_AT.store(0, Ordering::Relaxed);
         PROF_LOCK_ORDER_VIOLATIONS.store(0, Ordering::Relaxed);
         TICK_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+        reset_remote_wake_mailboxes_for_tests();
         reset_any_wake_policy_for_tests();
         guard
     }
@@ -5973,6 +6058,120 @@ mod tests {
         let metrics = sched_lock_metrics_snapshot_and_reset();
         assert_eq!(metrics.wake_task_fastpath_already_pending, 0);
         assert_eq!(metrics.wake_task.wait_calls, 1);
+    }
+
+    #[test]
+    fn test_wake_task_remote_path_uses_mailbox_without_scheduler_lock() {
+        let _g = init_test_env();
+        TICK_COUNT.store(123, Ordering::Relaxed);
+        clear_global_need_resched(1, Ordering::Relaxed);
+
+        let task = crate::task::Task {
+            id: 6_202,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            base_priority: TaskPriority::Normal,
+            enqueued_at_tick: 0,
+            exit_code: None,
+            exit_waiters: crate::sched::WaitQueue::new(),
+            is_user: false,
+            wake_pending: false,
+            pending_interrupt: false,
+            affinity: Affinity::Pinned(1),
+            kstack_base: core::ptr::null_mut(),
+            kstack_size: 0,
+            kstack_top: 0,
+            ctx: Default::default(),
+            aspace: MockAddressSpace(0),
+            simd: crate::simd::SimdState::new(&MOCK_RUNTIME),
+            stack_info: None,
+            mappings: alloc::sync::Arc::new(spin::Mutex::new(
+                crate::memory::mappings::MappingList::new(),
+            )),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            last_cpu: Some(1),
+            name: [0; 32],
+            name_len: 0,
+            process_info: None,
+            user_fs_base: 0,
+            detached: false,
+            signals: crate::signal::ThreadSignals::new(),
+        };
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+
+        crate::sched::blocking::wake_task::<MockRuntime>(6_202);
+
+        let task = crate::task::registry::get_task::<MockRuntime>(6_202).unwrap();
+        assert_eq!(task.state, TaskState::Runnable);
+        assert_eq!(task.enqueued_at_tick, 123);
+
+        let queued = take_remote_wake_mailbox(1);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued.front().map(|entry| entry.tid), Some(6_202));
+        assert!(global_need_resched_load(1, Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_drain_remote_wake_mailbox_enqueues_locally() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.mark_cpu_online(1);
+        sched.state.per_cpu[1].current = Some(6_300);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6_300,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Low,
+            affinity: Affinity::Pinned(1),
+            last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: Some(1),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6_301,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(1),
+            last_cpu: Some(1),
+            wake_cpu: None,
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        let _ = sched.state.register_waiter(6_301, state::WaitReason::BlockCurrent);
+        sched.state.add_task_to_sleep_queue(6_301, 7);
+
+        enqueue_remote_wake_mailbox(
+            1,
+            types::RemoteWakeMailboxEntry {
+                tid: 6_301,
+                priority: TaskPriority::Normal as usize,
+                enqueued_at_tick: 9,
+                wake_mono: 11,
+            },
+        );
+
+        sched.drain_remote_wake_mailbox(1);
+
+        assert!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 6_301)
+        );
+        assert_eq!(sched.state.get_task(6_301).map(|sf| sf.state), Some(TaskState::Runnable));
+        assert_eq!(sched.state.get_task(6_301).and_then(|sf| sf.wake_cpu), Some(1));
+        assert!(!sched.state.wait_queue.contains(&6_301));
+        assert!(!sched.state.sleep_membership.contains_key(&6_301));
     }
 
     #[test]
