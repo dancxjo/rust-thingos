@@ -3705,6 +3705,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "killall"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+]
+
+[[package]]
 name = "kindc"
 version = "0.1.0"
 dependencies = [
