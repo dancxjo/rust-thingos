@@ -37,21 +37,21 @@
 //! | `authority.capability_mask` | `capability_mask` | Capability bits used for enforcement           |
 //! | `name`/`exec_path`      | `name`                | Human-readable label only (non-authoritative)  |
 //!
-//! # What is not yet replaced
+//! # What is still provisional
 //!
-//! * uid/gid-like identity — no such field in `Process` yet
-//! * capability masks — no such field in `Process` yet
+//! * principal/capability backing storage — still lives in transitional
+//!   `Process.authority` and is bridged into canonical `Authority`
 //! * service-account / principal binding — not yet introduced
 //! * signal permissions — remain in `Process::signals` (provisional)
 //! * namespace / VFS visibility — will become `Place` context in Phase 8
 //!
 //! # Future direction
 //!
-//! When a uid/gid field or capability mask is added to `Process`, this bridge
-//! will be the **only** place that needs updating to surface those fields
-//! through the canonical `Authority` type.  New access-control code must not
-//! read those fields from `Process` directly; all public paths must go through
-//! this bridge.
+//! As credential state is extracted from transitional `Process` storage into a
+//! dedicated authority owner, this bridge remains the **only** place that needs
+//! updating to surface those fields through the canonical `Authority` type.
+//! New access-control code must not read those fields from `Process` directly;
+//! all public paths must go through this bridge.
 //!
 //! # Guardrail: new authorization code entry points
 //!
@@ -121,10 +121,11 @@ fn required_capability(privilege: &str) -> Option<u64> {
 ///
 /// # Note on provisional credential state
 ///
-/// The current `Process` struct does not carry uid/gid, capability masks, or
-/// service-account fields.  All credential/permission state in `Process` is
-/// therefore **provisional** — it backs the canonical `Authority` through this
-/// bridge but has not yet been fully extracted into `Authority`-shaped storage.
+/// The current `Process` struct stores principal (`uid`/`gid`) and capability
+/// mask data in transitional authority backing fields, but still lacks
+/// service-account/principal binding. Credential/permission state is therefore
+/// **provisional** — surfaced through this bridge but not yet extracted into a
+/// dedicated authority owner.
 pub fn authority_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) -> Authority {
     // Prefer the human-readable thread/process name; fall back to exec_path when
     // the name has not been set (i.e., it is empty).
@@ -136,12 +137,10 @@ pub fn authority_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) 
     let name =
         if snapshot.name.is_empty() { snapshot.exec_path.clone() } else { snapshot.name.clone() };
 
-    // PROVISIONAL: capabilities is always empty in Phase 7.  The current
-    // `Process` struct carries no capability mask.  When a capability field is
-    // added to `Process` (or its Authority-shaped substructure from Phase 5),
-    // this is the sole site that must be updated to surface those capabilities
-    // through the canonical `Authority` type.  New access-control code must NOT
-    // read capability state from `Process` directly.
+    // PROVISIONAL: capability names are derived from the transitional
+    // `snapshot.capability_mask` bits. As the authority model expands (for
+    // example, adding roles/delegation), this remains the sole site that maps
+    // process-backed capability state into canonical `Authority` fields.
     Authority {
         uid: snapshot.uid,
         gid: snapshot.gid,
@@ -166,9 +165,9 @@ pub fn authority_from_snapshot(snapshot: &crate::sched::hooks::ProcessSnapshot) 
 ///
 /// # Migration note
 ///
-/// Once uid/gid-like fields or a capability mask are added to `Process`, this
-/// function remains the **single entry point** — callers will transparently
-/// receive a richer `Authority` without code changes at call sites.
+/// As the credential model grows beyond transitional `Process.authority`
+/// backing, this function remains the **single entry point** — callers receive
+/// a richer `Authority` without code changes at call sites.
 pub fn authority_for_current() -> Authority {
     if let Some(p) = crate::sched::process_info_current() {
         let p = p.lock();
@@ -218,10 +217,9 @@ pub fn authority_for_current() -> Authority {
 ///
 /// # Future direction
 ///
-/// When a capability mask or role model is added to `Process` (or its
-/// Authority-shaped substructure), this function will be updated to enforce
-/// the check.  All call sites will automatically gain real enforcement without
-/// code changes.
+/// As the privilege model grows (for example roles/delegation), this function
+/// remains the single enforcement gate. All call sites will automatically gain
+/// updated checks without code changes.
 ///
 pub fn check_privilege(authority: &Authority, privilege: &str) -> SysResult<()> {
     // uid 0 is the privileged principal.
@@ -283,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn test_authority_capabilities_are_empty_in_phase7() {
+    fn test_authority_capabilities_are_empty_when_mask_is_zero() {
         let snap = make_snapshot("svc", "/bin/svc");
         let auth = authority_from_snapshot(&snap);
         assert!(auth.capabilities.is_empty());
