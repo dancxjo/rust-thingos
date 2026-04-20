@@ -3139,12 +3139,14 @@ pub fn unregister_task_exit_waiter<R: BootRuntime>(
 struct TerminationRegistryOutcome {
     waiters: alloc::vec::Vec<u64>,
     siblings_to_kill: alloc::vec::Vec<TaskId>,
+    auto_reap: bool,
 }
 
 fn mark_task_exited_in_registry<R: BootRuntime>(
     tid: TaskId,
     code: i32,
 ) -> TerminationRegistryOutcome {
+    let mut auto_reap = false;
     debug_assert_scheduler_not_held_by_this_cpu::<R>("mark_task_exited_in_registry");
     if tid == 6 {
         crate::kdebug!("SCHED[TID6]: exited (code={})", code);
@@ -3153,6 +3155,7 @@ fn mark_task_exited_in_registry<R: BootRuntime>(
     let mut waiters = if let Some(mut task) = crate::task::registry::get_task_mut::<R>(tid) {
         task.state = TaskState::Dead;
         task.exit_code = Some(code);
+        auto_reap = task.detached;
         task.exit_waiters.drain()
     } else {
         alloc::vec::Vec::new()
@@ -3198,6 +3201,20 @@ fn mark_task_exited_in_registry<R: BootRuntime>(
         crate::job::bridge::publish_leader_exit(notify_ppid, notify_pid, code, exit_observer_inbox);
     waiters.extend(parent_waiters);
 
+    // If this process was a thread-group leader, its exit orphans its children.
+    // Reparent all children whose ppid matches this dying process to init (PID 1).
+    if notify_pid != 0 {
+        let mut registry = crate::task::registry::get_registry::<R>();
+        for task in registry.threads.iter_mut() {
+            if let Some(pinfo) = &task.process_info {
+                let mut pi = pinfo.lock();
+                if pi.job.ppid == notify_pid {
+                    pi.job.ppid = 1;
+                }
+            }
+        }
+    }
+
     // Kill sibling threads (thread-group exit).
     for &sibling in &siblings_to_kill {
         if let Some(mut task) = crate::task::registry::get_task_mut::<R>(sibling) {
@@ -3213,7 +3230,7 @@ fn mark_task_exited_in_registry<R: BootRuntime>(
 
     siblings_to_kill.retain(|&sibling| sibling != tid);
 
-    TerminationRegistryOutcome { waiters, siblings_to_kill }
+    TerminationRegistryOutcome { waiters, siblings_to_kill, auto_reap }
 }
 
 fn mark_task_exited<R: BootRuntime>(
@@ -3290,12 +3307,19 @@ pub fn exit<R: BootRuntime>(code: i32) {
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         let switch_decision = sched.terminate_current(current_tid, &termination.siblings_to_kill);
+        if termination.auto_reap {
+            sched.state.remove_task(current_tid);
+        }
         let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
         let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
         let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         clear_sched_lock_tracking::<R>();
         (switch_decision, deferred_prepare_ipis, deferred_registry_syncs, deferred_registry_inserts)
     };
+
+    if termination.auto_reap {
+        crate::task::registry::get_registry::<R>().remove(current_tid);
+    }
 
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
     apply_deferred_registry_inserts::<R>(deferred_registry_inserts);

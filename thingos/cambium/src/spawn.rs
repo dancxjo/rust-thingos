@@ -218,8 +218,9 @@ impl ManagedDriver {
             return;
         };
 
-        match task_poll(pid) {
-            Ok((TaskStatus::Dead, code)) => {
+        match stem::syscall::waitpid(pid as i64, abi::types::system::waitpid_flags::WNOHANG) {
+            Ok((child_pid, status)) if child_pid > 0 => {
+                let code = abi::signal::w_exit_status(status as u8);
                 warn!("CAMBIUM: driver for {} exited with code {}", self.slot, code);
                 self.pid = None;
                 self.cleanup_mount();

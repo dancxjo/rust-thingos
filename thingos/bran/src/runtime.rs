@@ -285,7 +285,7 @@ pub struct Runtime<A: ArchRuntime> {
     console_rx: Mutex<ConsoleBuffer>,
 }
 
-impl<A: ArchRuntime> Runtime<A> {
+impl<A: ArchRuntime + 'static> Runtime<A> {
     pub const fn new(arch: A) -> Self {
         Self {
             arch,
@@ -295,9 +295,10 @@ impl<A: ArchRuntime> Runtime<A> {
     }
 
     fn poll_console_input(&self) {
-        let mut console_rx = self.console_rx.lock();
         while let Some(byte) = self.arch.getchar() {
-            console_rx.push(byte);
+            if !self.handle_console_input_byte(byte) {
+                self.console_rx.lock().push(byte);
+            }
         }
     }
 }

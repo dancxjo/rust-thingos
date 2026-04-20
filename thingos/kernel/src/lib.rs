@@ -398,6 +398,12 @@ pub trait BootRuntimeBase: 'static {
     fn getchar(&self) -> Option<u8> {
         None
     }
+    /// Give the runtime a chance to immediately consume urgent console bytes
+    /// such as VINTR/VQUIT/VSUSP before they are queued for later line-discipline
+    /// processing.
+    fn handle_console_input_byte(&self, byte: u8) -> bool {
+        crate::vfs::devfs::ConsoleNode::handle_runtime_input_byte(self, byte)
+    }
     fn mono_ticks(&self) -> u64;
     fn mono_freq_hz(&self) -> u64 {
         10_000_000
@@ -656,11 +662,17 @@ pub fn is_runtime_initialized() -> bool {
 pub fn ioport_read_u8(_port: u16) -> u8 {
     #[cfg(target_arch = "x86_64")]
     {
+        if _port == 0x60 {
+            if let Some(byte) = crate::irq::ps2::take_scancode() {
+                return byte;
+            }
+        }
+
         let val: u8;
         unsafe {
             core::arch::asm!("in al, dx", out("al") val, in("dx") _port, options(nostack, preserves_flags))
         };
-        val
+        if _port == 0x64 { crate::irq::ps2::overlay_status(val) } else { val }
     }
     #[cfg(not(target_arch = "x86_64"))]
     {

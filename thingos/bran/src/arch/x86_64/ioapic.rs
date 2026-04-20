@@ -298,6 +298,20 @@ pub fn send_fixed_ipi(apic_id: u32, vector: u8) {
     }
 }
 
+/// Send an NMI IPI to a target CPU's Local APIC.
+pub fn send_nmi_ipi(apic_id: u32) {
+    let lapic_base = LOCAL_APIC_BASE.load(Ordering::SeqCst);
+    let hhdm = HHDM_OFFSET.load(Ordering::SeqCst);
+    let base = lapic_base + hhdm;
+
+    unsafe {
+        // ICR High: Destination (bits 56-63)
+        ptr::write_volatile((base + 0x310) as *mut u32, apic_id << 24);
+        // ICR Low: Delivery mode NMI (100b), edge, physical destination.
+        ptr::write_volatile((base + 0x300) as *mut u32, (1 << 14) | ((DeliveryMode::Nmi as u32) << 8));
+    }
+}
+
 pub fn lapic_in_service_vector() -> Option<u8> {
     let lapic_base = LOCAL_APIC_BASE.load(Ordering::SeqCst);
     let hhdm = HHDM_OFFSET.load(Ordering::SeqCst);

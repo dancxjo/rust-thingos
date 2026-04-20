@@ -298,6 +298,55 @@ pub(crate) fn console_foreground_pgid() -> Option<u32> {
 pub struct ConsoleNode;
 
 impl ConsoleNode {
+    fn try_handle_signal_byte<R: crate::BootRuntimeBase + ?Sized>(
+        rt: &R,
+        termios: abi::termios::Termios,
+        foreground_pgid: Option<u32>,
+        c: u8,
+    ) -> bool {
+        use abi::termios::{ECHO, ISIG, VINTR, VQUIT, VSUSP};
+
+        if termios.c_lflag & ISIG == 0 {
+            return false;
+        }
+
+        let do_echo = termios.c_lflag & ECHO != 0;
+        let vintr = termios.c_cc[VINTR];
+        let vquit = termios.c_cc[VQUIT];
+        let vsusp = termios.c_cc[VSUSP];
+
+        let (sig, caret) = if c == vintr {
+            (abi::signal::SIGINT, b'C')
+        } else if c == vquit {
+            (abi::signal::SIGQUIT, b'\\')
+        } else if c == vsusp {
+            (abi::signal::SIGTSTP, b'Z')
+        } else {
+            return false;
+        };
+
+        if do_echo {
+            rt.putchar(b'^');
+            rt.putchar(caret);
+            rt.putchar(b'\r');
+            rt.putchar(b'\n');
+        }
+        CONSOLE_BUF.lock().clear();
+        if let Some(pgid) = foreground_pgid {
+            crate::signal::send_signal_to_group(pgid, sig);
+        }
+        true
+    }
+
+    pub fn handle_runtime_input_byte<R: crate::BootRuntimeBase + ?Sized>(rt: &R, c: u8) -> bool {
+        let tty_state = CONSOLE_TTY_STATE.lock();
+        let termios = tty_state.termios;
+        let foreground_pgid = crate::presence::console_foreground_pgid();
+        drop(tty_state);
+
+        Self::try_handle_signal_byte(rt, termios, foreground_pgid, c)
+    }
+
     fn current_caller() -> Option<ConsoleCaller> {
         let pinfo = crate::sched::process_info_current()?;
         let p = pinfo.lock();
@@ -410,7 +459,7 @@ impl ConsoleNode {
     }
 
     fn drain_input(rt: &'static dyn crate::BootRuntimeBase) -> bool {
-        use abi::termios::{ECHO, ECHOE, ICANON, ICRNL, ISIG, VINTR, VQUIT, VSUSP};
+        use abi::termios::{ECHO, ECHOE, ICANON, ICRNL};
 
         let tty_state = CONSOLE_TTY_STATE.lock();
         let termios = tty_state.termios;
@@ -420,57 +469,14 @@ impl ConsoleNode {
         let canonical = termios.c_lflag & ICANON != 0;
         let do_echo = termios.c_lflag & ECHO != 0;
         let do_echo_erase = termios.c_lflag & ECHOE != 0;
-        let isig = termios.c_lflag & ISIG != 0;
         let icrnl = termios.c_iflag & ICRNL != 0;
-
-        let vintr = termios.c_cc[VINTR];
-        let vquit = termios.c_cc[VQUIT];
-        let vsusp = termios.c_cc[VSUSP];
 
         let mut interrupted = false;
 
         while let Some(c) = rt.getchar() {
-            if isig {
-                if c == vintr {
-                    if do_echo {
-                        rt.putchar(b'^');
-                        rt.putchar(b'C');
-                        rt.putchar(b'\r');
-                        rt.putchar(b'\n');
-                    }
-                    CONSOLE_BUF.lock().clear();
-                    if let Some(pgid) = foreground_pgid {
-                        crate::signal::send_signal_to_group(pgid, abi::signal::SIGINT);
-                    }
-                    interrupted = true;
-                    continue;
-                } else if c == vquit {
-                    if do_echo {
-                        rt.putchar(b'^');
-                        rt.putchar(b'\\');
-                        rt.putchar(b'\r');
-                        rt.putchar(b'\n');
-                    }
-                    CONSOLE_BUF.lock().clear();
-                    if let Some(pgid) = foreground_pgid {
-                        crate::signal::send_signal_to_group(pgid, abi::signal::SIGQUIT);
-                    }
-                    interrupted = true;
-                    continue;
-                } else if c == vsusp {
-                    if do_echo {
-                        rt.putchar(b'^');
-                        rt.putchar(b'Z');
-                        rt.putchar(b'\r');
-                        rt.putchar(b'\n');
-                    }
-                    CONSOLE_BUF.lock().clear();
-                    if let Some(pgid) = foreground_pgid {
-                        crate::signal::send_signal_to_group(pgid, abi::signal::SIGTSTP);
-                    }
-                    interrupted = true;
-                    continue;
-                }
+            if Self::try_handle_signal_byte(rt, termios, foreground_pgid, c) {
+                interrupted = true;
+                continue;
             }
 
             match c {
