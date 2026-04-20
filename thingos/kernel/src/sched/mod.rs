@@ -5163,6 +5163,25 @@ mod tests {
     }
 
     #[test]
+    fn test_pending_prepare_schedule_ipi_bitmap_drain_preserves_all_pending_targets() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        sched.queue_pending_prepare_schedule_ipi(1);
+        sched.queue_pending_prepare_schedule_ipi(3);
+        sched.queue_pending_prepare_schedule_ipi(5);
+        sched.queue_pending_prepare_schedule_ipi(3);
+
+        assert_eq!(
+            sched.drain_pending_prepare_schedule_ipis(),
+            alloc::vec![1usize, 3usize, 5usize],
+            "bitmap-backed drain should return all queued CPU targets without dropping pending bits or duplicating targets"
+        );
+    }
+
+    #[test]
     fn test_prepare_schedule_bounds_misroute_repair_work_per_call() {
         let _g = init_test_env();
 
