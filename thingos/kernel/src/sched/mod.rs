@@ -1874,11 +1874,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             return;
         }
 
-        let estimated_promotions = (TaskPriority::Low as usize..TaskPriority::Realtime as usize)
-            .map(|p| self.state.per_cpu[cpu_idx].runq[p].len())
-            .sum();
-        let mut promotions: alloc::vec::Vec<(TaskId, usize, usize)> =
-            alloc::vec::Vec::with_capacity(estimated_promotions);
+        let mut promotions: alloc::vec::Vec<(TaskId, usize, usize)> = alloc::vec::Vec::new();
 
         // Periodically materialize aging into runnable buckets so pick can stay
         // a simple highest-priority queue selector.
@@ -1913,6 +1909,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 continue;
             }
             if self.state.remove_task_from_runq(id) {
+                // Promoted tasks append at the destination bucket tail, preserving
+                // FIFO among already-materialized peers at that effective priority.
                 self.state.enqueue_task(cpu_idx, to_prio, id);
             }
         }
