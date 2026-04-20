@@ -78,20 +78,32 @@ impl RingBuf {
 
     fn dequeue(&mut self, dst: &mut [u8]) -> usize {
         let n = dst.len().min(self.len);
-        for b in dst[..n].iter_mut() {
-            *b = self.data[self.head];
-            self.head = (self.head + 1) % self.cap;
+        if n == 0 {
+            return 0;
         }
+        let first = (self.cap - self.head).min(n);
+        dst[..first].copy_from_slice(&self.data[self.head..self.head + first]);
+        let second = n - first;
+        if second > 0 {
+            dst[first..n].copy_from_slice(&self.data[..second]);
+        }
+        self.head = (self.head + n) % self.cap;
         self.len -= n;
         n
     }
 
     fn enqueue(&mut self, src: &[u8]) -> usize {
         let n = src.len().min(self.free_space());
-        for &b in &src[..n] {
-            self.data[self.tail] = b;
-            self.tail = (self.tail + 1) % self.cap;
+        if n == 0 {
+            return 0;
         }
+        let first = (self.cap - self.tail).min(n);
+        self.data[self.tail..self.tail + first].copy_from_slice(&src[..first]);
+        let second = n - first;
+        if second > 0 {
+            self.data[..second].copy_from_slice(&src[first..n]);
+        }
+        self.tail = (self.tail + n) % self.cap;
         self.len += n;
         n
     }
@@ -111,23 +123,33 @@ struct SockMsg {
     fds: Vec<Arc<dyn VfsNode>>,
 }
 
+/// The volatile, mutex-protected part of a connected socket pair.
+///
+/// Wait queues live in the outer [`SocketPeer`] so that wakeups can be issued
+/// *after* releasing this mutex, eliminating scheduler-lock chains.
+struct SocketPeerData {
+    a_to_b: RingBuf,
+    b_to_a: RingBuf,
+    msgs_a_to_b: VecDeque<SockMsg>,
+    msgs_b_to_a: VecDeque<SockMsg>,
+    /// Is A still alive (not shut down for writing / not closed)?
+    a_alive: bool,
+    /// Is B still alive?
+    b_alive: bool,
+}
+
 /// State shared between the two ends of a connected socket pair.
 ///
-/// Side A (the connecting/client side) writes to `a_to_b` and reads from
-/// `b_to_a`.  Side B (the accepted/server side) is the mirror.
+/// `Arc<SocketPeer>` is stored in both sides' [`SocketState::Connected`]
+/// variants.  The wait queues are *outside* the `Mutex<SocketPeerData>` so
+/// that:
+///
+/// * Wakeups happen after the data lock is released (no lock convoy).
+/// * Wait-queue registration can happen *before* the data lock is taken (see
+///   the "pre-register" pattern in the read/write implementations), eliminating
+///   missed-wake races without nested locking.
 pub struct SocketPeer {
-    /// Data written by A, readable by B.
-    a_to_b: RingBuf,
-    /// Data written by B, readable by A.
-    b_to_a: RingBuf,
-    /// Messages (data + FDs) sent by A, readable by B.
-    msgs_a_to_b: VecDeque<SockMsg>,
-    /// Messages (data + FDs) sent by B, readable by A.
-    msgs_b_to_a: VecDeque<SockMsg>,
-    /// Is A still alive (not shut down for writing)?
-    a_alive: bool,
-    /// Is B still alive (not shut down for writing)?
-    b_alive: bool,
+    data: Mutex<SocketPeerData>,
     /// A waiting to read (from b_to_a).
     a_read_waitq: WaitQueue,
     /// B waiting to read (from a_to_b).
@@ -141,12 +163,14 @@ pub struct SocketPeer {
 impl SocketPeer {
     fn new() -> Self {
         Self {
-            a_to_b: RingBuf::new(DEFAULT_SOCK_CAPACITY),
-            b_to_a: RingBuf::new(DEFAULT_SOCK_CAPACITY),
-            msgs_a_to_b: VecDeque::new(),
-            msgs_b_to_a: VecDeque::new(),
-            a_alive: true,
-            b_alive: true,
+            data: Mutex::new(SocketPeerData {
+                a_to_b: RingBuf::new(DEFAULT_SOCK_CAPACITY),
+                b_to_a: RingBuf::new(DEFAULT_SOCK_CAPACITY),
+                msgs_a_to_b: VecDeque::new(),
+                msgs_b_to_a: VecDeque::new(),
+                a_alive: true,
+                b_alive: true,
+            }),
             a_read_waitq: WaitQueue::new(),
             b_read_waitq: WaitQueue::new(),
             a_write_waitq: WaitQueue::new(),
@@ -220,7 +244,7 @@ enum SocketState {
     /// `listen()` called; server is ready to accept.
     Listening { path: String, listener: Arc<ListeningSocket> },
     /// `connect()` or `accept()` succeeded.
-    Connected { side: Side, peer: Arc<Mutex<SocketPeer>>, shutdown_rd: bool, shutdown_wr: bool },
+    Connected { side: Side, peer: Arc<SocketPeer>, shutdown_rd: bool, shutdown_wr: bool },
     /// Socket has been fully closed.
     Closed,
 }
@@ -247,7 +271,7 @@ impl UnixSocketNode {
     /// Returns `(side_a, side_b)` — both are in the Connected state and can
     /// be inserted directly into the calling process's fd table.
     pub fn new_pair() -> (Arc<Self>, Arc<Self>) {
-        let peer = Arc::new(Mutex::new(SocketPeer::new()));
+        let peer = Arc::new(SocketPeer::new());
         let a = Arc::new(Self {
             ino: NEXT_SOCKET_INO.fetch_add(1, Ordering::Relaxed),
             state: Mutex::new(SocketState::Connected {
@@ -334,7 +358,7 @@ impl UnixSocketNode {
     pub fn connect(&self, path: &str) -> abi::errors::SysResult<()> {
         let listener = registry_get(path).ok_or(abi::errors::Errno::ECONNREFUSED)?;
 
-        let peer = Arc::new(Mutex::new(SocketPeer::new()));
+        let peer = Arc::new(SocketPeer::new());
 
         // Server-side socket (SideB): pre-connected, placed into accept queue.
         let server_node = Arc::new(UnixSocketNode {
@@ -370,36 +394,44 @@ impl UnixSocketNode {
 
     /// Perform a shutdown in direction `how` (0=RD, 1=WR, 2=RDWR).
     pub fn shutdown(&self, how: u32) -> abi::errors::SysResult<()> {
-        let mut state = self.state.lock();
-        match &mut *state {
-            SocketState::Connected { side, peer, shutdown_rd, shutdown_wr } => {
-                let shut_rd = how == 0 || how == 2;
-                let shut_wr = how == 1 || how == 2;
-                if shut_rd {
-                    *shutdown_rd = true;
-                }
-                if shut_wr {
-                    *shutdown_wr = true;
-                    // Wake the peer's readers so they see EOF.
-                    let p = peer.lock();
-                    match side {
-                        Side::A => p.b_read_waitq.wake_all(),
-                        Side::B => p.a_read_waitq.wake_all(),
+        // Extract what we need while holding the state lock, then release it
+        // before performing wakeups so we do not wake tasks while holding the
+        // state lock (which would create a scheduler-lock chain).
+        let (peer, side, shut_rd, shut_wr) = {
+            let mut state = self.state.lock();
+            match &mut *state {
+                SocketState::Connected { side, peer, shutdown_rd, shutdown_wr } => {
+                    let shut_rd = how == 0 || how == 2;
+                    let shut_wr = how == 1 || how == 2;
+                    if shut_rd {
+                        *shutdown_rd = true;
                     }
-                }
-                if shut_rd {
-                    // Wake the peer's writers so they get EPIPE/ECONNRESET.
-                    let p = peer.lock();
-                    match side {
-                        Side::A => p.b_write_waitq.wake_all(),
-                        Side::B => p.a_write_waitq.wake_all(),
+                    if shut_wr {
+                        *shutdown_wr = true;
                     }
+                    (peer.clone(), *side, shut_rd, shut_wr)
                 }
-                Ok(())
+                SocketState::Closed => return Err(abi::errors::Errno::EBADF),
+                _ => return Err(abi::errors::Errno::ENOTCONN),
             }
-            SocketState::Closed => Err(abi::errors::Errno::EBADF),
-            _ => Err(abi::errors::Errno::ENOTCONN),
+        }; // state lock released
+
+        // Wake peer's blocked tasks outside the state lock.
+        if shut_wr {
+            // Peer's readers will see EOF.
+            match side {
+                Side::A => peer.b_read_waitq.wake_all(),
+                Side::B => peer.a_read_waitq.wake_all(),
+            }
         }
+        if shut_rd {
+            // Peer's writers will get EPIPE / ECONNRESET.
+            match side {
+                Side::A => peer.b_write_waitq.wake_all(),
+                Side::B => peer.a_write_waitq.wake_all(),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -417,51 +449,76 @@ impl VfsNode for UnixSocketNode {
                 return Err(abi::errors::Errno::EINTR);
             }
             let tid = unsafe { crate::sched::current_tid_current() };
-            {
+
+            // Extract the peer Arc and side from the state lock, then release it
+            // so wakeups do not need to hold the state lock.
+            let (peer, side, shutdown_rd) = {
                 let state = self.state.lock();
                 match &*state {
                     SocketState::Connected { side, peer, shutdown_rd, .. } => {
-                        if *shutdown_rd {
-                            return Ok(0);
-                        }
-                        let mut p = peer.lock();
-                        // Extract bool copies before taking any mutable borrow.
-                        let other_alive = match side {
-                            Side::A => p.b_alive,
-                            Side::B => p.a_alive,
-                        };
-                        let has_data = match side {
-                            Side::A => !p.b_to_a.is_empty(),
-                            Side::B => !p.a_to_b.is_empty(),
-                        };
-
-                        if has_data {
-                            let n = match side {
-                                Side::A => p.b_to_a.dequeue(buf),
-                                Side::B => p.a_to_b.dequeue(buf),
-                            };
-                            match side {
-                                Side::A => p.b_write_waitq.wake_one(),
-                                Side::B => p.a_write_waitq.wake_one(),
-                            }
-                            return Ok(n);
-                        }
-                        if !other_alive {
-                            return Ok(0); // EOF
-                        }
-                        // Register in read wait queue before blocking.
-                        match side {
-                            Side::A => p.a_read_waitq.push_back(tid as u64),
-                            Side::B => p.b_read_waitq.push_back(tid as u64),
-                        }
+                        (peer.clone(), *side, *shutdown_rd)
                     }
                     SocketState::Closed => return Err(abi::errors::Errno::EBADF),
                     _ => return Err(abi::errors::Errno::ENOTCONN),
                 }
+            }; // state lock released
+
+            if shutdown_rd {
+                return Ok(0);
             }
-            unsafe { crate::task::block_current_erased() };
-            if crate::sched::take_pending_interrupt_current() {
-                return Err(abi::errors::Errno::EINTR);
+
+            // Pre-register as a read waiter before inspecting the buffer so
+            // that a concurrent writer/closer cannot fire a wake between the
+            // "no data" check and `block_current_erased` (missed-wake fix).
+            let read_waitq = match side {
+                Side::A => &peer.a_read_waitq,
+                Side::B => &peer.b_read_waitq,
+            };
+            read_waitq.push_back(tid as u64);
+
+            let outcome = {
+                let mut d = peer.data.lock();
+                let other_alive = match side {
+                    Side::A => d.b_alive,
+                    Side::B => d.a_alive,
+                };
+                let has_data = match side {
+                    Side::A => !d.b_to_a.is_empty(),
+                    Side::B => !d.a_to_b.is_empty(),
+                };
+
+                if has_data {
+                    let n = match side {
+                        Side::A => d.b_to_a.dequeue(buf),
+                        Side::B => d.a_to_b.dequeue(buf),
+                    };
+                    read_waitq.remove(tid as u64);
+                    Some(Ok(n))
+                } else if !other_alive {
+                    read_waitq.remove(tid as u64);
+                    Some(Ok(0)) // EOF
+                } else {
+                    None // stay registered; will block
+                }
+            }; // data lock released
+
+            match outcome {
+                Some(Ok(n)) if n > 0 => {
+                    // Wake a blocked writer on the peer side — outside data lock ✓
+                    match side {
+                        Side::A => peer.b_write_waitq.wake_one(),
+                        Side::B => peer.a_write_waitq.wake_one(),
+                    }
+                    return Ok(n);
+                }
+                Some(result) => return result,
+                None => {
+                    unsafe { crate::task::block_current_erased() };
+                    read_waitq.remove(tid as u64);
+                    if crate::sched::take_pending_interrupt_current() {
+                        return Err(abi::errors::Errno::EINTR);
+                    }
+                }
             }
         }
     }
@@ -475,51 +532,72 @@ impl VfsNode for UnixSocketNode {
                 return Err(abi::errors::Errno::EINTR);
             }
             let tid = unsafe { crate::sched::current_tid_current() };
-            {
+
+            let (peer, side, shutdown_wr) = {
                 let state = self.state.lock();
                 match &*state {
                     SocketState::Connected { side, peer, shutdown_wr, .. } => {
-                        if *shutdown_wr {
-                            return Err(abi::errors::Errno::EPIPE);
-                        }
-                        let mut p = peer.lock();
-                        // Extract bool copies before taking any mutable borrow.
-                        let other_alive = match side {
-                            Side::A => p.b_alive,
-                            Side::B => p.a_alive,
-                        };
-                        let tx_full = match side {
-                            Side::A => p.a_to_b.is_full(),
-                            Side::B => p.b_to_a.is_full(),
-                        };
-
-                        if !other_alive {
-                            return Err(abi::errors::Errno::EPIPE);
-                        }
-                        if !tx_full {
-                            let n = match side {
-                                Side::A => p.a_to_b.enqueue(buf),
-                                Side::B => p.b_to_a.enqueue(buf),
-                            };
-                            match side {
-                                Side::A => p.b_read_waitq.wake_one(),
-                                Side::B => p.a_read_waitq.wake_one(),
-                            }
-                            return Ok(n);
-                        }
-                        // Buffer is full — register and block.
-                        match side {
-                            Side::A => p.a_write_waitq.push_back(tid as u64),
-                            Side::B => p.b_write_waitq.push_back(tid as u64),
-                        }
+                        (peer.clone(), *side, *shutdown_wr)
                     }
                     SocketState::Closed => return Err(abi::errors::Errno::EBADF),
                     _ => return Err(abi::errors::Errno::ENOTCONN),
                 }
+            }; // state lock released
+
+            if shutdown_wr {
+                return Err(abi::errors::Errno::EPIPE);
             }
-            unsafe { crate::task::block_current_erased() };
-            if crate::sched::take_pending_interrupt_current() {
-                return Err(abi::errors::Errno::EINTR);
+
+            // Pre-register as a write waiter before inspecting the buffer.
+            let write_waitq = match side {
+                Side::A => &peer.a_write_waitq,
+                Side::B => &peer.b_write_waitq,
+            };
+            write_waitq.push_back(tid as u64);
+
+            let outcome = {
+                let mut d = peer.data.lock();
+                let other_alive = match side {
+                    Side::A => d.b_alive,
+                    Side::B => d.a_alive,
+                };
+                let tx_full = match side {
+                    Side::A => d.a_to_b.is_full(),
+                    Side::B => d.b_to_a.is_full(),
+                };
+
+                if !other_alive {
+                    write_waitq.remove(tid as u64);
+                    Some(Err(abi::errors::Errno::EPIPE))
+                } else if !tx_full {
+                    let n = match side {
+                        Side::A => d.a_to_b.enqueue(buf),
+                        Side::B => d.b_to_a.enqueue(buf),
+                    };
+                    write_waitq.remove(tid as u64);
+                    Some(Ok(n))
+                } else {
+                    None // stay registered; will block
+                }
+            }; // data lock released
+
+            match outcome {
+                Some(Ok(n)) => {
+                    // Wake a blocked reader on the peer side — outside data lock ✓
+                    match side {
+                        Side::A => peer.b_read_waitq.wake_one(),
+                        Side::B => peer.a_read_waitq.wake_one(),
+                    }
+                    return Ok(n);
+                }
+                Some(result) => return result,
+                None => {
+                    unsafe { crate::task::block_current_erased() };
+                    write_waitq.remove(tid as u64);
+                    if crate::sched::take_pending_interrupt_current() {
+                        return Err(abi::errors::Errno::EINTR);
+                    }
+                }
             }
         }
     }
@@ -534,29 +612,43 @@ impl VfsNode for UnixSocketNode {
     }
 
     fn close(&self) {
-        let mut state = self.state.lock();
-        match &*state {
-            SocketState::Listening { path, .. } => {
-                registry_remove(path);
+        // Atomically transition state to Closed and extract peer info.
+        // The actual wakeups happen *after* releasing both state and data
+        // locks so we don't hold hot locks during scheduler operations.
+        let action = {
+            let mut state = self.state.lock();
+            match core::mem::replace(&mut *state, SocketState::Closed) {
+                SocketState::Listening { path, .. } => {
+                    registry_remove(&path);
+                    None
+                }
+                SocketState::Connected { side, peer, .. } => Some((peer, side)),
+                _ => None,
             }
-            SocketState::Connected { side, peer, .. } => {
-                let mut p = peer.lock();
+        }; // state lock released
+
+        if let Some((peer, side)) = action {
+            // Mark the closing side as dead under the data lock.
+            {
+                let mut d = peer.data.lock();
                 match side {
-                    Side::A => {
-                        p.a_alive = false;
-                        p.b_read_waitq.wake_all();
-                        p.b_write_waitq.wake_all();
-                    }
-                    Side::B => {
-                        p.b_alive = false;
-                        p.a_read_waitq.wake_all();
-                        p.a_write_waitq.wake_all();
-                    }
+                    Side::A => d.a_alive = false,
+                    Side::B => d.b_alive = false,
+                }
+            } // data lock released
+
+            // Wake the peer's blocked readers and writers outside all locks ✓
+            match side {
+                Side::A => {
+                    peer.b_read_waitq.wake_all();
+                    peer.b_write_waitq.wake_all();
+                }
+                Side::B => {
+                    peer.a_read_waitq.wake_all();
+                    peer.a_write_waitq.wake_all();
                 }
             }
-            _ => {}
         }
-        *state = SocketState::Closed;
     }
 
     fn poll(&self) -> u16 {
@@ -564,11 +656,11 @@ impl VfsNode for UnixSocketNode {
         let state = self.state.lock();
         match &*state {
             SocketState::Connected { side, peer, shutdown_rd, shutdown_wr } => {
-                let p = peer.lock();
+                let d = peer.data.lock();
                 let mut events = 0u16;
                 let (rx_buf, tx_buf, other_alive) = match side {
-                    Side::A => (&p.b_to_a, &p.a_to_b, p.b_alive),
-                    Side::B => (&p.a_to_b, &p.b_to_a, p.a_alive),
+                    Side::A => (&d.b_to_a, &d.a_to_b, d.b_alive),
+                    Side::B => (&d.a_to_b, &d.b_to_a, d.a_alive),
                 };
                 if !shutdown_rd && (!rx_buf.is_empty() || !other_alive) {
                     events |= POLLIN;
@@ -584,11 +676,7 @@ impl VfsNode for UnixSocketNode {
                 events
             }
             SocketState::Listening { listener, .. } => {
-                if listener.queue_len() > 0 {
-                    POLLIN
-                } else {
-                    0
-                }
+                if listener.queue_len() > 0 { POLLIN } else { 0 }
             }
             _ => 0,
         }
@@ -597,13 +685,10 @@ impl VfsNode for UnixSocketNode {
     fn add_waiter(&self, tid: u64) {
         let state = self.state.lock();
         match &*state {
-            SocketState::Connected { side, peer, .. } => {
-                let p = peer.lock();
-                match side {
-                    Side::A => p.a_read_waitq.push_back(tid),
-                    Side::B => p.b_read_waitq.push_back(tid),
-                }
-            }
+            SocketState::Connected { side, peer, .. } => match side {
+                Side::A => peer.a_read_waitq.push_back(tid),
+                Side::B => peer.b_read_waitq.push_back(tid),
+            },
             SocketState::Listening { listener, .. } => {
                 listener.accept_waitq.push_back(tid);
             }
@@ -614,13 +699,10 @@ impl VfsNode for UnixSocketNode {
     fn remove_waiter(&self, tid: u64) {
         let state = self.state.lock();
         match &*state {
-            SocketState::Connected { side, peer, .. } => {
-                let p = peer.lock();
-                match side {
-                    Side::A => p.a_read_waitq.remove(tid),
-                    Side::B => p.b_read_waitq.remove(tid),
-                }
-            }
+            SocketState::Connected { side, peer, .. } => match side {
+                Side::A => peer.a_read_waitq.remove(tid),
+                Side::B => peer.b_read_waitq.remove(tid),
+            },
             SocketState::Listening { listener, .. } => {
                 listener.accept_waitq.remove(tid);
             }
@@ -655,59 +737,75 @@ impl VfsNode for UnixSocketNode {
         data: &[u8],
         fds: alloc::vec::Vec<Arc<dyn VfsNode>>,
     ) -> abi::errors::SysResult<()> {
-        let state = self.state.lock();
-        match &*state {
-            SocketState::Connected { side, peer, shutdown_wr, .. } => {
-                if *shutdown_wr {
-                    return Err(abi::errors::Errno::EPIPE);
+        // Extract state snapshot then release lock before waking.
+        let (peer, side, shut_wr) = {
+            let state = self.state.lock();
+            match &*state {
+                SocketState::Connected { side, peer, shutdown_wr, .. } => {
+                (peer.clone(), *side, *shutdown_wr)
                 }
-                let mut p = peer.lock();
-                if !match side {
-                    Side::A => p.b_alive,
-                    Side::B => p.a_alive,
-                } {
-                    return Err(abi::errors::Errno::EPIPE);
-                }
+                SocketState::Closed => return Err(abi::errors::Errno::EBADF),
+                _ => return Err(abi::errors::Errno::ENOTCONN),
+            }
+        }; // state lock released
+
+        if shut_wr {
+            return Err(abi::errors::Errno::EPIPE);
+        }
+
+        let other_alive = {
+            let mut d = peer.data.lock();
+            let alive = match side {
+                Side::A => d.b_alive,
+                Side::B => d.a_alive,
+            };
+            if alive {
                 let msg = SockMsg { data: data.to_vec(), fds };
                 match side {
-                    Side::A => {
-                        p.msgs_a_to_b.push_back(msg);
-                        p.b_read_waitq.wake_one();
-                    }
-                    Side::B => {
-                        p.msgs_b_to_a.push_back(msg);
-                        p.a_read_waitq.wake_one();
-                    }
+                    Side::A => d.msgs_a_to_b.push_back(msg),
+                    Side::B => d.msgs_b_to_a.push_back(msg),
                 }
-                Ok(())
             }
-            SocketState::Closed => Err(abi::errors::Errno::EBADF),
-            _ => Err(abi::errors::Errno::ENOTCONN),
+            alive
+        }; // data lock released
+
+        if !other_alive {
+            return Err(abi::errors::Errno::EPIPE);
         }
+        // Wake the peer's reader outside the data lock ✓
+        match side {
+            Side::A => peer.b_read_waitq.wake_one(),
+            Side::B => peer.a_read_waitq.wake_one(),
+        }
+        Ok(())
     }
 
     fn sock_recvmsg(
         &self,
     ) -> abi::errors::SysResult<Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<Arc<dyn VfsNode>>)>>
     {
-        let state = self.state.lock();
-        match &*state {
-            SocketState::Connected { side, peer, shutdown_rd, .. } => {
-                if *shutdown_rd {
-                    return Ok(None);
+        let (peer, side, shut_rd) = {
+            let state = self.state.lock();
+            match &*state {
+                SocketState::Connected { side, peer, shutdown_rd, .. } => {
+                    (peer.clone(), *side, *shutdown_rd)
                 }
-                let mut p = peer.lock();
-                let msg = match side {
-                    Side::A => p.msgs_b_to_a.pop_front(),
-                    Side::B => p.msgs_a_to_b.pop_front(),
-                };
-                match msg {
-                    Some(m) => Ok(Some((m.data, m.fds))),
-                    None => Ok(None), // EAGAIN — no message queued
-                }
+                SocketState::Closed => return Err(abi::errors::Errno::EBADF),
+                _ => return Err(abi::errors::Errno::ENOTCONN),
             }
-            SocketState::Closed => Err(abi::errors::Errno::EBADF),
-            _ => Err(abi::errors::Errno::ENOTCONN),
+        }; // state lock released
+
+        if shut_rd {
+            return Ok(None);
+        }
+        let mut d = peer.data.lock();
+        let msg = match side {
+            Side::A => d.msgs_b_to_a.pop_front(),
+            Side::B => d.msgs_a_to_b.pop_front(),
+        };
+        match msg {
+            Some(m) => Ok(Some((m.data, m.fds))),
+            None => Ok(None), // EAGAIN — no message queued
         }
     }
 }
