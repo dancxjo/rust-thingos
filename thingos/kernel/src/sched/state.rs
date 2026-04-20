@@ -212,6 +212,20 @@ impl PerCpu {
             stats: PerCpuSchedStats::default(),
         }
     }
+
+    #[inline]
+    fn mark_runnable_nonempty(&mut self, prio: usize) {
+        if prio > 0 {
+            self.nonempty_runnable_mask |= 1u8 << prio;
+        }
+    }
+
+    #[inline]
+    fn clear_runnable_if_empty(&mut self, prio: usize) {
+        if prio > 0 && self.runq[prio].is_empty() {
+            self.nonempty_runnable_mask &= !(1u8 << prio);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -425,9 +439,7 @@ impl SchedState {
         let _cpu_lock = lock_per_cpu_runq(cpu);
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
             pc.runq[prio].push_back(tid);
-            if prio > 0 {
-                pc.nonempty_runnable_mask |= 1u8 << prio;
-            }
+            pc.mark_runnable_nonempty(prio);
             pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
             pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         }
@@ -446,14 +458,10 @@ impl SchedState {
         if let Some(pc) = per_cpu.get_mut(cpu) {
             for _cleanup_attempt in 0..RUNQ_STALE_PURGE_BUDGET {
                 let Some(tid) = pc.runq[prio].pop_front() else {
-                    if prio > 0 {
-                        pc.nonempty_runnable_mask &= !(1u8 << prio);
-                    }
+                    pc.clear_runnable_if_empty(prio);
                     break;
                 };
-                if prio > 0 && pc.runq[prio].is_empty() {
-                    pc.nonempty_runnable_mask &= !(1u8 << prio);
-                }
+                pc.clear_runnable_if_empty(prio);
                 // Lazy-invalidation model: entries may stay in the VecDeque after
                 // `remove_thread_from_runq` marks them not-enqueued.
                 // Only return the entry if it still matches the task's canonical
@@ -505,9 +513,7 @@ impl SchedState {
         if removed.is_none() {
             return None;
         }
-        if prio > 0 && pc.runq[prio].is_empty() {
-            pc.nonempty_runnable_mask &= !(1u8 << prio);
-        }
+        pc.clear_runnable_if_empty(prio);
         pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
         pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         if let Some(thread) = threads.get_mut(&tid) {
@@ -657,9 +663,7 @@ impl SchedState {
         runq.retain(|entry_tid| {
             threads.get(entry_tid).and_then(|thread| thread.runq_location) == Some((cpu, prio))
         });
-        if prio > 0 && runq.is_empty() {
-            pc.nonempty_runnable_mask &= !(1u8 << prio);
-        }
+        pc.clear_runnable_if_empty(prio);
     }
 
     // ── Backward-compatible forwarding methods ────────────────────────────────

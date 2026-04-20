@@ -236,6 +236,8 @@ pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
+/// Bits 1..=4 represent non-idle priority queues (Low..Realtime).
+const RUNNABLE_NONIDLE_MASK: u8 = 0b1_1110;
 // Keep steal scans bounded to limit idle-path latency while still peeking past
 // a small pinned/unstealable head segment.
 const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
@@ -246,6 +248,12 @@ const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 64;
 const RESCHED_IPI_NEVER_SENT: u64 = u64::MAX;
 const RESCHED_IPI_MIN_TICK_DELTA: u64 = 2;
+
+#[inline]
+fn highest_set_bit_u8(mask: u8) -> usize {
+    debug_assert!(mask != 0);
+    (u8::BITS as usize - 1) - mask.leading_zeros() as usize
+}
 
 /// Map a microsecond duration to a histogram bucket index.
 ///
@@ -2414,9 +2422,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
             let mut best_q = None;
             let mut best_eff = 0;
-            let mut candidate_mask = self.state.per_cpu[cpu_idx].nonempty_runnable_mask & 0b1_1110;
+            let mut candidate_mask =
+                self.state.per_cpu[cpu_idx].nonempty_runnable_mask & RUNNABLE_NONIDLE_MASK;
             while candidate_mask != 0 {
-                let p = (u8::BITS - 1 - candidate_mask.leading_zeros()) as usize;
+                let p = highest_set_bit_u8(candidate_mask);
                 candidate_mask &= !(1u8 << p);
 
                 if let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].front() {
