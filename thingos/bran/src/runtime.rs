@@ -348,8 +348,7 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
         self.poll_console_input();
         // Write to serial (arch-specific)
         self.arch.putchar(c);
-        // Boot display path disabled; serial remains the early log sink.
-        // crate::theme::putchar(c);
+        crate::console::put_char(c);
         self.poll_console_input();
     }
     fn getchar(&self) -> Option<u8> {

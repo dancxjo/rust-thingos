@@ -1,6 +1,22 @@
 use crate::requests::FRAMEBUFFER_REQUEST;
 use kernel::{FramebufferInfo, PixelFormat};
 
+#[cfg(target_arch = "x86_64")]
+#[inline]
+unsafe fn fill_u32_sse2(buf: &mut [u32], color: u32) {
+    use core::arch::x86_64::{__m128i, _mm_set1_epi32, _mm_storeu_si128};
+    let chunks = buf.len() / 4;
+    let rem = buf.len() % 4;
+    let vec = unsafe { _mm_set1_epi32(color as i32) };
+    let ptr = buf.as_mut_ptr();
+    for i in 0..chunks {
+        unsafe { _mm_storeu_si128(ptr.add(i * 4) as *mut __m128i, vec) };
+    }
+    for i in 0..rem {
+        unsafe { *ptr.add(chunks * 4 + i) = color };
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Framebuffer {
     pub addr: *mut u32,
@@ -101,8 +117,14 @@ impl Framebuffer {
             let pixels_per_row = row_bytes / 4;
 
             // Fill first row with u32 writes
-            for i in 0..pixels_per_row.min(self.width as usize) {
-                buffer_u32[i] = color;
+            let first_row = pixels_per_row.min(self.width as usize);
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                fill_u32_sse2(&mut buffer_u32[..first_row], color);
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                buffer_u32[..first_row].fill(color);
             }
 
             // Copy first row to all remaining rows using fast slice copy
