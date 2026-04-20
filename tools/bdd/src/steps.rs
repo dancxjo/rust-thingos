@@ -1333,9 +1333,8 @@ async fn when_press_key(world: &mut ThingOsWorld) {
 
 #[when("I wait for the shell prompt")]
 async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // Shell prompt ends with ⚡ followed by a space.
-    // It also contains ANSI escape codes.
-    let found = world.wait_for_serial("⚡ ", 60.0).await;
+    // Shell prompt contains THING-OS followed by status and cwd.
+    let found = world.wait_for_serial("THING-OS", 60.0).await;
     if !found {
         return Err(StepError("Timed out waiting for shell prompt".to_string()));
     }
