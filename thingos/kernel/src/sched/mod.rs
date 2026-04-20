@@ -1874,10 +1874,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
             return;
         }
 
-        let mut promotions: alloc::vec::Vec<(TaskId, usize, usize)> = alloc::vec::Vec::new();
+        let estimated_promotions = (TaskPriority::Low as usize..TaskPriority::Realtime as usize)
+            .map(|p| self.state.per_cpu[cpu_idx].runq[p].len())
+            .sum();
+        let mut promotions: alloc::vec::Vec<(TaskId, usize, usize)> =
+            alloc::vec::Vec::with_capacity(estimated_promotions);
 
         // Periodically materialize aging into runnable buckets so pick can stay
         // a simple highest-priority queue selector.
+        // Skip Realtime priority: fairness aging is bounded to non-realtime work.
         for p in (TaskPriority::Low as usize)..(TaskPriority::Realtime as usize) {
             for &id in self.state.per_cpu[cpu_idx].runq[p].iter() {
                 let Some(sf) = self.state.get_thread(id) else {
@@ -1890,6 +1895,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
                 let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
                 let boost = boost.min(types::MAX_PRIORITY_BOOST);
+                // Never age into Realtime; preserve explicit realtime priority semantics.
                 let target = (p + boost).min(TaskPriority::High as usize);
                 if target > p {
                     promotions.push((id, p, target));
