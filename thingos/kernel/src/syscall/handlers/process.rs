@@ -22,14 +22,8 @@ pub fn sys_exit(code: i32) -> SysResult<usize> {
 pub fn sys_reboot(cmd: usize) -> SysResult<usize> {
     use abi::syscall::reboot_cmd;
 
-    // AUTHORITY CHECK — route through the canonical bridge rather than reading
-    // Process fields directly.  In Phase 7 this is a no-op (check_privilege
-    // always succeeds), but it establishes the Authority-oriented pattern so
-    // future phases can enforce real privilege without changing call sites.
-    //
-    // PROVISIONAL: Real privilege enforcement is deferred to the
-    // TODO(authority-enforcement) milestone.  Until then this call documents
-    // intent and keeps the direct-Process anti-pattern from proliferating.
+    // Enforce reboot authority through the canonical Authority bridge.
+    // Callers must be root (uid 0) or hold CAP_REBOOT.
     let authority = crate::authority::bridge::authority_for_current();
     crate::authority::bridge::check_privilege(&authority, "reboot")?;
 
@@ -836,6 +830,9 @@ pub fn sys_task_exec(
 #[cfg(test)]
 mod tests {
     use super::serialize_auxv_to_buf;
+    use crate::authority::bridge::CAP_REBOOT;
+    use abi::errors::Errno;
+    use thingos::authority::Authority;
 
     // AT_* constants used in tests (must match kernel/src/task/exec.rs).
     const AT_NULL: u64 = 0;
@@ -968,5 +965,44 @@ mod tests {
                 n
             );
         }
+    }
+
+    #[test]
+    fn reboot_privilege_allows_root_authority() {
+        let authority = Authority {
+            uid: 0,
+            gid: 0,
+            name: alloc::string::String::from("root"),
+            capability_mask: 0,
+            capabilities: alloc::vec::Vec::new(),
+        };
+        assert!(crate::authority::bridge::check_privilege(&authority, "reboot").is_ok());
+    }
+
+    #[test]
+    fn reboot_privilege_allows_capability_for_non_root() {
+        let authority = Authority {
+            uid: 1000,
+            gid: 1000,
+            name: alloc::string::String::from("svc"),
+            capability_mask: CAP_REBOOT,
+            capabilities: alloc::vec![alloc::string::String::from("reboot")],
+        };
+        assert!(crate::authority::bridge::check_privilege(&authority, "reboot").is_ok());
+    }
+
+    #[test]
+    fn reboot_privilege_denies_unprivileged_non_root() {
+        let authority = Authority {
+            uid: 1000,
+            gid: 1000,
+            name: alloc::string::String::from("user"),
+            capability_mask: 0,
+            capabilities: alloc::vec::Vec::new(),
+        };
+        assert_eq!(
+            crate::authority::bridge::check_privilege(&authority, "reboot"),
+            Err(Errno::EPERM)
+        );
     }
 }

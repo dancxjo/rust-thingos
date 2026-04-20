@@ -233,7 +233,7 @@ See `docs/kernel/watch.md` for `SYS_FS_WATCH_FD` / `SYS_FS_WATCH_PATH` details.
 
 | Number | Name | Description |
 |---|---|---|
-| `0x7000` | `SYS_REBOOT` | Reboot / halt / power-off |
+| `0x7000` | `SYS_REBOOT` | Reboot / halt / power-off (requires root or `CAP_REBOOT`) |
 | `0x7001` | `SYS_GETRANDOM` | Fill buffer with random bytes |
 | `0x7002` | `SYS_CONSOLE_ENABLE` | Enable console output |
 | `0x7003` | `SYS_LOG_SET_LEVEL` | Set minimum log level |
