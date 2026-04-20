@@ -19,13 +19,8 @@ fn map_mmio_range(phys: u64, len: u64, hhdm: u64) {
     let start = phys & !0xfff;
     let end = (phys + len + 0xfff) & !0xfff;
     let aspace = paging::active_address_space();
-    let perms = MapPerms {
-        user: false,
-        read: true,
-        write: true,
-        exec: false,
-        kind: MapKind::Device,
-    };
+    let perms =
+        MapPerms { user: false, read: true, write: true, exec: false, kind: MapKind::Device };
 
     let mut p = start;
     while p < end {
@@ -100,7 +95,7 @@ fn read_reg(reg: u32) -> u32 {
     }
 }
 
-/// Write IOAPIC register via indirect access  
+/// Write IOAPIC register via indirect access
 fn write_reg(reg: u32, val: u32) {
     unsafe {
         let base = base();
@@ -247,14 +242,17 @@ pub fn calibrate_lapic_timer(hz: u32) -> (u32, u64) {
         ioport_write_u8(0x61, ioport_read_u8(0x61) & !0x01);
 
         let delta = start_lapic.saturating_sub(end_lapic);
-        let (ticks_per_sec, calibrated) = if delta > 1000 {
-            ((delta as u64) * 100, true)
-        } else {
-            (1_000_000_000, false)
-        };
+        let (ticks_per_sec, calibrated) =
+            if delta > 1000 { ((delta as u64) * 100, true) } else { (1_000_000_000, false) };
         let init_cnt = (ticks_per_sec / hz as u64) as u32;
 
-        kernel::kprintln!("LAPIC: calibrated {} ticks/sec (delta={}, ok={}) -> init_cnt={}", ticks_per_sec, delta, calibrated, init_cnt);
+        kernel::kdebug!(
+            "LAPIC: calibrated {} ticks/sec (delta={}, ok={}) -> init_cnt={}",
+            ticks_per_sec,
+            delta,
+            calibrated,
+            init_cnt
+        );
         (init_cnt, ticks_per_sec)
     }
 }
@@ -308,7 +306,10 @@ pub fn send_nmi_ipi(apic_id: u32) {
         // ICR High: Destination (bits 56-63)
         ptr::write_volatile((base + 0x310) as *mut u32, apic_id << 24);
         // ICR Low: Delivery mode NMI (100b), edge, physical destination.
-        ptr::write_volatile((base + 0x300) as *mut u32, (1 << 14) | ((DeliveryMode::Nmi as u32) << 8));
+        ptr::write_volatile(
+            (base + 0x300) as *mut u32,
+            (1 << 14) | ((DeliveryMode::Nmi as u32) << 8),
+        );
     }
 }
 
