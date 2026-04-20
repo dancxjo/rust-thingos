@@ -352,7 +352,9 @@ impl Shell {
                         pgid,
                         command
                     );
+                    write_str("\x1B[?25l"); // hide cursor while child runs
                     self.wait_for_foreground_job(job_id);
+                    write_str("\x1B[?25h"); // show cursor when shell regains control
                 }
             }
             Err(err) => {
@@ -657,7 +659,6 @@ fn utf8_char_count(bytes: &[u8]) -> usize {
 }
 
 fn redraw_line_at_cursor(bytes: &[u8], cursor: usize, last_status: Option<i32>) {
-    write_str("\x1B[?25l"); // hide cursor during redraw
     write_str("\r\x1B[K");
     prompt(last_status);
     if let Ok(text) = core::str::from_utf8(bytes) {
@@ -670,7 +671,6 @@ fn redraw_line_at_cursor(bytes: &[u8], cursor: usize, last_status: Option<i32>) 
         let seq = format!("\x1B[{}D", cols);
         write_str(&seq);
     }
-    write_str("\x1B[?25h"); // show cursor after redraw
 }
 
 fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineResult {
