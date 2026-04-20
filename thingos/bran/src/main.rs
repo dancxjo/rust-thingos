@@ -20,9 +20,14 @@ use kernel::{BootRuntime, BootTasking};
 use requests::{BASE_REVISION, FRAMEBUFFER_REQUEST};
 
 pub static RUNTIME: arch::CurrentRuntime = arch::create_runtime();
+const EARLY_BOOT_TRACE_ENABLED: bool = false;
 
 #[cfg(target_arch = "x86_64")]
 fn early_serial_write(msg: &[u8]) {
+    if !EARLY_BOOT_TRACE_ENABLED {
+        let _ = msg;
+        return;
+    }
     unsafe {
         let port = 0x3f8u16;
         for &b in msg {

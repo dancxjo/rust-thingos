@@ -40,6 +40,17 @@ use abi::vm::{VmBackingKind, VmMapFlags, VmProt, VmRegionInfo};
 
 use crate::task::StartupArg;
 
+const RAW_BOOT_TRACE_ENABLED: bool = false;
+
+#[inline]
+fn boot_trace<R: BootRuntime>(runtime: &R, msg: &[u8]) {
+    if RAW_BOOT_TRACE_ENABLED {
+        runtime.serial_putbuf(msg);
+    } else {
+        let _ = (runtime, msg);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
     // Decode x86_64 page fault error code bits

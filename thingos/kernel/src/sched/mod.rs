@@ -3028,7 +3028,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// Mark a secondary CPU as online and initialize its idle task.
     pub fn cpu_online(&mut self, cpu_index: usize) {
         crate::kdebug!("SMP: CPU {} online (triggered by scheduler spawn)", cpu_index);
-        self.bringup_in_progress = false;
+        while self.state.per_cpu.len() <= cpu_index {
+            self.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        self.state.mark_cpu_online(cpu_index);
+        self.total_cpu_count = self.total_cpu_count.max(cpu_index.saturating_add(1));
 
         // Create idle task for this new CPU
         let i = cpu_index;
