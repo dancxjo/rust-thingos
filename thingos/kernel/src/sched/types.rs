@@ -223,8 +223,7 @@ impl<R: BootRuntime> Scheduler<R> {
     /// decide whether to halt or keep spinning.
     pub fn has_runnable_work(&self, cpu_idx: usize) -> bool {
         if let Some(pc) = self.state.per_cpu.get(cpu_idx) {
-            // Check priority queues 1 (Low) through 4 (Realtime)
-            pc.runq[1..].iter().any(|q| !q.is_empty())
+            pc.nonempty_runnable_mask != 0
         } else {
             false
         }

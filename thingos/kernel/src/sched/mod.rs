@@ -772,7 +772,9 @@ pub(crate) fn enqueue_remote_wake_mailbox(
 }
 
 #[inline]
-fn take_remote_wake_mailbox(cpu: usize) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
+fn take_remote_wake_mailbox(
+    cpu: usize,
+) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
     if cpu >= types::MAX_CPUS {
         return alloc::collections::VecDeque::new();
     }
@@ -2298,7 +2300,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let prio = sf.priority as usize;
         match sf.affinity {
             crate::task::Affinity::Pinned(cpu) if cpu < per_cpu_len => Some((prio, cpu)),
-            crate::task::Affinity::Pinned(_) => Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1))),
+            crate::task::Affinity::Pinned(_) => {
+                Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1)))
+            }
             crate::task::Affinity::Any => {
                 let fallback = queued_target_cpu.min(per_cpu_len - 1);
                 Some((prio, sf.last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(fallback)))
@@ -2405,12 +2409,16 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         let mut next_id = None;
         let mut pick_attempts = 0usize;
-        // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick
+        // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick.
+        // Use per-CPU runnable queue bitmap to avoid probing all priority fronts.
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
             let mut best_q = None;
             let mut best_eff = 0;
+            let mut candidate_mask = self.state.per_cpu[cpu_idx].nonempty_runnable_mask & 0b1_1110;
+            while candidate_mask != 0 {
+                let p = (u8::BITS - 1 - candidate_mask.leading_zeros()) as usize;
+                candidate_mask &= !(1u8 << p);
 
-            for p in (1..5).rev() {
                 if let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].front() {
                     let mut eff = p; // Start with base priority (queue index)
                     if p < 4 {
@@ -2432,6 +2440,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         best_eff = eff;
                         best_q = Some(p);
                     }
+                } else {
+                    self.state.per_cpu[cpu_idx].nonempty_runnable_mask &= !(1u8 << p);
                 }
             }
 
@@ -4921,6 +4931,39 @@ mod tests {
         let t1 = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
         assert_eq!(t1.enqueued_at_tick, 1000);
         assert_eq!(t1.state, TaskState::Runnable);
+    }
+
+    #[test]
+    fn test_prepare_schedule_clears_stale_runnable_mask_bits() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        let current = make_task(0, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+
+        // Inject a stale bit for a queue that is actually empty.
+        sched.state.per_cpu[0].nonempty_runnable_mask = 1u8 << TaskPriority::Realtime as usize;
+
+        let next = sched.prepare_schedule().expect("current task should remain schedulable");
+        assert_eq!(next.to_tid, 0);
+        assert_eq!(sched.state.per_cpu[0].nonempty_runnable_mask, 0);
     }
 
     #[test]

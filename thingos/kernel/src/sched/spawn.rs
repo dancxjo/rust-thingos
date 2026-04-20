@@ -627,9 +627,9 @@ pub unsafe fn spawn_user_thread<R: BootRuntime>(
     arg: StartupArg,
     stack_info: abi::types::StackInfo,
     priority: crate::task::TaskPriority,
-) -> TaskId { unsafe {
-    spawn_user_thread_ex::<R>(entry, stack, arg, stack_info, priority, 0, false)
-}}
+) -> TaskId {
+    unsafe { spawn_user_thread_ex::<R>(entry, stack, arg, stack_info, priority, 0, false) }
+}
 
 /// Extended version of `spawn_user_thread` with explicit TLS base and detached flag.
 pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
@@ -970,7 +970,12 @@ fn setup_stdio_fds<R: BootRuntime>(
             if let Ok(node) = crate::vfs::mount::lookup(path) {
                 let _ = handle_table.insert_at(0, node, OpenFlags::read_write(), path.clone());
             } else {
-                let _ = handle_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    0,
+                    null.clone(),
+                    OpenFlags::read_only(),
+                    "/dev/null".into(),
+                );
             }
         }
     }
@@ -1026,7 +1031,12 @@ fn setup_stdio_fds<R: BootRuntime>(
             if let Ok(node) = crate::vfs::mount::lookup(path) {
                 let _ = handle_table.insert_at(1, node, OpenFlags::read_write(), path.clone());
             } else {
-                let _ = handle_table.insert_at(1, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    1,
+                    null.clone(),
+                    OpenFlags::write_only(),
+                    "/dev/null".into(),
+                );
             }
         }
     }
@@ -1065,15 +1075,24 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let path = alloc::format!("fd:{}", fd);
                 let _ = handle_table.insert_at(2, node, flags, path);
             } else {
-                let _ =
-                    handle_table.insert_at(2, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    2,
+                    null.clone(),
+                    OpenFlags::write_only(),
+                    "/dev/null".into(),
+                );
             }
         }
         StdioSpec::Path(ref path) => {
             if let Ok(node) = crate::vfs::mount::lookup(path) {
                 let _ = handle_table.insert_at(2, node, OpenFlags::read_write(), path.clone());
             } else {
-                let _ = handle_table.insert_at(2, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    2,
+                    null.clone(),
+                    OpenFlags::write_only(),
+                    "/dev/null".into(),
+                );
             }
         }
     }
