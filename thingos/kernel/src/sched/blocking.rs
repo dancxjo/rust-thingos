@@ -358,12 +358,14 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         );
         let lock_start = rt.mono_ticks();
 
+        crate::kdebug!("WAKE_TASK: ID={} taking SCHEDULER lock", id);
         let result = if let Some(ptr) = *lock_sched {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             wake_task_locked::<R>(sched, id)
         } else {
             (None, None)
         };
+        crate::kdebug!("WAKE_TASK: ID={} wake_task_locked returned IPI_CPU={:?}", id, result.0);
 
         super::record_sched_lock_hold::<R>(
             &super::PROF_SCHED_LOCK_WAKE_TASK_CALLS,
@@ -401,6 +403,7 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         }
         super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        crate::kdebug!("WAKE_TASK: Sending IPI 0x30 to CPU {}", cpu);
         rt.send_ipi(cpu, 0x30);
     }
 
