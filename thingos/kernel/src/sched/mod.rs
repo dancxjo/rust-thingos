@@ -1878,7 +1878,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Periodically materialize aging into runnable buckets so pick can stay
         // a simple highest-priority queue selector.
-        for p in 1..(TaskPriority::Realtime as usize) {
+        for p in (TaskPriority::Low as usize)..(TaskPriority::Realtime as usize) {
             for &id in self.state.per_cpu[cpu_idx].runq[p].iter() {
                 let Some(sf) = self.state.get_thread(id) else {
                     continue;
@@ -1890,7 +1890,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
                 let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
                 let boost = boost.min(types::MAX_PRIORITY_BOOST);
-                let target = (p + boost).min(TaskPriority::Realtime as usize);
+                let target = (p + boost).min(TaskPriority::High as usize);
                 if target > p {
                     promotions.push((id, p, target));
                 }
@@ -2449,7 +2449,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Priority scan — pick the highest runnable bucket; fairness aging is
         // materialized periodically outside this hot path.
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
-            let best_q = (1..5)
+            let best_q = ((TaskPriority::Low as usize)..=(TaskPriority::Realtime as usize))
                 .rev()
                 .find(|&p| self.state.per_cpu[cpu_idx].runq[p].front().is_some());
 
