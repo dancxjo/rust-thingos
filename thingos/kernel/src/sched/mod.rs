@@ -1342,8 +1342,24 @@ pub(crate) fn should_send_remote_resched_ipi(target_cpu: usize) -> bool {
 pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
     deferred_updates: alloc::vec::Vec<types::DeferredRegistrySync>,
 ) {
-    debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_syncs");
-    for update in deferred_updates {
+    #[inline]
+    fn merge_registry_sync(
+        dst: &mut types::DeferredRegistrySync,
+        src: types::DeferredRegistrySync,
+    ) {
+        if src.new_state.is_some() {
+            dst.new_state = src.new_state;
+        }
+        if src.new_enqueued_at_tick.is_some() {
+            dst.new_enqueued_at_tick = src.new_enqueued_at_tick;
+        }
+        if src.new_last_cpu.is_some() {
+            dst.new_last_cpu = src.new_last_cpu;
+        }
+    }
+
+    #[inline]
+    fn apply_registry_sync_update<R: BootRuntime>(update: types::DeferredRegistrySync) {
         if let Some(mut task) = crate::task::registry::get_task_mut::<R>(update.tid) {
             if let Some(state) = update.new_state {
                 task.state = state;
@@ -1355,6 +1371,28 @@ pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
                 task.last_cpu = Some(last_cpu);
             }
         }
+    }
+
+    debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_syncs");
+    if deferred_updates.is_empty() {
+        return;
+    }
+
+    // Batch per-task journal entries emitted while SCHEDULER was held so each
+    // task is synchronized to REGISTRY at most once in this replay pass.
+    let mut coalesced = alloc::vec::Vec::with_capacity(deferred_updates.len());
+    let mut coalesced_by_tid = alloc::collections::BTreeMap::new();
+    for update in deferred_updates {
+        if let Some(existing_idx) = coalesced_by_tid.get(&update.tid).copied() {
+            merge_registry_sync(&mut coalesced[existing_idx], update);
+        } else {
+            let next_idx = coalesced.len();
+            coalesced_by_tid.insert(update.tid, next_idx);
+            coalesced.push(update);
+        }
+    }
+    for update in coalesced {
+        apply_registry_sync_update::<R>(update);
     }
 }
 
@@ -4921,6 +4959,42 @@ mod tests {
         let t1 = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
         assert_eq!(t1.enqueued_at_tick, 1000);
         assert_eq!(t1.state, TaskState::Runnable);
+    }
+
+    #[test]
+    fn deferred_registry_syncs_are_batched_per_tid() {
+        let _g = init_test_env();
+        let tid = 9100;
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(tid, TaskState::Blocked, TaskPriority::Normal),
+        ));
+
+        apply_deferred_registry_syncs::<MockRuntime>(alloc::vec![
+            types::DeferredRegistrySync {
+                tid,
+                new_state: Some(TaskState::Runnable),
+                new_enqueued_at_tick: Some(7),
+                new_last_cpu: None,
+            },
+            types::DeferredRegistrySync {
+                tid,
+                new_state: None,
+                new_enqueued_at_tick: Some(55),
+                new_last_cpu: Some(2),
+            },
+            types::DeferredRegistrySync {
+                tid,
+                new_state: Some(TaskState::Running),
+                new_enqueued_at_tick: None,
+                new_last_cpu: None,
+            },
+        ]);
+
+        let task = crate::task::registry::get_task::<MockRuntime>(tid).expect("task should exist");
+        assert_eq!(task.state, TaskState::Running);
+        assert_eq!(task.enqueued_at_tick, 55);
+        assert_eq!(task.last_cpu, Some(2));
     }
 
     #[test]

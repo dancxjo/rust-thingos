@@ -90,7 +90,8 @@ pub struct SwitchDecision {
 /// scheduler hot cache first, then emits one or more of these updates so the
 /// canonical REGISTRY record can be synchronized after the SCHEDULER lock is
 /// released. Lock-owning scheduler call sites are responsible for draining and
-/// applying these updates once they drop `SCHEDULER` (see
+/// applying these updates once they drop `SCHEDULER`. Replay coalesces by task
+/// and applies batched updates in a single pass (see
 /// `apply_deferred_registry_syncs` users in `sched`/`task` modules).
 pub(crate) struct DeferredRegistrySync {
     /// Task being synchronized.
