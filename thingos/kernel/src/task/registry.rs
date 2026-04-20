@@ -42,21 +42,21 @@ impl<R: BootRuntime> ThreadRegistry<R> {
     pub fn get(&self, id: u64) -> Option<&Thread<R>> {
         let idx = self.get_index(id)?;
         let thread = self.threads.get(idx)?;
-        debug_assert_eq!(thread.id, id, "registry index map must point to requested thread id");
+        debug_assert_eq!(thread.id, id);
         Some(&**thread)
     }
 
     pub fn get_mut(&mut self, id: u64) -> Option<&mut Thread<R>> {
         let idx = self.get_index(id)?;
         let thread = self.threads.get_mut(idx)?;
-        debug_assert_eq!(thread.id, id, "registry index map must point to requested thread id");
+        debug_assert_eq!(thread.id, id);
         Some(&mut **thread)
     }
 
     pub fn remove(&mut self, id: u64) -> Option<Box<Thread<R>>> {
         let idx = self.thread_index_by_id.remove(&id)?;
         let removed = self.threads.swap_remove(idx);
-        debug_assert_eq!(removed.id, id, "registry index map must match removed thread id");
+        debug_assert_eq!(removed.id, id);
         if idx < self.threads.len() {
             // `swap_remove` moved the last live thread into `idx`; refresh its
             // index map entry so future lookups stay consistent.
