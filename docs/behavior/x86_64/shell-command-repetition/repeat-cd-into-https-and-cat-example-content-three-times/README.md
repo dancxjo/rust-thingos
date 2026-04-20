@@ -1,12 +1,19 @@
-# ❌ Scenario: Repeat cd into https and cat example content three times
+# ✅ Scenario: Repeat cd into https and cat example content three times
 
-> Last run: 2026-04-20 16:46:37
+> Last run: 2026-04-20 16:53:13
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ❌ | 6076ms | - - - |
+| 1 | Given the machine is booted | ✅ | 16843ms | - - - |
+| 2 | When I wait for the shell prompt | ✅ | 2206ms | - [📜](./02/serial.log) - |
+| 3 | And I type "cd /https" on the serial console | ✅ | 1519ms | - [📜](./03/serial.log) - |
+| 4 | And I type "cat www.example.com" on the serial console | ✅ | 2035ms | - [📜](./04/serial.log) - |
+| 5 | And I type "cd /https" on the serial console | ✅ | 1515ms | - [📜](./05/serial.log) - |
+| 6 | And I type "cat www.example.com" on the serial console | ✅ | 2031ms | - [📜](./06/serial.log) - |
+| 7 | And I type "cd /https" on the serial console | ✅ | 1518ms | - [📜](./07/serial.log) - |
+| 8 | And I type "cat www.example.com" on the serial console | ✅ | 2030ms | - [📜](./08/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -48,7 +55,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [bran:runtime] tasking init skipped (already done)
 [kernel:mem:init] tasking init ok
-[42195408882] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[50471964642] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -71,11 +78,11 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[45717006720] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[45722329092] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[54030272208] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[54035606889] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
 [kernel:task:init] begin
 [kernel:task:init] registry init ok
-[45833282451] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[54149449530] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
 [kernel:task:init] sched init ok
 [kernel:task:init] done
 [bran:runtime] modules begin
@@ -113,8 +120,8 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [bran:runtime] modules ok
 [bran:runtime] framebuffer begin
 [bran:runtime] framebuffer ok
-[46856249847] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[47034215052] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[55134392115] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[55342946868] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
 [bran:runtime] modules begin
 [bran:req] get_modules enter
 [bran:req] get_modules cache hit
@@ -150,9 +157,17 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 cd /https
 [1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/https[0m [1;96m>[0m [?25hcat www.example.com
 [?25lcd /https
-cat www.example.com
-cd /https
-cat www.example.com
+cat www.exampl[81539387688] [[32mINFO [0m] [netd::vfs_provider] [CPU2] NetVfsProvider: TCP connect DNS lookup failed for 'www.example.com': Timeout
+[81603574998] [[32mINFO [0m] [httpsd] [CPU3] httpsd: upstream open failed for handle=2 https://www.example.com: http connect failed: connect command failed: EIO
+ecat: error reading www.example.com
+[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/https[0m [1;96m>[0m [?25hcd /https
+.[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/https[0m [1;96m>[0m [?25hcat www.example.com
+[?25lcd /https
+cat www.example[93329999796] [[32mINFO [0m] [netd::vfs_provider] [CPU2] NetVfsProvider: TCP connect DNS lookup failed for 'www.example.com': Timeout
+[93353856156] [[32mINFO [0m] [httpsd] [CPU3] httpsd: upstream open failed for handle=3 https://www.example.com: http connect failed: connect command failed: EIO
+cat: error reading www.example.com
+[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/https[0m [1;96m>[0m [?25hcd /https
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/https[0m [1;96m>[0m [?25hcat www.example.com
 
 ```
 </details>

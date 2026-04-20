@@ -1,12 +1,17 @@
-# ❌ Scenario: Launch ps and verify reaping
+# ✅ Scenario: Launch ps and verify reaping
 
-> Last run: 2026-04-20 16:47:49
+> Last run: 2026-04-20 16:53:13
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ❌ | 6080ms | - [📜](./01/serial.log) - |
+| 1 | Given the machine is booted | ✅ | 15449ms | - [📜](./01/serial.log) - |
+| 2 | When I wait for the shell prompt | ✅ | 2308ms | - [📜](./02/serial.log) - |
+| 3 | And I type "ps" on the serial console | ✅ | 1157ms | - [📜](./03/serial.log) - |
+| 4 | Then the serial output should contain "PID" | ✅ | 7ms | - - - |
+| 5 | And the serial output should contain "sh" | ✅ | 0ms | - - - |
+| 6 | And the serial output should contain "ps" | ✅ | 4ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -48,7 +53,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [bran:runtime] tasking init skipped (already done)
 [kernel:mem:init] tasking init ok
-[44774496426] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[45935478963] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -71,11 +76,11 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[48409319475] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[48421769154] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[49326263052] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[49331676735] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
 [kernel:task:init] begin
 [kernel:task:init] registry init ok
-[48531348294] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[49435046958] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
 [kernel:task:init] sched init ok
 [kernel:task:init] done
 [bran:runtime] modules begin
@@ -113,8 +118,16 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [bran:runtime] modules ok
 [bran:runtime] framebuffer begin
 [bran:runtime] framebuffer ok
-[49505909277] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[49679634411] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[50478896886] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[50720001024] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
 [1;32m
         .-.
        /   \        [1;36mTHING-OS[1;32m
@@ -135,14 +148,6 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
-[bran:runtime] modules begin
-[bran:req] get_modules enter
-[bran:req] get_modules cache hit
-[bran:runtime] modules ok
-[bran:runtime] modules begin
-[bran:req] get_modules enter
-[bran:req] get_modules cache hit
-[bran:runtime] modules ok
 [1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[bran:runtime] modules begin
 [bran:req] get_modules enter
 [bran:req] get_modules cache hit
@@ -154,6 +159,9 @@ ps
     7     5 S    /bin/cambium
     8     5 S    /bin/netd
     9     5 S    /bin/httpsd
- 
+   11     7 R    /drivers/virtio_netd
+   12     7 S    /drivers/ahci_disk
+   13     6 R    /bin/ps
+[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m]
 ```
 </details>

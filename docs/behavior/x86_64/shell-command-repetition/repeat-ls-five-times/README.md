@@ -1,12 +1,18 @@
-# ❌ Scenario: Repeat ls five times
+# ✅ Scenario: Repeat ls five times
 
-> Last run: 2026-04-20 16:46:37
+> Last run: 2026-04-20 16:53:13
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ❌ | 6086ms | - - - |
+| 1 | Given the machine is booted | ✅ | 13608ms | - - - |
+| 2 | When I wait for the shell prompt | ✅ | 2208ms | - [📜](./02/serial.log) - |
+| 3 | And I type "ls" on the serial console | ✅ | 1154ms | - [📜](./03/serial.log) - |
+| 4 | And I type "ls" on the serial console | ✅ | 1159ms | - [📜](./04/serial.log) - |
+| 5 | And I type "ls" on the serial console | ✅ | 1156ms | - [📜](./05/serial.log) - |
+| 6 | And I type "ls" on the serial console | ✅ | 1157ms | - [📜](./06/serial.log) - |
+| 7 | And I type "ls" on the serial console | ✅ | 1154ms | - [📜](./07/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -48,7 +54,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [bran:runtime] tasking init skipped (already done)
 [kernel:mem:init] tasking init ok
-[42649768788] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[39541097112] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -71,11 +77,11 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[46259385876] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[46265276013] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[43225177446] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[43230171633] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
 [kernel:task:init] begin
 [kernel:task:init] registry init ok
-[46375065363] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[43342448820] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
 [kernel:task:init] sched init ok
 [kernel:task:init] done
 [bran:runtime] modules begin
@@ -113,12 +119,8 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [bran:runtime] modules ok
 [bran:runtime] framebuffer begin
 [bran:runtime] framebuffer ok
-[47245619289] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[47392085862] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
-[bran:runtime] modules begin
-[bran:req] get_modules enter
-[bran:req] get_modules cache hit
-[bran:runtime] modules ok
+[44368150299] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[44530865775] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
 [bran:runtime] modules begin
 [bran:req] get_modules enter
 [bran:req] get_modules cache hit
@@ -143,6 +145,10 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
 [1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[bran:runtime] modules begin
 [bran:req] get_modules enter
 [bran:req] get_modules cache hit
@@ -156,6 +162,6 @@ ls
 [?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls
 [?25l[34mbin[0m  [34mboot[0m  [34mdata[0m  [34mdev[0m  [34mdrivers[0m  [34metc[0m  [34mhttps[0m  [34mlib[0m  [34mmnt[0m  motd  [34mnet[0m  [34mproc[0m  [34mrun[0m  [34mservices[0m  [34msession[0m  [34mshare[0m  [34msys[0m  [34mtmp[0m  version  
 [?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls
-[?25l[34mbi
+[?25l[34
 ```
 </details>
