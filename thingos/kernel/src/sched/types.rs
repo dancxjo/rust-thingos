@@ -236,12 +236,12 @@ impl<R: BootRuntime> Scheduler<R> {
             return alloc::vec::Vec::new();
         }
 
-        let cpu_limit = self.state.per_cpu.len().min(MAX_CPUS);
         let mut deferred = alloc::vec::Vec::with_capacity(bitmap.count_ones() as usize);
-        for cpu in 0..cpu_limit {
-            if (bitmap & (1u64 << cpu)) != 0 {
-                deferred.push(cpu);
-            }
+        let mut remaining = bitmap;
+        while remaining != 0 {
+            let cpu = remaining.trailing_zeros() as usize;
+            deferred.push(cpu);
+            remaining &= remaining - 1;
         }
         deferred
     }
