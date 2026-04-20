@@ -15,7 +15,7 @@ const DEFAULT_BG: u32 = 0x0000_0000;
 const BRIGHT_FG_OFFSET: u32 = 0x0040_4040;
 const BRIGHT_BG_OFFSET: u32 = 0x0020_2020;
 const ASCII_PRINTABLE_START: u32 = 0x20;
-const ASCII_PRINTABLE_END: u32 = 0x7E;
+const ASCII_PRINTABLE_END: u32 = 0xFF;
 const ACTIVATION_BANNER: &[u8] = b"\x1b[0m\x1b[?25lThing-OS kernel terminal (F12)\n";
 
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
@@ -82,6 +82,19 @@ impl FbConsole {
                 }
             }
         }
+    }
+
+    fn brighten_rgb(base: u32, offset: u32) -> u32 {
+        let br = (base >> 16) & 0xFF;
+        let bg = (base >> 8) & 0xFF;
+        let bb = base & 0xFF;
+        let or = (offset >> 16) & 0xFF;
+        let og = (offset >> 8) & 0xFF;
+        let ob = offset & 0xFF;
+        let nr = (br + or).min(0xFF);
+        let ng = (bg + og).min(0xFF);
+        let nb = (bb + ob).min(0xFF);
+        (nr << 16) | (ng << 8) | nb
     }
 
     fn reset_style(&mut self) {
@@ -183,10 +196,12 @@ impl FbConsole {
                         self.bg = Self::ansi_color(p, true);
                     } else if (90..=97).contains(&p) {
                         // ANSI bright foreground: add a small RGB brightness offset.
-                        self.fg = Self::ansi_color(p - 60, false) | BRIGHT_FG_OFFSET;
+                        self.fg =
+                            Self::brighten_rgb(Self::ansi_color(p - 60, false), BRIGHT_FG_OFFSET);
                     } else if (100..=107).contains(&p) {
                         // ANSI bright background: add a smaller RGB brightness offset.
-                        self.bg = Self::ansi_color(p - 60, true) | BRIGHT_BG_OFFSET;
+                        self.bg =
+                            Self::brighten_rgb(Self::ansi_color(p - 60, true), BRIGHT_BG_OFFSET);
                     }
                 }
                 if !had_any {
@@ -232,6 +247,7 @@ impl FbConsole {
             AnsiState::Csi { params, len, cur } => {
                 if b.is_ascii_digit() {
                     let d = (b - b'0') as u16;
+                    // Clamp to u16 to keep parser storage fixed-size in `AnsiState::Csi`.
                     *cur = Some(cur.unwrap_or(0).saturating_mul(10).saturating_add(d));
                     return;
                 }
