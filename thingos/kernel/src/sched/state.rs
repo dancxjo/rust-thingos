@@ -162,6 +162,7 @@ pub struct ThreadSchedFields {
 /// Backward-compatible alias — prefer `ThreadSchedFields` in new code.
 pub type TaskSchedFields = ThreadSchedFields;
 
+/// Timer-wheel entry for a sleeping thread.
 #[derive(Debug, Clone, Copy)]
 pub struct SleepEntry {
     pub tid: ThreadId,
@@ -245,7 +246,15 @@ pub struct SchedState {
     pub free_thread_slots: Vec<usize>,
     pub next_thread_slot: usize,
     pub per_cpu: Vec<PerCpu>,
+    /// Fixed-slot timer wheel for sleeping tasks.
+    ///
+    /// Slot `i` contains `SleepEntry` values whose `wake_tick % SLEEP_WHEEL_SLOTS == i`.
+    /// Different deadlines can share a slot; each entry stores its full `wake_tick`.
     pub sleep_queue: Vec<Vec<SleepEntry>>,
+    /// Next scheduler tick to scan in the sleep timer wheel.
+    ///
+    /// This advances monotonically during wake processing and may be rewound when
+    /// a newly-added sleeper has an earlier wake tick.
     pub sleep_scan_tick: u64,
     pub sleep_membership: BTreeMap<ThreadId, SleepMembership>,
     pub wait_queue: BTreeSet<ThreadId>,
@@ -555,19 +564,6 @@ impl SchedState {
         self.last_enqueue_cause.get(&tid).copied().unwrap_or(EnqueueCause::Unknown)
     }
 
-    pub fn refresh_sleep_bucket_membership(&mut self, wake_tick: u64) {
-        let slot = sleep_wheel_slot(wake_tick);
-        let Some(bucket) = self.sleep_queue.get(slot) else {
-            return;
-        };
-        for (idx, entry) in bucket.iter().enumerate() {
-            if entry.wake_tick == wake_tick {
-                self.sleep_membership
-                    .insert(entry.tid, SleepMembership { wake_tick, bucket_index: idx });
-            }
-        }
-    }
-
     pub fn add_task_to_sleep_queue(&mut self, tid: ThreadId, wake_tick: u64) {
         self.remove_task_from_sleep_queue(tid);
 
@@ -578,6 +574,8 @@ impl SchedState {
             bucket.len() - 1
         };
         self.sleep_membership.insert(tid, SleepMembership { wake_tick, bucket_index: idx });
+        // If a newly inserted deadline is earlier than the next scan point,
+        // rewind so wake processing does not skip this new sleeper.
         if wake_tick < self.sleep_scan_tick {
             self.sleep_scan_tick = wake_tick;
         }
@@ -593,10 +591,9 @@ impl SchedState {
         let slot = sleep_wheel_slot(membership.wake_tick);
 
         if let Some(bucket) = self.sleep_queue.get_mut(slot) {
-            let remove_idx = if bucket
-                .get(membership.bucket_index)
-                .is_some_and(|entry| entry.tid == tid && entry.wake_tick == membership.wake_tick)
-            {
+            let remove_idx = if bucket.get(membership.bucket_index).is_some_and(|entry| {
+                entry.tid == tid && entry.wake_tick == membership.wake_tick
+            }) {
                 Some(membership.bucket_index)
             } else {
                 // Metadata can become stale when tests or transitional code
@@ -625,6 +622,9 @@ impl SchedState {
         removed
     }
 
+    /// Number of currently sleeping tasks tracked by direct membership index.
+    ///
+    /// This is `sleep_membership.len()` rather than a wheel-slot scan.
     #[inline]
     pub fn sleep_task_count(&self) -> usize {
         self.sleep_membership.len()
@@ -648,11 +648,8 @@ impl SchedState {
         let bucket = self.sleep_queue.get(slot)?;
         let tids: Vec<ThreadId> = bucket
             .iter()
-            .filter_map(
-                |entry| {
-                    if entry.wake_tick == wake_tick { Some(entry.tid) } else { None }
-                },
-            )
+            .filter(|entry| entry.wake_tick == wake_tick)
+            .map(|entry| entry.tid)
             .collect();
         if tids.is_empty() { None } else { Some(tids) }
     }
@@ -663,7 +660,7 @@ impl SchedState {
             return due;
         }
         if self.sleep_membership.is_empty() {
-            self.sleep_scan_tick = now.saturating_add(1);
+            self.sleep_scan_tick = now;
             return due;
         }
 
@@ -690,11 +687,13 @@ impl SchedState {
                     idx += 1;
                 }
             }
-
-            if budget == 0 && bucket.iter().any(|entry| entry.wake_tick <= now) {
+            if budget == 0 {
                 break;
             }
-            self.sleep_scan_tick = self.sleep_scan_tick.saturating_add(1);
+            if self.sleep_scan_tick == u64::MAX {
+                break;
+            }
+            self.sleep_scan_tick += 1;
         }
         due
     }
