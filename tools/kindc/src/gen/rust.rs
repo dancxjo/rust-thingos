@@ -167,7 +167,7 @@ mod tests {
     use indexmap::IndexMap;
 
     #[test]
-    fn generated_header_uses_abi_wire_thing_id() {
+    fn generates_abi_wire_thingid_import_without_local_struct() {
         let schema = Schema {
             version: 1,
             kinds: IndexMap::new(),
