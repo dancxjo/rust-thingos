@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 pub use abi::logging::Level;
 use spin::Mutex;
 
-use crate::{BootRuntimeBase, IrqState};
+use crate::BootRuntimeBase;
 pub type LogLevel = Level;
 
 static GLOBAL_LOGGER: Mutex<Option<Logger>> = Mutex::new(None);
@@ -158,6 +158,34 @@ impl Logger {
     }
 }
 
+#[inline]
+fn write_crlf_translated(buf: &[u8], mut emit: impl FnMut(&[u8])) {
+    let mut scratch = [0u8; 256];
+    let mut used = 0usize;
+
+    for &b in buf {
+        if b == b'\n' {
+            if used == scratch.len() {
+                emit(&scratch[..used]);
+                used = 0;
+            }
+            scratch[used] = b'\r';
+            used += 1;
+        }
+
+        if used == scratch.len() {
+            emit(&scratch[..used]);
+            used = 0;
+        }
+        scratch[used] = b;
+        used += 1;
+    }
+
+    if used != 0 {
+        emit(&scratch[..used]);
+    }
+}
+
 // Safety: BootRuntimeBase is effectively a singleton VTable provided by BRAN.
 unsafe impl Sync for Logger {}
 unsafe impl Send for Logger {}
@@ -169,12 +197,7 @@ impl fmt::Write for Logger {
         if PANIC_ACTIVE.load(Ordering::Relaxed) {
             return Err(fmt::Error);
         }
-        for b in s.bytes() {
-            if b == b'\n' {
-                self.runtime.putchar(b'\r');
-            }
-            self.runtime.putchar(b);
-        }
+        write_crlf_translated(s.as_bytes(), |chunk| self.runtime.putbuf(chunk));
         Ok(())
     }
 }
@@ -385,12 +408,7 @@ pub fn write_bytes_locked(buf: &[u8]) {
 
     let mut lock = GLOBAL_LOGGER.lock();
     if let Some(writer) = lock.as_mut() {
-        for &b in buf {
-            if b == b'\n' {
-                writer.runtime.putchar(b'\r');
-            }
-            writer.runtime.putchar(b);
-        }
+        write_crlf_translated(buf, |chunk| writer.runtime.putbuf(chunk));
     }
     drop(lock);
 
@@ -410,12 +428,7 @@ pub fn write_serial_bytes_locked(buf: &[u8]) {
 
     let mut lock = GLOBAL_LOGGER.lock();
     if let Some(writer) = lock.as_mut() {
-        for &b in buf {
-            if b == b'\n' {
-                writer.runtime.serial_putchar(b'\r');
-            }
-            writer.runtime.serial_putchar(b);
-        }
+        write_crlf_translated(buf, |chunk| writer.runtime.serial_putbuf(chunk));
     }
     drop(lock);
 
@@ -432,12 +445,7 @@ pub fn write_fb_bytes_locked(buf: &[u8]) {
 
     let mut lock = GLOBAL_LOGGER.lock();
     if let Some(writer) = lock.as_mut() {
-        for &b in buf {
-            if b == b'\n' {
-                writer.runtime.fb_putchar(b'\r');
-            }
-            writer.runtime.fb_putchar(b);
-        }
+        write_crlf_translated(buf, |chunk| writer.runtime.fb_putbuf(chunk));
     }
     drop(lock);
 

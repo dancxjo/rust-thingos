@@ -442,13 +442,34 @@ pub trait BootTasking {
 
 pub trait BootRuntimeBase: 'static {
     fn putchar(&self, c: u8);
+    /// Write multiple bytes to the combined console output.
+    /// Default implementation forwards byte-by-byte to `putchar`.
+    fn putbuf(&self, buf: &[u8]) {
+        for &b in buf {
+            self.putchar(b);
+        }
+    }
     /// Write one byte to the serial port only (not the framebuffer console).
     fn serial_putchar(&self, c: u8) {
         self.putchar(c);
     }
+    /// Write multiple bytes to serial only.
+    /// Default implementation forwards byte-by-byte to `serial_putchar`.
+    fn serial_putbuf(&self, buf: &[u8]) {
+        for &b in buf {
+            self.serial_putchar(b);
+        }
+    }
     /// Write one byte to the framebuffer console only (not the serial port).
     fn fb_putchar(&self, c: u8) {
         self.putchar(c);
+    }
+    /// Write multiple bytes to framebuffer only.
+    /// Default implementation forwards byte-by-byte to `fb_putchar`.
+    fn fb_putbuf(&self, buf: &[u8]) {
+        for &b in buf {
+            self.fb_putchar(b);
+        }
     }
     /// Non-blocking serial read. Returns `Some(byte)` if data is available.
     fn getchar(&self) -> Option<u8> {

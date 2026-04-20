@@ -338,21 +338,36 @@ impl LimineRuntimeData {
 impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     fn putchar(&self, c: u8) {
         // Drain pending RX before writing so bursty boot logs do not starve
-        // input polling.  A single poll per putchar is sufficient; the
-        // previous double-poll doubled the mutex overhead without benefit.
+        // input polling.
         self.poll_console_input();
         // Write to serial (arch-specific)
         self.arch.putchar(c);
         crate::console::put_char(c);
+    }
+    fn putbuf(&self, buf: &[u8]) {
         self.poll_console_input();
+        for &c in buf {
+            self.arch.putchar(c);
+            crate::console::put_char(c);
+        }
     }
     fn serial_putchar(&self, c: u8) {
         self.poll_console_input();
         self.arch.putchar(c);
+    }
+    fn serial_putbuf(&self, buf: &[u8]) {
         self.poll_console_input();
+        for &c in buf {
+            self.arch.putchar(c);
+        }
     }
     fn fb_putchar(&self, c: u8) {
         crate::console::put_char(c);
+    }
+    fn fb_putbuf(&self, buf: &[u8]) {
+        for &c in buf {
+            crate::console::put_char(c);
+        }
     }
     fn getchar(&self) -> Option<u8> {
         self.poll_console_input();
