@@ -356,6 +356,14 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
         crate::console::put_char(c);
         self.poll_console_input();
     }
+    fn serial_putchar(&self, c: u8) {
+        self.poll_console_input();
+        self.arch.putchar(c);
+        self.poll_console_input();
+    }
+    fn fb_putchar(&self, c: u8) {
+        crate::console::put_char(c);
+    }
     fn getchar(&self) -> Option<u8> {
         self.poll_console_input();
         self.console_rx.lock().pop()

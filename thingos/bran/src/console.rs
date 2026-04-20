@@ -6,6 +6,7 @@ use crate::framebuffer::Framebuffer;
 
 const CELL_H: u32 = 16;
 const CELL_W: u32 = 8;
+const CURSOR_W: u32 = 2;
 const TAB_WIDTH: usize = 4;
 const CSI_PARAM_CAP: usize = 8;
 const DEFAULT_FG: u32 = 0x00FF_FFFF;
@@ -46,6 +47,8 @@ pub struct FbConsole {
     bg: u32,
     ansi: AnsiState,
     active: bool,
+    /// Whether the visual cursor bar is currently painted on the framebuffer.
+    cursor_drawn: bool,
     /// Accumulation buffer for multi-byte UTF-8 sequences.
     utf8_buf: [u8; 4],
     /// Number of bytes accumulated so far.
@@ -68,6 +71,7 @@ impl FbConsole {
             bg: DEFAULT_BG,
             ansi: AnsiState::Normal,
             active: false,
+            cursor_drawn: false,
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_expected: 0,
@@ -117,6 +121,7 @@ impl FbConsole {
         self.fb.clear(self.bg);
         self.cursor_x = 0;
         self.cursor_y = 0;
+        self.cursor_drawn = false;
     }
 
     fn set_pixel(&mut self, x: u32, y: u32, color: u32) {
@@ -168,17 +173,22 @@ impl FbConsole {
             tail.fill(self.bg);
         }
         self.cursor_y = self.cursor_y.saturating_sub(CELL_H);
+        // The scroll shifted framebuffer contents; any painted cursor is gone.
+        self.cursor_drawn = false;
     }
 
     fn newline(&mut self) {
+        self.erase_cursor();
         self.cursor_x = 0;
         self.cursor_y = self.cursor_y.saturating_add(CELL_H);
         if self.cursor_y.saturating_add(CELL_H) > self.fb.height {
             self.scroll();
         }
+        self.draw_cursor();
     }
 
     fn put_visible_char(&mut self, ch: char) {
+        self.erase_cursor();
         let code = ch as u32;
         let glyph = if (code as usize) < GLYPH_TABLE_LEN {
             self.glyphs[code as usize]
@@ -191,6 +201,37 @@ impl FbConsole {
         }
         self.draw_glyph(&glyph, self.cursor_x, self.cursor_y);
         self.cursor_x = self.cursor_x.saturating_add(width);
+        self.draw_cursor();
+    }
+
+    /// Paint a thin vertical bar at the current cursor position.
+    fn draw_cursor(&mut self) {
+        if self.cursor_drawn {
+            return;
+        }
+        let x = self.cursor_x;
+        let y = self.cursor_y;
+        for row in 0..CELL_H {
+            for col in 0..CURSOR_W {
+                self.set_pixel(x + col, y + row, self.fg);
+            }
+        }
+        self.cursor_drawn = true;
+    }
+
+    /// Erase the cursor bar by painting background colour over it.
+    fn erase_cursor(&mut self) {
+        if !self.cursor_drawn {
+            return;
+        }
+        let x = self.cursor_x;
+        let y = self.cursor_y;
+        for row in 0..CELL_H {
+            for col in 0..CURSOR_W {
+                self.set_pixel(x + col, y + row, self.bg);
+            }
+        }
+        self.cursor_drawn = false;
     }
 
     fn apply_csi(&mut self, final_byte: u8, params: &[u16]) {
@@ -220,15 +261,19 @@ impl FbConsole {
                 }
             }
             b'J' => {
+                self.erase_cursor();
                 self.clear_to_bg();
+                self.draw_cursor();
             }
             b'H' | b'f' => {
+                self.erase_cursor();
                 let row = params.first().copied().unwrap_or(1).max(1) as u32;
                 let col = params.get(1).copied().unwrap_or(1).max(1) as u32;
                 self.cursor_y =
                     (row - 1).saturating_mul(CELL_H).min(self.fb.height.saturating_sub(1));
                 self.cursor_x =
                     (col - 1).saturating_mul(CELL_W).min(self.fb.width.saturating_sub(1));
+                self.draw_cursor();
             }
             _ => {}
         }
@@ -258,8 +303,16 @@ impl FbConsole {
             AnsiState::Normal => match b {
                 0x1B => self.ansi = AnsiState::Esc,
                 b'\n' => self.newline(),
-                b'\r' => self.cursor_x = 0,
-                0x08 => self.cursor_x = self.cursor_x.saturating_sub(CELL_W),
+                b'\r' => {
+                    self.erase_cursor();
+                    self.cursor_x = 0;
+                    self.draw_cursor();
+                }
+                0x08 => {
+                    self.erase_cursor();
+                    self.cursor_x = self.cursor_x.saturating_sub(CELL_W);
+                    self.draw_cursor();
+                }
                 b'\t' => {
                     for _ in 0..TAB_WIDTH {
                         self.put_visible_char(' ');
@@ -327,6 +380,7 @@ impl FbConsole {
         for &b in ACTIVATION_BANNER {
             self.handle_byte(b);
         }
+        self.draw_cursor();
     }
 
     pub fn put_char(&mut self, c: u8) {

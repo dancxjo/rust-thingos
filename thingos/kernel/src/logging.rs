@@ -34,7 +34,7 @@ static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Off)
 /// Default is 2 (warn).
-static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(4);
+static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(3);
 
 /// Set the minimum log level for output (0=Off, 1=Error+, 2=Warn+, etc.)
 pub fn set_log_level(level: u8) {
@@ -90,10 +90,10 @@ impl LogTransaction {
 
         // Emit BEGIN marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
-        
+
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
         let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-        
+
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
             if !MUTE_SERIAL.load(Ordering::Relaxed) {
@@ -115,10 +115,10 @@ impl Drop for LogTransaction {
     fn drop(&mut self) {
         // Emit END marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
-        
+
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
         let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-        
+
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
             if !MUTE_SERIAL.load(Ordering::Relaxed) {
@@ -127,7 +127,7 @@ impl Drop for LogTransaction {
             }
         }
         drop(lock);
-        
+
         if let (Some(r), Some(s)) = (rt, irq_state) {
             r.irq_restore(s);
         }
@@ -224,7 +224,7 @@ impl Write for LogBufferWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
         let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-        
+
         let mut state = LOG_STATE.lock();
         for &b in s.as_bytes() {
             unsafe {
@@ -236,7 +236,7 @@ impl Write for LogBufferWriter {
             }
         }
         drop(state);
-        
+
         if let (Some(r), Some(s)) = (rt, irq_state) {
             r.irq_restore(s);
         }
@@ -390,6 +390,53 @@ pub fn write_bytes_locked(buf: &[u8]) {
                 writer.runtime.putchar(b'\r');
             }
             writer.runtime.putchar(b);
+        }
+    }
+    drop(lock);
+
+    if let (Some(r), Some(s)) = (rt, irq_state) {
+        r.irq_restore(s);
+    }
+}
+
+/// Write a raw byte buffer to the serial port only (not the FB console),
+/// under the `GLOBAL_LOGGER` lock to prevent interleaving.
+pub fn write_serial_bytes_locked(buf: &[u8]) {
+    if MUTE_SERIAL.load(Ordering::Relaxed) {
+        return;
+    }
+    let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+    let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
+
+    let mut lock = GLOBAL_LOGGER.lock();
+    if let Some(writer) = lock.as_mut() {
+        for &b in buf {
+            if b == b'\n' {
+                writer.runtime.serial_putchar(b'\r');
+            }
+            writer.runtime.serial_putchar(b);
+        }
+    }
+    drop(lock);
+
+    if let (Some(r), Some(s)) = (rt, irq_state) {
+        r.irq_restore(s);
+    }
+}
+
+/// Write a raw byte buffer to the framebuffer console only (not the serial
+/// port), under the `GLOBAL_LOGGER` lock to prevent interleaving.
+pub fn write_fb_bytes_locked(buf: &[u8]) {
+    let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+    let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
+
+    let mut lock = GLOBAL_LOGGER.lock();
+    if let Some(writer) = lock.as_mut() {
+        for &b in buf {
+            if b == b'\n' {
+                writer.runtime.fb_putchar(b'\r');
+            }
+            writer.runtime.fb_putchar(b);
         }
     }
     drop(lock);

@@ -393,6 +393,14 @@ pub trait BootTasking {
 
 pub trait BootRuntimeBase: 'static {
     fn putchar(&self, c: u8);
+    /// Write one byte to the serial port only (not the framebuffer console).
+    fn serial_putchar(&self, c: u8) {
+        self.putchar(c);
+    }
+    /// Write one byte to the framebuffer console only (not the serial port).
+    fn fb_putchar(&self, c: u8) {
+        self.putchar(c);
+    }
     /// Non-blocking serial read. Returns `Some(byte)` if data is available.
     fn getchar(&self) -> Option<u8> {
         None
