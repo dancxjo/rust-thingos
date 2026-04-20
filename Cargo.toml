@@ -116,6 +116,7 @@ members = [
   "thingos/utils/iso9660d",
   "thingos/utils/iso_reader",
   "thingos/utils/kill",
+  "thingos/utils/killall",
   "thingos/utils/ld_so",
   "thingos/utils/libdl",
   "thingos/utils/ln",
