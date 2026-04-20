@@ -392,6 +392,19 @@ impl ThingOsWorld {
         self.serial_log.lock().await.clone()
     }
 
+    /// Write bytes to the serial console.
+    pub async fn serial_write(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let serial_sock_path = self.work_dir.join("serial.sock");
+        if !serial_sock_path.exists() {
+            return Err("Serial socket does not exist".into());
+        }
+
+        let mut stream = UnixStream::connect(&serial_sock_path).await?;
+        stream.write_all(data).await?;
+        stream.flush().await?;
+        Ok(())
+    }
+
     /// Kill the QEMU process if running and clean up the ISO.
     pub async fn shutdown(&mut self) {
         // Wait a bit to ensure any pending screenshots/logs are captured

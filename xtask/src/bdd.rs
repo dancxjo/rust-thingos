@@ -3,11 +3,23 @@ use xshell::Shell;
 use crate::common::Result;
 
 pub fn bdd(
-    _sh: &Shell,
+    sh: &Shell,
     feature: Option<String>,
     tags: Option<String>,
-    arch: Vec<String>,
+    archs: Vec<String>,
 ) -> Result<()> {
-    println!("xtask: bdd feature={feature:?} tags={tags:?} arch={arch:?}");
+    for arch in archs {
+        println!("xtask: bdd running tests for arch={arch}...");
+        let mut cmd = xshell::cmd!(sh, "cargo run -p bdd");
+        cmd = cmd.env("BDD_ARCH", &arch);
+        if let Some(f) = &feature {
+            cmd = cmd.env("BDD_FEATURE", f);
+        }
+        if let Some(t) = &tags {
+            // Cucumber CLI handles tags via --tags, passed through cargo run
+            cmd = cmd.args(["--", "--tags", t]);
+        }
+        cmd.run()?;
+    }
     Ok(())
 }

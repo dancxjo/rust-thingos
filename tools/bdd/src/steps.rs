@@ -1331,6 +1331,28 @@ async fn when_press_key(world: &mut ThingOsWorld) {
     }
 }
 
+#[when("I wait for the shell prompt")]
+async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    // Shell prompt ends with ⚡ followed by a space.
+    // It also contains ANSI escape codes.
+    let found = world.wait_for_serial("⚡ ", 60.0).await;
+    if !found {
+        return Err(StepError("Timed out waiting for shell prompt".to_string()));
+    }
+    Ok(())
+}
+
+#[when(regex = r#"^I type "(.+)" on the serial console$"#)]
+async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
+    eprintln!("│  │  │      ⌨️ Typing on serial: {}", text);
+    let mut data = text.into_bytes();
+    data.push(b'\n');
+    world.serial_write(&data).await.map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+    // Small delay to let the guest process the input
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    Ok(())
+}
+
 #[when(regex = r#"^I press (.+)$"#)]
 async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
     if world.qmp_control.is_some() {
