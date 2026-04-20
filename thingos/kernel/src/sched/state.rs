@@ -1,5 +1,6 @@
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec::Vec;
+
 use spin::{Mutex, Once};
 
 /// Unique identifier for a kernel thread (scheduler task).
@@ -211,6 +212,9 @@ pub struct SleepMembership {
 
 pub struct PerCpu {
     pub runq: [VecDeque<ThreadId>; 5],
+    /// Bitset of non-empty runnable queues for priorities 1..=4.
+    /// Bit `p` is set when `runq[p]` currently has at least one entry.
+    pub nonempty_runnable_mask: u8,
     pub idle_task: Option<ThreadId>,
     pub current: Option<ThreadId>,
     pub last_switch: u64,
@@ -232,6 +236,7 @@ impl PerCpu {
                 VecDeque::with_capacity(128),
                 VecDeque::with_capacity(128),
             ],
+            nonempty_runnable_mask: 0,
             idle_task: None,
             current: None,
             last_switch: 0,
@@ -241,6 +246,20 @@ impl PerCpu {
             need_resched: false,
             idle_enter_mono_ticks: None,
             stats: PerCpuSchedStats::default(),
+        }
+    }
+
+    #[inline]
+    fn mark_runnable_nonempty(&mut self, prio: usize) {
+        if prio > 0 {
+            self.nonempty_runnable_mask |= 1u8 << prio;
+        }
+    }
+
+    #[inline]
+    fn clear_runnable_if_empty(&mut self, prio: usize) {
+        if prio > 0 && self.runq[prio].is_empty() {
+            self.nonempty_runnable_mask &= !(1u8 << prio);
         }
     }
 }
@@ -466,6 +485,7 @@ impl SchedState {
         let _cpu_lock = lock_per_cpu_runq(cpu);
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
             pc.runq[prio].push_back(tid);
+            pc.mark_runnable_nonempty(prio);
             pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
             pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         }
@@ -484,8 +504,10 @@ impl SchedState {
         if let Some(pc) = per_cpu.get_mut(cpu) {
             for _cleanup_attempt in 0..RUNQ_STALE_PURGE_BUDGET {
                 let Some(tid) = pc.runq[prio].pop_front() else {
+                    pc.clear_runnable_if_empty(prio);
                     break;
                 };
+                pc.clear_runnable_if_empty(prio);
                 // Lazy-invalidation model: entries may stay in the VecDeque after
                 // `remove_thread_from_runq` marks them not-enqueued.
                 // Only return the entry if it still matches the task's canonical
@@ -537,6 +559,7 @@ impl SchedState {
         if removed.is_none() {
             return None;
         }
+        pc.clear_runnable_if_empty(prio);
         pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
         pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         if let Some(thread) = threads.get_mut(&tid) {
@@ -753,6 +776,7 @@ impl SchedState {
         runq.retain(|entry_tid| {
             threads.get(entry_tid).and_then(|thread| thread.runq_location) == Some((cpu, prio))
         });
+        pc.clear_runnable_if_empty(prio);
     }
 
     // ── Backward-compatible forwarding methods ────────────────────────────────
@@ -1072,18 +1096,44 @@ mod tests {
     #[test]
     fn per_cpu_runq_locks_are_independent() {
         let cpu0_lock = try_lock_per_cpu_runq(0).expect("cpu0 runq lock should be acquirable");
-        assert!(
-            try_lock_per_cpu_runq(0).is_none(),
-            "same CPU lock should not be re-entrant"
-        );
-        assert!(
-            try_lock_per_cpu_runq(1).is_some(),
-            "different CPU lock should remain independent"
-        );
+        assert!(try_lock_per_cpu_runq(0).is_none(), "same CPU lock should not be re-entrant");
+        assert!(try_lock_per_cpu_runq(1).is_some(), "different CPU lock should remain independent");
         drop(cpu0_lock);
         assert!(
             try_lock_per_cpu_runq(0).is_some(),
             "cpu0 runq lock should be acquirable again after release"
+        );
+    }
+
+    #[test]
+    fn runnable_mask_tracks_non_idle_enqueue_and_dequeue() {
+        let mut state = SchedState::new();
+        state.per_cpu.push(PerCpu::new());
+        state.insert_thread(sched_fields(51, TaskState::Runnable, TaskPriority::Normal));
+
+        state.enqueue_thread(0, TaskPriority::Normal as usize, 51);
+        assert_ne!(
+            state.per_cpu[0].nonempty_runnable_mask & (1u8 << TaskPriority::Normal as usize),
+            0
+        );
+
+        assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), Some(51));
+        assert_eq!(
+            state.per_cpu[0].nonempty_runnable_mask & (1u8 << TaskPriority::Normal as usize),
+            0
+        );
+    }
+
+    #[test]
+    fn runnable_mask_excludes_idle_queue() {
+        let mut state = SchedState::new();
+        state.per_cpu.push(PerCpu::new());
+        state.insert_thread(sched_fields(61, TaskState::Runnable, TaskPriority::Idle));
+
+        state.enqueue_thread(0, TaskPriority::Idle as usize, 61);
+        assert_eq!(
+            state.per_cpu[0].nonempty_runnable_mask, 0,
+            "idle queue should not be marked as non-idle runnable work"
         );
     }
 }

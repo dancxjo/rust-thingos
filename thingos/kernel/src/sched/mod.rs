@@ -236,6 +236,8 @@ pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
+/// Bits 1..=4 represent non-idle priority queues (Low..Realtime).
+const RUNNABLE_NONIDLE_MASK: u8 = 0b1_1110;
 // Keep steal scans bounded to limit idle-path latency while still peeking past
 // a small pinned/unstealable head segment.
 const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
@@ -252,6 +254,12 @@ const PROACTIVE_REBALANCE_MIN_VARIANCE: u64 = 4;
 const PROACTIVE_REBALANCE_MIN_IMBALANCE_TICKS: u64 = 32;
 const RESCHED_IPI_NEVER_SENT: u64 = u64::MAX;
 const RESCHED_IPI_MIN_TICK_DELTA: u64 = 2;
+
+#[inline]
+fn highest_set_bit_u8(mask: u8) -> usize {
+    debug_assert!(mask != 0);
+    (u8::BITS as usize - 1) - mask.leading_zeros() as usize
+}
 
 /// Map a microsecond duration to a histogram bucket index.
 ///
@@ -778,7 +786,9 @@ pub(crate) fn enqueue_remote_wake_mailbox(
 }
 
 #[inline]
-fn take_remote_wake_mailbox(cpu: usize) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
+fn take_remote_wake_mailbox(
+    cpu: usize,
+) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
     if cpu >= types::MAX_CPUS {
         return alloc::collections::VecDeque::new();
     }
@@ -2378,7 +2388,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let prio = sf.priority as usize;
         match sf.affinity {
             crate::task::Affinity::Pinned(cpu) if cpu < per_cpu_len => Some((prio, cpu)),
-            crate::task::Affinity::Pinned(_) => Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1))),
+            crate::task::Affinity::Pinned(_) => {
+                Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1)))
+            }
             crate::task::Affinity::Any => {
                 let fallback = queued_target_cpu.min(per_cpu_len - 1);
                 Some((prio, sf.last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(fallback)))
@@ -2485,9 +2497,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Priority scan — pick the highest runnable bucket; fairness aging is
         // materialized periodically outside this hot path.
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
-            let best_q = ((TaskPriority::Low as usize)..=(TaskPriority::Realtime as usize))
-                .rev()
-                .find(|&p| self.state.per_cpu[cpu_idx].runq[p].front().is_some());
+            let mut best_q = None;
+            let mut candidate_mask =
+                self.state.per_cpu[cpu_idx].nonempty_runnable_mask & RUNNABLE_NONIDLE_MASK;
+            while candidate_mask != 0 {
+                let p = highest_set_bit_u8(candidate_mask);
+                candidate_mask &= !(1u8 << p);
+                if self.state.per_cpu[cpu_idx].runq[p].front().is_some() {
+                    best_q = Some(p);
+                    break;
+                }
+                self.state.per_cpu[cpu_idx].nonempty_runnable_mask &= !(1u8 << p);
+            }
 
             if let Some(p) = best_q {
                 let Some(id) = self.state.dequeue_task_front(cpu_idx, p) else {
@@ -5080,6 +5101,39 @@ mod tests {
         assert_eq!(task.state, TaskState::Running);
         assert_eq!(task.enqueued_at_tick, 55);
         assert_eq!(task.last_cpu, Some(2));
+    }
+
+    #[test]
+    fn test_prepare_schedule_clears_stale_runnable_mask_bits() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        let current = make_task(0, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+
+        // Inject a stale bit for a queue that is actually empty.
+        sched.state.per_cpu[0].nonempty_runnable_mask = 1u8 << TaskPriority::Realtime as usize;
+
+        let next = sched.prepare_schedule().expect("current task should remain schedulable");
+        assert_eq!(next.to_tid, 0);
+        assert_eq!(sched.state.per_cpu[0].nonempty_runnable_mask, 0);
     }
 
     #[test]
