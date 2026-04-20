@@ -67,10 +67,17 @@ impl RingBuf {
     /// Dequeue up to `dst.len()` bytes. Returns number of bytes read.
     fn dequeue(&mut self, dst: &mut [u8]) -> usize {
         let n = dst.len().min(self.len);
-        for i in 0..n {
-            dst[i] = self.data[self.head];
-            self.head = (self.head + 1) % self.cap;
+        if n == 0 {
+            return 0;
         }
+        // Split into at most two contiguous slices to avoid per-byte modulo.
+        let first = (self.cap - self.head).min(n);
+        dst[..first].copy_from_slice(&self.data[self.head..self.head + first]);
+        let second = n - first;
+        if second > 0 {
+            dst[first..n].copy_from_slice(&self.data[..second]);
+        }
+        self.head = (self.head + n) % self.cap;
         self.len -= n;
         n
     }
@@ -78,10 +85,17 @@ impl RingBuf {
     /// Enqueue up to `src.len()` bytes. Returns number of bytes written.
     fn enqueue(&mut self, src: &[u8]) -> usize {
         let n = src.len().min(self.free_space());
-        for i in 0..n {
-            self.data[self.tail] = src[i];
-            self.tail = (self.tail + 1) % self.cap;
+        if n == 0 {
+            return 0;
         }
+        // Split into at most two contiguous slices to avoid per-byte modulo.
+        let first = (self.cap - self.tail).min(n);
+        self.data[self.tail..self.tail + first].copy_from_slice(&src[..first]);
+        let second = n - first;
+        if second > 0 {
+            self.data[..second].copy_from_slice(&src[first..n]);
+        }
+        self.tail = (self.tail + n) % self.cap;
         self.len += n;
         n
     }
@@ -91,11 +105,32 @@ impl RingBuf {
 // Pipe inner state
 // ---------------------------------------------------------------------------
 
-pub struct PipeInner {
+/// The volatile data protected by a mutex: buffer plus reference counts.
+///
+/// Wait queues live in the outer [`PipePair`] so that wakeups can be issued
+/// *after* releasing this mutex, eliminating the scheduler-lock chain that
+/// would otherwise form when holding `PipeData`'s lock during
+/// `WaitQueue::wake_one()`.
+struct PipeData {
     buf: RingBuf,
     readers: u32,
     writers: u32,
     nonblock: bool,
+}
+
+/// Shared pipe state for one pipe instance.
+///
+/// `Arc<PipePair>` is held by both [`PipeReadNode`] and [`PipeWriteNode`].
+/// The wait queues are intentionally outside the `Mutex<PipeData>` so that:
+///
+/// * Wakeups (which eventually acquire the scheduler lock) happen after the
+///   data lock is released, preventing lock convoys.
+/// * Wait-queue registration can be performed *before* re-checking the buffer
+///   under the data lock (see the "pre-register" pattern in the read/write
+///   implementations), which prevents missed-wake races without requiring a
+///   nested lock.
+pub struct PipePair {
+    inner: Mutex<PipeData>,
     read_waitq: WaitQueue,
     write_waitq: WaitQueue,
 }
@@ -105,7 +140,7 @@ pub struct PipeInner {
 // ---------------------------------------------------------------------------
 
 static NEXT_PIPE_ID: AtomicU64 = AtomicU64::new(1);
-static PIPES: Mutex<BTreeMap<u64, Arc<Mutex<PipeInner>>>> = Mutex::new(BTreeMap::new());
+static PIPES: Mutex<BTreeMap<u64, Arc<PipePair>>> = Mutex::new(BTreeMap::new());
 
 /// Default pipe capacity in bytes.
 const DEFAULT_PIPE_CAPACITY: usize = 4096;
@@ -120,68 +155,73 @@ pub fn create(capacity: u32, flags: u32) -> u64 {
     let cap = if capacity == 0 { DEFAULT_PIPE_CAPACITY } else { capacity as usize };
     let nonblock = (flags & abi::syscall::pipe_flags::NONBLOCK) != 0;
 
-    let inner = Arc::new(Mutex::new(PipeInner {
-        buf: RingBuf::new(cap),
-        readers: 1,
-        writers: 1,
-        nonblock,
+    let pair = Arc::new(PipePair {
+        inner: Mutex::new(PipeData { buf: RingBuf::new(cap), readers: 1, writers: 1, nonblock }),
         read_waitq: WaitQueue::new(),
         write_waitq: WaitQueue::new(),
-    }));
+    });
 
     let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
-    PIPES.lock().insert(id, inner);
+    PIPES.lock().insert(id, pair);
     id
 }
 
 /// Read from a pipe. Blocks (or returns EAGAIN) when empty and writers exist.
 /// Returns Ok(0) on EOF (all writers closed).
 pub fn read(pipe_id: u64, dst: &mut [u8]) -> Result<usize, abi::errors::Errno> {
-    let pipe = get_pipe(pipe_id)?;
+    let pair = get_pipe(pipe_id)?;
 
     loop {
         if crate::sched::take_pending_interrupt_current() {
             return Err(abi::errors::Errno::EINTR);
         }
 
-        // Get current TID for wait queue registration
         let tid = unsafe { crate::sched::current_tid_current() };
 
-        {
-            let mut inner = pipe.lock();
+        // Pre-register as a read waiter *before* inspecting the buffer.  If a
+        // concurrent writer enqueues data and calls `write_waitq.wake_one()`
+        // between our "buffer is empty" check and `block_current_erased`, the
+        // scheduler's `wake_pending` flag ensures we return immediately rather
+        // than sleeping forever.
+        pair.read_waitq.push_back(tid as u64);
 
-            // Data available — dequeue and wake writers
-            if !inner.buf.is_empty() {
-                let n = inner.buf.dequeue(dst);
-                inner.write_waitq.wake_one();
+        let outcome = {
+            let mut data = pair.inner.lock();
+
+            if !data.buf.is_empty() {
+                let n = data.buf.dequeue(dst);
+                pair.read_waitq.remove(tid as u64);
                 crate::ipc::diag::PIPE_READS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 crate::ipc::diag::PIPE_BYTES_READ
                     .fetch_add(n as u64, core::sync::atomic::Ordering::Relaxed);
+                Some(Ok(n))
+            } else if data.writers == 0 {
+                pair.read_waitq.remove(tid as u64);
+                Some(Ok(0)) // EOF
+            } else if data.nonblock {
+                pair.read_waitq.remove(tid as u64);
+                Some(Err(abi::errors::Errno::EAGAIN))
+            } else {
+                None // stay registered; will block
+            }
+        }; // data lock released
+
+        match outcome {
+            Some(Ok(n)) if n > 0 => {
+                // Wake a blocked writer now that there is buffer space.
+                pair.write_waitq.wake_one(); // outside data lock ✓
                 return Ok(n);
             }
-
-            // No data, no writers => EOF
-            if inner.writers == 0 {
-                return Ok(0);
+            Some(result) => return result,
+            None => {
+                unsafe { crate::task::block_current_erased() };
+                pair.read_waitq.remove(tid as u64);
+                if crate::sched::take_pending_interrupt_current() {
+                    return Err(abi::errors::Errno::EINTR);
+                }
+                // Woken up — retry loop.
             }
-
-            // Empty, writers exist — block or EAGAIN
-            if inner.nonblock {
-                return Err(abi::errors::Errno::EAGAIN);
-            }
-
-            // Register in read wait queue before dropping lock
-            inner.read_waitq.push_back(tid as u64);
         }
-        // Lock dropped — now park
-        unsafe {
-            crate::task::block_current_erased();
-        }
-        pipe.lock().read_waitq.remove(tid as u64);
-        if crate::sched::take_pending_interrupt_current() {
-            return Err(abi::errors::Errno::EINTR);
-        }
-        // Woken up — retry loop
     }
 }
 
@@ -192,7 +232,7 @@ pub fn write(pipe_id: u64, src: &[u8]) -> Result<usize, abi::errors::Errno> {
         return Ok(0);
     }
 
-    let pipe = get_pipe(pipe_id)?;
+    let pair = get_pipe(pipe_id)?;
 
     loop {
         if crate::sched::take_pending_interrupt_current() {
@@ -201,58 +241,66 @@ pub fn write(pipe_id: u64, src: &[u8]) -> Result<usize, abi::errors::Errno> {
 
         let tid = unsafe { crate::sched::current_tid_current() };
 
-        {
-            let mut inner = pipe.lock();
+        // Pre-register as a write waiter before inspecting the buffer (see
+        // the read path above for the rationale).
+        pair.write_waitq.push_back(tid as u64);
 
-            // No readers => broken pipe
-            if inner.readers == 0 {
+        let outcome = {
+            let mut data = pair.inner.lock();
+
+            if data.readers == 0 {
+                pair.write_waitq.remove(tid as u64);
                 crate::ipc::diag::PIPE_BROKEN_PIPE
                     .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                return Err(abi::errors::Errno::EPIPE);
-            }
-
-            // Space available — enqueue and wake readers
-            if !inner.buf.is_full() {
-                let n = inner.buf.enqueue(src);
-                inner.read_waitq.wake_one();
-                crate::ipc::diag::PIPE_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                Some(Err(abi::errors::Errno::EPIPE))
+            } else if !data.buf.is_full() {
+                let n = data.buf.enqueue(src);
+                pair.write_waitq.remove(tid as u64);
+                crate::ipc::diag::PIPE_WRITES
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 crate::ipc::diag::PIPE_BYTES_WRITTEN
                     .fetch_add(n as u64, core::sync::atomic::Ordering::Relaxed);
+                Some(Ok(n))
+            } else if data.nonblock {
+                pair.write_waitq.remove(tid as u64);
+                Some(Err(abi::errors::Errno::EAGAIN))
+            } else {
+                None // stay registered; will block
+            }
+        }; // data lock released
+
+        match outcome {
+            Some(Ok(n)) => {
+                // Wake a blocked reader now that data is available.
+                pair.read_waitq.wake_one(); // outside data lock ✓
                 return Ok(n);
             }
-
-            // Full, readers exist — block or EAGAIN
-            if inner.nonblock {
-                return Err(abi::errors::Errno::EAGAIN);
+            Some(result) => return result,
+            None => {
+                unsafe { crate::task::block_current_erased() };
+                pair.write_waitq.remove(tid as u64);
+                if crate::sched::take_pending_interrupt_current() {
+                    return Err(abi::errors::Errno::EINTR);
+                }
             }
-
-            inner.write_waitq.push_back(tid as u64);
-        }
-        unsafe {
-            crate::task::block_current_erased();
-        }
-        pipe.lock().write_waitq.remove(tid as u64);
-        if crate::sched::take_pending_interrupt_current() {
-            return Err(abi::errors::Errno::EINTR);
         }
     }
 }
 
 /// Close the read end of a pipe.
 pub fn close_read(pipe_id: u64) -> Result<(), abi::errors::Errno> {
-    let pipe = get_pipe(pipe_id)?;
-    let should_remove;
-    {
-        let mut inner = pipe.lock();
-        if inner.readers == 0 {
+    let pair = get_pipe(pipe_id)?;
+    let (was_last_reader, should_remove) = {
+        let mut data = pair.inner.lock();
+        if data.readers == 0 {
             return Err(abi::errors::Errno::EBADF);
         }
-        inner.readers -= 1;
-        if inner.readers == 0 {
-            // Wake all blocked writers so they can discover BrokenPipe
-            inner.write_waitq.wake_all();
-        }
-        should_remove = inner.readers == 0 && inner.writers == 0;
+        data.readers -= 1;
+        let last = data.readers == 0;
+        (last, last && data.writers == 0)
+    }; // data lock released
+    if was_last_reader {
+        pair.write_waitq.wake_all(); // outside data lock ✓
     }
     if should_remove {
         PIPES.lock().remove(&pipe_id);
@@ -262,19 +310,18 @@ pub fn close_read(pipe_id: u64) -> Result<(), abi::errors::Errno> {
 
 /// Close the write end of a pipe.
 pub fn close_write(pipe_id: u64) -> Result<(), abi::errors::Errno> {
-    let pipe = get_pipe(pipe_id)?;
-    let should_remove;
-    {
-        let mut inner = pipe.lock();
-        if inner.writers == 0 {
+    let pair = get_pipe(pipe_id)?;
+    let (was_last_writer, should_remove) = {
+        let mut data = pair.inner.lock();
+        if data.writers == 0 {
             return Err(abi::errors::Errno::EBADF);
         }
-        inner.writers -= 1;
-        if inner.writers == 0 {
-            // Wake all blocked readers so they can observe EOF
-            inner.read_waitq.wake_all();
-        }
-        should_remove = inner.readers == 0 && inner.writers == 0;
+        data.writers -= 1;
+        let last = data.writers == 0;
+        (last, data.readers == 0 && last)
+    }; // data lock released
+    if was_last_writer {
+        pair.read_waitq.wake_all(); // outside data lock ✓
     }
     if should_remove {
         PIPES.lock().remove(&pipe_id);
@@ -286,7 +333,7 @@ pub fn close_write(pipe_id: u64) -> Result<(), abi::errors::Errno> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn get_pipe(id: u64) -> Result<Arc<Mutex<PipeInner>>, abi::errors::Errno> {
+fn get_pipe(id: u64) -> Result<Arc<PipePair>, abi::errors::Errno> {
     PIPES.lock().get(&id).cloned().ok_or(abi::errors::Errno::EBADF)
 }
 
@@ -299,14 +346,14 @@ fn get_pipe(id: u64) -> Result<Arc<Mutex<PipeInner>>, abi::errors::Errno> {
 /// Created by [`create_fd_pair`] and inserted into the process fd table as
 /// stdin (fd 0) or as the read end of a pipe passed to `pipe()`.
 pub struct PipeReadNode {
-    inner: Arc<Mutex<PipeInner>>,
+    inner: Arc<PipePair>,
     // Pipe ID kept for the global registry lookup (allows `close` to work).
     pipe_id: u64,
 }
 
 /// The write end of an anonymous pipe, exposed as a [`crate::vfs::VfsNode`].
 pub struct PipeWriteNode {
-    inner: Arc<Mutex<PipeInner>>,
+    inner: Arc<PipePair>,
     pipe_id: u64,
 }
 
@@ -315,30 +362,48 @@ impl crate::vfs::VfsNode for PipeReadNode {
         if buf.is_empty() {
             return Ok(0);
         }
+        let pair = &self.inner;
         loop {
             if crate::sched::take_pending_interrupt_current() {
                 return Err(abi::errors::Errno::EINTR);
             }
             let tid = unsafe { crate::sched::current_tid_current() };
-            {
-                let mut inner = self.inner.lock();
-                if !inner.buf.is_empty() {
-                    let n = inner.buf.dequeue(buf);
-                    inner.write_waitq.wake_one();
+
+            // Pre-register as a read waiter before inspecting the buffer so
+            // that a concurrent writer cannot fire a wake between the "buffer
+            // is empty" check and `block_current_erased` (missed-wake).
+            pair.read_waitq.push_back(tid as u64);
+
+            let outcome = {
+                let mut data = pair.inner.lock();
+                if !data.buf.is_empty() {
+                    let n = data.buf.dequeue(buf);
+                    pair.read_waitq.remove(tid as u64);
+                    Some(Ok(n))
+                } else if data.writers == 0 {
+                    pair.read_waitq.remove(tid as u64);
+                    Some(Ok(0)) // EOF
+                } else if data.nonblock {
+                    pair.read_waitq.remove(tid as u64);
+                    Some(Err(abi::errors::Errno::EAGAIN))
+                } else {
+                    None // stay registered; will block
+                }
+            }; // data lock released
+
+            match outcome {
+                Some(Ok(n)) if n > 0 => {
+                    pair.write_waitq.wake_one(); // outside data lock ✓
                     return Ok(n);
                 }
-                if inner.writers == 0 {
-                    return Ok(0); // EOF
+                Some(result) => return result,
+                None => {
+                    unsafe { crate::task::block_current_erased() };
+                    pair.read_waitq.remove(tid as u64);
+                    if crate::sched::take_pending_interrupt_current() {
+                        return Err(abi::errors::Errno::EINTR);
+                    }
                 }
-                if inner.nonblock {
-                    return Err(abi::errors::Errno::EAGAIN);
-                }
-                inner.read_waitq.push_back(tid as u64);
-            }
-            unsafe { crate::task::block_current_erased() };
-            self.inner.lock().read_waitq.remove(tid as u64);
-            if crate::sched::take_pending_interrupt_current() {
-                return Err(abi::errors::Errno::EINTR);
             }
         }
     }
@@ -357,16 +422,17 @@ impl crate::vfs::VfsNode for PipeReadNode {
     }
 
     fn close(&self) {
-        let should_remove;
-        {
-            let mut inner = self.inner.lock();
-            if inner.readers > 0 {
-                inner.readers -= 1;
+        let pair = &self.inner;
+        let (was_last_reader, should_remove) = {
+            let mut data = pair.inner.lock();
+            if data.readers > 0 {
+                data.readers -= 1;
             }
-            if inner.readers == 0 {
-                inner.write_waitq.wake_all();
-            }
-            should_remove = inner.readers == 0 && inner.writers == 0;
+            let last = data.readers == 0;
+            (last, last && data.writers == 0)
+        }; // data lock released
+        if was_last_reader {
+            pair.write_waitq.wake_all(); // outside data lock ✓
         }
         if should_remove {
             PIPES.lock().remove(&self.pipe_id);
@@ -375,23 +441,23 @@ impl crate::vfs::VfsNode for PipeReadNode {
 
     fn poll(&self) -> u16 {
         use abi::syscall::poll_flags::{POLLHUP, POLLIN};
-        let inner = self.inner.lock();
+        let data = self.inner.inner.lock();
         let mut revents = 0;
-        if !inner.buf.is_empty() || inner.writers == 0 {
+        if !data.buf.is_empty() || data.writers == 0 {
             revents |= POLLIN;
         }
-        if inner.writers == 0 {
+        if data.writers == 0 {
             revents |= POLLHUP;
         }
         revents
     }
 
     fn add_waiter(&self, tid: u64) {
-        self.inner.lock().read_waitq.push_back(tid);
+        self.inner.read_waitq.push_back(tid);
     }
 
     fn remove_waiter(&self, tid: u64) {
-        self.inner.lock().read_waitq.remove(tid);
+        self.inner.read_waitq.remove(tid);
     }
 }
 
@@ -404,30 +470,46 @@ impl crate::vfs::VfsNode for PipeWriteNode {
         if buf.is_empty() {
             return Ok(0);
         }
+        let pair = &self.inner;
         loop {
             if crate::sched::take_pending_interrupt_current() {
                 return Err(abi::errors::Errno::EINTR);
             }
             let tid = unsafe { crate::sched::current_tid_current() };
-            {
-                let mut inner = self.inner.lock();
-                if inner.readers == 0 {
-                    return Err(abi::errors::Errno::EPIPE);
+
+            // Pre-register as a write waiter before inspecting the buffer.
+            pair.write_waitq.push_back(tid as u64);
+
+            let outcome = {
+                let mut data = pair.inner.lock();
+                if data.readers == 0 {
+                    pair.write_waitq.remove(tid as u64);
+                    Some(Err(abi::errors::Errno::EPIPE))
+                } else if !data.buf.is_full() {
+                    let n = data.buf.enqueue(buf);
+                    pair.write_waitq.remove(tid as u64);
+                    Some(Ok(n))
+                } else if data.nonblock {
+                    pair.write_waitq.remove(tid as u64);
+                    Some(Err(abi::errors::Errno::EAGAIN))
+                } else {
+                    None // stay registered; will block
                 }
-                if !inner.buf.is_full() {
-                    let n = inner.buf.enqueue(buf);
-                    inner.read_waitq.wake_one();
+            }; // data lock released
+
+            match outcome {
+                Some(Ok(n)) => {
+                    pair.read_waitq.wake_one(); // outside data lock ✓
                     return Ok(n);
                 }
-                if inner.nonblock {
-                    return Err(abi::errors::Errno::EAGAIN);
+                Some(result) => return result,
+                None => {
+                    unsafe { crate::task::block_current_erased() };
+                    pair.write_waitq.remove(tid as u64);
+                    if crate::sched::take_pending_interrupt_current() {
+                        return Err(abi::errors::Errno::EINTR);
+                    }
                 }
-                inner.write_waitq.push_back(tid as u64);
-            }
-            unsafe { crate::task::block_current_erased() };
-            self.inner.lock().write_waitq.remove(tid as u64);
-            if crate::sched::take_pending_interrupt_current() {
-                return Err(abi::errors::Errno::EINTR);
             }
         }
     }
@@ -442,16 +524,17 @@ impl crate::vfs::VfsNode for PipeWriteNode {
     }
 
     fn close(&self) {
-        let should_remove;
-        {
-            let mut inner = self.inner.lock();
-            if inner.writers > 0 {
-                inner.writers -= 1;
+        let pair = &self.inner;
+        let (was_last_writer, should_remove) = {
+            let mut data = pair.inner.lock();
+            if data.writers > 0 {
+                data.writers -= 1;
             }
-            if inner.writers == 0 {
-                inner.read_waitq.wake_all();
-            }
-            should_remove = inner.readers == 0 && inner.writers == 0;
+            let last = data.writers == 0;
+            (last, data.readers == 0 && last)
+        }; // data lock released
+        if was_last_writer {
+            pair.read_waitq.wake_all(); // outside data lock ✓
         }
         if should_remove {
             PIPES.lock().remove(&self.pipe_id);
@@ -460,22 +543,22 @@ impl crate::vfs::VfsNode for PipeWriteNode {
 
     fn poll(&self) -> u16 {
         use abi::syscall::poll_flags::{POLLERR, POLLHUP, POLLOUT};
-        let inner = self.inner.lock();
+        let data = self.inner.inner.lock();
         let mut revents = 0;
-        if inner.readers == 0 {
+        if data.readers == 0 {
             revents |= POLLHUP | POLLERR;
-        } else if !inner.buf.is_full() {
+        } else if !data.buf.is_full() {
             revents |= POLLOUT;
         }
         revents
     }
 
     fn add_waiter(&self, tid: u64) {
-        self.inner.lock().write_waitq.push_back(tid);
+        self.inner.write_waitq.push_back(tid);
     }
 
     fn remove_waiter(&self, tid: u64) {
-        self.inner.lock().write_waitq.remove(tid);
+        self.inner.write_waitq.remove(tid);
     }
 }
 
@@ -487,8 +570,8 @@ impl crate::vfs::VfsNode for PipeWriteNode {
 ///
 /// Returns `None` if `pipe_id` is not found.
 pub fn read_node_for_id(pipe_id: u64) -> Option<alloc::sync::Arc<dyn crate::vfs::VfsNode>> {
-    let inner = get_pipe(pipe_id).ok()?;
-    Some(Arc::new(PipeReadNode { inner, pipe_id }))
+    let pair = get_pipe(pipe_id).ok()?;
+    Some(Arc::new(PipeReadNode { inner: pair, pipe_id }))
 }
 
 /// Wrap an existing pipe (by `pipe_id`) as a write-end `VfsNode`.
@@ -497,8 +580,8 @@ pub fn read_node_for_id(pipe_id: u64) -> Option<alloc::sync::Arc<dyn crate::vfs:
 ///
 /// Returns `None` if `pipe_id` is not found.
 pub fn write_node_for_id(pipe_id: u64) -> Option<alloc::sync::Arc<dyn crate::vfs::VfsNode>> {
-    let inner = get_pipe(pipe_id).ok()?;
-    Some(Arc::new(PipeWriteNode { inner, pipe_id }))
+    let pair = get_pipe(pipe_id).ok()?;
+    Some(Arc::new(PipeWriteNode { inner: pair, pipe_id }))
 }
 
 /// Create an anonymous pipe and return a `(pipe_id, read_node, write_node)` triple.
@@ -510,20 +593,17 @@ pub fn create_fd_pair_with_id(
     nonblock: bool,
 ) -> (u64, alloc::sync::Arc<dyn crate::vfs::VfsNode>, alloc::sync::Arc<dyn crate::vfs::VfsNode>) {
     let cap = if capacity == 0 { DEFAULT_PIPE_CAPACITY } else { capacity as usize };
-    let inner = Arc::new(Mutex::new(PipeInner {
-        buf: RingBuf::new(cap),
-        readers: 1,
-        writers: 1,
-        nonblock,
+    let pair = Arc::new(PipePair {
+        inner: Mutex::new(PipeData { buf: RingBuf::new(cap), readers: 1, writers: 1, nonblock }),
         read_waitq: WaitQueue::new(),
         write_waitq: WaitQueue::new(),
-    }));
+    });
     let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
-    PIPES.lock().insert(id, inner.clone());
+    PIPES.lock().insert(id, pair.clone());
     let read_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> =
-        Arc::new(PipeReadNode { inner: inner.clone(), pipe_id: id });
+        Arc::new(PipeReadNode { inner: pair.clone(), pipe_id: id });
     let write_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> =
-        Arc::new(PipeWriteNode { inner, pipe_id: id });
+        Arc::new(PipeWriteNode { inner: pair, pipe_id: id });
     (id, read_node, write_node)
 }
 
@@ -631,21 +711,19 @@ mod tests {
     #[test]
     fn write_end_not_pollout_when_buffer_full() {
         // Use a tiny capacity (1 byte) so we can fill it easily.
-        let (inner, _id) = {
-            let cap = 1usize;
-            let inner = Arc::new(Mutex::new(PipeInner {
-                buf: RingBuf::new(cap),
+        let pair = Arc::new(PipePair {
+            inner: Mutex::new(PipeData {
+                buf: RingBuf::new(1),
                 readers: 1,
                 writers: 1,
                 nonblock: true,
-                read_waitq: WaitQueue::new(),
-                write_waitq: WaitQueue::new(),
-            }));
-            let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
-            PIPES.lock().insert(id, inner.clone());
-            (inner, id)
-        };
-        let write_node = Arc::new(PipeWriteNode { inner, pipe_id: _id });
+            }),
+            read_waitq: WaitQueue::new(),
+            write_waitq: WaitQueue::new(),
+        });
+        let _id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
+        PIPES.lock().insert(_id, pair.clone());
+        let write_node = Arc::new(PipeWriteNode { inner: pair, pipe_id: _id });
 
         // Fill the buffer.
         write_node.write(0, b"X").expect("first write");
@@ -655,15 +733,17 @@ mod tests {
 
     #[test]
     fn read_returns_eintr_and_unregisters_waiter_when_interrupted() {
-        let inner = Arc::new(Mutex::new(PipeInner {
-            buf: RingBuf::new(8),
-            readers: 1,
-            writers: 1,
-            nonblock: false,
+        let pair = Arc::new(PipePair {
+            inner: Mutex::new(PipeData {
+                buf: RingBuf::new(8),
+                readers: 1,
+                writers: 1,
+                nonblock: false,
+            }),
             read_waitq: WaitQueue::new(),
             write_waitq: WaitQueue::new(),
-        }));
-        let read_node = PipeReadNode { inner: inner.clone(), pipe_id: 1 };
+        });
+        let read_node = PipeReadNode { inner: pair.clone(), pipe_id: 1 };
         unsafe {
             CURRENT_TID_HOOK = Some(test_current_tid);
             TAKE_PENDING_INTERRUPT_HOOK = Some(test_take_interrupt);
@@ -675,20 +755,22 @@ mod tests {
         let err = read_node.read(0, &mut buf).unwrap_err();
 
         assert_eq!(err, abi::errors::Errno::EINTR);
-        assert!(inner.lock().read_waitq.is_empty());
+        assert!(pair.read_waitq.is_empty());
     }
 
     #[test]
     fn write_returns_eintr_and_unregisters_waiter_when_interrupted() {
-        let inner = Arc::new(Mutex::new(PipeInner {
-            buf: RingBuf::new(1),
-            readers: 1,
-            writers: 1,
-            nonblock: false,
+        let pair = Arc::new(PipePair {
+            inner: Mutex::new(PipeData {
+                buf: RingBuf::new(1),
+                readers: 1,
+                writers: 1,
+                nonblock: false,
+            }),
             read_waitq: WaitQueue::new(),
             write_waitq: WaitQueue::new(),
-        }));
-        let write_node = PipeWriteNode { inner: inner.clone(), pipe_id: 2 };
+        });
+        let write_node = PipeWriteNode { inner: pair.clone(), pipe_id: 2 };
         write_node.write(0, b"x").expect("fill pipe");
 
         unsafe {
@@ -701,6 +783,6 @@ mod tests {
         let err = write_node.write(0, b"y").unwrap_err();
 
         assert_eq!(err, abi::errors::Errno::EINTR);
-        assert!(inner.lock().write_waitq.is_empty());
+        assert!(pair.write_waitq.is_empty());
     }
 }

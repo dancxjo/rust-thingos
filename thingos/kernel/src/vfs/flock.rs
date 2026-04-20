@@ -1,8 +1,9 @@
 //! Kernel-side advisory file locking (flock semantics).
 //!
 //! This module implements a simple in-kernel advisory lock table.  Locks are
-//! tracked per **(inode number, process-id)** pair, mirroring POSIX `flock(2)`
-//! semantics where each process holds at most one advisory lock per open file.
+//! tracked per **inode number**, with per-process holder sets, mirroring POSIX
+//! `flock(2)` semantics where each process holds at most one advisory lock per
+//! open file.
 //!
 //! Supported operations (the `how` argument to [`flock`]):
 //!
@@ -22,34 +23,48 @@
 //!
 //! * Lock upgrade (shared → exclusive while no other holder) is detected and
 //!   allowed when the calling process is the sole holder.
+//!
+//! # Design notes
+//!
+//! The previous design used two separate global tables: a `(ino, pid) →
+//! LockType` table and a separate `ino → Vec<TID>` wait-queue table.  This
+//! required O(n) full-table scans for conflict checks and O(n) waiter-list
+//! operations, and wakeups were performed while holding the global table lock
+//! (lock-convoy risk).
+//!
+//! The new design uses a **single** `ino → InodeLock` table where each entry
+//! carries:
+//! * A `BTreeSet<u32>` of shared-lock holders (O(log n) insert/remove/check).
+//! * An `Option<u32>` exclusive-lock holder.
+//! * An `Arc<WaitQueue>` for blocked waiters — shared with the waiter so that
+//!   `release` can wake via the Arc *after* releasing the table lock, eliminating
+//!   the lock-convoy path.
 
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::sync::Arc;
 
 use abi::errors::{Errno, SysResult};
 use abi::syscall::flock_flags::{LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN};
 use spin::Mutex;
 
-/// The type of advisory lock held by one process on one inode.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LockType {
-    Shared,
-    Exclusive,
+use crate::sched::wait_queue::WaitQueue;
+
+/// Per-inode advisory lock state.
+struct InodeLock {
+    /// PIDs holding shared locks (at most one lock per PID).
+    shared_holders: BTreeSet<u32>,
+    /// PID holding the exclusive lock, or `None`.
+    exclusive_holder: Option<u32>,
+    /// Wait queue for tasks blocked on this inode's lock.
+    ///
+    /// Stored as `Arc` so that `release` can clone the Arc, remove the entry
+    /// from the table (if unlocked), release the table lock, and then call
+    /// `wake_all` — all without holding the table lock during wakeups.
+    waitq: Arc<WaitQueue>,
 }
 
-/// Global advisory lock table: (inode, pid) → lock type.
-///
-/// Each process may hold at most one advisory lock per inode at a time.
-/// Acquiring a new lock while already holding one atomically replaces the
-/// previous lock (upgrade/downgrade).
-static FLOCK_TABLE: Mutex<BTreeMap<(u64, u32), LockType>> = Mutex::new(BTreeMap::new());
-
-/// Per-inode wait queue: inode → list of task IDs blocked waiting for the lock.
-///
-/// When a blocking `flock` call cannot acquire the lock immediately, the
-/// calling task's TID is recorded here so that [`release`] can wake it once
-/// the conflicting lock is gone.
-static FLOCK_WAIT_QUEUE: Mutex<BTreeMap<u64, Vec<u64>>> = Mutex::new(BTreeMap::new());
+/// Global advisory lock table: inode → per-inode lock state.
+static FLOCK_TABLE: Mutex<BTreeMap<u64, InodeLock>> = Mutex::new(BTreeMap::new());
 
 /// Apply a `flock(2)`-style lock operation.
 ///
@@ -61,6 +76,7 @@ static FLOCK_WAIT_QUEUE: Mutex<BTreeMap<u64, Vec<u64>>> = Mutex::new(BTreeMap::n
 /// * [`Errno::EAGAIN`] (`EWOULDBLOCK`) — lock is held by another process and
 ///   `LOCK_NB` was specified.
 /// * [`Errno::EINVAL`] — `how` does not contain a valid lock operation.
+/// * [`Errno::EINTR`] — a signal was received while blocked.
 pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
     if how & LOCK_UN != 0 {
         release(ino, pid);
@@ -70,71 +86,74 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
     let non_blocking = how & LOCK_NB != 0;
 
     loop {
-        let mut table = FLOCK_TABLE.lock();
-
-        if how & LOCK_SH != 0 {
-            // Check for a conflicting exclusive lock held by another process.
-            let contended = table
-                .iter()
-                .any(|((i, p), lt)| *i == ino && *p != pid && *lt == LockType::Exclusive);
-            if contended {
-                if non_blocking {
-                    return Err(Errno::EAGAIN);
-                }
-                // Blocking: register ourselves as a waiter while still
-                // holding `table` so that a concurrent `release` cannot
-                // miss us.
-                let tid = unsafe { crate::sched::current_tid_current() };
-                FLOCK_WAIT_QUEUE.lock().entry(ino).or_insert_with(Vec::new).push(tid);
-                drop(table);
-                // Sleep until woken by `release`.  If the lock was already
-                // freed between dropping `table` and this call, the
-                // scheduler's `wake_pending` flag ensures we return
-                // immediately rather than blocking forever.
-                unsafe { crate::sched::block_current_erased() };
-                // Remove ourselves from the wait queue in case we were
-                // woken spuriously or the waiter list was already drained
-                // by `release`.
-                let mut wq = FLOCK_WAIT_QUEUE.lock();
-                if let Some(waiters) = wq.get_mut(&ino) {
-                    waiters.retain(|&w| w != tid);
-                    if waiters.is_empty() {
-                        wq.remove(&ino);
-                    }
-                }
-                // Retry the acquisition.
-                continue;
-            }
-            table.insert((ino, pid), LockType::Shared);
-            return Ok(());
+        if crate::sched::take_pending_interrupt_current() {
+            return Err(Errno::EINTR);
         }
 
-        if how & LOCK_EX != 0 {
-            // Check for any conflicting lock held by another process.
-            let contended = table.iter().any(|((i, p), _)| *i == ino && *p != pid);
-            if contended {
-                if non_blocking {
-                    return Err(Errno::EAGAIN);
-                }
-                // Blocking: same wait-queue pattern as LOCK_SH above.
-                let tid = unsafe { crate::sched::current_tid_current() };
-                FLOCK_WAIT_QUEUE.lock().entry(ino).or_insert_with(Vec::new).push(tid);
-                drop(table);
-                unsafe { crate::sched::block_current_erased() };
-                let mut wq = FLOCK_WAIT_QUEUE.lock();
-                if let Some(waiters) = wq.get_mut(&ino) {
-                    waiters.retain(|&w| w != tid);
-                    if waiters.is_empty() {
-                        wq.remove(&ino);
-                    }
-                }
-                continue;
-            }
-            table.insert((ino, pid), LockType::Exclusive);
-            return Ok(());
-        }
+        // Check for conflict and either acquire (success) or register as a
+        // waiter (blocking path) — all under a single table lock acquisition.
+        let wait_for = {
+            let mut table = FLOCK_TABLE.lock();
+            let entry = table.entry(ino).or_insert_with(|| InodeLock {
+                shared_holders: BTreeSet::new(),
+                exclusive_holder: None,
+                waitq: Arc::new(WaitQueue::new()),
+            });
 
-        return Err(Errno::EINVAL);
+            if how & LOCK_SH != 0 {
+                // Conflict: another process holds an exclusive lock.
+                let contended =
+                    entry.exclusive_holder.is_some_and(|holder| holder != pid);
+                if !contended {
+                    // Acquire shared lock (may replace a prior EX lock held by
+                    // same pid, i.e. downgrade).
+                    if entry.exclusive_holder == Some(pid) {
+                        entry.exclusive_holder = None;
+                    }
+                    entry.shared_holders.insert(pid);
+                    return Ok(());
+                }
+            } else if how & LOCK_EX != 0 {
+                // Conflict: any lock held by another process.
+                let other_shared = entry.shared_holders.iter().any(|&p| p != pid);
+                let other_exclusive =
+                    entry.exclusive_holder.is_some_and(|holder| holder != pid);
+                let contended = other_shared || other_exclusive;
+                if !contended {
+                    // Acquire exclusive lock (may replace a prior SH lock held
+                    // by same pid, i.e. upgrade).
+                    entry.shared_holders.remove(&pid);
+                    entry.exclusive_holder = Some(pid);
+                    return Ok(());
+                }
+            } else {
+                return Err(Errno::EINVAL);
+            }
+
+            // Contended.
+            if non_blocking {
+                return Err(Errno::EAGAIN);
+            }
+
+            // Register as a waiter *inside* the table lock so that a
+            // concurrent `release` that fires immediately after we drop the
+            // table lock will find our TID in the wait queue and set
+            // `wake_pending`, ensuring `block_current_erased` returns at once.
+            let tid = unsafe { crate::sched::current_tid_current() };
+            entry.waitq.push_back(tid as u64);
+            entry.waitq.clone() // clone Arc so we can call remove() after blocking
+        }; // table lock released
+
+        unsafe { crate::sched::block_current_erased() };
+
+        // Clean up wait-queue registration regardless of how we were woken.
+        let tid = unsafe { crate::sched::current_tid_current() };
+        wait_for.remove(tid as u64);
+
+        if crate::sched::take_pending_interrupt_current() {
+            return Err(Errno::EINTR);
+        }
+        // Retry the acquisition.
     }
 }
 
@@ -144,12 +163,33 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
 /// when a file descriptor is closed, ensuring that stale locks are never left
 /// in the table.
 pub fn release(ino: u64, pid: u32) {
-    FLOCK_TABLE.lock().remove(&(ino, pid));
+    // Remove the holder entries and, if the inode is now fully unlocked, prune
+    // the table entry.  Clone the wait-queue Arc so we can call `wake_all`
+    // *after* releasing the table lock, avoiding the scheduler-lock convoy.
+    let waitq_opt = {
+        let mut table = FLOCK_TABLE.lock();
+        if let Some(entry) = table.get_mut(&ino) {
+            entry.shared_holders.remove(&pid);
+            if entry.exclusive_holder == Some(pid) {
+                entry.exclusive_holder = None;
+            }
+            let waitq = entry.waitq.clone();
+            // Remove the table entry when it is fully unlocked so the table
+            // does not accumulate empty entries forever.  Waiters that were
+            // registered (and are now being woken) hold their own Arc clone
+            // and will simply retry and create a fresh entry if still needed.
+            if entry.shared_holders.is_empty() && entry.exclusive_holder.is_none() {
+                table.remove(&ino);
+            }
+            Some(waitq)
+        } else {
+            None
+        }
+    }; // table lock released
 
-    // Wake every thread that is sleeping on this inode so they can retry.
-    let waiters = FLOCK_WAIT_QUEUE.lock().remove(&ino).unwrap_or_default();
-    for tid in waiters {
-        unsafe { crate::sched::wake_task_erased(tid) };
+    // Wake every thread that was sleeping on this inode so they can retry.
+    if let Some(waitq) = waitq_opt {
+        waitq.wake_all(); // outside FLOCK_TABLE lock ✓
     }
 }
 
@@ -163,7 +203,19 @@ mod tests {
     /// Remove any existing state for the given (ino, pid) pair so tests do
     /// not interfere with each other.
     fn cleanup(ino: u64, pid: u32) {
-        FLOCK_TABLE.lock().remove(&(ino, pid));
+        let mut table = FLOCK_TABLE.lock();
+        if let Some(entry) = table.get_mut(&ino) {
+            entry.shared_holders.remove(&pid);
+            if entry.exclusive_holder == Some(pid) {
+                entry.exclusive_holder = None;
+            }
+        }
+        // Remove empty entry to avoid interfering with other tests.
+        if let Some(entry) = table.get(&ino) {
+            if entry.shared_holders.is_empty() && entry.exclusive_holder.is_none() {
+                table.remove(&ino);
+            }
+        }
     }
 
     #[test]
@@ -236,7 +288,15 @@ mod tests {
         cleanup(ino, pid);
         flock(ino, pid, LOCK_EX).unwrap();
         release(ino, pid);
-        assert!(!FLOCK_TABLE.lock().contains_key(&(ino, pid)));
+        // Entry must be gone (no holders, no waiters).
+        assert!(
+            FLOCK_TABLE
+                .lock()
+                .get(&ino)
+                .map(|e| e.shared_holders.is_empty() && e.exclusive_holder.is_none())
+                .unwrap_or(true),
+            "entry should be removed or empty after release"
+        );
     }
 
     #[test]
@@ -256,22 +316,47 @@ mod tests {
         release(ino, pid);
     }
 
-    /// Verify that releasing a lock wakes any registered waiters and clears
-    /// the wait queue entry for that inode.
+    /// Verify that releasing a lock wakes any registered waiters.
     #[test]
     fn release_wakes_and_clears_wait_queue() {
+        use crate::sched::blocking::WAKE_TASK_HOOK;
+        use core::sync::atomic::{AtomicUsize, Ordering as AOrdering};
+
+        static WOKEN: AtomicUsize = AtomicUsize::new(0);
+        fn record_wake(_id: u64) {
+            WOKEN.fetch_add(1, AOrdering::SeqCst);
+        }
+
+        WOKEN.store(0, AOrdering::SeqCst);
+        WAKE_TASK_HOOK.store(record_wake as *mut (), AOrdering::SeqCst);
+
         let ino = 0xF00B;
+        cleanup(ino, 50);
+
         // Manually insert a fake waiter TID to simulate a blocked thread.
-        FLOCK_WAIT_QUEUE.lock().entry(ino).or_insert_with(alloc::vec::Vec::new).push(9999);
+        {
+            let mut table = FLOCK_TABLE.lock();
+            let entry = table.entry(ino).or_insert_with(|| InodeLock {
+                shared_holders: BTreeSet::new(),
+                exclusive_holder: None,
+                waitq: Arc::new(WaitQueue::new()),
+            });
+            entry.waitq.push_back(9999);
+        }
+
         // Acquire a lock so release has something to remove.
         flock(ino, 50, LOCK_EX).unwrap();
-        // Release should drain the wait queue (wake_task_erased is a no-op
-        // in unit-test context since the hook is not installed, but the
-        // queue must be cleared).
+
+        // Release should drain the wait queue (wake_task_erased calls our hook).
         release(ino, 50);
+
+        assert_eq!(WOKEN.load(AOrdering::SeqCst), 1, "waiter 9999 should be woken by release");
+        // Table entry must be gone.
         assert!(
-            FLOCK_WAIT_QUEUE.lock().get(&ino).is_none(),
-            "wait queue should be empty after release"
+            FLOCK_TABLE.lock().get(&ino).is_none(),
+            "table entry should be removed after release"
         );
+
+        WAKE_TASK_HOOK.store(core::ptr::null_mut(), AOrdering::SeqCst);
     }
 }

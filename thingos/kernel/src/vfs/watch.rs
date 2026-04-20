@@ -6,13 +6,13 @@
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::errors::{Errno, SysResult};
 use abi::vfs_watch::{self, WatchEvent};
 use spin::Mutex;
 
+use crate::sched::wait_queue::WaitQueue;
 use super::{VfsNode, VfsStat};
 
 /// A ring buffer of VFS events.
@@ -21,12 +21,15 @@ pub struct EventQueue {
     events: Mutex<VecDeque<(WatchEvent, Option<String>)>>,
     max_size: usize,
     /// Tasks waiting for events.
-    waiters: Mutex<Vec<u64>>,
+    ///
+    /// Using [`WaitQueue`] instead of a plain `Mutex<Vec<u64>>` gives O(log n)
+    /// insert/remove and avoids cloning the full waiter list on every event.
+    waiters: WaitQueue,
 }
 
 impl EventQueue {
     pub fn new(max_size: usize) -> Self {
-        Self { events: Mutex::new(VecDeque::new()), max_size, waiters: Mutex::new(Vec::new()) }
+        Self { events: Mutex::new(VecDeque::new()), max_size, waiters: WaitQueue::new() }
     }
 
     pub fn push(&self, mut event: WatchEvent, name: Option<&str>) {
@@ -52,15 +55,7 @@ impl EventQueue {
 
         // Wake waiters after dropping the queue lock so a woken task can read
         // immediately without inverting the queue/registry lock order.
-        let waiters: Vec<u64> = {
-            let waiters = self.waiters.lock();
-            waiters.iter().copied().collect()
-        };
-        for tid in waiters {
-            unsafe {
-                crate::sched::wake_task_erased(tid);
-            }
-        }
+        self.waiters.wake_all();
     }
 
     pub fn pop(&self) -> Option<(WatchEvent, Option<String>)> {
@@ -81,15 +76,11 @@ impl EventQueue {
     }
 
     pub fn add_waiter(&self, tid: u64) {
-        let mut lock = self.waiters.lock();
-        if !lock.contains(&tid) {
-            lock.push(tid);
-        }
+        self.waiters.push_back(tid);
     }
 
     pub fn remove_waiter(&self, tid: u64) {
-        let mut lock = self.waiters.lock();
-        lock.retain(|&t| t != tid);
+        self.waiters.remove(tid);
     }
 }
 
@@ -100,11 +91,17 @@ pub struct Watch {
     pub queue: Arc<EventQueue>,
     pub mask: u32,
     pub flags: u32,
+    /// Stable registration ID allocated at construction time and used as the
+    /// [`WatchRecord::subject_id`] when this watch is registered.  Also used
+    /// by [`VfsNode::close`] to unregister the watch from the global registry
+    /// and prevent the registry from growing without bound.
+    registration_id: u64,
 }
 
 impl Watch {
     pub fn new(mask: u32, flags: u32) -> Self {
-        Self { queue: Arc::new(EventQueue::new(1024)), mask, flags }
+        let registration_id = NEXT_WATCH_ID.fetch_add(1, Ordering::Relaxed);
+        Self { queue: Arc::new(EventQueue::new(1024)), mask, flags, registration_id }
     }
 }
 
@@ -169,13 +166,19 @@ impl VfsNode for Watch {
     fn remove_waiter(&self, tid: u64) {
         self.queue.remove_waiter(tid);
     }
+
+    fn close(&self) {
+        // Remove this watch from the global registry so that:
+        // 1. The registry cannot grow without bound (leak fix).
+        // 2. Subsequent emit_event calls do not fan out to closed watches.
+        unregister_watch(self.registration_id);
+    }
 }
 
 // ── Registry ────────────────────────────────────────────────────────────────
 
-/// Monotonically-increasing counter used to assign stable per-registration
-/// subject IDs.  IDs are never reused within a single kernel session, so
-/// clients can reliably correlate events across the lifetime of a watch.
+/// Monotonically-increasing counter used to assign stable per-watch
+/// subject IDs at construction time (see [`Watch::new`]).
 static NEXT_WATCH_ID: AtomicU64 = AtomicU64::new(1);
 
 struct WatchRecord {
@@ -190,14 +193,24 @@ struct WatchRecord {
     subject_id: u64,
 }
 
-static REGISTRY: Mutex<Vec<WatchRecord>> = Mutex::new(Vec::new());
+static REGISTRY: Mutex<alloc::vec::Vec<WatchRecord>> = Mutex::new(alloc::vec::Vec::new());
 
 pub fn register_watch(node: &Arc<dyn VfsNode>, watch: Arc<Watch>, mount_id: u64) -> SysResult<()> {
     let stat = node.stat()?;
-    let subject_id = NEXT_WATCH_ID.fetch_add(1, Ordering::Relaxed);
+    // Use the stable ID pre-allocated in Watch::new so that VfsNode::close
+    // can remove by the same ID without needing to look up the Arc pointer.
+    let subject_id = watch.registration_id;
     let mut lock = REGISTRY.lock();
     lock.push(WatchRecord { watch, target_ino: stat.ino, mount_id, subject_id });
     Ok(())
+}
+
+/// Remove the watch with the given `registration_id` from the global registry.
+///
+/// Called by [`Watch::close`] to prevent the registry from growing without bound
+/// and to stop delivering events to closed file descriptors.
+pub fn unregister_watch(registration_id: u64) {
+    REGISTRY.lock().retain(|r| r.subject_id != registration_id);
 }
 
 pub fn emit_event(node: &dyn VfsNode, mask: u32, name: Option<&str>, cookie: u32, mount_id: u64) {
@@ -206,9 +219,9 @@ pub fn emit_event(node: &dyn VfsNode, mask: u32, name: Option<&str>, cookie: u32
         Err(_) => return,
     };
 
-    let pending: Vec<(Arc<Watch>, WatchEvent)> = {
+    let pending: alloc::vec::Vec<(Arc<Watch>, WatchEvent)> = {
         let lock = REGISTRY.lock();
-        let mut pending = Vec::new();
+        let mut pending = alloc::vec::Vec::new();
         for record in lock.iter() {
             if record.target_ino == stat.ino
                 && record.mount_id == mount_id
@@ -307,7 +320,58 @@ mod tests {
         assert!(watch.queue.is_empty());
     }
 
-    // ── Registry disambiguation tests ─────────────────────────────────────────
+    // ── Watch close unregisters from registry ────────────────────────────────
+
+    /// Opening and immediately closing a watch must not leave a stale entry in
+    /// the registry.  Without the `VfsNode::close` → `unregister_watch` fix the
+    /// registry would grow by one entry per watch lifetime.
+    #[test]
+    fn close_removes_watch_from_registry() {
+        let mount_id: u64 = 0xdead_0020;
+        let ino: u64 = 100;
+        let node = Arc::new(FixedInoNode(ino)) as Arc<dyn VfsNode>;
+
+        let watch = Arc::new(Watch::new(0xffff_ffff, 0));
+        let reg_id = watch.registration_id;
+
+        register_watch(&node, watch.clone(), mount_id).unwrap();
+
+        // Registry must contain our entry.
+        assert!(
+            REGISTRY.lock().iter().any(|r| r.subject_id == reg_id),
+            "watch should be in registry after register_watch"
+        );
+
+        // Simulate fd close.
+        watch.close();
+
+        // Registry must no longer contain the entry.
+        assert!(
+            !REGISTRY.lock().iter().any(|r| r.subject_id == reg_id),
+            "watch must be removed from registry after close"
+        );
+    }
+
+    /// Repeated open/close cycles must not grow the registry.
+    #[test]
+    fn repeated_open_close_does_not_grow_registry() {
+        let mount_id: u64 = 0xdead_0021;
+        let ino: u64 = 101;
+        let node = Arc::new(FixedInoNode(ino)) as Arc<dyn VfsNode>;
+
+        // Record baseline size to be resilient against other tests leaving entries.
+        let baseline = REGISTRY.lock().len();
+
+        for _ in 0..10 {
+            let w = Arc::new(Watch::new(0xffff_ffff, 0));
+            register_watch(&node, w.clone(), mount_id).unwrap();
+            w.close();
+        }
+
+        let after = REGISTRY.lock().len();
+        assert_eq!(after, baseline, "registry must not grow after close");
+    }
+
 
     struct FixedInoNode(u64);
 
