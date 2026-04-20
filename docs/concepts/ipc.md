@@ -17,6 +17,7 @@ another.
 | Primitive | Syscall family | When to use |
 |-----------|---------------|-------------|
 | **Channel** | `SYS_CHANNEL_*` | Discrete messages: commands, ACKs, events, thing passing, RPC |
+| **Inbox** | `SYS_MSG_SEND` / `SYS_MSG_BROADCAST` / `SYS_MSG_RECV` | Typed lifecycle and system-wide notifications (directed or process-group fanout) |
 | **Pipe** | `SYS_PIPE` / `SYS_FS_*` | Sequential byte streams: stdio, process output pipelines |
 | **Unix socket** | `SYS_SOCKET` / `SYS_BIND` / `SYS_CONNECT` / `SYS_SOCKETPAIR` | Bidirectional byte-stream endpoint IPC via filesystem path or anonymous pair |
 | **Memfd** | `SYS_MEMFD_CREATE` / `SYS_VM_MAP` | Bulk data, zero-copy buffers, shared rings |
@@ -58,6 +59,10 @@ See `docs/concepts/channel_semantics.md` for the full specification.
   notifications, registration handshakes.
 - Request/reply RPC that is not naturally file-shaped.
 - Passing capabilities (things) between processes.
+
+> For **system-wide** notifications (for example power/network/mount state),
+> use Inbox typed messaging with `SYS_MSG_BROADCAST` to a subscription process
+> group instead of channel fanout loops.
 
 ### When **not** to use channels
 
@@ -391,6 +396,8 @@ loop_.run(|op| match op {
 | I need to … | Use |
 |-------------|-----|
 | Send a command / event to a service | Channel |
+| Broadcast a system-wide notification to subscribers | Inbox (`SYS_MSG_BROADCAST`) to a process group |
+| Subscribe to system-wide notification stream | Join the subscription process group, then receive from inbox (`SYS_MSG_RECV`) |
 | Do synchronous request/reply RPC | Channel + `abi::rpc::RpcHeader` |
 | Pass a thing (capability) to another process | Channel + `channel_send_msg` |
 | Transfer a large buffer zero-copy | Memfd thing + channel (to pass the thing) |
