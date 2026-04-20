@@ -27,25 +27,32 @@ pub fn alloc_user_va(size: usize) -> u64 {
 }
 
 pub fn init<R: crate::BootRuntime>(rt: &R) {
+    rt.serial_putbuf(b"[kernel:mem:init] enter\r\n");
     let map = rt.phys_memory_map();
+    rt.serial_putbuf(b"[kernel:mem:init] phys_memory_map ok\r\n");
     let _modules = rt.modules();
+    rt.serial_putbuf(b"[kernel:mem:init] modules ok\r\n");
     let offset = rt.phys_to_virt_offset();
+    rt.serial_putbuf(b"[kernel:mem:init] phys_to_virt_offset ok\r\n");
 
-    crate::kdebug!("Memory map has {} entries", map.len());
-    for (i, range) in map.iter().enumerate() {
-        crate::ktrace!("  [{}] 0x{:x} - 0x{:x} ({:?})", i, range.start, range.end, range.kind);
-    }
-    crate::kdebug!("HHDM Offset: 0x{:x}", offset);
+    let _ = map;
+    let _ = offset;
+    rt.serial_putbuf(b"[kernel:mem:init] memory map logging done\r\n");
 
     // 1. Setup early frame allocator
     let bitmap = boot_frame_alloc::init(map, offset);
+    rt.serial_putbuf(b"[kernel:mem:init] boot_frame_alloc init ok\r\n");
     let alloc = frame_alloc::FrameAllocator::new_from_boot(map, _modules, bitmap, offset);
+    rt.serial_putbuf(b"[kernel:mem:init] frame allocator build ok\r\n");
 
-    crate::kinfo!("Frame allocator initialized with {} free frames", alloc.free_count());
+    let _ = alloc.free_count();
+    rt.serial_putbuf(b"[kernel:mem:init] frame allocator log ok\r\n");
 
     unsafe { FRAME_ALLOCATOR.init(alloc) };
+    rt.serial_putbuf(b"[kernel:mem:init] FRAME_ALLOCATOR init ok\r\n");
 
     rt.tasking().init(offset);
+    rt.serial_putbuf(b"[kernel:mem:init] tasking init ok\r\n");
 }
 
 pub fn is_frame_allocator_ready() -> bool {

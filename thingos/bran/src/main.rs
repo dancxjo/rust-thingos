@@ -93,16 +93,19 @@ unsafe extern "C" fn kmain() -> ! {
     RUNTIME.init(hhdm_offset);
     early_serial_write(b"[bran] runtime init ok\r\n");
 
+    early_serial_write(b"[bran] logging init begin\r\n");
     unsafe {
         kernel::logging::init(&RUNTIME);
     }
+    early_serial_write(b"[bran] logging init ok\r\n");
 
     if !framebuffer_present {
-        kernel::kwarn!("bran: Limine framebuffer unavailable; continuing in serial-only mode");
+        early_serial_write(b"[bran] no framebuffer; serial-only mode\r\n");
     }
 
-    // Post-logging_init marker
-    kernel::kinfo!("ALIVE (UART/LOGGING READY)");
+    // Avoid logger macro calls here while isolating early boot hangs.
+    early_serial_write(b"[bran] post-logging marker\r\n");
+    early_serial_write(b"[bran] calling kernel::start\r\n");
 
     kernel::start(&RUNTIME);
 }

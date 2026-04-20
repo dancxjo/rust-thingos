@@ -101,25 +101,32 @@ static ALLOCATOR: TracingAllocator = TracingAllocator;
 
 #[cfg(not(test))]
 pub fn init<R: BootRuntime>(_rt: &R) {
+    _rt.serial_putbuf(b"[kernel:global_alloc] enter\r\n");
     unsafe {
+        _rt.serial_putbuf(b"[kernel:global_alloc] set expand hook\r\n");
         HEAP_EXPAND_HOOK = Some(expand_heap_impl::<R>);
     }
+    _rt.serial_putbuf(b"[kernel:global_alloc] expand hook ok\r\n");
 
+    _rt.serial_putbuf(b"[kernel:global_alloc] kernel_heap lock begin\r\n");
     let mut heap = kernel_heap().lock();
+    _rt.serial_putbuf(b"[kernel:global_alloc] kernel_heap lock ok\r\n");
     // Keep early boot fast: bootstrap with a smaller heap and grow on demand.
+    _rt.serial_putbuf(b"[kernel:global_alloc] reserve_region begin\r\n");
     let (base, size) = heap
         .reserve_region::<R>(BOOTSTRAP_HEAP_PAGES)
         .expect("Failed to reserve kernel heap region");
+    _rt.serial_putbuf(b"[kernel:global_alloc] reserve_region ok\r\n");
 
     unsafe {
+        _rt.serial_putbuf(b"[kernel:global_alloc] inner allocator init begin\r\n");
         INNER_ALLOCATOR.lock().init(base as *mut u8, size);
     }
+    _rt.serial_putbuf(b"[kernel:global_alloc] inner allocator init ok\r\n");
     HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
+    _rt.serial_putbuf(b"[kernel:global_alloc] heap top store ok\r\n");
 
-    crate::kdebug!(
-        "Global allocator initialized (LinkedHeap, {} MiB bootstrap)",
-        (size / (1024 * 1024))
-    );
+    _rt.serial_putbuf(b"[kernel:global_alloc] init done\r\n");
 }
 
 #[cfg(not(test))]

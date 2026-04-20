@@ -561,7 +561,13 @@ impl Default for NamespaceRef {
 /// - `/run`      ← transient runtime state (tmpfs)
 /// - `/services` ← populated by userland daemons (tmpfs stub for now)
 pub fn init(modules: &'static [crate::BootModuleDesc]) {
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] begin\r\n");
+    }
     mount::init();
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount::init ok\r\n");
+    }
 
     // Create the root filesystem (tmpfs) — writable, volatile.
     let root_fs = Arc::new(ramfs::RamFs::new());
@@ -583,6 +589,9 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     let _ = root_fs.mkdir("services");
     let _ = root_fs.mkdir("session");
     let _ = root_fs.mkdir("data");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] root dirs populated\r\n");
+    }
 
     // Create the root union filesystem.
     let mut root_union = union::UnionFs::new_fallthrough();
@@ -591,38 +600,66 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
 
     mount::mount("/", Arc::new(root_union), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted union filesystem at / (root)");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount / ok\r\n");
+    }
 
     // Device filesystem
     mount::mount("/dev", Arc::new(devfs::DevFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted devfs at /dev");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /dev ok\r\n");
+    }
 
     // Process info filesystem
     mount::mount("/proc", Arc::new(procfs::ProcFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted procfs at /proc");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /proc ok\r\n");
+    }
 
     // Kernel device metadata
     mount::mount("/sys", Arc::new(sysfs::SysFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted sysfs at /sys");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /sys ok\r\n");
+    }
 
     // Temporary filesystem — scratch space for userland.
     mount::mount("/tmp", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /tmp");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /tmp ok\r\n");
+    }
 
     // Transient runtime state
     mount::mount("/run", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /run");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /run ok\r\n");
+    }
 
     // Service namespace
     mount::mount("/services", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /services");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /services ok\r\n");
+    }
 
     // Session namespace — filesystem-native GUI objects live here.
     mount::mount("/session", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /session");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /session ok\r\n");
+    }
 
     // Persistent user data — writable scratchpad for userland programs.
     mount::mount("/data", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /data");
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] mount /data ok\r\n");
+        crate::runtime_base().serial_putbuf(b"[kernel:vfs:init] done\r\n");
+    }
 }
 
 /// Helper for filesystem drivers to implement `readdir`.

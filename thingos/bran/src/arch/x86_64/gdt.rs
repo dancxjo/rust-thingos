@@ -12,7 +12,12 @@ fn current_cpu_index() -> usize {
             options(nostack, preserves_flags, readonly)
         );
     }
-    idx as usize
+    let idx = idx as usize;
+    if idx < MAX_CPUS {
+        idx
+    } else {
+        0
+    }
 }
 
 pub const KERNEL_CODE_SEL: u16 = 0x08;
@@ -207,6 +212,14 @@ pub unsafe fn set_ist1(stack_top: u64) {
     let cpu_index = current_cpu_index();
     unsafe {
         TSS_ARRAY[cpu_index].ist1 = stack_top;
+    }
+}
+
+pub unsafe fn set_ist1_for_cpu(cpu_index: usize, stack_top: u64) {
+    if cpu_index < MAX_CPUS {
+        unsafe {
+            TSS_ARRAY[cpu_index].ist1 = stack_top;
+        }
     }
 }
 

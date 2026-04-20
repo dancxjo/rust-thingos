@@ -75,6 +75,25 @@ impl SerialBuffer {
 pub static mut CPU_IDS: [CpuId; acpi::MAX_CPUS] = [CpuId(0); acpi::MAX_CPUS];
 pub static CPU_COUNT: AtomicU64 = AtomicU64::new(1); // Default to 1 (BSP)
 
+fn cpu_id_from_gs_index_fallback() -> CpuId {
+    let idx: u64;
+    unsafe {
+        asm!(
+            "mov {}, gs:[16]",
+            out(reg) idx,
+            options(nostack, preserves_flags, readonly)
+        );
+    }
+    let idx = idx as usize;
+    let count = CPU_COUNT.load(Ordering::SeqCst) as usize;
+    if idx < count { unsafe { CPU_IDS[idx] } } else { CpuId(0) }
+}
+
+#[repr(align(16))]
+struct DfIstStack([u8; 4096]);
+
+static mut DF_IST_STACK: DfIstStack = DfIstStack([0; 4096]);
+
 impl X86_64Runtime {
     const LAPIC_ICR_DELIVERY_TIMEOUT_US: u64 = 100_000;
     const AP_STARTUP_TIMEOUT_US: u64 = 5_000_000;
@@ -91,7 +110,7 @@ impl X86_64Runtime {
     pub fn current_cpu_id(&self) -> CpuId {
         match self.lapic_id() {
             Ok(id) => CpuId(id),
-            Err(_) => CpuId(0),
+            Err(_) => cpu_id_from_gs_index_fallback(),
         }
     }
 
@@ -179,6 +198,15 @@ impl X86_64Runtime {
                 );
             }
         }
+    }
+
+    fn lapic_mmio_is_mapped(&self) -> bool {
+        let hhdm = self.hhdm_offset.load(Ordering::SeqCst);
+        if hhdm == 0 {
+            return false;
+        }
+        let lapic_virt = apic::base_phys() + hhdm;
+        paging::try_translate(self.active_address_space(), lapic_virt).is_some()
     }
 }
 
@@ -332,9 +360,9 @@ impl ArchRuntime for X86_64Runtime {
 
             // Allocate Double Fault Stack
             self.early_serial_write(b"[bran:x64:init] alloc DF stack\r\n");
-            let phys = kernel::memory::alloc_frame().expect("No frames for DF stack");
-            let virt = phys + hhdm_offset + 4096; // Top of stack
-            gdt::set_ist1(virt);
+            let virt = core::ptr::addr_of_mut!(DF_IST_STACK.0) as u64 + 4096;
+            gdt::set_ist1_for_cpu(0, virt);
+            self.early_serial_write(b"[bran:x64:init] ist1 set\r\n");
 
             self.early_serial_write(b"[bran:x64:init] idt::init\r\n");
             idt::init();
@@ -348,38 +376,42 @@ impl ArchRuntime for X86_64Runtime {
         let lapic_phys = 0xfee00000u64;
         let lapic_virt = lapic_phys + hhdm_offset;
         let aspace = self.active_address_space();
-        // Check if already mapped (it might be if Limine's HHDM covers it)
-        if paging::try_translate(aspace, lapic_virt).is_none() {
-            // Create a simple frame hook for the mapping
-            struct LocalFrameHook;
-            impl FrameAllocatorHook for LocalFrameHook {
+        // Check if already mapped (it might be if Limine's HHDM covers it).
+        let mut lapic_mapped = paging::try_translate(aspace, lapic_virt).is_some();
+        if !lapic_mapped {
+            struct EarlyFrameHook;
+            impl FrameAllocatorHook for EarlyFrameHook {
                 fn alloc_frame(&self) -> Option<u64> {
                     kernel::memory::alloc_frame()
                 }
             }
 
-            // Map as uncacheable device memory
-            let perms = kernel::MapPerms {
+            let perms = MapPerms {
                 read: true,
                 write: true,
                 exec: false,
                 user: false,
-                kind: kernel::MapKind::Device,
+                kind: MapKind::Device,
             };
-            let _ = paging::map_page(
+
+            if paging::map_page(
                 aspace,
                 lapic_virt,
                 lapic_phys,
                 perms,
-                kernel::MapKind::Device,
-                &LocalFrameHook,
-            );
-            paging::tlb_flush_page(lapic_virt);
+                MapKind::Device,
+                &EarlyFrameHook,
+            )
+            .is_ok()
+            {
+                paging::tlb_flush_page(lapic_virt);
+                lapic_mapped = paging::try_translate(aspace, lapic_virt).is_some();
+            }
         }
 
-        // Initialize IOAPIC for interrupt routing (after IDT is set up)
-        self.early_serial_write(b"[bran:x64:init] init_ioapic\r\n");
-        crate::arch::init_ioapic();
+        if lapic_mapped {
+            crate::arch::init_ioapic();
+        }
 
         // Perform full UART initialization (baud, MCR OUT2, etc)
         self.early_serial_write(b"[bran:x64:init] init_uart\r\n");
@@ -698,6 +730,14 @@ impl ArchRuntime for X86_64Runtime {
     }
 
     fn setup_preemption_timer(&self, hz: u32) {
+        if !self.lapic_mmio_is_mapped() {
+            kernel::kwarn!(
+                "LAPIC: skipping preemption timer setup at {}Hz (LAPIC MMIO unmapped)",
+                hz
+            );
+            return;
+        }
+
         let (init_cnt, ticks_per_sec) = ioapic::calibrate_lapic_timer(hz);
 
         self.timer_vector.store(idt::IRQ_TIMER_VECTOR as usize, Ordering::SeqCst);
@@ -746,6 +786,10 @@ impl ArchRuntime for X86_64Runtime {
             return Err(abi::errors::Errno::EAGAIN);
         }
         let base = apic::base_phys();
+        let lapic_virt = base + hhdm;
+        if paging::try_translate(self.active_address_space(), lapic_virt).is_none() {
+            return Err(abi::errors::Errno::EAGAIN);
+        }
         Ok(apic::id(base, hhdm))
     }
     fn lapic_base_phys(&self) -> Result<u64, abi::errors::Errno> {
@@ -797,7 +841,7 @@ impl ArchRuntime for X86_64Runtime {
     fn current_cpu_id(&self) -> CpuId {
         match self.lapic_id() {
             Ok(id) => CpuId(id),
-            Err(_) => CpuId(0),
+            Err(_) => cpu_id_from_gs_index_fallback(),
         }
     }
 
@@ -889,7 +933,15 @@ impl ArchRuntime for X86_64Runtime {
         // need explicit enable too — without this, the SVR enable bit or
         // TPR may be in BIOS default state, silently masking IPIs like
         // the resched vector (0x30) and preventing task scheduling.
-        ioapic::enable_local_apic();
+        if self.lapic_mmio_is_mapped() {
+            ioapic::enable_local_apic();
+        } else {
+            kernel::kwarn!(
+                "SMP: CPU {} skipped LAPIC enable/timer setup (LAPIC MMIO unmapped)",
+                cpu_index
+            );
+            return;
+        }
 
         // Initialize preemption timer using cached BSP calibration
         let vector = self.timer_vector.load(Ordering::SeqCst);

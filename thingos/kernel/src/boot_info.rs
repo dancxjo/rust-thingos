@@ -15,7 +15,13 @@ pub struct BootSyscallInfo {
 }
 
 pub fn set(info: BootSyscallInfo) {
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:boot_info] set begin\r\n");
+    }
     *BOOT_INFO.write() = Some(info);
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(b"[kernel:boot_info] set ok\r\n");
+    }
 }
 
 pub fn get() -> Option<BootSyscallInfo> {

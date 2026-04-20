@@ -46,6 +46,12 @@ static DEVICE_REGISTRY: Mutex<BTreeMap<String, Arc<dyn VfsNode>>> = Mutex::new(B
 static BOOT_FB_INFO: Mutex<Option<(crate::FramebufferInfo, u64)>> = Mutex::new(None);
 static KERNEL_CMDLINE: Mutex<Option<String>> = Mutex::new(None);
 
+fn trace_serial(msg: &[u8]) {
+    if crate::is_runtime_initialized() {
+        crate::runtime_base().serial_putbuf(msg);
+    }
+}
+
 /// Register a device node under the name `name` in `/dev`.
 ///
 /// The `name` must be the bare device name, e.g. `"ttyS0"` (not `/dev/ttyS0`).
@@ -57,7 +63,9 @@ static KERNEL_CMDLINE: Mutex<Option<String>> = Mutex::new(None);
 /// devfs::register("ttyS0", Arc::new(UartNode::new()));
 /// ```
 pub fn register(name: &str, node: Arc<dyn VfsNode>) {
+    trace_serial(b"[kernel:devfs] register begin\r\n");
     DEVICE_REGISTRY.lock().insert(name.to_string(), node);
+    trace_serial(b"[kernel:devfs] register ok\r\n");
 }
 
 /// Remove a previously registered device node.
@@ -69,6 +77,7 @@ pub fn unregister(name: &str) -> bool {
 }
 
 pub fn set_boot_fb(fb: crate::FramebufferInfo, resource_id: u64) {
+    trace_serial(b"[kernel:devfs] set_boot_fb begin\r\n");
     crate::kdebug!(
         "devfs: set_boot_fb width={} height={} pitch={} resource_id=0x{:x}",
         fb.width,
@@ -77,6 +86,7 @@ pub fn set_boot_fb(fb: crate::FramebufferInfo, resource_id: u64) {
         resource_id
     );
     *BOOT_FB_INFO.lock() = Some((fb, resource_id));
+    trace_serial(b"[kernel:devfs] set_boot_fb ok\r\n");
 }
 
 pub fn set_cmdline(cmdline: String) {

@@ -34,7 +34,7 @@ static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Off)
 /// Default is 2 (warn).
-static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(3);
+static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(5);
 
 /// Set the minimum log level for output (0=Off, 1=Error+, 2=Warn+, etc.)
 pub fn set_log_level(level: u8) {
@@ -319,7 +319,7 @@ pub fn _log_event(
                 ts,
                 level_to_colored_str(meta.level),
                 event_str,
-                writer.runtime.current_cpu_id().0
+                writer.runtime.current_cpu_index()
             );
             let _ = writer.write_fmt(msg_fmt);
 
@@ -343,7 +343,7 @@ pub fn _log_event(
     {
         let mut writer = LogBufferWriter;
         let (ts, cpu) = if crate::is_runtime_initialized() {
-            (crate::runtime_base().mono_ticks(), crate::runtime_base().current_cpu_id().0)
+            (crate::runtime_base().mono_ticks(), crate::runtime_base().current_cpu_index())
         } else {
             (0, 0)
         };

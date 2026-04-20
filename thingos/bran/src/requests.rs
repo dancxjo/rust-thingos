@@ -3,8 +3,8 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use kernel::{BootModuleDesc, BootModuleKind};
 use limine::BaseRevision;
 use limine::request::{
-    DeviceTreeBlobRequest, FramebufferRequest, HhdmRequest, ExecutableFileRequest, MemoryMapRequest,
-    ModuleRequest, RsdpRequest,
+    DeviceTreeBlobRequest, ExecutableFileRequest, FramebufferRequest, HhdmRequest,
+    MemoryMapRequest, ModuleRequest, RsdpRequest,
 };
 
 #[unsafe(no_mangle)]
@@ -66,41 +66,68 @@ static MODULES_LEN: AtomicUsize = AtomicUsize::new(0);
 /// writes.
 static MODULES_INIT: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_arch = "x86_64")]
+fn early_serial_write(msg: &[u8]) {
+    unsafe {
+        let port = 0x3f8u16;
+        for &b in msg {
+            let mut spins = 0u32;
+            loop {
+                let lsr: u8;
+                core::arch::asm!(
+                    "in al, dx",
+                    out("al") lsr,
+                    in("dx") port + 5,
+                    options(nostack, preserves_flags)
+                );
+                if (lsr & 0x20) != 0 || spins >= 100_000 {
+                    break;
+                }
+                spins = spins.saturating_add(1);
+                core::hint::spin_loop();
+            }
+            core::arch::asm!(
+                "out dx, al",
+                in("dx") port,
+                in("al") b,
+                options(nostack, preserves_flags)
+            );
+        }
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn early_serial_write(_msg: &[u8]) {}
+
 pub fn get_modules() -> &'static [BootModuleDesc] {
+    early_serial_write(b"[bran:req] get_modules enter\r\n");
     // Fast path: already initialized.  The Acquire load synchronises with the
     // Release store below, guaranteeing visibility of MODULES_CACHE contents.
     if MODULES_INIT.load(Ordering::Acquire) {
+        early_serial_write(b"[bran:req] get_modules cache hit\r\n");
         let len = MODULES_LEN.load(Ordering::Relaxed);
         return unsafe { &MODULES_CACHE[..len] };
     }
 
+    early_serial_write(b"[bran:req] before MODULE_REQUEST response\r\n");
     let count = if let Some(response) = MODULE_REQUEST.get_response() {
+        early_serial_write(b"[bran:req] got MODULE_REQUEST response\r\n");
         let files = response.modules();
         let total = files.len();
+        early_serial_write(b"[bran:req] modules list acquired\r\n");
 
         if total > MAX_MODULES {
-            kernel::kwarn!(
-                "get_modules: Limine reports {} boot modules; only first {} fit in cache (rest dropped)",
-                total,
-                MAX_MODULES
-            );
+            early_serial_write(b"[bran:req] truncating modules cache\r\n");
         }
 
         let count = core::cmp::min(total, MAX_MODULES);
-        kernel::kdebug!("Limine: Found {} boot modules", total);
+        early_serial_write(b"[bran:req] begin module cache fill\r\n");
         for i in 0..count {
             let file = files[i];
 
             // Name
             let name = file.path().to_str().unwrap_or("unknown");
             let cmdline = core::str::from_utf8(file.cmdline()).unwrap_or("");
-            kernel::ktrace!(
-                "  [{}] {} (cmdline='{}') size={}",
-                i,
-                name,
-                cmdline,
-                file.size()
-            );
 
             // Data
             let ptr = file.addr();
@@ -123,8 +150,10 @@ pub fn get_modules() -> &'static [BootModuleDesc] {
                 };
             }
         }
+        early_serial_write(b"[bran:req] module cache fill done\r\n");
         count
     } else {
+        early_serial_write(b"[bran:req] no MODULE_REQUEST response\r\n");
         0
     };
 
@@ -134,6 +163,7 @@ pub fn get_modules() -> &'static [BootModuleDesc] {
     // Release: ensures all writes to MODULES_CACHE and MODULES_LEN happen-before
     // any Acquire load of MODULES_INIT in another CPU.
     MODULES_INIT.store(true, Ordering::Release);
+    early_serial_write(b"[bran:req] get_modules publish done\r\n");
 
     unsafe { &MODULES_CACHE[..count] }
 }
@@ -146,4 +176,3 @@ pub fn get_kernel_cmdline() -> &'static str {
         })
         .unwrap_or("")
 }
-

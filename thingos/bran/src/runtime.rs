@@ -1,8 +1,11 @@
+use core::sync::atomic::{AtomicBool, Ordering};
 use kernel::{
     BootModuleDesc, BootRuntime, BootRuntimeBase, BootTasking, CpuId, FrameAllocatorHook,
     FramebufferInfo, IrqState, MapKind, MapPerms, PhysRange, UserEntry, UserTaskSpec,
 };
 use spin::Mutex;
+
+static TASKING_INIT_ONCE: AtomicBool = AtomicBool::new(false);
 
 pub trait ArchRuntime {
     type Context: Copy + Default;
@@ -540,13 +543,22 @@ impl<A: ArchRuntime + 'static> BootRuntime for Runtime<A> {
     }
 
     fn phys_memory_map(&self) -> &'static [PhysRange] {
-        self.limine.phys_memory_map()
+        self.serial_putbuf(b"[bran:runtime] phys_memory_map begin\r\n");
+        let map = self.limine.phys_memory_map();
+        self.serial_putbuf(b"[bran:runtime] phys_memory_map ok\r\n");
+        map
     }
     fn modules(&self) -> &'static [BootModuleDesc] {
-        self.limine.modules()
+        self.serial_putbuf(b"[bran:runtime] modules begin\r\n");
+        let modules = self.limine.modules();
+        self.serial_putbuf(b"[bran:runtime] modules ok\r\n");
+        modules
     }
     fn framebuffer(&self) -> Option<FramebufferInfo> {
-        self.limine.framebuffer()
+        self.serial_putbuf(b"[bran:runtime] framebuffer begin\r\n");
+        let fb = self.limine.framebuffer();
+        self.serial_putbuf(b"[bran:runtime] framebuffer ok\r\n");
+        fb
     }
     fn get_kernel_cmdline(&self) -> &'static str {
         crate::requests::get_kernel_cmdline()
@@ -614,7 +626,13 @@ impl<A: ArchRuntime + 'static> BootTasking for Runtime<A> {
     type AddressSpace = A::AddressSpace;
 
     fn init(&self, hhdm_offset: u64) {
-        self.arch.init(hhdm_offset)
+        if TASKING_INIT_ONCE.swap(true, Ordering::AcqRel) {
+            self.serial_putbuf(b"[bran:runtime] tasking init skipped (already done)\r\n");
+            return;
+        }
+        self.serial_putbuf(b"[bran:runtime] tasking init begin\r\n");
+        self.arch.init(hhdm_offset);
+        self.serial_putbuf(b"[bran:runtime] tasking init ok\r\n");
     }
 
     fn init_kernel_context(
