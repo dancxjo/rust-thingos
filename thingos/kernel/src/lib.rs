@@ -839,9 +839,9 @@ fn _irq_restore_wrapper<R: BootRuntime>(state: IrqState) {
     runtime::<R>().irq_restore(state);
 }
 
-const STARTUP_BACKGROUND_COLOR: u32 = 0x00_D9_D9_FC;
+const STARTUP_PERIWINKLE_LAVENDER_COLOR: u32 = 0x00_D9_D9_FC;
 
-fn paint_bootfb_color(fb: FramebufferInfo, color: u32) {
+fn paint_bootfb_solid(fb: FramebufferInfo, color: u32) {
     if fb.width == 0 || fb.height == 0 || fb.pitch < 4 || fb.byte_len < (fb.pitch as u64) {
         return;
     }
@@ -1162,7 +1162,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
     // Keep a visible startup background without auto-activating the F12 terminal.
     if let Some(fb) = runtime.framebuffer() {
-        paint_bootfb_color(fb, STARTUP_BACKGROUND_COLOR);
+        paint_bootfb_solid(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
     }
 
     kdebug!("Entering scheduler loop.");
