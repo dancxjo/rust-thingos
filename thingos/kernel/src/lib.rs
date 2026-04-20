@@ -448,6 +448,11 @@ pub trait BootRuntimeBase: 'static {
         }
     }
 
+    fn irq_disable(&self) -> IrqState {
+        IrqState(0)
+    }
+    fn irq_restore(&self, _state: IrqState) {}
+
     /// Send an Inter-Processor Interrupt (IPI) to a specific CPU.
     fn send_ipi(&self, _cpu_index: usize, _vector: u8) {}
 
@@ -565,14 +570,11 @@ pub trait BootRuntime: BootRuntimeBase + Sized + 'static {
         &ONE
     }
 
-    /// Start all non-boot CPUs and run `entry` on each of them.
-    /// Deprecated: use start_cpu for lazy bring-up.
     fn start_secondary_cpus(&self, _entry: extern "C" fn(usize) -> !) -> Result<(), Errno> {
         Err(Errno::NotSupported)
     }
 
-    fn irq_disable(&self) -> IrqState;
-    fn irq_restore(&self, state: IrqState);
+    // irq_disable and irq_restore moved to BootRuntimeBase
 
     /// Setup periodic preemption timer (e.g. 100Hz heartbeat)
     fn setup_preemption_timer(&self, _hz: u32) {}

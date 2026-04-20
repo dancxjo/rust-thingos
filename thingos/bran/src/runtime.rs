@@ -475,6 +475,13 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     fn set_idle_task_current(&self, idle: bool) {
         self.arch.set_idle_task_current(idle)
     }
+
+    fn irq_disable(&self) -> IrqState {
+        self.arch.irq_disable()
+    }
+    fn irq_restore(&self, state: IrqState) {
+        self.arch.irq_restore(state)
+    }
 }
 
 impl<A: ArchRuntime + 'static> BootRuntime for Runtime<A> {
@@ -534,12 +541,7 @@ impl<A: ArchRuntime + 'static> BootRuntime for Runtime<A> {
         self.arch.start_secondary_cpus(entry)
     }
 
-    fn irq_disable(&self) -> IrqState {
-        self.arch.irq_disable()
-    }
-    fn irq_restore(&self, state: IrqState) {
-        self.arch.irq_restore(state)
-    }
+    // irq_disable and irq_restore moved to BootRuntimeBase
 
     fn acpi_rsdp(&self) -> Option<u64> {
         self.limine.acpi_rsdp()

@@ -39,6 +39,7 @@ pub struct X86_64Runtime {
     trampoline_ready: AtomicUsize,
 
     serial_buf: spin::Mutex<SerialBuffer>,
+    serial_tx_lock: spin::Mutex<()>,
 }
 
 pub struct SerialBuffer {
@@ -166,6 +167,7 @@ impl X86_64Runtime {
             started_cpu_count: AtomicUsize::new(1),
             trampoline_ready: AtomicUsize::new(0),
             serial_buf: spin::Mutex::new(SerialBuffer::new()),
+            serial_tx_lock: spin::Mutex::new(()),
         }
     }
 
@@ -350,19 +352,24 @@ impl ArchRuntime for X86_64Runtime {
     }
 
     fn putchar(&self, c: u8) {
-        unsafe {
-            let port = 0x3f8u16;
-            // Wait for Transmitter Holding Register Empty (THRE)
-            loop {
-                let lsr: u8;
-                core::arch::asm!("in al, dx", out("al") lsr, in("dx") port + 5, options(nostack, preserves_flags));
-                if (lsr & 0x20) != 0 {
-                    break;
+        let state = self.irq_disable();
+        {
+            let _lock = self.serial_tx_lock.lock();
+            unsafe {
+                let port = 0x3f8u16;
+                // Wait for Transmitter Holding Register Empty (THRE)
+                loop {
+                    let lsr: u8;
+                    core::arch::asm!("in al, dx", out("al") lsr, in("dx") port + 5, options(nostack, preserves_flags));
+                    if (lsr & 0x20) != 0 {
+                        break;
+                    }
+                    core::hint::spin_loop();
                 }
-                core::hint::spin_loop();
+                core::arch::asm!("out dx, al", in("dx") port, in("al") c);
             }
-            core::arch::asm!("out dx, al", in("dx") port, in("al") c);
         }
+        self.irq_restore(state);
     }
 
     fn getchar(&self) -> Option<u8> {

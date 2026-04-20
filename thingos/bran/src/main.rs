@@ -101,7 +101,10 @@ fn indicate_progress() {
 
 #[alloc_error_handler]
 fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
-    unsafe { kernel::logging::force_unlock() };
+    unsafe {
+        kernel::logging::force_unlock();
+        crate::console::force_unlock();
+    };
 
     // Get current task info for debugging
     let tid = unsafe { kernel::sched::current_tid_current() };
@@ -132,7 +135,10 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
 #[panic_handler]
 fn rust_panic(info: &core::panic::PanicInfo) -> ! {
     // unsafe { kernel::logging::init(&RUNTIME) };
-    unsafe { kernel::logging::force_unlock() };
+    unsafe {
+        kernel::logging::force_unlock();
+        crate::console::force_unlock();
+    };
     if let Some(location) = info.location() {
         kernel::kerror!(
             "KERNEL PANIC Location: {}:{}:{} Message: {}",

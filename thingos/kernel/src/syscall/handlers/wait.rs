@@ -452,7 +452,7 @@ mod tests {
         table.insert_at(fd, node, OpenFlags::read_write(), "/test".into()).expect("insert_at");
         Arc::new(Mutex::new(crate::task::ProcessInfo {
             pid: 1,
-            job: crate::task::ProcessLifecycle::new(0, 1),
+            job: crate::job::Job::new(0, 1),
             unix_compat: crate::task::ProcessUnixCompat::isolated(1, false),
             handle_table: table,
             ipc_table: crate::ipc::IpcHandleTable::new(),

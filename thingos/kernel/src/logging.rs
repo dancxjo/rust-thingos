@@ -85,6 +85,10 @@ impl LogTransaction {
 
         // Emit BEGIN marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
+        
+        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+        let irq_state = rt.map(|r| r.irq_disable());
+        
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
             if !MUTE_SERIAL.load(Ordering::Relaxed) {
@@ -94,6 +98,10 @@ impl LogTransaction {
         }
         drop(lock);
 
+        if let (Some(rt), Some(state)) = (rt, irq_state) {
+            rt.irq_restore(state);
+        }
+
         Self { span_id, name }
     }
 }
@@ -102,6 +110,10 @@ impl Drop for LogTransaction {
     fn drop(&mut self) {
         // Emit END marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
+        
+        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+        let irq_state = rt.map(|r| r.irq_disable());
+        
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
             if !MUTE_SERIAL.load(Ordering::Relaxed) {
@@ -110,6 +122,10 @@ impl Drop for LogTransaction {
             }
         }
         drop(lock);
+        
+        if let (Some(rt), Some(state)) = (rt, irq_state) {
+            rt.irq_restore(state);
+        }
         clear_span();
     }
 }
@@ -154,7 +170,9 @@ impl fmt::Write for Logger {
 }
 
 pub unsafe fn init(runtime: &'static dyn BootRuntimeBase) {
+    let irq = runtime.irq_disable();
     *GLOBAL_LOGGER.lock() = Some(Logger::new(runtime));
+    runtime.irq_restore(irq);
 }
 
 pub unsafe fn force_unlock() {
@@ -189,6 +207,9 @@ struct LogBufferWriter;
 
 impl Write for LogBufferWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
+        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+        let irq_state = rt.map(|r| r.irq_disable());
+        
         let mut state = LOG_STATE.lock();
         for &b in s.as_bytes() {
             unsafe {
@@ -198,6 +219,11 @@ impl Write for LogBufferWriter {
             if state.len < MAX_LOG_BUFFER_SIZE {
                 state.len += 1;
             }
+        }
+        drop(state);
+        
+        if let (Some(rt), Some(state)) = (rt, irq_state) {
+            rt.irq_restore(state);
         }
         Ok(())
     }
@@ -244,6 +270,9 @@ pub fn _log_event(
 
     // 1. Serial Output - human-readable format: [TIME] [LEVEL] [SOURCE] Message
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
+        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+        let irq_state = rt.map(|r| r.irq_disable());
+
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
             let ts = writer.runtime.mono_ticks();
@@ -266,6 +295,11 @@ pub fn _log_event(
             }
 
             let _ = writer.write_char('\n');
+        }
+        drop(lock);
+
+        if let (Some(rt), Some(state)) = (rt, irq_state) {
+            rt.irq_restore(state);
         }
     }
 
@@ -309,9 +343,17 @@ pub fn _log_contract(source: &'static str, args: fmt::Arguments) {
 /// Log a raw string without any formatting (for kprint! compatibility)
 pub fn _log_raw(args: fmt::Arguments) {
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
+        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+        let irq_state = rt.map(|r| r.irq_disable());
+
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
             let _ = writer.write_fmt(args);
+        }
+        drop(lock);
+
+        if let (Some(rt), Some(state)) = (rt, irq_state) {
+            rt.irq_restore(state);
         }
     }
 }

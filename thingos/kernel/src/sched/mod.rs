@@ -1074,9 +1074,6 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                 match trigger {
                     DispatchTrigger::TimerTick => {
                         pc.stats.timer_interrupts = pc.stats.timer_interrupts.saturating_add(1);
-                        if (pc.stats.timer_interrupts % 1000) == 0 {
-                            crate::kdebug!("SCHED_HEARTBEAT: CPU={} ticks={}", cpu_idx, pc.stats.timer_interrupts);
-                        }
                         if cpu_idx < types::MAX_CPUS && pc.current == pc.idle_task {
                             PROF_IDLE_TICKS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
                         }
@@ -1084,7 +1081,6 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                     DispatchTrigger::ReschedIpi => {
                         pc.stats.resched_ipi_received =
                             pc.stats.resched_ipi_received.saturating_add(1);
-                        crate::kdebug!("RESCHED_IPI: Received on CPU {}", cpu_idx);
                     }
                 }
             }
@@ -6498,7 +6494,7 @@ mod tests {
             name_len: 0,
             process_info: Some(alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
                 pid,
-                job: crate::task::ProcessLifecycle::new(ppid, pid as TaskId),
+                job: crate::job::Job::new(ppid, pid as TaskId),
                 unix_compat: crate::task::ProcessUnixCompat::isolated(pid, false),
                 handle_table: crate::vfs::handle_table::HandleTable::new(),
                 ipc_table: crate::ipc::IpcHandleTable::new(),
@@ -6556,7 +6552,7 @@ mod tests {
 
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 1220,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![1220, 1221],
                 exec_in_progress: false,
@@ -6846,7 +6842,7 @@ mod tests {
         // pid = 7000 (thread-group leader), thread_ids = [7000, 7001].
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 7000,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![7000, 7001],
                 exec_in_progress: false,
@@ -6884,7 +6880,7 @@ mod tests {
         // Shared ProcessInfo for a 2-thread group: leader 8700, sibling 8701.
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 8700,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![8700, 8701],
                 exec_in_progress: false,
@@ -6943,7 +6939,7 @@ mod tests {
         // Shared ProcessInfo for a 2-thread group: leader 8800, sibling 8801.
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 8800,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![8800, 8801],
                 exec_in_progress: false,
@@ -7011,7 +7007,7 @@ mod tests {
         // Parent process (pid 9900) with one thread waiting in waitpid path.
         let parent_pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9900,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![9900],
                 exec_in_progress: false,
@@ -7034,7 +7030,7 @@ mod tests {
         // Child process (pid 9800) whose leader exits with code 7.
         let child_pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9800,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 9900,
                 thread_ids: alloc::vec![9800],
                 exec_in_progress: false,
@@ -7086,7 +7082,7 @@ mod tests {
         // Shared ProcessInfo for a 3-thread group: leader 9100, siblings 9101, 9102.
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9100,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![9100, 9101, 9102],
                 exec_in_progress: false,
@@ -7185,7 +7181,7 @@ mod tests {
 
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9700,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: all_tids.clone(),
                 exec_in_progress: false,
@@ -7279,7 +7275,7 @@ mod tests {
 
         let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9300,
-            job: crate::task::ProcessLifecycle::new(1, 9300),
+            job: crate::job::Job::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
             handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),

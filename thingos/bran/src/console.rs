@@ -405,16 +405,20 @@ fn load_unifont_ascii() -> [Glyph; GLYPH_TABLE_LEN] {
 }
 
 pub fn init(fb: Framebuffer) {
+    let state = crate::RUNTIME.irq_disable();
     *CONSOLE.lock() = Some(FbConsole::new(fb));
+    crate::RUNTIME.irq_restore(state);
 }
 
 pub fn activate_onscreen_terminal() {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
+    let state = crate::RUNTIME.irq_disable();
     if let Some(ref mut console) = *CONSOLE.lock() {
         console.activate();
     }
+    crate::RUNTIME.irq_restore(state);
 }
 
 pub fn disable() {
@@ -429,7 +433,15 @@ pub fn put_char(c: u8) {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
+    let state = crate::RUNTIME.irq_disable();
     if let Some(ref mut console) = *CONSOLE.lock() {
         console.put_char(c);
+    }
+    crate::RUNTIME.irq_restore(state);
+}
+
+pub unsafe fn force_unlock() {
+    unsafe {
+        CONSOLE.force_unlock();
     }
 }

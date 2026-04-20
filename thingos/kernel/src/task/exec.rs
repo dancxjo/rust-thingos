@@ -351,6 +351,9 @@ pub fn build_auxv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::sync::Arc;
+    use spin::Mutex;
+    use crate::task::ProcessInfo;
     use crate::task::loader::LoaderAuxInfo;
 
     #[test]
@@ -475,7 +478,7 @@ mod tests {
     ) -> Arc<Mutex<ProcessInfo>> {
         Arc::new(Mutex::new(ProcessInfo {
             pid,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![tid_leader, tid_sibling],
                 exec_in_progress: false,
@@ -490,7 +493,7 @@ mod tests {
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
-            exec_path: alloc::string::String::new(),
+            exec_path: alloc::string::String::from("/bin/test"),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
         }))
@@ -540,7 +543,7 @@ mod tests {
     fn exec_sibling_collection_three_threads() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9230,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: alloc::vec![9230, 9231, 9232],
                 exec_in_progress: false,
@@ -577,7 +580,7 @@ mod tests {
     fn exec_single_threaded_no_siblings() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9240,
-            job: crate::task::ProcessLifecycle::new(1, 9240),
+            job: crate::job::Job::new(1, 9240),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9240, false),
             handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
@@ -686,7 +689,7 @@ mod tests {
     fn exec_commit_closes_cloexec_fds() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9300,
-            job: crate::task::ProcessLifecycle::new(1, 9300),
+            job: crate::job::Job::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
             handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
@@ -733,7 +736,7 @@ mod tests {
     fn exec_commit_preserves_all_fds_without_cloexec() {
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9310,
-            job: crate::task::ProcessLifecycle::new(1, 9310),
+            job: crate::job::Job::new(1, 9310),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9310, false),
             handle_table: crate::vfs::handle_table::HandleTable::new(),
             ipc_table: crate::ipc::IpcHandleTable::new(),
@@ -892,7 +895,7 @@ mod tests {
 
         Arc::new(Mutex::new(ProcessInfo {
             pid,
-            job: crate::task::ProcessLifecycle::new(1, pid as crate::task::TaskId),
+            job: crate::job::Job::new(1, pid as crate::task::TaskId),
             unix_compat: {
                 let mut uc = crate::task::ProcessUnixCompat::isolated(pid, false);
                 uc.set_spawn_context(
@@ -1136,7 +1139,7 @@ mod tests {
 
         let pinfo = Arc::new(Mutex::new(ProcessInfo {
             pid: 9600,
-            job: crate::task::ProcessLifecycle {
+            job: crate::job::Job {
                 ppid: 1,
                 thread_ids: all_tids.clone(),
                 exec_in_progress: false,
