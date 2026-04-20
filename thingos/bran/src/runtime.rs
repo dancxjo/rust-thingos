@@ -344,13 +344,12 @@ impl LimineRuntimeData {
 
 impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     fn putchar(&self, c: u8) {
-        // Drain pending RX before writing so bursty boot logs do not starve input polling.
+        // Drain pending RX before writing so bursty boot logs do not starve
+        // input polling.  A single poll per putchar is sufficient; the
+        // previous double-poll doubled the mutex overhead without benefit.
         self.poll_console_input();
         // Write to serial (arch-specific)
         self.arch.putchar(c);
-        // Boot display path disabled; serial remains the early log sink.
-        // crate::theme::putchar(c);
-        self.poll_console_input();
     }
     fn getchar(&self) -> Option<u8> {
         self.poll_console_input();

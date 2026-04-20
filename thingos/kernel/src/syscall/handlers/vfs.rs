@@ -1012,17 +1012,16 @@ pub fn sys_fs_seek(fd: usize, offset: usize, whence: usize) -> SysResult<usize> 
     let stat = node.stat()?;
     let size = stat.size;
 
-    // Read the current offset and immediately release the offset lock.
-    // This is intentional: validation of `new_offset` happens before the
-    // final write-back at the end of this function, so a brief unlock
-    // between the read and write is safe (single-threaded per-process FD table).
-    let current_offset = *file.offset.lock();
-
     // The raw syscall argument carries the offset as pointer-sized bits.  On
     // 64-bit targets the bit representation of `i64` and `usize` are the same,
     // so reinterpreting as `i64` recovers the signed value for SEEK_CUR /
     // SEEK_END (which may receive negative offsets).
     let offset_signed = offset as i64;
+
+    // Hold the offset lock across the read+compute+write to prevent lost-update
+    // races when two threads share the same open-file description via dup/dup2.
+    let mut off = file.offset.lock();
+    let current_offset = *off;
 
     let new_offset: u64 = match whence {
         0 => {
@@ -1051,7 +1050,7 @@ pub fn sys_fs_seek(fd: usize, offset: usize, whence: usize) -> SysResult<usize> 
         _ => return Err(Errno::EINVAL),
     };
 
-    *file.offset.lock() = new_offset;
+    *off = new_offset;
     Ok(new_offset as usize)
 }
 

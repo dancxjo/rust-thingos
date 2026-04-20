@@ -1702,6 +1702,11 @@ pub fn init<R: BootRuntime>() {
             crate::memory::set_translate_user_page_hook(vm::translate_user_page::<R>);
         }
         blocking::init_blocking_hooks::<R>();
+        // Release fence: ensures every hook pointer written above is visible
+        // to any CPU that subsequently observes the SCHEDULER lock release or
+        // any other acquire barrier.  Required because the hook statics are
+        // `static mut` read without a lock on the fast path.
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
         let cpu_total = if let Some(ptr) = *lock {
             let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
             sched.total_cpu_count
