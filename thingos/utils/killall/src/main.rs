@@ -8,6 +8,7 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::collections::BTreeSet;
 
 use abi::signal::*;
 use stem::syscall::{
@@ -34,12 +35,12 @@ fn read_file(path: &str) -> Option<String> {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&buf[..n]),
             Err(_) => {
-                let _ = vfs_close(fd).ok();
+                let _ = vfs_close(fd);
                 return None;
             }
         }
     }
-    let _ = vfs_close(fd).ok();
+    let _ = vfs_close(fd);
     Some(String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -194,7 +195,7 @@ fn collect_processes() -> Vec<ProcEntry> {
         }
     }
 
-    let _ = vfs_close(fd).ok();
+    let _ = vfs_close(fd);
     out
 }
 
@@ -239,7 +240,7 @@ fn main(_arg: usize) -> ! {
 
     let self_pid = getpid() as i32;
     let procs = collect_processes();
-    let mut matched_pids: Vec<i32> = Vec::new();
+    let mut matched_pids = BTreeSet::new();
 
     for pattern in &patterns {
         let mut matched_for_pattern = false;
@@ -249,9 +250,7 @@ fn main(_arg: usize) -> ! {
             }
             if pattern_matches_process(pattern, proc) {
                 matched_for_pattern = true;
-                if !matched_pids.contains(&proc.pid) {
-                    matched_pids.push(proc.pid);
-                }
+                matched_pids.insert(proc.pid);
             }
         }
         if !matched_for_pattern {
