@@ -204,17 +204,24 @@ pub extern "C" fn kernel_handle_exception(
     //  16  FPU Exception           → SIGFPE
     //  17  Alignment Check         → SIGBUS
     //  19  SIMD Exception          → SIGFPE
+    //
+    // The fault_addr is the faulting memory address for memory-related exceptions
+    // (GPF passes error_code which encodes the segment selector, not a vaddr; use
+    // rip as the instruction address in that case).  For arithmetic/SIGFPE-class
+    // exceptions there is no meaningful fault address; pass rip so the receiver
+    // can locate the faulting instruction.
     let fault_sig = match kind {
-        0 | 4 | 16 | 19 => Some(abi::signal::SIGFPE),
-        5 | 13 => Some(abi::signal::SIGSEGV),
-        6 => Some(abi::signal::SIGILL),
-        17 => Some(abi::signal::SIGBUS),
+        0 | 4 | 16 | 19 => Some((abi::signal::SIGFPE, rip)),
+        5 => Some((abi::signal::SIGSEGV, rip)),
+        6 => Some((abi::signal::SIGILL, rip)),
+        13 => Some((abi::signal::SIGSEGV, rip)),
+        17 => Some((abi::signal::SIGBUS, rip)),
         _ => None,
     };
-    if let Some(sig) = fault_sig {
+    if let Some((sig, fault_addr)) = fault_sig {
         if let Some(pinfo) = crate::sched::process_info_current() {
             let pid = pinfo.lock().pid;
-            crate::signal::send_fault_signal_to_process(pid, sig, error_code, rip, rsp);
+            crate::signal::send_fault_signal_to_process(pid, sig, fault_addr, rip, rsp);
         }
     }
 
