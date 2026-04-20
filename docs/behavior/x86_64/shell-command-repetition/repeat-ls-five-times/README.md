@@ -1,18 +1,18 @@
 # ✅ Scenario: Repeat ls five times
 
-> Last run: 2026-04-20 11:59:00
+> Last run: 2026-04-20 16:43:09
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 14611ms | - - - |
-| 2 | When I wait for the shell prompt | ✅ | 2102ms | - [📜](./02/serial.log) - |
-| 3 | And I type "ls" on the serial console | ✅ | 1162ms | - [📜](./03/serial.log) - |
-| 4 | And I type "ls" on the serial console | ✅ | 1156ms | - [📜](./04/serial.log) - |
-| 5 | And I type "ls" on the serial console | ✅ | 1158ms | - [📜](./05/serial.log) - |
-| 6 | And I type "ls" on the serial console | ✅ | 1156ms | - [📜](./06/serial.log) - |
-| 7 | And I type "ls" on the serial console | ✅ | 1155ms | - [📜](./07/serial.log) - |
+| 1 | Given the machine is booted | ✅ | 14559ms | - - - |
+| 2 | When I wait for the shell prompt | ✅ | 2203ms | - [📜](./02/serial.log) - |
+| 3 | And I type "ls" on the serial console | ✅ | 1159ms | - [📜](./03/serial.log) - |
+| 4 | And I type "ls" on the serial console | ✅ | 1153ms | - [📜](./04/serial.log) - |
+| 5 | And I type "ls" on the serial console | ✅ | 1155ms | - [📜](./05/serial.log) - |
+| 6 | And I type "ls" on the serial console | ✅ | 1153ms | - [📜](./06/serial.log) - |
+| 7 | And I type "ls" on the serial console | ✅ | 1151ms | - [📜](./07/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -20,15 +20,115 @@
 ```
 [2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;056;240t0[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;042;160t0[2J[01;01HBdsDxe: loading Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
 BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
-[2J[01;01H[01;01H[2J[01;01H[01;01H[42590451057] [[32mINFO [0m] [kernel] [CPU0] thing-os kernel starting...
-[42608997354] [[33mWARN [0m] [bran::mem] [CPU0] memory_map: Limine reports 230 entries; only first 64 fit in cache (rest dropped)
-[43030064781] [[32mINFO [0m] [kernel::memory] [CPU0] Frame allocator initialized with 479141 free frames
-[43081514883] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
-[46455095148] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[46460460618] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[46576138785] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[47226235947] [[32mINFO [0m] [sprout] [CPU2] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
-[47554955811] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[2J[01;01H[01;01H[2J[01;01H[01;01H[bran:runtime] tasking init begin
+[bran:runtime] tasking init ok
+[bran:runtime] framebuffer begin
+[bran:runtime] framebuffer ok
+[kernel:mem:init] enter
+[bran:runtime] phys_memory_map begin
+[bran:mem] memory_map enter
+[bran:mem] before MEMORY_MAP_REQUEST response
+[bran:mem] got MEMORY_MAP_REQUEST response
+[bran:mem] entries read
+[bran:mem] truncating memory map to MAX_RANGES
+[bran:mem] begin cache fill
+[bran:mem] cache fill done
+[bran:mem] publish done
+[bran:runtime] phys_memory_map ok
+[kernel:mem:init] phys_memory_map ok
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] before MODULE_REQUEST response
+[bran:req] got MODULE_REQUEST response
+[bran:req] modules list acquired
+[bran:req] begin module cache fill
+[bran:req] module cache fill done
+[bran:req] get_modules publish done
+[bran:runtime] modules ok
+[kernel:mem:init] modules ok
+[kernel:mem:init] phys_to_virt_offset ok
+[kernel:mem:init] memory map logging done
+[kernel:mem:init] boot_frame_alloc init ok
+[kernel:mem:init] frame allocator build ok
+[kernel:mem:init] frame allocator log ok
+[kernel:mem:init] FRAME_ALLOCATOR init ok
+[bran:runtime] tasking init skipped (already done)
+[kernel:mem:init] tasking init ok
+[42649768788] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[kernel:global_alloc] enter
+[kernel:global_alloc] set expand hook
+[kernel:global_alloc] expand hook ok
+[kernel:global_alloc] kernel_heap lock begin
+[kernel:global_alloc] kernel_heap lock ok
+[kernel:global_alloc] reserve_region begin
+[kernel:global_alloc] reserve_region ok
+[kernel:global_alloc] inner allocator init begin
+[kernel:global_alloc] inner allocator init ok
+[kernel:global_alloc] heap top store ok
+[kernel:global_alloc] init done
+[bran:runtime] framebuffer begin
+[bran:runtime] framebuffer ok
+[kernel:devfs] set_boot_fb begin
+[kernel:devfs] set_boot_fb ok
+[kernel:devfs] register begin
+[kernel:devfs] register ok
+[kernel:entropy] seed begin
+[kernel:entropy] fill_entropy done
+[kernel:entropy] add_sample(timer) ok
+[kernel:entropy] mark_seeded(timer) ok
+[kernel:entropy] seed done
+[46259385876] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[46265276013] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[kernel:task:init] begin
+[kernel:task:init] registry init ok
+[46375065363] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[kernel:task:init] sched init ok
+[kernel:task:init] done
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
+[kernel:vfs:init] begin
+[kernel:vfs:init] mount::init ok
+[kernel:vfs:init] root dirs populated
+[kernel:vfs:init] mount / ok
+[kernel:vfs:init] mount /dev ok
+[kernel:vfs:init] mount /proc ok
+[kernel:vfs:init] mount /sys ok
+[kernel:vfs:init] mount /tmp ok
+[kernel:vfs:init] mount /run ok
+[kernel:vfs:init] mount /services ok
+[kernel:vfs:init] mount /session ok
+[kernel:vfs:init] mount /data ok
+[kernel:vfs:init] done
+[bran:runtime] phys_memory_map begin
+[bran:mem] memory_map enter
+[bran:mem] cache hit
+[bran:runtime] phys_memory_map ok
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
+[bran:runtime] framebuffer begin
+[bran:runtime] framebuffer ok
+[kernel:boot_info] set begin
+[kernel:boot_info] set ok
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
+[bran:runtime] framebuffer begin
+[bran:runtime] framebuffer ok
+[47245619289] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[47392085862] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
+[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
 [1;32m
         .-.
        /   \        [1;36mTHING-OS[1;32m
@@ -49,15 +149,19 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
-[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[bran:runtime] modules begin
+[bran:req] get_modules enter
+[bran:req] get_modules cache hit
+[bran:runtime] modules ok
+ls
 [?25l[34mbin[0m  [34mboot[0m  [34mdata[0m  [34mdev[0m  [34mdrivers[0m  [34metc[0m  [34mhttps[0m  [34mlib[0m  [34mmnt[0m  motd  [34mnet[0m  [34mproc[0m  [34mrun[0m  [34mservices[0m  [34msession[0m  [34mshare[0m  [34msys[0m  [34mtmp[0m  version  
 [?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls
 [?25l[34mbin[0m  [34mboot[0m  [34mdata[0m  [34mdev[0m  [34mdrivers[0m  [34metc[0m  [34mhttps[0m  [34mlib[0m  [34mmnt[0m  motd  [34mnet[0m  [34mproc[0m  [34mrun[0m  [34mservices[0m  [34msession[0m  [34mshare[0m  [34msys[0m  [34mtmp[0m  version  
 [?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls
-[34mbin[0m  [34mboot[0m  [34mdata[0m  [34mdev[0m  [34mdrivers[0m  [34metc[0m  [34mhttps[0m  [34mlib[0m  [34mmnt[0m  motd  [?25l[34mnet[0m  [34mproc[0m  [34mrun[0m  [34mservices[0m  [34msession[0m  [34mshare[0m  [34msys[0m  [34mtmp[0m  version  
+[?25l[34mbin[0m  [34mboot[0m  [34mdata[0m  [34mdev[0m  [34mdrivers[0m  [34metc[0m  [34mhttps[0m  [34mlib[0m  [34mmnt[0m  motd  [34mnet[0m  [34mproc[0m  [34mrun[0m  [34mservices[0m  [34msession[0m  [34mshare[0m  [34msys[0m  [34mtmp[0m  version  
 [?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls
 [?25l[34mbin[0m  [34mboot[0m  [34mdata[0m  [34mdev[0m  [34mdrivers[0m  [34metc[0m  [34mhttps[0m  [34mlib[0m  [34mmnt[0m  motd  [34mnet[0m  [34mproc[0m  [34mrun[0m  [34mservices[0m  [34msession[0m  [34mshare[0m  [34msys[0m  [34mtmp[0m  version  
 [?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls
-[?25l[34mbin[0m  [34mboot[0m  [34mdata[0m  [34mdev[0m  [34mdrivers[0m  [34metc[0m  [34mhttps[0m  [34mlib[0m  [34mmnt[0m  motd  
+[?25l[34mbi
 ```
 </details>

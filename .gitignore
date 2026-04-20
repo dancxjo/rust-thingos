@@ -120,3 +120,4 @@ thingos/bran/bin-x86_64/kernel
 thingos/bran/bin-x86_64/kernel
 assets/pci/pci.ids
 thingos/build.log
+thingos/bran/bin-aarch64/kernel

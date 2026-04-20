@@ -1,9 +1,10 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-20 14:12:51
+> Last run: 2026-04-20 16:43:09
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [Process Reaping Smoke Test](process-reaping-smoke-test/README.md) | 0/1 | ❌ |
+| [Process Reaping Smoke Test](process-reaping-smoke-test/README.md) | 1/1 | ✅ |
+| [Shell Command Repetition](shell-command-repetition/README.md) | 2/2 | ✅ |
