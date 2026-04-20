@@ -95,7 +95,69 @@ Projection invariants:
 
 ---
 
-## 5. Follow-On Work Areas
+## 5. Signal-to-Inbox Pivot (Implemented)
+
+### 5.1 Overview
+
+Signal delivery now follows a **dual-delivery model** during the migration period:
+
+1. **Inbox delivery** (canonical new model):
+   `kernel::signal::inbox_bridge::deliver_signal_to_inbox` enqueues a typed
+   `thingos.signal` message with `KindId::THINGOS_SIGNAL` into the target
+   process inbox.
+
+2. **Pending-bit delivery** (POSIX compatibility projection):
+   `ProcessSignals::post` records the signal in the pending bitmask and wakes
+   threads so legacy signal handlers still fire correctly.
+
+Both paths run for every signal delivery (except SIGKILL/SIGSTOP; see §5.3).
+Once applications are fully migrated to inbox-based event loops, step 2 will
+be removed.
+
+### 5.2 Payload Encoding (`thingos.signal`)
+
+```
+offset  size  field
+──────  ────  ────────────────────────────────────────────────
+   0      1   signum       — POSIX signal number (1–63)
+   1      8   sender_tid   — LE u64, 0 = kernel/anonymous
+   9      1   has_fault    — 1 if fault context follows, 0 otherwise
+  10      8   fault_addr   — LE u64, faulting address (when has_fault=1)
+  18      8   rip          — LE u64, instruction pointer (when has_fault=1)
+  26      8   rsp          — LE u64, stack pointer (when has_fault=1)
+```
+
+The `thingos.signal.fault` field eliminates async-signal-safe constraints for
+crash-class signal diagnostics.  A SIGSEGV message includes the exact fault
+address and register state so an application's main event loop can log crash
+details before the kernel terminates the process.
+
+### 5.3 SIGKILL and SIGSTOP Bypass
+
+SIGKILL and SIGSTOP are **not** delivered to the inbox.  They are uncatchable
+by POSIX definition.  Delivering them to the inbox would allow a
+buggy/malicious receiver to observe (and loop on) a forced-exit request that
+must not be overridable.  These signals continue through the existing kernel
+fast-path unchanged.
+
+### 5.4 Fault-Originated Signals
+
+Hardware-fault–sourced signals (SIGSEGV, SIGBUS, SIGILL, SIGFPE) are delivered
+via `send_fault_signal_to_process` which populates the full
+`SignalFaultContext` in the inbox message payload.
+
+Exception-to-signal mapping for x86_64:
+
+| Exception | Signal |
+|---|---|
+| Divide-by-zero (0), Overflow (4), FPU (16), SIMD (19) | SIGFPE |
+| Bound Range (5), General Protection (13), Page Fault | SIGSEGV |
+| Invalid Opcode (6) | SIGILL |
+| Alignment Check (17) | SIGBUS |
+
+---
+
+## 6. Follow-On Work Areas
 
 1. **Lifecycle path**
    - Normalize `SIGCHLD` and termination handling around canonical `Job` event
@@ -106,15 +168,19 @@ Projection invariants:
 3. **Authority path**
    - Centralize signal-send permission checks as explicit `Authority` policy
      reused by typed control-message delivery.
-4. **Message path**
-   - Prefer typed inbox messages for new asynchronous app-facing notifications;
-     add signal projection only when ABI compatibility requires it.
+4. **Message path (completed)**
+   - Typed inbox messages are now delivered for every non-uncatchable signal.
+   - Fault-class signals include rich register/address context in the payload.
+   - Removal of the legacy pending-bit path deferred until applications migrate.
 
 ---
 
-## 6. Decision Summary
+## 7. Decision Summary
 
 - `signal` is **Compatibility**, not architectural truth.
 - Canonical direction is **typed events + typed messages**.
 - Unix signals remain a **projection policy surface** for compatibility, not the
-  system’s fundamental event model.
+  system's fundamental event model.
+- The `KindId::THINGOS_SIGNAL` message kind is the **canonical asynchronous
+  notification path** for signal-like events; `ProcessUnixCompat.signals` is the
+  **POSIX compatibility projection**.

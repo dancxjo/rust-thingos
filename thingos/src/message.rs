@@ -80,6 +80,34 @@ impl KindId {
         0xc2, 0x60, 0x8e, 0x30, 0xff, 0xa2, 0xa2, 0xda, 0x8b, 0x96, 0x22, 0x8d, 0x3e, 0xd0, 0x11,
         0x74,
     ]);
+
+    /// The KindId generated for `thingos.signal` by `kindc`.
+    ///
+    /// Identifies a typed signal notification message delivered through the
+    /// canonical Inbox path.  This is the canonical asynchronous delivery
+    /// vehicle for Unix-origin signals.  Receivers dispatch on this value to
+    /// handle signals in their main event loop without async-signal-safe
+    /// constraints.
+    ///
+    /// Payload encoding: `[signum: u8, sender_tid: u64 (LE), has_fault: u8,
+    ///                      fault_addr: u64 (LE), rip: u64 (LE), rsp: u64 (LE)]`
+    /// The trailing fault fields are present only when `has_fault == 1`.
+    pub const THINGOS_SIGNAL: KindId = KindId([
+        0x95, 0x34, 0x43, 0xd5, 0xfb, 0x78, 0xdf, 0xee, 0xe2, 0x6b, 0xdf, 0x35, 0x8d, 0xc9,
+        0xbf, 0xe3,
+    ]);
+
+    /// The KindId generated for `thingos.signal.fault` by `kindc`.
+    ///
+    /// Identifies the fault-context payload nested inside a `thingos.signal`
+    /// message for crash-class signals (SIGSEGV, SIGBUS, etc.).  This value
+    /// is included for completeness; callers should dispatch on
+    /// [`KindId::THINGOS_SIGNAL`] and inspect the embedded fault fields rather
+    /// than on this identifier directly.
+    pub const THINGOS_SIGNAL_FAULT: KindId = KindId([
+        0x12, 0x74, 0xd1, 0xcc, 0x56, 0x95, 0x75, 0x90, 0x21, 0x9c, 0x17, 0xdd, 0x75, 0x65,
+        0xa3, 0x1d,
+    ]);
 }
 
 /// The canonical inter-unit communication envelope.
@@ -159,6 +187,16 @@ mod tests {
     #[test]
     fn test_kind_id_thingos_job_exit_constant() {
         assert_eq!(KindId::THINGOS_JOB_EXIT.0, crate::kinds::KIND_ID_THINGOS_JOB_EXIT);
+    }
+
+    #[test]
+    fn test_kind_id_thingos_signal_constant() {
+        assert_eq!(KindId::THINGOS_SIGNAL.0, crate::kinds::KIND_ID_THINGOS_SIGNAL);
+    }
+
+    #[test]
+    fn test_kind_id_thingos_signal_fault_constant() {
+        assert_eq!(KindId::THINGOS_SIGNAL_FAULT.0, crate::kinds::KIND_ID_THINGOS_SIGNAL_FAULT);
     }
 
     #[test]

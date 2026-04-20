@@ -39,6 +39,7 @@
 //! - Signal handler invocation is architecture-specific; see `arch/delivery.rs`.
 
 pub mod delivery;
+pub mod inbox_bridge;
 pub mod routing;
 
 use abi::errors::Errno;
@@ -251,6 +252,44 @@ pub fn send_signal_to_process(pid: u32, sig: u8) -> bool {
     let report = routing::route_signal(route);
     report.succeeded > 0
         || report.failures.iter().all(|(_, o)| *o != SignalDeliveryOutcome::RecipientNotFound)
+}
+
+/// Post a **fault-originated** signal `sig` to process `pid` with rich context.
+///
+/// This is the canonical entry point for hardware-fault–sourced signals
+/// (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP).  In addition to the legacy
+/// `ProcessSignals::post` path, it delivers a typed `thingos.signal` message
+/// to the process inbox that includes the full [`inbox_bridge::SignalFaultContext`]
+/// (faulting address, RIP, RSP).  This allows applications to log rich crash
+/// diagnostics in their main event loop without async-signal-safe constraints.
+///
+/// # SIGKILL / SIGSTOP
+///
+/// These signals cannot be sourced from hardware faults in normal operation;
+/// if they are passed, the fault context is ignored and the call behaves
+/// identically to [`send_signal_to_process`].
+pub fn send_fault_signal_to_process(
+    pid: u32,
+    sig: u8,
+    fault_addr: u64,
+    rip: u64,
+    rsp: u64,
+) -> bool {
+    let sender_tid = unsafe { crate::sched::current_tid_current() };
+    let fault = inbox_bridge::SignalFaultContext { fault_addr, rip, rsp };
+
+    // ── Step 1: Inbox delivery with rich fault context ────────────────────
+    if let Err(reason) =
+        inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, Some(fault))
+    {
+        crate::kdebug!(
+            "signal: fault inbox delivery failed sig={} pid={} reason={}",
+            sig, pid, reason
+        );
+    }
+
+    // ── Step 2: Legacy pending-bit delivery ───────────────────────────────
+    send_signal_to_process(pid, sig)
 }
 
 /// Post signal `sig` to the process containing thread `tid`.
