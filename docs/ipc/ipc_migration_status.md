@@ -110,7 +110,7 @@ Cross-reference: issue #46 (Inbox/Port convergence), issue #107 (this audit).
 
 ---
 
-## 1. IPC Substrate Overview
+## 3. IPC Substrate Overview
 
 Thing-OS IPC is built on a **plural substrate model** — multiple primitives,
 each with a clear job, unified under a common VFS-first readiness model.
@@ -129,7 +129,7 @@ each with a clear job, unified under a common VFS-first readiness model.
 
 ---
 
-## 2. Terminology Glossary
+## 4. Terminology Glossary
 
 | Term | Meaning |
 |------|---------|
@@ -142,9 +142,9 @@ each with a clear job, unified under a common VFS-first readiness model.
 
 ---
 
-## 3. Recommended Patterns
+## 5. Recommended Patterns
 
-### 3.1 Readiness multiplexing
+### 5.1 Readiness multiplexing
 
 Use `SYS_FS_POLL` for all readiness needs.  Every IPC object is reachable
 through it:
@@ -158,7 +158,7 @@ through it:
 For heterogeneous waits that mix FDs with task-exit, IRQs, or timeouts, use
 `SYS_WAIT_MANY` with `WaitKind::Fd` for all FD-backed sources.
 
-### 3.2 New service or driver protocols
+### 5.2 New service or driver protocols
 
 When writing a new service or driver:
 
@@ -176,7 +176,7 @@ When writing a new service or driver:
 6. **Do not use `SYS_CHANNEL_WAIT`**: it is deprecated.  Use
    `SYS_FD_FROM_HANDLE` + `SYS_FS_POLL` instead.
 
-### 3.3 Delivery semantics
+### 5.3 Delivery semantics
 
 | Delivery type | Primitive | Notes |
 |---------------|-----------|-------|
@@ -188,7 +188,7 @@ When writing a new service or driver:
 
 ---
 
-## 4. Deprecation Register
+## 6. Deprecation Register
 
 | Syscall / API | Status | Replacement |
 |---------------|--------|-------------|
@@ -200,25 +200,9 @@ When writing a new service or driver:
 
 Deprecated syscalls remain in the ABI for compatibility but will not receive
 new features.  New code must not use them.
-### 3.2 Message passing
-
-- **Discrete messages** (commands, events, RPC, capability passing): use a
-  channel (`SYS_CHANNEL_SEND_ALL`, `SYS_CHANNEL_SEND_MSG`).
-- **Byte streams** (stdio, pipelines): use a pipe or Unix socket.
-- **Bulk data** (pixel buffers, audio rings): use a memfd; pass the fd over a
-  channel.
-- **Typed delivery to a process/job** (lifecycle events, process messages):
-  use an inbox.
-
-### 3.3 Capability passing
-
-Use `SYS_CHANNEL_SEND_MSG` / `SYS_CHANNEL_RECV_MSG` to pass things
-atomically alongside data.  The old `SYS_CHANNEL_SEND_HANDLE` single-thing
-API is deprecated; use the msg variants instead.
-
 ---
 
-## 4. Deprecation Table
+## 7. Deprecation Table
 
 | API | Status | Migration path |
 |-----|--------|---------------|
@@ -233,7 +217,7 @@ API is deprecated; use the msg variants instead.
 
 ---
 
-## 5. Inbox / Port Convergence Status (Issue #46)
+## 8. Inbox / Port Convergence Status (Issue #46)
 
 The Inbox and Port/Channel primitives are **distinct** abstractions that share
 a common readiness model.  They are not collapsed into one — see
@@ -257,19 +241,14 @@ a common readiness model.  They are not collapsed into one — see
 | C — Readiness | Add inbox VFS wrapper node (`InboxNode`) | ✅ Done (`kernel/src/vfs/inbox_node.rs`) |
 | C — Readiness | Expose inbox FD acquisition syscall / path-open | ⬜ Pending |
 | C — Readiness | Tests for mixed poll sets (files + channels + inbox FDs) | ⬜ Pending |
-| A — Spec lock | Semantics doc (`inbox_vs_port_semantics.md`) | ✅ Done |
-| A — Spec lock | Strategy doc (`convergence_strategy.md`) | ✅ Done |
 | B — Shared core | Extract shared internal queue trait | ⬜ Pending |
 | B — Shared core | Migrate backpressure/wakeup/metrics to core | ⬜ Pending |
-| **C — Readiness** | **`InboxNode` VFS wrapper (poll + waiter hooks)** | **✅ Done** — `kernel/src/vfs/inbox_node.rs` |
-| C — Readiness | Expose inbox FD acquisition path to userspace | ⬜ Pending |
-| C — Readiness | Tests: mixed poll sets (file + channel + inbox FDs) | ⬜ Pending |
 | D — Deprecation | Document migration off `SYS_CHANNEL_WAIT` | ✅ Done (this document + `channel_semantics.md`) |
 | D — Deprecation | Userspace `channel_wait` → `fd_from_handle + fs_poll` | ✅ Done — ata_disk, ahci_disk, display_fake, display_virtio_gpu migrated |
 
 ---
 
-## 6. Blockers and Dependencies
+## 9. Blockers and Dependencies
 
 | Blocker | Affects | Notes |
 |---------|---------|-------|
@@ -279,7 +258,7 @@ a common readiness model.  They are not collapsed into one — see
 
 ---
 
-## 7. Cross-References
+## 10. Cross-References
 
 - Primitive overview and transport selection: `docs/concepts/ipc.md`
 - Practical recipes: `docs/concepts/ipc_cookbook.md`
@@ -289,7 +268,8 @@ a common readiness model.  They are not collapsed into one — see
 - Channel specification: `docs/concepts/channel_semantics.md`
 - Shared queue prototype: `kernel/src/ipc/msgqueue.rs`
 - Inbox VFS node: `kernel/src/vfs/inbox_node.rs`
-## 6. Driver / Service Migration Status
+
+## 11. Driver / Service Migration Status
 
 | Component | Legacy pattern | Migration status |
 |-----------|---------------|-----------------|
@@ -306,7 +286,7 @@ a common readiness model.  They are not collapsed into one — see
 
 ---
 
-## 7. See Also
+## 12. See Also
 
 - `docs/concepts/ipc.md` — IPC primitive overview and decision matrix
 - `docs/concepts/readiness.md` — unified poll/readiness model (all types)
