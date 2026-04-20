@@ -244,6 +244,11 @@ const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
 const ANY_WAKE_LOCAL_DEPTH_BIAS: usize = 1;
 const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 64;
+const PROACTIVE_REBALANCE_TICK_STRIDE: u64 = 8;
+const PROACTIVE_REBALANCE_LOCAL_DEPTH_MAX: usize = 0;
+const PROACTIVE_REBALANCE_MIN_DEPTH_GAP: usize = 2;
+const PROACTIVE_REBALANCE_MIN_VARIANCE: u64 = 4;
+const PROACTIVE_REBALANCE_MIN_IMBALANCE_TICKS: u64 = 32;
 const RESCHED_IPI_NEVER_SENT: u64 = u64::MAX;
 const RESCHED_IPI_MIN_TICK_DELTA: u64 = 2;
 
@@ -1889,6 +1894,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 // Check preemption watchdog
                 self.check_preempt_watchdog();
 
+                let now_tick = TICK_COUNT.load(Ordering::Relaxed);
+                self.maybe_proactive_rebalance(cpu_idx, now_tick);
+
                 let mut should_yield = global_requested || self.state.per_cpu[cpu_idx].need_resched;
                 self.state.per_cpu[cpu_idx].need_resched = false;
 
@@ -2509,7 +2517,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     // Attempt to steal a task from the most-loaded peer CPU before
                     // falling back to the idle task.  This prevents the scheduler from
                     // going idle on a CPU while other CPUs have run queues backed up.
-                    let stolen = self.steal_task_for(cpu_idx);
+                    let stolen = self.steal_task_for(cpu_idx, false);
                     if stolen.is_some() {
                         stolen
                     } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
@@ -2705,13 +2713,65 @@ impl<R: BootRuntime> types::Scheduler<R> {
         Some(SwitchDecision { cpu_idx, from_tid: current_id, to_tid: next_id })
     }
 
+    fn maybe_proactive_rebalance(&mut self, local_cpu: usize, now_tick: u64) {
+        if now_tick == 0 || now_tick % PROACTIVE_REBALANCE_TICK_STRIDE != 0 {
+            return;
+        }
+
+        if !self.state.online_cpus.contains(&local_cpu) {
+            return;
+        }
+
+        let local_depth = runq_depth_for_cpu(&self.state, local_cpu);
+        if local_depth > PROACTIVE_REBALANCE_LOCAL_DEPTH_MAX {
+            return;
+        }
+
+        let per_cpu_len = self.state.per_cpu.len();
+        let busiest_depth = (0..per_cpu_len)
+            .filter(|&cpu| cpu != local_cpu && self.state.online_cpus.contains(&cpu))
+            .map(|cpu| runq_depth_for_cpu(&self.state, cpu))
+            .max()
+            .unwrap_or(0);
+        if busiest_depth < 2 || busiest_depth < local_depth + PROACTIVE_REBALANCE_MIN_DEPTH_GAP {
+            return;
+        }
+
+        let variance = PROF_RUNQ_DEPTH_VARIANCE_LAST.load(Ordering::Relaxed);
+        let imbalance_duration_crossed = self
+            .imbalance_active_since_mono
+            .map(|start| crate::runtime::<R>().mono_ticks().wrapping_sub(start))
+            .is_some_and(|elapsed| elapsed >= PROACTIVE_REBALANCE_MIN_IMBALANCE_TICKS);
+        if variance < PROACTIVE_REBALANCE_MIN_VARIANCE && !imbalance_duration_crossed {
+            return;
+        }
+
+        if let Some(stolen_id) = self.steal_task_for(local_cpu, true) {
+            let stolen_priority = self
+                .state
+                .get_task(stolen_id)
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(0);
+            let current_priority = self.state.per_cpu[local_cpu]
+                .current
+                .and_then(|tid| self.state.get_task(tid))
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(0);
+            let current_is_idle =
+                self.state.per_cpu[local_cpu].current == self.state.per_cpu[local_cpu].idle_task;
+            if current_is_idle || stolen_priority >= current_priority {
+                self.state.per_cpu[local_cpu].need_resched = true;
+            }
+        }
+    }
+
     /// Steal the highest-priority `Affinity::Any` task from the most-loaded
     /// peer CPU that has at least 2 runnable tasks.
     ///
-    /// Called when the local run queue is empty before falling back to the
-    /// idle task.  Only moves tasks whose affinity allows placement on any
-    /// CPU; pinned tasks are never stolen.
-    fn steal_task_for(&mut self, local_cpu: usize) -> Option<TaskId> {
+    /// When `enqueue_local_runq` is true, the stolen task is immediately enqueued
+    /// on the local run queue for proactive balancing. Otherwise the task is
+    /// returned detached so callers can dispatch it immediately.
+    fn steal_task_for(&mut self, local_cpu: usize, enqueue_local_runq: bool) -> Option<TaskId> {
         let per_cpu_len = self.state.per_cpu.len();
         // Find the peer CPU with the most queued work.
         let (busiest_cpu, busiest_depth) = (0..per_cpu_len)
@@ -2768,6 +2828,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     }
                     self.state
                         .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
+                    if enqueue_local_runq {
+                        let target_prio = self
+                            .state
+                            .get_task(stolen_id)
+                            .map(|sf| sf.priority as usize)
+                            .unwrap_or(p);
+                        self.state.enqueue_task(local_cpu, target_prio, stolen_id);
+                        self.metrics.pushes += 1;
+                    }
                     self.metrics.steals += 1;
                     crate::kdebug!(
                         "SCHED: CPU {} stole task {} (prio {}) from CPU {} (depth {})",
@@ -8590,7 +8659,7 @@ mod tests {
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9930);
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9931);
 
-        let stolen = sched.steal_task_for(0);
+        let stolen = sched.steal_task_for(0, false);
         assert_eq!(
             stolen,
             Some(9931),
@@ -8667,7 +8736,7 @@ mod tests {
         });
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, stealable_tid);
 
-        let stolen = sched.steal_task_for(0);
+        let stolen = sched.steal_task_for(0, false);
         assert_eq!(
             stolen, None,
             "steal scan must stay bounded and not inspect beyond configured depth"
@@ -8677,6 +8746,125 @@ mod tests {
                 .iter()
                 .any(|&tid| tid == stealable_tid),
             "stealable task beyond scan-depth cap should remain on donor queue"
+        );
+    }
+
+    #[test]
+    fn test_proactive_rebalance_pulls_work_before_local_cpu_goes_idle() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(9960, TaskState::Running, TaskPriority::Normal),
+        ));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9960,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.per_cpu[0].current = Some(9960);
+
+        for tid in [9961, 9962] {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        PROF_RUNQ_DEPTH_VARIANCE_LAST.store(PROACTIVE_REBALANCE_MIN_VARIANCE, Ordering::Relaxed);
+
+        sched.maybe_proactive_rebalance(0, PROACTIVE_REBALANCE_TICK_STRIDE);
+
+        assert_eq!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].len(),
+            1,
+            "proactive rebalance should pull one runnable task into local runq before idle fallback"
+        );
+        assert_eq!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len(),
+            1,
+            "donor runq should lose one task after proactive pull"
+        );
+        assert!(
+            sched.state.per_cpu[0].need_resched,
+            "local CPU should request reschedule after proactive pull"
+        );
+    }
+
+    #[test]
+    fn test_proactive_rebalance_requires_variance_or_duration_threshold() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        for tid in [9970, 9971] {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        PROF_RUNQ_DEPTH_VARIANCE_LAST.store(0, Ordering::Relaxed);
+        sched.maybe_proactive_rebalance(0, PROACTIVE_REBALANCE_TICK_STRIDE);
+
+        assert!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].is_empty(),
+            "without telemetry threshold crossing, proactive rebalance should not pull work"
+        );
+        assert_eq!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len(),
+            2,
+            "donor runq should remain unchanged when thresholds are not met"
         );
     }
 
