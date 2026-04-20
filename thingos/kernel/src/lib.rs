@@ -839,7 +839,9 @@ fn _irq_restore_wrapper<R: BootRuntime>(state: IrqState) {
     runtime::<R>().irq_restore(state);
 }
 
-fn paint_bootfb_probe(fb: FramebufferInfo) {
+const STARTUP_PERIWINKLE_LAVENDER_COLOR: u32 = 0x00_D9_D9_FC;
+
+fn paint_bootfb_solid(fb: FramebufferInfo, color: u32) {
     if fb.width == 0 || fb.height == 0 || fb.pitch < 4 || fb.byte_len < (fb.pitch as u64) {
         return;
     }
@@ -857,51 +859,8 @@ fn paint_bootfb_probe(fb: FramebufferInfo) {
     unsafe {
         for y in 0..rows {
             let row = core::slice::from_raw_parts_mut(ptr.add(y * stride_px), width.min(stride_px));
-            let band = (y * 4) / rows.max(1);
-            let color = match band {
-                0 => 0x00_30_30_A0,
-                1 => 0x00_30_A0_30,
-                2 => 0x00_A0_30_30,
-                _ => 0x00_80_80_80,
-            };
             for pixel in row.iter_mut() {
                 *pixel = color;
-            }
-        }
-
-        let marker_h = rows.min(96);
-        let marker_w = width.min(stride_px).min(256);
-        for y in 0..marker_h {
-            let row = core::slice::from_raw_parts_mut(ptr.add(y * stride_px), width.min(stride_px));
-            for x in 0..marker_w {
-                row[x] = if ((x / 16) + (y / 16)) % 2 == 0 { 0x00_FF_FF_FF } else { 0x00_00_00_00 };
-            }
-        }
-
-        // Draw 'K' marker at (280, 10) to signal Kernel ownership
-        let k_x = 280;
-        let k_y = 10;
-        if width > k_x + 60 && rows > k_y + 80 {
-            for dy in 0..80 {
-                let row = core::slice::from_raw_parts_mut(
-                    ptr.add((k_y + dy) * stride_px),
-                    width.min(stride_px),
-                );
-                // Vertical stem
-                for dx in 0..12 {
-                    if k_x + dx < row.len() {
-                        row[k_x + dx] = 0x00_FF_FF_00;
-                    }
-                }
-                // Diagonals
-                let mid = 40;
-                let arm_w = (dy as i32 - mid).abs();
-                let dx = 12 + arm_w;
-                for i in 0..12 {
-                    if k_x + dx as usize + i < row.len() {
-                        row[k_x + dx as usize + i] = 0x00_FF_FF_00;
-                    }
-                }
             }
         }
     }
@@ -1201,8 +1160,10 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     // Transition out of early-boot mode.
     crate::sched::end_bringup::<R>();
 
-    // Automatically bring up the F12 terminal as soon as we reach the main loop.
-    runtime.activate_onscreen_terminal();
+    // Keep a visible startup background without auto-activating the F12 terminal.
+    if let Some(fb) = runtime.framebuffer() {
+        paint_bootfb_solid(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
+    }
 
     kdebug!("Entering scheduler loop.");
     loop {
