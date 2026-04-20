@@ -5067,6 +5067,7 @@ mod tests {
         assert_eq!(t1.state, TaskState::Runnable);
     }
 
+    #[test]
     fn deferred_registry_syncs_are_batched_per_tid() {
         let _g = init_test_env();
         let tid = 9100;
