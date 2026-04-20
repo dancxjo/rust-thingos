@@ -286,6 +286,12 @@ fn idle_episode_hist_bucket(us: u64) -> usize {
 }
 
 #[inline]
+/// Return weighted vruntime debt accrued for one scheduler tick.
+///
+/// Lower numeric deltas for higher priorities approximate weighted fair service:
+/// higher-priority tasks accumulate debt more slowly, while lower-priority tasks
+/// pay debt faster. The progression is intentionally coarse and power-of-two so
+/// it is cheap on the hot tick path while still differentiating priorities.
 fn vruntime_tick_delta(priority: TaskPriority) -> u64 {
     match priority {
         TaskPriority::Realtime => 1,
@@ -294,6 +300,27 @@ fn vruntime_tick_delta(priority: TaskPriority) -> u64 {
         TaskPriority::Low => 8,
         TaskPriority::Idle => 16,
     }
+}
+
+#[inline]
+fn better_fair_pick_candidate(
+    eff: usize,
+    vruntime: u64,
+    queue_idx: usize,
+    best_eff: usize,
+    best_vruntime: u64,
+    best_q: Option<usize>,
+) -> bool {
+    if eff > best_eff {
+        return true;
+    }
+    if eff != best_eff {
+        return false;
+    }
+    if vruntime < best_vruntime {
+        return true;
+    }
+    vruntime == best_vruntime && best_q.is_some_and(|best_queue_idx| queue_idx < best_queue_idx)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1907,9 +1934,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 // Tick bookkeeping: decrement timeslice via the hot-field cache,
                 // avoiding a nested REGISTRY lock on every timer tick.
                 if let Some(current_id) = self.state.per_cpu[cpu_idx].current {
-                    let mut current_priority = None;
-                    if let Some(sf) = self.state.get_thread_mut(current_id) {
-                        current_priority = Some(sf.priority);
+                    let current_priority = if let Some(sf) = self.state.get_thread_mut(current_id) {
+                        let priority = sf.priority;
                         if sf.timeslice_remaining > 0 {
                             sf.timeslice_remaining -= 1;
                         }
@@ -1918,9 +1944,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             sf.timeslice_remaining = types::DEFAULT_TIMESLICE;
                             should_yield = true;
                         }
-                    }
-                    if Some(current_id) != self.state.per_cpu[cpu_idx].idle_task {
-                        if let Some(priority) = current_priority {
+                        Some(priority)
+                    } else {
+                        None
+                    };
+                    if let Some(priority) = current_priority {
+                        if priority != TaskPriority::Idle {
                             let delta = vruntime_tick_delta(priority);
                             let stats = self.state.task_runtime_stats_mut(current_id);
                             stats.fair_vruntime = stats.fair_vruntime.saturating_add(delta);
@@ -2426,17 +2455,28 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         let mut next_id = None;
         let mut pick_attempts = 0usize;
+        let mut dequeue_failures = 0usize;
         // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick
-        while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
+        while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET
+            && dequeue_failures < PREPARE_SCHEDULE_PICK_BUDGET
+        {
             let mut best_q = None;
-            let mut best_idx = 0usize;
+            let mut best_idx = None;
+            let mut best_tid = None;
             let mut best_eff = 0;
             let mut best_vruntime = u64::MAX;
+            // Rotating scan seed: naturally wraps with usize arithmetic and is
+            // bounded back to queue length via modulo below.
+            let scan_base = self.state.per_cpu[cpu_idx].stats.dispatch_count as usize;
 
             for p in (1..5).rev() {
                 let runq_len = self.state.per_cpu[cpu_idx].runq[p].len();
+                if runq_len == 0 {
+                    continue;
+                }
                 let scan_len = runq_len.min(PREPARE_SCHEDULE_FAIR_SCAN_DEPTH_PER_PRIORITY);
-                for idx in 0..scan_len {
+                for step in 0..scan_len {
+                    let idx = (scan_base + step) % runq_len;
                     let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].get(idx) else {
                         continue;
                     };
@@ -2465,25 +2505,44 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     // Preserve previous anti-starvation behavior for exact ties:
                     // if both effective priority and vruntime are equal, prefer
                     // the lower-base-priority queue candidate (larger age debt).
-                    let better = eff > best_eff
-                        || (eff == best_eff
-                            && (vruntime < best_vruntime
-                                || (vruntime == best_vruntime
-                                    && best_q.is_some_and(|best_p| p < best_p))));
+                    let better = better_fair_pick_candidate(
+                        eff,
+                        vruntime,
+                        p,
+                        best_eff,
+                        best_vruntime,
+                        best_q,
+                    );
                     if better {
                         best_eff = eff;
                         best_vruntime = vruntime;
                         best_q = Some(p);
-                        best_idx = idx;
+                        best_idx = Some(idx);
+                        best_tid = Some(id);
                     }
                 }
             }
 
-            if let Some(p) = best_q {
+            if let (Some(p), Some(best_idx), Some(best_tid)) = (best_q, best_idx, best_tid) {
+                let still_same = self.state.per_cpu[cpu_idx]
+                    .runq[p]
+                    .get(best_idx)
+                    .copied()
+                    .is_some_and(|tid| tid == best_tid);
+                if !still_same {
+                    dequeue_failures = dequeue_failures.saturating_add(1);
+                    continue;
+                }
                 let Some(id) = self.state.dequeue_task_at(cpu_idx, p, best_idx) else {
                     // Dequeue returned None despite the peek succeeding; the entry
                     // must have been concurrently removed (e.g., by a misroute
                     // repair). Skip and retry the priority scan.
+                    dequeue_failures = dequeue_failures.saturating_add(1);
+                    continue;
+                };
+                if id != best_tid {
+                    self.state.enqueue_task(cpu_idx, p, id);
+                    dequeue_failures = dequeue_failures.saturating_add(1);
                     continue;
                 };
                 pick_attempts += 1;
