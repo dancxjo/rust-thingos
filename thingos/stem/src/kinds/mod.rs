@@ -9,11 +9,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-// FIXME: This should be imported from abi::wire
-// use abi::wire::ThingId;
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-pub struct ThingId(pub [u8; 16]);
+use abi::wire::ThingId;
 
 /// A capability-based authority
 pub const KIND_ID_THINGOS_AUTHORITY: [u8; 16] = [
