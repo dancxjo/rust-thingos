@@ -1,5 +1,6 @@
 //! Core scheduler types and data structures.
 
+use alloc::collections::BTreeMap;
 use core::marker::PhantomData;
 
 use crate::BootRuntime;
@@ -132,6 +133,9 @@ pub struct Scheduler<R: BootRuntime> {
     pub(crate) pending_wake_ipis: alloc::vec::Vec<usize>,
     /// Unused wake budget carried forward to future ticks.
     pub(crate) wake_sleepers_budget_carry: usize,
+    /// Per-task requested sleep duration (ticks) captured at sleep registration.
+    /// Used by Any-affinity wake placement to avoid bouncing brief sleepers.
+    pub(crate) sleep_duration_ticks_by_tid: BTreeMap<TaskId, u64>,
     /// Bitmap of CPUs with deferred `prepare_schedule` misroute IPIs.
     /// Populated under the SCHEDULER lock and drained after the lock is
     /// released so remote nudges never run in the scheduler critical section.
@@ -175,6 +179,7 @@ impl<R: BootRuntime> Scheduler<R> {
             metrics: SchedulerMetrics::new(),
             pending_wake_ipis: alloc::vec::Vec::new(),
             wake_sleepers_budget_carry: 0,
+            sleep_duration_ticks_by_tid: BTreeMap::new(),
             pending_prepare_schedule_ipis_bitmap: 0,
             pending_misrouted_requeues: alloc::vec::Vec::new(),
             pending_registry_syncs: alloc::vec::Vec::new(),
