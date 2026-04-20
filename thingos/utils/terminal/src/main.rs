@@ -71,7 +71,7 @@ impl Font {
 enum AnsiState {
     Normal,
     Esc,
-    Csi { params: Vec<u32>, current_num: Option<u32> },
+    Csi { params: Vec<u32>, current_num: Option<u32>, private: bool },
 }
 
 struct Terminal {
@@ -85,6 +85,7 @@ struct Terminal {
     current_fg: u32,
     current_bg: u32,
     ansi_state: AnsiState,
+    cursor_visible: bool,
 }
 
 impl Terminal {
@@ -100,6 +101,7 @@ impl Terminal {
             current_fg: 0xFFFFFFFF, // White
             current_bg: 0xFF000000, // Black
             ansi_state: AnsiState::Normal,
+            cursor_visible: true,
         }
     }
 
@@ -169,21 +171,44 @@ impl Terminal {
             }
             AnsiState::Esc => {
                 if c == '[' {
-                    self.ansi_state = AnsiState::Csi { params: Vec::new(), current_num: None };
+                    self.ansi_state = AnsiState::Csi { params: Vec::new(), current_num: None, private: false };
                 } else {
                     self.ansi_state = AnsiState::Normal;
                 }
                 return;
             }
-            AnsiState::Csi { mut params, mut current_num } => {
+            AnsiState::Csi { mut params, mut current_num, mut private } => {
+                if c == '?' && params.is_empty() && current_num.is_none() {
+                    private = true;
+                    self.ansi_state = AnsiState::Csi { params, current_num, private };
+                    return;
+                }
                 if c.is_ascii_digit() {
                     let digit = c.to_digit(10).unwrap();
                     current_num = Some(current_num.unwrap_or(0) * 10 + digit);
-                    self.ansi_state = AnsiState::Csi { params, current_num };
+                    self.ansi_state = AnsiState::Csi { params, current_num, private };
                     return;
                 } else if c == ';' {
                     params.push(current_num.unwrap_or(0));
-                    self.ansi_state = AnsiState::Csi { params, current_num: None };
+                    self.ansi_state = AnsiState::Csi { params, current_num: None, private };
+                    return;
+                } else if private && (c == 'h' || c == 'l') {
+                    // DEC Private Mode Set/Reset
+                    params.push(current_num.unwrap_or(0));
+                    let show = c == 'h';
+                    for &p in &params {
+                        if p == 25 {
+                            // DECTCEM — cursor visibility
+                            if show {
+                                self.cursor_visible = true;
+                                self.draw_cursor();
+                            } else {
+                                self.erase_cursor();
+                                self.cursor_visible = false;
+                            }
+                        }
+                    }
+                    self.ansi_state = AnsiState::Normal;
                     return;
                 } else if c == 'm' {
                     // SGR - Select Graphic Rendition
@@ -279,6 +304,29 @@ impl Terminal {
             unsafe {
                 let off = y * (self.stride / 4) + x;
                 *self.fb_ptr.add(off as usize) = color;
+            }
+        }
+    }
+
+    fn draw_cursor(&mut self) {
+        if !self.cursor_visible {
+            return;
+        }
+        let x = self.cursor_x;
+        let y = self.cursor_y;
+        for row in 0..16u32 {
+            for col in 0..2u32 {
+                self.set_pixel(x + col, y + row, self.current_fg);
+            }
+        }
+    }
+
+    fn erase_cursor(&mut self) {
+        let x = self.cursor_x;
+        let y = self.cursor_y;
+        for row in 0..16u32 {
+            for col in 0..2u32 {
+                self.set_pixel(x + col, y + row, self.current_bg);
             }
         }
     }

@@ -287,7 +287,6 @@ impl HttpsProvider {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    let _ = stem::syscall::log_set_level(5);
     let mount_point = mount_point_from_args();
     run_provider(&mount_point)
 }

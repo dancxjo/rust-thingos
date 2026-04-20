@@ -36,7 +36,7 @@ struct Glyph {
 enum AnsiState {
     Normal,
     Esc,
-    Csi { params: [u16; CSI_PARAM_CAP], len: usize, cur: Option<u16> },
+    Csi { params: [u16; CSI_PARAM_CAP], len: usize, cur: Option<u16>, private: bool },
 }
 
 pub struct FbConsole {
@@ -52,6 +52,8 @@ pub struct FbConsole {
     cursor_drawn: bool,
     /// Tick counter for cursor blink; toggles every CURSOR_BLINK_INTERVAL ticks.
     blink_tick: u32,
+    /// Whether the cursor should be shown (DECTCEM). Toggled by CSI ?25h / ?25l.
+    cursor_visible: bool,
     /// Accumulation buffer for multi-byte UTF-8 sequences.
     utf8_buf: [u8; 4],
     /// Number of bytes accumulated so far.
@@ -76,6 +78,7 @@ impl FbConsole {
             active: false,
             cursor_drawn: false,
             blink_tick: 0,
+            cursor_visible: true,
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_expected: 0,
@@ -212,7 +215,7 @@ impl FbConsole {
 
     /// Paint a thin vertical bar at the current cursor position.
     fn draw_cursor(&mut self) {
-        if self.cursor_drawn {
+        if self.cursor_drawn || !self.cursor_visible {
             return;
         }
         let x = self.cursor_x;
@@ -240,7 +243,29 @@ impl FbConsole {
         self.cursor_drawn = false;
     }
 
-    fn apply_csi(&mut self, final_byte: u8, params: &[u16]) {
+    fn apply_csi(&mut self, final_byte: u8, params: &[u16], private: bool) {
+        // DEC Private Mode: CSI ? <n> h/l
+        if private {
+            match final_byte {
+                b'h' | b'l' => {
+                    let show = final_byte == b'h';
+                    for &p in params {
+                        if p == 25 {
+                            // DECTCEM — cursor visibility
+                            if show {
+                                self.cursor_visible = true;
+                                self.draw_cursor();
+                            } else {
+                                self.erase_cursor();
+                                self.cursor_visible = false;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         match final_byte {
             b'm' => {
                 let mut had_any = false;
@@ -345,12 +370,16 @@ impl FbConsole {
             },
             AnsiState::Esc => {
                 if b == b'[' {
-                    self.ansi = AnsiState::Csi { params: [0; CSI_PARAM_CAP], len: 0, cur: None };
+                    self.ansi = AnsiState::Csi { params: [0; CSI_PARAM_CAP], len: 0, cur: None, private: false };
                 } else {
                     self.ansi = AnsiState::Normal;
                 }
             }
-            AnsiState::Csi { params, len, cur } => {
+            AnsiState::Csi { params, len, cur, private } => {
+                if b == b'?' && *len == 0 && cur.is_none() {
+                    *private = true;
+                    return;
+                }
                 if b.is_ascii_digit() {
                     let d = (b - b'0') as u16;
                     // Saturate at `u16::MAX` to keep parser storage fixed-size.
@@ -369,10 +398,11 @@ impl FbConsole {
                     params[*len] = cur.unwrap_or(0);
                     *len += 1;
                 }
+                let is_private = *private;
                 let mut used = [0u16; CSI_PARAM_CAP];
                 let copy_len = (*len).min(CSI_PARAM_CAP);
                 used[..copy_len].copy_from_slice(&params[..copy_len]);
-                self.apply_csi(b, &used[..copy_len]);
+                self.apply_csi(b, &used[..copy_len], is_private);
                 self.ansi = AnsiState::Normal;
             }
         }
@@ -391,7 +421,7 @@ impl FbConsole {
 
     /// Toggle cursor visibility. Call from the periodic timer tick.
     fn blink(&mut self) {
-        if !self.active {
+        if !self.active || !self.cursor_visible {
             return;
         }
         self.blink_tick = self.blink_tick.wrapping_add(1);
