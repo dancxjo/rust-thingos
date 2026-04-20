@@ -560,7 +560,7 @@ impl VfsNode for ProcPidJobObserverNode {
 
     fn stat(&self) -> SysResult<VfsStat> {
         Ok(VfsStat {
-            mode: VfsStat::S_IFREG | 0o222,
+            mode: VfsStat::S_IFREG | 0o200,
             size: 0,
             ino: PROC_PID_BASE_INO
                 + self.pid as u64 * PROC_PID_INO_STRIDE

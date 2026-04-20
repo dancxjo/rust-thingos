@@ -28,7 +28,7 @@ use sysfs::{SysDevice, scan_devices};
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
 const RECONCILE_TIMEOUT_MS: u64 = 30_000;
 /// `THINGOS_JOB_EXIT` notification payload layout:
-/// - bytes 0-3: pid (u32 LE)
+/// - bytes 0-3: exited process PID / job_id (u32 LE)
 /// - byte 4: state (2 = exited)
 /// - byte 5: exit-code present flag (0/1)
 /// - bytes 6-9: exit code (i32 LE, valid when present=1)
@@ -249,6 +249,10 @@ fn run_daemon_mode() -> ! {
                     if p.revents & (poll_flags::POLLERR | poll_flags::POLLHUP | poll_flags::POLLNVAL)
                         != 0
                     {
+                        warn!(
+                            "CAMBIUM: poll stream error on fd {} (revents=0x{:x})",
+                            p.handle, p.revents
+                        );
                         reconcile_due = true;
                     }
                 }
