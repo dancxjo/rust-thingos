@@ -384,6 +384,9 @@ impl SchedState {
     }
 
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
+        if cpu >= self.per_cpu.len() {
+            return;
+        }
         let _cpu_lock = lock_per_cpu_runq(cpu);
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
             pc.runq[prio].push_back(tid);
@@ -396,6 +399,9 @@ impl SchedState {
     }
 
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
+        if cpu >= self.per_cpu.len() {
+            return None;
+        }
         let _cpu_lock = lock_per_cpu_runq(cpu);
         let SchedState { threads, per_cpu, .. } = self;
 
@@ -437,6 +443,9 @@ impl SchedState {
     /// bounded lookahead paths (e.g. steal) that intentionally target a
     /// non-front candidate.
     pub fn dequeue_thread_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
+        if cpu >= self.per_cpu.len() {
+            return None;
+        }
         let _cpu_lock = lock_per_cpu_runq(cpu);
         let SchedState { threads, per_cpu, .. } = self;
 
@@ -470,6 +479,9 @@ impl SchedState {
             };
             (cpu, prio)
         };
+        if cpu >= self.per_cpu.len() {
+            return true;
+        }
         let _cpu_lock = lock_per_cpu_runq(cpu);
         self.opportunistic_compact_runq(cpu, prio);
         true
