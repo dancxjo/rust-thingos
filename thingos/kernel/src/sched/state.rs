@@ -27,6 +27,10 @@ pub type TaskPriority = ThreadPriority;
 pub enum ThreadSchedClass {
     NormalTimeslice,
     Realtime,
+    /// Reserved class for explicit kernel interrupt-thread / bottom-half work.
+    ///
+    /// This class is intentionally not selected by `default_sched_class()`;
+    /// callers must opt in explicitly when class-aware admission is added.
     InterruptBottomHalf,
     BackgroundMaintenance,
 }
@@ -752,6 +756,21 @@ mod tests {
         assert_eq!(
             TaskPriority::Realtime.default_sched_class(),
             TaskSchedClass::Realtime
+        );
+    }
+
+    #[test]
+    fn interrupt_bottom_half_is_not_assigned_by_default_priority_mapping() {
+        let mapped = [
+            TaskPriority::Idle.default_sched_class(),
+            TaskPriority::Low.default_sched_class(),
+            TaskPriority::Normal.default_sched_class(),
+            TaskPriority::High.default_sched_class(),
+            TaskPriority::Realtime.default_sched_class(),
+        ];
+        assert!(
+            !mapped.contains(&TaskSchedClass::InterruptBottomHalf),
+            "interrupt-bottom-half class should remain explicit rather than priority-derived"
         );
     }
 
