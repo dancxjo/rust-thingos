@@ -33,7 +33,83 @@ pub const AGING_THRESHOLD_TICKS: u64 = 500;
 /// priority (Low -> Normal -> High), but never to Realtime.
 pub const MAX_PRIORITY_BOOST: usize = 2;
 
+/// Consecutive spin-yield threshold before requeue placement is penalized.
+///
+/// A task that repeatedly yields without blocking can consume scheduler
+/// attention without useful work. Once it has crossed this threshold and is
+/// observed yielding again from a prior yield requeue, the scheduler demotes
+/// its immediate requeue band by [`SPIN_YIELD_PENALTY_BANDS`].
+pub const SPIN_YIELD_PENALTY_THRESHOLD: u64 = 8;
+
+/// Number of priority bands to demote pathological spin-yielders on requeue.
+pub const SPIN_YIELD_PENALTY_BANDS: usize = 1;
+
 // PerCpu is now in state.rs
+
+/// Class-specific scheduling policy.
+///
+/// Current scheduler behavior still uses a single per-priority run queue, but
+/// this policy contract defines distinct latency domains so class-specific
+/// semantics can be adopted without overloading priority values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchedulerClassPolicy {
+    pub class: crate::task::TaskSchedClass,
+    pub min_priority: crate::task::TaskPriority,
+    pub max_priority: crate::task::TaskPriority,
+    pub default_timeslice_ticks: u32,
+    pub aging_enabled: bool,
+    pub preempt_lower_on_wake: bool,
+}
+
+/// Return the canonical scheduler policy for a latency class.
+///
+/// The returned policy encodes the current class contract: allowed priority
+/// band, default timeslice, whether aging is enabled, and whether wakeups in
+/// this class should preempt lower-priority work.
+pub const fn policy_for_sched_class(class: crate::task::TaskSchedClass) -> SchedulerClassPolicy {
+    match class {
+        crate::task::TaskSchedClass::NormalTimeslice => SchedulerClassPolicy {
+            class,
+            min_priority: crate::task::TaskPriority::Normal,
+            max_priority: crate::task::TaskPriority::High,
+            default_timeslice_ticks: DEFAULT_TIMESLICE,
+            aging_enabled: true,
+            preempt_lower_on_wake: true,
+        },
+        crate::task::TaskSchedClass::Realtime => SchedulerClassPolicy {
+            class,
+            min_priority: crate::task::TaskPriority::Realtime,
+            max_priority: crate::task::TaskPriority::Realtime,
+            default_timeslice_ticks: DEFAULT_TIMESLICE,
+            aging_enabled: false,
+            preempt_lower_on_wake: true,
+        },
+        crate::task::TaskSchedClass::InterruptBottomHalf => SchedulerClassPolicy {
+            class,
+            min_priority: crate::task::TaskPriority::High,
+            max_priority: crate::task::TaskPriority::Realtime,
+            default_timeslice_ticks: 1,
+            aging_enabled: false,
+            preempt_lower_on_wake: true,
+        },
+        crate::task::TaskSchedClass::BackgroundMaintenance => SchedulerClassPolicy {
+            class,
+            min_priority: crate::task::TaskPriority::Idle,
+            max_priority: crate::task::TaskPriority::Low,
+            default_timeslice_ticks: DEFAULT_TIMESLICE,
+            aging_enabled: true,
+            preempt_lower_on_wake: false,
+        },
+    }
+}
+
+/// Convenience wrapper returning class policy for a task priority.
+///
+/// This uses `TaskPriority::default_sched_class()` so the current priority
+/// lattice can opt into explicit class semantics without changing queue layout.
+pub const fn policy_for_priority(priority: crate::task::TaskPriority) -> SchedulerClassPolicy {
+    policy_for_sched_class(priority.default_sched_class())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackFaultResult {
@@ -90,7 +166,8 @@ pub struct SwitchDecision {
 /// scheduler hot cache first, then emits one or more of these updates so the
 /// canonical REGISTRY record can be synchronized after the SCHEDULER lock is
 /// released. Lock-owning scheduler call sites are responsible for draining and
-/// applying these updates once they drop `SCHEDULER` (see
+/// applying these updates once they drop `SCHEDULER`. Replay coalesces by task
+/// and applies batched updates in a single pass (see
 /// `apply_deferred_registry_syncs` users in `sched`/`task` modules).
 pub(crate) struct DeferredRegistrySync {
     /// Task being synchronized.
@@ -251,5 +328,37 @@ impl<R: BootRuntime> Scheduler<R> {
             remaining &= remaining - 1;
         }
         deferred
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn priority_policy_uses_default_sched_class_mapping() {
+        let policy = policy_for_priority(crate::task::TaskPriority::Normal);
+        assert_eq!(policy.class, crate::task::TaskSchedClass::NormalTimeslice);
+        assert!(policy.aging_enabled);
+        assert!(policy.preempt_lower_on_wake);
+
+        let policy = policy_for_priority(crate::task::TaskPriority::Realtime);
+        assert_eq!(policy.class, crate::task::TaskSchedClass::Realtime);
+        assert!(!policy.aging_enabled);
+        assert!(policy.preempt_lower_on_wake);
+    }
+
+    #[test]
+    fn background_and_interrupt_classes_have_distinct_policies() {
+        let bg = policy_for_sched_class(crate::task::TaskSchedClass::BackgroundMaintenance);
+        let irq = policy_for_sched_class(crate::task::TaskSchedClass::InterruptBottomHalf);
+
+        assert_eq!(bg.min_priority, crate::task::TaskPriority::Idle);
+        assert_eq!(bg.max_priority, crate::task::TaskPriority::Low);
+        assert!(!bg.preempt_lower_on_wake);
+
+        assert_eq!(irq.default_timeslice_ticks, 1);
+        assert!(!irq.aging_enabled);
+        assert!(irq.preempt_lower_on_wake);
     }
 }
