@@ -297,15 +297,25 @@ fn try_lock_per_cpu_runq(cpu: usize) -> Option<spin::mutex::MutexGuard<'static, 
 }
 
 impl SchedState {
-    #[inline]
     /// Validate run-queue CPU index against both lock capacity and initialized
     /// scheduler CPU state length.
     ///
     /// `MAX_CPUS` is the lock array upper bound, while `per_cpu.len()` reflects
     /// CPUs currently initialized in this scheduler instance (tests often use a
     /// smaller vector).
-    fn has_valid_runq_cpu(&self, cpu: usize) -> bool {
-        cpu < crate::sched::types::MAX_CPUS && cpu < self.per_cpu.len()
+    #[inline]
+    fn validate_runq_cpu(&self, cpu: usize, context: &str) -> bool {
+        let valid = cpu < crate::sched::types::MAX_CPUS && cpu < self.per_cpu.len();
+        if !valid {
+            crate::kwarn!(
+                "SCHED: {} ignoring invalid cpu {} (max_cpus={}, initialized_per_cpu={})",
+                context,
+                cpu,
+                crate::sched::types::MAX_CPUS,
+                self.per_cpu.len()
+            );
+        }
+        valid
     }
 
     pub fn new() -> Self {
@@ -404,7 +414,7 @@ impl SchedState {
     }
 
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
-        if !self.has_valid_runq_cpu(cpu) {
+        if !self.validate_runq_cpu(cpu, "enqueue_thread") {
             return;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
@@ -419,7 +429,7 @@ impl SchedState {
     }
 
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
-        if !self.has_valid_runq_cpu(cpu) {
+        if !self.validate_runq_cpu(cpu, "dequeue_thread_front") {
             return None;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
@@ -463,7 +473,7 @@ impl SchedState {
     /// bounded lookahead paths (e.g. steal) that intentionally target a
     /// non-front candidate.
     pub fn dequeue_thread_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
-        if !self.has_valid_runq_cpu(cpu) {
+        if !self.validate_runq_cpu(cpu, "dequeue_thread_at") {
             return None;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
@@ -499,7 +509,7 @@ impl SchedState {
             };
             (cpu, prio)
         };
-        if !self.has_valid_runq_cpu(cpu) {
+        if !self.validate_runq_cpu(cpu, "remove_thread_from_runq") {
             return false;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
