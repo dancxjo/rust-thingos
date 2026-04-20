@@ -4,8 +4,9 @@
 //! longest-prefix-first so that the most specific mount is tried first.
 //!
 //! # Thread safety
-//! The table is protected by a spin-lock.  Mounts happen once at boot; reads
-//! happen on every `open(2)` syscall.
+//! The table is protected by a reader-writer spin-lock.  Mounts happen once
+//! at boot; reads happen on every `open(2)` syscall, so a shared read lock
+//! greatly reduces contention on the hot lookup path.
 
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -13,7 +14,7 @@ use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
 use abi::syscall::mount_flags;
-use spin::Mutex;
+use spin::RwLock;
 
 use super::VfsDriver;
 
@@ -31,14 +32,14 @@ struct MountEntry {
     stack: Vec<MountLayer>,
 }
 
-static MOUNT_TABLE: Mutex<Vec<MountEntry>> = Mutex::new(Vec::new());
+static MOUNT_TABLE: RwLock<Vec<MountEntry>> = RwLock::new(Vec::new());
 static INIT_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static NEXT_MOUNT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
 
 /// Initialise the mount table storage.  Must be called once before any
 /// [`mount`] or [`lookup`] call.
 pub fn init() {
-    // The static Mutex<Vec<_>> is already valid; mark init complete.
+    // The static RwLock<Vec<_>> is already valid; mark init complete.
     INIT_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
 }
 
@@ -48,7 +49,7 @@ pub fn init() {
 pub fn mount(mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
     let prefix = normalise(mount_point);
     let id = NEXT_MOUNT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    let mut table = MOUNT_TABLE.lock();
+    let mut table = MOUNT_TABLE.write();
 
     let layer = MountLayer { driver, id, flags };
 
@@ -73,7 +74,7 @@ pub fn mount(mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
 /// Returns `Err(ENOENT)` if nothing is mounted there.
 pub fn umount(mount_point: &str) -> SysResult<()> {
     let prefix = normalise(mount_point);
-    let mut table = MOUNT_TABLE.lock();
+    let mut table = MOUNT_TABLE.write();
     let before = table.len();
     table.retain(|e| e.prefix != prefix);
     if table.len() == before { Err(Errno::ENOENT) } else { Ok(()) }
@@ -88,10 +89,10 @@ pub fn lookup(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
         return Err(Errno::ENOENT);
     }
 
-    // Capture matching drivers into a local list to avoid holding the spinlock
-    // during potentially blocking driver lookups.
+    // Capture matching drivers into a local list to avoid holding the read
+    // lock during potentially blocking driver lookups.
     let matches: Vec<(String, Vec<Arc<dyn VfsDriver>>)> = {
-        let table = MOUNT_TABLE.lock();
+        let table = MOUNT_TABLE.read();
         table
             .iter()
             .filter_map(|entry| {
@@ -131,7 +132,7 @@ pub fn lookup(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
 /// `get_mounts_under("/dev/display")` would return `["card0"]`.
 pub fn get_mounts_under(parent_path: &str) -> Vec<String> {
     let prefix = normalise(parent_path);
-    let table = MOUNT_TABLE.lock();
+    let table = MOUNT_TABLE.read();
     let mut results = Vec::new();
 
     for entry in table.iter() {
@@ -159,7 +160,7 @@ pub fn mount_id_for_path(path: &str) -> u64 {
     if !path.starts_with('/') {
         return 0;
     }
-    let table = MOUNT_TABLE.lock();
+    let table = MOUNT_TABLE.read();
     // The table is sorted longest-prefix first, so the first match is the
     // most specific mount. We return the topmost layer's ID.
     for entry in table.iter() {
@@ -177,7 +178,7 @@ pub fn get_driver_for_path(path: &str) -> SysResult<Arc<dyn VfsDriver>> {
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
-    let table = MOUNT_TABLE.lock();
+    let table = MOUNT_TABLE.read();
     for entry in table.iter() {
         if strip_prefix(path, &entry.prefix).is_some() {
             if let Some(top) = entry.stack.first() {
@@ -196,7 +197,7 @@ pub fn create(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.lock();
+        let table = MOUNT_TABLE.read();
         table
             .iter()
             .find_map(|entry| {
@@ -222,7 +223,7 @@ pub fn mkdir(path: &str) -> SysResult<()> {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.lock();
+        let table = MOUNT_TABLE.read();
         table
             .iter()
             .find_map(|entry| {
@@ -248,7 +249,7 @@ pub fn unlink(path: &str) -> SysResult<()> {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.lock();
+        let table = MOUNT_TABLE.read();
         table
             .iter()
             .find_map(|entry| {
@@ -274,7 +275,7 @@ pub fn symlink(target: &str, link_path: &str) -> SysResult<()> {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.lock();
+        let table = MOUNT_TABLE.read();
         table
             .iter()
             .find_map(|entry| {
@@ -302,7 +303,7 @@ pub fn link(src_path: &str, dst_path: &str) -> SysResult<()> {
         return Err(Errno::ENOENT);
     }
     let (src_rel, dst_rel, driver): (String, String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.lock();
+        let table = MOUNT_TABLE.read();
         let src_entry = table
             .iter()
             .find_map(|entry| {
@@ -345,7 +346,7 @@ pub fn rename(old_path: &str, new_path: &str) -> SysResult<()> {
         return Err(Errno::ENOENT);
     }
     let (old_rel, new_rel, driver): (String, String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.lock();
+        let table = MOUNT_TABLE.read();
         table
             .iter()
             .find_map(|entry| {
@@ -371,7 +372,7 @@ pub fn rename(old_path: &str, new_path: &str) -> SysResult<()> {
 /// ```
 /// Used by `/proc/mounts`.
 pub fn mounts_text() -> alloc::string::String {
-    let table = MOUNT_TABLE.lock();
+    let table = MOUNT_TABLE.read();
     let mut out = alloc::string::String::new();
     for entry in table.iter() {
         out.push_str(&entry.prefix);
@@ -435,7 +436,7 @@ mod tests {
     }
 
     fn fresh_table() {
-        MOUNT_TABLE.lock().clear();
+        MOUNT_TABLE.write().clear();
         INIT_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
     }
 

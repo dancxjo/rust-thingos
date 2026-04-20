@@ -216,12 +216,23 @@ fn reconcile_devices(
         }
 
         // First try the symbol-based catalog (new path).
-        let maybe_entry =
-            if device.kind != "unknown" { catalog.find_for_kind(&device.kind) } else { None };
+        let maybe_entry = if device.kind != "unknown" {
+            catalog.find_for_kind(&device.kind).filter(|entry| {
+                // `display_bootfb` is a bootstrap display path started by sprout with a
+                // dedicated memfd handshake, and must not be auto-bound to PCI display slots.
+                !(device.slot.starts_with("pci-") && entry.path.ends_with("/display_bootfb"))
+            })
+        } else {
+            None
+        };
 
-        if let Some(entry) = maybe_entry
-            .or_else(|| catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code))
-        {
+        if let Some(entry) = maybe_entry.or_else(|| {
+            catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code).filter(
+                |entry| {
+                    !(device.slot.starts_with("pci-") && entry.path.ends_with("/display_bootfb"))
+                },
+            )
+        }) {
             let managed = drivers.entry(device.slot.clone()).or_insert_with(|| {
                 ManagedDriver::new_from_catalog(
                     &device,

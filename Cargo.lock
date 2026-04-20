@@ -3705,6 +3705,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "killall"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+]
+
+[[package]]
 name = "kindc"
 version = "0.1.0"
 dependencies = [
@@ -10040,11 +10048,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "crossterm"
-version = "0.29.0"
-
-[[patch.unused]]
-name = "which"
-version = "8.0.2"

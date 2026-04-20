@@ -82,7 +82,18 @@ pub fn wait_until_exists(path: &str) -> SysResult<()> {
     loop {
         if let Some((event, event_name)) = watcher.read_event()? {
             if event_name == name {
-                return Ok(());
+                // Re-verify the file is actually accessible — it may have been
+                // removed or renamed immediately after the create/move event
+                // (TOCTOU fix).  Only return success if the open succeeds.
+                match crate::syscall::vfs_open(path, abi::syscall::vfs_flags::O_RDONLY) {
+                    Ok(fd) => {
+                        let _ = vfs_close(fd);
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        // File disappeared before we could open it; keep waiting.
+                    }
+                }
             }
         }
     }

@@ -137,7 +137,7 @@ made. Where a check is absent but should exist, it is noted as **missing**.
 | `SYS_KILL` | `signal.rs` | Signal number range | sig arg | bounds | yes | No sender/receiver permission check |
 | `SYS_SETPGID` | `signal.rs` | `setpgid_current` internal logic | pgid, current session | partial POSIX rules | partial | Incomplete POSIX enforcement; no uid check |
 | `SYS_SETSID` | `signal.rs` | Not already a group leader | `pgid == pid` check | existence | partial | No extra privilege required |
-| `SYS_REBOOT` | `process.rs` | Command constant valid | cmd arg | bounds only | **missing** | No privilege check |
+| `SYS_REBOOT` | `process.rs` | Command constant + reboot privilege | cmd arg + `Authority` | bounds + capability (`root` or `CAP_REBOOT`) | yes | Enforced through `authority::bridge::check_privilege("reboot")` |
 | `SYS_LOG_SET_LEVEL` | `dispatch.rs` | None | none | — | **missing** | Zero-gate privileged operation |
 | `SYS_CONSOLE_DISABLE` | `handlers/mod.rs` | None (assumed) | none | — | **missing** | No privilege check confirmed |
 | `SYS_FS_OPEN` | `vfs.rs` | Process has process_info | scheduler hook | existence | partial | No path/mode access control |
@@ -327,7 +327,7 @@ For each authority item, the conceptual future home in the ThingOS object model.
 | Mount authority | unchecked | Authority capability (`CAP_MOUNT`-equivalent) | Requires Authority in VFS layer |
 | Process kill (by TID) | unchecked | Job-scoped kill or Authority capability | Requires relationship model |
 | Signal send | unchecked | Authority capability or job membership | Requires uid/gid or capability |
-| Reboot/halt | unchecked | Authority capability (`CAP_REBOOT`-equivalent) | Single line to gate |
+| Reboot/halt | gated (`root` or `CAP_REBOOT`) | Keep `Authority` capability enforcement | Enforced in syscall path |
 | Log level set | unchecked | Authority capability | Trivial to gate once Authority is in syscall path |
 | Console disable | unchecked | Authority capability | Same as log level |
 | Priority escalation | unchecked | Authority capability (`CAP_SYS_NICE`-equivalent) | Gate at `sys_set_priority` |
@@ -350,7 +350,7 @@ These items are already well-bounded and can be moved with minimal risk:
 |---|---|---|
 | 1 | Gate `SYS_DEVICE_IOPORT_*` behind device claim | Straightforward check; precedent in MMIO handler |
 | 2 | Unify `SYS_DEVICE_IRQ_SUBSCRIBE` VECTOR mode under claim check | One-line fix; same pattern as DEVICE mode |
-| 3 | Gate `SYS_REBOOT` / `SYS_LOG_SET_LEVEL` / `SYS_CONSOLE_DISABLE` | Add a privileged-caller flag; trivial once first Authority concept in syscall path |
+| 3 | Gate `SYS_LOG_SET_LEVEL` / `SYS_CONSOLE_DISABLE` | Add a privileged-caller flag; same authority pattern as `SYS_REBOOT` |
 | 4 | Per-process handle table (replace `GLOBAL_HANDLE_TABLE`) | Comment in code says "Single Process Model v0"; this is the designated migration point |
 
 ### 5.2 Medium-risk items (require prerequisite concepts)
@@ -401,7 +401,7 @@ Before attempting high-risk items, the following must exist:
 |---|---|
 | Phase 10 | Introduce `Job`; promote `ProcessLifecycle`; move exit/wait semantics |
 | Phase 11 | Add uid/gid to `Process`; surface through `authority::bridge` |
-| Phase 12 | Authority in syscall path; gate reboot/log/console/ioport |
+| Phase 12 | Authority in syscall path; gate log/console/ioport (reboot already gated) |
 | Phase 13 | Per-process handle tables; gate handle-in-message transfer |
 | Phase 14 | VFS access control (enforce mode bits, gate mount) |
 | Phase 15 | Signal permission model (uid check or capability) |
@@ -419,7 +419,7 @@ Items marked as requiring follow-up investigation or design clarification:
 | `SYS_DEVICE_IRQ_SUBSCRIBE` VECTOR mode | Unchecked vector subscription | **likely oversight** — one fallthrough clause |
 | `SYS_KILL` no sender check | Arbitrary cross-process signaling | **assumed invariant** — intentional for now, must be addressed with uid/gid |
 | `SYS_TASK_KILL` no relationship check | Any thread can kill any TID | **assumed invariant** — dangerous in multi-process scenarios |
-| `SYS_REBOOT` unchecked | Any process can halt the system | **assumed invariant** (single-user embedded design) — easy to gate |
+| `SYS_REBOOT` privilege gate | Reboot path now requires `root` or `CAP_REBOOT` | **enforced** via `authority::bridge::check_privilege("reboot")` |
 | Signal in-message sender metadata | `sender_tid` is recorded but never verified | **assumed invariant** — not validated at delivery |
 | `chmod`/`fchmod` without owner check | Any process can change mode of any file | **assumed invariant** — safe only in single-user model |
 | `env` as authority vector | `PATH` and other env vars inherited; attacker-controlled env could redirect exec | **unclear ownership** — env not classified as authority today |
