@@ -233,8 +233,16 @@ fn main(boot_fd: usize) -> ! {
 
     // Bridge the response-port handle to a VFS FD once so we can use
     // sendmsg (FD-based) for capability transfer.
-    let drv_resp_write_fd = vfs_handle_from_port(drv_resp_write)
-        .expect("display_bootfb: vfs_handle_from_port(drv_resp_write)");
+    let drv_resp_write_fd = match vfs_handle_from_port(drv_resp_write) {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!(
+                "display_bootfb: invalid bootstrap resp handle {} (vfs_handle_from_port failed: {:?})",
+                drv_resp_write, e
+            );
+            stem::syscall::exit(1);
+        }
+    };
 
     // Sovereign Handshake
     use abi::display_driver_protocol;
