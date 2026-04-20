@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 pub use abi::logging::Level;
 use spin::Mutex;
 
-use crate::BootRuntimeBase;
+use crate::{BootRuntimeBase, IrqState};
 pub type LogLevel = Level;
 
 static GLOBAL_LOGGER: Mutex<Option<Logger>> = Mutex::new(None);
@@ -98,8 +98,8 @@ impl LogTransaction {
         }
         drop(lock);
 
-        if let (Some(rt), Some(state)) = (rt, irq_state) {
-            rt.irq_restore(state);
+        if let (Some(r), Some(s)) = (rt, irq_state) {
+            r.irq_restore(s);
         }
 
         Self { span_id, name }
@@ -123,8 +123,8 @@ impl Drop for LogTransaction {
         }
         drop(lock);
         
-        if let (Some(rt), Some(state)) = (rt, irq_state) {
-            rt.irq_restore(state);
+        if let (Some(r), Some(s)) = (rt, irq_state) {
+            r.irq_restore(s);
         }
         clear_span();
     }
@@ -222,8 +222,8 @@ impl Write for LogBufferWriter {
         }
         drop(state);
         
-        if let (Some(rt), Some(state)) = (rt, irq_state) {
-            rt.irq_restore(state);
+        if let (Some(r), Some(s)) = (rt, irq_state) {
+            r.irq_restore(s);
         }
         Ok(())
     }
@@ -298,8 +298,8 @@ pub fn _log_event(
         }
         drop(lock);
 
-        if let (Some(rt), Some(state)) = (rt, irq_state) {
-            rt.irq_restore(state);
+        if let (Some(r), Some(s)) = (rt, irq_state) {
+            r.irq_restore(s);
         }
     }
 
@@ -352,8 +352,8 @@ pub fn _log_raw(args: fmt::Arguments) {
         }
         drop(lock);
 
-        if let (Some(rt), Some(state)) = (rt, irq_state) {
-            rt.irq_restore(state);
+        if let (Some(r), Some(s)) = (rt, irq_state) {
+            r.irq_restore(s);
         }
     }
 }

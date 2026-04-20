@@ -8,6 +8,8 @@ fn main() {
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let pci_ids_path = manifest_dir.join("../..").join("assets/pci/pci.ids");
+    println!("cargo:warning=stem build.rs: manifest_dir={}", manifest_dir.display());
+    println!("cargo:warning=stem build.rs: pci_ids_path={}", pci_ids_path.display());
     println!("cargo:rerun-if-changed={}", pci_ids_path.display());
 
     let contents = fs::read_to_string(&pci_ids_path).expect("failed to read assets/pci/pci.ids");

@@ -4070,15 +4070,7 @@ mod tests {
         fn phys_to_virt_offset(&self) -> u64 {
             0
         }
-    }
-    impl BootRuntime for MockRuntime {
-        type Tasking = MockRuntime;
-        fn tasking(&self) -> &Self {
-            self
-        }
-        fn halt(&self) -> ! {
-            loop {}
-        }
+
         fn irq_disable(&self) -> crate::IrqState {
             let prev = IRQ_DEPTH.with(|c| {
                 let d = c.get();
@@ -4090,6 +4082,17 @@ mod tests {
         fn irq_restore(&self, state: crate::IrqState) {
             IRQ_DEPTH.with(|c| c.set(state.0));
         }
+    }
+    impl BootRuntime for MockRuntime {
+        type Tasking = MockRuntime;
+        fn tasking(&self) -> &Self {
+            self
+        }
+        fn halt(&self) -> ! {
+            loop {}
+        }
+
+        // irq_disable and irq_restore moved to BootRuntimeBase
         fn phys_memory_map(&self) -> &'static [crate::PhysRange] {
             &[]
         }

@@ -475,8 +475,8 @@ mod tests {
         pid: u32,
         tid_leader: crate::task::TaskId,
         tid_sibling: crate::task::TaskId,
-    ) -> Arc<Mutex<ProcessInfo>> {
-        Arc::new(Mutex::new(ProcessInfo {
+    ) -> alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>> {
+        alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid,
             job: crate::job::Job {
                 ppid: 1,
@@ -541,7 +541,7 @@ mod tests {
     /// returns both other threads.
     #[test]
     fn exec_sibling_collection_three_threads() {
-        let pinfo = Arc::new(Mutex::new(ProcessInfo {
+        let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9230,
             job: crate::job::Job {
                 ppid: 1,
@@ -578,7 +578,7 @@ mod tests {
     /// be set and the process can proceed directly to commit.
     #[test]
     fn exec_single_threaded_no_siblings() {
-        let pinfo = Arc::new(Mutex::new(ProcessInfo {
+        let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9240,
             job: crate::job::Job::new(1, 9240),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9240, false),
@@ -687,7 +687,7 @@ mod tests {
     /// gone; others should remain.
     #[test]
     fn exec_commit_closes_cloexec_fds() {
-        let pinfo = Arc::new(Mutex::new(ProcessInfo {
+        let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9300,
             job: crate::job::Job::new(1, 9300),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9300, false),
@@ -734,7 +734,7 @@ mod tests {
     /// all FDs survive.
     #[test]
     fn exec_commit_preserves_all_fds_without_cloexec() {
-        let pinfo = Arc::new(Mutex::new(ProcessInfo {
+        let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9310,
             job: crate::job::Job::new(1, 9310),
             unix_compat: crate::task::ProcessUnixCompat::isolated(9310, false),
@@ -883,7 +883,7 @@ mod tests {
     // ── No stale pre-exec metadata invariants ─────────────────────────────────
 
     /// Helper: build a ProcessInfo pre-loaded with realistic pre-exec metadata.
-    fn make_pinfo_with_metadata(pid: u32) -> Arc<Mutex<ProcessInfo>> {
+    fn make_pinfo_with_metadata(pid: u32) -> alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>> {
         let mut handle_table = crate::vfs::handle_table::HandleTable::new();
         // fd 0: stays open (no HANDLE_CLOEXEC)
         handle_table.insert_at(0, null_node(), OpenFlags::read_only(), "/stdin".into()).unwrap();
@@ -893,7 +893,7 @@ mod tests {
             .unwrap();
         handle_table.set_handle_flags(1, HANDLE_CLOEXEC).unwrap();
 
-        Arc::new(Mutex::new(ProcessInfo {
+        alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid,
             job: crate::job::Job::new(1, pid as crate::task::TaskId),
             unix_compat: {
@@ -1137,7 +1137,7 @@ mod tests {
         let mut all_tids = alloc::vec![caller_tid];
         all_tids.extend_from_slice(&sibling_tids);
 
-        let pinfo = Arc::new(Mutex::new(ProcessInfo {
+        let pinfo = alloc::sync::Arc::new(spin::Mutex::new(crate::task::ProcessInfo {
             pid: 9600,
             job: crate::job::Job {
                 ppid: 1,

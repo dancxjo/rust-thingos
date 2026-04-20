@@ -1,5 +1,5 @@
 use core::sync::atomic::{AtomicBool, Ordering};
-use kernel::BootRuntime;
+use kernel::{BootRuntime, BootRuntimeBase};
 use spin::Mutex;
 
 use crate::framebuffer::Framebuffer;
