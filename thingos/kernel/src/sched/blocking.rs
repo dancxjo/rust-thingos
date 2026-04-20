@@ -382,14 +382,15 @@ fn try_remote_wake_via_mailbox<R: BootRuntime>(id: u64) -> bool {
         },
     );
     let already_pending = super::set_global_need_resched(mailbox_cpu);
-    if !already_pending {
-        if super::should_send_remote_resched_ipi(mailbox_cpu) {
-            super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            rt.send_ipi(mailbox_cpu, 0x30);
-        }
+    if super::claim_remote_wake_mailbox_ipi_epoch(mailbox_cpu) {
+        super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        rt.send_ipi(mailbox_cpu, 0x30);
     } else {
-        super::PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        // Track suppressions attributable to an already-pending resched signal.
+        if already_pending {
+            super::PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
     }
     true
 }

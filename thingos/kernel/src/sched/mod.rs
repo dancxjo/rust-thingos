@@ -265,7 +265,7 @@ pub fn hist_bucket(us: u64) -> usize {
 }
 
 #[inline]
-fn wake_latency_hist_bucket(us: u64) -> usize {
+fn us_latency_hist_bucket(us: u64) -> usize {
     match us {
         0..=4 => 0,
         5..=19 => 1,
@@ -478,6 +478,23 @@ static REMOTE_WAKE_MAILBOX_PENDING: [AtomicBool; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const ATOMIC_FALSE: AtomicBool = AtomicBool::new(false);
     [ATOMIC_FALSE; types::MAX_CPUS]
+};
+static REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_ZERO: AtomicU64 = AtomicU64::new(0);
+    [ATOMIC_ZERO; types::MAX_CPUS]
+};
+static REMOTE_WAKE_MAILBOX_LAST_IPI_EPOCH: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_ZERO: AtomicU64 = AtomicU64::new(0);
+    [ATOMIC_ZERO; types::MAX_CPUS]
+};
+pub static DIAG_REMOTE_WAKE_MAILBOX_NO_IPI: AtomicU64 = AtomicU64::new(0);
+const REMOTE_WAKE_MAILBOX_AGE_HIST_BUCKETS: usize = 5;
+pub static PROF_REMOTE_WAKE_MAILBOX_AGE_HIST: [AtomicU64; REMOTE_WAKE_MAILBOX_AGE_HIST_BUCKETS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_ZERO: AtomicU64 = AtomicU64::new(0);
+    [ATOMIC_ZERO; REMOTE_WAKE_MAILBOX_AGE_HIST_BUCKETS]
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -806,8 +823,33 @@ pub(crate) fn enqueue_remote_wake_mailbox(
     let safe_cpu = target_cpu.min(types::MAX_CPUS.saturating_sub(1));
     let mut mailbox = REMOTE_WAKE_MAILBOXES[safe_cpu].lock();
     mailbox.push_back(entry);
+    REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH[safe_cpu].fetch_add(1, Ordering::Release);
     REMOTE_WAKE_MAILBOX_PENDING[safe_cpu].store(true, Ordering::Release);
     safe_cpu
+}
+
+#[inline]
+pub(crate) fn claim_remote_wake_mailbox_ipi_epoch(cpu: usize) -> bool {
+    if cpu >= types::MAX_CPUS {
+        return false;
+    }
+    let mut last_ipi_epoch = REMOTE_WAKE_MAILBOX_LAST_IPI_EPOCH[cpu].load(Ordering::Acquire);
+    loop {
+        let enqueue_epoch = REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH[cpu].load(Ordering::Acquire);
+        if enqueue_epoch <= last_ipi_epoch {
+            DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        match REMOTE_WAKE_MAILBOX_LAST_IPI_EPOCH[cpu].compare_exchange_weak(
+            last_ipi_epoch,
+            enqueue_epoch,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => last_ipi_epoch = actual,
+        }
+    }
 }
 
 #[inline]
@@ -828,7 +870,13 @@ fn take_remote_wake_mailbox(
 fn reset_remote_wake_mailboxes_for_tests() {
     for cpu in 0..types::MAX_CPUS {
         REMOTE_WAKE_MAILBOX_PENDING[cpu].store(false, Ordering::Relaxed);
+        REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH[cpu].store(0, Ordering::Relaxed);
+        REMOTE_WAKE_MAILBOX_LAST_IPI_EPOCH[cpu].store(0, Ordering::Relaxed);
         REMOTE_WAKE_MAILBOXES[cpu].lock().clear();
+    }
+    DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.store(0, Ordering::Relaxed);
+    for bucket in &PROF_REMOTE_WAKE_MAILBOX_AGE_HIST {
+        bucket.store(0, Ordering::Relaxed);
     }
 }
 
@@ -1991,10 +2039,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if pending.is_empty() {
             return;
         }
+        let now_mono = crate::runtime::<R>().mono_ticks();
 
         for wake in pending {
             let tid = wake.tid;
             let priority = wake.priority.min(TaskPriority::Realtime as usize);
+            let age_us = ticks_to_us::<R>(now_mono.wrapping_sub(wake.wake_mono));
+            let age_bucket = us_latency_hist_bucket(age_us);
+            PROF_REMOTE_WAKE_MAILBOX_AGE_HIST[age_bucket].fetch_add(1, Ordering::Relaxed);
 
             self.state.unregister_waiter(tid);
             let _ = self.state.remove_task_from_sleep_queue(tid);
@@ -2772,7 +2824,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             PROF_WAKE_TO_RUN_COUNT.fetch_add(1, Ordering::Relaxed);
             PROF_WAKE_TO_RUN_TICKS_TOTAL.fetch_add(wake_to_run_us, Ordering::Relaxed);
             update_max_u64(&PROF_WAKE_TO_RUN_TICKS_MAX, wake_to_run_us);
-            let bucket = wake_latency_hist_bucket(wake_to_run_us);
+            let bucket = us_latency_hist_bucket(wake_to_run_us);
             PROF_WAKE_TO_RUN_HIST[bucket].fetch_add(1, Ordering::Relaxed);
             let stats = self.state.task_runtime_stats_mut(next_id);
             stats.wake_to_run_count = stats.wake_to_run_count.saturating_add(1);
@@ -4208,6 +4260,15 @@ pub fn dump_stats<R: BootRuntime>() {
         PROF_WAKE_TO_RUN_HIST[2].load(Ordering::Relaxed),
         PROF_WAKE_TO_RUN_HIST[3].load(Ordering::Relaxed),
         PROF_WAKE_TO_RUN_HIST[4].load(Ordering::Relaxed)
+    );
+    crate::kprint!(
+        "  Remote wake mailbox age(µs): hist=[0-4:{},5-19:{},20-99:{},100-499:{},>=500:{}] no_ipi={}\n",
+        PROF_REMOTE_WAKE_MAILBOX_AGE_HIST[0].load(Ordering::Relaxed),
+        PROF_REMOTE_WAKE_MAILBOX_AGE_HIST[1].load(Ordering::Relaxed),
+        PROF_REMOTE_WAKE_MAILBOX_AGE_HIST[2].load(Ordering::Relaxed),
+        PROF_REMOTE_WAKE_MAILBOX_AGE_HIST[3].load(Ordering::Relaxed),
+        PROF_REMOTE_WAKE_MAILBOX_AGE_HIST[4].load(Ordering::Relaxed),
+        DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.load(Ordering::Relaxed),
     );
     crate::kprint!(
         "  Runq depth variance: last={} max={} imbalance(total_us={}, episodes={}, longest_us={})\n",
@@ -6345,6 +6406,9 @@ mod tests {
         let _g = init_test_env();
         TICK_COUNT.store(123, Ordering::Relaxed);
         clear_global_need_resched(1, Ordering::Relaxed);
+        DIAG_IPI_SENT.store(0, Ordering::Relaxed);
+        DIAG_IPI_SENT_WAKE_TASK.store(0, Ordering::Relaxed);
+        DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.store(0, Ordering::Relaxed);
 
         let task = crate::task::Task {
             id: 6_202,
@@ -6389,6 +6453,36 @@ mod tests {
         assert_eq!(queued.len(), 1);
         assert_eq!(queued.front().map(|entry| entry.tid), Some(6_202));
         assert!(global_need_resched_load(1, Ordering::Acquire));
+        assert_eq!(DIAG_IPI_SENT.load(Ordering::Relaxed), 1);
+        assert_eq!(DIAG_IPI_SENT_WAKE_TASK.load(Ordering::Relaxed), 1);
+        assert_eq!(DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_wake_task_remote_mailbox_forces_ipi_when_pending_and_rate_limited() {
+        let _g = init_test_env();
+        TICK_COUNT.store(100, Ordering::Relaxed);
+        DIAG_IPI_SENT.store(0, Ordering::Relaxed);
+        DIAG_IPI_SENT_WAKE_TASK.store(0, Ordering::Relaxed);
+        DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.store(0, Ordering::Relaxed);
+        LAST_RESCHED_IPI_SENT_AT_TICK[1].store(100, Ordering::Relaxed);
+        set_global_need_resched(1);
+
+        let task = make_task(6_203, TaskState::Blocked, TaskPriority::Normal);
+        let mut task = task;
+        task.affinity = Affinity::Pinned(1);
+        task.last_cpu = Some(1);
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+
+        crate::sched::blocking::wake_task::<MockRuntime>(6_203);
+
+        assert_eq!(
+            DIAG_IPI_SENT.load(Ordering::Relaxed),
+            1,
+            "remote mailbox wake should force one resched IPI even with pending/rate-limit state"
+        );
+        assert_eq!(DIAG_IPI_SENT_WAKE_TASK.load(Ordering::Relaxed), 1);
+        assert_eq!(DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -6452,6 +6546,7 @@ mod tests {
         assert_eq!(sched.state.get_task(6_301).and_then(|sf| sf.wake_cpu), Some(1));
         assert!(!sched.state.wait_queue.contains(&6_301));
         assert!(!sched.state.sleep_membership.contains_key(&6_301));
+        assert_eq!(PROF_REMOTE_WAKE_MAILBOX_AGE_HIST[0].load(Ordering::Relaxed), 1);
     }
 
     #[test]
