@@ -32,7 +32,7 @@ Legend:
 | **Late-subscriber sees history** | ✗ | ~ | Audit Events: yes; State Events: last-value; Edge Events: no |
 | **Poll/readiness surface** | Wake Event (indirect) | ✓ | A readable inbox fires a Wake Event; event watches are directly pollable |
 | **Blocking semantics** | ✓ | ✓ | Both can park a waiting task via `SYS_FS_POLL` or `SYS_WAIT_MANY` |
-| **VFS thing exposure** | ~ | ✓ | Channels are VFS things; Inbox needs `InboxNode` wrapper (planned); watches are VFS things |
+| **VFS thing exposure** | ~ | ✓ | Channels are VFS things; Inbox `InboxNode` wrapper is implemented in kernel, but userspace FD acquisition/path-open is still pending; watches are VFS things |
 | **Capability passing** | ✓ | ✗ | `channel_send_msg` transfers things; Events do not carry capability handles |
 | **Sender identity recorded** | ~ | ~ | Both support metadata; neither mandates it |
 | **Authority model** | Capability (send-side thing) | Subscription registration | Sending a Message requires owning the endpoint; subscribing to an Event requires a registration API |
@@ -66,7 +66,7 @@ Legend:
 
 | Primitive | Semantic class | Delivery class | Fanout | Consumptive | Pollable | Notes |
 |-----------|---------------|---------------|--------|-------------|---------|-------|
-| **Inbox** (`kernel::inbox`) | Message-native | Mailbox Message | ✗ (per-inbox copy) | ✓ | ~ (needs `InboxNode`) | Single-owner FIFO; `InboxNode` VFS wrapper planned |
+| **Inbox** (`kernel::inbox`) | Message-native | Mailbox Message | ✗ (per-inbox copy) | ✓ | ~ (`InboxNode` implemented; userspace acquisition pending) | Single-owner FIFO; `InboxNode` exists in `kernel/src/vfs/inbox_node.rs`; remaining work is userspace FD acquisition/path-open and mixed poll-set coverage |
 | **Channel** (`SYS_CHANNEL_*`) | Message-native | Command / Request-Reply | ✗ | ✓ | ✓ via `SYS_FD_FROM_HANDLE` | Full poll integration today |
 | **`SYS_MSG_SEND`** | Message-native | Mailbox Message | ✗ | ✓ | N/A (kernel delivery) | Directs to process inbox by pid |
 | **`SYS_MSG_BROADCAST`** | Message-native (fanout delivery) | Mailbox Message × N | ✓ (inbox copy per member) | ✓ per recipient | N/A | Each recipient's copy is a Message; fanout is a delivery strategy, not an event model |
@@ -121,7 +121,7 @@ Legend:
 
 | Resource | `POLLIN` means | `POLLOUT` means | `POLLHUP` means | Semantic class |
 |----------|---------------|----------------|----------------|---------------|
-| Inbox thing (future `InboxNode`) | Messages waiting to dequeue | Queue has capacity | Inbox closed | Wake Event about Message |
+| Inbox thing (`InboxNode`) | Messages waiting to dequeue | Queue has capacity | Inbox closed | Wake Event about Message (kernel node implemented; userspace acquisition path still pending) |
 | Channel read thing | Messages waiting to dequeue | N/A | Writer closed | Wake Event about Message |
 | Channel write thing | N/A | Queue has free space | Reader closed (`EPIPE`) | Wake Event about Message |
 | Pipe read thing | Bytes available | N/A | Writer closed (EOF) | Wake Event about byte stream |
