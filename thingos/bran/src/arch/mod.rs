@@ -156,14 +156,15 @@ fn init_x86_64_ioapic() {
     x86_64::ioapic::mask_all();
     kernel::kdebug!("IOAPIC: All pins masked");
 
-    // 4. Route IRQ1 (keyboard) -> vector 0x21
+    // 4. Route IRQ1 (keyboard) as NMI so Alt+F12 can break through IRQ-disabled wedges.
     let (gsi1, active_low1, level1) = madt_info.irq_to_gsi(1);
-    let mut entry1 = x86_64::ioapic::RedirEntry::new_fixed(0x21, 0);
+    let mut entry1 = x86_64::ioapic::RedirEntry::new_fixed(0, 0);
+    entry1.delivery_mode = x86_64::ioapic::DeliveryMode::Nmi;
     entry1.active_low = active_low1;
     entry1.level_triggered = level1;
     x86_64::ioapic::write_redir(gsi1 as u8, entry1);
     x86_64::ioapic::unmask_pin(gsi1 as u8);
-    kernel::ktrace!("IOAPIC: IRQ1 -> GSI {} -> 0x21", gsi1);
+    kernel::ktrace!("IOAPIC: IRQ1 -> GSI {} -> NMI", gsi1);
 
     // IRQ12 (mouse) -> vector 0x2C
     let (gsi12, active_low12, level12) = madt_info.irq_to_gsi(12);
