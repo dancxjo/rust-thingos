@@ -1,5 +1,6 @@
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec::Vec;
+use spin::{Mutex, Once};
 
 /// Unique identifier for a kernel thread (scheduler task).
 pub type ThreadId = u64;
@@ -257,6 +258,35 @@ pub struct SchedState {
     pub online_cpus: Vec<usize>,
 }
 
+/// CPU-local run-queue locks.
+///
+/// These locks protect per-CPU queue mutations (`enqueue/dequeue/compact`) so
+/// hot queue traffic no longer relies solely on the global scheduler lock.
+/// Shared structures (`threads`, sleep queue, wait queue, CPU topology) remain
+/// protected by the scheduler-global lock in higher-level paths.
+static PER_CPU_RUNQ_LOCKS: Once<Vec<Mutex<()>>> = Once::new();
+
+#[inline]
+fn per_cpu_runq_locks() -> &'static Vec<Mutex<()>> {
+    PER_CPU_RUNQ_LOCKS.call_once(|| {
+        let mut locks = Vec::with_capacity(crate::sched::types::MAX_CPUS);
+        for _ in 0..crate::sched::types::MAX_CPUS {
+            locks.push(Mutex::new(()));
+        }
+        locks
+    })
+}
+
+#[inline]
+fn lock_per_cpu_runq(cpu: usize) -> Option<spin::mutex::MutexGuard<'static, ()>> {
+    per_cpu_runq_locks().get(cpu).map(|lock| lock.lock())
+}
+
+#[cfg(test)]
+fn try_lock_per_cpu_runq(cpu: usize) -> Option<spin::mutex::MutexGuard<'static, ()>> {
+    per_cpu_runq_locks().get(cpu).and_then(|lock| lock.try_lock())
+}
+
 impl SchedState {
     pub fn new() -> Self {
         SchedState {
@@ -354,6 +384,7 @@ impl SchedState {
     }
 
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
+        let _cpu_lock = lock_per_cpu_runq(cpu);
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
             pc.runq[prio].push_back(tid);
             pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
@@ -365,6 +396,7 @@ impl SchedState {
     }
 
     pub fn dequeue_thread_front(&mut self, cpu: usize, prio: usize) -> Option<ThreadId> {
+        let _cpu_lock = lock_per_cpu_runq(cpu);
         let SchedState { threads, per_cpu, .. } = self;
 
         if let Some(pc) = per_cpu.get_mut(cpu) {
@@ -405,6 +437,7 @@ impl SchedState {
     /// bounded lookahead paths (e.g. steal) that intentionally target a
     /// non-front candidate.
     pub fn dequeue_thread_at(&mut self, cpu: usize, prio: usize, idx: usize) -> Option<ThreadId> {
+        let _cpu_lock = lock_per_cpu_runq(cpu);
         let SchedState { threads, per_cpu, .. } = self;
 
         let pc = per_cpu.get_mut(cpu)?;
@@ -437,6 +470,7 @@ impl SchedState {
             };
             (cpu, prio)
         };
+        let _cpu_lock = lock_per_cpu_runq(cpu);
         self.opportunistic_compact_runq(cpu, prio);
         true
     }
@@ -809,5 +843,23 @@ mod tests {
         assert!(!state.wait_queue.contains(&42));
         assert!(!state.wait_reasons.contains_key(&42));
         assert!(!state.unregister_waiter(42));
+    }
+
+    #[test]
+    fn per_cpu_runq_locks_are_independent() {
+        let cpu0_lock = try_lock_per_cpu_runq(0).expect("cpu0 runq lock should be acquirable");
+        assert!(
+            try_lock_per_cpu_runq(0).is_none(),
+            "same CPU lock should not be re-entrant"
+        );
+        assert!(
+            try_lock_per_cpu_runq(1).is_some(),
+            "different CPU lock should remain independent"
+        );
+        drop(cpu0_lock);
+        assert!(
+            try_lock_per_cpu_runq(0).is_some(),
+            "cpu0 runq lock should be acquirable again after release"
+        );
     }
 }
