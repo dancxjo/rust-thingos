@@ -14,9 +14,9 @@ const DEFAULT_FG: u32 = 0x00FF_FFFF;
 const DEFAULT_BG: u32 = 0x0000_0000;
 const BRIGHT_FG_OFFSET: u32 = 0x0040_4040;
 const BRIGHT_BG_OFFSET: u32 = 0x0020_2020;
-const ASCII_PRINTABLE_START: u32 = 0x20;
-const ASCII_PRINTABLE_END: u32 = 0xFF;
-const ACTIVATION_BANNER: &[u8] = b"\x1b[0m\x1b[?25lThing-OS kernel terminal (F12)\n";
+const GLYPH_PRELOAD_START: u32 = 0x20;
+const GLYPH_PRELOAD_END: u32 = 0xFF;
+const ACTIVATION_BANNER: &[u8] = b"\x1b[0mThing-OS kernel terminal (F12)\n";
 
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
 pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
@@ -233,7 +233,9 @@ impl FbConsole {
                         self.put_visible_char(' ');
                     }
                 }
-                0x20..=0x7E => self.put_visible_char(b as char),
+                (GLYPH_PRELOAD_START as u8)..=(GLYPH_PRELOAD_END as u8) => {
+                    self.put_visible_char(b as char)
+                }
                 _ => {}
             },
             AnsiState::Esc => {
@@ -247,7 +249,7 @@ impl FbConsole {
             AnsiState::Csi { params, len, cur } => {
                 if b.is_ascii_digit() {
                     let d = (b - b'0') as u16;
-                    // Clamp to u16 to keep parser storage fixed-size in `AnsiState::Csi`.
+                    // Saturate at `u16::MAX` to keep parser storage fixed-size.
                     *cur = Some(cur.unwrap_or(0).saturating_mul(10).saturating_add(d));
                     return;
                 }
@@ -276,7 +278,7 @@ impl FbConsole {
         self.active = true;
         self.reset_style();
         self.clear_to_bg();
-        // Keep cursor hidden for the active boot framebuffer terminal session.
+        // Reset style and print the terminal activation banner.
         for &b in ACTIVATION_BANNER {
             self.handle_byte(b);
         }
@@ -352,8 +354,8 @@ fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
         let Some(code) = parse_hex_u32(&line[..sep]) else {
             continue;
         };
-        // Restrict preloaded glyphs to printable ASCII.
-        if !(ASCII_PRINTABLE_START..=ASCII_PRINTABLE_END).contains(&code) {
+        // Restrict preloaded glyphs to the byte-oriented terminal render range.
+        if !(GLYPH_PRELOAD_START..=GLYPH_PRELOAD_END).contains(&code) {
             continue;
         }
         let hex = &line[sep + 1..];
