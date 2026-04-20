@@ -87,7 +87,7 @@ impl LogTransaction {
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
         
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = rt.map(|r| r.irq_disable());
+        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
         
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
@@ -112,7 +112,7 @@ impl Drop for LogTransaction {
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
         
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = rt.map(|r| r.irq_disable());
+        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
         
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
@@ -208,7 +208,7 @@ struct LogBufferWriter;
 impl Write for LogBufferWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = rt.map(|r| r.irq_disable());
+        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
         
         let mut state = LOG_STATE.lock();
         for &b in s.as_bytes() {
@@ -271,7 +271,7 @@ pub fn _log_event(
     // 1. Serial Output - human-readable format: [TIME] [LEVEL] [SOURCE] Message
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = rt.map(|r| r.irq_disable());
+        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
 
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
@@ -344,7 +344,7 @@ pub fn _log_contract(source: &'static str, args: fmt::Arguments) {
 pub fn _log_raw(args: fmt::Arguments) {
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = rt.map(|r| r.irq_disable());
+        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
 
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {

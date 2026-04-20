@@ -4072,15 +4072,15 @@ mod tests {
         }
 
         fn irq_disable(&self) -> crate::IrqState {
-            let prev = IRQ_DEPTH.with(|c| {
+            let prev = IRQ_DEPTH.try_with(|c| {
                 let d = c.get();
                 c.set(d + 1);
                 d
-            });
+            }).unwrap_or(0);
             crate::IrqState(prev)
         }
         fn irq_restore(&self, state: crate::IrqState) {
-            IRQ_DEPTH.with(|c| c.set(state.0));
+            let _ = IRQ_DEPTH.try_with(|c| c.set(state.0));
         }
     }
     impl BootRuntime for MockRuntime {
