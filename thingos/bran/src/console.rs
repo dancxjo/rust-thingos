@@ -1,6 +1,3 @@
-extern crate alloc;
-
-use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicBool, Ordering};
 use kernel::BootRuntime;
 use spin::Mutex;
@@ -24,7 +21,9 @@ const ACTIVATION_BANNER: &[u8] = b"\x1b[0mThing-OS kernel terminal (F12)\n";
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
 pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone)]
+const GLYPH_TABLE_LEN: usize = 256;
+
+#[derive(Clone, Copy)]
 struct Glyph {
     width: u8,
     bytes: [u8; 32],
@@ -40,7 +39,7 @@ enum AnsiState {
 
 pub struct FbConsole {
     fb: Framebuffer,
-    glyphs: BTreeMap<u32, Glyph>,
+    glyphs: [Glyph; GLYPH_TABLE_LEN],
     cursor_x: u32,
     cursor_y: u32,
     fg: u32,
@@ -172,10 +171,10 @@ impl FbConsole {
 
     fn put_visible_char(&mut self, ch: char) {
         let code = ch as u32;
-        let fallback = self.glyphs.get(&(b'?' as u32)).cloned();
-        let g = self.glyphs.get(&code).cloned().or(fallback);
-        let Some(glyph) = g else {
-            return;
+        let glyph = if (code as usize) < GLYPH_TABLE_LEN {
+            self.glyphs[code as usize]
+        } else {
+            self.glyphs[b'?' as usize]
         };
         let width = glyph.width as u32;
         if self.cursor_x.saturating_add(width) > self.fb.width {
@@ -325,8 +324,24 @@ fn parse_hex_byte_pair(hi: u8, lo: u8) -> Option<u8> {
 ///
 /// Returns an empty map when the module is missing or invalid so the console
 /// can degrade gracefully instead of failing boot.
-fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
-    let mut out = BTreeMap::new();
+fn fallback_glyph() -> Glyph {
+    let mut bytes = [0u8; 32];
+    // Minimal 8x16 placeholder frame.
+    for row in 0..16usize {
+        bytes[row] = if row == 0 || row == 15 { 0x7E } else { 0x42 };
+    }
+    Glyph { width: 8, bytes, len: 16 }
+}
+
+fn empty_glyph() -> Glyph {
+    Glyph { width: 8, bytes: [0; 32], len: 16 }
+}
+
+fn load_unifont_ascii() -> [Glyph; GLYPH_TABLE_LEN] {
+    let mut out = [empty_glyph(); GLYPH_TABLE_LEN];
+    let fallback = fallback_glyph();
+    out[b'?' as usize] = fallback;
+
     let modules = crate::RUNTIME.modules();
     let unifont = modules
         .iter()
@@ -360,6 +375,9 @@ fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
         if !(GLYPH_PRELOAD_START..=GLYPH_PRELOAD_END).contains(&code) {
             continue;
         }
+        if (code as usize) >= GLYPH_TABLE_LEN {
+            continue;
+        }
         let hex = &line[sep + 1..];
         if hex.len() != 32 && hex.len() != 64 {
             continue;
@@ -380,18 +398,8 @@ fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
         if !ok {
             continue;
         }
-        out.insert(
-            code,
-            Glyph { width: if hex.len() == 32 { 8 } else { 16 }, bytes, len: pairs as u8 },
-        );
-    }
-    if !out.contains_key(&(b'?' as u32)) {
-        let mut bytes = [0u8; 32];
-        // Minimal 8x16 placeholder frame.
-        for row in 0..16usize {
-            bytes[row] = if row == 0 || row == 15 { 0x7E } else { 0x42 };
-        }
-        out.insert(b'?' as u32, Glyph { width: 8, bytes, len: 16 });
+        out[code as usize] =
+            Glyph { width: if hex.len() == 32 { 8 } else { 16 }, bytes, len: pairs as u8 };
     }
     out
 }
