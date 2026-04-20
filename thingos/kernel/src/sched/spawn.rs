@@ -1439,6 +1439,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // scheduler-internal state. REGISTRY insertion is deferred until unlock.
     let _irq = rt.irq_disable();
 
+    crate::kdebug!("SPAWN_FROM_PATH: Starting Phase 1 for {}", path);
     let (id, deferred_registry_inserts) = {
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(current_cpu);
@@ -1459,7 +1460,9 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         drop(lock);
         (id, deferred_registry_inserts)
     };
+    crate::kdebug!("SPAWN_FROM_PATH: Phase 1 complete, ID={}, applying inserts", id);
     super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
+    crate::kdebug!("SPAWN_FROM_PATH: Inserts applied, entering Phase 2");
 
     // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
     // The task is Blocked and cannot be scheduled until wake_task(id) is called.
@@ -1615,8 +1618,11 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.
+    crate::kdebug!("SPAWN_FROM_PATH: Phase 2 complete, waking task {}", id);
     crate::sched::blocking::wake_task::<R>(id);
+    crate::kdebug!("SPAWN_FROM_PATH: Task {} woken, restoring IRQs", id);
     rt.irq_restore(_irq);
+    crate::kdebug!("SPAWN_FROM_PATH: Done for {}", path);
 
     Ok(SpawnExResult {
         child_tid: id,
