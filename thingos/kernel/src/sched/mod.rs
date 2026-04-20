@@ -3196,6 +3196,20 @@ fn mark_task_exited_in_registry<R: BootRuntime>(
         crate::job::bridge::publish_leader_exit(notify_ppid, notify_pid, code, exit_observer_inbox);
     waiters.extend(parent_waiters);
 
+    // If this process was a thread-group leader, its exit orphans its children.
+    // Reparent all children whose ppid matches this dying process to init (PID 1).
+    if notify_pid != 0 {
+        let mut registry = crate::task::registry::get_registry::<R>();
+        for task in registry.threads.iter_mut() {
+            if let Some(pinfo) = &task.process_info {
+                let mut pi = pinfo.lock();
+                if pi.job.ppid == notify_pid {
+                    pi.job.ppid = 1;
+                }
+            }
+        }
+    }
+
     // Kill sibling threads (thread-group exit).
     for &sibling in &siblings_to_kill {
         if let Some(mut task) = crate::task::registry::get_task_mut::<R>(sibling) {

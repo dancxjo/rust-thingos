@@ -1,7 +1,10 @@
 use core::mem::size_of;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use abi::trace::TraceEvent;
 
 pub const IRQ_TIMER_VECTOR: u8 = 0x20;
+pub const IRQ_PAUSE_DUMP_VECTOR: u8 = 0x31;
 pub const IRQ_RESCHED_VECTOR: u8 = 0x30;
 pub const IRQ_TLB_SHOOTDOWN_VECTOR: u8 = 0x41;
 use kernel::kinfo;
@@ -9,6 +12,7 @@ use kernel::kinfo;
 static IRQ12_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ1_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ4_COUNT: AtomicU64 = AtomicU64::new(0);
+static PAUSE_DUMP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
@@ -70,6 +74,7 @@ unsafe extern "C" {
     fn irq_resched_handler_shim();
     fn irq_tlb_shootdown_handler_shim();
     fn irq_keyboard_handler_shim();
+    fn irq_pause_dump_handler_shim();
     fn irq_mouse_handler_shim();
     fn irq_serial_handler_shim();
     fn invalid_opcode_handler_shim();
@@ -255,6 +260,12 @@ core::arch::global_asm!(
         swapgs
     2:
         iretq
+
+    .global irq_pause_dump_handler_shim
+    irq_pause_dump_handler_shim:
+        cli
+    1:  hlt
+        jmp 1b
 
     .global irq_keyboard_handler_shim
     irq_keyboard_handler_shim:
@@ -503,6 +514,13 @@ pub unsafe fn init() {
             0x8E,
         );
 
+        IDT.entries[IRQ_PAUSE_DUMP_VECTOR as usize].set_handler(
+            irq_pause_dump_handler_shim as *const () as u64,
+            crate::arch::x86_64::gdt::KERNEL_CODE_SEL,
+            0,
+            0x8E,
+        );
+
         // Dedicated Reschedule IPI Vector
         IDT.entries[IRQ_RESCHED_VECTOR as usize].set_handler(
             irq_resched_handler_shim as *const () as u64,
@@ -567,6 +585,139 @@ pub struct InterruptStackFrame {
     pub ss: u64,
 }
 
+const PS2_STATUS_PORT: u16 = 0x64;
+const PS2_DATA_PORT: u16 = 0x60;
+const PS2_STATUS_OUTPUT_FULL: u8 = 0x01;
+const PS2_STATUS_AUX_DATA: u8 = 0x20;
+
+#[inline]
+fn raw_inb(port: u16) -> u8 {
+    let value: u8;
+    unsafe {
+        core::arch::asm!("in al, dx", out("al") value, in("dx") port, options(nostack, preserves_flags))
+    }
+    value
+}
+
+fn capture_ps2_keyboard_irq() -> bool {
+    let mut pause_dump = false;
+
+    for _ in 0..32 {
+        let status = raw_inb(PS2_STATUS_PORT);
+        if status & PS2_STATUS_OUTPUT_FULL == 0 {
+            break;
+        }
+        if status & PS2_STATUS_AUX_DATA != 0 {
+            break;
+        }
+
+        let byte = raw_inb(PS2_DATA_PORT);
+        if kernel::irq::ps2::buffer_scancode(byte) {
+            pause_dump = true;
+        }
+    }
+
+    pause_dump
+}
+
+fn trigger_pause_dump() -> ! {
+    let already_active = PAUSE_DUMP_ACTIVE.swap(true, Ordering::SeqCst);
+    unsafe {
+        core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+    }
+
+    if !already_active {
+        let runtime = kernel::runtime_base();
+        let current_cpu = runtime.current_cpu_index();
+        let cpu_total = runtime.cpu_total_count();
+
+        for cpu in 0..cpu_total {
+            if cpu != current_cpu {
+                runtime.send_ipi(cpu, IRQ_PAUSE_DUMP_VECTOR);
+            }
+        }
+
+        kinfo!("PS/2 hotkey Alt+F12 detected on CPU {}; forcing kernel pause", current_cpu);
+        render_pause_dump_screen();
+        kernel::sched::dump_stats_current();
+    }
+
+    crate::arch::x86_64::hcf()
+}
+
+fn current_task_name() -> [u8; 32] {
+    unsafe { kernel::sched::current_task_name_current() }
+}
+
+fn current_task_name_str(name: &[u8; 32]) -> &str {
+    let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    core::str::from_utf8(&name[..len]).unwrap_or("unknown")
+}
+
+fn print_irq_trace_summary() {
+    let mut events = [TraceEvent::Empty; 12];
+    let count = {
+        let ring = kernel::trace::irq_ring::IRQ_RING.lock();
+        ring.read_all(&mut events)
+    };
+
+    kernel::kprint!("Recent IRQ/Trace Events:\n");
+    if count == 0 {
+        kernel::kprint!("  <none>\n");
+        return;
+    }
+
+    for event in &events[..count] {
+        match *event {
+            TraceEvent::Empty => {}
+            TraceEvent::TimerTick { timestamp } => {
+                kernel::kprint!("  timer      t={}\n", timestamp);
+            }
+            TraceEvent::Irq { vector, timestamp } => {
+                kernel::kprint!("  irq  0x{:02x}  t={}\n", vector, timestamp);
+            }
+            TraceEvent::ContextSwitch { from, to, timestamp } => {
+                kernel::kprint!("  switch {} -> {}  t={}\n", from, to, timestamp);
+            }
+            TraceEvent::PreemptDisable { depth, timestamp } => {
+                kernel::kprint!("  preempt depth={}  t={}\n", depth, timestamp);
+            }
+        }
+    }
+}
+
+fn render_pause_dump_screen() {
+    let runtime = kernel::runtime_base();
+    let cpu = runtime.current_cpu_index();
+    let cpu_total = runtime.cpu_total_count();
+    let tid = unsafe { kernel::sched::current_tid_current() };
+    let task_name = current_task_name();
+    let task_name = current_task_name_str(&task_name);
+    let ticks = runtime.mono_ticks();
+    let irq1 = IRQ1_COUNT.load(Ordering::Relaxed);
+    let irq12 = IRQ12_COUNT.load(Ordering::Relaxed);
+    let irq4 = IRQ4_COUNT.load(Ordering::Relaxed);
+
+    kernel::kprint!("\x1b[0m\x1b[2J\x1b[H\x1b[?25l");
+    kernel::kprint!("\x1b[37;44;1m");
+    kernel::kprint!("                                                                                \n");
+    kernel::kprint!("  Thing-OS Kernel Pause And Dump                                               \n");
+    kernel::kprint!("                                                                                \n");
+    kernel::kprint!("\x1b[0m\x1b[37;44m");
+    kernel::kprint!(" Alt+F12 was pressed on a PS/2 keyboard. The kernel has stopped all CPUs.      \n");
+    kernel::kprint!(" Power cycle or reboot is required to continue.                                 \n");
+    kernel::kprint!("                                                                                \n");
+    kernel::kprint!(" CPU      : {:<3} / {:<3}                                                      \n", cpu, cpu_total);
+    kernel::kprint!(" TID      : {:<16}                                                   \n", tid);
+    kernel::kprint!(" Task     : {:<60}\n", task_name);
+    kernel::kprint!(" Ticks    : {:<60}\n", ticks);
+    kernel::kprint!(" IRQ cnts : kbd={:<10} mouse={:<10} serial={:<10}             \n", irq1, irq12, irq4);
+    kernel::kprint!("                                                                                \n");
+    kernel::kprint!("\x1b[0m\n");
+    print_irq_trace_summary();
+    kernel::kprint!("\n");
+}
+
 /// Hardware IRQ handler - dispatches to kernel and sends EOI
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_irq_handler(vector: u64) {
@@ -582,6 +733,8 @@ pub extern "C" fn rust_irq_handler(vector: u64) {
         return;
     }
 
+    let mut pause_dump = false;
+
     if resolved == 0x21 {
         let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         /*
@@ -589,6 +742,7 @@ pub extern "C" fn rust_irq_handler(vector: u64) {
             kinfo!("IRQ1 fired (count={})", count);
         }
         */
+        pause_dump = capture_ps2_keyboard_irq();
     }
 
     if resolved == 0x2C {
@@ -605,6 +759,10 @@ pub extern "C" fn rust_irq_handler(vector: u64) {
 
     if (resolved >= 0x20 && resolved <= 0x2F) || (resolved >= 0xF0) {
         crate::arch::x86_64::pic::send_eoi(resolved);
+    }
+
+    if pause_dump {
+        trigger_pause_dump();
     }
 
     if resolved == 0x24 {
