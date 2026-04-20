@@ -730,7 +730,7 @@ pub fn init_runtime<R: BootRuntime>(runtime: &'static R) {
     unsafe {
         RAW_RUNTIME_BASE = Some(runtime as &'static dyn BootRuntimeBase);
     }
-    runtime.serial_putbuf(b"[kernel:init_runtime] runtime refs set\r\n");
+    boot_trace(runtime, b"[kernel:init_runtime] runtime refs set\r\n");
 }
 
 pub fn runtime<R: BootRuntime>() -> &'static R {
@@ -876,53 +876,53 @@ fn paint_bootfb_solid(fb: FramebufferInfo, color: u32) {
 }
 
 pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
-    runtime.serial_putbuf(b"[kernel:start] enter\r\n");
+    boot_trace(runtime, b"[kernel:start] enter\r\n");
 
     crate::irq::IRQ_DISABLE_HOOK
         .store(_irq_disable_wrapper::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
     crate::irq::IRQ_RESTORE_HOOK
         .store(_irq_restore_wrapper::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
-    runtime.serial_putbuf(b"[kernel:start] irq hooks installed\r\n");
+    boot_trace(runtime, b"[kernel:start] irq hooks installed\r\n");
 
     init_runtime(runtime);
-    runtime.serial_putbuf(b"[kernel:start] init_runtime ok\r\n");
+    boot_trace(runtime, b"[kernel:start] init_runtime ok\r\n");
 
     unsafe { crate::logging::init(runtime) };
-    runtime.serial_putbuf(b"[kernel:start] logging init ok\r\n");
+    boot_trace(runtime, b"[kernel:start] logging init ok\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] framebuffer query begin\r\n");
+    boot_trace(runtime, b"[kernel:start] framebuffer query begin\r\n");
     let fb_opt = runtime.framebuffer();
-    runtime.serial_putbuf(b"[kernel:start] framebuffer query ok\r\n");
+    boot_trace(runtime, b"[kernel:start] framebuffer query ok\r\n");
     if let Some(fb) = fb_opt {
         let _ = fb;
-        runtime.serial_putbuf(b"[kernel:start] framebuffer detected\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer detected\r\n");
         // paint_bootfb_probe(fb);
     }
 
-    runtime.serial_putbuf(b"[kernel:start] pre-memory contract point\r\n");
+    boot_trace(runtime, b"[kernel:start] pre-memory contract point\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] memory::init\r\n");
+    boot_trace(runtime, b"[kernel:start] memory::init\r\n");
     memory::init(runtime);
-    runtime.serial_putbuf(b"[kernel:start] memory::init ok\r\n");
-    runtime.serial_putbuf(b"[kernel:start] after memory::init marker\r\n");
-    runtime.serial_putbuf(b"[kernel:start] kinfo(global_alloc) begin\r\n");
+    boot_trace(runtime, b"[kernel:start] memory::init ok\r\n");
+    boot_trace(runtime, b"[kernel:start] after memory::init marker\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(global_alloc) begin\r\n");
     kinfo!("Initializing global allocator...");
-    runtime.serial_putbuf(b"[kernel:start] kinfo(global_alloc) ok\r\n");
-    runtime.serial_putbuf(b"[kernel:start] global_alloc::init\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(global_alloc) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] global_alloc::init\r\n");
     memory::global_alloc::init(runtime);
-    runtime.serial_putbuf(b"[kernel:start] global_alloc::init ok\r\n");
-    runtime.serial_putbuf(b"[kernel:start] after global_alloc marker\r\n");
+    boot_trace(runtime, b"[kernel:start] global_alloc::init ok\r\n");
+    boot_trace(runtime, b"[kernel:start] after global_alloc marker\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs begin\r\n");
-    runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs query begin\r\n");
+    boot_trace(runtime, b"[kernel:start] framebuffer/devfs begin\r\n");
+    boot_trace(runtime, b"[kernel:start] framebuffer/devfs query begin\r\n");
     if let Some(fb) = runtime.framebuffer() {
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs have fb\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs have fb\r\n");
         let fb_resource_id = 0xFB00_0000;
 
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs registry lock begin\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry lock begin\r\n");
         {
             let mut reg = crate::device_registry::REGISTRY.lock();
-            runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs registry lock ok\r\n");
+            boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry lock ok\r\n");
             let mut bars = [0; 6];
             let mut sizes = [0; 6];
 
@@ -931,69 +931,69 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             // device_registry expects PHYSICAL addresses for BARs.
             let ph_offset = runtime.phys_to_virt_offset();
             let phys_addr = if fb.addr >= ph_offset { fb.addr - ph_offset } else { fb.addr };
-            runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs phys addr ok\r\n");
+            boot_trace(runtime, b"[kernel:start] framebuffer/devfs phys addr ok\r\n");
 
             bars[0] = phys_addr;
             sizes[0] = fb.byte_len as u64;
-            runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs registry register begin\r\n");
+            boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry register begin\r\n");
             reg.register(crate::device_registry::DeviceEntry::new_mmio(
                 "display_fb",
                 fb_resource_id,
                 bars,
                 sizes,
             ));
-            runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs registry register ok\r\n");
+            boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry register ok\r\n");
         }
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs registry scope done\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry scope done\r\n");
 
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs set_boot_fb begin\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs set_boot_fb begin\r\n");
         crate::vfs::devfs::set_boot_fb(fb, fb_resource_id);
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs set_boot_fb ok\r\n");
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs register fb0 begin\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs set_boot_fb ok\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs register fb0 begin\r\n");
         crate::vfs::devfs::register(
             "fb0",
             alloc::sync::Arc::new(crate::vfs::devfs::FbNode::new(fb, fb_resource_id)),
         );
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs register fb0 ok\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs register fb0 ok\r\n");
     } else {
-        runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs no fb\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs no fb\r\n");
     }
-    runtime.serial_putbuf(b"[kernel:start] framebuffer/devfs ok\r\n");
+    boot_trace(runtime, b"[kernel:start] framebuffer/devfs ok\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] kdebug(entropy) begin\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(entropy) begin\r\n");
     kdebug!("Seeding entropy pool...");
-    runtime.serial_putbuf(b"[kernel:start] kdebug(entropy) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(entropy) ok\r\n");
     crate::entropy::seed_from_hardware();
-    runtime.serial_putbuf(b"[kernel:start] entropy seeded\r\n");
+    boot_trace(runtime, b"[kernel:start] entropy seeded\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] kinfo(simd) begin\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(simd) begin\r\n");
     kinfo!("Initializing SIMD...");
-    runtime.serial_putbuf(b"[kernel:start] kinfo(simd) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(simd) ok\r\n");
     runtime.simd_init_cpu();
-    runtime.serial_putbuf(b"[kernel:start] simd init ok\r\n");
+    boot_trace(runtime, b"[kernel:start] simd init ok\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] kinfo(task) begin\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(task) begin\r\n");
     kinfo!("Initializing tasking...");
-    runtime.serial_putbuf(b"[kernel:start] kinfo(task) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(task) ok\r\n");
     crate::task::init::<R>();
-    runtime.serial_putbuf(b"[kernel:start] task init ok\r\n");
+    boot_trace(runtime, b"[kernel:start] task init ok\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] kdebug(vfs) begin\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
     kdebug!("Initializing VFS...");
-    runtime.serial_putbuf(b"[kernel:start] kdebug(vfs) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(vfs) ok\r\n");
     crate::vfs::devfs::set_cmdline(runtime.get_kernel_cmdline().to_string());
-    runtime.serial_putbuf(b"[kernel:start] vfs::set_cmdline ok\r\n");
+    boot_trace(runtime, b"[kernel:start] vfs::set_cmdline ok\r\n");
     crate::vfs::init(runtime.modules());
-    runtime.serial_putbuf(b"[kernel:start] vfs init ok\r\n");
+    boot_trace(runtime, b"[kernel:start] vfs init ok\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] kdebug(pci) begin\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(pci) begin\r\n");
     kdebug!("Scanning PCI bus...");
-    runtime.serial_putbuf(b"[kernel:start] kdebug(pci) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(pci) ok\r\n");
     scan_pci();
-    runtime.serial_putbuf(b"[kernel:start] pci scan ok\r\n");
+    boot_trace(runtime, b"[kernel:start] pci scan ok\r\n");
 
     // Register legacy ISA devices
-    runtime.serial_putbuf(b"[kernel:start] legacy device register begin\r\n");
+    boot_trace(runtime, b"[kernel:start] legacy device register begin\r\n");
     {
         let mut reg = crate::device_registry::REGISTRY.lock();
         // RTC CMOS (0x70, 0x71)
@@ -1009,25 +1009,25 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             0x60,
         ));
     }
-    runtime.serial_putbuf(b"[kernel:start] legacy device register ok\r\n");
+    boot_trace(runtime, b"[kernel:start] legacy device register ok\r\n");
 
     // CRITICAL: Calibrate the BSP preemption timer BEFORE starting secondary CPUs.
     // Secondary CPUs read timer_vector/timer_init_cnt in init_secondary_cpu().
     // If these aren't set yet, secondary CPUs get no LAPIC timer, meaning
     // wake_sleepers() (called only from on_tick → PreemptTick) never fires
     // on those CPUs, and any task that calls sleep_ms() is stuck forever.
-    runtime.serial_putbuf(b"[kernel:start] kdebug(preemption timer) begin\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(preemption timer) begin\r\n");
     kdebug!("System initialized. Setting up preemption timer (100Hz)...");
-    runtime.serial_putbuf(b"[kernel:start] kdebug(preemption timer) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kdebug(preemption timer) ok\r\n");
     runtime.setup_preemption_timer(100);
-    runtime.serial_putbuf(b"[kernel:start] preemption timer ok\r\n");
+    boot_trace(runtime, b"[kernel:start] preemption timer ok\r\n");
 
     // Bring up all secondary CPUs during early boot.
-    runtime.serial_putbuf(b"[kernel:start] cpu_total_count begin\r\n");
+    boot_trace(runtime, b"[kernel:start] cpu_total_count begin\r\n");
     let cpu_total = runtime.cpu_total_count();
-    runtime.serial_putbuf(b"[kernel:start] cpu_total_count ok\r\n");
+    boot_trace(runtime, b"[kernel:start] cpu_total_count ok\r\n");
     if cpu_total > 1 {
-        runtime.serial_putbuf(b"[kernel:start] smp start_secondary begin\r\n");
+        boot_trace(runtime, b"[kernel:start] smp start_secondary begin\r\n");
         crate::kdebug!(
             "Kernel: Detected {} CPUs. Starting {} secondaries...",
             cpu_total,
@@ -1037,11 +1037,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             Ok(()) => crate::kdebug!("Kernel: Secondary CPU bring-up complete."),
             Err(err) => crate::kerror!("Kernel: Secondary CPU bring-up failed: {:?}", err),
         }
-        runtime.serial_putbuf(b"[kernel:start] smp start_secondary ok\r\n");
+        boot_trace(runtime, b"[kernel:start] smp start_secondary ok\r\n");
     } else {
         crate::kdebug!("Kernel: Detected {} CPU.", cpu_total);
     }
-    runtime.serial_putbuf(b"[kernel:start] smp bring-up stage done\r\n");
+    boot_trace(runtime, b"[kernel:start] smp bring-up stage done\r\n");
 
     // Store global boot info for syscalls
     crate::boot_info::set(crate::boot_info::BootSyscallInfo {
@@ -1052,11 +1052,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         acpi_rsdp: runtime.acpi_rsdp(),
         dtb_ptr: runtime.dtb_ptr(),
     });
-    runtime.serial_putbuf(b"[kernel:start] boot_info set\r\n");
+    boot_trace(runtime, b"[kernel:start] boot_info set\r\n");
 
-    runtime.serial_putbuf(b"[kernel:start] modules enumerate begin\r\n");
+    boot_trace(runtime, b"[kernel:start] modules enumerate begin\r\n");
     let modules = runtime.modules();
-    runtime.serial_putbuf(b"[kernel:start] runtime.modules enumerate ok\r\n");
+    boot_trace(runtime, b"[kernel:start] runtime.modules enumerate ok\r\n");
     kdebug!("Kernel: Enumerating {} boot modules...", modules.len());
     for (i, m) in modules.iter().enumerate() {
         crate::ktrace!(
@@ -1067,17 +1067,17 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             m.bytes.len()
         );
     }
-    runtime.serial_putbuf(b"[kernel:start] modules enumerate loop ok\r\n");
+    boot_trace(runtime, b"[kernel:start] modules enumerate loop ok\r\n");
 
     // Look for module with "init" in cmdline, otherwise fallback to "sprout" by name
     let init_module = modules
         .iter()
         .find(|m| m.cmdline.contains("init"))
         .or_else(|| modules.iter().find(|m| m.name.contains("sprout")));
-    runtime.serial_putbuf(b"[kernel:start] init module selection ok\r\n");
+    boot_trace(runtime, b"[kernel:start] init module selection ok\r\n");
 
     if let Some(mod_desc) = init_module {
-        runtime.serial_putbuf(b"[kernel:start] init module found\r\n");
+        boot_trace(runtime, b"[kernel:start] init module found\r\n");
         kdebug!(
             "Found init module: {} (cmdline: '{}'), loading...",
             mod_desc.name,
@@ -1177,9 +1177,9 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 crate::task::TaskPriority::Normal,
             );
         }
-        runtime.serial_putbuf(b"[kernel:start] init process spawned\r\n");
+        boot_trace(runtime, b"[kernel:start] init process spawned\r\n");
     } else {
-        runtime.serial_putbuf(b"[kernel:start] no init module; fallback path\r\n");
+        boot_trace(runtime, b"[kernel:start] no init module; fallback path\r\n");
         kdebug!("Sprout not found. Checking fallback...");
 
         let spawned_fallback = false;
@@ -1228,7 +1228,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
     // Transition out of early-boot mode.
     crate::sched::end_bringup::<R>();
-    runtime.serial_putbuf(b"[kernel:start] end_bringup\r\n");
+    boot_trace(runtime, b"[kernel:start] end_bringup\r\n");
 
     // Keep a visible startup background without auto-activating the F12 terminal.
     if let Some(fb) = runtime.framebuffer() {
@@ -1236,8 +1236,8 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     }
 
     kinfo!("Entering scheduler loop.");
-    runtime.serial_putbuf(b"[kernel:start] kinfo(scheduler loop) ok\r\n");
-    runtime.serial_putbuf(b"[kernel:start] scheduler loop\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
     loop {
         if !crate::task::yield_now::<R>() {
             // No runnable work on this CPU — halt until the next interrupt

@@ -2172,6 +2172,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_cpu_online_grows_per_cpu_state_without_ending_bringup() {
+        let _g = init_test_env();
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.mark_cpu_online(0);
+        sched.state.per_cpu[0].current = Some(0);
+        sched.bringup_in_progress = true;
+
+        sched.cpu_online(1);
+
+        assert!(sched.bringup_in_progress, "cpu_online should not end early-boot bringup");
+        assert!(sched.state.per_cpu.len() > 1, "cpu_online should extend per-cpu state");
+        assert!(
+            sched.state.online_cpus.contains(&1),
+            "cpu_online should mark the secondary CPU online"
+        );
+        assert!(
+            sched.state.per_cpu[1].idle_task.is_some(),
+            "cpu_online should create an idle task for the new CPU"
+        );
+    }
+
     /// After `end_bringup` the flag is cleared and subsequent spawns may be
     /// placed on other CPUs via the normal round-robin algorithm.
     #[test]
