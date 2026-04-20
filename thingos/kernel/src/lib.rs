@@ -398,6 +398,12 @@ pub trait BootRuntimeBase: 'static {
     fn getchar(&self) -> Option<u8> {
         None
     }
+    /// Give the runtime a chance to immediately consume urgent console bytes
+    /// such as VINTR/VQUIT/VSUSP before they are queued for later line-discipline
+    /// processing.
+    fn handle_console_input_byte(&self, byte: u8) -> bool {
+        crate::vfs::devfs::ConsoleNode::handle_runtime_input_byte(self, byte)
+    }
     fn mono_ticks(&self) -> u64;
     fn mono_freq_hz(&self) -> u64 {
         10_000_000

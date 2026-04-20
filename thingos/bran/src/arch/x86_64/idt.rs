@@ -13,6 +13,7 @@ static IRQ12_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ1_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ4_COUNT: AtomicU64 = AtomicU64::new(0);
 static PAUSE_DUMP_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PAUSE_DUMP_OWNER_CPU: AtomicU64 = AtomicU64::new(u64::MAX);
 
 const MAX_PAUSE_CPUS: usize = 256;
 static PAUSE_CPU_VALID: [AtomicBool; MAX_PAUSE_CPUS] = [const { AtomicBool::new(false) }; MAX_PAUSE_CPUS];
@@ -708,6 +709,30 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, usize) {
     (pause_dump, captured)
 }
 
+fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
+    let mut reboot = false;
+
+    for _ in 0..max_reads {
+        let status = raw_inb(PS2_STATUS_PORT);
+        if status & PS2_STATUS_OUTPUT_FULL == 0 {
+            break;
+        }
+        if status & PS2_STATUS_AUX_DATA != 0 {
+            break;
+        }
+
+        let byte = raw_inb(PS2_DATA_PORT);
+        let released = (byte & 0x80) != 0;
+        let scancode = byte & 0x7F;
+        let _ = kernel::irq::ps2::buffer_scancode(byte);
+        if !released && scancode == 0x58 {
+            reboot = true;
+        }
+    }
+
+    reboot
+}
+
 fn capture_ps2_keyboard_irq() -> bool {
     capture_ps2_keyboard(32).0
 }
@@ -838,11 +863,13 @@ fn trigger_pause_dump(snapshot: Option<&IrqRegisterSnapshot>) -> ! {
     let already_active = PAUSE_DUMP_ACTIVE.swap(true, Ordering::SeqCst);
     unsafe {
         core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+        kernel::logging::force_unlock();
     }
 
     if !already_active {
         let runtime = kernel::runtime_base();
         let current_cpu = runtime.current_cpu_index();
+        PAUSE_DUMP_OWNER_CPU.store(current_cpu as u64, Ordering::SeqCst);
         let cpu_total = runtime.cpu_total_count();
         clear_pause_cpu_snapshots(cpu_total);
 
@@ -861,10 +888,15 @@ fn trigger_pause_dump(snapshot: Option<&IrqRegisterSnapshot>) -> ! {
 
         kinfo!("PS/2 hotkey Alt+F12 detected on CPU {}; forcing kernel pause", current_cpu);
         render_pause_dump_screen(snapshot);
+        kernel::kprint!(" Press F12 to reboot immediately.                                             \n\n");
         kernel::sched::dump_stats_current();
     }
 
-    crate::arch::x86_64::hcf()
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
+    }
 }
 
 fn current_task_name() -> [u8; 32] {
@@ -996,6 +1028,15 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
         let cpu = runtime.current_cpu_index();
         let (rsp, rbp, _, _) = capture_control_state();
         store_pause_cpu_snapshot(cpu, snapshot, rsp, rbp);
+        if PAUSE_DUMP_OWNER_CPU.load(Ordering::SeqCst) == cpu as u64 {
+            if capture_pause_reboot_hotkey(32) {
+                unsafe {
+                    kernel::logging::force_unlock();
+                }
+                runtime.reboot();
+            }
+            return;
+        }
         crate::arch::x86_64::hcf();
     }
 
