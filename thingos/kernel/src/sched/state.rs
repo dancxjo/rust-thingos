@@ -59,6 +59,11 @@ pub enum EnqueueCause {
 #[derive(Debug, Clone, Copy)]
 pub struct TaskRuntimeStats {
     pub run_count: u64,
+    /// CFS-style fairness debt approximation used by scheduler pick heuristics.
+    ///
+    /// Lower values indicate less accumulated CPU service; picker logic can
+    /// prefer tasks with lower debt when effective priority ties.
+    pub fair_vruntime: u64,
     pub migration_count: u64,
     pub migration_wake: u64,
     pub migration_steal: u64,
@@ -79,6 +84,7 @@ impl Default for TaskRuntimeStats {
     fn default() -> Self {
         TaskRuntimeStats {
             run_count: 0,
+            fair_vruntime: 0,
             migration_count: 0,
             migration_wake: 0,
             migration_steal: 0,

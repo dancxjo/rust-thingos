@@ -234,6 +234,7 @@ static LAST_RESCHED_IPI_SENT_AT_TICK: [AtomicU64; types::MAX_CPUS] = {
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
 pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
+const PREPARE_SCHEDULE_FAIR_SCAN_DEPTH_PER_PRIORITY: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
 // Keep steal scans bounded to limit idle-path latency while still peeking past
@@ -281,6 +282,17 @@ fn idle_episode_hist_bucket(us: u64) -> usize {
         5..=49 => 1,
         50..=499 => 2,
         _ => 3,
+    }
+}
+
+#[inline]
+fn vruntime_tick_delta(priority: TaskPriority) -> u64 {
+    match priority {
+        TaskPriority::Realtime => 1,
+        TaskPriority::High => 2,
+        TaskPriority::Normal => 4,
+        TaskPriority::Low => 8,
+        TaskPriority::Idle => 16,
     }
 }
 
@@ -1895,7 +1907,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 // Tick bookkeeping: decrement timeslice via the hot-field cache,
                 // avoiding a nested REGISTRY lock on every timer tick.
                 if let Some(current_id) = self.state.per_cpu[cpu_idx].current {
+                    let mut current_priority = None;
                     if let Some(sf) = self.state.get_thread_mut(current_id) {
+                        current_priority = Some(sf.priority);
                         if sf.timeslice_remaining > 0 {
                             sf.timeslice_remaining -= 1;
                         }
@@ -1903,6 +1917,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             // Reset for next run
                             sf.timeslice_remaining = types::DEFAULT_TIMESLICE;
                             should_yield = true;
+                        }
+                    }
+                    if Some(current_id) != self.state.per_cpu[cpu_idx].idle_task {
+                        if let Some(priority) = current_priority {
+                            let delta = vruntime_tick_delta(priority);
+                            let stats = self.state.task_runtime_stats_mut(current_id);
+                            stats.fair_vruntime = stats.fair_vruntime.saturating_add(delta);
                         }
                     }
                 }
@@ -2408,39 +2429,62 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
             let mut best_q = None;
+            let mut best_idx = 0usize;
             let mut best_eff = 0;
+            let mut best_vruntime = u64::MAX;
 
             for p in (1..5).rev() {
-                if let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].front() {
+                let runq_len = self.state.per_cpu[cpu_idx].runq[p].len();
+                let scan_len = runq_len.min(PREPARE_SCHEDULE_FAIR_SCAN_DEPTH_PER_PRIORITY);
+                for idx in 0..scan_len {
+                    let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].get(idx) else {
+                        continue;
+                    };
+                    let Some(sf) = self.state.get_thread(id) else {
+                        continue;
+                    };
+                    if sf.runq_location != Some((cpu_idx, p)) {
+                        continue;
+                    }
+                    if sf.state == TaskState::Dead || sf.state == TaskState::Blocked {
+                        continue;
+                    }
+
                     let mut eff = p; // Start with base priority (queue index)
                     if p < 4 {
                         // aging only applies up to High
-                        // Use the hot-field cache to avoid a nested REGISTRY lock.
-                        if let Some(sf) = self.state.get_thread(id) {
-                            let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
-                            let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
-                            let boost = boost.min(types::MAX_PRIORITY_BOOST);
-                            eff = (p + boost).min(4);
-                        }
+                        let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
+                        let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
+                        let boost = boost.min(types::MAX_PRIORITY_BOOST);
+                        eff = (p + boost).min(4);
                     }
-                    // Use >= so that an aged lower-priority task wins the tie when its
-                    // boosted effective priority equals a higher-priority task's. We scan
-                    // from p=4 down to p=1; a later (lower-p) match with equal eff
-                    // replaces the earlier one, meaning the task that *needed* aging to
-                    // compete gets to run first, preventing indefinite starvation.
-                    if eff >= best_eff {
+                    let vruntime = self.state.task_runtime_stats(id).fair_vruntime;
+                    // CFS-style tie-break: for equal effective priority, prefer
+                    // the least-served runnable task (lower vruntime).
+                    //
+                    // Preserve previous anti-starvation behavior for exact ties:
+                    // if both effective priority and vruntime are equal, prefer
+                    // the lower-base-priority queue candidate (larger age debt).
+                    let better = eff > best_eff
+                        || (eff == best_eff
+                            && (vruntime < best_vruntime
+                                || (vruntime == best_vruntime
+                                    && best_q.is_some_and(|best_p| p < best_p))));
+                    if better {
                         best_eff = eff;
+                        best_vruntime = vruntime;
                         best_q = Some(p);
+                        best_idx = idx;
                     }
                 }
             }
 
             if let Some(p) = best_q {
-                let Some(id) = self.state.dequeue_task_front(cpu_idx, p) else {
+                let Some(id) = self.state.dequeue_task_at(cpu_idx, p, best_idx) else {
                     // Dequeue returned None despite the peek succeeding; the entry
                     // must have been concurrently removed (e.g., by a misroute
                     // repair). Skip and retry the priority scan.
-                    break;
+                    continue;
                 };
                 pick_attempts += 1;
                 self.metrics.pops += 1;
@@ -4787,6 +4831,79 @@ mod tests {
         // Verify it was popped from the Low queue, not moved to High queue
         assert!(sched.state.per_cpu[0].runq[TaskPriority::Low as usize].is_empty());
         assert!(!sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].is_empty());
+    }
+
+    #[test]
+    fn test_vruntime_prefers_least_served_on_effective_priority_tie() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        let dummy_current = make_task(0, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(dummy_current));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+
+        let mut task_a = make_task(4001, TaskState::Runnable, TaskPriority::Normal);
+        task_a.enqueued_at_tick = 0;
+        let mut task_b = make_task(4002, TaskState::Runnable, TaskPriority::Normal);
+        task_b.enqueued_at_tick = 0;
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task_a));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task_b));
+
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 4001,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 4002,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, 4001);
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, 4002);
+
+        sched.state.task_runtime_stats_mut(4001).fair_vruntime = 100;
+        sched.state.task_runtime_stats_mut(4002).fair_vruntime = 10;
+
+        let next_switch = sched.prepare_schedule().expect("Should pick a runnable task");
+        assert_eq!(
+            next_switch.to_tid, 4002,
+            "least-served task should be preferred when effective priority ties"
+        );
     }
 
     #[test]
