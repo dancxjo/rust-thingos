@@ -203,9 +203,9 @@ fn poll_port(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Opt
     let mut value = 0i64;
 
     if (spec.flags & wait::interest::READABLE) != 0 {
-        match table.get(handle, crate::ipc::IpcHandleMode::Read).cloned() {
+        match table.get(handle, crate::ipc::IpcHandleMode::Read) {
             Some(entry) => {
-                let port = entry.port.clone();
+                let port = Arc::clone(&entry.port);
                 if !port.is_empty() {
                     ready_flags |= wait::ready::READABLE;
                     value = port.len() as i64;
@@ -218,9 +218,9 @@ fn poll_port(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Opt
     }
 
     if (spec.flags & wait::interest::WRITABLE) != 0 {
-        match table.get(handle, crate::ipc::IpcHandleMode::Write).cloned() {
+        match table.get(handle, crate::ipc::IpcHandleMode::Write) {
             Some(entry) => {
-                let port = entry.port.clone();
+                let port = Arc::clone(&entry.port);
                 if !port.is_full() {
                     ready_flags |= wait::ready::WRITABLE;
                     value = port.available() as i64;
@@ -336,18 +336,15 @@ fn register_all(
                 let handle = crate::ipc::IpcHandle(spec.object as u32);
                 let table = &pinfo.ipc_table;
                 if (spec.flags & wait::interest::READABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcHandleMode::Read).cloned()
-                    {
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcHandleMode::Read) {
                         entry.port.add_waiter_read(tid);
-                        regs.push(Registration::PortRead(entry.port.clone()));
+                        regs.push(Registration::PortRead(Arc::clone(&entry.port)));
                     }
                 }
                 if (spec.flags & wait::interest::WRITABLE) != 0 {
-                    if let Some(entry) =
-                        table.get(handle, crate::ipc::IpcHandleMode::Write).cloned()
-                    {
+                    if let Some(entry) = table.get(handle, crate::ipc::IpcHandleMode::Write) {
                         entry.port.add_waiter_write(tid);
-                        regs.push(Registration::PortWrite(entry.port.clone()));
+                        regs.push(Registration::PortWrite(Arc::clone(&entry.port)));
                     }
                 }
             }
@@ -501,9 +498,8 @@ mod tests {
             let entry = lock
                 .ipc_table
                 .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
-                .cloned()
                 .expect("entry");
-            entry.port
+            Arc::clone(&entry.port)
         };
 
         assert!(port.send_all(b"abc"));
@@ -561,9 +557,8 @@ mod tests {
             let entry = lock
                 .ipc_table
                 .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
-                .cloned()
                 .expect("entry");
-            entry.port
+            Arc::clone(&entry.port)
         };
 
         let writable = poll_spec_with_pinfo(
@@ -619,18 +614,16 @@ mod tests {
             let entry = lock
                 .ipc_table
                 .get(crate::ipc::IpcHandle(write_a), crate::ipc::IpcHandleMode::Write)
-                .cloned()
                 .expect("entry a");
-            entry.port
+            Arc::clone(&entry.port)
         };
         let port_b = {
             let lock = pinfo.lock();
             let entry = lock
                 .ipc_table
                 .get(crate::ipc::IpcHandle(write_b), crate::ipc::IpcHandleMode::Write)
-                .cloned()
                 .expect("entry b");
-            entry.port
+            Arc::clone(&entry.port)
         };
 
         assert!(port_a.send_all(b"a"));
@@ -651,7 +644,10 @@ mod tests {
             },
         ];
         let mut results = [WaitResult::default(); 2];
-        let ready = collect_ready(&specs, &mut results).expect("collect");
+        let ready = {
+            let lock = pinfo.lock();
+            collect_ready(&lock, &specs, &mut results).expect("collect")
+        };
         assert_eq!(ready, 2);
         assert_eq!(results[0].token, 1);
         assert_eq!(results[1].token, 2);
@@ -668,18 +664,16 @@ mod tests {
             let entry = lock
                 .ipc_table
                 .get(crate::ipc::IpcHandle(write_a), crate::ipc::IpcHandleMode::Write)
-                .cloned()
                 .expect("entry a");
-            entry.port
+            Arc::clone(&entry.port)
         };
         let port_b = {
             let lock = pinfo.lock();
             let entry = lock
                 .ipc_table
                 .get(crate::ipc::IpcHandle(write_b), crate::ipc::IpcHandleMode::Write)
-                .cloned()
                 .expect("entry b");
-            entry.port
+            Arc::clone(&entry.port)
         };
 
         assert!(port_a.send_all(b"a"));
@@ -728,9 +722,8 @@ mod tests {
             let entry = lock
                 .ipc_table
                 .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
-                .cloned()
                 .expect("entry");
-            entry.port
+            Arc::clone(&entry.port)
         };
         assert!(port.send_all(b"hello"));
 

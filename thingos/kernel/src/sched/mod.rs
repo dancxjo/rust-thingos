@@ -4503,7 +4503,6 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
-            voluntary_yields: 0,
         });
         let task_normal = crate::task::Task {
             id: 1001,
@@ -4721,7 +4720,6 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
-            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 2002,
@@ -4859,7 +4857,6 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
-            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 3002,
@@ -4874,7 +4871,6 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
-            voluntary_yields: 0,
         });
 
         // Put RT task in sleep queue with wake_tick in the past
@@ -4967,7 +4963,6 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
-            voluntary_yields: 0,
         });
 
         // Put the sleeping task in the sleep queue with a wake_tick in the past.
@@ -5026,7 +5021,6 @@ mod tests {
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
                 wake_pending: false,
-            voluntary_yields: 0,
             });
             sched.state.add_task_to_sleep_queue(tid, 50);
         }
@@ -5111,7 +5105,6 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
-            voluntary_yields: 0,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9102);
 
@@ -5588,6 +5581,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 6001,
@@ -5642,6 +5636,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         let task = crate::task::Task {
@@ -5720,6 +5715,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         let task = crate::task::Task {
@@ -6084,6 +6080,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         };
         sched.state.insert_task(target_fields);
 
@@ -6158,6 +6155,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 8304,
@@ -6171,6 +6169,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Seed stale queue membership for the exiting task and ensure another
@@ -6233,6 +6232,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 8311,
@@ -6246,6 +6246,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8311);
 
@@ -6283,6 +6284,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         let termination = mark_task_exited_in_registry::<MockRuntime>(8306, 202);
@@ -6315,6 +6317,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 8305,
@@ -6328,6 +6331,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);
@@ -7617,6 +7621,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 9901,
@@ -7630,6 +7635,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         let (_ipi, _deferred) =
@@ -7678,6 +7684,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 9911,
@@ -7691,6 +7698,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Make CPU 0 overloaded relative to CPU 1.
@@ -7893,6 +7901,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         let sleeping = make_task(9921, TaskState::Blocked, TaskPriority::Normal);
@@ -7981,6 +7990,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Keep CPU 0 overloaded for Any-affinity wake routing.
@@ -8096,6 +8106,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9930);
@@ -8205,6 +8216,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         };
 
         let (last, wake, run) = task_cpu_trace_strings(Some(9), Some(&sf));
@@ -8227,6 +8239,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         };
 
         let (last, wake, run) = task_cpu_trace_strings(Some(4), Some(&sf));

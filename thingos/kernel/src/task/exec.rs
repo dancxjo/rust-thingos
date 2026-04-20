@@ -911,6 +911,7 @@ mod tests {
                 uc
             },
             handle_table,
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/old/cwd"),
             root: alloc::string::String::from("/"),
@@ -1154,6 +1155,7 @@ mod tests {
                 uc
             },
             handle_table: crate::vfs::handle_table::HandleTable::new(),
+            ipc_table: crate::ipc::IpcHandleTable::new(),
             namespace: crate::vfs::NamespaceRef::global(),
             cwd: alloc::string::String::from("/"),
             root: alloc::string::String::from("/"),
