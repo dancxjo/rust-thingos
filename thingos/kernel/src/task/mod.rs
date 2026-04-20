@@ -823,18 +823,8 @@ pub struct Thread<R: BootRuntime> {
 pub type Task<R> = Thread<R>;
 
 pub fn init<R: BootRuntime>() {
-    if crate::is_runtime_initialized() {
-        crate::runtime_base().serial_putbuf(b"[kernel:task:init] begin\r\n");
-    }
     crate::task::registry::init::<R>();
-    if crate::is_runtime_initialized() {
-        crate::runtime_base().serial_putbuf(b"[kernel:task:init] registry init ok\r\n");
-    }
     crate::sched::init::<R>();
-    if crate::is_runtime_initialized() {
-        crate::runtime_base().serial_putbuf(b"[kernel:task:init] sched init ok\r\n");
-        crate::runtime_base().serial_putbuf(b"[kernel:task:init] done\r\n");
-    }
 }
 pub fn spawn<R: BootRuntime>(
     entry: extern "C" fn(usize) -> !,

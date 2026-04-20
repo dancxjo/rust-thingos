@@ -97,30 +97,19 @@ pub fn memory_map() -> &'static [kernel::PhysRange] {
     use crate::requests::MEMORY_MAP_REQUEST;
     use kernel::{PhysRange, PhysRangeKind};
 
-    early_serial_write(b"[bran:mem] memory_map enter\r\n");
-
     // Fast path: already initialized.  The Acquire load synchronises with the
     // Release store below, so all writes to RANGES/RANGES_COUNT are visible.
     if RANGES_INIT.load(Ordering::Acquire) {
-        early_serial_write(b"[bran:mem] cache hit\r\n");
         let count = RANGES_COUNT.load(Ordering::Relaxed);
         return unsafe { &RANGES[..count] };
     }
 
-    early_serial_write(b"[bran:mem] before MEMORY_MAP_REQUEST response\r\n");
     if let Some(resp) = MEMORY_MAP_REQUEST.get_response() {
-        early_serial_write(b"[bran:mem] got MEMORY_MAP_REQUEST response\r\n");
         let entries = resp.entries();
         let total = entries.len();
-        early_serial_write(b"[bran:mem] entries read\r\n");
-
-        if total > MAX_RANGES {
-            early_serial_write(b"[bran:mem] truncating memory map to MAX_RANGES\r\n");
-        }
 
         let count = total.min(MAX_RANGES);
         unsafe {
-            early_serial_write(b"[bran:mem] begin cache fill\r\n");
             for (i, entry) in entries.into_iter().enumerate().take(count) {
                 RANGES[i] = PhysRange {
                     start: entry.base,
@@ -137,7 +126,6 @@ pub fn memory_map() -> &'static [kernel::PhysRange] {
                     },
                 };
             }
-            early_serial_write(b"[bran:mem] cache fill done\r\n");
         }
 
         // Publish count first (Relaxed is fine here — the Release on
@@ -146,11 +134,9 @@ pub fn memory_map() -> &'static [kernel::PhysRange] {
         // Release: ensures all writes to RANGES and RANGES_COUNT happen-before
         // any Acquire load of RANGES_INIT in another CPU.
         RANGES_INIT.store(true, Ordering::Release);
-        early_serial_write(b"[bran:mem] publish done\r\n");
 
         unsafe { &RANGES[..count] }
     } else {
-        early_serial_write(b"[bran:mem] no MEMORY_MAP_REQUEST response\r\n");
         &[]
     }
 }

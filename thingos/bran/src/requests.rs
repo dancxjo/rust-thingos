@@ -100,28 +100,18 @@ fn early_serial_write(msg: &[u8]) {
 fn early_serial_write(_msg: &[u8]) {}
 
 pub fn get_modules() -> &'static [BootModuleDesc] {
-    early_serial_write(b"[bran:req] get_modules enter\r\n");
     // Fast path: already initialized.  The Acquire load synchronises with the
     // Release store below, guaranteeing visibility of MODULES_CACHE contents.
     if MODULES_INIT.load(Ordering::Acquire) {
-        early_serial_write(b"[bran:req] get_modules cache hit\r\n");
         let len = MODULES_LEN.load(Ordering::Relaxed);
         return unsafe { &MODULES_CACHE[..len] };
     }
 
-    early_serial_write(b"[bran:req] before MODULE_REQUEST response\r\n");
     let count = if let Some(response) = MODULE_REQUEST.get_response() {
-        early_serial_write(b"[bran:req] got MODULE_REQUEST response\r\n");
         let files = response.modules();
         let total = files.len();
-        early_serial_write(b"[bran:req] modules list acquired\r\n");
-
-        if total > MAX_MODULES {
-            early_serial_write(b"[bran:req] truncating modules cache\r\n");
-        }
 
         let count = core::cmp::min(total, MAX_MODULES);
-        early_serial_write(b"[bran:req] begin module cache fill\r\n");
         for i in 0..count {
             let file = files[i];
 
@@ -150,10 +140,8 @@ pub fn get_modules() -> &'static [BootModuleDesc] {
                 };
             }
         }
-        early_serial_write(b"[bran:req] module cache fill done\r\n");
         count
     } else {
-        early_serial_write(b"[bran:req] no MODULE_REQUEST response\r\n");
         0
     };
 
@@ -163,7 +151,6 @@ pub fn get_modules() -> &'static [BootModuleDesc] {
     // Release: ensures all writes to MODULES_CACHE and MODULES_LEN happen-before
     // any Acquire load of MODULES_INIT in another CPU.
     MODULES_INIT.store(true, Ordering::Release);
-    early_serial_write(b"[bran:req] get_modules publish done\r\n");
 
     unsafe { &MODULES_CACHE[..count] }
 }
