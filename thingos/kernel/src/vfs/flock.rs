@@ -157,6 +157,18 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
     }
 }
 
+/// Returns `true` if the given process holds any advisory lock on any inode.
+///
+/// Used by `sys_fs_close` to skip the (potentially expensive) `node.stat()`
+/// RPC when the process has no advisory locks at all — which is the common
+/// case for most programs.
+pub fn process_has_locks(pid: u32) -> bool {
+    let table = FLOCK_TABLE.lock();
+    table.values().any(|entry| {
+        entry.shared_holders.contains(&pid) || entry.exclusive_holder == Some(pid)
+    })
+}
+
 /// Release any advisory lock held by `pid` on `ino` and wake blocked waiters.
 ///
 /// This is called automatically by [`crate::syscall::handlers::vfs::sys_fs_close`]

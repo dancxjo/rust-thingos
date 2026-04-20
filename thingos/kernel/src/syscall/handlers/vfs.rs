@@ -118,19 +118,31 @@ pub fn sys_fs_close(fd: usize) -> SysResult<usize> {
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
 
     // Before closing, check if this fd has an advisory lock and release it.
-    // We do this before removing the fd so the node is still accessible.
-    let maybe_lock_info: Option<(u64, u32)> = {
+    // We must NOT call node.stat() while holding the process-info lock: for
+    // provider-backed files, stat() triggers a synchronous RPC to the
+    // userland provider.  If the provider is busy servicing another RPC
+    // (e.g. a vfs_poll), the calling task would block indefinitely while
+    // holding the spin-lock — deadlocking any other operation that needs
+    // the same ProcessInfo.
+    //
+    // Optimisation: skip the (potentially expensive) stat entirely when the
+    // process holds no advisory locks, which is the common case.
+    let (maybe_node, pid) = {
         let lock = pinfo_arc.lock();
         let pid = lock.pid;
-        lock.handle_table.get(fd as u32).ok().and_then(|f| f.node.stat().ok()).map(|s| (s.ino, pid))
-    };
+        let node = lock.handle_table.get(fd as u32).ok().map(|f| f.node.clone());
+        (node, pid)
+    }; // pinfo_arc lock released — safe to perform I/O now
+
+    if let Some(node) = maybe_node {
+        if crate::vfs::flock::process_has_locks(pid) {
+            if let Ok(s) = node.stat() {
+                crate::vfs::flock::release(s.ino, pid);
+            }
+        }
+    }
 
     pinfo_arc.lock().handle_table.close(fd as u32)?;
-
-    // Release any advisory lock the process held on this inode.
-    if let Some((ino, pid)) = maybe_lock_info {
-        crate::vfs::flock::release(ino, pid);
-    }
 
     Ok(0)
 }

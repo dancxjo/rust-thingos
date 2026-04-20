@@ -811,7 +811,9 @@ pub(crate) fn enqueue_remote_wake_mailbox(
 }
 
 #[inline]
-fn take_remote_wake_mailbox(cpu: usize) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
+fn take_remote_wake_mailbox(
+    cpu: usize,
+) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
     if cpu >= types::MAX_CPUS {
         return alloc::collections::VecDeque::new();
     }
@@ -2064,65 +2066,42 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // per-CPU queues for each task.
         let mut wake_batch_loads = WakeBatchLoadSnapshot::new(&self.state);
 
-        while wake_budget > 0 {
-            let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() else {
-                break;
-            };
-            if wake_tick <= now {
-                let Some((_, mut tids)) = self.state.sleep_queue.pop_first() else {
-                    // Safety: In an SMP environment, even if we just checked first_key_value,
-                    // a concurrent removal (e.g. via task death) could have emptied the slot.
-                    // Skip and continue to maintain system liveness.
-                    break;
-                };
-                let to_take = core::cmp::min(wake_budget, tids.len());
+        // Use the timer-wheel helper which handles bucket scanning,
+        // membership bookkeeping, and budget limiting internally.
+        let due_tids = self.state.take_due_sleepers(now, wake_budget);
+        let taken = due_tids.len();
 
-                for tid in tids.drain(..to_take) {
-                    // This task left the sleep queue (woken or dropped if task
-                    // record vanished), so clear direct membership now.
-                    self.state.sleep_membership.remove(&tid);
-                    // Read scheduling fields from the hot-field cache only.
-                    // REGISTRY is not accessed in this inner loop.
-                    if let Some(sf) = self.state.get_thread(tid) {
-                        let priority = sf.priority as usize;
-                        let target_cpu = match sf.affinity {
-                            crate::task::Affinity::Pinned(cpu) => {
-                                wake_batch_loads.note_enqueue(cpu);
-                                cpu
-                            }
-                            crate::task::Affinity::Any => {
-                                let preferred =
-                                    select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
-                                        self,
-                                        sf.last_cpu,
-                                        &wake_batch_loads,
-                                    );
-                                let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
-                                    self,
-                                    preferred,
-                                    &wake_batch_loads,
-                                );
-                                wake_batch_loads.note_enqueue(target);
-                                target
-                            }
-                        };
-                        to_wake.push((tid, priority, target_cpu));
+        for tid in due_tids {
+            // Read scheduling fields from the hot-field cache only.
+            // REGISTRY is not accessed in this inner loop.
+            if let Some(sf) = self.state.get_thread(tid) {
+                let priority = sf.priority as usize;
+                let target_cpu = match sf.affinity {
+                    crate::task::Affinity::Pinned(cpu) => {
+                        wake_batch_loads.note_enqueue(cpu);
+                        cpu
                     }
-                    // If not in hot-field cache, skip (task was already removed).
-                }
-
-                wake_budget = wake_budget.saturating_sub(to_take);
-                if !tids.is_empty() {
-                    self.state.sleep_queue.insert(wake_tick, tids);
-                    // Remaining tids stayed in this bucket after budget limiting;
-                    // refresh their direct membership indices in one pass.
-                    self.state.refresh_sleep_bucket_membership(wake_tick);
-                    break;
-                }
-            } else {
-                break;
+                    crate::task::Affinity::Any => {
+                        let preferred = select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
+                            self,
+                            sf.last_cpu,
+                            &wake_batch_loads,
+                        );
+                        let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
+                            self,
+                            preferred,
+                            &wake_batch_loads,
+                        );
+                        wake_batch_loads.note_enqueue(target);
+                        target
+                    }
+                };
+                to_wake.push((tid, priority, target_cpu));
             }
+            // If not in hot-field cache, skip (task was already removed).
         }
+
+        wake_budget = wake_budget.saturating_sub(taken);
 
         self.wake_sleepers_budget_carry = wake_budget;
 
@@ -2348,7 +2327,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let prio = sf.priority as usize;
         match sf.affinity {
             crate::task::Affinity::Pinned(cpu) if cpu < per_cpu_len => Some((prio, cpu)),
-            crate::task::Affinity::Pinned(_) => Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1))),
+            crate::task::Affinity::Pinned(_) => {
+                Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1)))
+            }
             crate::task::Affinity::Any => {
                 let fallback = queued_target_cpu.min(per_cpu_len - 1);
                 Some((prio, sf.last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(fallback)))
@@ -2524,8 +2505,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
 
             if let (Some(p), Some(best_idx), Some(best_tid)) = (best_q, best_idx, best_tid) {
-                let still_same = self.state.per_cpu[cpu_idx]
-                    .runq[p]
+                let still_same = self.state.per_cpu[cpu_idx].runq[p]
                     .get(best_idx)
                     .copied()
                     .is_some_and(|tid| tid == best_tid);
