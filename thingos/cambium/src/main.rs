@@ -28,10 +28,10 @@ use sysfs::{SysDevice, scan_devices};
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
 const RECONCILE_TIMEOUT_MS: u64 = 30_000;
 /// `THINGOS_JOB_EXIT` notification payload layout:
-/// - bytes 0..4: pid (u32 LE)
+/// - bytes 0-3: pid (u32 LE)
 /// - byte 4: state (2 = exited)
 /// - byte 5: exit-code present flag (0/1)
-/// - bytes 6..10: exit code (i32 LE, valid when present=1)
+/// - bytes 6-9: exit code (i32 LE, valid when present=1)
 const JOB_EXIT_NOTIFICATION_LEN: usize = 10;
 const JOB_EXIT_JOB_ID_BYTES: usize = 4;
 const JOB_EXIT_STATE_OFFSET: usize = 4;
