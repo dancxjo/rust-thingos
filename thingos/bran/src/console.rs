@@ -12,6 +12,7 @@ const TAB_WIDTH: usize = 4;
 const CSI_PARAM_CAP: usize = 8;
 const DEFAULT_FG: u32 = 0x00FF_FFFF;
 const DEFAULT_BG: u32 = 0x0000_0000;
+const ACTIVATION_BANNER: &[u8] = b"\x1b[0m\x1b[?25lThing-OS kernel terminal (F12)\n";
 
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
 pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
@@ -177,8 +178,10 @@ impl FbConsole {
                     } else if (40..=47).contains(&p) {
                         self.bg = Self::ansi_color(p, true);
                     } else if (90..=97).contains(&p) {
+                        // ANSI bright foreground: add a small RGB brightness offset.
                         self.fg = Self::ansi_color(p - 60, false) | 0x0040_4040;
                     } else if (100..=107).contains(&p) {
+                        // ANSI bright background: add a smaller RGB brightness offset.
                         self.bg = Self::ansi_color(p - 60, true) | 0x0020_2020;
                     }
                 }
@@ -254,7 +257,7 @@ impl FbConsole {
         self.reset_style();
         self.clear_to_bg();
         // Keep cursor hidden for the active bootstrap framebuffer terminal session.
-        for &b in b"\x1b[0m\x1b[?25lThing-OS kernel terminal (F12)\n" {
+        for &b in ACTIVATION_BANNER {
             self.handle_byte(b);
         }
     }
@@ -301,7 +304,9 @@ fn parse_hex_byte_pair(hi: u8, lo: u8) -> Option<u8> {
 fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
     let mut out = BTreeMap::new();
     let modules = crate::RUNTIME.modules();
-    let unifont = modules.iter().find(|m| m.name.contains("unifont.hex"));
+    let unifont = modules
+        .iter()
+        .find(|m| m.name.ends_with("/unifont.hex") || m.name.ends_with("unifont.hex"));
     let Some(module) = unifont else {
         return out;
     };

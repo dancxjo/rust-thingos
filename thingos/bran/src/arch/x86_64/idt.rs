@@ -677,6 +677,8 @@ const PS2_DATA_PORT: u16 = 0x60;
 const PS2_STATUS_OUTPUT_FULL: u8 = 0x01;
 const PS2_STATUS_AUX_DATA: u8 = 0x20;
 const PS2_SCANCODE_F12: u8 = 0x58;
+const PS2_SCANCODE_RELEASE_MASK: u8 = 0x80;
+const PS2_SCANCODE_KEY_MASK: u8 = 0x7F;
 
 #[inline]
 fn raw_inb(port: u16) -> u8 {
@@ -706,8 +708,8 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, usize) {
         if kernel::irq::ps2::buffer_scancode(byte) {
             pause_dump = true;
         }
-        let released = (byte & 0x80) != 0;
-        let scancode = byte & 0x7F;
+        let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
+        let scancode = byte & PS2_SCANCODE_KEY_MASK;
         if !released && scancode == PS2_SCANCODE_F12 {
             f12_press = true;
         }
@@ -729,8 +731,8 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
         }
 
         let byte = raw_inb(PS2_DATA_PORT);
-        let released = (byte & 0x80) != 0;
-        let scancode = byte & 0x7F;
+        let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
+        let scancode = byte & PS2_SCANCODE_KEY_MASK;
         let _ = kernel::irq::ps2::buffer_scancode(byte);
         if !released && scancode == PS2_SCANCODE_F12 {
             reboot = true;

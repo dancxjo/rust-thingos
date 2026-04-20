@@ -9,18 +9,18 @@ use kernel::{FramebufferInfo, PixelFormat};
 /// - `buf` must be a valid, writable `u32` slice.
 /// - Uses unaligned vector stores (`_mm_storeu_si128`), so no extra alignment
 ///   constraints are required beyond pointer validity.
-/// - Marked `unsafe` because it performs raw-pointer SIMD stores internally.
-unsafe fn fill_u32_sse2(buf: &mut [u32], color: u32) {
+/// - Internally uses raw-pointer SIMD stores.
+fn fill_u32_sse2(buf: &mut [u32], color: u32) {
     use core::arch::x86_64::{__m128i, _mm_set1_epi32, _mm_storeu_si128};
     let chunks = buf.len() / 4;
     let rem = buf.len() % 4;
-    let vec = _mm_set1_epi32(color as i32);
+    let vec = unsafe { _mm_set1_epi32(color as i32) };
     let ptr = buf.as_mut_ptr();
     for i in 0..chunks {
-        _mm_storeu_si128(ptr.add(i * 4) as *mut __m128i, vec);
+        unsafe { _mm_storeu_si128(ptr.add(i * 4) as *mut __m128i, vec) };
     }
     for i in 0..rem {
-        *ptr.add(chunks * 4 + i) = color;
+        unsafe { *ptr.add(chunks * 4 + i) = color };
     }
 }
 
@@ -126,9 +126,7 @@ impl Framebuffer {
             // Fill first row with u32 writes
             let first_row = pixels_per_row.min(self.width as usize);
             #[cfg(target_arch = "x86_64")]
-            unsafe {
-                fill_u32_sse2(&mut buffer_u32[..first_row], color);
-            }
+            fill_u32_sse2(&mut buffer_u32[..first_row], color);
             #[cfg(not(target_arch = "x86_64"))]
             {
                 buffer_u32[..first_row].fill(color);
