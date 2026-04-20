@@ -99,7 +99,11 @@ impl Supervisor {
         info!("SPROUT: Launching serial shell...");
         setup_serial_shell(self.tasks.clone());
 
-        // Stage 2: Spawn health-monitoring vine for shell restarts.
+        // Stage 2: Start cambium for driver discovery.
+        info!("SPROUT: Spawning cambium for driver discovery...");
+        self.spawn_cambium();
+
+        // Stage 3: Spawn health-monitoring vine for shell restarts.
         let tasks_health = self.tasks.clone();
         let _ = stem::thread::spawn_task(move || {
             loop {
@@ -161,7 +165,6 @@ impl Supervisor {
         stem::debug!("SPROUT: Discovery loop disabled in favor of cambium.");
     }
 
-    #[allow(dead_code)]
     fn spawn_cambium(&mut self) {
         let (write, read) = match stem::syscall::port_create(4096) {
             Ok(h) => h,
