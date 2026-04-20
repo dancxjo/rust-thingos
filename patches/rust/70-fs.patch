@@ -596,7 +596,7 @@ index 00000000..ba7f15ec
 +    }
 +
 +    pub fn read_buf(&self, mut cursor: BorrowedCursor<'_>) -> io::Result<()> {
-+        // SAFETY: the syscall initialises the bytes it writes.
++        // SAFETY: the syscall initializes the bytes it writes.
 +        let buf = unsafe { cursor.as_mut() };
 +        let ret = unsafe {
 +            raw_syscall6(

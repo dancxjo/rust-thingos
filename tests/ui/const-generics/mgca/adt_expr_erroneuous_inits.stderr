@@ -19,13 +19,13 @@ error[E0574]: expected struct, variant or union type, found function `NonStruct`
 LL |     accepts::<{ NonStruct { }}>();
    |                 ^^^^^^^^^ not a struct, variant or union type
 
-error: struct expression with missing field initialiser for `field`
+error: struct expression with missing field initializer for `field`
   --> $DIR/adt_expr_erroneuous_inits.rs:16:17
    |
 LL |     accepts::<{ Foo::<u8> { }}>();
    |                 ^^^^^^^^^^^^^
 
-error: struct expression with multiple initialisers for `field`
+error: struct expression with multiple initializers for `field`
   --> $DIR/adt_expr_erroneuous_inits.rs:18:49
    |
 LL |     accepts::<{ Foo::<u8> { field: const { 1 }, field: const { 2} }}>();

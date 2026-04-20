@@ -105,7 +105,7 @@ unchanged.
 ### Milestone NS-2 — Copy-on-write namespace at spawn
 
 **Goal:** `SYS_SPAWN_PROCESS_EX` can optionally give the child its own private
-mount table, initialised as a shallow copy of the parent's.
+mount table, initialized as a shallow copy of the parent's.
 
 **Changes required:**
 

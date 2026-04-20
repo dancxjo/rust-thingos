@@ -38,7 +38,7 @@ ALLOWED=(
     "petals_session/"
     # MSI/PCI — uses root for device registration.
     "irq/msi.rs"
-    # Top-level boot sequence — initialises Root and calls init_graph_workers.
+    # Top-level boot sequence — initializes Root and calls init_graph_workers.
     "lib.rs"
     # Structured logging (uses Root for LogEvent).
     "logging.rs"
