@@ -293,23 +293,31 @@ fn generate_limine_config(
 }
 
 fn generate_motd() -> String {
-    const WIDTH: usize = 60;
-    let mut motd = String::new();
-    let border = format!("  +{}+\n", "-".repeat(WIDTH + 2));
-
-    motd.push_str(&border);
-    motd.push_str(&format!(
-        "  | {:<width$} |\n",
-        "THING-OS  v0.1  (thingos ACT IV)                 2026-04-16",
-        width = WIDTH
-    ));
-    motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
-    motd.push_str(&format!("  | {:<width$} |\n", "People, places, things", width = WIDTH));
-    motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
-    motd.push_str(&format!("  | {:<width$} |\n", "", width = WIDTH));
-    motd.push_str(&format!("  | {:<width$} |\n", "Try: ls /bin, ps, cat /version", width = WIDTH));
-    motd.push_str(&border);
-    motd
+    concat!(
+        "\x1b[1;32m\n",
+        "        .-.\n",
+        "       /   \\        \x1b[1;36mTHING-OS\x1b[1;32m\n",
+        "      |     |       \x1b[0;36m\"People, places, things.\"\x1b[1;32m\n",
+        "       \\   /        \n",
+        "        `-'        \n",
+        "       /   \\        v0.1  \u{2022}  ACT IV\n",
+        "      |     |       2026-04-16\n",
+        "       \\   /\n",
+        "        `-'\n",
+        "\x1b[0m\n",
+        "\x1b[2m--------------------------------------------------------------\x1b[0m\n",
+        "\x1b[1m sprout has taken root. the system is awake.\x1b[0m\n",
+        "\n",
+        "  try:\n",
+        "    \x1b[36mls /bin\x1b[0m       browse available shoots\n",
+        "    \x1b[36mps\x1b[0m            observe living processes\n",
+        "    \x1b[36mcat /version\x1b[0m  inspect the genome\n",
+        "\n",
+        "\x1b[2m--------------------------------------------------------------\x1b[0m\n",
+        "\n",
+        "\x1b[1;32mTHING-OS\x1b[0m [\x1b[33mBOOT\x1b[0m] / \u{26A1} \n",
+    )
+    .to_string()
 }
 
 /// Build an ISO image for the target architecture with default settings.

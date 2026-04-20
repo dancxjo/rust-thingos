@@ -7,7 +7,7 @@ use crate::framebuffer::Framebuffer;
 const CELL_H: u32 = 16;
 const CELL_W: u32 = 8;
 const CURSOR_W: u32 = 2;
-const CURSOR_BLINK_INTERVAL: u32 = 15;
+const CURSOR_BLINK_INTERVAL: u32 = 50;
 const TAB_WIDTH: usize = 4;
 const CSI_PARAM_CAP: usize = 8;
 const DEFAULT_FG: u32 = 0x00FF_FFFF;

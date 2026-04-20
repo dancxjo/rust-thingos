@@ -1187,7 +1187,7 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
 
     if captured != 0 {
         if count <= 3 || (count % 128 == 0) {
-            kinfo!("PS/2 keyboard NMI fired (count={})", count);
+            kernel::kdebug!("PS/2 keyboard NMI fired (count={})", count);
         }
         kernel::irq::dispatch_irq(0x21);
     }
