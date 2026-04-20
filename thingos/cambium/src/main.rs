@@ -28,9 +28,11 @@ use sysfs::{SysDevice, scan_devices};
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
 const RECONCILE_TIMEOUT_MS: u64 = 30_000;
 const JOB_EXIT_NOTIFICATION_LEN: usize = 10;
+const JOB_EXIT_JOB_ID_BYTES: usize = 4;
 const JOB_EXIT_STATE_OFFSET: usize = 4;
 const JOB_EXIT_CODE_PRESENT_OFFSET: usize = 5;
 const JOB_EXIT_CODE_OFFSET: usize = 6;
+const JOB_EXIT_CODE_BYTES: usize = 4;
 const JOB_EXIT_STATE_EXITED: u8 = 2;
 
 #[stem::main]
@@ -361,14 +363,14 @@ fn decode_job_exit_notification(bytes: &[u8]) -> Option<(u32, i32)> {
     if bytes.len() < JOB_EXIT_NOTIFICATION_LEN {
         return None;
     }
-    let job_id = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?);
+    let job_id = u32::from_le_bytes(bytes.get(..JOB_EXIT_JOB_ID_BYTES)?.try_into().ok()?);
     if bytes[JOB_EXIT_STATE_OFFSET] != JOB_EXIT_STATE_EXITED {
         return None;
     }
     let code = if bytes[JOB_EXIT_CODE_PRESENT_OFFSET] == 1 {
         i32::from_le_bytes(
             bytes
-                .get(JOB_EXIT_CODE_OFFSET..JOB_EXIT_CODE_OFFSET + 4)?
+                .get(JOB_EXIT_CODE_OFFSET..JOB_EXIT_CODE_OFFSET + JOB_EXIT_CODE_BYTES)?
                 .try_into()
                 .ok()?,
         )
