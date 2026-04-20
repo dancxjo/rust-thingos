@@ -5492,9 +5492,12 @@ mod tests {
         assert!(crate::task::registry::get_task::<MockRuntime>(4001).is_some());
         assert!(crate::task::registry::get_task::<MockRuntime>(4099).is_none());
 
-        // Churn through rapid create/exit and validate lookups stay correct.
-        for i in 0..512 {
-            let tid = 5000 + (i % 32) as u64;
+        // Keep a small hot set of thread IDs cycling through many create/exit
+        // operations to stress index maintenance under churn.
+        const CHURN_ITERATIONS: usize = 512;
+        const CHURN_ACTIVE_TIDS: usize = 32;
+        for i in 0..CHURN_ITERATIONS {
+            let tid = 5000 + (i % CHURN_ACTIVE_TIDS) as u64;
             if crate::task::registry::get_task::<MockRuntime>(tid).is_none() {
                 crate::task::registry::get_registry::<MockRuntime>()
                     .insert(alloc::boxed::Box::new(make_task(tid)));

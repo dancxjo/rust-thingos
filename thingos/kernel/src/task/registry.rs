@@ -38,18 +38,14 @@ impl<R: BootRuntime> ThreadRegistry<R> {
     pub fn get(&self, id: u64) -> Option<&Thread<R>> {
         let idx = self.get_index(id)?;
         let thread = self.threads.get(idx)?;
-        if thread.id != id {
-            return None;
-        }
+        debug_assert_eq!(thread.id, id, "registry index map must point to requested thread id");
         Some(&**thread)
     }
 
     pub fn get_mut(&mut self, id: u64) -> Option<&mut Thread<R>> {
         let idx = self.get_index(id)?;
         let thread = self.threads.get_mut(idx)?;
-        if thread.id != id {
-            return None;
-        }
+        debug_assert_eq!(thread.id, id, "registry index map must point to requested thread id");
         Some(&mut **thread)
     }
 
