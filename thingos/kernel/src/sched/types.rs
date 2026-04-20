@@ -129,8 +129,8 @@ pub struct Scheduler<R: BootRuntime> {
     /// released so remote nudges never run in the scheduler critical section.
     pub(crate) pending_prepare_schedule_ipis_bitmap: u64,
     /// Misrouted tasks deferred by `prepare_schedule`.
-    /// Repaired in bounded batches so the picker path does not janitor the
-    /// entire backlog under the global scheduler lock in a single call.
+    /// Repaired in bounded maintenance batches outside the picker path so
+    /// selection stays focused on choosing the next runnable task.
     pub(crate) pending_misrouted_requeues: alloc::vec::Vec<(usize, usize, TaskId)>,
     /// REGISTRY synchronization work deferred out of `prepare_schedule` so the
     /// hot selection path can update scheduler cache fields without immediate

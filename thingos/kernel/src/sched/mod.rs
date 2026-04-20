@@ -2170,7 +2170,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
         }
 
-        self.prepare_schedule()
+        let switch = self.prepare_schedule();
+        self.run_pending_misroute_repair_maintenance();
+        switch
     }
 
     /// Drain up to `max_to_flush` deferred misrouted tasks, requeue each task on
@@ -2190,6 +2192,63 @@ impl<R: BootRuntime> types::Scheduler<R> {
         }
     }
 
+    /// Re-resolve deferred misroute entries against latest scheduler fields.
+    ///
+    /// Returns the effective `(priority, target_cpu)` to enqueue to, or `None`
+    /// when the entry should be dropped (task removed/non-runnable/already queued).
+    #[inline]
+    fn resolve_pending_misroute_requeue(
+        &self,
+        queued_prio: usize,
+        queued_target_cpu: usize,
+        id: TaskId,
+    ) -> Option<(usize, usize)> {
+        let sf = self.state.get_thread(id)?;
+        if sf.state != TaskState::Runnable || sf.runq_location.is_some() {
+            return None;
+        }
+        let per_cpu_len = self.state.per_cpu.len();
+        if per_cpu_len == 0 {
+            return None;
+        }
+        let prio = sf.priority as usize;
+        match sf.affinity {
+            crate::task::Affinity::Pinned(cpu) if cpu < per_cpu_len => Some((prio, cpu)),
+            crate::task::Affinity::Pinned(_) => Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1))),
+            crate::task::Affinity::Any => {
+                let fallback = queued_target_cpu.min(per_cpu_len - 1);
+                Some((prio, sf.last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(fallback)))
+            }
+        }
+    }
+
+    /// Opportunistically drop stale deferred misroutes and refresh queued route
+    /// metadata before draining bounded repair work.
+    #[inline]
+    fn prevalidate_pending_misrouted_requeues(&mut self) {
+        let mut i = 0usize;
+        while i < self.pending_misrouted_requeues.len() {
+            let (queued_prio, queued_target_cpu, id) = self.pending_misrouted_requeues[i];
+            if let Some((prio, target_cpu)) =
+                self.resolve_pending_misroute_requeue(queued_prio, queued_target_cpu, id)
+            {
+                if (prio, target_cpu) != (queued_prio, queued_target_cpu) {
+                    self.pending_misrouted_requeues[i] = (prio, target_cpu, id);
+                }
+                i += 1;
+            } else {
+                self.pending_misrouted_requeues.swap_remove(i);
+            }
+        }
+    }
+
+    /// Run deferred misroute cleanup outside the picker path.
+    #[inline]
+    fn run_pending_misroute_repair_maintenance(&mut self) {
+        self.prevalidate_pending_misrouted_requeues();
+        self.flush_pending_misrouted_requeues_bounded(PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET);
+    }
+
     /// Queue a misrouted task for bounded repair when backlog allows.
     ///
     /// If the deferred backlog cap is reached, fall back to synchronous repair
@@ -2197,6 +2256,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// remains memory-bounded.
     #[inline]
     fn defer_or_repair_misroute(&mut self, prio: usize, target_cpu: usize, id: TaskId) {
+        let Some((prio, target_cpu)) = self.resolve_pending_misroute_requeue(prio, target_cpu, id)
+        else {
+            return;
+        };
         if self.pending_misrouted_requeues.len() < PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP {
             self.pending_misrouted_requeues.push((prio, target_cpu, id));
             return;
@@ -2374,10 +2437,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 }
             }
         };
-
-        // Keep cleanup bounded so the picker path remains short under heavy
-        // misroute pressure.
-        self.flush_pending_misrouted_requeues_bounded(PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET);
 
         let next_id = next_id?;
 
@@ -2679,8 +2738,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         for _ in 0..TERMINATE_CURRENT_SWITCH_RETRY_BUDGET {
             if let Some(switch) = self.prepare_schedule() {
+                self.run_pending_misroute_repair_maintenance();
                 return switch;
             }
+            self.run_pending_misroute_repair_maintenance();
             core::hint::spin_loop();
         }
 
@@ -5142,7 +5203,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_schedule_defers_misroute_ipi_to_pending_prepare_queue() {
+    fn test_prepare_schedule_defers_misroute_repair_until_maintenance() {
         let _g = init_test_env();
 
         let mut sched = types::Scheduler::<MockRuntime>::new();
@@ -5190,27 +5251,47 @@ mod tests {
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9102);
 
-        // No local idle task exists, so prepare_schedule returns None after
-        // requeueing the misrouted task and requesting a remote nudge.
+        // No local idle task exists, so prepare_schedule returns None and defers
+        // misroute repair to the maintenance pass.
         let switch = sched.prepare_schedule();
         assert!(
             switch.is_none(),
             "prepare_schedule should return None when only misrouted work exists and no idle task"
         );
-        assert_eq!(
-            sched.drain_pending_prepare_schedule_ipis(),
-            alloc::vec![1usize],
-            "prepare_schedule should defer misroute nudge to pending_prepare_schedule_ipis"
+        assert!(
+            sched.drain_pending_prepare_schedule_ipis().is_empty(),
+            "prepare_schedule picker path should not perform deferred misroute repair or queue repair IPIs"
         );
         assert!(
             sched.pending_wake_ipis.is_empty(),
             "misroute IPIs should not be mixed into pending_wake_ipis"
         );
         assert!(
+            sched
+                .pending_misrouted_requeues
+                .iter()
+                .any(|&(_, target_cpu, tid)| target_cpu == 1 && tid == 9102),
+            "misrouted task should be queued for deferred repair maintenance"
+        );
+        assert!(
+            !sched.state.per_cpu[1].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 9102),
+            "target CPU runq should remain unchanged until maintenance runs"
+        );
+
+        sched.run_pending_misroute_repair_maintenance();
+
+        assert_eq!(
+            sched.drain_pending_prepare_schedule_ipis(),
+            alloc::vec![1usize],
+            "misroute maintenance should queue the deferred repair nudge"
+        );
+        assert!(
             sched.state.per_cpu[1].runq[TaskPriority::Normal as usize]
                 .iter()
                 .any(|&tid| tid == 9102),
-            "misrouted task should be moved to target CPU runq"
+            "misroute maintenance should move the task to the target CPU runq"
         );
     }
 
@@ -5258,7 +5339,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_schedule_bounds_misroute_repair_work_per_call() {
+    fn test_misroute_repair_maintenance_is_bounded_per_call() {
         let _g = init_test_env();
 
         let mut sched = types::Scheduler::<MockRuntime>::new();
@@ -5314,21 +5395,104 @@ mod tests {
         assert!(switch.is_none());
         assert!(
             !sched.pending_misrouted_requeues.is_empty(),
-            "misroute repairs should be deferred when work exceeds per-call repair budget"
+            "prepare_schedule should defer misroute repairs into maintenance backlog"
         );
+        assert_eq!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len(),
+            0,
+            "prepare_schedule picker path should not directly repair deferred misroutes"
+        );
+
+        sched.run_pending_misroute_repair_maintenance();
+
         assert!(
             sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len()
                 <= PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET,
-            "prepare_schedule should only repair up to PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET misroutes per call"
+            "maintenance should only repair up to PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET misroutes per call"
         );
 
-        // Repeated calls should drain deferred work.
+        // Repeated maintenance passes should drain deferred work.
         for _ in 0..4 {
-            let _ = sched.prepare_schedule();
+            sched.run_pending_misroute_repair_maintenance();
         }
         assert!(
             sched.pending_misrouted_requeues.is_empty(),
-            "deferred misroute backlog should drain across subsequent prepare_schedule calls"
+            "deferred misroute backlog should drain across maintenance passes"
+        );
+    }
+
+    #[test]
+    fn test_misroute_repair_maintenance_drops_non_runnable_entries() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.mark_cpu_online(1);
+
+        // Current task on CPU 0.
+        let current_task = make_task(9300, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current_task));
+        sched.state.per_cpu[0].current = Some(9300);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9300,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+
+        // Runnable task incorrectly queued on CPU 0 but pinned to CPU 1.
+        let misrouted = make_task(9301, TaskState::Runnable, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(misrouted));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9301,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(1),
+            last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9301);
+
+        let switch = sched.prepare_schedule();
+        assert!(switch.is_none());
+        assert_eq!(sched.pending_misrouted_requeues.len(), 1);
+
+        if let Some(sf) = sched.state.get_task_mut(9301) {
+            sf.state = TaskState::Dead;
+        }
+
+        sched.run_pending_misroute_repair_maintenance();
+
+        assert!(
+            sched.pending_misrouted_requeues.is_empty(),
+            "maintenance prevalidation should drop non-runnable deferred misroutes"
+        );
+        assert!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize]
+                .iter()
+                .all(|&tid| tid != 9301),
+            "dropped deferred entry should not be re-enqueued"
+        );
+        assert!(
+            sched.drain_pending_prepare_schedule_ipis().is_empty(),
+            "dropped deferred entry should not queue an IPI"
         );
     }
 
