@@ -11,10 +11,10 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use abi::errors::Errno;
-use abi::syscall::{PollHandle, poll_flags};
 use abi::driver_interface::DriverClass;
+use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
+use abi::syscall::{PollHandle, poll_flags};
 use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use binding::{match_binding, mount_hint};
 use catalog::Catalog;
@@ -221,18 +221,10 @@ fn run_daemon_mode() -> ! {
 
         let mut pollfds: Vec<PollHandle> = Vec::new();
         if let Some(fd) = devices_watch_fd {
-            pollfds.push(PollHandle {
-                handle: fd as i32,
-                events: poll_flags::POLLIN,
-                revents: 0,
-            });
+            pollfds.push(PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 });
         }
         if let Some(fd) = inbox_fd {
-            pollfds.push(PollHandle {
-                handle: fd as i32,
-                events: poll_flags::POLLIN,
-                revents: 0,
-            });
+            pollfds.push(PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 });
         }
 
         let poll_result = vfs_poll(&mut pollfds, RECONCILE_TIMEOUT_MS);
@@ -246,7 +238,8 @@ fn run_daemon_mode() -> ! {
                     reconcile_due = true;
                 }
                 for p in &pollfds {
-                    if p.revents & (poll_flags::POLLERR | poll_flags::POLLHUP | poll_flags::POLLNVAL)
+                    if p.revents
+                        & (poll_flags::POLLERR | poll_flags::POLLHUP | poll_flags::POLLNVAL)
                         != 0
                     {
                         warn!(
@@ -256,21 +249,23 @@ fn run_daemon_mode() -> ! {
                         reconcile_due = true;
                     }
                 }
-                if let Some(fd) = devices_watch_fd
-                    && pollfds.iter().any(|p| {
-                        p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0
-                    })
-                {
-                    drain_watch_fd(fd);
-                    reconcile_due = true;
-                }
-                if let Some(fd) = inbox_fd
-                    && pollfds
+                if let Some(fd) = devices_watch_fd {
+                    if pollfds
                         .iter()
                         .any(|p| p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0)
-                {
-                    drain_job_exit_messages(&mut drivers, &mut observed_pids);
-                    register_observers_for_running(&mut drivers, &mut observed_pids);
+                    {
+                        drain_watch_fd(fd);
+                        reconcile_due = true;
+                    }
+                }
+                if let Some(fd) = inbox_fd {
+                    if pollfds
+                        .iter()
+                        .any(|p| p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0)
+                    {
+                        drain_job_exit_messages(&mut drivers, &mut observed_pids);
+                        register_observers_for_running(&mut drivers, &mut observed_pids);
+                    }
                 }
             }
             Err(err) => {
