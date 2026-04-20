@@ -224,7 +224,7 @@ pub unsafe fn exit_current(code: i32) {
         hook(code);
     } else {
         // Fallback if no scheduler
-        crate::kprintln!("exit_current called without scheduler!");
+        crate::kerror!("exit_current called without scheduler!");
     }
 }
 

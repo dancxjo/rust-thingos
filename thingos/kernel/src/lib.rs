@@ -83,7 +83,7 @@ pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
     );
 
     if stack_result == crate::sched::StackFaultResult::Overflow {
-        crate::kprintln!("STACK: overflow at va=0x{:x} (task {})", addr, task_name);
+        crate::kerror!("STACK: overflow at va=0x{:x} (task {})", addr, task_name);
     }
 
     unsafe {

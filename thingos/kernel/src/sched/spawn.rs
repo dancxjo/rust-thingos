@@ -1188,7 +1188,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     // These take precedence over stdio/inherited defaults for the same slots.
     for remap in fd_remap {
         if let Err(e) = handle_table.dup2(remap.src_handle, remap.dst_handle) {
-            crate::kprintln!(
+            crate::kwarn!(
                 "SPAWN: FD remap failed: {} -> {} (errno {:?})",
                 remap.src_handle,
                 remap.dst_handle,
@@ -1521,7 +1521,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // Step 6b: Apply explicit FD remappings.
     for remap in fd_remap {
         if let Err(e) = handle_table.dup2(remap.src_handle, remap.dst_handle) {
-            crate::kprintln!(
+            crate::kwarn!(
                 "SPAWN: FD remap failed: {} -> {} (errno {:?})",
                 remap.src_handle,
                 remap.dst_handle,

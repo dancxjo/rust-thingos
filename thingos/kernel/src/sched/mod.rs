@@ -2225,7 +2225,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let cpu_idx = current_cpu_index::<R>();
         let real_cpu_id = rt.current_cpu_id().0 as usize;
         if cpu_idx != real_cpu_id {
-            crate::kprintln!(
+            crate::kerror!(
                 "FATAL GS CORRUPTION: Core {} thinks it is index {} via GS!",
                 real_cpu_id,
                 cpu_idx
