@@ -52,6 +52,10 @@ fn get_active_ui() -> alloc::string::String {
     "terminal".to_string()
 }
 
+fn try_port_handle_to_fd(port: PortHandle) -> Option<u32> {
+    vfs_handle_from_port(port).ok()
+}
+
 #[stem::main]
 fn main(packed_handles: usize) -> ! {
     let packed = packed_handles as u64;
@@ -116,16 +120,8 @@ fn main(packed_handles: usize) -> ! {
         None
     };
 
-    let bloom_evt_fd: Option<u32> = if bloom_evt_write != 0 {
-        vfs_handle_from_port(bloom_evt_write).ok()
-    } else {
-        None
-    };
-    let evt_input_echo_fd: Option<u32> = if evt_input_echo_write != 0 {
-        vfs_handle_from_port(evt_input_echo_write).ok()
-    } else {
-        None
-    };
+    let bloom_evt_fd = try_port_handle_to_fd(bloom_evt_write);
+    let evt_input_echo_fd = try_port_handle_to_fd(evt_input_echo_write);
 
     loop {
         let events = match ws.wait(None::<stem::time::Duration>) {

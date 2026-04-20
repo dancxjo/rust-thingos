@@ -175,7 +175,8 @@ pub fn msg_broadcast(pgid: u32, kind: KindId, payload: &[u8]) -> Result<Broadcas
 /// Open the calling process inbox as a pollable/readable VFS FD.
 ///
 /// This uses the procfs path-open model (`/proc/self/inbox`) so callers can
-/// combine inbox readiness with regular files and channel FDs in `SYS_FS_POLL`.
+/// combine inbox readiness with regular files and channel FDs in `vfs_poll`.
+/// The returned FD also supports `vfs_read` (one message payload per read).
 pub fn msg_inbox_open_self() -> Result<u32, Errno> {
     crate::syscall::vfs::vfs_open("/proc/self/inbox", O_RDONLY)
 }

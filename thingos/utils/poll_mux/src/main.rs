@@ -82,8 +82,8 @@ fn main(_arg: usize) -> ! {
     assert!(fds[1].revents & poll_flags::POLLIN != 0, "Expected POLLIN on port");
 
     // 9. Add one message to our own inbox and verify inbox FD readiness.
-    let kind = KindId([0u8; 16]);
-    msg_send(stem::syscall::getpid(), kind, b"inbox").expect("msg_send self failed");
+    let inbox_test_kind = KindId([0u8; 16]);
+    msg_send(stem::syscall::getpid(), inbox_test_kind, b"inbox").expect("msg_send self failed");
 
     // 10. Mixed poll: pipe + port + inbox + VFS file all at once.
     //     Pipe (index 0), port (index 1), and inbox (index 2) have unread data;
