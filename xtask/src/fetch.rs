@@ -208,7 +208,7 @@ fn fetch_fonts(assets: &Path) -> Result<()> {
         let _ = fs::remove_dir_all(fonts_dir.join("ttf"));
     }
 
-    let noto_fonts = [
+    let noto_fonts: &[(&'static str, &'static str)] = &[
         (
             "NotoSans-Regular.ttf",
             "https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf",
@@ -227,18 +227,30 @@ fn fetch_fonts(assets: &Path) -> Result<()> {
         ),
     ];
 
-    for (name, url) in noto_fonts {
-        let dest = fonts_dir.join(name);
-        if !dest.exists() {
-            println!("    Downloading {name}...");
-            if let Err(e) = download_file(url, &dest) {
-                eprintln!(
-                    "    [WARNING] Failed to download {}: {}. Creating placeholder.",
-                    name, e
-                );
-                fs::write(&dest, b"PLACEHOLDER FONT")?;
-            }
-        }
+    // Dispatch each independent font download as a concurrent vine so all four
+    // requests fly in parallel instead of serialising on network latency.
+    let handles: Vec<std::thread::JoinHandle<Result<()>>> = noto_fonts
+        .iter()
+        .map(|&(name, url)| {
+            let dest = fonts_dir.join(name);
+            std::thread::spawn(move || -> Result<()> {
+                if !dest.exists() {
+                    println!("    Downloading {name}...");
+                    if let Err(e) = download_file(url, &dest) {
+                        eprintln!(
+                            "    [WARNING] Failed to download {}: {}. Creating placeholder.",
+                            name, e
+                        );
+                        fs::write(&dest, b"PLACEHOLDER FONT")?;
+                    }
+                }
+                Ok(())
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().map_err(|_| anyhow::anyhow!("font download vine panicked"))??;
     }
 
     let dseg_dest = fonts_dir.join("DSEG7Classic-Regular.ttf");
