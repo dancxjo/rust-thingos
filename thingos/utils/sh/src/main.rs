@@ -481,14 +481,14 @@ fn prompt(last_status: Option<i32>) {
         Ok(n) => {
             let cwd = core::str::from_utf8(&buf[..n]).unwrap_or("/");
             let out = format!(
-                "\x1B[1;95mTHING\x1B[0m\x1B[1;96m-OS\x1B[0m \x1B[2;94m[\x1B[0m{}\x1B[2;94m]\x1B[0m \x1B[1;93m{}\x1B[0m \x1B[1;96m⚡\x1B[0m ",
+                "\x1B[1;95mTHING\x1B[0m\x1B[1;96m-OS\x1B[0m \x1B[2;94m[\x1B[0m{}\x1B[2;94m]\x1B[0m \x1B[1;93m{}\x1B[0m \x1B[1;96m▶\x1B[0m ",
                 status, cwd
             );
             write_str(&out);
         }
         Err(_) => {
             let out = format!(
-                "\x1B[1;95mTHING\x1B[0m\x1B[1;96m-OS\x1B[0m \x1B[2;94m[\x1B[0m{}\x1B[2;94m]\x1B[0m \x1B[1;96m⚡\x1B[0m ",
+                "\x1B[1;95mTHING\x1B[0m\x1B[1;96m-OS\x1B[0m \x1B[2;94m[\x1B[0m{}\x1B[2;94m]\x1B[0m \x1B[1;96m▶\x1B[0m ",
                 status
             );
             write_str(&out);
