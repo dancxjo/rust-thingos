@@ -5435,7 +5435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_lookup_and_churn_without_sorted_insertion() {
+    fn test_registry_rapid_create_exit_churn() {
         let _g = init_test_env();
         crate::task::registry::init::<MockRuntime>();
         let mut sched = types::Scheduler::<MockRuntime>::new();

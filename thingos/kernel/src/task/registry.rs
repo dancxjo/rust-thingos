@@ -36,16 +36,27 @@ impl<R: BootRuntime> ThreadRegistry<R> {
     }
 
     pub fn get(&self, id: u64) -> Option<&Thread<R>> {
-        self.get_index(id).and_then(|idx| self.threads.get(idx)).map(|thread| &**thread)
+        let idx = self.get_index(id)?;
+        let thread = self.threads.get(idx)?;
+        if thread.id != id {
+            return None;
+        }
+        Some(&**thread)
     }
 
     pub fn get_mut(&mut self, id: u64) -> Option<&mut Thread<R>> {
-        self.get_index(id).and_then(|idx| self.threads.get_mut(idx)).map(|thread| &mut **thread)
+        let idx = self.get_index(id)?;
+        let thread = self.threads.get_mut(idx)?;
+        if thread.id != id {
+            return None;
+        }
+        Some(&mut **thread)
     }
 
     pub fn remove(&mut self, id: u64) -> Option<Box<Thread<R>>> {
         let idx = self.thread_index_by_id.remove(&id)?;
         let removed = self.threads.swap_remove(idx);
+        debug_assert_eq!(removed.id, id, "registry index map must match removed thread id");
         if idx < self.threads.len() {
             let moved_id = self.threads[idx].id;
             self.thread_index_by_id.insert(moved_id, idx);
