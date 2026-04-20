@@ -417,18 +417,27 @@ where
     let host = url.host.clone();
     let req_bytes = request.as_bytes().to_vec();
 
-    // We do the TLS connection setup in the main thread so we can return errors immediately.
-    let mut tcp = TcpStream::connect(&host, url.port)?;
-
     // To handle the TLS context borrowing locally in the background thread,
     // we spawn a native stem task that will perform the TLS read loop.
     let _ = spawn_task_detached(move || {
+        let mut tcp = match TcpStream::connect(&host, url.port) {
+            Ok(t) => t,
+            Err(e) => {
+                let msg = format!("ERR: http connect failed: {}", e);
+                let _ = port_send_all(write_handle, msg.as_bytes());
+                let _ = port_close(write_handle);
+                return;
+            }
+        };
+        debug!("http: background task: TCP connected to {}", host);
+
         let transport = TcpTransport { inner: tcp };
         let mut record_read_buf = [0u8; TLS_RECORD_READ_BUF_SIZE];
         let mut record_write_buf = [0u8; TLS_RECORD_WRITE_BUF_SIZE];
         let mut tls = TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
 
         let config = TlsConfig::new().with_server_name(&host).enable_rsa_signatures();
+        debug!("http: background task: starting TLS handshake with {}", host);
         let seed = match build_tls_seed() {
             Ok(s) => s,
             Err(e) => {
@@ -442,10 +451,12 @@ where
 
         if let Err(e) = tls.open(TlsContext::new(&config, UnsecureProvider::new::<S>(rng))) {
             let msg = format!("ERR: https handshake failed: {:?}", e);
+            warn!("http: background task: {}", msg);
             let _ = port_send_all(write_handle, msg.as_bytes());
             let _ = port_close(write_handle);
             return;
         }
+        debug!("http: background task: TLS handshake complete for {}", host);
 
         let mut offset = 0usize;
         while offset < req_bytes.len() {
@@ -525,12 +536,12 @@ where
     let mut headers_done = false;
     let deadline_ns = deadline_after_ms(HEADER_READ_TIMEOUT_MS);
 
-    // Read chunks from the port until we have all the headers
     for attempt in 0..MAX_HEADER_READ_ITERATIONS {
         if stem::syscall::monotonic_ns() >= deadline_ns {
             warn!("http: https header read timed out after {} iterations", attempt);
             break;
         }
+        trace!("http: waiting for header data from port (attempt={})", attempt);
         match port_recv(read_handle, &mut buf) {
             Ok(0) | Err(abi::errors::Errno::EPIPE) => {
                 // Port closed early

@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use kernel::kinfo;
+use kernel::kdebug;
 
 pub const IRQ_TIMER_VECTOR: u8 = 0x20;
 pub const IRQ_PAUSE_DUMP_VECTOR: u8 = 0x31;

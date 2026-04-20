@@ -439,20 +439,20 @@ pub fn diag_enabled() -> bool {
 }
 
 /// Required boot signals that must ALL appear (order irrelevant).
-/// Each entry is a list of acceptable alternatives - pass if ANY in the group matches.
-/// These signals now use [INFO] prefix for critical boot milestones.
+/// Each entry is a list of substrings that must all be present.
+/// Keep these level-agnostic so INFO/DEBUG demotions don't break readiness checks.
 pub const REQUIRED_BOOT_SIGNALS: &[&[&str]] = &[
-    // Kernel start - now uses INFO level
-    &["[INFO]", "thing-os kernel"],
+    // Kernel start marker
+    &["thing-os kernel"],
     // SIMD init (replaces legacy paging boundary signal)
-    &["[INFO]", "Initializing SIMD"],
+    &["Initializing SIMD"],
     // Memory map / allocator
-    &["[INFO]", "Frame allocator initialized"],
-    &["[INFO]", "Initializing global allocator"],
+    &["Frame allocator initialized"],
+    &["Initializing global allocator"],
     // Tasking bring-up
-    &["[INFO]", "Initializing tasking"],
-    &["[INFO]", "Scheduler initialized"],
-    &["[INFO]", "Entering scheduler loop"],
+    &["Initializing tasking"],
+    &["Scheduler initialized"],
+    &["Entering scheduler loop"],
 ];
 
 /// Liveness signals - at least one of these must appear.

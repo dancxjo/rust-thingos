@@ -77,16 +77,16 @@ impl Supervisor {
         }
 
         if let Some(cmdline) = cmdline_str {
-            info!("SPROUT: Parsed command line: '{}'", cmdline);
+            stem::debug!("SPROUT: Parsed command line: '{}'", cmdline);
             for part in cmdline.split(|c| c == ' ' || c == '\n' || c == '\r') {
                 if part == "display=bootfb" {
                     force_bootfb = true;
-                    info!("SPROUT: Detected 'display=bootfb' command line argument");
+                    stem::debug!("SPROUT: Detected 'display=bootfb' command line argument");
                 }
             }
         }
 
-        info!("SPROUT: FORCING display=bootfb for diagnostic test!");
+        stem::debug!("SPROUT: FORCING display=bootfb for diagnostic test!");
         force_bootfb = true;
 
         Config { force_bootfb }
@@ -96,19 +96,19 @@ impl Supervisor {
         stem::debug!("SPROUT: Supervisor session started (MINIMAL MODE)");
 
         // Stage 1: Launch Serial Shell
-        info!("SPROUT: Launching serial shell...");
+        stem::debug!("SPROUT: Launching serial shell...");
         setup_serial_shell(self.tasks.clone());
 
         // Stage 2: Start cambium for driver discovery.
-        info!("SPROUT: Spawning cambium for driver discovery...");
+        stem::debug!("SPROUT: Spawning cambium for driver discovery...");
         self.spawn_cambium();
 
         // Stage 3: Start network stack.
-        info!("SPROUT: Spawning netd...");
+        stem::debug!("SPROUT: Spawning netd...");
         self.spawn_netd();
 
         // Stage 4: Mount httpsd (HTTPS VFS provider).
-        info!("SPROUT: Spawning httpsd...");
+        stem::debug!("SPROUT: Spawning httpsd...");
         self.spawn_httpsd();
 
         // Stage 5: Spawn health-monitoring vine for shell restarts.
@@ -182,7 +182,7 @@ impl Supervisor {
         // but for now cambium just spawns drivers.
         match stem::syscall::spawn_process("/bin/cambium", 0) {
             Ok(pid) => {
-                info!("SPROUT: Spawned cambium (PID={})", pid);
+                stem::debug!("SPROUT: Spawned cambium (PID={})", pid);
                 let mut tasks = self.tasks.lock();
                 tasks.push(ManagedTask {
                     name: "cambium".to_string(),
@@ -206,7 +206,7 @@ impl Supervisor {
     fn spawn_netd(&mut self) {
         match stem::syscall::spawn_process("/bin/netd", 0) {
             Ok(pid) => {
-                info!("SPROUT: Spawned netd (PID={})", pid);
+                stem::debug!("SPROUT: Spawned netd (PID={})", pid);
                 let mut tasks = self.tasks.lock();
                 tasks.push(ManagedTask {
                     name: "netd".to_string(),
@@ -223,7 +223,7 @@ impl Supervisor {
     fn spawn_httpsd(&mut self) {
         match stem::syscall::spawn_process("/bin/httpsd", 0) {
             Ok(pid) => {
-                info!("SPROUT: Spawned httpsd (PID={})", pid);
+                stem::debug!("SPROUT: Spawned httpsd (PID={})", pid);
                 let mut tasks = self.tasks.lock();
                 tasks.push(ManagedTask {
                     name: "httpsd".to_string(),
@@ -256,7 +256,7 @@ impl Supervisor {
                     if t.resp_fd.is_none() {
                         if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(t.drv_resp_read) {
                             t.resp_fd = Some(fd);
-                            stem::info!(
+                            stem::debug!(
                                 "SPROUT: Bridged resp_port {} -> FD {} for task '{}'",
                                 t.drv_resp_read,
                                 fd,

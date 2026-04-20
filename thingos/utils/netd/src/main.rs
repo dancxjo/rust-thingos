@@ -432,7 +432,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
 
         probe_round = probe_round.saturating_add(1);
         if probe_round == 1 || probe_round % 20 == 0 {
-            warn!(
+            debug!(
                 "NETD: No virtio VFS provider ready under {}[0..{}], retrying (round={})",
                 VIRTIO_PATH_PREFIX,
                 MAX_VIRTIO_UNITS.saturating_sub(1),

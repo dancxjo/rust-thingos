@@ -117,7 +117,7 @@ impl VirtioDevice {
         stem::debug!("VirtIO: allocating DMA command buffer...");
         let cmd_buf = device_alloc_dma(claim_handle, 1).map_err(|_| Errno::ENOMEM)?;
         let cmd_buf_phys = device_dma_phys(cmd_buf).map_err(|_| Errno::EFAULT)?;
-        stem::info!("VirtIO: cmd_buf virt=0x{:x} phys=0x{:x}", cmd_buf, cmd_buf_phys);
+        stem::debug!("VirtIO: cmd_buf virt=0x{:x} phys=0x{:x}", cmd_buf, cmd_buf_phys);
 
         stem::debug!("VirtIO: device::new complete");
         Ok(Self {
