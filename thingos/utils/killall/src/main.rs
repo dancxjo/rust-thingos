@@ -75,32 +75,34 @@ fn basename(path: &str) -> &str {
 fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p = pattern.as_bytes();
     let t = text.as_bytes();
-    let mut pi = 0usize;
-    let mut ti = 0usize;
-    let mut star_pi: Option<usize> = None;
-    let mut star_ti = 0usize;
+    let mut pattern_index = 0usize;
+    let mut text_index = 0usize;
+    let mut star_pattern_index: Option<usize> = None;
+    let mut star_text_index = 0usize;
 
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == t[ti] || p[pi] == b'?') {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == b'*' {
-            star_pi = Some(pi);
-            pi += 1;
-            star_ti = ti;
-        } else if let Some(s) = star_pi {
-            pi = s + 1;
-            star_ti += 1;
-            ti = star_ti;
+    while text_index < t.len() {
+        if pattern_index < p.len()
+            && (p[pattern_index] == t[text_index] || p[pattern_index] == b'?')
+        {
+            pattern_index += 1;
+            text_index += 1;
+        } else if pattern_index < p.len() && p[pattern_index] == b'*' {
+            star_pattern_index = Some(pattern_index);
+            pattern_index += 1;
+            star_text_index = text_index;
+        } else if let Some(star_index) = star_pattern_index {
+            pattern_index = star_index + 1;
+            star_text_index += 1;
+            text_index = star_text_index;
         } else {
             return false;
         }
     }
 
-    while pi < p.len() && p[pi] == b'*' {
-        pi += 1;
+    while pattern_index < p.len() && p[pattern_index] == b'*' {
+        pattern_index += 1;
     }
-    pi == p.len()
+    pattern_index == p.len()
 }
 
 fn pattern_matches_process(pattern: &str, proc: &ProcEntry) -> bool {
@@ -199,40 +201,53 @@ fn collect_processes() -> Vec<ProcEntry> {
     out
 }
 
-fn parse_args() -> Option<(u8, Vec<String>)> {
-    let len = argv_get(&mut []).ok()?;
+enum ParseArgsError {
+    InvalidArgs,
+    InvalidSignal(String),
+}
+
+fn parse_args() -> Result<(u8, Vec<String>), ParseArgsError> {
+    let len = argv_get(&mut []).map_err(|_| ParseArgsError::InvalidArgs)?;
     let mut buf = alloc::vec![0u8; len];
-    argv_get(&mut buf).ok()?;
+    argv_get(&mut buf).map_err(|_| ParseArgsError::InvalidArgs)?;
     let raw_args = stem::utils::parse_argv(&buf);
     if raw_args.len() < 2 {
-        return None;
+        return Err(ParseArgsError::InvalidArgs);
     }
 
     let mut args = Vec::new();
     for raw in raw_args.iter().skip(1) {
-        let arg = core::str::from_utf8(raw).ok()?;
+        let arg = core::str::from_utf8(raw).map_err(|_| ParseArgsError::InvalidArgs)?;
         args.push(arg.to_string());
     }
 
     let (sig, start) = if let Some(sig_str) = args[0].strip_prefix('-') {
-        let sig = parse_signal(sig_str)?;
+        let sig = parse_signal(sig_str)
+            .ok_or_else(|| ParseArgsError::InvalidSignal(sig_str.to_string()))?;
         (sig, 1usize)
     } else {
         (SIGTERM, 0usize)
     };
 
     if start >= args.len() {
-        return None;
+        return Err(ParseArgsError::InvalidArgs);
     }
 
-    Some((sig, args[start..].to_vec()))
+    Ok((sig, args[start..].to_vec()))
 }
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let (sig, patterns) = match parse_args() {
-        Some(v) => v,
-        None => {
+        Ok(v) => v,
+        Err(ParseArgsError::InvalidSignal(sig)) => {
+            let msg = alloc::format!("killall: invalid signal: -{sig}\n");
+            write_stderr(&msg);
+            write_stderr("Usage: killall [-<signal>] <pattern> [<pattern> ...]\n");
+            exit(1);
+        }
+        Err(ParseArgsError::InvalidArgs) => {
+            write_stderr("killall: at least one pattern is required\n");
             write_stderr("Usage: killall [-<signal>] <pattern> [<pattern> ...]\n");
             exit(1);
         }
@@ -263,7 +278,7 @@ fn main(_arg: usize) -> ! {
         exit(1);
     }
 
-    let mut exit_code = 0i32;
+    let mut exit_code = 0;
     for pid in matched_pids {
         if let Err(e) = kill(pid, sig) {
             let msg = alloc::format!("killall: {pid}: {e:?}\n");
