@@ -2829,15 +2829,15 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     if let Some(sf) = self.state.get_task_mut(stolen_id) {
                         sf.wake_cpu = Some(local_cpu);
                     }
+                    let Some(stolen_priority) =
+                        self.state.get_task(stolen_id).map(|sf| sf.priority as usize)
+                    else {
+                        continue;
+                    };
                     self.state
                         .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
                     if enqueue_local_runq {
-                        let target_prio = self
-                            .state
-                            .get_task(stolen_id)
-                            .map(|sf| sf.priority as usize)
-                            .unwrap_or(p);
-                        self.state.enqueue_task(local_cpu, target_prio, stolen_id);
+                        self.state.enqueue_task(local_cpu, stolen_priority, stolen_id);
                         self.metrics.pushes += 1;
                     }
                     self.metrics.steals += 1;
