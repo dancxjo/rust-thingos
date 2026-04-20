@@ -101,7 +101,6 @@ pub trait ArchRuntime {
     /// Sets the idle task state for this CPU.
     fn set_idle_task_current(&self, _idle: bool) {}
 
-
     // Tasking - defaults
     fn init_kernel_context(
         &self,
@@ -256,11 +255,7 @@ struct ConsoleBuffer {
 
 impl ConsoleBuffer {
     const fn new() -> Self {
-        Self {
-            data: [0; 1024],
-            head: 0,
-            tail: 0,
-        }
+        Self { data: [0; 1024], head: 0, tail: 0 }
     }
 
     fn push(&mut self, byte: u8) {
@@ -318,10 +313,7 @@ impl LimineRuntimeData {
     }
 
     pub fn phys_to_virt_offset(&self) -> u64 {
-        crate::requests::HHDM_REQUEST
-            .get_response()
-            .map(|r| r.offset())
-            .unwrap_or(0)
+        crate::requests::HHDM_REQUEST.get_response().map(|r| r.offset()).unwrap_or(0)
     }
 
     pub fn modules(&self) -> &'static [BootModuleDesc] {
@@ -333,9 +325,7 @@ impl LimineRuntimeData {
     }
 
     pub fn acpi_rsdp(&self) -> Option<u64> {
-        crate::requests::RSDP_REQUEST
-            .get_response()
-            .map(|r| r.address() as u64)
+        crate::requests::RSDP_REQUEST.get_response().map(|r| r.address() as u64)
     }
 
     pub fn dtb_ptr(&self) -> Option<u64> {
@@ -640,10 +630,7 @@ impl<A: ArchRuntime + 'static> BootTasking for Runtime<A> {
         from_user_fs_base: *mut u64,
         to_user_fs_base: u64,
     ) {
-        unsafe {
-            self.arch
-                .switch_with_tls(from, to, to_tid, from_user_fs_base, to_user_fs_base)
-        }
+        unsafe { self.arch.switch_with_tls(from, to, to_tid, from_user_fs_base, to_user_fs_base) }
     }
 
     fn get_user_tls_base(&self) -> u64 {
@@ -679,8 +666,7 @@ impl<A: ArchRuntime + 'static> BootTasking for Runtime<A> {
         kind: MapKind,
         allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()> {
-        self.arch
-            .map_page(aspace, virt, phys, perms, kind, allocator)
+        self.arch.map_page(aspace, virt, phys, perms, kind, allocator)
     }
 
     fn unmap_page(&self, aspace: Self::AddressSpace, virt: u64) -> Result<Option<u64>, ()> {

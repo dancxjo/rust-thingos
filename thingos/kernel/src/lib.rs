@@ -92,7 +92,13 @@ pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kernel_handle_exception(rip: u64, error_code: u64, rsp: u64, _cs: u64, kind: u64) {
+pub extern "C" fn kernel_handle_exception(
+    rip: u64,
+    error_code: u64,
+    rsp: u64,
+    _cs: u64,
+    kind: u64,
+) {
     let exception_name = match kind {
         0 => "Divide-by-zero",
         1 => "Debug",
