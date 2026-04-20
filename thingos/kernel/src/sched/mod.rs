@@ -2071,6 +2071,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                                 cpu
                             }
                             crate::task::Affinity::Any => {
+                                // One-shot hint: consume the recorded requested sleep
+                                // duration as the task leaves the sleep queue.
                                 let requested_sleep_ticks =
                                     self.sleep_duration_ticks_by_tid.remove(&tid);
                                 let preferred =
@@ -8387,6 +8389,7 @@ mod tests {
             state: TaskState::Blocked,
             priority: TaskPriority::Normal,
             affinity: Affinity::Any,
+            // last_cpu differs from wake_cpu to force the waker-locality tie-break.
             last_cpu: Some(1),
             wake_cpu: Some(0),
             run_cpu: None,
