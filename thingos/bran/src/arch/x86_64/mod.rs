@@ -801,6 +801,10 @@ impl ArchRuntime for X86_64Runtime {
         }
     }
 
+    fn activate_onscreen_terminal(&self) {
+        idt::activate_terminal_and_spawn_shell();
+    }
+
     fn is_idle_task_current(&self) -> bool {
         let is_idle: u64;
         unsafe {

@@ -241,6 +241,9 @@ pub trait ArchRuntime {
     fn fill_entropy(&self, _dst: &mut [u8]) -> usize {
         0
     }
+
+    /// Activates the onscreen terminal if supported.
+    fn activate_onscreen_terminal(&self) {}
 }
 
 // --- Generic Runtime ---
@@ -481,6 +484,10 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     }
     fn irq_restore(&self, state: IrqState) {
         self.arch.irq_restore(state)
+    }
+
+    fn activate_onscreen_terminal(&self) {
+        self.arch.activate_onscreen_terminal()
     }
 }
 

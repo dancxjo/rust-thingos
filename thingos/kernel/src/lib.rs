@@ -522,6 +522,9 @@ pub trait BootRuntimeBase: 'static {
 
     /// Sets the idle task state for the current CPU.
     fn set_idle_task_current(&self, _idle: bool) {}
+
+    /// Activates the onscreen terminal if supported by the runtime.
+    fn activate_onscreen_terminal(&self) {}
 }
 
 pub trait BootRuntime: BootRuntimeBase + Sized + 'static {
@@ -837,7 +840,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             fb.bpp,
             fb.format
         );
-        paint_bootfb_probe(fb);
+        // paint_bootfb_probe(fb);
     }
 
     contract!("thing-os kernel starting...");
@@ -1110,9 +1113,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         }
     }
 
-    // All initial services have been spawned.  Transition out of early-boot
-    // mode so the scheduler resumes normal SMP placement and IPI delivery.
+    // Transition out of early-boot mode.
     crate::sched::end_bringup::<R>();
+
+    // Automatically bring up the F12 terminal as soon as we reach the main loop.
+    runtime.activate_onscreen_terminal();
 
     contract!("Entering scheduler loop.");
     loop {
