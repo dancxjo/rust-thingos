@@ -5494,8 +5494,8 @@ mod tests {
 
         // Keep a small hot set of thread IDs cycling through many create/exit
         // operations to stress index maintenance under churn.
-        const CHURN_ITERATIONS: usize = 512;
-        const CHURN_ACTIVE_TIDS: usize = 32;
+        const CHURN_ITERATIONS: usize = 512; // enough passes to repeatedly reshuffle slots
+        const CHURN_ACTIVE_TIDS: usize = 32; // small hot set maximizes remove/reinsert reuse
         for i in 0..CHURN_ITERATIONS {
             let tid = 5000 + (i % CHURN_ACTIVE_TIDS) as u64;
             if crate::task::registry::get_task::<MockRuntime>(tid).is_none() {
