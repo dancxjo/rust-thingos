@@ -339,7 +339,19 @@ fn run_provider(mount_point: &str) -> ! {
             }
         };
         let resp = dispatch(&mut provider, req.op, &req.payload);
-        let _ = lp.send_response(req.resp_port, resp);
+        loop {
+            match lp.send_response(req.resp_port, resp.clone()) {
+                Ok(_) => break,
+                Err(Errno::EAGAIN) => {
+                    stem::syscall::yield_now();
+                    continue;
+                }
+                Err(e) => {
+                    warn!("httpsd: failed to send response: {:?}", e);
+                    break;
+                }
+            }
+        }
     }
 
     stem::syscall::exit(0);

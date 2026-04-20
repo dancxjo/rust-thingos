@@ -491,8 +491,12 @@ where
                     let mut offset = 0;
                     while offset < n {
                         match port_send_all(write_handle, &buf[offset..n]) {
-                            Ok(0) | Err(_) => break,
                             Ok(written) => offset += written,
+                            Err(abi::errors::Errno::EAGAIN) => {
+                                stem::syscall::yield_now();
+                                continue;
+                            }
+                            Err(_) => break,
                         }
                     }
                     if offset < n {

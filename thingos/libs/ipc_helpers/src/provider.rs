@@ -54,7 +54,7 @@ pub struct ProviderRequest {
 }
 
 /// A response to be sent back to the kernel.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProviderResponse {
     /// 0 = OK, non-zero = errno.
     pub status: u8,

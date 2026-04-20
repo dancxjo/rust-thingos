@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicBool, Ordering};
 use kernel::{BootRuntime, BootRuntimeBase};
 use spin::Mutex;
@@ -42,6 +43,10 @@ enum AnsiState {
 pub struct FbConsole {
     fb: Framebuffer,
     glyphs: [Glyph; GLYPH_TABLE_LEN],
+    /// Lazily-populated cache for glyphs above U+00FF.
+    extended_glyphs: BTreeMap<u32, Glyph>,
+    /// Raw unifont hex data for on-demand glyph lookup.
+    unifont_data: &'static [u8],
     cursor_x: u32,
     cursor_y: u32,
     fg: u32,
@@ -66,10 +71,12 @@ unsafe impl Send for FbConsole {}
 
 impl FbConsole {
     pub fn new(fb: Framebuffer) -> Self {
-        let glyphs = load_unifont_ascii();
+        let (glyphs, unifont_data) = load_unifont_ascii();
         Self {
             fb,
             glyphs,
+            extended_glyphs: BTreeMap::new(),
+            unifont_data,
             cursor_x: 0,
             cursor_y: 0,
             fg: DEFAULT_FG,
@@ -201,8 +208,13 @@ impl FbConsole {
         let code = ch as u32;
         let glyph = if (code as usize) < GLYPH_TABLE_LEN {
             self.glyphs[code as usize]
+        } else if let Some(&g) = self.extended_glyphs.get(&code) {
+            g
         } else {
-            self.glyphs[b'?' as usize]
+            let g = lookup_unifont_glyph(self.unifont_data, code)
+                .unwrap_or(self.glyphs[b'?' as usize]);
+            self.extended_glyphs.insert(code, g);
+            g
         };
         let width = glyph.width as u32;
         if self.cursor_x.saturating_add(width) > self.fb.width {
@@ -509,7 +521,54 @@ fn empty_glyph() -> Glyph {
     Glyph { width: 8, bytes: [0; 32], len: 16 }
 }
 
-fn load_unifont_ascii() -> [Glyph; GLYPH_TABLE_LEN] {
+/// Parse a unifont hex bitmap line (after the ':') into a Glyph.
+fn parse_hex_glyph(hex: &[u8]) -> Option<Glyph> {
+    if hex.len() != 32 && hex.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0u8; 32];
+    let pairs = hex.len() / 2;
+    for i in 0..pairs {
+        bytes[i] = parse_hex_byte_pair(hex[i * 2], hex[i * 2 + 1])?;
+    }
+    Some(Glyph { width: if hex.len() == 32 { 8 } else { 16 }, bytes, len: pairs as u8 })
+}
+
+/// Search the raw unifont hex data for a specific codepoint and parse its glyph.
+fn lookup_unifont_glyph(data: &[u8], target: u32) -> Option<Glyph> {
+    let mut start = 0usize;
+    while start < data.len() {
+        let mut end = start;
+        while end < data.len() && data[end] != b'\n' {
+            end += 1;
+        }
+        let line = &data[start..end];
+        start = end.saturating_add(1);
+        if line.is_empty() {
+            continue;
+        }
+        let mut sep = 0usize;
+        while sep < line.len() && line[sep] != b':' {
+            sep += 1;
+        }
+        if sep == 0 || sep + 1 >= line.len() {
+            continue;
+        }
+        let Some(code) = parse_hex_u32(&line[..sep]) else {
+            continue;
+        };
+        if code == target {
+            return parse_hex_glyph(&line[sep + 1..]);
+        }
+        // The hex file is sorted; stop early if we've passed the target.
+        if code > target {
+            return None;
+        }
+    }
+    None
+}
+
+fn load_unifont_ascii() -> ([Glyph; GLYPH_TABLE_LEN], &'static [u8]) {
     let mut out = [empty_glyph(); GLYPH_TABLE_LEN];
     let fallback = fallback_glyph();
     out[b'?' as usize] = fallback;
@@ -519,7 +578,7 @@ fn load_unifont_ascii() -> [Glyph; GLYPH_TABLE_LEN] {
         .iter()
         .find(|m| m.name.ends_with("/unifont.hex") || m.name.ends_with("unifont.hex"));
     let Some(module) = unifont else {
-        return out;
+        return (out, &[]);
     };
     let data = module.bytes;
     let mut start = 0usize;
@@ -550,30 +609,11 @@ fn load_unifont_ascii() -> [Glyph; GLYPH_TABLE_LEN] {
         if (code as usize) >= GLYPH_TABLE_LEN {
             continue;
         }
-        let hex = &line[sep + 1..];
-        if hex.len() != 32 && hex.len() != 64 {
-            continue;
+        if let Some(g) = parse_hex_glyph(&line[sep + 1..]) {
+            out[code as usize] = g;
         }
-        let mut bytes = [0u8; 32];
-        let mut ok = true;
-        let pairs = hex.len() / 2;
-        for i in 0..pairs {
-            let hi = hex[i * 2];
-            let lo = hex[i * 2 + 1];
-            if let Some(v) = parse_hex_byte_pair(hi, lo) {
-                bytes[i] = v;
-            } else {
-                ok = false;
-                break;
-            }
-        }
-        if !ok {
-            continue;
-        }
-        out[code as usize] =
-            Glyph { width: if hex.len() == 32 { 8 } else { 16 }, bytes, len: pairs as u8 };
     }
-    out
+    (out, data)
 }
 
 pub fn init(fb: Framebuffer) {
