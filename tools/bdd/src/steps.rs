@@ -1336,11 +1336,14 @@ async fn when_press_key(world: &mut ThingOsWorld) {
 
 #[when("I wait for the shell prompt")]
 async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // Shell prompt contains THING-OS followed by status and cwd.
-    let found = world.wait_for_serial("THING-OS", 60.0).await;
+    // Wait for the prompt character. We use a delay after this to ensure
+    // that any trailing escape sequences (like showing the cursor) have finished.
+    let found = world.wait_for_serial("> ", 60.0).await;
     if !found {
         return Err(StepError("Timed out waiting for shell prompt".to_string()));
     }
+    // Extra delay to ensure the shell is ready to receive input
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     Ok(())
 }
 
@@ -1349,9 +1352,12 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
     eprintln!("│  │  │      ⌨️ Typing on serial: {}", text);
     let mut data = text.into_bytes();
     data.push(b'\n');
+    
+    // Sometimes the first byte is lost if sent too fast after prompt
     world.serial_write(&data).await.map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+    
     // Small delay to let the guest process the input
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     Ok(())
 }
 

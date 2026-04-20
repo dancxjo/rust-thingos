@@ -189,7 +189,7 @@ exclude = [
 panic = "abort"
 
 [profile.dev]
-panic = "abort"
+panic = "unwind"
 
 [profile.bench]
 debug = true

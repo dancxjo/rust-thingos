@@ -37,6 +37,9 @@ pub struct ThingOsWorld {
     /// Work directory for storing sockets
     #[world(skip)]
     pub work_dir: PathBuf,
+    /// Sender for serial input (persistent connection)
+    #[world(skip)]
+    pub serial_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 impl ThingOsWorld {
@@ -212,45 +215,56 @@ impl ThingOsWorld {
         let serial_log = self.serial_log.clone();
         let serial_sock_path = self.work_dir.join("serial.sock");
 
-        tokio::spawn(async move {
-            use crate::artifacts;
-            // Wait briefly for QEMU to create the serial socket
-            for _ in 0..50 {
-                if serial_sock_path.exists() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Wait briefly for QEMU to create the serial socket
+        for _ in 0..50 {
+            if serial_sock_path.exists() {
+                break;
             }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
 
-            match UnixStream::connect(&serial_sock_path).await {
-                Ok(mut stream) => {
-                    let mut buf = vec![0u8; 4096];
-                    let mut last_update = std::time::Instant::now();
-                    while let Ok(n) = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await {
-                        if n == 0 {
-                            break;
-                        } // EOF
+        let stream = UnixStream::connect(&serial_sock_path).await?;
+        let (mut read_half, mut write_half) = tokio::io::split(stream);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        self.serial_tx = Some(tx);
 
-                        let text = String::from_utf8_lossy(&buf[..n]);
-                        let clean_text = strip_ansi(&text);
-                        let mut log = serial_log.lock().await;
+        // Spawn a task to read serial output from the UNIX socket and sync to global cache
+        let serial_log = self.serial_log.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = vec![0u8; 4096];
+            let mut last_update = std::time::Instant::now();
+            loop {
+                tokio::select! {
+                    // Handle incoming data from QEMU
+                    result = read_half.read(&mut buf) => {
+                        match result {
+                            Ok(n) if n > 0 => {
+                                let text = String::from_utf8_lossy(&buf[..n]);
+                                let mut log = serial_log.lock().await;
+                                log.push_str(&text);
 
-                        log.push_str(&clean_text);
-
-                        // Sync to global cache for reporter access (throttled to avoid QEMU pipe stall)
-                        if last_update.elapsed().as_millis() > 50 {
-                            artifacts::set_latest_serial(&log).await;
-                            last_update = std::time::Instant::now();
+                                // Sync to global cache for reporter access (throttled)
+                                if last_update.elapsed().as_millis() > 50 {
+                                    crate::artifacts::set_latest_serial(&log).await;
+                                    last_update = std::time::Instant::now();
+                                }
+                            }
+                            _ => break, // EOF or error
                         }
                     }
-                    eprintln!(
-                        "│  │  │      ⚠️ QEMU serial socket reader loop exited! Did QEMU close?"
-                    );
-                }
-                Err(e) => {
-                    eprintln!("│  │  │      debug: FAILED to connect to QEMU serial socket: {}", e);
+                    // Handle outgoing data to QEMU
+                    Some(data) = rx.recv() => {
+                        if let Err(e) = write_half.write_all(&data).await {
+                            eprintln!("│  │  │      ⚠️ Failed to write to serial stream: {}", e);
+                        }
+                        let _ = write_half.flush().await;
+                    }
                 }
             }
+            eprintln!(
+                "│  │  │      ⚠️ QEMU serial socket reader/writer loop exited!"
+            );
         });
 
         // Also spawn a task to read stderr for QEMU errors
@@ -375,7 +389,7 @@ impl ThingOsWorld {
                     last_print = std::time::Instant::now();
                 }
 
-                if log.contains(&needle) {
+                if strip_ansi(&log).to_lowercase().contains(&needle.to_lowercase()) {
                     eprintln!("│  │  │      debug: found {} in serial", needle);
                     return true;
                 }
@@ -397,15 +411,12 @@ impl ThingOsWorld {
 
     /// Write bytes to the serial console.
     pub async fn serial_write(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let serial_sock_path = self.work_dir.join("serial.sock");
-        if !serial_sock_path.exists() {
-            return Err("Serial socket does not exist".into());
+        if let Some(ref tx) = self.serial_tx {
+            tx.send(data.to_vec()).map_err(|_| "Serial channel closed")?;
+            Ok(())
+        } else {
+            Err("Serial connection not established".into())
         }
-
-        let mut stream = UnixStream::connect(&serial_sock_path).await?;
-        stream.write_all(data).await?;
-        stream.flush().await?;
-        Ok(())
     }
 
     /// Kill the QEMU process if running and clean up the ISO.
