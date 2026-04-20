@@ -676,6 +676,9 @@ const PS2_STATUS_PORT: u16 = 0x64;
 const PS2_DATA_PORT: u16 = 0x60;
 const PS2_STATUS_OUTPUT_FULL: u8 = 0x01;
 const PS2_STATUS_AUX_DATA: u8 = 0x20;
+const PS2_SCANCODE_F12: u8 = 0x58;
+const PS2_SCANCODE_RELEASE_MASK: u8 = 0x80;
+const PS2_SCANCODE_KEY_MASK: u8 = 0x7F;
 
 #[inline]
 fn raw_inb(port: u16) -> u8 {
@@ -686,8 +689,9 @@ fn raw_inb(port: u16) -> u8 {
     value
 }
 
-fn capture_ps2_keyboard(max_reads: usize) -> (bool, usize) {
+fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, usize) {
     let mut pause_dump = false;
+    let mut f12_press = false;
     let mut captured = 0usize;
 
     for _ in 0..max_reads {
@@ -704,9 +708,14 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, usize) {
         if kernel::irq::ps2::buffer_scancode(byte) {
             pause_dump = true;
         }
+        let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
+        let scancode = byte & PS2_SCANCODE_KEY_MASK;
+        if !released && scancode == PS2_SCANCODE_F12 {
+            f12_press = true;
+        }
     }
 
-    (pause_dump, captured)
+    (pause_dump, f12_press, captured)
 }
 
 fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
@@ -722,10 +731,10 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
         }
 
         let byte = raw_inb(PS2_DATA_PORT);
-        let released = (byte & 0x80) != 0;
-        let scancode = byte & 0x7F;
+        let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
+        let scancode = byte & PS2_SCANCODE_KEY_MASK;
         let _ = kernel::irq::ps2::buffer_scancode(byte);
-        if !released && scancode == 0x58 {
+        if !released && scancode == PS2_SCANCODE_F12 {
             reboot = true;
         }
     }
@@ -738,7 +747,10 @@ fn capture_ps2_keyboard_irq() -> bool {
 }
 
 fn poll_ps2_keyboard_fallback() -> bool {
-    let (pause_dump, captured) = capture_ps2_keyboard(8);
+    let (pause_dump, f12_press, captured) = capture_ps2_keyboard(8);
+    if f12_press {
+        crate::console::activate_onscreen_terminal();
+    }
     if captured != 0 {
         kernel::irq::dispatch_irq(0x21);
     }
@@ -1041,7 +1053,10 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
     }
 
     let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let (pause_dump, captured) = capture_ps2_keyboard(32);
+    let (pause_dump, f12_press, captured) = capture_ps2_keyboard(32);
+    if f12_press {
+        crate::console::activate_onscreen_terminal();
+    }
 
     if captured != 0 {
         if count <= 3 || (count % 128 == 0) {

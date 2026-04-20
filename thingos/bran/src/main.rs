@@ -90,7 +90,8 @@ fn indicate_progress() {
                 bpp_bytes,
                 stride
             );
-            let _display = Framebuffer::new(&framebuffer);
+            let display = Framebuffer::new(&framebuffer);
+            crate::console::init(display);
 
             // Register disable callback (no-op now but keep for compatibility)
             kernel::syscall::handlers::register_console_disable(theme::disable);
