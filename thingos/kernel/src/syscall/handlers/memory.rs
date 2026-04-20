@@ -103,7 +103,7 @@ pub fn sys_vm_map(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
                         return Err(Errno::EINVAL);
                     }
                     if total_size > 1024 * 1024 {
-                        crate::kinfo!(
+                        crate::kdebug!(
                             "sys_vm_map: large backing file mapping offset={} len={} total_size={}",
                             offset,
                             len,

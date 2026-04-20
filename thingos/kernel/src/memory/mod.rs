@@ -33,17 +33,17 @@ pub fn init<R: crate::BootRuntime>(rt: &R) {
     let _modules = rt.modules();
     let offset = rt.phys_to_virt_offset();
 
-    crate::kdebug!("Memory map has {} entries", map.len());
+    crate::kinfo!("Memory map has {} entries", map.len());
     for (i, range) in map.iter().enumerate() {
         crate::ktrace!("  [{}] 0x{:x} - 0x{:x} ({:?})", i, range.start, range.end, range.kind);
     }
-    crate::kdebug!("HHDM Offset: 0x{:x}", offset);
+    crate::kinfo!("HHDM Offset: 0x{:x}", offset);
 
     // 1. Setup early frame allocator
     let bitmap = boot_frame_alloc::init(map, offset);
     let alloc = frame_alloc::FrameAllocator::new_from_boot(map, _modules, bitmap, offset);
 
-    crate::kdebug!("Frame allocator initialized with {} free frames", alloc.free_count());
+    crate::kinfo!("Frame allocator initialized with {} free frames", alloc.free_count());
 
     unsafe { FRAME_ALLOCATOR.init(alloc) };
 
@@ -130,7 +130,7 @@ pub unsafe fn map_user_page(virt: u64, phys: u64) -> Result<(), abi::errors::Err
     if let Some(hook) = unsafe { MAP_USER_PAGE_HOOK } {
         unsafe { hook(virt, phys) }.map_err(|e| e.to_errno())
     } else {
-        kinfo!("WARN: map_user_page called before hook installed (virt=0x{:x})", virt);
+        crate::kwarn!("map_user_page called before hook installed (virt=0x{:x})", virt);
         Err(abi::errors::Errno::EIO)
     }
 }
@@ -140,7 +140,7 @@ pub unsafe fn unmap_user_page(virt: u64) -> Result<(), abi::errors::Errno> {
     if let Some(hook) = unsafe { UNMAP_USER_PAGE_HOOK } {
         unsafe { hook(virt) }.map_err(|e| e.to_errno())
     } else {
-        kinfo!("WARN: unmap_user_page called before hook installed (virt=0x{:x})", virt);
+        crate::kwarn!("unmap_user_page called before hook installed (virt=0x{:x})", virt);
         Err(abi::errors::Errno::EIO)
     }
 }
@@ -167,7 +167,7 @@ pub unsafe fn map_user_page_with_perms(
     if let Some(hook) = unsafe { MAP_USER_PAGE_PERMS_HOOK } {
         unsafe { hook(virt, phys, perms) }.map_err(|e| e.to_errno())
     } else {
-        kinfo!("WARN: map_user_page_with_perms called before hook installed (virt=0x{:x})", virt);
+        crate::kwarn!("map_user_page_with_perms called before hook installed (virt=0x{:x})", virt);
         Err(abi::errors::Errno::EIO)
     }
 }
@@ -177,7 +177,7 @@ pub unsafe fn protect_user_page(virt: u64, perms: MapPerms) -> Result<(), abi::e
     if let Some(hook) = unsafe { PROTECT_USER_PAGE_HOOK } {
         unsafe { hook(virt, perms) }.map_err(|e| e.to_errno())
     } else {
-        kinfo!("WARN: protect_user_page called before hook installed (virt=0x{:x})", virt);
+        crate::kwarn!("protect_user_page called before hook installed (virt=0x{:x})", virt);
         Err(abi::errors::Errno::EIO)
     }
 }

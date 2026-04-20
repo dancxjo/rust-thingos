@@ -103,7 +103,7 @@ impl Default for DevFs {
 impl VfsDriver for DevFs {
     fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
         if path == "fb0" || path.starts_with("fb") {
-            crate::kdebug!("devfs: lookup entry path='{}' len={}", path, path.len());
+            crate::ktrace!("devfs: lookup entry path='{}' len={}", path, path.len());
         }
         // Empty path → the /dev directory node itself.
         if path.is_empty() {
@@ -116,7 +116,7 @@ impl VfsDriver for DevFs {
             let reg = DEVICE_REGISTRY.lock();
             if let Some(node) = reg.get(path) {
                 if path == "fb0" || path.starts_with("fb") {
-                    crate::kdebug!("devfs: dynamic registry hit path='{}'", path);
+                    crate::kinfo!("devfs: dynamic registry hit path='{}'", path);
                 }
                 return Ok(node.clone());
             }
@@ -261,7 +261,13 @@ use spin::Once;
 static CONSOLE_LD: Once<Arc<crate::vfs::tty::LineDiscipline>> = Once::new();
 
 fn get_console_ld() -> Arc<crate::vfs::tty::LineDiscipline> {
-    CONSOLE_LD.call_once(|| Arc::new(crate::vfs::tty::LineDiscipline::with_presence(crate::presence::get_console_presence_state()))).clone()
+    CONSOLE_LD
+        .call_once(|| {
+            Arc::new(crate::vfs::tty::LineDiscipline::with_presence(
+                crate::presence::get_console_presence_state(),
+            ))
+        })
+        .clone()
 }
 
 /// Global tty line discipline for `/dev/tty0` (framebuffer terminal).
@@ -357,18 +363,12 @@ impl ConsoleNode {
 
 impl VfsNode for ConsoleNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let tty = crate::vfs::tty::TtyNode {
-            hw: Arc::new(SerialHardware),
-            ld: get_console_ld(),
-        };
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(SerialHardware), ld: get_console_ld() };
         tty.read(offset, buf)
     }
 
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
-        let tty = crate::vfs::tty::TtyNode {
-            hw: Arc::new(SerialHardware),
-            ld: get_console_ld(),
-        };
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(SerialHardware), ld: get_console_ld() };
         tty.write(offset, buf)
     }
 
@@ -388,10 +388,7 @@ impl VfsNode for ConsoleNode {
     }
 
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
-        let tty = crate::vfs::tty::TtyNode {
-            hw: Arc::new(SerialHardware),
-            ld: get_console_ld(),
-        };
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(SerialHardware), ld: get_console_ld() };
         tty.device_call(call)
     }
 }
@@ -400,18 +397,12 @@ pub struct FbTerminalNode;
 
 impl VfsNode for FbTerminalNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let tty = crate::vfs::tty::TtyNode {
-            hw: Arc::new(FbHardware),
-            ld: get_fb_tty_ld(),
-        };
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };
         tty.read(offset, buf)
     }
 
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
-        let tty = crate::vfs::tty::TtyNode {
-            hw: Arc::new(FbHardware),
-            ld: get_fb_tty_ld(),
-        };
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };
         tty.write(offset, buf)
     }
 
@@ -431,10 +422,7 @@ impl VfsNode for FbTerminalNode {
     }
 
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
-        let tty = crate::vfs::tty::TtyNode {
-            hw: Arc::new(FbHardware),
-            ld: get_fb_tty_ld(),
-        };
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };
         tty.device_call(call)
     }
 }
@@ -474,7 +462,7 @@ impl VfsNode for CmdlineNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let cmdline = KERNEL_CMDLINE.lock();
         if let Some(cmdline) = cmdline.as_ref() {
-            crate::kdebug!("devfs: cmdline read offset={} len={}", offset, buf.len());
+            crate::ktrace!("devfs: cmdline read offset={} len={}", offset, buf.len());
             let bytes = cmdline.as_bytes();
             if offset >= bytes.len() as u64 {
                 return Ok(0);

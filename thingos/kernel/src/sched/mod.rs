@@ -1639,18 +1639,18 @@ fn set_any_wake_policy_for_tests_with_streak(
 }
 
 pub fn init<R: BootRuntime>() {
-    crate::kdebug!("  Acquiring scheduler lock...");
+    crate::ktrace!("  Acquiring scheduler lock...");
     let mut lock = SCHEDULER.lock();
     set_sched_lock_tracking::<R>(0); // Init runs on boot CPU (0)
-    crate::kdebug!("  Lock acquired, checking if initialized...");
+    crate::ktrace!("  Lock acquired, checking if initialized...");
     if lock.is_none() {
-        crate::kdebug!("  Allocating scheduler...");
+        crate::ktrace!("  Allocating scheduler...");
         let sched = alloc::boxed::Box::new(types::Scheduler::<R>::new());
-        crate::kdebug!("  Leaking scheduler...");
+        crate::ktrace!("  Leaking scheduler...");
         let s = alloc::boxed::Box::leak(sched);
-        crate::kdebug!("  Initializing boot task...");
+        crate::ktrace!("  Initializing boot task...");
         init_boot_task::<R>(s);
-        crate::kdebug!("  Storing scheduler pointer...");
+        crate::ktrace!("  Storing scheduler pointer...");
         *lock = Some(s as *mut types::Scheduler<R> as usize);
         unsafe {
             hooks::YIELD_HOOK = Some(sleep::yield_now::<R>);
@@ -1737,7 +1737,7 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
     // until end_bringup() is called after all service spawning is complete.
     sched.bringup_in_progress = true;
 
-    crate::kdebug!("  Creating boot task...");
+    crate::ktrace!("  Creating boot task...");
 
     let layout = alloc::alloc::Layout::from_size_align(16384, 8).unwrap();
     let stack_base = unsafe { alloc::alloc::alloc(layout) };
@@ -1796,7 +1796,7 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
 
     // Link boot task to CPU 0
 
-    crate::kdebug!("  Creating idle tasks...");
+    crate::ktrace!("  Creating idle tasks...");
 
     // Create idle task for CPU 0 initially
     {
@@ -1824,7 +1824,7 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         }
     }
 
-    crate::kdebug!("  Boot task initialized");
+    crate::ktrace!("  Boot task initialized");
 }
 
 impl<R: BootRuntime> types::Scheduler<R> {
@@ -4012,7 +4012,7 @@ pub static CPU_ONLINE: AtomicUsize = AtomicUsize::new(0);
 pub unsafe fn enter_secondary(cpu_index: usize) -> ! {
     // Mark as online
     CPU_ONLINE.fetch_add(1, Ordering::Relaxed);
-    crate::kdebug!("SMP: Secondary CPU {} online!", cpu_index);
+    crate::kinfo!("SMP: Secondary CPU {} online!", cpu_index);
 
     // Enter scheduler loop via the hook which bootstraps this CPU.
     // The run_scheduler hook will call bootstrap_cpu to set up this CPU's

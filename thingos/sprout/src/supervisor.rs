@@ -103,7 +103,15 @@ impl Supervisor {
         info!("SPROUT: Spawning cambium for driver discovery...");
         self.spawn_cambium();
 
-        // Stage 3: Spawn health-monitoring vine for shell restarts.
+        // Stage 3: Start network stack.
+        info!("SPROUT: Spawning netd...");
+        self.spawn_netd();
+
+        // Stage 4: Mount httpsd (HTTPS VFS provider).
+        info!("SPROUT: Spawning httpsd...");
+        self.spawn_httpsd();
+
+        // Stage 5: Spawn health-monitoring vine for shell restarts.
         let tasks_health = self.tasks.clone();
         let _ = stem::thread::spawn_task(move || {
             loop {
@@ -192,6 +200,40 @@ impl Supervisor {
                 });
             }
             Err(e) => warn!("SPROUT: Failed to spawn cambium: {:?}", e),
+        }
+    }
+
+    fn spawn_netd(&mut self) {
+        match stem::syscall::spawn_process("/bin/netd", 0) {
+            Ok(pid) => {
+                info!("SPROUT: Spawned netd (PID={})", pid);
+                let mut tasks = self.tasks.lock();
+                tasks.push(ManagedTask {
+                    name: "netd".to_string(),
+                    kind: TaskKind::Service("svc.netd".to_string()),
+                    module_path: "/bin/netd".to_string(),
+                    pid: Some(pid),
+                    ..Default::default()
+                });
+            }
+            Err(e) => warn!("SPROUT: Failed to spawn netd: {:?}", e),
+        }
+    }
+
+    fn spawn_httpsd(&mut self) {
+        match stem::syscall::spawn_process("/bin/httpsd", 0) {
+            Ok(pid) => {
+                info!("SPROUT: Spawned httpsd (PID={})", pid);
+                let mut tasks = self.tasks.lock();
+                tasks.push(ManagedTask {
+                    name: "httpsd".to_string(),
+                    kind: TaskKind::Service("svc.httpsd".to_string()),
+                    module_path: "/bin/httpsd".to_string(),
+                    pid: Some(pid),
+                    ..Default::default()
+                });
+            }
+            Err(e) => warn!("SPROUT: Failed to spawn httpsd: {:?}", e),
         }
     }
 

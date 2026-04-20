@@ -103,7 +103,7 @@ pub fn sys_device_claim(path_ptr: usize, path_len: usize) -> SysResult<usize> {
 
     match res {
         Ok(claim_handle) => {
-            crate::kdebug!(
+            crate::kinfo!(
                 "DEVICE: task {} claimed device '{}' (handle {})",
                 task_id,
                 slot,
@@ -112,11 +112,11 @@ pub fn sys_device_claim(path_ptr: usize, path_len: usize) -> SysResult<usize> {
             Ok(claim_handle)
         }
         Err(Errno::EBUSY) => {
-            crate::kdebug!("DEVICE: claim failed - device '{}' is already claimed", slot);
+            crate::kwarn!("DEVICE: claim failed - device '{}' is already claimed", slot);
             Err(Errno::EBUSY)
         }
         Err(e) => {
-            crate::kdebug!("DEVICE: device '{}' not found in registry", slot);
+            crate::kwarn!("DEVICE: device '{}' not found in registry", slot);
             Err(e)
         }
     }
@@ -143,7 +143,7 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
     let (phys_addr, size) = match bar_res {
         Ok(info) => info,
         Err(Errno::EPERM) => {
-            crate::kdebug!(
+            crate::kwarn!(
                 "DEVICE: map_mmio failed - claim {} not owned by task {}",
                 claim_handle,
                 task_id
@@ -151,7 +151,7 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
             return Err(Errno::EPERM);
         }
         Err(e) => {
-            crate::kdebug!(
+            crate::kwarn!(
                 "DEVICE: map_mmio failed - BAR{} info not found for claim {}",
                 bar_index,
                 claim_handle
@@ -161,7 +161,7 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
     };
 
     if phys_addr == 0 || size == 0 {
-        crate::kdebug!("DEVICE: map_mmio failed - BAR{} phys/size is 0", bar_index);
+        crate::kwarn!("DEVICE: map_mmio failed - BAR{} phys/size is 0", bar_index);
         return Err(Errno::ENODEV);
     }
 

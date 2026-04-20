@@ -201,7 +201,7 @@ impl Inbox {
                 return Err(SendError::Full { capacity: inner.capacity });
             }
             inner.queue.push_back(envelope);
-            crate::kdebug!("inbox::send: enqueued message, depth={}", inner.queue.len());
+            crate::ktrace!("inbox::send: enqueued message, depth={}", inner.queue.len());
         }
         // Wake one waiter outside the lock to avoid priority inversion.
         self.waiters.wake_one();
@@ -221,7 +221,7 @@ impl Inbox {
     pub fn try_recv(&self) -> Result<Option<MessageEnvelope>, RecvError> {
         let mut inner = self.inner.lock();
         if let Some(envelope) = inner.queue.pop_front() {
-            crate::kdebug!("inbox::try_recv: dequeued message, depth={}", inner.queue.len());
+            crate::ktrace!("inbox::try_recv: dequeued message, depth={}", inner.queue.len());
             return Ok(Some(envelope));
         }
         if inner.closed {
