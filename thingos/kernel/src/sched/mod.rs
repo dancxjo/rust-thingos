@@ -2267,19 +2267,29 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if Some(current_id) != self.state.per_cpu[cpu_idx].idle_task {
             if let Some(t) = self.state.get_thread(current_id) {
                 if t.state != TaskState::Dead && t.state != TaskState::Blocked {
-                    let priority = t.priority;
+                    let mut requeue_prio = t.priority as usize;
+                    let previous_enqueue_was_yield = matches!(
+                        self.state.last_enqueue_cause(current_id),
+                        crate::sched::state::EnqueueCause::YieldRequeue
+                    );
+                    if let Some(t) = self.state.get_thread_mut(current_id) {
+                        t.voluntary_yields = t.voluntary_yields.saturating_add(1);
+                        if previous_enqueue_was_yield
+                            && t.voluntary_yields >= types::SPIN_YIELD_PENALTY_THRESHOLD
+                        {
+                            requeue_prio = requeue_prio
+                                .saturating_sub(types::SPIN_YIELD_PENALTY_BANDS)
+                                .max(1);
+                        }
+                    }
                     // Push to LOCAL runq (we are yielding on this CPU)
-                    self.state.enqueue_task(cpu_idx, priority as usize, current_id);
+                    self.state.enqueue_task(cpu_idx, requeue_prio, current_id);
                     self.state.note_enqueue_cause(
                         current_id,
                         crate::sched::state::EnqueueCause::YieldRequeue,
                     );
                     self.metrics.pushes += 1;
                 }
-            }
-            // Increment the per-task voluntary-yield counter in the hot-field cache.
-            if let Some(t) = self.state.get_thread_mut(current_id) {
-                t.voluntary_yields = t.voluntary_yields.saturating_add(1);
             }
         }
 
@@ -5077,6 +5087,114 @@ mod tests {
         let t1 = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
         assert_eq!(t1.enqueued_at_tick, 1000);
         assert_eq!(t1.state, TaskState::Runnable);
+    }
+
+    #[test]
+    fn test_prepare_yield_penalizes_spin_yield_requeue_band() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(6001, TaskState::Running, TaskPriority::Normal)));
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(6002, TaskState::Runnable, TaskPriority::High)));
+
+        sched.state.per_cpu[0].current = Some(6001);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6001,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: types::SPIN_YIELD_PENALTY_THRESHOLD - 1,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6002,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::High,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched
+            .state
+            .note_enqueue_cause(6001, crate::sched::state::EnqueueCause::YieldRequeue);
+        sched.state.enqueue_task(0, TaskPriority::High as usize, 6002);
+
+        let switch = sched.prepare_yield().expect("high-priority peer should run");
+        assert_eq!(switch.to_tid, 6002);
+        assert_eq!(
+            sched.state.get_task(6001).and_then(|sf| sf.runq_location),
+            Some((0, TaskPriority::Low as usize)),
+            "spin-yielding task should be demoted one runnable band on requeue",
+        );
+    }
+
+    #[test]
+    fn test_prepare_yield_does_not_penalize_without_prior_yield_requeue() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(6101, TaskState::Running, TaskPriority::Normal)));
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(6102, TaskState::Runnable, TaskPriority::High)));
+
+        sched.state.per_cpu[0].current = Some(6101);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6101,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: types::SPIN_YIELD_PENALTY_THRESHOLD + 5,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 6102,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::High,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched
+            .state
+            .note_enqueue_cause(6101, crate::sched::state::EnqueueCause::Wake);
+        sched.state.enqueue_task(0, TaskPriority::High as usize, 6102);
+
+        let switch = sched.prepare_yield().expect("high-priority peer should run");
+        assert_eq!(switch.to_tid, 6102);
+        assert_eq!(
+            sched.state.get_task(6101).and_then(|sf| sf.runq_location),
+            Some((0, TaskPriority::Normal as usize)),
+            "without prior yield-requeue cause, no spin penalty should be applied",
+        );
     }
 
     #[test]
