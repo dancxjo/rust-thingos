@@ -50,6 +50,11 @@ pub struct SchedulerClassPolicy {
     pub preempt_lower_on_wake: bool,
 }
 
+/// Return the canonical scheduler policy for a latency class.
+///
+/// The returned policy encodes the current class contract: allowed priority
+/// band, default timeslice, whether aging is enabled, and whether wakeups in
+/// this class should preempt lower-priority work.
 pub const fn policy_for_sched_class(class: crate::task::TaskSchedClass) -> SchedulerClassPolicy {
     match class {
         crate::task::TaskSchedClass::NormalTimeslice => SchedulerClassPolicy {
@@ -87,6 +92,10 @@ pub const fn policy_for_sched_class(class: crate::task::TaskSchedClass) -> Sched
     }
 }
 
+/// Convenience wrapper returning class policy for a task priority.
+///
+/// This uses `TaskPriority::default_sched_class()` so the current priority
+/// lattice can opt into explicit class semantics without changing queue layout.
 pub const fn policy_for_priority(priority: crate::task::TaskPriority) -> SchedulerClassPolicy {
     policy_for_sched_class(priority.default_sched_class())
 }
