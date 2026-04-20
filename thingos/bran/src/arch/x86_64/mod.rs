@@ -151,6 +151,35 @@ impl X86_64Runtime {
         }
         kernel::kdebug!("[SERIAL] UART COM1 initialized (115200 8N1 FIFO-1 IRQ-on)");
     }
+
+    fn early_serial_write(&self, msg: &[u8]) {
+        unsafe {
+            let port = 0x3f8u16;
+            for &b in msg {
+                let mut spins = 0u32;
+                loop {
+                    let lsr: u8;
+                    core::arch::asm!(
+                        "in al, dx",
+                        out("al") lsr,
+                        in("dx") port + 5,
+                        options(nostack, preserves_flags)
+                    );
+                    if (lsr & 0x20) != 0 || spins >= 100_000 {
+                        break;
+                    }
+                    spins = spins.saturating_add(1);
+                    core::hint::spin_loop();
+                }
+                core::arch::asm!(
+                    "out dx, al",
+                    in("dx") port,
+                    in("al") b,
+                    options(nostack, preserves_flags)
+                );
+            }
+        }
+    }
 }
 
 const BOOT_TEMP_MAP_BASE: u64 = 0xffffff10_00000000;
@@ -290,21 +319,27 @@ impl ArchRuntime for X86_64Runtime {
     type AddressSpace = X86_64AddressSpace;
 
     fn init(&self, hhdm_offset: u64) {
+        self.early_serial_write(b"[bran:x64:init] enter\r\n");
         self.hhdm_offset.store(hhdm_offset, Ordering::SeqCst);
 
         unsafe {
+            self.early_serial_write(b"[bran:x64:init] syscall::init\r\n");
             // Initialize syscalls early (sets GS_BASE) so current_cpu_index() works
             syscall::init(0);
 
+            self.early_serial_write(b"[bran:x64:init] gdt::init\r\n");
             gdt::init();
 
             // Allocate Double Fault Stack
+            self.early_serial_write(b"[bran:x64:init] alloc DF stack\r\n");
             let phys = kernel::memory::alloc_frame().expect("No frames for DF stack");
             let virt = phys + hhdm_offset + 4096; // Top of stack
             gdt::set_ist1(virt);
 
+            self.early_serial_write(b"[bran:x64:init] idt::init\r\n");
             idt::init();
         }
+        self.early_serial_write(b"[bran:x64:init] paging::init\r\n");
         paging::init(hhdm_offset);
 
         // Map the LAPIC MMIO region into the HHDM.
@@ -343,10 +378,13 @@ impl ArchRuntime for X86_64Runtime {
         }
 
         // Initialize IOAPIC for interrupt routing (after IDT is set up)
+        self.early_serial_write(b"[bran:x64:init] init_ioapic\r\n");
         crate::arch::init_ioapic();
 
         // Perform full UART initialization (baud, MCR OUT2, etc)
+        self.early_serial_write(b"[bran:x64:init] init_uart\r\n");
         self.init_uart();
+        self.early_serial_write(b"[bran:x64:init] done\r\n");
     }
 
     fn putchar(&self, c: u8) {

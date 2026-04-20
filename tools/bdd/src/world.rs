@@ -5,11 +5,11 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use cucumber::World;
+use regex::Regex;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
-use regex::Regex;
 
 /// The test world shared across all steps in a scenario.
 #[derive(Debug, Default, World)]
@@ -43,19 +43,32 @@ pub struct ThingOsWorld {
 }
 
 impl ThingOsWorld {
+    fn env_flag(name: &str) -> bool {
+        matches!(
+            std::env::var(name).ok().as_deref().map(str::to_ascii_lowercase).as_deref(),
+            Some("1") | Some("true") | Some("yes") | Some("on")
+        )
+    }
+
+    fn cached_iso_path(arch: &str, resolution: &str) -> PathBuf {
+        let safe_resolution: String =
+            resolution.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        PathBuf::from("target")
+            .join("bdd")
+            .join("images")
+            .join(format!("thing-os-bdd-{}-{}.iso", arch, safe_resolution))
+    }
+
     /// Boot the OS in QEMU for the given architecture.
-    /// This builds a unique ISO with 1920x1080 resolution for this scenario.
+    /// Reuses a cached ISO for the architecture/resolution when available.
     pub async fn boot(&mut self, arch: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.arch = arch.to_string();
 
-        // Generate unique ISO name for this scenario
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .subsec_nanos();
         let pid = std::process::id();
-        let iso_name = format!("thing-os-bdd-{}-{}-{}.iso", arch, pid, nanos);
-        let iso_path = PathBuf::from(&iso_name);
 
         self.work_dir = std::env::temp_dir().join(format!("thingos-bdd-{}-{}", pid, nanos));
         std::fs::create_dir_all(&self.work_dir)?;
@@ -63,20 +76,48 @@ impl ThingOsWorld {
         // Get resolution from environment (default 1920x1080 for BDD tests)
         let resolution =
             std::env::var("BDD_RESOLUTION").unwrap_or_else(|_| "1920x1080".to_string());
+        let iso_path = Self::cached_iso_path(arch, &resolution);
+        let force_rebuild = Self::env_flag("BDD_FORCE_REBUILD_IMAGE");
 
-        // Build ISO using xtask command
-        eprintln!("[bdd] Building ISO {} with resolution {}...", iso_name, resolution);
-        let build_status = std::process::Command::new("cargo")
-            .args(["xtask", "iso", "--env", arch, "--resolution", &resolution, "--output", &iso_name])
-            .env("RUSTFLAGS", "-Awarnings")
-            .status()?;
-
-        if !build_status.success() {
-            return Err(format!("Failed to build ISO: {}", iso_name).into());
+        if let Some(parent) = iso_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
 
-        self.iso_path = Some(iso_path);
-        eprintln!("[bdd] ISO built: {}", iso_name);
+        if iso_path.exists() && !force_rebuild {
+            eprintln!("[bdd] Reusing cached ISO: {}", iso_path.display());
+        } else {
+            if force_rebuild && iso_path.exists() {
+                eprintln!("[bdd] Forcing ISO rebuild: {}", iso_path.display());
+            } else {
+                eprintln!(
+                    "[bdd] Building ISO {} with resolution {}...",
+                    iso_path.display(),
+                    resolution
+                );
+            }
+
+            let iso_output = iso_path.to_string_lossy().to_string();
+            let build_status = std::process::Command::new("cargo")
+                .args([
+                    "xtask",
+                    "iso",
+                    "--env",
+                    arch,
+                    "--resolution",
+                    &resolution,
+                    "--output",
+                    &iso_output,
+                ])
+                .env("RUSTFLAGS", "-Awarnings")
+                .status()?;
+
+            if !build_status.success() {
+                return Err(format!("Failed to build ISO: {}", iso_path.display()).into());
+            }
+        }
+
+        self.iso_path = Some(iso_path.clone());
+        eprintln!("[bdd] ISO ready: {}", iso_path.display());
 
         let ovmf_code = format!("vendor/ovmf/ovmf-code-{}.fd", arch);
         let ovmf_vars = format!("vendor/ovmf/ovmf-vars-{}.fd", arch);
@@ -119,7 +160,7 @@ impl ThingOsWorld {
                     &format!("if=pflash,unit=0,format=raw,file={},readonly=on", ovmf_code),
                 ]);
                 cmd.args(["-drive", &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars)]);
-                cmd.args(["-cdrom", &iso_name]);
+                cmd.args(["-cdrom", &iso_path.to_string_lossy()]);
 
                 cmd.args(["-device", "virtio-net-pci,netdev=n0"]);
                 cmd.args(["-netdev", "user,id=n0"]);
@@ -136,7 +177,7 @@ impl ThingOsWorld {
                     &format!("if=pflash,unit=0,format=raw,file={},readonly=on", ovmf_code),
                 ]);
                 cmd.args(["-drive", &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars)]);
-                cmd.args(["-cdrom", &iso_name]);
+                cmd.args(["-cdrom", &iso_path.to_string_lossy()]);
                 cmd.args(["-semihosting"]);
             }
             "riscv64" => {
@@ -158,7 +199,10 @@ impl ThingOsWorld {
                 cmd.args(["-device", "usb-mouse"]);
                 cmd.args([
                     "-drive",
-                    &format!("file={},format=raw,if=none,id=drive0,readonly=on", iso_name),
+                    &format!(
+                        "file={},format=raw,if=none,id=drive0,readonly=on",
+                        iso_path.display()
+                    ),
                 ]);
                 cmd.args(["-device", "virtio-blk-device,drive=drive0"]);
             }
@@ -174,7 +218,7 @@ impl ThingOsWorld {
                     &format!("if=pflash,unit=0,format=raw,file={},readonly=on", ovmf_code),
                 ]);
                 cmd.args(["-drive", &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars)]);
-                cmd.args(["-cdrom", &iso_name]);
+                cmd.args(["-cdrom", &iso_path.to_string_lossy()]);
             }
             _ => {}
         }
@@ -408,7 +452,10 @@ impl ThingOsWorld {
     }
 
     /// Write bytes to the serial console.
-    pub async fn serial_write(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn serial_write(
+        &self,
+        data: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(ref tx) = self.serial_tx {
             tx.send(data.to_vec()).map_err(|_| "Serial channel closed")?;
             Ok(())
@@ -417,7 +464,7 @@ impl ThingOsWorld {
         }
     }
 
-    /// Kill the QEMU process if running and clean up the ISO.
+    /// Kill the QEMU process if running.
     pub async fn shutdown(&mut self) {
         // Wait a bit to ensure any pending screenshots/logs are captured
         // The user specifically requested to keep QEMU open long enough.
@@ -433,12 +480,6 @@ impl ThingOsWorld {
         // Clean up QMP socket
         if let Some(ref socket_path) = self.qmp_socket {
             let _ = std::fs::remove_file(socket_path);
-        }
-
-        // Clean up ISO file
-        if let Some(ref iso_path) = self.iso_path {
-            eprintln!("[bdd] Cleaning up ISO: {}", iso_path.display());
-            let _ = std::fs::remove_file(iso_path);
         }
     }
 }
@@ -486,10 +527,12 @@ impl ThingOsWorld {
             let log = self.serial_log.lock().await;
             let missing: Vec<String> = required
                 .iter()
-                .filter(|alts| !alts.iter().all(|sig| {
-                    let clean_sig = strip_ansi(sig);
-                    log.contains(&clean_sig)
-                }))
+                .filter(|alts| {
+                    !alts.iter().all(|sig| {
+                        let clean_sig = strip_ansi(sig);
+                        log.contains(&clean_sig)
+                    })
+                })
                 .map(|alts| alts.join(" AND "))
                 .collect();
 
