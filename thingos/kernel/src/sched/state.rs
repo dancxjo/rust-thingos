@@ -281,13 +281,7 @@ fn per_cpu_runq_locks() -> &'static Vec<Mutex<()>> {
 fn lock_per_cpu_runq(cpu: usize) -> spin::mutex::MutexGuard<'static, ()> {
     per_cpu_runq_locks()
         .get(cpu)
-        .unwrap_or_else(|| {
-            panic!(
-                "per-cpu runq lock index {} out of bounds [0, {})",
-                cpu,
-                crate::sched::types::MAX_CPUS
-            )
-        })
+        .expect("internal invariant violated: validated per-cpu runq lock index missing")
         .lock()
 }
 
@@ -418,11 +412,10 @@ impl SchedState {
             return;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
-        if let Some(pc) = self.per_cpu.get_mut(cpu) {
-            pc.runq[prio].push_back(tid);
-            pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
-            pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
-        }
+        let pc = self.per_cpu.get_mut(cpu).expect("validated cpu index must exist");
+        pc.runq[prio].push_back(tid);
+        pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
+        pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         if let Some(t) = self.get_thread_mut(tid) {
             t.runq_location = Some((cpu, prio));
         }
@@ -434,31 +427,29 @@ impl SchedState {
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
         let SchedState { threads, per_cpu, .. } = self;
+        let pc = per_cpu.get_mut(cpu).expect("validated cpu index must exist");
 
-        if let Some(pc) = per_cpu.get_mut(cpu) {
-            for _cleanup_attempt in 0..RUNQ_STALE_PURGE_BUDGET {
-                let Some(tid) = pc.runq[prio].pop_front() else {
-                    break;
-                };
-                // Lazy-invalidation model: entries may stay in the VecDeque after
-                // `remove_thread_from_runq` marks them not-enqueued.
-                // Only return the entry if it still matches the task's canonical
-                // runq placement metadata.
-                let valid_location =
-                    threads.get(&tid).and_then(|thread| thread.runq_location) == Some((cpu, prio));
+        for _cleanup_attempt in 0..RUNQ_STALE_PURGE_BUDGET {
+            let Some(tid) = pc.runq[prio].pop_front() else {
+                break;
+            };
+            // Lazy-invalidation model: entries may stay in the VecDeque after
+            // `remove_thread_from_runq` marks them not-enqueued.
+            // Only return the entry if it still matches the task's canonical
+            // runq placement metadata.
+            let valid_location =
+                threads.get(&tid).and_then(|thread| thread.runq_location) == Some((cpu, prio));
 
-                if !valid_location {
-                    continue;
-                }
-
-                pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
-                pc.stats.runq_depth_change_events =
-                    pc.stats.runq_depth_change_events.saturating_add(1);
-                if let Some(thread) = threads.get_mut(&tid) {
-                    thread.runq_location = None;
-                }
-                return Some(tid);
+            if !valid_location {
+                continue;
             }
+
+            pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
+            pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
+            if let Some(thread) = threads.get_mut(&tid) {
+                thread.runq_location = None;
+            }
+            return Some(tid);
         }
         None
     }
@@ -479,7 +470,7 @@ impl SchedState {
         let _cpu_lock = lock_per_cpu_runq(cpu);
         let SchedState { threads, per_cpu, .. } = self;
 
-        let pc = per_cpu.get_mut(cpu)?;
+        let pc = per_cpu.get_mut(cpu).expect("validated cpu index must exist");
         let tid = pc.runq[prio].get(idx).copied()?;
         let valid_location =
             threads.get(&tid).and_then(|thread| thread.runq_location) == Some((cpu, prio));
