@@ -27,6 +27,11 @@ use sysfs::{SysDevice, scan_devices};
 
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
 const RECONCILE_TIMEOUT_MS: u64 = 30_000;
+const JOB_EXIT_NOTIFICATION_LEN: usize = 10;
+const JOB_EXIT_STATE_OFFSET: usize = 4;
+const JOB_EXIT_CODE_PRESENT_OFFSET: usize = 5;
+const JOB_EXIT_CODE_OFFSET: usize = 6;
+const JOB_EXIT_STATE_EXITED: u8 = 2;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -248,12 +253,10 @@ fn run_daemon_mode() -> ! {
                     drain_watch_fd(fd);
                     reconcile_due = true;
                 }
-                if inbox_fd.is_some()
-                    && pollfds.iter().any(|p| {
-                        inbox_fd.is_some_and(|fd| {
-                            p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0
-                        })
-                    })
+                if let Some(fd) = inbox_fd
+                    && pollfds
+                        .iter()
+                        .any(|p| p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0)
                 {
                     drain_job_exit_messages(&mut drivers, &mut observed_pids);
                     register_observers_for_running(&mut drivers, &mut observed_pids);
@@ -356,15 +359,20 @@ fn drain_job_exit_messages(
 }
 
 fn decode_job_exit_notification(bytes: &[u8]) -> Option<(u32, i32)> {
-    if bytes.len() < 10 {
+    if bytes.len() < JOB_EXIT_NOTIFICATION_LEN {
         return None;
     }
     let job_id = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-    if bytes[4] != 2 {
+    if bytes[JOB_EXIT_STATE_OFFSET] != JOB_EXIT_STATE_EXITED {
         return None;
     }
-    let code = if bytes[5] == 1 {
-        i32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]])
+    let code = if bytes[JOB_EXIT_CODE_PRESENT_OFFSET] == 1 {
+        i32::from_le_bytes([
+            bytes[JOB_EXIT_CODE_OFFSET],
+            bytes[JOB_EXIT_CODE_OFFSET + 1],
+            bytes[JOB_EXIT_CODE_OFFSET + 2],
+            bytes[JOB_EXIT_CODE_OFFSET + 3],
+        ])
     } else {
         0
     };

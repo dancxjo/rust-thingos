@@ -527,6 +527,10 @@ struct ProcPidJobObserverNode {
     pid: u32,
 }
 
+const PROC_PID_BASE_INO: u64 = 300;
+const PROC_PID_INO_STRIDE: u64 = 10;
+const PROC_PID_JOB_OBSERVER_INO_OFFSET: u64 = 14;
+
 impl VfsNode for ProcPidJobObserverNode {
     fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
         Err(Errno::EACCES)
@@ -558,7 +562,9 @@ impl VfsNode for ProcPidJobObserverNode {
         Ok(VfsStat {
             mode: VfsStat::S_IFREG | 0o222,
             size: 0,
-            ino: 300 + self.pid as u64 * 10 + 14,
+            ino: PROC_PID_BASE_INO
+                + self.pid as u64 * PROC_PID_INO_STRIDE
+                + PROC_PID_JOB_OBSERVER_INO_OFFSET,
             ..Default::default()
         })
     }
