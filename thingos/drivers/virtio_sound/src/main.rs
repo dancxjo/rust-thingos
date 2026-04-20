@@ -834,7 +834,7 @@ fn ok_device_call(ret_val: u32, out_data: &[u8]) -> ProviderResponse {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
-    debug!("SND: Starting VirtIO Sound Driver (boot_fd={})...", boot_fd);
+    stem::debug!("SND: Starting VirtIO Sound Driver (boot_fd={})...", boot_fd);
 
     // Try to recover boot_fd from argv[1] if not passed directly.
     if boot_fd == 0 && explicit_path.is_none() {
@@ -856,7 +856,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                             if let Ok(s) = core::str::from_utf8(&buf[offset..offset + arg1_len]) {
                                 if let Ok(val) = s.parse::<usize>() {
                                     boot_fd = val;
-                                    debug!("SND: Recovered boot_fd {} from argv[1]", boot_fd);
+                                    stem::debug!("SND: Recovered boot_fd {} from argv[1]", boot_fd);
                                 }
                             }
                         }
@@ -871,7 +871,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     } else if let Some(path) = resolve_device_path_from_boot_fd(boot_fd) {
         path
     } else if let Some(found) = find_virtio_sound_device() {
-        debug!("SND: Discovered device at {}", found);
+        stem::debug!("SND: Discovered device at {}", found);
         found
     } else {
         error!("SND: No virtio-sound device found");
@@ -908,7 +908,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     }
 
     driver.driver_ok();
-    debug!("SND: Device initialized");
+    stem::debug!("SND: Device initialized");
 
     let dma_dev = driver.claim_handle();
     let control_dma = match setup_control_dma(dma_dev) {
@@ -940,7 +940,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
             }
         }
     };
-    debug!("SND: Using stream {}", stream_id);
+    stem::debug!("SND: Using stream {}", stream_id);
 
     // ── Mount VFS provider at /dev/audio/card0/ ───────────────────────────────
     // Mount early — before configure_stream/PCM_START/DMA alloc — so that
@@ -957,7 +957,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     };
 
     match vfs_mount(req_write, "/dev/audio/card0") {
-        Ok(()) => debug!("SND: Mounted at /dev/audio/card0"),
+        Ok(()) => stem::debug!("SND: Mounted at /dev/audio/card0"),
         Err(e) => {
             warn!("SND: vfs_mount failed: {:?} — continuing without VFS interface", e);
         }
@@ -991,7 +991,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let mut provider_loop = ProviderLoop::new(req_read);
     let mapped_listener = setup_mapped_ring_listener();
     if mapped_listener.is_some() {
-        debug!("SND: mapped ring control socket at {}", AUDIO_RING_SOCKET_PATH);
+        stem::debug!("SND: mapped ring control socket at {}", AUDIO_RING_SOCKET_PATH);
     } else {
         warn!("SND: mapped ring socket unavailable; using write() path");
     }

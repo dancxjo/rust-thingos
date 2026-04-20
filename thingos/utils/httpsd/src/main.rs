@@ -16,7 +16,7 @@ use http::{HttpClient, Response};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use stem::syscall::argv_get;
 use stem::syscall::vfs::{vfs_mount, vfs_umount};
-use stem::{debug, info, warn};
+use stem::{debug, trace, warn};
 
 const MOUNT_POINT: &str = "/https";
 const ROOT_HANDLE: u64 = 1;
@@ -211,6 +211,13 @@ impl HttpsProvider {
                 break;
             };
 
+            trace!(
+                "httpsd: read_node handle={} calling read_chunk (offset={} end={} eof={})",
+                handle,
+                offset,
+                body_end,
+                state.eof
+            );
             let chunk = response.read_chunk().map_err(|err| {
                 warn!(
                     "httpsd: upstream read failed for handle={} {}: {}",
@@ -220,6 +227,7 @@ impl HttpsProvider {
                 );
                 Errno::EIO
             })?;
+            trace!("httpsd: read_chunk handle={} returned {} bytes", handle, chunk.len());
             if chunk.is_empty() {
                 debug!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
                 state.response = None;

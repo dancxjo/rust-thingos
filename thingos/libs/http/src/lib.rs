@@ -16,7 +16,7 @@ use rand_core::SeedableRng;
 use stem::syscall::port::{PortHandle, port_close, port_create, port_recv, port_send_all};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 use stem::thread::spawn_task_detached;
-use stem::{debug, info, warn};
+use stem::{debug, warn, trace};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
@@ -416,11 +416,11 @@ where
         .map_err(|e| format!("port create failed: {:?}", e))?;
     let host = url.host.clone();
     let req_bytes = request.as_bytes().to_vec();
-
+    let port = url.port;
     // To handle the TLS context borrowing locally in the background thread,
     // we spawn a native stem task that will perform the TLS read loop.
     let _ = spawn_task_detached(move || {
-        let mut tcp = match TcpStream::connect(&host, url.port) {
+        let tcp = match TcpStream::connect(&host, port) {
             Ok(t) => t,
             Err(e) => {
                 let msg = format!("ERR: http connect failed: {}", e);
@@ -740,10 +740,17 @@ fn append_header_chunk_and_find_body_start(
     buffer: &mut Vec<u8>,
     chunk: &[u8],
 ) -> Result<Option<usize>, String> {
+    trace!(
+        "http: append_header_chunk: chunk_len={} total_len_before={} total_len_after={}",
+        chunk.len(),
+        buffer.len(),
+        buffer.len() + chunk.len()
+    );
     buffer.extend_from_slice(chunk);
 
     if let Some(idx) = find_subsequence(buffer, b"\r\n\r\n") {
         let body_start = idx + 4;
+        debug!("http: found body start at index {}", body_start);
         if body_start > MAX_HEADER_BYTES {
             return Err(format!(
                 "response headers exceed max size: {} > {}",
