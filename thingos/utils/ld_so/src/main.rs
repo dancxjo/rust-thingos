@@ -193,7 +193,7 @@ struct SymbolTable {
 impl SymbolTable {
     const fn new() -> Self {
         // Can't use array-repeat expressions for non-Copy types in const
-        // contexts on stable; hand-initialise.
+        // contexts on stable; hand-initialize.
         const E: SymEntry = SymEntry::empty();
         SymbolTable { entries: [E; MAX_SYMBOLS], count: 0 }
     }
@@ -263,7 +263,7 @@ fn name_eq(stored: &[u8; 64], name: &[u8]) -> bool {
     end >= 64 || stored[end] == 0
 }
 
-// Global symbol table — initialised once at loader entry.
+// Global symbol table — initialized once at loader entry.
 static mut SYMTAB: SymbolTable = SymbolTable::new();
 
 fn sym_insert(name: &[u8], addr: u64) {

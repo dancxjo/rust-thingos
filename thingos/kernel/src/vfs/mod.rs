@@ -546,7 +546,7 @@ impl Default for NamespaceRef {
 
 // ── Global init ──────────────────────────────────────────────────────────────
 
-/// Initialise the VFS subsystem and mount built-in filesystems.
+/// initialize the VFS subsystem and mount built-in filesystems.
 ///
 /// Called once from `kernel::start` during early boot, *before* any user
 /// processes are spawned.

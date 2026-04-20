@@ -2187,7 +2187,7 @@ mod tests {
         assert!(sched.bringup_in_progress, "bringup_in_progress should be true");
 
         // Simulate end_bringup by clearing the flag directly (the public
-        // end_bringup<R>() function requires a fully-initialised SCHEDULER
+        // end_bringup<R>() function requires a fully-initialized SCHEDULER
         // global which is intentionally absent in unit tests).
         sched.bringup_in_progress = false;
         assert!(!sched.bringup_in_progress, "bringup_in_progress should be false after end");

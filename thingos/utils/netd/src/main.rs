@@ -26,10 +26,11 @@ use abi::seed::{
 };
 use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
 use abi::syscall::{PollHandle, poll_flags};
+use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_umount};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_umount, vfs_watch_path};
 use stem::syscall::{argv_get, exit};
 use stem::{debug, warn};
 use vfs_device::VfsNicDevice;
@@ -213,10 +214,19 @@ fn main(arg: usize) -> ! {
     let mut sockets_storage: [SocketStorage; 256] = [SocketStorage::EMPTY; 256];
     let mut socket_set = SocketSet::new(&mut sockets_storage[..]);
     let mut last_link_state = device.link_up();
+    let mut known_nic_units = scan_registered_nic_units();
 
     // Bridge the request-read port to an FD for FD-first polling.
     let req_fd =
         stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()).unwrap_or(0);
+    let nic_watch_fd =
+        match vfs_watch_path("/dev/net", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                warn!("NETD: Failed to watch /dev/net for NIC registrations: {:?}", e);
+                None
+            }
+        };
 
     loop {
         let mut did_work = false;
@@ -248,8 +258,8 @@ fn main(arg: usize) -> ! {
         socket_api.gc_closed_sockets(&mut socket_set);
 
         if !did_work {
-            let mut pollfds = idle_pollfds(req_fd, events_fd);
-            if stem::syscall::vfs::vfs_poll(&mut pollfds, 1).unwrap_or(0) > 0 {
+            let mut pollfds = idle_pollfds(req_fd, events_fd, nic_watch_fd);
+            if vfs_poll(&mut pollfds, 1).unwrap_or(0) > 0 {
                 if (pollfds[1].revents & poll_flags::POLLIN) != 0 {
                     let now = VfsNicDevice::now();
                     let _ = iface.poll(now, &mut device, &mut socket_set);
@@ -262,6 +272,15 @@ fn main(arg: usize) -> ! {
                         &mut socket_set,
                         &mut socket_api,
                     );
+                }
+
+                if let Some(watch_fd) = nic_watch_fd {
+                    if pollfds.iter().any(|p| {
+                        p.handle == watch_fd as i32 && (p.revents & poll_flags::POLLIN) != 0
+                    }) {
+                        drain_watch_fd(watch_fd);
+                        let _ = report_new_nic_registrations(&mut known_nic_units);
+                    }
                 }
             }
         }
@@ -288,11 +307,69 @@ pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     }
 }
 
-fn idle_pollfds(req_fd: u32, events_fd: u32) -> [PollHandle; 2] {
-    [
-        PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-        PollHandle { handle: events_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-    ]
+fn idle_pollfds(req_fd: u32, events_fd: u32, nic_watch_fd: Option<u32>) -> Vec<PollHandle> {
+    let mut pollfds = Vec::with_capacity(3);
+    pollfds.push(PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 });
+    pollfds.push(PollHandle { handle: events_fd as i32, events: poll_flags::POLLIN, revents: 0 });
+    if let Some(fd) = nic_watch_fd {
+        pollfds.push(PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 });
+    }
+    pollfds
+}
+
+fn scan_registered_nic_units() -> [bool; MAX_VIRTIO_UNITS as usize] {
+    let mut seen = [false; MAX_VIRTIO_UNITS as usize];
+    for unit in 0..MAX_VIRTIO_UNITS {
+        if nic_unit_ready(unit) {
+            seen[unit as usize] = true;
+        }
+    }
+    seen
+}
+
+fn report_new_nic_registrations(known_units: &mut [bool; MAX_VIRTIO_UNITS as usize]) -> bool {
+    let mut detected = false;
+    for unit in 0..MAX_VIRTIO_UNITS {
+        let idx = unit as usize;
+        let ready = nic_unit_ready(unit);
+        if ready && !known_units[idx] {
+            known_units[idx] = true;
+            detected = true;
+            debug!(
+                "NETD: Detected new NIC registration from cambium at {}{}",
+                VIRTIO_PATH_PREFIX, unit
+            );
+        } else if !ready {
+            known_units[idx] = false;
+        }
+    }
+    detected
+}
+
+fn nic_unit_ready(unit: u32) -> bool {
+    let rx_path = alloc::format!("{}{}{}", VIRTIO_PATH_PREFIX, unit, "/rx");
+    match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
+        Ok(fd) => {
+            let _ = vfs_close(fd);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn drain_watch_fd(fd: u32) {
+    let mut buf = [0u8; 512];
+    loop {
+        match vfs_read(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(abi::errors::Errno::EAGAIN) => break,
+            Err(err) => {
+                warn!("NETD: failed draining /dev/net watch events: {:?}", err);
+                break;
+            }
+        }
+    }
 }
 
 /// Open a virtio NIC device fileset, retrying until any `/dev/net/virtioN`

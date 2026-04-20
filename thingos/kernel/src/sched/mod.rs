@@ -4203,7 +4203,7 @@ mod tests {
     /// Serialises sched tests that mutate shared globals (REGISTRY, SCHEDULER,
     /// TICK_COUNT).  Any test that calls `init_test_env` should hold the
     /// returned guard for its entire duration to prevent races with concurrent
-    /// tests that reinitialise the registry.
+    /// tests that reinitialize the registry.
     pub(crate) static SCHED_TEST_GUARD: spin::Mutex<()> = spin::Mutex::new(());
 
     pub(crate) fn init_test_env() -> spin::MutexGuard<'static, ()> {

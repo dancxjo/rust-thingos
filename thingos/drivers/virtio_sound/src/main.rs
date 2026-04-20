@@ -880,7 +880,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         }
     };
 
-    // Initialise hardware.
+    // initialize hardware.
     let mut driver = match VirtioDevice::new(&path_str) {
         Ok(d) => d,
         Err(e) => {
@@ -908,7 +908,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     }
 
     driver.driver_ok();
-    info!("SND: Device initialised");
+    info!("SND: Device initialized");
 
     let dma_dev = driver.claim_handle();
     let control_dma = match setup_control_dma(dma_dev) {

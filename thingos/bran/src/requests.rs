@@ -67,7 +67,7 @@ static MODULES_LEN: AtomicUsize = AtomicUsize::new(0);
 static MODULES_INIT: AtomicBool = AtomicBool::new(false);
 
 pub fn get_modules() -> &'static [BootModuleDesc] {
-    // Fast path: already initialised.  The Acquire load synchronises with the
+    // Fast path: already initialized.  The Acquire load synchronises with the
     // Release store below, guaranteeing visibility of MODULES_CACHE contents.
     if MODULES_INIT.load(Ordering::Acquire) {
         let len = MODULES_LEN.load(Ordering::Relaxed);

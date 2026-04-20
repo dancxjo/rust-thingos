@@ -833,11 +833,11 @@ mod tests {
 
     // ── timestamps ──────────────────────────────────────────────────────────
 
-    /// Timestamps are initialised (non-garbage) on file creation.
+    /// Timestamps are initialized (non-garbage) on file creation.
     /// In tests the clock is not anchored so all timestamps are zero,
     /// but they must be consistent across stat calls.
     #[test]
-    fn test_create_initialises_timestamps() {
+    fn test_create_initializes_timestamps() {
         let fs = RamFs::new();
         fs.create_file("ts.txt", b"hello".to_vec()).unwrap();
         let node = fs.lookup("ts.txt").unwrap();

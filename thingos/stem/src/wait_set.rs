@@ -207,7 +207,7 @@ impl WaitSet {
     fn alloc_token(&mut self) -> WaitToken {
         let tok = WaitToken(self.next_token);
         // Skip 0 so that token 0 is never issued (easier to spot bugs where a
-        // token field was left default-initialised). Wrapping is safe here
+        // token field was left default-initialized). Wrapping is safe here
         // because push_spec() bounds the set to WAIT_MANY_MAX_ITEMS entries,
         // so a single WaitSet can hold at most 32 live tokens at any point in
         // time; token reuse after u64 wrap-around is therefore not a concern

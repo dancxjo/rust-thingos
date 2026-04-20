@@ -41,7 +41,7 @@ pub use task::AArch64Context;
 #[unsafe(naked)]
 unsafe extern "C" fn switch_to_el1h() {
     naked_asm!(
-        // Save current SP before any branching so both paths can initialise
+        // Save current SP before any branching so both paths can initialize
         // SP_EL1 to a valid kernel stack address.
         "mov  x9, sp",
 
@@ -77,7 +77,7 @@ unsafe extern "C" fn switch_to_el1h() {
         // ── Common: install saved SP into SP_EL1 and select it ──────────
         "2:",
         "msr  spsel, #1",      // switch stack-pointer select to SP_EL1
-        "mov  sp, x9",         // initialise SP_EL1 from the saved value
+        "mov  sp, x9",         // initialize SP_EL1 from the saved value
         "isb",
         "ret",
     );

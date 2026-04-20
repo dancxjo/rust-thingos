@@ -36,7 +36,7 @@ static MOUNT_TABLE: RwLock<Vec<MountEntry>> = RwLock::new(Vec::new());
 static INIT_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static NEXT_MOUNT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
 
-/// Initialise the mount table storage.  Must be called once before any
+/// initialize the mount table storage.  Must be called once before any
 /// [`mount`] or [`lookup`] call.
 pub fn init() {
     // The static RwLock<Vec<_>> is already valid; mark init complete.
@@ -155,7 +155,7 @@ pub fn get_mounts_under(parent_path: &str) -> Vec<String> {
 /// Return the stable mount ID for the best-matching mount covering `path`.
 ///
 /// Returns `0` if no mount covers `path` (which should not happen for valid
-/// absolute paths after the VFS is initialised).
+/// absolute paths after the VFS is initialized).
 pub fn mount_id_for_path(path: &str) -> u64 {
     if !path.starts_with('/') {
         return 0;

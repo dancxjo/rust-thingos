@@ -67,7 +67,7 @@ pub fn memory_map() -> &'static [kernel::PhysRange] {
     use crate::requests::MEMORY_MAP_REQUEST;
     use kernel::{PhysRange, PhysRangeKind};
 
-    // Fast path: already initialised.  The Acquire load synchronises with the
+    // Fast path: already initialized.  The Acquire load synchronises with the
     // Release store below, so all writes to RANGES/RANGES_COUNT are visible.
     if RANGES_INIT.load(Ordering::Acquire) {
         let count = RANGES_COUNT.load(Ordering::Relaxed);
