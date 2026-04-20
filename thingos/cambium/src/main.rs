@@ -11,22 +11,22 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use abi::errors::Errno;
+use abi::syscall::{PollHandle, poll_flags};
 use abi::driver_interface::DriverClass;
-use abi::syscall::vfs_flags::O_RDONLY;
+use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
+use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use binding::{match_binding, mount_hint};
 use catalog::Catalog;
 use spawn::ManagedDriver;
-use stem::syscall::vfs::{vfs_close, vfs_open};
+use stem::kinds::KIND_ID_THINGOS_JOB_EXIT;
+use stem::syscall::message::{KindId, msg_inbox_open_self, msg_recv};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_watch_path, vfs_write};
 use stem::{debug, error, warn};
 use sysfs::{SysDevice, scan_devices};
 
-/// How many main-loop ticks between full catalog rescans.
-/// At 100 ms per tick this is ~30 seconds.
-const CATALOG_RESCAN_TICKS: u32 = 300;
-/// How many main-loop ticks between full device topology rescans.
-/// Cambium does not have topology-change notifications yet, so avoid walking
-/// `/sys/devices` every tick when the machine is idle.
-const DEVICE_RESCAN_TICKS: u32 = 50;
+/// Periodic fallback rescan interval (milliseconds) when no events arrive.
+const RECONCILE_TIMEOUT_MS: u64 = 30_000;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -171,7 +171,7 @@ fn run_daemon_mode() -> ! {
 
     let mut drivers: BTreeMap<String, ManagedDriver> = BTreeMap::new();
     let mut catalog = Catalog::new();
-    let mut tick: u32 = 0;
+    let mut observed_pids: BTreeMap<u64, ()> = BTreeMap::new();
 
     // Initial catalog scan.
     catalog.scan();
@@ -180,26 +180,195 @@ fn run_daemon_mode() -> ! {
         Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
         Err(err) => warn!("CAMBIUM: initial scan of /sys/devices failed: {:?}", err),
     }
+    register_observers_for_running(&mut drivers, &mut observed_pids);
+
+    let inbox_fd = match msg_inbox_open_self() {
+        Ok(fd) => Some(fd),
+        Err(err) => {
+            warn!("CAMBIUM: failed to open /proc/self/inbox: {:?}", err);
+            None
+        }
+    };
+    let devices_watch_fd =
+        match vfs_watch_path("/sys/devices", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
+            Ok(fd) => Some(fd),
+            Err(err) => {
+                warn!("CAMBIUM: failed to watch /sys/devices: {:?}", err);
+                None
+            }
+        };
 
     loop {
-        for managed in drivers.values_mut() {
-            managed.monitor();
+        if inbox_fd.is_none() && devices_watch_fd.is_none() {
+            for managed in drivers.values_mut() {
+                managed.monitor();
+            }
+            stem::time::sleep_ms(100);
+            continue;
         }
 
-        tick = tick.wrapping_add(1);
-        if tick % DEVICE_RESCAN_TICKS == 0 {
+        let mut pollfds: Vec<PollHandle> = Vec::new();
+        if let Some(fd) = devices_watch_fd {
+            pollfds.push(PollHandle {
+                handle: fd as i32,
+                events: poll_flags::POLLIN,
+                revents: 0,
+            });
+        }
+        if let Some(fd) = inbox_fd {
+            pollfds.push(PollHandle {
+                handle: fd as i32,
+                events: poll_flags::POLLIN,
+                revents: 0,
+            });
+        }
+
+        let poll_result = vfs_poll(&mut pollfds, RECONCILE_TIMEOUT_MS);
+        let mut reconcile_due = false;
+
+        match poll_result {
+            Ok(ready) => {
+                if ready == 0 {
+                    // Fallback periodic refresh if event streams are quiet.
+                    catalog.scan();
+                    reconcile_due = true;
+                }
+                for p in &pollfds {
+                    if p.revents & (poll_flags::POLLERR | poll_flags::POLLHUP | poll_flags::POLLNVAL)
+                        != 0
+                    {
+                        reconcile_due = true;
+                    }
+                }
+                if let Some(fd) = devices_watch_fd
+                    && pollfds.iter().any(|p| {
+                        p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0
+                    })
+                {
+                    drain_watch_fd(fd);
+                    reconcile_due = true;
+                }
+                if inbox_fd.is_some()
+                    && pollfds.iter().any(|p| {
+                        inbox_fd.is_some_and(|fd| {
+                            p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0
+                        })
+                    })
+                {
+                    drain_job_exit_messages(&mut drivers, &mut observed_pids);
+                    register_observers_for_running(&mut drivers, &mut observed_pids);
+                }
+            }
+            Err(err) => {
+                warn!("CAMBIUM: poll error in daemon loop: {:?}", err);
+                reconcile_due = true;
+            }
+        }
+
+        if reconcile_due {
             match scan_devices() {
-                Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
+                Ok(devices) => {
+                    reconcile_devices(&mut drivers, &catalog, devices);
+                    register_observers_for_running(&mut drivers, &mut observed_pids);
+                }
                 Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
             }
         }
-        if tick % CATALOG_RESCAN_TICKS == 0 {
-            debug!("CAMBIUM: rescanning driver catalog");
-            catalog.scan();
-        }
-
-        stem::time::sleep_ms(100);
     }
+}
+
+fn register_observers_for_running(
+    drivers: &mut BTreeMap<String, ManagedDriver>,
+    observed_pids: &mut BTreeMap<u64, ()>,
+) {
+    for managed in drivers.values_mut() {
+        let Some(pid) = managed.pid() else {
+            continue;
+        };
+        if observed_pids.contains_key(&pid) {
+            continue;
+        }
+        match register_job_observer(pid) {
+            Ok(()) => {
+                observed_pids.insert(pid, ());
+            }
+            Err(err) => {
+                warn!("CAMBIUM: failed to register job observer for pid {}: {:?}", pid, err);
+            }
+        }
+    }
+}
+
+fn register_job_observer(pid: u64) -> Result<(), Errno> {
+    let path = alloc::format!("/proc/{}/job_observer", pid);
+    let fd = vfs_open(&path, O_WRONLY)?;
+    let write_res = vfs_write(fd, b"1").map(|_| ());
+    let _ = vfs_close(fd);
+    write_res
+}
+
+fn drain_watch_fd(fd: u32) {
+    let mut buf = [0u8; 512];
+    loop {
+        match vfs_read(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(Errno::EAGAIN) => break,
+            Err(err) => {
+                warn!("CAMBIUM: failed reading /sys/devices watch events: {:?}", err);
+                break;
+            }
+        }
+    }
+}
+
+fn drain_job_exit_messages(
+    drivers: &mut BTreeMap<String, ManagedDriver>,
+    observed_pids: &mut BTreeMap<u64, ()>,
+) {
+    let mut kind = KindId([0u8; 16]);
+    let mut payload = [0u8; 64];
+    loop {
+        match msg_recv(&mut kind, &mut payload) {
+            Ok(actual_len) => {
+                if kind.0 != KIND_ID_THINGOS_JOB_EXIT {
+                    continue;
+                }
+                let len = actual_len.min(payload.len());
+                let Some((pid, code)) = decode_job_exit_notification(&payload[..len]) else {
+                    continue;
+                };
+                observed_pids.remove(&(pid as u64));
+                for managed in drivers.values_mut() {
+                    if managed.pid() == Some(pid as u64) {
+                        managed.handle_exit(code);
+                        break;
+                    }
+                }
+            }
+            Err(Errno::EAGAIN) => break,
+            Err(err) => {
+                warn!("CAMBIUM: inbox receive error: {:?}", err);
+                break;
+            }
+        }
+    }
+}
+
+fn decode_job_exit_notification(bytes: &[u8]) -> Option<(u32, i32)> {
+    if bytes.len() < 10 {
+        return None;
+    }
+    let job_id = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    if bytes[4] != 2 {
+        return None;
+    }
+    let code = if bytes[5] == 1 {
+        i32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]])
+    } else {
+        0
+    };
+    Some((job_id, code))
 }
 
 fn reconcile_devices(

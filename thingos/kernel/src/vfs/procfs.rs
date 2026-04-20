@@ -32,6 +32,7 @@
 //! | `/proc/<pid>/authority`          | Canonical `thingos::authority::Authority` — permission context (Phase 7) |
 //! | `/proc/<pid>/place`              | Canonical `thingos::place::Place` — world/visibility context (Phase 8)  |
 //! | `/proc/<pid>/presence`           | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
+//! | `/proc/<pid>/job_observer`       | Write-only registration of caller inbox as `JobExit` observer |
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -287,6 +288,8 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
             let inbox = crate::inbox::get_inbox(inbox_id).ok_or(Errno::ENOENT)?;
             Ok(Arc::new(crate::vfs::inbox_node::InboxNode::new(inbox)))
         }
+        // /proc/<pid>/job_observer — register caller inbox for JobExit notifications.
+        "job_observer" => Ok(Arc::new(ProcPidJobObserverNode { pid })),
         _ => Err(Errno::ENOENT),
     }
 }
@@ -506,8 +509,58 @@ impl VfsNode for ProcPidDirNode {
             "place",
             "presence",
             "inbox",
+            "job_observer",
         ];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
+    }
+}
+
+// ── /proc/<pid>/job_observer — register JobExit observer ──────────────────────
+
+/// Write-only registration node for job-exit observer wiring.
+///
+/// The caller's own inbox is attached as the observer target:
+/// - allowed for self (`/proc/<self>/job_observer`)
+/// - allowed for direct children
+/// - rejected with `EPERM` otherwise.
+struct ProcPidJobObserverNode {
+    pid: u32,
+}
+
+impl VfsNode for ProcPidJobObserverNode {
+    fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(Errno::EACCES)
+    }
+
+    fn write(&self, _offset: u64, buf: &[u8]) -> SysResult<usize> {
+        let caller = crate::sched::process_info_current().ok_or(Errno::ESRCH)?;
+        let (caller_pid, caller_inbox) = {
+            let caller_lock = caller.lock();
+            (caller_lock.pid, caller_lock.unix_compat.message_inbox)
+        };
+
+        let target = crate::sched::process_info_for_tid_current(self.pid as u64).ok_or(Errno::ESRCH)?;
+        let allowed = {
+            let target_lock = target.lock();
+            caller_pid == self.pid || target_lock.job.ppid == caller_pid
+        };
+        if !allowed {
+            return Err(Errno::EPERM);
+        }
+
+        if !crate::job::notify::register_exit_observer(self.pid, caller_inbox) {
+            return Err(Errno::ESRCH);
+        }
+        Ok(buf.len())
+    }
+
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFREG | 0o222,
+            size: 0,
+            ino: 300 + self.pid as u64 * 10 + 14,
+            ..Default::default()
+        })
     }
 }
 

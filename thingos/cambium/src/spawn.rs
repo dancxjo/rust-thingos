@@ -36,6 +36,10 @@ pub struct ManagedDriver {
 }
 
 impl ManagedDriver {
+    pub fn pid(&self) -> Option<u64> {
+        self.pid
+    }
+
     /// Create from the legacy static binding table (pre-catalog path).
     pub fn new(device: &SysDevice, binding: Binding, mount_path: Option<String>) -> Self {
         Self {
@@ -221,13 +225,7 @@ impl ManagedDriver {
         match stem::syscall::waitpid(pid as i64, abi::types::system::waitpid_flags::WNOHANG) {
             Ok((child_pid, status)) if child_pid > 0 => {
                 let code = abi::signal::w_exit_status(status as u8);
-                warn!("CAMBIUM: driver for {} exited with code {}", self.slot, code);
-                self.pid = None;
-                self.cleanup_mount();
-                if device_present(&self.slot) {
-                    self.schedule_restart();
-                    self.ensure_running();
-                }
+                self.handle_exit(code);
             }
             Ok(_) => {}
             Err(err) => {
@@ -239,6 +237,16 @@ impl ManagedDriver {
                     self.ensure_running();
                 }
             }
+        }
+    }
+
+    pub fn handle_exit(&mut self, code: i32) {
+        warn!("CAMBIUM: driver for {} exited with code {}", self.slot, code);
+        self.pid = None;
+        self.cleanup_mount();
+        if device_present(&self.slot) {
+            self.schedule_restart();
+            self.ensure_running();
         }
     }
 
