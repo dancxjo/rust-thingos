@@ -86,6 +86,16 @@ pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
         crate::kerror!("STACK: overflow at va=0x{:x} (task {})", addr, task_name);
     }
 
+    // Deliver SIGSEGV with rich fault context as a typed inbox message so that
+    // the process can log crash diagnostics before the kernel terminates it.
+    if user {
+        if let Some(pinfo) = crate::sched::process_info_current() {
+            let pid = pinfo.lock().pid;
+            // rsp is not available in the page-fault handler context; pass 0.
+            crate::signal::send_fault_signal_to_process(pid, abi::signal::SIGSEGV, addr, rip, 0);
+        }
+    }
+
     unsafe {
         crate::sched::exit_current(-1);
     }
@@ -180,6 +190,32 @@ pub extern "C" fn kernel_handle_exception(
             error_code,
             kind
         );
+    }
+
+    // Deliver a typed fault signal to the process inbox for crash-class exceptions
+    // so applications can capture rich diagnostics in their event loop.
+    //
+    // Exception-to-POSIX-signal mapping (x86_64):
+    //   0  Divide-by-zero         → SIGFPE
+    //   4  Overflow                → SIGFPE
+    //   5  Bound Range             → SIGSEGV
+    //   6  Invalid Opcode (SIGILL) → SIGILL
+    //  13  General Protection      → SIGSEGV
+    //  16  FPU Exception           → SIGFPE
+    //  17  Alignment Check         → SIGBUS
+    //  19  SIMD Exception          → SIGFPE
+    let fault_sig = match kind {
+        0 | 4 | 16 | 19 => Some(abi::signal::SIGFPE),
+        5 | 13 => Some(abi::signal::SIGSEGV),
+        6 => Some(abi::signal::SIGILL),
+        17 => Some(abi::signal::SIGBUS),
+        _ => None,
+    };
+    if let Some(sig) = fault_sig {
+        if let Some(pinfo) = crate::sched::process_info_current() {
+            let pid = pinfo.lock().pid;
+            crate::signal::send_fault_signal_to_process(pid, sig, error_code, rip, rsp);
+        }
     }
 
     unsafe {

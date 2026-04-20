@@ -1,0 +1,30 @@
+/// Optional register and memory state captured at the time of a fault-class signal.
+///
+/// Included in signal messages for crash-class signals (e.g. SIGSEGV, SIGBUS)
+/// to provide rich post-mortem context without async-signal-safe constraints.
+kind thingos.signal.fault = struct {
+  /// Address that caused the fault (e.g. faulting memory address for SIGSEGV).
+  fault_addr: u64,
+  /// Saved instruction pointer at the time of the fault.
+  rip: u64,
+  /// Saved stack pointer at the time of the fault.
+  rsp: u64,
+}
+
+/// Typed signal notification — canonical inbox message payload for signal delivery.
+///
+/// Replaces async-signal-handler interrupt semantics with inbox-safe typed events.
+/// Applications receive a `thingos.signal` message in their main event loop
+/// instead of having a signal handler interrupted into the execution context.
+///
+/// The `signum` field carries the POSIX signal number for compatibility.
+/// Crash-class signals (e.g. SIGSEGV) populate the `fault` field with rich
+/// diagnostic context including the faulting address and register state.
+kind thingos.signal = struct {
+  /// POSIX signal number (1–63). Preserves compatibility with UNIX signal numbers.
+  signum: u8,
+  /// Thread ID of the sender, or 0 for kernel-originated signals.
+  sender_tid: u64,
+  /// Optional fault context for crash-class signals (SIGSEGV, SIGBUS, etc.).
+  fault: option<thingos.signal.fault>,
+}

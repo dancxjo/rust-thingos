@@ -222,12 +222,22 @@ fn route_to_group(route: SignalRoute) -> Vec<(u64, SignalDeliveryOutcome)> {
 
 /// Deliver `sig` to process `pid` through the canonical path.
 ///
-/// This is the **single** per-recipient delivery hook.  It translates a
-/// routing decision into the existing pending-signal state machinery:
+/// This is the **single** per-recipient delivery hook.  It:
 ///
-/// - Looks up the process by PID.
-/// - Calls `ProcessSignals::post` (which enforces mask/ignore semantics).
-/// - Wakes all threads in the process so they check for pending signals.
+/// 1. **Inbox delivery** (canonical new model): enqueues a typed
+///    `thingos.signal` [`Message`] into the process inbox via
+///    [`super::inbox_bridge::deliver_signal_to_inbox`].  This is the
+///    primary path for applications migrating to inbox-based event loops.
+///    SIGKILL and SIGSTOP skip inbox delivery (they are uncatchable).
+///
+/// 2. **Pending-bit delivery** (POSIX compatibility projection): calls
+///    `ProcessSignals::post` to record the signal in the pending bitmask
+///    and wakes all threads.  This path remains authoritative for legacy
+///    applications that install traditional signal handlers.
+///
+/// Both paths run concurrently during the migration period.  Once
+/// applications are fully migrated to inbox-based event loops, step 2 can
+/// be removed.
 ///
 /// # sig == 0
 ///
@@ -249,6 +259,21 @@ pub fn deliver_to_recipient(pid: u32, sig: u8) -> SignalDeliveryOutcome {
         return SignalDeliveryOutcome::ExistenceConfirmed;
     }
 
+    // ── Step 1: Inbox delivery (canonical new model) ──────────────────────
+    // Enqueue a typed thingos.signal message to the process inbox.
+    // SIGKILL/SIGSTOP are excluded by the bridge (uncatchable).
+    // Failures are non-fatal diagnostics; the legacy path below is authoritative.
+    let sender_tid = unsafe { crate::sched::current_tid_current() };
+    if let Err(reason) =
+        super::inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, None)
+    {
+        crate::kdebug!(
+            "signal::route inbox delivery failed sig={} pid={} reason={}",
+            sig, pid, reason
+        );
+    }
+
+    // ── Step 2: Pending-bit delivery (POSIX compatibility projection) ─────
     let tids = {
         let mut p = pinfo.lock();
         p.unix_compat.signals.post(sig);
@@ -268,6 +293,8 @@ pub fn deliver_to_recipient(pid: u32, sig: u8) -> SignalDeliveryOutcome {
 /// owns `tid`, then wakes only the targeted thread.  This matches the
 /// legacy `send_signal_to_thread` semantics.
 ///
+/// Also co-delivers a typed `thingos.signal` inbox message (canonical path).
+///
 /// When `sig == 0` the function only checks existence.
 pub fn deliver_to_thread_recipient(tid: u64, sig: u8) -> SignalDeliveryOutcome {
     let Some(pinfo) = crate::sched::process_info_for_tid_current(tid) else {
@@ -278,6 +305,19 @@ pub fn deliver_to_thread_recipient(tid: u64, sig: u8) -> SignalDeliveryOutcome {
         return SignalDeliveryOutcome::ExistenceConfirmed;
     }
 
+    // ── Step 1: Inbox delivery (canonical new model) ──────────────────────
+    let sender_tid = unsafe { crate::sched::current_tid_current() };
+    let pid = pinfo.lock().pid;
+    if let Err(reason) =
+        super::inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, None)
+    {
+        crate::kdebug!(
+            "signal::route thread inbox delivery failed sig={} tid={} reason={}",
+            sig, tid, reason
+        );
+    }
+
+    // ── Step 2: Pending-bit delivery (POSIX compatibility projection) ─────
     {
         let mut p = pinfo.lock();
         p.unix_compat.signals.post(sig);
