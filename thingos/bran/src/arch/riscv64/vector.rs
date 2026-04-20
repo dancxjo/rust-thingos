@@ -32,24 +32,24 @@ trap_entry:
     csrrw sp, sscratch, sp   // Restore SP (it was 0 or invalid)
     // sp is valid Kernel Stack.
     addi sp, sp, -288
-    
+
     // Save partial registers to use tmps
     sd x1, 0(sp)   // ra
     sd x3, 16(sp)  // gp
-    
+
     // Save Kernel SP (original value was sp + 288)
     addi t0, sp, 288
     sd t0, 8(sp)   // x2/sp
-    
+
     j 2f
 
 1:  // --- Came from User Mode ---
     // sp is now KStack. sscratch is User Stack.
     addi sp, sp, -288
-    
+
     sd x1, 0(sp)
     sd x3, 16(sp)
-    
+
     // Save User SP (from sscratch)
     csrr t0, sscratch
     sd t0, 8(sp)
@@ -87,27 +87,27 @@ trap_entry:
     // Save CSRs
     csrr t0, sstatus
     sd t0, 248(sp)
-    
+
     csrr t0, sepc
     sd t0, 256(sp)
-    
+
     csrr t0, stval
     sd t0, 264(sp)
-    
+
     csrr t0, scause
     sd t0, 272(sp)
-    
+
     // Call handler(tf)
     mv a0, sp
     call rust_trap_handler
-    
+
     // Restore
     ld t0, 248(sp)
     csrw sstatus, t0
-    
+
     ld t0, 256(sp)
     csrw sepc, t0
-    
+
     ld x1, 0(sp)
     ld x3, 16(sp)
     ld x4, 24(sp)
@@ -138,25 +138,25 @@ trap_entry:
     ld x29, 224(sp)
     ld x30, 232(sp)
     ld x31, 240(sp)
-    
+
     // Check if we need to return to User or Kernel
     // We check Previous Mode in Supervisor Status (SPP bit 8).
     // If SPP=1 (Supervisor), we return to Kernel.
     // If SPP=0 (User), we return to User.
-    
+
     ld t0, 248(sp) // Load sstatus again (it might be modified by handler, but we restored it to CSR)
     // Actually we should read from CSR or saved value. Saved value is reliable.
-    
+
     // Check SPP bit (bit 8)
     li t1, (1 << 8)
     and t1, t0, t1
     bnez t1, 3f
-    
+
     // --- Return to User ---
     // Restore User SP (x2) to sscratch
     ld t0, 8(sp)
     csrw sscratch, t0
-    
+
     addi sp, sp, 288
     // Swap sp and sscratch to restore User Stack
     csrrw sp, sscratch, sp
@@ -190,6 +190,8 @@ pub unsafe extern "C" fn rust_trap_handler(tf: &mut UserTrapFrame) {
                 // S-mode Timer Interrupt (STIP): advance time accounting and
                 // trigger a reschedule if needed.
                 kernel::sched::on_tick::<crate::arch::CurrentRuntime>();
+                crate::console::flush_deferred();
+                crate::console::blink_cursor();
             }
             1 => {
                 // S-mode Software Interrupt (SSIP): used as the reschedule IPI.

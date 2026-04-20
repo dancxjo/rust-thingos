@@ -24,6 +24,62 @@ const ACTIVATION_BANNER: &[u8] = b"\x1b[0mThing-OS kernel terminal (F12)\n";
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
 pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
 
+// ---------------------------------------------------------------------------
+// Deferred output ring buffer
+//
+// `put_char()` and `put_buf()` push bytes here instead of rendering glyphs
+// immediately.  The actual framebuffer rendering happens in
+// `flush_deferred()`, which is called from the timer tick (IRQ context) with
+// `try_lock` so it never blocks an interrupt.
+// ---------------------------------------------------------------------------
+const DEFERRED_CAP: usize = 8192;
+
+struct DeferredRing {
+    buf: [u8; DEFERRED_CAP],
+    head: usize,
+    len: usize,
+}
+
+impl DeferredRing {
+    const fn new() -> Self {
+        Self { buf: [0; DEFERRED_CAP], head: 0, len: 0 }
+    }
+
+    fn push(&mut self, b: u8) {
+        let tail = (self.head + self.len) % DEFERRED_CAP;
+        self.buf[tail] = b;
+        if self.len < DEFERRED_CAP {
+            self.len += 1;
+        } else {
+            // Overwrite oldest byte.
+            self.head = (self.head + 1) % DEFERRED_CAP;
+        }
+    }
+
+    fn push_slice(&mut self, data: &[u8]) {
+        for &b in data {
+            self.push(b);
+        }
+    }
+
+    /// Drain up to `out.len()` bytes. Returns count drained.
+    fn drain(&mut self, out: &mut [u8]) -> usize {
+        let n = self.len.min(out.len());
+        for i in 0..n {
+            out[i] = self.buf[self.head];
+            self.head = (self.head + 1) % DEFERRED_CAP;
+        }
+        self.len -= n;
+        n
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+static DEFERRED: Mutex<DeferredRing> = Mutex::new(DeferredRing::new());
+
 const GLYPH_TABLE_LEN: usize = 256;
 
 #[derive(Clone, Copy)]
@@ -211,8 +267,8 @@ impl FbConsole {
         } else if let Some(&g) = self.extended_glyphs.get(&code) {
             g
         } else {
-            let g = lookup_unifont_glyph(self.unifont_data, code)
-                .unwrap_or(self.glyphs[b'?' as usize]);
+            let g =
+                lookup_unifont_glyph(self.unifont_data, code).unwrap_or(self.glyphs[b'?' as usize]);
             self.extended_glyphs.insert(code, g);
             g
         };
@@ -645,11 +701,15 @@ pub fn put_char(c: u8) {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
-    let state = crate::RUNTIME.irq_disable();
-    if let Some(ref mut console) = *CONSOLE.lock() {
-        console.put_char(c);
+    DEFERRED.lock().push(c);
+}
+
+/// Enqueue a byte slice for deferred framebuffer rendering.
+pub fn put_buf(buf: &[u8]) {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
     }
-    crate::RUNTIME.irq_restore(state);
+    DEFERRED.lock().push_slice(buf);
 }
 
 /// Called from the timer IRQ to blink the cursor.
@@ -665,8 +725,80 @@ pub fn blink_cursor() {
     }
 }
 
+/// Drain the deferred ring buffer and render to the framebuffer console.
+///
+/// Called from the timer tick (and optionally from idle or explicit flush
+/// points).  Uses `try_lock` on both the ring buffer and the console so it
+/// never blocks an IRQ handler.
+///
+/// Processes up to `FLUSH_BATCH` bytes per call so a burst of log output
+/// doesn't monopolise the timer ISR.  Remaining bytes will be rendered on
+/// the next tick.
+const FLUSH_BATCH: usize = 512;
+
+pub fn flush_deferred() {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let mut local = [0u8; FLUSH_BATCH];
+
+    // Drain from the ring buffer (very short lock).
+    let n = {
+        let mut ring = match DEFERRED.try_lock() {
+            Some(r) => r,
+            None => return,
+        };
+        if ring.is_empty() {
+            return;
+        }
+        ring.drain(&mut local)
+    };
+
+    if n == 0 {
+        return;
+    }
+
+    // Render under the CONSOLE lock.
+    if let Some(ref mut guard) = CONSOLE.try_lock() {
+        if let Some(ref mut console) = **guard {
+            for &b in &local[..n] {
+                console.put_char(b);
+            }
+        }
+    } else {
+        // Console is busy — re-enqueue bytes so they aren't lost.
+        // They may appear after any bytes that arrived in the meantime,
+        // which is an acceptable reorder for a debug console.
+        if let Some(mut ring) = DEFERRED.try_lock() {
+            ring.push_slice(&local[..n]);
+        }
+        // If we can't re-lock the ring either, the bytes are lost — acceptable
+        // for a debug console under extreme contention.
+    }
+}
+
+/// Synchronous flush — drains the *entire* deferred ring buffer and renders
+/// immediately.  Intended for panic paths where we need output NOW.
+/// Callers should disable IRQs before calling if needed.
+pub fn flush_sync() {
+    let mut local = [0u8; FLUSH_BATCH];
+    loop {
+        let n = DEFERRED.lock().drain(&mut local);
+        if n == 0 {
+            break;
+        }
+        if let Some(ref mut console) = *CONSOLE.lock() {
+            for &b in &local[..n] {
+                console.put_char(b);
+            }
+        }
+    }
+}
+
 pub unsafe fn force_unlock() {
     unsafe {
         CONSOLE.force_unlock();
+        DEFERRED.force_unlock();
     }
 }
