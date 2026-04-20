@@ -633,12 +633,14 @@ mod tests {
 
     fn temp_dir_path(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        let millis = SystemTime::now()
+        let millis_u128 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("failed to get system time")
-            .as_millis() as u64;
+            .as_millis();
+        let millis = millis_u128.min(u64::MAX as u128) as u64;
         let pid = std::process::id();
-        path.push(format!("thingos-xtask-{name}-{pid}-{millis}"));
+        let tid = format!("{:?}", std::thread::current().id());
+        path.push(format!("thingos-xtask-{name}-{pid}-{millis}-{tid}"));
         std::fs::create_dir_all(&path).expect("create temp dir");
         path
     }
