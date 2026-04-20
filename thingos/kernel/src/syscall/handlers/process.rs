@@ -840,6 +840,20 @@ mod tests {
     const AT_PHDR: u64 = 3;
     const AT_ENTRY: u64 = 9;
 
+    fn build_test_authority(uid: u32, capability_mask: u64, name: &str) -> Authority {
+        Authority {
+            uid,
+            gid: uid,
+            name: alloc::string::String::from(name),
+            capability_mask,
+            capabilities: if (capability_mask & CAP_REBOOT) != 0 {
+                alloc::vec![alloc::string::String::from("reboot")]
+            } else {
+                alloc::vec::Vec::new()
+            },
+        }
+    }
+
     /// Helper: parse the serialized auxv blob back into `(type, value)` pairs.
     fn parse_blob(buf: &[u8]) -> alloc::vec::Vec<(u64, u64)> {
         let mut out = alloc::vec::Vec::new();
@@ -969,37 +983,19 @@ mod tests {
 
     #[test]
     fn reboot_privilege_allows_root_authority() {
-        let authority = Authority {
-            uid: 0,
-            gid: 0,
-            name: alloc::string::String::from("root"),
-            capability_mask: 0,
-            capabilities: alloc::vec::Vec::new(),
-        };
+        let authority = build_test_authority(0, 0, "root");
         assert!(crate::authority::bridge::check_privilege(&authority, "reboot").is_ok());
     }
 
     #[test]
     fn reboot_privilege_allows_capability_for_non_root() {
-        let authority = Authority {
-            uid: 1000,
-            gid: 1000,
-            name: alloc::string::String::from("svc"),
-            capability_mask: CAP_REBOOT,
-            capabilities: alloc::vec![alloc::string::String::from("reboot")],
-        };
+        let authority = build_test_authority(1000, CAP_REBOOT, "svc");
         assert!(crate::authority::bridge::check_privilege(&authority, "reboot").is_ok());
     }
 
     #[test]
     fn reboot_privilege_denies_unprivileged_non_root() {
-        let authority = Authority {
-            uid: 1000,
-            gid: 1000,
-            name: alloc::string::String::from("user"),
-            capability_mask: 0,
-            capabilities: alloc::vec::Vec::new(),
-        };
+        let authority = build_test_authority(1000, 0, "user");
         assert_eq!(
             crate::authority::bridge::check_privilege(&authority, "reboot"),
             Err(Errno::EPERM)
