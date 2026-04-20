@@ -285,18 +285,17 @@ fn register_observers_for_running(
     observed_pids: &mut BTreeMap<u64, ()>,
 ) {
     for managed in drivers.values_mut() {
-        let Some(pid) = managed.pid() else {
-            continue;
-        };
-        if observed_pids.contains_key(&pid) {
-            continue;
-        }
-        match register_job_observer(pid) {
-            Ok(()) => {
-                observed_pids.insert(pid, ());
+        if let Some(pid) = managed.pid() {
+            if observed_pids.contains_key(&pid) {
+                continue;
             }
-            Err(err) => {
-                warn!("CAMBIUM: failed to register job observer for pid {}: {:?}", pid, err);
+            match register_job_observer(pid) {
+                Ok(()) => {
+                    observed_pids.insert(pid, ());
+                }
+                Err(err) => {
+                    warn!("CAMBIUM: failed to register job observer for pid {}: {:?}", pid, err);
+                }
             }
         }
     }
@@ -362,17 +361,17 @@ fn decode_job_exit_notification(bytes: &[u8]) -> Option<(u32, i32)> {
     if bytes.len() < JOB_EXIT_NOTIFICATION_LEN {
         return None;
     }
-    let job_id = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let job_id = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?);
     if bytes[JOB_EXIT_STATE_OFFSET] != JOB_EXIT_STATE_EXITED {
         return None;
     }
     let code = if bytes[JOB_EXIT_CODE_PRESENT_OFFSET] == 1 {
-        i32::from_le_bytes([
-            bytes[JOB_EXIT_CODE_OFFSET],
-            bytes[JOB_EXIT_CODE_OFFSET + 1],
-            bytes[JOB_EXIT_CODE_OFFSET + 2],
-            bytes[JOB_EXIT_CODE_OFFSET + 3],
-        ])
+        i32::from_le_bytes(
+            bytes
+                .get(JOB_EXIT_CODE_OFFSET..JOB_EXIT_CODE_OFFSET + 4)?
+                .try_into()
+                .ok()?,
+        )
     } else {
         0
     };
