@@ -7,6 +7,7 @@ use abi::display_protocol::Rect;
 pub struct Client {
     pub id: u32,
     pub event_port: u32,
+    pub input_pid: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -80,10 +81,10 @@ impl Scene {
         }
     }
 
-    pub fn register_client(&mut self, event_port: u32) -> u32 {
+    pub fn register_client(&mut self, event_port: u32, input_pid: Option<u32>) -> u32 {
         let id = self.next_client_id;
         self.next_client_id = self.next_client_id.saturating_add(1);
-        self.clients.insert(id, Client { id, event_port });
+        self.clients.insert(id, Client { id, event_port, input_pid });
         id
     }
 
@@ -98,6 +99,10 @@ impl Scene {
 
     pub fn client_event_port(&self, client_id: u32) -> Option<u32> {
         self.clients.get(&client_id).map(|c| c.event_port)
+    }
+
+    pub fn client_inbox_pid(&self, client_id: u32) -> Option<u32> {
+        self.clients.get(&client_id).and_then(|c| c.input_pid)
     }
 
     pub fn create_surface(&mut self, client_id: u32) -> Option<u32> {

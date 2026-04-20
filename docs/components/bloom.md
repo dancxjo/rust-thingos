@@ -56,6 +56,7 @@ Clients connect over channels and use a surface-centric protocol with double-buf
 
 Client → Bloom requests:
 - `CONNECT(reply_channel, event_channel)`
+- `CONNECT_INBOX(reply_channel, event_channel, input_pid)`
 - `CREATE_SURFACE(reply_channel, client_id)`
 - `DESTROY_SURFACE(reply_channel, client_id, surface_id)`
 - `ATTACH_BUFFER(reply_channel, client_id, surface_id, handle, width, height, stride, format, modifier)`
@@ -69,10 +70,10 @@ Client → Bloom requests:
 Bloom → Client events:
 - `ACK(status, value, serial)`
 - `FRAME_DONE(surface_id, serial, timestamp_ns)`
-- `POINTER_ENTER/LEAVE/MOTION`
-- `POINTER_BUTTON`
-- `KEYBOARD_ENTER/LEAVE`
-- `KEYBOARD_KEY`
+- `POINTER_ENTER/LEAVE/MOTION` (typed inbox when `CONNECT_INBOX` is used)
+- `POINTER_BUTTON` (typed inbox when `CONNECT_INBOX` is used)
+- `KEYBOARD_ENTER/LEAVE` (typed inbox when `CONNECT_INBOX` is used)
+- `KEYBOARD_KEY` (typed inbox when `CONNECT_INBOX` is used)
 
 ## Internal module split
 

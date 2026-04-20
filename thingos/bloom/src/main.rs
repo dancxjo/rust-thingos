@@ -209,8 +209,21 @@ fn process_client_message(
 
     match req {
         ClientRequest::Connect(req) => {
-            let client_id =
-                if req.event_port == 0 { 0 } else { scene.register_client(req.event_port) };
+            let client_id = if req.event_port == 0 {
+                0
+            } else {
+                scene.register_client(req.event_port, None)
+            };
+            send_ack(req.reply_port, 0, client_id, 0);
+            client_id != 0
+        }
+        ClientRequest::ConnectInbox(req) => {
+            let client_id = if req.event_port == 0 {
+                0
+            } else {
+                let input_pid = if req.input_pid == 0 { None } else { Some(req.input_pid) };
+                scene.register_client(req.event_port, input_pid)
+            };
             send_ack(req.reply_port, 0, client_id, 0);
             client_id != 0
         }
