@@ -8,6 +8,8 @@ use spin::Mutex;
 use crate::framebuffer::Framebuffer;
 
 const CELL_H: u32 = 16;
+const TAB_WIDTH: usize = 4;
+const CSI_PARAM_CAP: usize = 8;
 const DEFAULT_FG: u32 = 0x00FF_FFFF;
 const DEFAULT_BG: u32 = 0x0000_0000;
 
@@ -25,7 +27,7 @@ struct Glyph {
 enum AnsiState {
     Normal,
     Esc,
-    Csi { params: [u16; 8], len: usize, cur: Option<u16> },
+    Csi { params: [u16; CSI_PARAM_CAP], len: usize, cur: Option<u16> },
 }
 
 pub struct FbConsole {
@@ -205,7 +207,7 @@ impl FbConsole {
                 b'\r' => self.cursor_x = 0,
                 0x08 => self.cursor_x = self.cursor_x.saturating_sub(8),
                 b'\t' => {
-                    for _ in 0..4 {
+                    for _ in 0..TAB_WIDTH {
                         self.put_visible_char(' ');
                     }
                 }
@@ -214,7 +216,8 @@ impl FbConsole {
             },
             AnsiState::Esc => {
                 if b == b'[' {
-                    self.ansi = AnsiState::Csi { params: [0; 8], len: 0, cur: None };
+                    self.ansi =
+                        AnsiState::Csi { params: [0; CSI_PARAM_CAP], len: 0, cur: None };
                 } else {
                     self.ansi = AnsiState::Normal;
                 }
@@ -237,8 +240,8 @@ impl FbConsole {
                     params[*len] = cur.unwrap_or(0);
                     *len += 1;
                 }
-                let mut used = [0u16; 8];
-                let copy_len = (*len).min(8);
+                let mut used = [0u16; CSI_PARAM_CAP];
+                let copy_len = (*len).min(CSI_PARAM_CAP);
                 used[..copy_len].copy_from_slice(&params[..copy_len]);
                 self.apply_csi(b, &used[..copy_len]);
                 self.ansi = AnsiState::Normal;
@@ -250,6 +253,7 @@ impl FbConsole {
         self.active = true;
         self.reset_style();
         self.clear_to_bg();
+        // Hide cursor while rendering through the bootstrap framebuffer terminal.
         for &b in b"\x1b[0m\x1b[?25lThing-OS kernel terminal (F12)\n" {
             self.handle_byte(b);
         }
@@ -316,7 +320,7 @@ fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
         let Some(code) = parse_hex_u32(&line[..sep]) else {
             continue;
         };
-        if !(code == b'?' as u32 || (0x20..=0x7E).contains(&code)) {
+        if !(0x20..=0x7E).contains(&code) {
             continue;
         }
         let hex = &line[sep + 1..];

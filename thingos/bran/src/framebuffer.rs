@@ -7,13 +7,13 @@ unsafe fn fill_u32_sse2(buf: &mut [u32], color: u32) {
     use core::arch::x86_64::{__m128i, _mm_set1_epi32, _mm_storeu_si128};
     let chunks = buf.len() / 4;
     let rem = buf.len() % 4;
-    let vec = unsafe { _mm_set1_epi32(color as i32) };
+    let vec = _mm_set1_epi32(color as i32);
     let ptr = buf.as_mut_ptr();
     for i in 0..chunks {
-        unsafe { _mm_storeu_si128(ptr.add(i * 4) as *mut __m128i, vec) };
+        _mm_storeu_si128(ptr.add(i * 4) as *mut __m128i, vec);
     }
     for i in 0..rem {
-        unsafe { *ptr.add(chunks * 4 + i) = color };
+        *ptr.add(chunks * 4 + i) = color;
     }
 }
 
