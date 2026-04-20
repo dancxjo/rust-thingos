@@ -116,6 +116,17 @@ fn main(packed_handles: usize) -> ! {
         None
     };
 
+    let bloom_evt_fd: Option<u32> = if bloom_evt_write != 0 {
+        vfs_handle_from_port(bloom_evt_write).ok()
+    } else {
+        None
+    };
+    let evt_input_echo_fd: Option<u32> = if evt_input_echo_write != 0 {
+        vfs_handle_from_port(evt_input_echo_write).ok()
+    } else {
+        None
+    };
+
     loop {
         let events = match ws.wait(None::<stem::time::Duration>) {
             Ok(evs) => evs,
@@ -198,14 +209,24 @@ fn main(packed_handles: usize) -> ! {
                                     }
 
                                     // Send to consumers
-                                    if port_send_all(bloom_evt_write, event_bytes).is_err() {
+                                    let bloom_send = if let Some(fd) = bloom_evt_fd {
+                                        vfs_write(fd, event_bytes)
+                                    } else {
+                                        port_send_all(bloom_evt_write, event_bytes)
+                                    };
+                                    if bloom_send.is_err() {
                                         drop_counter += 1;
                                     }
 
-                                    if evt_input_echo_write != 0
-                                        && port_send_all(evt_input_echo_write, event_bytes).is_err()
-                                    {
-                                        drop_counter += 1;
+                                    if evt_input_echo_write != 0 {
+                                        let echo_send = if let Some(fd) = evt_input_echo_fd {
+                                            vfs_write(fd, event_bytes)
+                                        } else {
+                                            port_send_all(evt_input_echo_write, event_bytes)
+                                        };
+                                        if echo_send.is_err() {
+                                            drop_counter += 1;
+                                        }
                                     }
 
                                     // Shift remaining

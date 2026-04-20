@@ -27,6 +27,7 @@
 /// Re-exported from `abi` so callers do not need to import `abi` separately.
 pub use abi::KindId;
 use abi::errors::Errno;
+use abi::syscall::vfs_flags::O_RDONLY;
 use abi::syscall::{SYS_MSG_BROADCAST, SYS_MSG_RECV, SYS_MSG_SEND};
 
 use crate::syscall::arch::raw_syscall6;
@@ -169,4 +170,12 @@ pub fn msg_broadcast(pgid: u32, kind: KindId, payload: &[u8]) -> Result<Broadcas
         )
     };
     abi::errors::errno(ret).map(BroadcastResult::from_packed)
+}
+
+/// Open the calling process inbox as a pollable/readable VFS FD.
+///
+/// This uses the procfs path-open model (`/proc/self/inbox`) so callers can
+/// combine inbox readiness with regular files and channel FDs in `SYS_FS_POLL`.
+pub fn msg_inbox_open_self() -> Result<u32, Errno> {
+    crate::syscall::vfs::vfs_open("/proc/self/inbox", O_RDONLY)
 }

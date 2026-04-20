@@ -187,13 +187,15 @@ Phase B: Shared core extraction — Prototype done
 Phase C: Readiness unification — Partially done
 1. ✅ Add inbox VFS wrapper node (poll + waiter hooks) — implemented as `InboxNode`
    in `kernel/src/vfs/inbox_node.rs`.
-2. ⬜ Expose inbox FD acquisition path (syscall or path-open model).
-3. ⬜ Add tests for mixed poll sets: files + channels + inbox FDs.
+2. ✅ Expose inbox FD acquisition path via path-open model (`/proc/self/inbox`,
+   `/proc/<pid>/inbox` in `kernel/src/vfs/procfs.rs`).
+3. ✅ Add tests for mixed poll sets: files + channels + inbox FDs
+   (`utils/poll_mux`).
 Phase C: Readiness unification
 1. ✅ Add inbox VFS wrapper node (poll + waiter hooks) — implemented as `InboxNode`
    in `kernel/src/vfs/inbox_node.rs`.
-2. Expose inbox FD acquisition path (syscall or path-open model).
-3. Add tests for mixed poll sets: files + channels + inbox FDs.
+2. ✅ Expose inbox FD acquisition path (path-open model through procfs inbox nodes).
+3. ✅ Add tests for mixed poll sets: files + channels + inbox FDs.
 
 Phase D: Adapter and deprecation cleanup — Partially done
 1. ✅ Document migration off deprecated `SYS_CHANNEL_WAIT`
