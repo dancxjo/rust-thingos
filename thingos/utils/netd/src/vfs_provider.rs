@@ -36,15 +36,18 @@
 //!
 //! ## IPC substrate — migration note
 //!
-//! This module currently dispatches VFS RPC requests by parsing `VfsRpcReqHeader`
-//! manually in `drain_rpcs` / `handle_one`.  New provider code should use
-//! `ipc_helpers::provider::ProviderLoop::try_next_request` + `ProviderResponse`
-//! instead — see `drivers/virtio_netd/src/vfs_provider.rs` for the migrated
-//! reference implementation.
+//! netd intentionally keeps the inline VFS RPC decoder in `drain_rpcs` /
+//! `handle_one` for now.  The current `op_*` methods write responses directly
+//! to the reply port and are called from a poll loop that also drives synchronous
+//! DNS completion, so a full `ProviderLoop` conversion would be a larger refactor.
 //!
-//! FIXME: migrate to `ProviderLoop` (add `ipc_helpers` dep to `netd/Cargo.toml`,
-//! convert `drain_rpcs` to use `try_next_request`, return `ProviderResponse` from
-//! all `op_*` methods).  Tracked in the VFS RPC IPC migration audit.
+//! Architecture expectation:
+//! - keep request draining non-blocking (`port_try_recv`) so networking work and
+//!   VFS servicing continue to interleave;
+//! - keep response framing compatible with `VfsRpcReqHeader` (covered by unit
+//!   tests in this module);
+//! - prefer `ipc_helpers::provider::ProviderLoop` for new providers (see
+//!   `drivers/virtio_netd/src/vfs_provider.rs`).
 extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -275,14 +278,9 @@ impl NetVfsProvider {
         socket_api: &mut SocketApi,
         buf: &[u8],
     ) {
-        let hdr_sz = core::mem::size_of::<VfsRpcReqHeader>();
-        if buf.len() < hdr_sz {
+        let Some((resp_port, op_byte, payload)) = parse_rpc_header(buf) else {
             return;
-        }
-
-        let resp_port = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as PortHandle;
-        let op_byte = buf[4];
-        let payload = &buf[hdr_sz..];
+        };
 
         let op = match VfsRpcOp::from_u8(op_byte) {
             Some(o) => o,
@@ -1600,9 +1598,10 @@ impl ReadResult {
 
 #[cfg(test)]
 mod tests {
+    use abi::vfs_rpc::VfsRpcReqHeader;
     use smoltcp::wire::Ipv4Address;
 
-    use super::{IpConfig, NetVfsProvider};
+    use super::{IpConfig, NetVfsProvider, parse_rpc_header};
 
     fn provider_with_config(dns_server: Ipv4Address, gateway: Ipv4Address) -> NetVfsProvider {
         NetVfsProvider {
@@ -1638,6 +1637,25 @@ mod tests {
         let provider =
             provider_with_config(Ipv4Address::UNSPECIFIED, Ipv4Address::new(10, 0, 2, 2));
         assert_eq!(provider.effective_dns_server(), Some(Ipv4Address::new(10, 0, 2, 2)));
+    }
+
+    #[test]
+    fn parse_rpc_header_rejects_short_frames() {
+        let short = [0u8; 4];
+        assert!(parse_rpc_header(&short).is_none());
+    }
+
+    #[test]
+    fn parse_rpc_header_returns_port_op_and_payload() {
+        let mut req = vec![0u8; core::mem::size_of::<VfsRpcReqHeader>() + 3];
+        req[0..4].copy_from_slice(&7u32.to_le_bytes());
+        req[4] = 3;
+        req[core::mem::size_of::<VfsRpcReqHeader>()..].copy_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+        let (resp_port, op, payload) = parse_rpc_header(&req).expect("expected valid header");
+        assert_eq!(resp_port, 7);
+        assert_eq!(op, 3);
+        assert_eq!(payload, &[0xAA, 0xBB, 0xCC]);
     }
 }
 
@@ -1693,4 +1711,15 @@ fn parse_ipv4(s: &str) -> Option<Ipv4Address> {
         parts[2].parse().ok()?,
         parts[3].parse().ok()?,
     ))
+}
+
+fn parse_rpc_header(buf: &[u8]) -> Option<(PortHandle, u8, &[u8])> {
+    let hdr_sz = core::mem::size_of::<VfsRpcReqHeader>();
+    if buf.len() < hdr_sz {
+        return None;
+    }
+
+    let resp_port = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as PortHandle;
+    let op = buf[4];
+    Some((resp_port, op, &buf[hdr_sz..]))
 }
