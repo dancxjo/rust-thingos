@@ -1,6 +1,5 @@
 //! Display Device Ops (IOCTLs)
 
-use super::types::{BufferHandle, BufferId, CommitRequest, DisplayInfo};
 
 /// Retrieve display device information and capabilities.
 /// Output: DisplayInfo

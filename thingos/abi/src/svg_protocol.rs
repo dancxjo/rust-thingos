@@ -7,7 +7,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use crate::wire::ThingId;
 
 /// Source of SVG data for rasterization
 #[derive(Debug, Clone)]

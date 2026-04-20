@@ -5,6 +5,7 @@
 //! packed layouts for payload structs.
 
 use core::marker::PhantomData;
+#[cfg(feature = "kernel-id-gen")]
 use core::sync::atomic::AtomicU64;
 #[cfg(feature = "kernel-id-gen")]
 use core::sync::atomic::Ordering;

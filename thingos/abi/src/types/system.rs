@@ -1,7 +1,6 @@
 //! Shared types used in syscall payloads.
 //! Must be #[repr(C)] to ensure stable layout.
 
-use crate::{BlobId, SymbolId};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
