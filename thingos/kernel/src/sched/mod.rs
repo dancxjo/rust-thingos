@@ -5494,7 +5494,7 @@ mod tests {
 
         // Keep a small hot set of thread IDs cycling through many create/exit
         // operations to stress index maintenance under churn.
-        const CHURN_ITERATIONS: usize = 512; // enough passes to repeatedly reshuffle slots
+        const CHURN_ITERATIONS: usize = 512; // enough iterations to repeatedly reshuffle slots
         const CHURN_ACTIVE_TID_COUNT: usize = 32; // small hot set maximizes remove/reinsert reuse
         for i in 0..CHURN_ITERATIONS {
             let tid = 5000 + (i % CHURN_ACTIVE_TID_COUNT) as u64;
