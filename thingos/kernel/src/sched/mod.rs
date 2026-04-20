@@ -3923,7 +3923,11 @@ pub fn register_timeout_wake<R: BootRuntime>(tid: TaskId, wake_tick: u64) {
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         let now = TICK_COUNT.load(Ordering::Relaxed);
-        sched.sleep_duration_ticks_by_tid.insert(tid, wake_tick.saturating_sub(now));
+        if wake_tick > now {
+            sched.sleep_duration_ticks_by_tid.insert(tid, wake_tick - now);
+        } else {
+            sched.sleep_duration_ticks_by_tid.remove(&tid);
+        }
         sched.state.add_task_to_sleep_queue(tid, wake_tick);
     }
     rt.irq_restore(_irq);
@@ -8636,8 +8640,8 @@ mod tests {
 
         // Mark this as a very short sleep so wake placement preserves locality.
         sched.sleep_duration_ticks_by_tid.insert(9933, 1);
-        TICK_COUNT.store(100, Ordering::Relaxed);
-        sched.state.add_task_to_sleep_queue(9933, 50);
+        TICK_COUNT.store(101, Ordering::Relaxed);
+        sched.state.add_task_to_sleep_queue(9933, 101);
         sched.wake_sleepers();
 
         assert!(
