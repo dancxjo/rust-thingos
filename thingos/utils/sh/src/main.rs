@@ -657,6 +657,7 @@ fn utf8_char_count(bytes: &[u8]) -> usize {
 }
 
 fn redraw_line_at_cursor(bytes: &[u8], cursor: usize, last_status: Option<i32>) {
+    write_str("\x1B[?25l"); // hide cursor during redraw
     write_str("\r\x1B[K");
     prompt(last_status);
     if let Ok(text) = core::str::from_utf8(bytes) {
@@ -669,6 +670,7 @@ fn redraw_line_at_cursor(bytes: &[u8], cursor: usize, last_status: Option<i32>) 
         let seq = format!("\x1B[{}D", cols);
         write_str(&seq);
     }
+    write_str("\x1B[?25h"); // show cursor after redraw
 }
 
 fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineResult {
@@ -696,6 +698,7 @@ fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineRes
     }
 
     let _tty_guard = tty_guard;
+    write_str("\x1B[?25h"); // ensure cursor is visible for input
     let mut one = [0u8; 1];
     let mut bytes: Vec<u8> = Vec::new();
     // Byte index of the insertion point within `bytes`.
@@ -1299,6 +1302,7 @@ fn main(_arg: usize) -> ! {
     }
 
     let _ = vfs::tcsetpgrp(TTY_FD, shell.shell_pgid);
+    write_str("\x1B[?25h"); // restore cursor visibility on exit
     shell.terminate_jobs();
     syscall::exit(0)
 }
