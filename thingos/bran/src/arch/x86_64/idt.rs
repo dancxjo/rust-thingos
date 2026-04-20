@@ -748,11 +748,11 @@ fn capture_ps2_keyboard_irq() -> bool {
 
 fn poll_ps2_keyboard_fallback() -> bool {
     let (pause_dump, f12_press, captured) = capture_ps2_keyboard(8);
-    if captured != 0 {
-        kernel::irq::dispatch_irq(0x21);
-    }
     if f12_press {
         crate::console::activate_onscreen_terminal();
+    }
+    if captured != 0 {
+        kernel::irq::dispatch_irq(0x21);
     }
     pause_dump
 }
@@ -1054,15 +1054,15 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
 
     let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let (pause_dump, f12_press, captured) = capture_ps2_keyboard(32);
+    if f12_press {
+        crate::console::activate_onscreen_terminal();
+    }
 
     if captured != 0 {
         if count <= 3 || (count % 128 == 0) {
             kinfo!("PS/2 keyboard NMI fired (count={})", count);
         }
         kernel::irq::dispatch_irq(0x21);
-    }
-    if f12_press {
-        crate::console::activate_onscreen_terminal();
     }
 
     if pause_dump {

@@ -8,6 +8,7 @@ use spin::Mutex;
 use crate::framebuffer::Framebuffer;
 
 const CELL_H: u32 = 16;
+const CELL_W: u32 = 8;
 const TAB_WIDTH: usize = 4;
 const CSI_PARAM_CAP: usize = 8;
 const DEFAULT_FG: u32 = 0x00FF_FFFF;
@@ -215,7 +216,8 @@ impl FbConsole {
                 let row = params.first().copied().unwrap_or(1).max(1) as u32;
                 let col = params.get(1).copied().unwrap_or(1).max(1) as u32;
                 self.cursor_y = (row - 1).saturating_mul(CELL_H).min(self.fb.height.saturating_sub(1));
-                self.cursor_x = (col - 1).saturating_mul(8).min(self.fb.width.saturating_sub(1));
+                self.cursor_x =
+                    (col - 1).saturating_mul(CELL_W).min(self.fb.width.saturating_sub(1));
             }
             _ => {}
         }
@@ -227,7 +229,7 @@ impl FbConsole {
                 0x1B => self.ansi = AnsiState::Esc,
                 b'\n' => self.newline(),
                 b'\r' => self.cursor_x = 0,
-                0x08 => self.cursor_x = self.cursor_x.saturating_sub(8),
+                0x08 => self.cursor_x = self.cursor_x.saturating_sub(CELL_W),
                 b'\t' => {
                     for _ in 0..TAB_WIDTH {
                         self.put_visible_char(' ');
@@ -386,6 +388,14 @@ fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
                 len: pairs as u8,
             },
         );
+    }
+    if !out.contains_key(&(b'?' as u32)) {
+        let mut bytes = [0u8; 32];
+        // Minimal 8x16 placeholder frame.
+        for row in 0..16usize {
+            bytes[row] = if row == 0 || row == 15 { 0x7E } else { 0x42 };
+        }
+        out.insert(b'?' as u32, Glyph { width: 8, bytes, len: 16 });
     }
     out
 }
