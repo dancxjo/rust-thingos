@@ -64,6 +64,10 @@ pub struct ConnectRequest {
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
+/// Extended connect request that enables inbox-based input delivery.
+///
+/// `input_pid` is the target process ID whose inbox will receive typed pointer
+/// and keyboard events from Bloom.
 pub struct ConnectInboxRequest {
     pub header: MessageHeader,
     pub reply_port: u32,

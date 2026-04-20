@@ -101,7 +101,7 @@ impl Scene {
         self.clients.get(&client_id).map(|c| c.event_port)
     }
 
-    pub fn client_input_pid(&self, client_id: u32) -> Option<u32> {
+    pub fn client_inbox_pid(&self, client_id: u32) -> Option<u32> {
         self.clients.get(&client_id).and_then(|c| c.input_pid)
     }
 

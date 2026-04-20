@@ -229,8 +229,12 @@ fn pressed_flag(pressed: bool) -> u8 {
     if pressed { 1 } else { 0 }
 }
 
+/// Deliver a serialized Bloom event to a client.
+///
+/// Prefers typed inbox delivery when the client registered `input_pid`
+/// via `CONNECT_INBOX`; otherwise falls back to legacy event-port delivery.
 fn send_client_event(scene: &Scene, client_id: u32, kind: KindId, payload: &[u8]) {
-    if let Some(pid) = scene.client_input_pid(client_id) {
+    if let Some(pid) = scene.client_inbox_pid(client_id) {
         let _ = msg_send(pid, kind, payload);
     } else if let Some(ch) = scene.client_event_port(client_id) {
         let _ = port_send_all(ch, payload);
