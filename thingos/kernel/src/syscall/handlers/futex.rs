@@ -4,7 +4,7 @@
 //! This is the backbone for Rust std's sync primitives (Mutex, Condvar,
 //! RwLock, thread parking).
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
@@ -19,7 +19,11 @@ type TaskId = u64;
 type FutexKey = (u32, usize);
 
 /// Global futex wait-queue table.
-static FUTEX_TABLE: Mutex<BTreeMap<FutexKey, Vec<TaskId>>> = Mutex::new(BTreeMap::new());
+///
+/// Each address maps to a FIFO queue of waiting thread IDs.  Using
+/// `VecDeque` instead of `Vec` gives O(1) pop from the front (FIFO wake
+/// order) and avoids starvation of long-waiting threads.
+static FUTEX_TABLE: Mutex<BTreeMap<FutexKey, VecDeque<TaskId>>> = Mutex::new(BTreeMap::new());
 
 fn futex_scope_id() -> u32 {
     if let Some(pinfo) = crate::sched::process_info_current() {
@@ -82,7 +86,7 @@ pub fn sys_futex_wait(uaddr: usize, expected: u32, timeout_ns: u64) -> SysResult
         if current_val != expected {
             return Err(Errno::EAGAIN);
         }
-        table.entry(key).or_insert_with(Vec::new).push(tid);
+        table.entry(key).or_insert_with(VecDeque::new).push_back(tid);
     }
 
     if timeout_ns == 0 {
@@ -144,7 +148,7 @@ fn futex_remove_self(key: &FutexKey, tid: TaskId) -> bool {
 
 /// `sys_futex_wake(uaddr, count)`
 ///
-/// Wake up to `count` threads waiting on `uaddr`.
+/// Wake up to `count` threads waiting on `uaddr` in FIFO order.
 /// Returns the number of threads actually woken.
 pub fn sys_futex_wake(uaddr: usize, count: u32) -> SysResult<usize> {
     let key = futex_key(uaddr);
@@ -158,10 +162,9 @@ pub fn sys_futex_wake(uaddr: usize, count: u32) -> SysResult<usize> {
         let mut table = FUTEX_TABLE.lock();
         if let Some(waiters) = table.get_mut(&key) {
             let n = (count as usize).min(waiters.len());
-            // Pop from the tail (LIFO within the Vec; insertion order is FIFO
-            // relative to push, so this wakes the most-recently-queued first
-            // — consistent with the previous behaviour).
-            let drained: Vec<TaskId> = waiters.drain(waiters.len() - n..).collect();
+            // Drain from the front (FIFO) to wake the longest-waiting threads
+            // first and prevent starvation.
+            let drained: Vec<TaskId> = waiters.drain(..n).collect();
             if waiters.is_empty() {
                 table.remove(&key);
             }
@@ -225,18 +228,19 @@ mod tests {
         let scope = 0xAABB_0001u32;
         let key = futex_key_for_scope(scope, &val as *const u32 as usize);
 
-        // Manually enqueue three waiters.
-        FUTEX_TABLE.lock().entry(key).or_insert_with(Vec::new).extend([10u64, 11u64, 12u64]);
+        // Manually enqueue three waiters (FIFO: 10 is oldest, 12 is newest).
+        FUTEX_TABLE
+            .lock()
+            .entry(key)
+            .or_insert_with(VecDeque::new)
+            .extend([10u64, 11u64, 12u64]);
 
-        // Wake only 2.
-        let uaddr = &val as *const u32 as usize;
-        // Temporarily patch scope resolution is not needed — we test
-        // sys_futex_wake indirectly by driving the table entry directly.
+        // Wake only 2 (FIFO: should wake 10 and 11, leaving 12).
         let to_wake: Vec<u64> = {
             let mut table = FUTEX_TABLE.lock();
             if let Some(waiters) = table.get_mut(&key) {
                 let n = 2usize.min(waiters.len());
-                let d: Vec<u64> = waiters.drain(waiters.len() - n..).collect();
+                let d: Vec<u64> = waiters.drain(..n).collect();
                 if waiters.is_empty() {
                     table.remove(&key);
                 }
@@ -251,8 +255,9 @@ mod tests {
 
         assert_eq!(to_wake.len(), 2);
         assert_eq!(WOKEN_COUNT.load(Ordering::SeqCst), 2);
-        // One waiter must remain.
+        // The oldest two (10, 11) were woken; 12 remains.
         assert_eq!(FUTEX_TABLE.lock().get(&key).map(|w| w.len()).unwrap_or(0), 1);
+        assert_eq!(FUTEX_TABLE.lock().get(&key).and_then(|w| w.front().copied()), Some(12u64));
 
         // Cleanup.
         FUTEX_TABLE.lock().remove(&key);

@@ -1,3 +1,5 @@
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use kernel::{BootModuleDesc, BootModuleKind};
 use limine::BaseRevision;
 use limine::request::{
@@ -55,59 +57,85 @@ static mut MODULES_CACHE: [BootModuleDesc; MAX_MODULES] = [BootModuleDesc {
     phys_end: 0,
     kind: BootModuleKind::Unknown,
 }; MAX_MODULES];
-static mut MODULES_LEN: usize = 0;
-static mut MODULES_INIT: bool = false;
+
+/// Number of valid entries written into `MODULES_CACHE`.
+static MODULES_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Set to `true` (with `Release`) once `MODULES_CACHE` and `MODULES_LEN` are
+/// fully written.  Readers load this with `Acquire` to observe the completed
+/// writes.
+static MODULES_INIT: AtomicBool = AtomicBool::new(false);
 
 pub fn get_modules() -> &'static [BootModuleDesc] {
-    unsafe {
-        if !MODULES_INIT {
-            if let Some(response) = MODULE_REQUEST.get_response() {
-                let files = response.modules();
-                let count = core::cmp::min(files.len(), MAX_MODULES);
-                kernel::kdebug!("Limine: Found {} boot modules", files.len());
-                for i in 0..count {
-                    let file = files[i];
-
-                    // Name
-                    let name = file.path().to_str().unwrap_or("unknown");
-                    let cmdline = core::str::from_utf8(file.cmdline()).unwrap_or("");
-                    kernel::ktrace!(
-                        "  [{}] {} (cmdline='{}') size={}",
-                        i,
-                        name,
-                        cmdline,
-                        file.size()
-                    );
-
-                    // Data
-                    let ptr = file.addr();
-                    let len = file.size() as usize;
-                    let bytes = core::slice::from_raw_parts(ptr, len);
-
-                    // Physical address
-                    let hhdm = HHDM_REQUEST.get_response().map(|r| r.offset()).unwrap_or(0);
-                    let virt_addr = ptr as u64;
-                    let phys_start = if virt_addr >= hhdm {
-                        virt_addr - hhdm
-                    } else {
-                        virt_addr
-                    };
-
-                    MODULES_CACHE[i] = BootModuleDesc {
-                        name,
-                        cmdline,
-                        bytes,
-                        phys_start,
-                        phys_end: phys_start + len as u64,
-                        kind: BootModuleKind::Unknown,
-                    };
-                }
-                MODULES_LEN = count;
-            }
-            MODULES_INIT = true;
-        }
-        &MODULES_CACHE[..MODULES_LEN]
+    // Fast path: already initialised.  The Acquire load synchronises with the
+    // Release store below, guaranteeing visibility of MODULES_CACHE contents.
+    if MODULES_INIT.load(Ordering::Acquire) {
+        let len = MODULES_LEN.load(Ordering::Relaxed);
+        return unsafe { &MODULES_CACHE[..len] };
     }
+
+    let count = if let Some(response) = MODULE_REQUEST.get_response() {
+        let files = response.modules();
+        let total = files.len();
+
+        if total > MAX_MODULES {
+            kernel::kwarn!(
+                "get_modules: Limine reports {} boot modules; only first {} fit in cache (rest dropped)",
+                total,
+                MAX_MODULES
+            );
+        }
+
+        let count = core::cmp::min(total, MAX_MODULES);
+        kernel::kdebug!("Limine: Found {} boot modules", total);
+        for i in 0..count {
+            let file = files[i];
+
+            // Name
+            let name = file.path().to_str().unwrap_or("unknown");
+            let cmdline = core::str::from_utf8(file.cmdline()).unwrap_or("");
+            kernel::ktrace!(
+                "  [{}] {} (cmdline='{}') size={}",
+                i,
+                name,
+                cmdline,
+                file.size()
+            );
+
+            // Data
+            let ptr = file.addr();
+            let len = file.size() as usize;
+            let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+
+            // Physical address
+            let hhdm = HHDM_REQUEST.get_response().map(|r| r.offset()).unwrap_or(0);
+            let virt_addr = ptr as u64;
+            let phys_start = if virt_addr >= hhdm { virt_addr - hhdm } else { virt_addr };
+
+            unsafe {
+                MODULES_CACHE[i] = BootModuleDesc {
+                    name,
+                    cmdline,
+                    bytes,
+                    phys_start,
+                    phys_end: phys_start + len as u64,
+                    kind: BootModuleKind::Unknown,
+                };
+            }
+        }
+        count
+    } else {
+        0
+    };
+
+    // Publish count (Relaxed — the Release on MODULES_INIT below provides the
+    // ordering guarantee to paired Acquire readers).
+    MODULES_LEN.store(count, Ordering::Relaxed);
+    // Release: ensures all writes to MODULES_CACHE and MODULES_LEN happen-before
+    // any Acquire load of MODULES_INIT in another CPU.
+    MODULES_INIT.store(true, Ordering::Release);
+
+    unsafe { &MODULES_CACHE[..count] }
 }
 
 pub fn get_kernel_cmdline() -> &'static str {
