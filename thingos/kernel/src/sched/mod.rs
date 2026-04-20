@@ -246,6 +246,7 @@ const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 64;
 const PROACTIVE_REBALANCE_TICK_STRIDE: u64 = 8;
 const PROACTIVE_REBALANCE_LOCAL_DEPTH_MAX: usize = 0;
+const PROACTIVE_REBALANCE_MIN_BUSIEST_DEPTH: usize = 2;
 const PROACTIVE_REBALANCE_MIN_DEPTH_GAP: usize = 2;
 const PROACTIVE_REBALANCE_MIN_VARIANCE: u64 = 4;
 const PROACTIVE_REBALANCE_MIN_IMBALANCE_TICKS: u64 = 32;
@@ -2714,7 +2715,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
     }
 
     fn maybe_proactive_rebalance(&mut self, local_cpu: usize, now_tick: u64) {
-        if now_tick == 0 || now_tick % PROACTIVE_REBALANCE_TICK_STRIDE != 0 {
+        if now_tick % PROACTIVE_REBALANCE_TICK_STRIDE != 0 {
             return;
         }
 
@@ -2733,7 +2734,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             .map(|cpu| runq_depth_for_cpu(&self.state, cpu))
             .max()
             .unwrap_or(0);
-        if busiest_depth < 2 || busiest_depth < local_depth + PROACTIVE_REBALANCE_MIN_DEPTH_GAP {
+        if busiest_depth < PROACTIVE_REBALANCE_MIN_BUSIEST_DEPTH
+            || busiest_depth < local_depth + PROACTIVE_REBALANCE_MIN_DEPTH_GAP
+        {
             return;
         }
 
