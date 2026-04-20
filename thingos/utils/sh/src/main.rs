@@ -626,16 +626,47 @@ fn complete_from_current_dir(fragment: &str) -> Option<String> {
     None
 }
 
+/// Move a byte index backward past one complete UTF-8 character.
+fn utf8_prev_boundary(bytes: &[u8], pos: usize) -> usize {
+    if pos == 0 {
+        return 0;
+    }
+    let mut i = pos - 1;
+    // Skip continuation bytes (10xxxxxx).
+    while i > 0 && bytes[i] & 0xC0 == 0x80 {
+        i -= 1;
+    }
+    i
+}
+
+/// Move a byte index forward past one complete UTF-8 character.
+fn utf8_next_boundary(bytes: &[u8], pos: usize) -> usize {
+    if pos >= bytes.len() {
+        return bytes.len();
+    }
+    let mut i = pos + 1;
+    while i < bytes.len() && bytes[i] & 0xC0 == 0x80 {
+        i += 1;
+    }
+    i
+}
+
+/// Count approximate display columns for a byte slice (1 column per character).
+fn utf8_char_count(bytes: &[u8]) -> usize {
+    if let Ok(s) = core::str::from_utf8(bytes) { s.chars().count() } else { bytes.len() }
+}
+
 fn redraw_line_at_cursor(bytes: &[u8], cursor: usize, last_status: Option<i32>) {
     write_str("\r\x1B[K");
     prompt(last_status);
     if let Ok(text) = core::str::from_utf8(bytes) {
         write_str(text);
     }
-    // Move the terminal cursor back to the insertion point when not at EOL.
-    let back = bytes.len() - cursor;
-    if back > 0 {
-        let seq = format!("\x1B[{}D", back);
+    // Move the terminal cursor back by the number of *characters* after the
+    // insertion point, not the number of bytes.
+    let cols = utf8_char_count(&bytes[cursor..]);
+    if cols > 0 {
+        let seq = format!("\x1B[{}D", cols);
         write_str(&seq);
     }
 }
@@ -736,8 +767,9 @@ fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineRes
                 0x08 | 0x7f => {
                     // Backspace / DEL: delete the character before the cursor
                     if cursor > 0 {
-                        cursor -= 1;
-                        bytes.remove(cursor);
+                        let prev = utf8_prev_boundary(&bytes, cursor);
+                        bytes.drain(prev..cursor);
+                        cursor = prev;
                         redraw_line_at_cursor(&bytes, cursor, last_status);
                     }
                 }
@@ -832,14 +864,14 @@ fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineRes
                         b'C' => {
                             // Right arrow: move cursor one character to the right
                             if cursor < bytes.len() {
-                                cursor += 1;
+                                cursor = utf8_next_boundary(&bytes, cursor);
                                 write_str("\x1B[C");
                             }
                         }
                         b'D' => {
                             // Left arrow: move cursor one character to the left
                             if cursor > 0 {
-                                cursor -= 1;
+                                cursor = utf8_prev_boundary(&bytes, cursor);
                                 write_str("\x1B[D");
                             }
                         }
@@ -864,7 +896,8 @@ fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineRes
                                 3 => {
                                     // Delete: remove the character at the cursor
                                     if cursor < bytes.len() {
-                                        bytes.remove(cursor);
+                                        let next = utf8_next_boundary(&bytes, cursor);
+                                        bytes.drain(cursor..next);
                                         redraw_line_at_cursor(&bytes, cursor, last_status);
                                     }
                                 }

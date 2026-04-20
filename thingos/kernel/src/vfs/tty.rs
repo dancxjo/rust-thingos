@@ -2,10 +2,13 @@
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
-use spin::Mutex;
 
 use abi::errors::{Errno, SysResult};
-use abi::termios::{Termios, Winsize, DEFAULT_TERMIOS, ICANON, ECHO, ECHOE, ISIG, VINTR, VQUIT, VSUSP, VMIN, ICRNL, TOSTOP};
+use abi::termios::{
+    DEFAULT_TERMIOS, ECHO, ECHOE, ICANON, ICRNL, ISIG, TOSTOP, Termios, VINTR, VMIN, VQUIT, VSUSP,
+    Winsize,
+};
+use spin::Mutex;
 
 use super::{VfsNode, VfsStat};
 
@@ -112,13 +115,29 @@ impl LineDiscipline {
                 0x08 | 0x7f => {
                     if canonical {
                         let mut cb = self.buf.lock();
-                        let last = cb.back().copied();
-                        if last.is_some() && last != Some(b'\n') {
-                            cb.pop_back();
-                            if do_echo && do_echo_erase {
-                                hw.write_byte(0x08);
-                                hw.write_byte(b' ');
-                                hw.write_byte(0x08);
+                        if let Some(&last) = cb.back() {
+                            if last != b'\n' {
+                                // Pop one complete UTF-8 character from the buffer.
+                                cb.pop_back();
+                                if last & 0xC0 == 0x80 {
+                                    // We removed a continuation byte; keep popping
+                                    // until we hit (and remove) the lead byte.
+                                    while let Some(&prev) = cb.back() {
+                                        if prev & 0xC0 == 0x80 {
+                                            cb.pop_back();
+                                        } else if prev >= 0x80 {
+                                            cb.pop_back();
+                                            break;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                                if do_echo && do_echo_erase {
+                                    hw.write_byte(0x08);
+                                    hw.write_byte(b' ');
+                                    hw.write_byte(0x08);
+                                }
                             }
                         }
                     } else {
@@ -132,14 +151,17 @@ impl LineDiscipline {
                         self.buf.lock().push_back(c);
                     }
                 }
-                0x20..=0x7e => {
-                    if do_echo {
-                        hw.write_byte(c);
-                    }
-                    self.buf.lock().push_back(c);
-                }
                 _ => {
-                    if !canonical {
+                    // Accept printable ASCII (0x20–0x7E) and high bytes
+                    // (0x80–0xFF for UTF-8 lead/continuation) in all modes.
+                    // Control characters below 0x20 not handled above are
+                    // passed through only in non-canonical (raw) mode.
+                    if c >= 0x20 {
+                        if do_echo {
+                            hw.write_byte(c);
+                        }
+                        self.buf.lock().push_back(c);
+                    } else if !canonical {
                         self.buf.lock().push_back(c);
                     }
                 }
@@ -164,10 +186,7 @@ struct TtyCaller {
 
 impl TtyNode {
     pub fn new(hw: Arc<dyn TtyHardware>) -> Self {
-        Self {
-            hw,
-            ld: Arc::new(LineDiscipline::new()),
-        }
+        Self { hw, ld: Arc::new(LineDiscipline::new()) }
     }
 
     fn get_caller(&self) -> Option<TtyCaller> {
@@ -182,7 +201,9 @@ impl TtyNode {
 
     fn maybe_acquire_controlling_tty(&self, caller: Option<TtyCaller>) {
         if let Some(c) = caller {
-            if !c.session_leader { return; }
+            if !c.session_leader {
+                return;
+            }
             let mut presence = self.ld.presence.lock();
             if presence.controlling_sid.is_none() {
                 presence.controlling_sid = Some(c.sid);
@@ -323,7 +344,13 @@ impl VfsNode for TtyNode {
                 }
                 let termios = *self.ld.termios.lock();
                 unsafe {
-                    crate::syscall::validate::copyout(call.out_ptr as usize, core::slice::from_raw_parts(&termios as *const _ as *const u8, termios_size))?;
+                    crate::syscall::validate::copyout(
+                        call.out_ptr as usize,
+                        core::slice::from_raw_parts(
+                            &termios as *const _ as *const u8,
+                            termios_size,
+                        ),
+                    )?;
                 }
                 Ok(0)
             }
@@ -333,7 +360,13 @@ impl VfsNode for TtyNode {
                 }
                 let mut new_termios = Termios::default();
                 unsafe {
-                    crate::syscall::validate::copyin(core::slice::from_raw_parts_mut(&mut new_termios as *mut _ as *mut u8, termios_size), call.in_ptr as usize)?;
+                    crate::syscall::validate::copyin(
+                        core::slice::from_raw_parts_mut(
+                            &mut new_termios as *mut _ as *mut u8,
+                            termios_size,
+                        ),
+                        call.in_ptr as usize,
+                    )?;
                 }
                 *self.ld.termios.lock() = new_termios;
                 Ok(0)
@@ -344,7 +377,10 @@ impl VfsNode for TtyNode {
                 }
                 let fg_pgid = self.ld.presence.lock().foreground_pgid.ok_or(Errno::ENOTTY)?;
                 unsafe {
-                    crate::syscall::validate::copyout(call.out_ptr as usize, core::slice::from_raw_parts(&fg_pgid as *const u32 as *const u8, pgid_size))?;
+                    crate::syscall::validate::copyout(
+                        call.out_ptr as usize,
+                        core::slice::from_raw_parts(&fg_pgid as *const u32 as *const u8, pgid_size),
+                    )?;
                 }
                 Ok(0)
             }
@@ -354,7 +390,13 @@ impl VfsNode for TtyNode {
                 }
                 let mut new_pgid = 0u32;
                 unsafe {
-                    crate::syscall::validate::copyin(core::slice::from_raw_parts_mut(&mut new_pgid as *mut u32 as *mut u8, pgid_size), call.in_ptr as usize)?;
+                    crate::syscall::validate::copyin(
+                        core::slice::from_raw_parts_mut(
+                            &mut new_pgid as *mut u32 as *mut u8,
+                            pgid_size,
+                        ),
+                        call.in_ptr as usize,
+                    )?;
                 }
                 self.ld.presence.lock().foreground_pgid = Some(new_pgid);
                 Ok(0)
@@ -365,7 +407,10 @@ impl VfsNode for TtyNode {
                 }
                 let ws = self.hw.winsize();
                 unsafe {
-                    crate::syscall::validate::copyout(call.out_ptr as usize, core::slice::from_raw_parts(&ws as *const _ as *const u8, winsize_size))?;
+                    crate::syscall::validate::copyout(
+                        call.out_ptr as usize,
+                        core::slice::from_raw_parts(&ws as *const _ as *const u8, winsize_size),
+                    )?;
                 }
                 Ok(0)
             }

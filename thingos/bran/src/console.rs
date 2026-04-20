@@ -46,6 +46,12 @@ pub struct FbConsole {
     bg: u32,
     ansi: AnsiState,
     active: bool,
+    /// Accumulation buffer for multi-byte UTF-8 sequences.
+    utf8_buf: [u8; 4],
+    /// Number of bytes accumulated so far.
+    utf8_len: u8,
+    /// Total bytes expected for the current UTF-8 character.
+    utf8_expected: u8,
 }
 
 unsafe impl Send for FbConsole {}
@@ -62,6 +68,9 @@ impl FbConsole {
             bg: DEFAULT_BG,
             ansi: AnsiState::Normal,
             active: false,
+            utf8_buf: [0; 4],
+            utf8_len: 0,
+            utf8_expected: 0,
         }
     }
 
@@ -226,6 +235,25 @@ impl FbConsole {
     }
 
     fn handle_byte(&mut self, b: u8) {
+        // If we're accumulating a multi-byte UTF-8 sequence, try to continue.
+        if self.utf8_expected > 0 {
+            if b & 0xC0 == 0x80 {
+                self.utf8_buf[self.utf8_len as usize] = b;
+                self.utf8_len += 1;
+                if self.utf8_len == self.utf8_expected {
+                    let ch = decode_utf8_char(&self.utf8_buf[..self.utf8_len as usize]);
+                    self.utf8_expected = 0;
+                    self.utf8_len = 0;
+                    self.put_visible_char(ch.unwrap_or('?'));
+                }
+                return;
+            } else {
+                // Invalid continuation — reset and process byte normally.
+                self.utf8_expected = 0;
+                self.utf8_len = 0;
+            }
+        }
+
         match &mut self.ansi {
             AnsiState::Normal => match b {
                 0x1B => self.ansi = AnsiState::Esc,
@@ -237,7 +265,23 @@ impl FbConsole {
                         self.put_visible_char(' ');
                     }
                 }
-                GLYPH_PRELOAD_START_U8..=GLYPH_PRELOAD_END_U8 => self.put_visible_char(b as char),
+                // UTF-8 lead bytes — start accumulation.
+                0xC0..=0xDF => {
+                    self.utf8_buf[0] = b;
+                    self.utf8_len = 1;
+                    self.utf8_expected = 2;
+                }
+                0xE0..=0xEF => {
+                    self.utf8_buf[0] = b;
+                    self.utf8_len = 1;
+                    self.utf8_expected = 3;
+                }
+                0xF0..=0xF7 => {
+                    self.utf8_buf[0] = b;
+                    self.utf8_len = 1;
+                    self.utf8_expected = 4;
+                }
+                GLYPH_PRELOAD_START_U8..=0x7E => self.put_visible_char(b as char),
                 _ => {}
             },
             AnsiState::Esc => {
@@ -291,6 +335,24 @@ impl FbConsole {
         }
         self.handle_byte(c);
     }
+}
+
+/// Decode a complete UTF-8 byte sequence (2–4 bytes) into a `char`.
+fn decode_utf8_char(buf: &[u8]) -> Option<char> {
+    let cp = match buf.len() {
+        2 => ((buf[0] as u32 & 0x1F) << 6) | (buf[1] as u32 & 0x3F),
+        3 => {
+            ((buf[0] as u32 & 0x0F) << 12) | ((buf[1] as u32 & 0x3F) << 6) | (buf[2] as u32 & 0x3F)
+        }
+        4 => {
+            ((buf[0] as u32 & 0x07) << 18)
+                | ((buf[1] as u32 & 0x3F) << 12)
+                | ((buf[2] as u32 & 0x3F) << 6)
+                | (buf[3] as u32 & 0x3F)
+        }
+        _ => return None,
+    };
+    char::from_u32(cp)
 }
 
 /// Parse one hexadecimal ASCII nibble into its numeric value.
