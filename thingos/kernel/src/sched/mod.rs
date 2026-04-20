@@ -2324,9 +2324,21 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if Some(current_id) != self.state.per_cpu[cpu_idx].idle_task {
             if let Some(t) = self.state.get_thread(current_id) {
                 if t.state != TaskState::Dead && t.state != TaskState::Blocked {
-                    let priority = t.priority;
+                    let priority = t.priority as usize;
+                    let projected_yields = t.voluntary_yields.saturating_add(1);
+                    let pathological_spin_yielder = projected_yields
+                        >= types::SPIN_YIELD_PENALTY_THRESHOLD
+                        && self.state.last_enqueue_cause(current_id)
+                            == crate::sched::state::EnqueueCause::YieldRequeue;
+                    let requeue_priority = if pathological_spin_yielder {
+                        priority
+                            .saturating_sub(types::SPIN_YIELD_PENALTY_BANDS)
+                            .max(TaskPriority::Low as usize)
+                    } else {
+                        priority
+                    };
                     // Push to LOCAL runq (we are yielding on this CPU)
-                    self.state.enqueue_task(cpu_idx, priority as usize, current_id);
+                    self.state.enqueue_task(cpu_idx, requeue_priority, current_id);
                     self.state.note_enqueue_cause(
                         current_id,
                         crate::sched::state::EnqueueCause::YieldRequeue,
@@ -5166,6 +5178,68 @@ mod tests {
         let switch = switch.unwrap();
         assert_eq!(switch.to_tid, 3002, "Scheduler should switch to the RT task");
         assert_eq!(switch.from_tid, 3001, "Scheduler should switch away from the Normal task");
+    }
+
+    #[test]
+    fn test_prepare_yield_penalizes_pathological_spin_yielder_requeue_band() {
+        let _g = init_test_env();
+        crate::task::registry::init::<MockRuntime>();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        let spinner = make_task(3101, TaskState::Running, TaskPriority::Normal);
+        let peer = make_task(3102, TaskState::Runnable, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(spinner));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(peer));
+
+        sched.state.per_cpu[0].current = Some(3101);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 3101,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: types::SPIN_YIELD_PENALTY_THRESHOLD - 1,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 3102,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, 3102);
+        sched
+            .state
+            .note_enqueue_cause(3101, crate::sched::state::EnqueueCause::YieldRequeue);
+
+        let switch = sched
+            .prepare_yield()
+            .expect("spin-yield penalty should still produce a switch");
+        assert_eq!(switch.to_tid, 3102, "peer should run before penalized spinner");
+
+        let spinner_fields = sched.state.get_task(3101).expect("spinner task should exist");
+        assert_eq!(spinner_fields.priority, TaskPriority::Normal);
+        assert_eq!(spinner_fields.voluntary_yields, types::SPIN_YIELD_PENALTY_THRESHOLD);
+        assert_eq!(
+            spinner_fields.runq_location,
+            Some((0, TaskPriority::Low as usize)),
+            "pathological spin-yielder should be requeued one priority band lower"
+        );
     }
 
     /// Verify that `wake_sleepers` defers cross-CPU IPIs to `pending_wake_ipis`
