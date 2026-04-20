@@ -1343,18 +1343,21 @@ async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), Step
         return Err(StepError("Timed out waiting for shell prompt".to_string()));
     }
     // Extra delay to ensure the shell is ready to receive input
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
     Ok(())
 }
 
 #[when(regex = r#"^I type "(.+)" on the serial console$"#)]
 async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
     eprintln!("│  │  │      ⌨️ Typing on serial: {}", text);
+    
     let mut data = text.into_bytes();
     data.push(b'\n');
     
-    // Sometimes the first byte is lost if sent too fast after prompt
-    world.serial_write(&data).await.map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+    for b in data {
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     
     // Small delay to let the guest process the input
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
@@ -1536,7 +1539,7 @@ async fn check_text_pixels(world: &mut ThingOsWorld, x: u32, y: u32) -> Result<(
         .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?;
     let rgb = img.to_rgb8();
 
-    let mut found_text = false;
+
     let search_radius = 40;
     let (width, height) = rgb.dimensions();
 

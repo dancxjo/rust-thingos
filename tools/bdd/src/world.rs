@@ -262,9 +262,6 @@ impl ThingOsWorld {
                     }
                 }
             }
-            eprintln!(
-                "│  │  │      ⚠️ QEMU serial socket reader/writer loop exited!"
-            );
         });
 
         // Also spawn a task to read stderr for QEMU errors
