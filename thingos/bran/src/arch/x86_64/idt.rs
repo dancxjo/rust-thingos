@@ -16,11 +16,13 @@ static PAUSE_DUMP_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PAUSE_DUMP_OWNER_CPU: AtomicU64 = AtomicU64::new(u64::MAX);
 
 const MAX_PAUSE_CPUS: usize = 256;
-static PAUSE_CPU_VALID: [AtomicBool; MAX_PAUSE_CPUS] = [const { AtomicBool::new(false) }; MAX_PAUSE_CPUS];
+static PAUSE_CPU_VALID: [AtomicBool; MAX_PAUSE_CPUS] =
+    [const { AtomicBool::new(false) }; MAX_PAUSE_CPUS];
 static PAUSE_CPU_RIP: [AtomicU64; MAX_PAUSE_CPUS] = [const { AtomicU64::new(0) }; MAX_PAUSE_CPUS];
 static PAUSE_CPU_RSP: [AtomicU64; MAX_PAUSE_CPUS] = [const { AtomicU64::new(0) }; MAX_PAUSE_CPUS];
 static PAUSE_CPU_RBP: [AtomicU64; MAX_PAUSE_CPUS] = [const { AtomicU64::new(0) }; MAX_PAUSE_CPUS];
-static PAUSE_CPU_RFLAGS: [AtomicU64; MAX_PAUSE_CPUS] = [const { AtomicU64::new(0) }; MAX_PAUSE_CPUS];
+static PAUSE_CPU_RFLAGS: [AtomicU64; MAX_PAUSE_CPUS] =
+    [const { AtomicU64::new(0) }; MAX_PAUSE_CPUS];
 static PAUSE_CPU_CS: [AtomicU64; MAX_PAUSE_CPUS] = [const { AtomicU64::new(0) }; MAX_PAUSE_CPUS];
 
 #[derive(Clone, Copy)]
@@ -900,8 +902,12 @@ fn trigger_pause_dump(snapshot: Option<&IrqRegisterSnapshot>) -> ! {
 
         kinfo!("PS/2 hotkey Alt+F12 detected on CPU {}; forcing kernel pause", current_cpu);
         render_pause_dump_screen(snapshot);
-        kernel::kprint!(" Press F12 to reboot immediately.                                             \n\n");
-        kernel::sched::dump_stats_current();
+        kernel::kprint!(
+            " Press F12 to reboot immediately.                                             \n\n"
+        );
+        kernel::kprint!(
+            " Scheduler task dump skipped in pause mode to avoid lock wedging.              \n"
+        );
     }
 
     loop {
@@ -922,9 +928,12 @@ fn current_task_name_str(name: &[u8; 32]) -> &str {
 
 fn print_irq_trace_summary() {
     let mut events = [TraceEvent::Empty; 12];
-    let count = {
-        let ring = kernel::trace::irq_ring::IRQ_RING.lock();
+    let count = if let Some(ring) = kernel::trace::irq_ring::IRQ_RING.try_lock() {
         ring.read_all(&mut events)
+    } else {
+        kernel::kprint!("Recent IRQ/Trace Events:\n");
+        kernel::kprint!("  <unavailable: ring lock busy during pause dump>\n");
+        return;
     };
 
     kernel::kprint!("Recent IRQ/Trace Events:\n");
@@ -987,21 +996,44 @@ fn render_pause_dump_screen(snapshot: Option<&IrqRegisterSnapshot>) {
 
     kernel::kprint!("\x1b[0m\x1b[2J\x1b[H\x1b[?25l");
     kernel::kprint!("\x1b[37;44;1m");
-    kernel::kprint!("                                                                                \n");
-    kernel::kprint!("  Thing-OS Kernel Pause And Dump                                               \n");
-    kernel::kprint!("                                                                                \n");
+    kernel::kprint!(
+        "                                                                                \n"
+    );
+    kernel::kprint!(
+        "  Thing-OS Kernel Pause And Dump                                               \n"
+    );
+    kernel::kprint!(
+        "                                                                                \n"
+    );
     kernel::kprint!("\x1b[0m\x1b[37;44m");
-    kernel::kprint!(" Alt+F12 was pressed on a PS/2 keyboard. The kernel has stopped all CPUs.      \n");
-    kernel::kprint!(" Power cycle or reboot is required to continue.                                 \n");
-    kernel::kprint!("                                                                                \n");
-    kernel::kprint!(" CPU      : {:<3} / {:<3}                                                      \n", cpu, cpu_total);
+    kernel::kprint!(
+        " Alt+F12 was pressed on a PS/2 keyboard. The kernel has stopped all CPUs.      \n"
+    );
+    kernel::kprint!(
+        " Power cycle or reboot is required to continue.                                 \n"
+    );
+    kernel::kprint!(
+        "                                                                                \n"
+    );
+    kernel::kprint!(
+        " CPU      : {:<3} / {:<3}                                                      \n",
+        cpu,
+        cpu_total
+    );
     kernel::kprint!(" TID      : {:<16}                                                   \n", tid);
     kernel::kprint!(" Task     : {:<60}\n", task_name);
     kernel::kprint!(" Ticks    : {:<60}\n", ticks);
-    kernel::kprint!(" IRQ cnts : kbd={:<10} mouse={:<10} serial={:<10}             \n", irq1, irq12, irq4);
+    kernel::kprint!(
+        " IRQ cnts : kbd={:<10} mouse={:<10} serial={:<10}             \n",
+        irq1,
+        irq12,
+        irq4
+    );
     kernel::kprint!(" RSP/RBP  : 0x{:016x} / 0x{:016x}                              \n", rsp, rbp);
     kernel::kprint!(" CR2/CR3  : 0x{:016x} / 0x{:016x}                              \n", cr2, cr3);
-    kernel::kprint!("                                                                                \n");
+    kernel::kprint!(
+        "                                                                                \n"
+    );
     kernel::kprint!("\x1b[0m\n");
     if let Some(snapshot) = snapshot {
         print_register_snapshot(snapshot);
@@ -1130,7 +1162,8 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
     // IRQ_TIMER_VECTOR or IRQ_RESCHED_VECTOR is our preemption heartbeat
     if resolved == IRQ_TIMER_VECTOR {
         if !pause_dump && poll_ps2_keyboard_fallback() {
-            let snapshot = if irq_snapshot.is_null() { None } else { Some(unsafe { &*irq_snapshot }) };
+            let snapshot =
+                if irq_snapshot.is_null() { None } else { Some(unsafe { &*irq_snapshot }) };
             trigger_pause_dump(snapshot);
         }
         kernel::sched::on_tick::<crate::arch::CurrentRuntime>();

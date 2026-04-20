@@ -17,6 +17,8 @@ const BRIGHT_FG_OFFSET: u32 = 0x0040_4040;
 const BRIGHT_BG_OFFSET: u32 = 0x0020_2020;
 const GLYPH_PRELOAD_START: u32 = 0x20;
 const GLYPH_PRELOAD_END: u32 = 0xFF;
+const GLYPH_PRELOAD_START_U8: u8 = GLYPH_PRELOAD_START as u8;
+const GLYPH_PRELOAD_END_U8: u8 = GLYPH_PRELOAD_END as u8;
 const ACTIVATION_BANNER: &[u8] = b"\x1b[0mThing-OS kernel terminal (F12)\n";
 
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
@@ -215,7 +217,8 @@ impl FbConsole {
             b'H' | b'f' => {
                 let row = params.first().copied().unwrap_or(1).max(1) as u32;
                 let col = params.get(1).copied().unwrap_or(1).max(1) as u32;
-                self.cursor_y = (row - 1).saturating_mul(CELL_H).min(self.fb.height.saturating_sub(1));
+                self.cursor_y =
+                    (row - 1).saturating_mul(CELL_H).min(self.fb.height.saturating_sub(1));
                 self.cursor_x =
                     (col - 1).saturating_mul(CELL_W).min(self.fb.width.saturating_sub(1));
             }
@@ -235,15 +238,12 @@ impl FbConsole {
                         self.put_visible_char(' ');
                     }
                 }
-                (GLYPH_PRELOAD_START as u8)..=(GLYPH_PRELOAD_END as u8) => {
-                    self.put_visible_char(b as char)
-                }
+                GLYPH_PRELOAD_START_U8..=GLYPH_PRELOAD_END_U8 => self.put_visible_char(b as char),
                 _ => {}
             },
             AnsiState::Esc => {
                 if b == b'[' {
-                    self.ansi =
-                        AnsiState::Csi { params: [0; CSI_PARAM_CAP], len: 0, cur: None };
+                    self.ansi = AnsiState::Csi { params: [0; CSI_PARAM_CAP], len: 0, cur: None };
                 } else {
                     self.ansi = AnsiState::Normal;
                 }
@@ -382,11 +382,7 @@ fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
         }
         out.insert(
             code,
-            Glyph {
-                width: if hex.len() == 32 { 8 } else { 16 },
-                bytes,
-                len: pairs as u8,
-            },
+            Glyph { width: if hex.len() == 32 { 8 } else { 16 }, bytes, len: pairs as u8 },
         );
     }
     if !out.contains_key(&(b'?' as u32)) {
