@@ -176,3 +176,25 @@ message::broadcast pgid=<N> pid=<N> failure=<reason>    // per failure
 - First-class `thingos::group::Group` kernel object
 - Userspace coordination service ownership of fanout
 - Cross-job policy and priority scheduling
+
+---
+
+## 11. System-Wide Notification Pattern
+
+`SYS_MSG_BROADCAST` is the preferred primitive for system-wide state changes.
+
+Typical examples include low-power, network-link, and mount-topology updates.
+In Kind terms these are notifications such as:
+
+- `KindId::POWER_LOW`
+- `KindId::NETWORK_UP`
+- `KindId::MOUNT_CHANGE`
+
+Subscription model:
+
+- A producer broadcasts to a dedicated subscription `pgid`.
+- Any application that should observe the stream joins that process group.
+- Receivers consume notifications from their own inbox via `SYS_MSG_RECV`.
+
+This keeps publication fanout centralized while preserving per-recipient inbox
+isolation and backpressure behavior.
