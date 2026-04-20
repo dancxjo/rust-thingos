@@ -1342,10 +1342,10 @@ pub(crate) fn resolve_switch_params<R: BootRuntime>(
 > {
     debug_assert_scheduler_not_held_by_this_cpu::<R>("resolve_switch_params");
     let mut registry = crate::task::registry::get_registry::<R>();
-    let from_task_result = registry.threads.binary_search_by_key(&decision.from_tid, |t| t.id);
-    let to_idx = registry.threads.binary_search_by_key(&decision.to_tid, |t| t.id).ok()?;
+    let from_idx = registry.get_index(decision.from_tid);
+    let to_idx = registry.get_index(decision.to_tid)?;
 
-    if let Ok(from_idx) = from_task_result {
+    if let Some(from_idx) = from_idx {
         let (from_task, to_task) = if from_idx < to_idx {
             let (left, right) = registry.threads.split_at_mut(to_idx);
             (&mut left[from_idx], &mut right[0])
@@ -5435,7 +5435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sorted_insertion() {
+    fn test_registry_rapid_create_exit_churn() {
         let _g = init_test_env();
         crate::task::registry::init::<MockRuntime>();
         let mut sched = types::Scheduler::<MockRuntime>::new();
@@ -5484,18 +5484,32 @@ mod tests {
         crate::task::registry::get_registry::<MockRuntime>()
             .insert(alloc::boxed::Box::new(make_task(4001)));
 
-        // Verify sorted order internally
         assert_eq!(crate::task::registry::get_registry::<MockRuntime>().threads.len(), 4);
-        assert_eq!(crate::task::registry::get_registry::<MockRuntime>().threads[0].id, 4001);
-        assert_eq!(crate::task::registry::get_registry::<MockRuntime>().threads[1].id, 4005);
-        assert_eq!(crate::task::registry::get_registry::<MockRuntime>().threads[2].id, 4010);
-        assert_eq!(crate::task::registry::get_registry::<MockRuntime>().threads[3].id, 4020);
 
         // Verify lookups work
         assert!(crate::task::registry::get_task::<MockRuntime>(4010).is_some());
         assert!(crate::task::registry::get_task::<MockRuntime>(4005).is_some());
         assert!(crate::task::registry::get_task::<MockRuntime>(4001).is_some());
         assert!(crate::task::registry::get_task::<MockRuntime>(4099).is_none());
+
+        // Keep a small hot set of thread IDs cycling through many create/exit
+        // operations to stress index maintenance under churn.
+        const CHURN_ITERATIONS: usize = 512; // enough iterations to repeatedly reshuffle slots
+        const CHURN_ACTIVE_TID_COUNT: usize = 32; // small hot set maximizes remove/reinsert reuse
+        for i in 0..CHURN_ITERATIONS {
+            let tid = 5000 + (i % CHURN_ACTIVE_TID_COUNT) as u64;
+            if crate::task::registry::get_task::<MockRuntime>(tid).is_none() {
+                crate::task::registry::get_registry::<MockRuntime>()
+                    .insert(alloc::boxed::Box::new(make_task(tid)));
+            }
+            let removed = crate::task::registry::get_registry::<MockRuntime>().remove(tid);
+            assert!(removed.is_some(), "expected tid {} to exist before removal", tid);
+            assert!(
+                crate::task::registry::get_task::<MockRuntime>(tid).is_none(),
+                "removed tid {} must not remain addressable",
+                tid
+            );
+        }
     }
 
     #[test]
