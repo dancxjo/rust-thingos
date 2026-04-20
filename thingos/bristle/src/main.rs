@@ -52,6 +52,10 @@ fn get_active_ui() -> alloc::string::String {
     "terminal".to_string()
 }
 
+fn try_port_handle_to_fd(port: PortHandle) -> Option<u32> {
+    vfs_handle_from_port(port).ok()
+}
+
 #[stem::main]
 fn main(packed_handles: usize) -> ! {
     let packed = packed_handles as u64;
@@ -115,6 +119,9 @@ fn main(packed_handles: usize) -> ! {
     } else {
         None
     };
+
+    let bloom_evt_fd = try_port_handle_to_fd(bloom_evt_write);
+    let evt_input_echo_fd = try_port_handle_to_fd(evt_input_echo_write);
 
     loop {
         let events = match ws.wait(None::<stem::time::Duration>) {
@@ -198,14 +205,24 @@ fn main(packed_handles: usize) -> ! {
                                     }
 
                                     // Send to consumers
-                                    if port_send_all(bloom_evt_write, event_bytes).is_err() {
+                                    let bloom_send = if let Some(fd) = bloom_evt_fd {
+                                        vfs_write(fd, event_bytes)
+                                    } else {
+                                        port_send_all(bloom_evt_write, event_bytes)
+                                    };
+                                    if bloom_send.is_err() {
                                         drop_counter += 1;
                                     }
 
-                                    if evt_input_echo_write != 0
-                                        && port_send_all(evt_input_echo_write, event_bytes).is_err()
-                                    {
-                                        drop_counter += 1;
+                                    if evt_input_echo_write != 0 {
+                                        let echo_send = if let Some(fd) = evt_input_echo_fd {
+                                            vfs_write(fd, event_bytes)
+                                        } else {
+                                            port_send_all(evt_input_echo_write, event_bytes)
+                                        };
+                                        if echo_send.is_err() {
+                                            drop_counter += 1;
+                                        }
                                     }
 
                                     // Shift remaining
