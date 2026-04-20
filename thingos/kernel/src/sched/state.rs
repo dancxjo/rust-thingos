@@ -281,7 +281,13 @@ fn per_cpu_runq_locks() -> &'static Vec<Mutex<()>> {
 fn lock_per_cpu_runq(cpu: usize) -> spin::mutex::MutexGuard<'static, ()> {
     per_cpu_runq_locks()
         .get(cpu)
-        .expect("per-cpu runq lock index must be bounds-checked before locking")
+        .unwrap_or_else(|| {
+            panic!(
+                "per-cpu runq lock index {} out of bounds [0, {})",
+                cpu,
+                crate::sched::types::MAX_CPUS
+            )
+        })
         .lock()
 }
 
@@ -292,6 +298,12 @@ fn try_lock_per_cpu_runq(cpu: usize) -> Option<spin::mutex::MutexGuard<'static, 
 
 impl SchedState {
     #[inline]
+    /// Validate run-queue CPU index against both lock capacity and initialized
+    /// scheduler CPU state length.
+    ///
+    /// `MAX_CPUS` is the lock array upper bound, while `per_cpu.len()` reflects
+    /// CPUs currently initialized in this scheduler instance (tests often use a
+    /// smaller vector).
     fn has_valid_runq_cpu(&self, cpu: usize) -> bool {
         cpu < crate::sched::types::MAX_CPUS && cpu < self.per_cpu.len()
     }
@@ -488,7 +500,7 @@ impl SchedState {
             (cpu, prio)
         };
         if !self.has_valid_runq_cpu(cpu) {
-            return true;
+            return false;
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
         self.opportunistic_compact_runq(cpu, prio);
