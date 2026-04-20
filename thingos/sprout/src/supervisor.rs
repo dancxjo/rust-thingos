@@ -15,11 +15,11 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use spin::Mutex;
-use stem::{info, warn};
 use stem::syscall::PortHandle;
+use stem::{info, warn};
 
 use crate::ledger::DeviceLedger;
-use crate::pipelines::{setup_serial_shell};
+use crate::pipelines::setup_serial_shell;
 use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
@@ -318,7 +318,7 @@ impl Supervisor {
         bundled_fd: u32,
     ) {
         use abi::supervisor_protocol::{self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, classes};
-        use stem::syscall::{PortHandle, vfs_close, port_send_all, vfs_mount};
+        use stem::syscall::{PortHandle, port_send_all, vfs_close, vfs_mount};
 
         // Helper: send MSG_BIND_FAILED back to the driver.
         let send_failed = |req_write: u32, id: u64, code: u32, msg: &[u8]| {
