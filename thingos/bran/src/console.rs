@@ -370,7 +370,12 @@ impl FbConsole {
             },
             AnsiState::Esc => {
                 if b == b'[' {
-                    self.ansi = AnsiState::Csi { params: [0; CSI_PARAM_CAP], len: 0, cur: None, private: false };
+                    self.ansi = AnsiState::Csi {
+                        params: [0; CSI_PARAM_CAP],
+                        len: 0,
+                        cur: None,
+                        private: false,
+                    };
                 } else {
                     self.ansi = AnsiState::Normal;
                 }

@@ -171,7 +171,8 @@ impl Terminal {
             }
             AnsiState::Esc => {
                 if c == '[' {
-                    self.ansi_state = AnsiState::Csi { params: Vec::new(), current_num: None, private: false };
+                    self.ansi_state =
+                        AnsiState::Csi { params: Vec::new(), current_num: None, private: false };
                 } else {
                     self.ansi_state = AnsiState::Normal;
                 }
