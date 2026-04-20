@@ -450,8 +450,6 @@ pub fn build_iso_with_config(
         include_busybox = true;
     }
 
-    println!("Building userspace programs...");
-
     let cwd = std::env::current_dir().unwrap();
     let target_json = if arch == "x86_64" {
         cwd.join("targets/x86_64-unknown-thingos.json")
@@ -462,8 +460,13 @@ pub fn build_iso_with_config(
     };
     let target = target_json.to_str().unwrap();
 
+    // Phase 1: build all userspace programs concurrently (one vine per batch).
+    build_programs_parallel(programs, target, "release")?;
+
+    // Phase 2: stage compiled binaries into the ISO root sequentially.
+    // Ordering here is stable and avoids concurrent writes to iso_root.
+    println!("Staging userspace programs...");
     for prog in programs {
-        build_userspace_app_with_features(sh, prog.name, target, "release", &prog.features)?;
         let dest_subdir = if is_driver(prog.name) { "drivers" } else { "bin" };
         let dest_path = iso_root.join(format!("{}/{}", dest_subdir, prog.name));
         copy_userspace_binary(sh, prog.name, target, "release", dest_path.to_str().unwrap())?;
@@ -656,6 +659,46 @@ fn build_userspace_app_with_features(
     }
 
     cmd_obj.run()?;
+    Ok(())
+}
+
+/// Build all programs concurrently using a pool of parallel vines.
+///
+/// Each vine creates its own `Shell` in the current working directory and
+/// invokes `build_userspace_app_with_features` for its assigned program.
+/// Programs are processed in batches whose size is bounded by the available
+/// CPU parallelism (capped at 8 to avoid overwhelming `cargo`'s file locks).
+/// After all vines in a batch finish the next batch starts, so errors are
+/// surfaced promptly without letting a later batch race past them.
+fn build_programs_parallel(programs: &[ProgramConfig], target: &str, profile: &str) -> Result<()> {
+    let num_parallel =
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8).max(1);
+
+    println!("Building {} userspace programs ({num_parallel} build vines)...", programs.len());
+
+    for chunk in programs.chunks(num_parallel) {
+        let handles: Vec<std::thread::JoinHandle<Result<()>>> = chunk
+            .iter()
+            .map(|prog| {
+                let target = target.to_string();
+                let profile = profile.to_string();
+                let features: Vec<String> = prog.features.iter().map(|s| s.to_string()).collect();
+                let name = prog.name;
+                std::thread::spawn(move || -> Result<()> {
+                    // Each vine creates its own Shell so none share mutable
+                    // state; Shell::new() anchors to the process working dir.
+                    let sh = Shell::new()?;
+                    let feature_refs: Vec<&str> = features.iter().map(|s| s.as_str()).collect();
+                    build_userspace_app_with_features(&sh, name, &target, &profile, &feature_refs)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().map_err(|_| anyhow::anyhow!("build vine panicked"))??;
+        }
+    }
+
     Ok(())
 }
 

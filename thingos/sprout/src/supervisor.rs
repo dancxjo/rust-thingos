@@ -155,15 +155,26 @@ impl Supervisor {
         setup_graphics_stack(self.tasks.clone(), display_handles, input_handles);
         setup_ui_services(self.tasks.clone());
 
+        // Spawn a dedicated health-monitoring vine.  It owns the waitpid(-1)
+        // loop and all task restart logic so the registration loop below is
+        // never blocked by child-lifecycle work.
+        let tasks_health = self.tasks.clone();
+        let _ = stem::thread::spawn_task(move || {
+            loop {
+                run_health_vine(&tasks_health);
+                stem::sleep_ms(200);
+            }
+        });
+
+        // Main supervisor vine: process driver registration messages only.
         loop {
             stem::trace!(
-                "SPROUT: --- Supervisor Loop Cycle Start (tasks={}) ---",
+                "SPROUT: --- Registration Loop Cycle Start (tasks={}) ---",
                 self.tasks.lock().len()
             );
             self.process_registrations();
-            self.monitor();
-            stem::trace!("SPROUT: --- Supervisor Loop Cycle End ---");
-            stem::sleep_ms(100);
+            stem::trace!("SPROUT: --- Registration Loop Cycle End ---");
+            stem::sleep_ms(50);
         }
     }
 
@@ -243,129 +254,7 @@ impl Supervisor {
     }
 
     pub fn monitor(&mut self) {
-        // Drain all pending child exits using a single non-blocking
-        // waitpid(-1, WNOHANG) loop.  This replaces the old per-task
-        // task_poll scan and eliminates the O(N) scheduler-lock pressure it
-        // introduced: instead of one kernel call per supervised task, we make
-        // at most one call per exited child plus one final call that returns 0
-        // (no more exited children).
-        loop {
-            match stem::syscall::waitpid(-1, abi::types::waitpid_flags::WNOHANG) {
-                Ok((0, _)) => break, // No more exited children right now.
-                Ok((child_pid, wait_status)) => {
-                    // Decode exit code: normal exits carry the code in bits [15:8];
-                    // signal-terminated exits carry the raw wait_status (negative by
-                    // convention so callers can distinguish them from clean exits).
-                    let exit_code: i32 = if abi::signal::wifexited(wait_status) {
-                        abi::signal::wexitstatus(wait_status) as i32
-                    } else {
-                        wait_status
-                    };
-                    let child_pid = child_pid as u64;
-                    let mut tasks = self.tasks.lock();
-                    if let Some(task) = tasks.iter_mut().find(|t| t.pid == Some(child_pid)) {
-                        info!(
-                            "SPROUT: Task '{}' (PID {}) died with code {}. Restarting...",
-                            task.name, child_pid, exit_code
-                        );
-                        task.pid = None;
-                        if let Some(fd) = task.resp_fd.take() {
-                            let _ = stem::syscall::vfs::vfs_close(fd);
-                        }
-                        task.restarts += 1;
-                    } else {
-                        info!(
-                            "SPROUT: Unknown child PID {} exited (code {})",
-                            child_pid, exit_code
-                        );
-                    }
-                }
-                Err(abi::errors::Errno::ECHILD) => break, // No children remain; expected.
-                Err(e) => {
-                    warn!("SPROUT: waitpid(-1, WNOHANG) returned unexpected error: {:?}", e);
-                    break;
-                }
-            }
-        }
-
-        // Init-style lifecycle: if all supervised children are gone, halt the system.
-        let should_shutdown = {
-            let tasks = self.tasks.lock();
-            !tasks.is_empty() && tasks.iter().all(|t| t.pid.is_none())
-        };
-        if should_shutdown {
-            info!("SPROUT: All supervised tasks have exited. Performing system shutdown...");
-            stem::syscall::shutdown();
-        }
-
-        // Handle Spawning/Restarting for tasks without PIDs
-        let mut tasks = self.tasks.lock();
-        for task in tasks.iter_mut() {
-            if task.pid.is_none() {
-                if task.name == "shell" {
-                    let selected = crate::pipelines::select_serial_shell();
-                    if task.module_path != selected {
-                        info!(
-                            "SPROUT: Switching serial shell from '{}' to '{}'",
-                            task.module_path, selected
-                        );
-                        task.module_path = selected;
-                    }
-                }
-
-                let handles_owned: Vec<u64> =
-                    if task.boot_req_read != 0 && task.boot_resp_write != 0 {
-                        alloc::vec![task.boot_req_read as u64, task.boot_resp_write as u64]
-                    } else {
-                        alloc::vec![]
-                    };
-
-                let arg_str = alloc::format!("{}", task.spawn_arg);
-                let spawn_path = if task.module_path.is_empty() {
-                    task.name.as_str()
-                } else {
-                    task.module_path.as_str()
-                };
-
-                let mut stdin_mode = stem::abi::types::stdio_mode::INHERIT;
-                let mut stdout_mode = stem::abi::types::stdio_mode::INHERIT;
-                let mut stderr_mode = stem::abi::types::stdio_mode::INHERIT;
-                let mut console_fd_to_close: Option<u32> = None;
-                if task.name == "shell" {
-                    if let Ok(console_fd) = stem::syscall::vfs::vfs_open(
-                        "/dev/console",
-                        abi::syscall::vfs_flags::O_RDWR,
-                    ) {
-                        stdin_mode = stem::abi::types::stdio_mode::handle(console_fd);
-                        stdout_mode = stem::abi::types::stdio_mode::handle(console_fd);
-                        stderr_mode = stem::abi::types::stdio_mode::handle(console_fd);
-                        console_fd_to_close = Some(console_fd);
-                    }
-                }
-
-                let spawn_res = stem::syscall::spawn_process_ex(
-                    spawn_path,
-                    &[spawn_path.as_bytes(), arg_str.as_bytes()],
-                    &alloc::collections::BTreeMap::new(),
-                    stdin_mode,
-                    stdout_mode,
-                    stderr_mode,
-                    task.spawn_arg as u64,
-                    &handles_owned,
-                );
-
-                if let Some(fd) = console_fd_to_close {
-                    let _ = stem::syscall::vfs::vfs_close(fd);
-                }
-
-                if let Ok(resp) = spawn_res {
-                    task.pid = Some(resp.child_tid);
-                    if let TaskKind::Driver(_) = task.kind {
-                        let _ = stem::thread::set_priority(resp.child_tid, 3);
-                    }
-                }
-            }
-        }
+        run_health_vine(&self.tasks);
     }
 
     fn process_registrations(&mut self) {
@@ -619,6 +508,132 @@ impl Supervisor {
             );
             if bundled_fd != 0 {
                 let _ = vfs_close(bundled_fd);
+            }
+        }
+    }
+}
+
+/// Health-monitoring vine body.
+///
+/// This runs on its own kernel task so it never blocks the registration loop.
+/// It is the *only* caller of `waitpid(-1, WNOHANG)` which prevents races with
+/// the main supervisor vine.
+///
+/// Logic:
+/// 1. Drain all pending child exits via non-blocking waitpid.
+/// 2. If every supervised task has exited, trigger a clean system shutdown.
+/// 3. Restart any task whose PID slot was cleared by step 1.
+fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
+    // Step 1: drain all pending child exits.
+    loop {
+        match stem::syscall::waitpid(-1, abi::types::waitpid_flags::WNOHANG) {
+            Ok((0, _)) => break, // No more exited children right now.
+            Ok((child_pid, wait_status)) => {
+                // Decode exit code: normal exits carry the code in bits [15:8];
+                // signal-terminated exits carry the raw wait_status (negative by
+                // convention so callers can distinguish them from clean exits).
+                let exit_code: i32 = if abi::signal::wifexited(wait_status) {
+                    abi::signal::wexitstatus(wait_status) as i32
+                } else {
+                    wait_status
+                };
+                let child_pid = child_pid as u64;
+                let mut task_list = tasks.lock();
+                if let Some(task) = task_list.iter_mut().find(|t| t.pid == Some(child_pid)) {
+                    info!(
+                        "SPROUT: Task '{}' (PID {}) died with code {}. Restarting...",
+                        task.name, child_pid, exit_code
+                    );
+                    task.pid = None;
+                    if let Some(fd) = task.resp_fd.take() {
+                        let _ = stem::syscall::vfs::vfs_close(fd);
+                    }
+                    task.restarts += 1;
+                } else {
+                    info!("SPROUT: Unknown child PID {} exited (code {})", child_pid, exit_code);
+                }
+            }
+            Err(abi::errors::Errno::ECHILD) => break, // No children remain; expected.
+            Err(e) => {
+                warn!("SPROUT: waitpid(-1, WNOHANG) returned unexpected error: {:?}", e);
+                break;
+            }
+        }
+    }
+
+    // Step 2: init-style lifecycle — if all supervised children are gone, halt.
+    let should_shutdown = {
+        let task_list = tasks.lock();
+        !task_list.is_empty() && task_list.iter().all(|t| t.pid.is_none())
+    };
+    if should_shutdown {
+        info!("SPROUT: All supervised tasks have exited. Performing system shutdown...");
+        stem::syscall::shutdown();
+    }
+
+    // Step 3: restart any task whose PID slot was cleared above.
+    let mut task_list = tasks.lock();
+    for task in task_list.iter_mut() {
+        if task.pid.is_none() {
+            if task.name == "shell" {
+                let selected = crate::pipelines::select_serial_shell();
+                if task.module_path != selected {
+                    info!(
+                        "SPROUT: Switching serial shell from '{}' to '{}'",
+                        task.module_path, selected
+                    );
+                    task.module_path = selected;
+                }
+            }
+
+            let handles_owned: Vec<u64> = if task.boot_req_read != 0 && task.boot_resp_write != 0 {
+                alloc::vec![task.boot_req_read as u64, task.boot_resp_write as u64]
+            } else {
+                alloc::vec![]
+            };
+
+            let arg_str = alloc::format!("{}", task.spawn_arg);
+            let spawn_path = if task.module_path.is_empty() {
+                task.name.as_str()
+            } else {
+                task.module_path.as_str()
+            };
+
+            let mut stdin_mode = stem::abi::types::stdio_mode::INHERIT;
+            let mut stdout_mode = stem::abi::types::stdio_mode::INHERIT;
+            let mut stderr_mode = stem::abi::types::stdio_mode::INHERIT;
+            let mut console_fd_to_close: Option<u32> = None;
+            if task.name == "shell" {
+                if let Ok(console_fd) =
+                    stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR)
+                {
+                    stdin_mode = stem::abi::types::stdio_mode::handle(console_fd);
+                    stdout_mode = stem::abi::types::stdio_mode::handle(console_fd);
+                    stderr_mode = stem::abi::types::stdio_mode::handle(console_fd);
+                    console_fd_to_close = Some(console_fd);
+                }
+            }
+
+            let spawn_res = stem::syscall::spawn_process_ex(
+                spawn_path,
+                &[spawn_path.as_bytes(), arg_str.as_bytes()],
+                &alloc::collections::BTreeMap::new(),
+                stdin_mode,
+                stdout_mode,
+                stderr_mode,
+                task.spawn_arg as u64,
+                &handles_owned,
+            );
+
+            if let Some(fd) = console_fd_to_close {
+                let _ = stem::syscall::vfs::vfs_close(fd);
+            }
+
+            if let Ok(resp) = spawn_res {
+                task.pid = Some(resp.child_tid);
+                if let TaskKind::Driver(_) = task.kind {
+                    let _ = stem::thread::set_priority(resp.child_tid, 3);
+                }
             }
         }
     }
