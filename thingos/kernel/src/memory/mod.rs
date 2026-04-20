@@ -14,8 +14,6 @@ pub mod paging;
 pub use frame_alloc::FRAME_ALLOCATOR;
 use spin::Mutex;
 
-use crate::kinfo;
-
 /// Next user VA for mappings (starts at 0x1000_0000, grows up)
 static NEXT_MAP_VA: Mutex<u64> = Mutex::new(0x1000_0000);
 
@@ -33,17 +31,17 @@ pub fn init<R: crate::BootRuntime>(rt: &R) {
     let _modules = rt.modules();
     let offset = rt.phys_to_virt_offset();
 
-    crate::kinfo!("Memory map has {} entries", map.len());
+    crate::kdebug!("Memory map has {} entries", map.len());
     for (i, range) in map.iter().enumerate() {
         crate::ktrace!("  [{}] 0x{:x} - 0x{:x} ({:?})", i, range.start, range.end, range.kind);
     }
-    crate::kinfo!("HHDM Offset: 0x{:x}", offset);
+    crate::kdebug!("HHDM Offset: 0x{:x}", offset);
 
     // 1. Setup early frame allocator
     let bitmap = boot_frame_alloc::init(map, offset);
     let alloc = frame_alloc::FrameAllocator::new_from_boot(map, _modules, bitmap, offset);
 
-    crate::kinfo!("Frame allocator initialized with {} free frames", alloc.free_count());
+    crate::kdebug!("Frame allocator initialized with {} free frames", alloc.free_count());
 
     unsafe { FRAME_ALLOCATOR.init(alloc) };
 

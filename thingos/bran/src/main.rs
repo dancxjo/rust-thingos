@@ -34,7 +34,7 @@ unsafe extern "C" fn kmain() -> ! {
     if FRAMEBUFFER_REQUEST.get_response().is_none() {
         kernel::kwarn!("Limine: FRAMEBUFFER_REQUEST not fulfilled!");
     } else {
-        kernel::kinfo!("Limine: FRAMEBUFFER_REQUEST fulfilled.");
+        kernel::kdebug!("Limine: FRAMEBUFFER_REQUEST fulfilled.");
     }
 
     // Initialize architecture-specific paging (HHDM offset, etc.)
@@ -82,7 +82,7 @@ fn indicate_progress() {
             } else {
                 width.saturating_mul(4)
             };
-            kernel::kinfo!(
+            kernel::kdebug!(
                 "BOOTFB: limine width={} height={} pitch={} bpp={} model={} -> bpp_bytes={} stride={}",
                 width,
                 height,

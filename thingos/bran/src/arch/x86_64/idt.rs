@@ -832,26 +832,26 @@ pub fn activate_terminal_and_spawn_shell() {
     if !try_lock_hotkey_shell_spawn() {
         let existing = HOTKEY_SHELL_TID.load(Ordering::Acquire);
         if existing != 0 && existing != HOTKEY_SHELL_LOCKED {
-            kinfo!("F12 hotkey: shell already running (tid={})", existing);
+            kdebug!("F12 hotkey: shell already running (tid={})", existing);
         }
         return;
     }
 
     if let Some(tid) = try_spawn_shell("/bin/sh") {
         unlock_hotkey_shell_spawn(Some(tid));
-        kinfo!("F12 hotkey: spawned {} as tid {}", "/bin/sh", tid);
+        kdebug!("F12 hotkey: spawned {} as tid {}", "/bin/sh", tid);
         return;
     }
 
     if let Some(tid) = try_spawn_shell("/bin/smallsh") {
         unlock_hotkey_shell_spawn(Some(tid));
-        kinfo!("F12 hotkey: spawned {} as tid {}", "/bin/smallsh", tid);
+        kdebug!("F12 hotkey: spawned {} as tid {}", "/bin/smallsh", tid);
         return;
     }
 
     unlock_hotkey_shell_spawn(None);
 
-    kinfo!("F12 hotkey: failed to spawn /bin/sh and /bin/smallsh");
+    kdebug!("F12 hotkey: failed to spawn /bin/sh and /bin/smallsh");
 }
 
 fn capture_control_state() -> (u64, u64, u64, u64) {

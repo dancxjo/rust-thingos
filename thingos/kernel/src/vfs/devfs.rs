@@ -69,7 +69,7 @@ pub fn unregister(name: &str) -> bool {
 }
 
 pub fn set_boot_fb(fb: crate::FramebufferInfo, resource_id: u64) {
-    crate::kinfo!(
+    crate::kdebug!(
         "devfs: set_boot_fb width={} height={} pitch={} resource_id=0x{:x}",
         fb.width,
         fb.height,
@@ -116,7 +116,7 @@ impl VfsDriver for DevFs {
             let reg = DEVICE_REGISTRY.lock();
             if let Some(node) = reg.get(path) {
                 if path == "fb0" || path.starts_with("fb") {
-                    crate::kinfo!("devfs: dynamic registry hit path='{}'", path);
+                    crate::kdebug!("devfs: dynamic registry hit path='{}'", path);
                 }
                 return Ok(node.clone());
             }

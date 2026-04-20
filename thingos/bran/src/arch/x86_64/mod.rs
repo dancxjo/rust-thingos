@@ -149,7 +149,7 @@ impl X86_64Runtime {
             // 8. Re-enable interrupts: Received Data Available
             core::arch::asm!("out dx, al", in("dx") port + 1, in("al") 0x01u8);
         }
-        kernel::kinfo!("[SERIAL] UART COM1 initialized (115200 8N1 FIFO-1 IRQ-on)");
+        kernel::kdebug!("[SERIAL] UART COM1 initialized (115200 8N1 FIFO-1 IRQ-on)");
     }
 }
 

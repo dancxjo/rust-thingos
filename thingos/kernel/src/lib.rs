@@ -714,7 +714,7 @@ pub fn init_runtime<R: BootRuntime>(runtime: &'static R) {
     unsafe {
         RAW_RUNTIME_BASE = Some(runtime as &'static dyn BootRuntimeBase);
     }
-    crate::contract!("INIT_RUNTIME: type={}", name);
+    crate::kdebug!("INIT_RUNTIME: type={}", name);
 }
 
 pub fn runtime<R: BootRuntime>() -> &'static R {
@@ -924,7 +924,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     contract!("thing-os kernel starting...");
 
     memory::init(runtime);
-    contract!("Initializing global allocator...");
+    kdebug!("Initializing global allocator...");
     memory::global_alloc::init(runtime);
 
     if let Some(fb) = runtime.framebuffer() {
@@ -958,16 +958,16 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         );
     }
 
-    contract!("Seeding entropy pool...");
+    kdebug!("Seeding entropy pool...");
     crate::entropy::seed_from_hardware();
 
-    contract!("Initializing SIMD...");
+    kdebug!("Initializing SIMD...");
     runtime.simd_init_cpu();
 
-    contract!("Initializing tasking...");
+    kdebug!("Initializing tasking...");
     crate::task::init::<R>();
 
-    contract!("Initializing VFS...");
+    kdebug!("Initializing VFS...");
     crate::vfs::devfs::set_cmdline(runtime.get_kernel_cmdline().to_string());
     crate::vfs::init(runtime.modules());
 
@@ -1132,7 +1132,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
         kdebug!("Spawning sprout with registry at 0x600000...");
         unsafe {
-            contract!("Spawning init process...");
+            kdebug!("Spawning init process...");
             let mut entry = user_entry;
             entry.arg0 = StartupArg::BootRegistry.to_raw(); // arg0 = registry ptr
             // Spawn at Normal priority - all tasks share the same priority for fair scheduling
@@ -1197,7 +1197,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     // Automatically bring up the F12 terminal as soon as we reach the main loop.
     runtime.activate_onscreen_terminal();
 
-    contract!("Entering scheduler loop.");
+    kdebug!("Entering scheduler loop.");
     loop {
         if !crate::task::yield_now::<R>() {
             // No runnable work on this CPU — halt until the next interrupt
