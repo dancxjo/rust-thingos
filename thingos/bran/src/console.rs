@@ -12,6 +12,10 @@ const TAB_WIDTH: usize = 4;
 const CSI_PARAM_CAP: usize = 8;
 const DEFAULT_FG: u32 = 0x00FF_FFFF;
 const DEFAULT_BG: u32 = 0x0000_0000;
+const BRIGHT_FG_OFFSET: u32 = 0x0040_4040;
+const BRIGHT_BG_OFFSET: u32 = 0x0020_2020;
+const ASCII_PRINTABLE_START: u32 = 0x20;
+const ASCII_PRINTABLE_END: u32 = 0x7E;
 const ACTIVATION_BANNER: &[u8] = b"\x1b[0m\x1b[?25lThing-OS kernel terminal (F12)\n";
 
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
@@ -179,10 +183,10 @@ impl FbConsole {
                         self.bg = Self::ansi_color(p, true);
                     } else if (90..=97).contains(&p) {
                         // ANSI bright foreground: add a small RGB brightness offset.
-                        self.fg = Self::ansi_color(p - 60, false) | 0x0040_4040;
+                        self.fg = Self::ansi_color(p - 60, false) | BRIGHT_FG_OFFSET;
                     } else if (100..=107).contains(&p) {
                         // ANSI bright background: add a smaller RGB brightness offset.
-                        self.bg = Self::ansi_color(p - 60, true) | 0x0020_2020;
+                        self.bg = Self::ansi_color(p - 60, true) | BRIGHT_BG_OFFSET;
                     }
                 }
                 if !had_any {
@@ -256,7 +260,7 @@ impl FbConsole {
         self.active = true;
         self.reset_style();
         self.clear_to_bg();
-        // Keep cursor hidden for the active bootstrap framebuffer terminal session.
+        // Keep cursor hidden for the active boot framebuffer terminal session.
         for &b in ACTIVATION_BANNER {
             self.handle_byte(b);
         }
@@ -332,7 +336,8 @@ fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
         let Some(code) = parse_hex_u32(&line[..sep]) else {
             continue;
         };
-        if !(0x20..=0x7E).contains(&code) {
+        // Restrict preloaded glyphs to printable ASCII.
+        if !(ASCII_PRINTABLE_START..=ASCII_PRINTABLE_END).contains(&code) {
             continue;
         }
         let hex = &line[sep + 1..];
