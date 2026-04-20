@@ -1716,7 +1716,7 @@ pub fn init<R: BootRuntime>() {
         } else {
             1
         };
-        crate::contract!("Scheduler initialized");
+        crate::kdebug!("Scheduler initialized");
     }
     clear_sched_lock_tracking::<R>();
 }
@@ -4012,7 +4012,7 @@ pub static CPU_ONLINE: AtomicUsize = AtomicUsize::new(0);
 pub unsafe fn enter_secondary(cpu_index: usize) -> ! {
     // Mark as online
     CPU_ONLINE.fetch_add(1, Ordering::Relaxed);
-    crate::kinfo!("SMP: Secondary CPU {} online!", cpu_index);
+    crate::kdebug!("SMP: Secondary CPU {} online!", cpu_index);
 
     // Enter scheduler loop via the hook which bootstraps this CPU.
     // The run_scheduler hook will call bootstrap_cpu to set up this CPU's

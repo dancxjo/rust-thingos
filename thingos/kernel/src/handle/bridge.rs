@@ -130,7 +130,7 @@ pub fn install_fd_compat_for_port_handle(
         },
         alloc::format!("handle:{}", handle.0),
     )?;
-    crate::kinfo!(
+    crate::kdebug!(
         "BRIDGE: handle={} -> fd={} node={:p} port={:p}",
         handle.0,
         fd,

@@ -103,7 +103,7 @@ pub fn sys_device_claim(path_ptr: usize, path_len: usize) -> SysResult<usize> {
 
     match res {
         Ok(claim_handle) => {
-            crate::kinfo!(
+            crate::kdebug!(
                 "DEVICE: task {} claimed device '{}' (handle {})",
                 task_id,
                 slot,

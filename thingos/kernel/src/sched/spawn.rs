@@ -861,7 +861,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         // Zero means no PT_TLS segment was found; FS_BASE starts at its default state.
         task.user_fs_base = aux_info.tls_tp;
     }
-    crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
+    crate::kdebug!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.  During bringup
@@ -1316,7 +1316,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         // Apply initial TLS base (FS_BASE on x86_64) for the new process's main thread.
         task.user_fs_base = aux_info.tls_tp;
     }
-    crate::kinfo!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
+    crate::kdebug!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.

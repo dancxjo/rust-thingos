@@ -986,7 +986,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
     let _irq = rt.irq_disable();
     let cpu_idx = crate::sched::current_cpu_index::<R>();
 
-    crate::kinfo!("SMP: bootstrap_cpu start on CPU {}", cpu_idx);
+    crate::kdebug!("SMP: bootstrap_cpu start on CPU {}", cpu_idx);
 
     let lock = crate::sched::SCHEDULER.lock();
     let _lock_tracking = crate::sched::sched_lock_tracking_guard::<R>(cpu_idx);
@@ -1000,7 +1000,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
                     pc.current = Some(idle_id);
                     rt.set_current_tid(idle_id);
                     sched.state.mark_cpu_online(cpu_idx);
-                    crate::kinfo!(
+                    crate::kdebug!(
                         "SMP: CPU {} bootstrapped with idle thread {} and is now schedulable",
                         cpu_idx,
                         idle_id
@@ -1026,7 +1026,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
 }
 
 pub fn run_scheduler<R: BootRuntime>() -> ! {
-    crate::kinfo!("SMP: run_scheduler entry on CPU {}", crate::sched::current_cpu_index::<R>());
+    crate::kdebug!("SMP: run_scheduler entry on CPU {}", crate::sched::current_cpu_index::<R>());
     // Bootstrap this CPU if needed (sets current thread for secondary CPUs).
     bootstrap_cpu::<R>();
 
