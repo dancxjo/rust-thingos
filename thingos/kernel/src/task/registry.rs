@@ -32,8 +32,8 @@ impl<R: BootRuntime> ThreadRegistry<R> {
 
     /// Return the current backing-vector slot for `id`.
     ///
-    /// Slots are stable only until a removal; `swap_remove` may move another
-    /// thread into a vacated index.
+    /// The returned index is valid only until the next `remove` call, because
+    /// `swap_remove` can relocate the last live thread into another slot.
     #[inline]
     pub fn get_index(&self, id: u64) -> Option<usize> {
         self.thread_index_by_id.get(&id).copied()
@@ -58,8 +58,8 @@ impl<R: BootRuntime> ThreadRegistry<R> {
         let removed = self.threads.swap_remove(idx);
         debug_assert_eq!(removed.id, id);
         if idx < self.threads.len() {
-            // `swap_remove` moved the last live thread into `idx`; refresh its
-            // index map entry so future lookups stay consistent.
+            // When `idx < threads.len()`, `swap_remove` moved the last thread
+            // into the vacated slot; refresh its index map entry.
             let moved_id = self.threads[idx].id;
             self.thread_index_by_id.insert(moved_id, idx);
         }
