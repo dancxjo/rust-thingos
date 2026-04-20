@@ -33,6 +33,17 @@ pub const AGING_THRESHOLD_TICKS: u64 = 500;
 /// priority (Low -> Normal -> High), but never to Realtime.
 pub const MAX_PRIORITY_BOOST: usize = 2;
 
+/// Consecutive spin-yield threshold before requeue placement is penalized.
+///
+/// A task that repeatedly yields without blocking can consume scheduler
+/// attention without useful work. Once it has crossed this threshold and is
+/// observed yielding again from a prior yield requeue, the scheduler demotes
+/// its immediate requeue band by [`SPIN_YIELD_PENALTY_BANDS`].
+pub const SPIN_YIELD_PENALTY_THRESHOLD: u64 = 8;
+
+/// Number of priority bands to demote pathological spin-yielders on requeue.
+pub const SPIN_YIELD_PENALTY_BANDS: usize = 1;
+
 // PerCpu is now in state.rs
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
