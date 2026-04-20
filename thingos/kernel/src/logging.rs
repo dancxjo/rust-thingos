@@ -302,8 +302,6 @@ pub fn _log_event(
     if !should_log(meta.level) {
         return;
     }
-
-    // Get sequence number first (guarantees ordering)
     let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
 
     // 1. Serial Output - human-readable format: [TIME] [LEVEL] [SOURCE] Message

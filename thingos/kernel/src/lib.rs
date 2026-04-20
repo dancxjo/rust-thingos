@@ -410,7 +410,6 @@ pub trait BootTasking {
         virt: u64,
         phys: u64,
         perms: MapPerms,
-        kind: MapKind,
         allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()>;
 
@@ -873,9 +872,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         .store(_irq_restore_wrapper::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
 
     init_runtime(runtime);
+
     unsafe { crate::logging::init(runtime) };
 
-    if let Some(fb) = runtime.framebuffer() {
+    let fb_opt = runtime.framebuffer();
+    if let Some(fb) = fb_opt {
         crate::kdebug!(
             "BOOTFB: width={} height={} pitch={} bpp={} format={:?}",
             fb.width,
@@ -1079,7 +1080,6 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                     exec: false,
                     kind: MapKind::Normal,
                 },
-                MapKind::Normal,
                 &GlobalAllocHook,
             )
             .unwrap();

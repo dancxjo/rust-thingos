@@ -291,7 +291,7 @@ pub fn load_module_at<R: BootRuntime>(
                 }
 
                 rt.tasking()
-                    .map_page(aspace, virt, phys, page_perms, MapKind::Normal, &hook)
+                    .map_page(aspace, virt, phys, page_perms, &hook)
                     .unwrap();
 
                 last_virt_page = virt;
@@ -372,7 +372,7 @@ pub fn load_module_at<R: BootRuntime>(
                 }
             }
 
-            rt.tasking().map_page(aspace, virt, phys, text_perms, MapKind::Normal, &hook).unwrap();
+            rt.tasking().map_page(aspace, virt, phys, text_perms, &hook).unwrap();
             virt += page_size;
         }
     }
@@ -406,7 +406,7 @@ pub fn load_module_at<R: BootRuntime>(
         unsafe {
             core::ptr::write_bytes(hhdm_virt as *mut u8, 0, page_size as usize);
         }
-        rt.tasking().map_page(aspace, virt, phys, data_perms, MapKind::Normal, &hook).unwrap();
+        rt.tasking().map_page(aspace, virt, phys, data_perms, &hook).unwrap();
         virt += page_size;
     }
 
@@ -685,7 +685,7 @@ fn setup_initial_tls_block<R: BootRuntime>(
         unsafe {
             core::ptr::write_bytes(hhdm as *mut u8, 0, page_size as usize);
         }
-        rt.tasking().map_page(aspace, virt, phys, perms, MapKind::Normal, hook).ok()?;
+        rt.tasking().map_page(aspace, virt, phys, perms, hook).ok()?;
         page_hhdms.push(hhdm);
         virt += page_size;
     }

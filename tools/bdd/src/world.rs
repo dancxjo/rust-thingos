@@ -67,7 +67,7 @@ impl ThingOsWorld {
         // Build ISO using xtask command
         eprintln!("[bdd] Building ISO {} with resolution {}...", iso_name, resolution);
         let build_status = std::process::Command::new("cargo")
-            .args(["xtask", "iso", "--resolution", &resolution, "--output", &iso_name])
+            .args(["xtask", "iso", "--env", arch, "--resolution", &resolution, "--output", &iso_name])
             .env("RUSTFLAGS", "-Awarnings")
             .status()?;
 
@@ -137,6 +137,7 @@ impl ThingOsWorld {
                 ]);
                 cmd.args(["-drive", &format!("if=pflash,unit=1,format=raw,file={}", ovmf_vars)]);
                 cmd.args(["-cdrom", &iso_name]);
+                cmd.args(["-semihosting"]);
             }
             "riscv64" => {
                 // riscv64 virt requires blockdev syntax with machine-level pflash assignment

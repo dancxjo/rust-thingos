@@ -196,7 +196,7 @@ fn generate_limine_config(
 ) -> String {
     let res = resolution.unwrap_or("1920x1080");
     let mut conf = String::new();
-    conf.push_str("timeout: 3\nquiet: yes\nverbose: no\nserial: yes\n");
+    conf.push_str("timeout: 3\nquiet: no\nverbose: yes\nserial: yes\n");
     conf.push_str("interface_branding: yes\n");
     conf.push_str("interface_help: no\n");
     conf.push_str("interface_background: 121212\n");
@@ -409,6 +409,8 @@ pub fn build_iso_with_config(
     });
 
     let kernel_src = format!("thingos/bran/bin-{arch}/kernel");
+    println!("ISO: Using kernel from {kernel_src}");
+    cmd!(sh, "file {kernel_src}").run()?;
     sh.copy_file(&kernel_src, iso_root.join("boot/kernel"))?;
     sh.copy_file("assets/fonts/unifont.hex", iso_root.join("share/fonts/unifont.hex"))?;
 

@@ -56,8 +56,8 @@ unsafe extern "C" fn thingos_driver_probe(
     Status::NoMatch
 }
 
-unsafe extern "C" fn thingos_driver_start(boot_fd: usize) -> Status {
-    main(boot_fd)
+unsafe extern "C" fn thingos_driver_start(ctx: *const DriverStartContext) -> Status {
+    main(ctx as usize)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -81,8 +81,8 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(boot_fd: usize) -> Status {
-    thingos_driver_start(boot_fd)
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+    thingos_driver_start(ctx)
 }
 
 #[unsafe(link_section = ".thing_manifest")]

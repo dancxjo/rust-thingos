@@ -14,7 +14,8 @@
     "panic-strategy": "abort",
     "position-independent-executables": false,
     "static-position-independent-executables": false,
-    "relocation-model": "static",
+    "relocation-model": "pic",
+    "dynamic-linking": true,
     "features": "+strict-align,+v8a",
     "executables": true,
     "has-thread-local": true

@@ -9,6 +9,10 @@ pub fn init(offset: u64) {
     unsafe { HHDM_OFFSET = offset };
 }
 
+pub unsafe fn get_hhdm_offset() -> u64 {
+    unsafe { HHDM_OFFSET }
+}
+
 pub fn active_address_space() -> AArch64AddressSpace {
     // For kernel use, we need TTBR1 (kernel address space)
     let ttbr1: u64;
@@ -38,9 +42,9 @@ pub fn map_page(
     virt: u64,
     phys: u64,
     perms: MapPerms,
-    kind: MapKind,
     allocator: &dyn FrameAllocatorHook,
 ) -> Result<(), ()> {
+    let kind = perms.kind;
     // AArch64 4-level, 4KB pages (48-bit VA)
     // MAIR index: 0 = Normal WB, 1 = Device nGnRE (set in MAIR_EL1)
     let mut attr_idx = 0u64;

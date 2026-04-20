@@ -49,7 +49,9 @@ pub fn init_paging() {
     #[cfg(target_arch = "x86_64")]
     x86_64::paging::init(offset);
     #[cfg(target_arch = "aarch64")]
-    aarch64::paging::init(offset);
+    {
+        aarch64::paging::init(offset);
+    }
     #[cfg(target_arch = "riscv64")]
     riscv64::paging::init(offset);
     #[cfg(target_arch = "loongarch64")]

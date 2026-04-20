@@ -82,7 +82,6 @@ impl KernelHeap {
                     exec: false,
                     kind: MapKind::Normal,
                 },
-                MapKind::Normal,
                 &KernelFrameHook,
             )?;
         }

@@ -48,6 +48,10 @@ pub fn init<R: crate::BootRuntime>(rt: &R) {
     rt.tasking().init(offset);
 }
 
+pub fn is_frame_allocator_ready() -> bool {
+    FRAME_ALLOCATOR.is_initialized()
+}
+
 pub fn alloc_frame() -> Option<u64> {
     FRAME_ALLOCATOR.with_lock(|a| a.alloc().map(|f| f.0))
 }

@@ -33,7 +33,6 @@ pub fn alloc_page<R: BootRuntime>() -> u64 {
                     exec: false,
                     kind: MapKind::Normal,
                 },
-                MapKind::Normal,
                 &DumbAlloc,
             )
             .expect("Failed to map boot heap page");

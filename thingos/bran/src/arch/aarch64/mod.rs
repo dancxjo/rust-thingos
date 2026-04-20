@@ -10,6 +10,15 @@ pub mod task;
 pub mod trap;
 pub mod vector;
 
+struct DumbAlloc;
+impl FrameAllocatorHook for DumbAlloc {
+    fn alloc_frame(&self) -> Option<u64> {
+        None
+    }
+}
+
+static UART_MAPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub struct AArch64Runtime {
     serial: SerialPort,
 }
@@ -88,13 +97,72 @@ impl ArchRuntime for AArch64Runtime {
     type AddressSpace = AArch64AddressSpace;
 
     fn init(&self, hhdm_offset: u64) {
-        paging::init(hhdm_offset);
         unsafe {
+            paging::init(hhdm_offset);
             vector::init();
+            self.early_init();
+
+            // Map UART MMIO into kernel space (HHDM)
+            let uart_phys = 0x0900_0000u64;
+            let uart_virt = uart_phys + hhdm_offset;
+            let aspace = paging::active_address_space();
+
+            let perms = MapPerms {
+                read: true,
+                write: true,
+                exec: false,
+                user: false,
+                kind: MapKind::Device,
+            };
+
+            struct KernelAlloc;
+            impl FrameAllocatorHook for KernelAlloc {
+                fn alloc_frame(&self) -> Option<u64> {
+                    kernel::memory::alloc_frame()
+                }
+            }
+
+            let allocator: &dyn FrameAllocatorHook = if kernel::memory::is_frame_allocator_ready() {
+                &KernelAlloc
+            } else {
+                &DumbAlloc
+            };
+
+            if self.map_page(aspace, uart_virt, uart_phys, perms, allocator).is_ok() {
+                UART_MAPPED.store(true, core::sync::atomic::Ordering::Release);
+            }
         }
     }
+
     fn putchar(&self, c: u8) {
-        self.serial.putchar(c);
+        // 1. Semihosting fallback (always works, very slow)
+        let ch = c;
+        unsafe {
+            core::arch::asm!(
+                "hlt #0xF000",
+                in("w0") 0x03,
+                in("x1") &ch,
+                options(nostack, preserves_flags)
+            );
+        }
+
+        // 2. PL011 UART0 via HHDM (only if mapped)
+        if UART_MAPPED.load(core::sync::atomic::Ordering::Acquire) {
+            let hhdm = unsafe { paging::get_hhdm_offset() };
+            let uart_base = 0x0900_0000u64 + hhdm;
+            let uart = uart_base as *mut u32;
+
+            unsafe {
+                // UARTFR (Flag Register) offset 0x18 (6 * 4). TXFF is bit 5.
+                let mut timeout = 1000u32;
+                while (core::ptr::read_volatile(uart.add(6)) & 0x20) != 0 && timeout > 0 {
+                    timeout -= 1;
+                }
+                if timeout > 0 {
+                    core::ptr::write_volatile(uart, c as u32);
+                }
+            }
+        }
     }
     // getchar: default None (semihosting has no standard getchar)
 
@@ -165,6 +233,9 @@ impl ArchRuntime for AArch64Runtime {
     unsafe fn early_init(&self) {
         unsafe {
             switch_to_el1h();
+            // MAIR Index 0: Normal Memory (0xFF), Index 1: Device-nGnRE (0x04)
+            let mair: u64 = 0xff04;
+            asm!("msr mair_el1, {}", in(reg) mair);
         }
     }
 
@@ -286,10 +357,9 @@ impl ArchRuntime for AArch64Runtime {
         virt: u64,
         phys: u64,
         perms: MapPerms,
-        kind: MapKind,
         allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()> {
-        paging::map_page(aspace, virt, phys, perms, kind, allocator)
+        paging::map_page(aspace, virt, phys, perms, allocator)
     }
 
     fn unmap_page(&self, aspace: Self::AddressSpace, virt: u64) -> Result<Option<u64>, ()> {
@@ -308,6 +378,7 @@ impl ArchRuntime for AArch64Runtime {
         aspace.0
     }
 }
+struct ProxyAllocator;
 impl FrameAllocatorHook for ProxyAllocator {
     fn alloc_frame(&self) -> Option<u64> {
         kernel::memory::alloc_frame()
@@ -326,15 +397,26 @@ impl SerialPort {
     }
 
     fn putchar(&self, c: u8) {
-        // Semihosting SYS_WRITEC operation
-        let ch = c;
+        // 2. PL011 UART0 (standard on QEMU virt)
+        // We use the HHDM mapping if initialized, or fall back to physical if very early.
+        // Limine usually maps the first 4GiB of physical memory at HHDM_OFFSET.
+        let hhdm = unsafe { paging::get_hhdm_offset() };
+        let uart_base = 0x09000000u64 + hhdm;
+        let uart = uart_base as *mut u32;
+
         unsafe {
-            asm!(
-                "hlt #0xF000",
-                in("w0") 0x03,
-                in("x1") &ch,
-                options(nostack, preserves_flags)
-            );
+            // UARTFR (Flag Register) is at offset 0x18. TXFF is bit 5.
+            // NON-BLOCKING: If the FIFO is full for too long (e.g. no one reading
+            // the serial socket), drop the byte rather than hanging the kernel.
+            let mut timeout = 1000u32;
+            while (core::ptr::read_volatile(uart.add(6)) & (1 << 5)) != 0 && timeout > 0 {
+                timeout -= 1;
+            }
+
+            if timeout > 0 {
+                // UARTDR (Data Register) is at offset 0x00.
+                core::ptr::write_volatile(uart, c as u32);
+            }
         }
     }
 }

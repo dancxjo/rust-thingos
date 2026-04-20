@@ -4396,7 +4396,6 @@ mod tests {
             _v: u64,
             _p: u64,
             _pr: MapPerms,
-            _k: MapKind,
             _a: &dyn crate::FrameAllocatorHook,
         ) -> Result<(), ()> {
             Ok(())

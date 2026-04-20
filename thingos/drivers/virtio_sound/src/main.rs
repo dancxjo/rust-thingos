@@ -130,8 +130,8 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(boot_fd: usize) -> Status {
-    main(boot_fd)
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+    main(ctx as usize)
 }
 
 #[unsafe(link_section = ".thing_manifest")]

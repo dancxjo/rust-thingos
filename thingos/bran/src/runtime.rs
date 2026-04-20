@@ -154,7 +154,6 @@ pub trait ArchRuntime {
         _virt: u64,
         _phys: u64,
         _perms: MapPerms,
-        _kind: MapKind,
         _allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()> {
         Ok(())
@@ -680,10 +679,9 @@ impl<A: ArchRuntime + 'static> BootTasking for Runtime<A> {
         virt: u64,
         phys: u64,
         perms: MapPerms,
-        kind: MapKind,
         allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()> {
-        self.arch.map_page(aspace, virt, phys, perms, kind, allocator)
+        self.arch.map_page(aspace, virt, phys, perms, allocator)
     }
 
     fn unmap_page(&self, aspace: Self::AddressSpace, virt: u64) -> Result<Option<u64>, ()> {

@@ -35,7 +35,7 @@ pub fn alloc_user_stack<R: BootRuntime>(pages: usize) -> Option<usize> {
         unsafe {
             core::ptr::write_bytes(hhdm_virt as *mut u8, 0, page_size as usize);
         }
-        rt.tasking().map_page(aspace, virt, phys, perms, MapKind::Normal, &hook).ok()?;
+        rt.tasking().map_page(aspace, virt, phys, perms, &hook).ok()?;
         virt += page_size;
     }
 
@@ -60,7 +60,7 @@ pub unsafe fn map_user_page<R: BootRuntime>(virt: u64, phys: u64) -> Result<(), 
     let hook = MapHook;
 
     rt.tasking()
-        .map_page(aspace, virt, phys, perms, MapKind::Normal, &hook)
+        .map_page(aspace, virt, phys, perms, &hook)
         .map_err(|()| MapError::OutOfMemory)?;
     rt.tasking().tlb_flush_page(virt);
 
@@ -87,7 +87,7 @@ pub unsafe fn map_user_page_perms<R: BootRuntime>(
     let hook = MapHook;
 
     rt.tasking()
-        .map_page(aspace, virt, phys, perms, perms.kind, &hook)
+        .map_page(aspace, virt, phys, perms, &hook)
         .map_err(|()| MapError::OutOfMemory)?;
     rt.tasking().tlb_flush_page(virt);
     Ok(())

@@ -15,6 +15,10 @@ impl FrameAllocatorLocked {
         *self.0.lock() = Some(alloc);
     }
 
+    pub fn is_initialized(&self) -> bool {
+        self.0.lock().is_some()
+    }
+
     pub fn with_lock<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut FrameAllocator) -> R,
