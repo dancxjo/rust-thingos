@@ -10,7 +10,6 @@
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
@@ -393,7 +392,7 @@ impl Port {
         }
 
         let target = if is_sender { &self.sender_tid } else { &self.receiver_tid };
-        let owner = target.load(Ordering::Acquire);
+        let _owner = target.load(Ordering::Acquire);
 
         if let Err(owner) = target.compare_exchange(0, current, Ordering::AcqRel, Ordering::Acquire)
         {

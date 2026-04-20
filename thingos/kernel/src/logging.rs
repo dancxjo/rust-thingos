@@ -3,7 +3,6 @@
 //! Human-readable format: [TIME] [LEVEL] [SOURCE] Message
 //! With optional span correlation for multi-line output.
 
-use alloc::format;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 

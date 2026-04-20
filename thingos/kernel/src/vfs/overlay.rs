@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use abi::errors::{Errno, SysResult};
+use abi::errors::SysResult;
 
 use super::{VfsDriver, VfsNode};
 use crate::vfs::ramfs::RamFs;

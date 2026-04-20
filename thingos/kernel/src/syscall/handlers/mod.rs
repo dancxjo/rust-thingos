@@ -34,8 +34,6 @@ pub mod vfs;
 mod wait;
 
 // Re-export all syscall handlers
-use alloc::string::String;
-use core::sync::atomic::Ordering;
 
 use abi::errors::{Errno, SysResult};
 pub use device::*;

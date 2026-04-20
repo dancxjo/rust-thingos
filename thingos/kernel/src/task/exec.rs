@@ -1,12 +1,8 @@
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
-use spin::Mutex;
 
-use crate::task::ProcessInfo;
-use crate::vfs::OpenFlags;
 use crate::{BootRuntime, BootTasking};
 
 /// Core logic for in-place process image replacement.

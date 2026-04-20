@@ -137,6 +137,8 @@ pub unsafe fn switch(from: &mut X86_64Context, to: &X86_64Context, to_tid: u64) 
         // But wait, we need to know if GS is active.
         // Assuming we set up GS in mod.rs init().
 
+        kernel::kdebug!("SWITCH: → TID={}", to_tid);
+
         let kstack = to.kstack_top;
         // Write to GS:8 (assuming CpuLocal layout: user_rsp: u64, kernel_rsp: u64)
         // We do this BEFORE switching, because we are in kernel mode.

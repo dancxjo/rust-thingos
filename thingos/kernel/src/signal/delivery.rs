@@ -40,7 +40,7 @@
 //! Only x86_64 has the full injection path; other targets use a stub that
 //! terminates the process on handler invocation.
 
-use abi::errors::{Errno, SysResult};
+use abi::errors::SysResult;
 
 // ── x86_64 ───────────────────────────────────────────────────────────────────
 
@@ -48,7 +48,7 @@ use abi::errors::{Errno, SysResult};
 pub mod x86_64 {
     use alloc::sync::Arc;
 
-    use abi::signal::{SIG_DFL, SIG_IGN, SigAction};
+    use abi::signal::{SIG_DFL, SigAction};
 
     use super::*;
     use crate::signal::{DefaultAction, UNCATCHABLE, default_action};

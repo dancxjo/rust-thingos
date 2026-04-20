@@ -1,4 +1,3 @@
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicPtr, Ordering};
 

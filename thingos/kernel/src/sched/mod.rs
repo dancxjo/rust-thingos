@@ -608,11 +608,11 @@ fn snapshot_sched_lock_metric(
     calls: &AtomicU64,
     total: &AtomicU64,
     max: &AtomicU64,
-    hold_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
+    _hold_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
     wait_calls: &AtomicU64,
     wait_total: &AtomicU64,
     wait_max: &AtomicU64,
-    wait_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
+    _wait_hist: &[AtomicU64; SCHED_HIST_BUCKETS],
 ) -> SchedLockMetrics {
     #[cfg(feature = "sched_telemetry")]
     let hold_hist_snapshot = {
@@ -935,7 +935,7 @@ pub fn sched_lock_metrics_snapshot_and_reset() -> SchedLockSiteMetrics {
 /// Uses try_resched_if_needed to avoid deadlock when SCHEDULER is held by main code
 pub fn on_tick<R: BootRuntime>() {
     let cpu_idx = crate::runtime::<R>().current_cpu_index();
-    let ticks = if cpu_idx == 0 {
+    let _ticks = if cpu_idx == 0 {
         TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1
     } else {
         TICK_COUNT.load(Ordering::Relaxed)
@@ -1066,7 +1066,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         }
     }
 
-    if let Some(mut lock) = lock {
+    if let Some(lock) = lock {
         set_sched_lock_tracking::<R>(cpu_idx);
         if let Some(ptr) = *lock {
             let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
@@ -1074,6 +1074,9 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                 match trigger {
                     DispatchTrigger::TimerTick => {
                         pc.stats.timer_interrupts = pc.stats.timer_interrupts.saturating_add(1);
+                        if (pc.stats.timer_interrupts % 1000) == 0 {
+                            crate::kdebug!("SCHED_HEARTBEAT: CPU={} ticks={}", cpu_idx, pc.stats.timer_interrupts);
+                        }
                         if cpu_idx < types::MAX_CPUS && pc.current == pc.idle_task {
                             PROF_IDLE_TICKS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
                         }
@@ -1081,6 +1084,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                     DispatchTrigger::ReschedIpi => {
                         pc.stats.resched_ipi_received =
                             pc.stats.resched_ipi_received.saturating_add(1);
+                        crate::kdebug!("RESCHED_IPI: Received on CPU {}", cpu_idx);
                     }
                 }
             }
@@ -1324,10 +1328,13 @@ pub(crate) fn apply_deferred_registry_inserts<R: BootRuntime>(
         return;
     }
     debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_inserts");
+    crate::kdebug!("REGISTRY: Applying {} deferred inserts", deferred_inserts.len());
     let mut registry = crate::task::registry::get_registry::<R>();
     for task in deferred_inserts {
+        crate::kdebug!("REGISTRY: Inserting TID={}", task.id);
         registry.insert(task);
     }
+    crate::kdebug!("REGISTRY: Inserts applied");
 }
 
 pub(crate) fn resolve_switch_params<R: BootRuntime>(
@@ -1707,7 +1714,7 @@ pub fn init<R: BootRuntime>() {
         // any other acquire barrier.  Required because the hook statics are
         // `static mut` read without a lock on the fast path.
         core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
-        let cpu_total = if let Some(ptr) = *lock {
+        let _cpu_total = if let Some(ptr) = *lock {
             let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
             sched.total_cpu_count
         } else {
@@ -3075,7 +3082,7 @@ fn register_task_exit_waiter<R: BootRuntime>(
     }
 
     if let Some(pinfo) = target.process_info.as_ref() {
-        let mut pi = pinfo.lock();
+        let pi = pinfo.lock();
         if pi.is_job_leader_tid(target_tid) {
             if let Some(code) = pi.job.leader_exit_code {
                 return Ok(Some(code));
@@ -3126,7 +3133,7 @@ pub fn unregister_task_exit_waiter<R: BootRuntime>(
     let target =
         crate::task::registry::get_task::<R>(target_tid).ok_or(abi::errors::Errno::ECHILD)?;
     if let Some(pinfo) = target.process_info.as_ref() {
-        let mut pi = pinfo.lock();
+        let pi = pinfo.lock();
         if pi.is_job_leader_tid(target_tid) {
             pi.job.leader_exit_waiters.remove(waiter_tid);
             return Ok(());

@@ -350,7 +350,7 @@ fn sys_pci_call(call: &DeviceCall) -> SysResult<usize> {
 /// Allocate DMA-safe memory for a device
 pub fn sys_device_alloc_dma(claim_handle: usize, page_count: usize) -> SysResult<usize> {
     use crate::device_registry::REGISTRY;
-    use crate::memory::FRAME_ALLOCATOR;
+    
 
     if page_count == 0 || page_count > 256 {
         return Err(Errno::EINVAL);

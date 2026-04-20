@@ -1,4 +1,3 @@
-use alloc::string::String;
 #[allow(unused_imports)]
 use core::ptr::{read_volatile, write_volatile};
 

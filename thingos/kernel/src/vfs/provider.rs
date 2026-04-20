@@ -136,7 +136,7 @@ impl ProviderFs {
     }
 
     pub fn notify(&self, handle: u64, _revents: u16) {
-        let mut chan = self.port.lock();
+        let chan = self.port.lock();
         if let Some(wq) = chan.waiters.get(&handle) {
             wq.wake_all();
         }

@@ -357,7 +357,7 @@ impl ConsoleNode {
         })
     }
 
-    fn maybe_acquire_controlling_tty(state: &mut ConsoleTtyState, caller: Option<ConsoleCaller>) {
+    fn maybe_acquire_controlling_tty(_state: &mut ConsoleTtyState, caller: Option<ConsoleCaller>) {
         if let Some(c) = caller {
             crate::presence::maybe_attach_console_presence(c.sid, c.pgid, c.session_leader);
         }

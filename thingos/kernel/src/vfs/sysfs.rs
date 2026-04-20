@@ -387,7 +387,7 @@ fn lookup_virtio_file(
     entry: DeviceEntry,
     file: &str,
 ) -> SysResult<StaticTextNode> {
-    use crate::virtio::pci::{VirtioCapabilityType, VirtioPciDevice};
+    use crate::virtio::pci::VirtioCapabilityType;
 
     let loc = entry.pci_location.ok_or(Errno::ENODEV)?;
     let runtime = crate::runtime_base();

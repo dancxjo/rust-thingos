@@ -4,7 +4,6 @@ use core::mem::size_of;
 use abi::errors::{Errno, SysResult};
 use abi::wait::{self, WaitKind, WaitResult, WaitSpec};
 
-use super::root_call;
 use crate::syscall::validate::validate_user_range;
 
 #[derive(Clone)]

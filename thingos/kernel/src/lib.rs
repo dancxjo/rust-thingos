@@ -33,8 +33,7 @@ pub mod time;
 pub mod trace;
 pub mod virtio;
 
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
+use alloc::string::ToString;
 
 use abi::errors::Errno;
 use abi::vm::{VmBackingKind, VmMapFlags, VmProt, VmRegionInfo};
@@ -93,7 +92,7 @@ pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kernel_handle_exception(rip: u64, error_code: u64, rsp: u64, cs: u64, kind: u64) {
+pub extern "C" fn kernel_handle_exception(rip: u64, error_code: u64, rsp: u64, _cs: u64, kind: u64) {
     let exception_name = match kind {
         0 => "Divide-by-zero",
         1 => "Debug",
@@ -1244,7 +1243,7 @@ pub fn scan_pci() {
                                 // Memory space
                                 let is_64 = (bar & 0x4) != 0;
                                 let mut final_bar = (bar & 0xFFFFFFF0) as u64;
-                                let mut final_size_mask = if is_64 && i < 5 {
+                                let final_size_mask = if is_64 && i < 5 {
                                     let next_offset = offset + 4;
                                     let bar_hi =
                                         rt.pci_cfg_read32(bus, dev, func, next_offset).unwrap_or(0);

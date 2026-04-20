@@ -1,5 +1,3 @@
-use core::alloc::Layout;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::BootRuntime;
 

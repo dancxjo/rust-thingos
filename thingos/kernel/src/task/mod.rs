@@ -17,7 +17,7 @@ pub mod exec;
 pub mod identity;
 pub mod loader;
 pub mod registry;
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -26,7 +26,7 @@ use spin::Mutex;
 
 pub use crate::sched::Scheduler;
 use crate::simd::SimdState;
-use crate::{BootRuntime, BootTasking, sched as scheduler};
+use crate::{BootRuntime, BootTasking};
 
 pub type ThreadId = crate::sched::state::ThreadId;
 /// Backward-compatible alias — prefer `ThreadId` in new code.
@@ -901,7 +901,7 @@ pub fn preempt_enable<R: BootRuntime>() {
             rt.irq_restore(irq);
             return;
         };
-        let cr3_before = rt.debug_active_aspace_root();
+        let _cr3_before = rt.debug_active_aspace_root();
 
         rt.tasking().activate_address_space(switch.to_aspace);
 
@@ -953,7 +953,7 @@ pub fn resched_if_needed<R: BootRuntime>() {
             rt.irq_restore(irq);
             return;
         };
-        let cr3_before = rt.debug_active_aspace_root();
+        let _cr3_before = rt.debug_active_aspace_root();
 
         rt.tasking().activate_address_space(switch.to_aspace);
 

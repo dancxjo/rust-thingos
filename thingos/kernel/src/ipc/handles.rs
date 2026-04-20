@@ -3,7 +3,6 @@
 //! Handles are indices into a per-task table that map to ports with
 //! specific access modes (read or write).
 
-use super::PortId;
 
 /// A handle is an index into the process handle table
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

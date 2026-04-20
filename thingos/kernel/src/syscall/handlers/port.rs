@@ -1,6 +1,5 @@
 //! Port IPC syscalls
 
-use alloc::sync::Arc;
 
 use abi::errors::{Errno, SysResult};
 

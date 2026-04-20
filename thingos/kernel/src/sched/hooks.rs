@@ -461,7 +461,7 @@ pub unsafe fn spawn_process_ex_current(
     inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
     fd_remap: Vec<abi::types::HandleRemap>,
-) -> Result<SpawnExResult, abi::errors::Errno> {
+) -> Result<SpawnExResult, abi::errors::Errno> { unsafe {
     if let Some(hook) = SPAWN_PROCESS_EX_HOOK {
         hook(
             name,
@@ -478,7 +478,7 @@ pub unsafe fn spawn_process_ex_current(
     } else {
         Err(abi::errors::Errno::ENOSYS)
     }
-}
+}}
 
 /// Invoke the VFS-based runtime process creation hook.
 ///
@@ -496,7 +496,7 @@ pub unsafe fn spawn_process_from_path_current(
     cwd: Option<alloc::string::String>,
     fd_remap: Vec<abi::types::HandleRemap>,
     entry_sym_override: Option<alloc::string::String>,
-) -> Result<SpawnExResult, abi::errors::Errno> {
+) -> Result<SpawnExResult, abi::errors::Errno> { unsafe {
     if let Some(hook) = SPAWN_PROCESS_FROM_PATH_HOOK {
         hook(
             path,
@@ -514,7 +514,7 @@ pub unsafe fn spawn_process_from_path_current(
     } else {
         Err(abi::errors::Errno::ENOSYS)
     }
-}
+}}
 
 pub unsafe fn current_task_resource_id() -> Option<u64> {
     if let Some(hook) = unsafe { CURRENT_RESOURCE_HOOK } { hook() } else { None }

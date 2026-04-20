@@ -252,7 +252,7 @@ impl Virtqueue {
             return None;
         }
 
-        let used = unsafe { &*(self.used_virt as *const VirtqueueUsed) };
+        let _used = unsafe { &*(self.used_virt as *const VirtqueueUsed) };
         let ring_ptr = (self.used_virt + 4) as *const VirtqueueUsedElem;
 
         let idx = self.last_used_idx as usize % self.queue_size as usize;

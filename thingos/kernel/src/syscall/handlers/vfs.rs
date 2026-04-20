@@ -296,7 +296,7 @@ pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<us
     // 2. Mount points supplement phase
     // Only supplement if we are in the mounts phase AND we have room in the buffer
     if is_mounts_phase_now && n < buf_len {
-        let mut mounts = crate::vfs::mount::get_mounts_under(&path);
+        let mounts = crate::vfs::mount::get_mounts_under(&path);
         if !mounts.is_empty() {
             let mounts_offset = current_offset & !(1 << 63);
             let m_n = crate::vfs::write_readdir_entries(

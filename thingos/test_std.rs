@@ -1,2 +1,3 @@
-use std::thread;
-use std::sync::mpsc;
+fn main() {
+    println!("Hello, world!");
+}

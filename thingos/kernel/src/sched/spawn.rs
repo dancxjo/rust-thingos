@@ -627,9 +627,9 @@ pub unsafe fn spawn_user_thread<R: BootRuntime>(
     arg: StartupArg,
     stack_info: abi::types::StackInfo,
     priority: crate::task::TaskPriority,
-) -> TaskId {
+) -> TaskId { unsafe {
     spawn_user_thread_ex::<R>(entry, stack, arg, stack_info, priority, 0, false)
-}
+}}
 
 /// Extended version of `spawn_user_thread` with explicit TLS base and detached flag.
 pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
@@ -1086,7 +1086,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     stdout_spec: StdioSpec,
     stderr_spec: StdioSpec,
     boot_arg: u64,
-    inherited_handles: Vec<u64>,
+    _inherited_handles: Vec<u64>,
     cwd: Option<alloc::string::String>,
     fd_remap: Vec<abi::types::HandleRemap>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {

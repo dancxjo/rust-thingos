@@ -42,7 +42,7 @@ pub mod delivery;
 pub mod routing;
 
 use abi::errors::Errno;
-use abi::signal::{SIG_DFL, SIG_IGN, SIGCHLD, SIGCONT, SIGKILL, SIGSTOP, SigAction, SigSet};
+use abi::signal::{SIG_IGN, SIGKILL, SIGSTOP, SigAction, SigSet};
 
 /// Uncatchable signals — cannot be caught, blocked, or ignored.
 pub const UNCATCHABLE: SigSet = SigSet((1u64 << (SIGKILL - 1)) | (1u64 << (SIGSTOP - 1)));

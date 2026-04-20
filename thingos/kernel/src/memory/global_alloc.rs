@@ -40,7 +40,7 @@ struct TracingAllocator;
 
 #[cfg(not(test))]
 unsafe impl GlobalAlloc for TracingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 { unsafe {
         let orig_size = layout.size();
         let orig_align = layout.align();
 
@@ -75,9 +75,9 @@ unsafe impl GlobalAlloc for TracingAllocator {
         }
 
         ptr
-    }
+    }}
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe {
         let orig_size = layout.size();
         let orig_align = layout.align();
 
@@ -92,7 +92,7 @@ unsafe impl GlobalAlloc for TracingAllocator {
         let irq = crate::irq::irq_disable_erased();
         unsafe { INNER_ALLOCATOR.dealloc(ptr, safe_layout) }
         crate::irq::irq_restore_erased(irq);
-    }
+    }}
 }
 
 #[cfg(not(test))]
