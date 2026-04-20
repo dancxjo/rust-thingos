@@ -315,8 +315,6 @@ fn generate_motd() -> String {
         "    \x1b[36mcat /version\x1b[0m  inspect the genome\n",
         "\n",
         "\x1b[2m--------------------------------------------------------------\x1b[0m\n",
-        "\n",
-        "\x1b[1;32mTHING-OS\x1b[0m [\x1b[33mBOOT\x1b[0m] / \u{26A1} \n",
     )
     .to_string()
 }
