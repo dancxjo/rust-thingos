@@ -1,6 +1,6 @@
 // Updated X86_64 runtime with user entry mapping and alignment check
 use core::arch::asm;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use kernel::once_cell::OnceCell;
 use kernel::time::MonotonicClamp;
@@ -74,6 +74,7 @@ impl SerialBuffer {
 
 pub static mut CPU_IDS: [CpuId; acpi::MAX_CPUS] = [CpuId(0); acpi::MAX_CPUS];
 pub static CPU_COUNT: AtomicU64 = AtomicU64::new(1); // Default to 1 (BSP)
+static IOAPIC_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 fn cpu_id_from_gs_index_fallback() -> CpuId {
     let idx: u64;
@@ -207,6 +208,35 @@ impl X86_64Runtime {
         }
         let lapic_virt = apic::base_phys() + hhdm;
         paging::try_translate(self.active_address_space(), lapic_virt).is_some()
+    }
+
+    fn try_map_lapic_mmio(&self) -> bool {
+        if self.lapic_mmio_is_mapped() {
+            return true;
+        }
+        if !kernel::memory::is_frame_allocator_ready() {
+            return false;
+        }
+
+        let hhdm = self.hhdm_offset.load(Ordering::SeqCst);
+        if hhdm == 0 {
+            return false;
+        }
+
+        let lapic_phys = 0xfee00000u64;
+        let lapic_virt = lapic_phys + hhdm;
+        let aspace = self.active_address_space();
+
+        let perms =
+            MapPerms { read: true, write: true, exec: false, user: false, kind: MapKind::Device };
+
+        if paging::map_page(aspace, lapic_virt, lapic_phys, perms, MapKind::Device, &ProxyAllocator)
+            .is_ok()
+        {
+            paging::tlb_flush_page(lapic_virt);
+        }
+
+        self.lapic_mmio_is_mapped()
     }
 }
 
@@ -347,27 +377,20 @@ impl ArchRuntime for X86_64Runtime {
     type AddressSpace = X86_64AddressSpace;
 
     fn init(&self, hhdm_offset: u64) {
-        self.early_serial_write(b"[bran:x64:init] enter\r\n");
         self.hhdm_offset.store(hhdm_offset, Ordering::SeqCst);
 
         unsafe {
-            self.early_serial_write(b"[bran:x64:init] syscall::init\r\n");
             // Initialize syscalls early (sets GS_BASE) so current_cpu_index() works
             syscall::init(0);
 
-            self.early_serial_write(b"[bran:x64:init] gdt::init\r\n");
             gdt::init();
 
             // Allocate Double Fault Stack
-            self.early_serial_write(b"[bran:x64:init] alloc DF stack\r\n");
             let virt = core::ptr::addr_of_mut!(DF_IST_STACK.0) as u64 + 4096;
             gdt::set_ist1_for_cpu(0, virt);
-            self.early_serial_write(b"[bran:x64:init] ist1 set\r\n");
 
-            self.early_serial_write(b"[bran:x64:init] idt::init\r\n");
             idt::init();
         }
-        self.early_serial_write(b"[bran:x64:init] paging::init\r\n");
         paging::init(hhdm_offset);
 
         // Map the LAPIC MMIO region into the HHDM.
@@ -376,47 +399,18 @@ impl ArchRuntime for X86_64Runtime {
         let lapic_phys = 0xfee00000u64;
         let lapic_virt = lapic_phys + hhdm_offset;
         let aspace = self.active_address_space();
-        // Check if already mapped (it might be if Limine's HHDM covers it).
-        let mut lapic_mapped = paging::try_translate(aspace, lapic_virt).is_some();
+        // Early bring-up: use an existing mapping if firmware already provided one,
+        // but do not allocate page-table frames before kernel memory init.
+        let lapic_mapped = paging::try_translate(aspace, lapic_virt).is_some();
         if !lapic_mapped {
-            struct EarlyFrameHook;
-            impl FrameAllocatorHook for EarlyFrameHook {
-                fn alloc_frame(&self) -> Option<u64> {
-                    kernel::memory::alloc_frame()
-                }
-            }
-
-            let perms = MapPerms {
-                read: true,
-                write: true,
-                exec: false,
-                user: false,
-                kind: MapKind::Device,
-            };
-
-            if paging::map_page(
-                aspace,
-                lapic_virt,
-                lapic_phys,
-                perms,
-                MapKind::Device,
-                &EarlyFrameHook,
-            )
-            .is_ok()
-            {
-                paging::tlb_flush_page(lapic_virt);
-                lapic_mapped = paging::try_translate(aspace, lapic_virt).is_some();
-            }
+            return self.init_uart();
         }
 
-        if lapic_mapped {
-            crate::arch::init_ioapic();
-        }
+        crate::arch::init_ioapic();
+        IOAPIC_INITIALIZED.store(true, Ordering::SeqCst);
 
         // Perform full UART initialization (baud, MCR OUT2, etc)
-        self.early_serial_write(b"[bran:x64:init] init_uart\r\n");
         self.init_uart();
-        self.early_serial_write(b"[bran:x64:init] done\r\n");
     }
 
     fn putchar(&self, c: u8) {
@@ -730,12 +724,17 @@ impl ArchRuntime for X86_64Runtime {
     }
 
     fn setup_preemption_timer(&self, hz: u32) {
-        if !self.lapic_mmio_is_mapped() {
+        if !self.try_map_lapic_mmio() {
             kernel::kwarn!(
-                "LAPIC: skipping preemption timer setup at {}Hz (LAPIC MMIO unmapped)",
+                "LAPIC: skipping preemption timer setup at {}Hz (LAPIC MMIO unavailable)",
                 hz
             );
             return;
+        }
+
+        if !IOAPIC_INITIALIZED.load(Ordering::SeqCst) {
+            crate::arch::init_ioapic();
+            IOAPIC_INITIALIZED.store(true, Ordering::SeqCst);
         }
 
         let (init_cnt, ticks_per_sec) = ioapic::calibrate_lapic_timer(hz);
@@ -933,15 +932,14 @@ impl ArchRuntime for X86_64Runtime {
         // need explicit enable too — without this, the SVR enable bit or
         // TPR may be in BIOS default state, silently masking IPIs like
         // the resched vector (0x30) and preventing task scheduling.
-        if self.lapic_mmio_is_mapped() {
-            ioapic::enable_local_apic();
-        } else {
+        if !self.try_map_lapic_mmio() {
             kernel::kwarn!(
-                "SMP: CPU {} skipped LAPIC enable/timer setup (LAPIC MMIO unmapped)",
+                "SMP: CPU {} skipped LAPIC enable/timer setup (LAPIC MMIO unavailable)",
                 cpu_index
             );
             return;
         }
+        ioapic::enable_local_apic();
 
         // Initialize preemption timer using cached BSP calibration
         let vector = self.timer_vector.load(Ordering::SeqCst);
