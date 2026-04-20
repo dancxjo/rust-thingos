@@ -1798,7 +1798,7 @@ pub fn init<R: BootRuntime>() {
         } else {
             1
         };
-        crate::kdebug!("Scheduler initialized");
+        crate::kinfo!("Scheduler initialized");
     }
     clear_sched_lock_tracking::<R>();
 }

@@ -890,7 +890,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     contract!("thing-os kernel starting...");
 
     memory::init(runtime);
-    kdebug!("Initializing global allocator...");
+    kinfo!("Initializing global allocator...");
     memory::global_alloc::init(runtime);
 
     if let Some(fb) = runtime.framebuffer() {
@@ -927,10 +927,10 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     kdebug!("Seeding entropy pool...");
     crate::entropy::seed_from_hardware();
 
-    kdebug!("Initializing SIMD...");
+    kinfo!("Initializing SIMD...");
     runtime.simd_init_cpu();
 
-    kdebug!("Initializing tasking...");
+    kinfo!("Initializing tasking...");
     crate::task::init::<R>();
 
     kdebug!("Initializing VFS...");
@@ -1165,7 +1165,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         paint_bootfb_solid(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
     }
 
-    kdebug!("Entering scheduler loop.");
+    kinfo!("Entering scheduler loop.");
     loop {
         if !crate::task::yield_now::<R>() {
             // No runnable work on this CPU — halt until the next interrupt

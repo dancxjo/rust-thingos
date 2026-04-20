@@ -9,6 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use regex::Regex;
 
 /// The test world shared across all steps in a scenario.
 #[derive(Debug, Default, World)]
@@ -231,9 +232,10 @@ impl ThingOsWorld {
                         } // EOF
 
                         let text = String::from_utf8_lossy(&buf[..n]);
+                        let clean_text = strip_ansi(&text);
                         let mut log = serial_log.lock().await;
 
-                        log.push_str(&text);
+                        log.push_str(&clean_text);
 
                         // Sync to global cache for reporter access (throttled to avoid QEMU pipe stall)
                         if last_update.elapsed().as_millis() > 50 {
@@ -354,6 +356,7 @@ impl ThingOsWorld {
 
     /// Wait for a string to appear in the serial log.
     pub async fn wait_for_serial(&self, needle: &str, timeout_secs: f64) -> bool {
+        let needle = strip_ansi(needle);
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs_f64(timeout_secs);
         let mut last_print = std::time::Instant::now();
@@ -372,7 +375,7 @@ impl ThingOsWorld {
                     last_print = std::time::Instant::now();
                 }
 
-                if log.contains(needle) {
+                if log.contains(&needle) {
                     eprintln!("│  │  │      debug: found {} in serial", needle);
                     return true;
                 }
@@ -474,7 +477,10 @@ impl ThingOsWorld {
             let log = self.serial_log.lock().await;
             let missing: Vec<String> = required
                 .iter()
-                .filter(|alts| !alts.iter().all(|sig| log.contains(sig)))
+                .filter(|alts| !alts.iter().all(|sig| {
+                    let clean_sig = strip_ansi(sig);
+                    log.contains(&clean_sig)
+                }))
                 .map(|alts| alts.join(" AND "))
                 .collect();
 
@@ -495,7 +501,10 @@ impl ThingOsWorld {
     /// Check if any liveness signal is present.
     pub async fn has_liveness_signal(&self) -> bool {
         let log = self.serial_log.lock().await;
-        LIVENESS_SIGNALS.iter().any(|sig| log.contains(sig))
+        LIVENESS_SIGNALS.iter().any(|sig| {
+            let clean_sig = strip_ansi(sig);
+            log.contains(&clean_sig)
+        })
     }
 
     /// Wait for any liveness signal within timeout.
@@ -515,4 +524,15 @@ impl ThingOsWorld {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
+}
+
+/// Strip ANSI escape sequences and carriage returns from a string.
+pub fn strip_ansi(s: &str) -> String {
+    use std::sync::OnceLock;
+    static ANSI_RE: OnceLock<Regex> = OnceLock::new();
+    let re = ANSI_RE.get_or_init(|| {
+        Regex::new(r"[\u001b\u009b][\[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]")
+            .expect("Invalid ANSI regex")
+    });
+    re.replace_all(s, "").replace('\r', "")
 }

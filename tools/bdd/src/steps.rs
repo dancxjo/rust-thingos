@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use cucumber::{given, then, when};
 
-use crate::world::ThingOsWorld;
+use crate::world::{ThingOsWorld, strip_ansi};
 
 /// Default timeout for waiting on serial output (seconds).
 const DEFAULT_TIMEOUT_SECS: f64 = 120.0;
@@ -727,7 +727,8 @@ async fn check_occurrence_count(
     count: usize,
 ) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    let occurrences = log.lines().filter(|l| l.contains(&pattern)).count();
+    let clean_pattern = strip_ansi(&pattern);
+    let occurrences = log.lines().filter(|l| l.contains(&clean_pattern)).count();
     if occurrences < count {
         return Err(StepError(format!(
             "Expected '{}' to appear at least {} times, but found {}",
@@ -750,7 +751,8 @@ async fn check_ordering(
     let lines: Vec<&str> = log.lines().collect();
 
     // Find the FIRST occurrence of 'first'
-    let first_pos = lines.iter().position(|l| l.contains(&first));
+    let clean_first = strip_ansi(&first);
+    let first_pos = lines.iter().position(|l| l.contains(&clean_first));
 
     if first_pos.is_none() {
         return Err(StepError(format!("Could not find '{}'", first)));
@@ -758,7 +760,8 @@ async fn check_ordering(
     let first_idx = first_pos.ok_or_else(|| StepError(format!("Could not find '{}'", first)))?;
 
     // Check if 'second' appears ANYWHERE after that first occurrence
-    let found_after = lines.iter().skip(first_idx + 1).any(|l| l.contains(&second));
+    let clean_second = strip_ansi(&second);
+    let found_after = lines.iter().skip(first_idx + 1).any(|l| l.contains(&clean_second));
 
     if !found_after {
         eprintln!("\n=== Serial Log (last 50 lines) ===");

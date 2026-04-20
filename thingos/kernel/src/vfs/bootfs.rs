@@ -16,8 +16,8 @@ use crate::BootModuleDesc;
 
 // ── Embedded file contents ────────────────────────────────────────────────────
 
-const VERSION_DATA: &[u8] = b"Thing-OS v0.1 (thingos ACT IV)\n";
-const MOTD_DATA: &[u8] = b"\x1B[1;32m\n        .-.\n       /   \\        \x1B[1;36mTHING-OS\x1B[1;32m\n      |     |       \x1B[0;36m\"People, places, things.\"\x1B[1;32m\n       \\   /        \n        `-'        \n       /   \\        v0.1  \xE2\x80\xA2  ACT IV\n      |     |       2026-04-16\n       \\   /\n        `-'\n\x1B[0m\n\x1B[2m--------------------------------------------------------------\x1B[0m\n\x1B[1m sprout has taken root. the system is awake.\x1B[0m\n\n  try:\n    \x1B[36mls /bin\x1B[0m       browse available shoots\n    \x1B[36mps\x1B[0m            observe living processes\n    \x1B[36mcat /version\x1B[0m  inspect the genome\n\n\x1B[2m--------------------------------------------------------------\x1B[0m\n";
+const VERSION_DATA: &[u8] = b"Thing-OS v0.1\n";
+const MOTD_DATA: &[u8] = b"\x1B[1;32m\n        .-.\n       /   \\        \x1B[1;36mTHING-OS\x1B[1;32m\n      |     |       \x1B[0;36m\"People, places, things.\"\x1B[1;32m\n       \\   /        \n        `-'        \n       /   \\        v0.1  \xE2\x80\xA2  \n      |     |       2026-04-16\n       \\   /\n        `-'\n\x1B[0m\n\x1B[2m--------------------------------------------------------------\x1B[0m\n\x1B[1m sprout has taken root. the system is awake.\x1B[0m\n\n  try:\n    \x1B[36mls /bin\x1B[0m       browse available shoots\n    \x1B[36mps\x1B[0m            observe living processes\n    \x1B[36mcat /version\x1B[0m  inspect the genome\n\n\x1B[2m--------------------------------------------------------------\x1B[0m\n";
 
 // ── BootFs driver ─────────────────────────────────────────────────────────────
 
