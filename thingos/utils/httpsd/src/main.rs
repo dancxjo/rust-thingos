@@ -121,9 +121,18 @@ impl HttpsProvider {
 
     fn allocate_node(&mut self, host: &str, path: &str, response: Option<Response>) -> u64 {
         let handle = self.next_handle;
-        self.next_handle = self.next_handle.saturating_add(1);
+        self.next_handle = self.next_handle.wrapping_add(1);
+        if self.next_handle == ROOT_HANDLE {
+            self.next_handle = ROOT_HANDLE + 1;
+        }
         self.handles.insert(handle, HttpsHandle::new(HttpsNode::new(host, path), response));
         handle
+    }
+
+    fn close_node(&mut self, handle: u64) {
+        if handle != ROOT_HANDLE {
+            self.handles.remove(&handle);
+        }
     }
 
     fn resolve_path(&mut self, path: &str) -> Result<u64, Errno> {
@@ -213,10 +222,7 @@ impl HttpsProvider {
 
             trace!(
                 "httpsd: read_node handle={} calling read_chunk (offset={} end={} eof={})",
-                handle,
-                offset,
-                body_end,
-                state.eof
+                handle, offset, body_end, state.eof
             );
             let chunk = response.read_chunk().map_err(|err| {
                 warn!(
@@ -367,9 +373,8 @@ fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> Provi
         VfsRpcOp::Read => dispatch_read(provider, payload),
         VfsRpcOp::Stat => dispatch_stat(provider, payload),
         VfsRpcOp::Readdir => dispatch_readdir(payload),
-        VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
-            ProviderResponse::ok_empty()
-        }
+        VfsRpcOp::Close => dispatch_close(provider, payload),
+        VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::Poll => ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN as u32),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
@@ -416,6 +421,15 @@ fn dispatch_stat(provider: &HttpsProvider, payload: &[u8]) -> ProviderResponse {
         Ok((mode, size, ino)) => ProviderResponse::ok_stat(mode, size, ino),
         Err(e) => ProviderResponse::err(e),
     }
+}
+
+fn dispatch_close(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 8 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
+    provider.close_node(handle);
+    ProviderResponse::ok_empty()
 }
 
 fn dispatch_readdir(payload: &[u8]) -> ProviderResponse {
