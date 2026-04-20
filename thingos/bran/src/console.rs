@@ -253,7 +253,7 @@ impl FbConsole {
         self.active = true;
         self.reset_style();
         self.clear_to_bg();
-        // Hide cursor while rendering through the bootstrap framebuffer terminal.
+        // Keep cursor hidden for the active bootstrap framebuffer terminal session.
         for &b in b"\x1b[0m\x1b[?25lThing-OS kernel terminal (F12)\n" {
             self.handle_byte(b);
         }
@@ -267,6 +267,7 @@ impl FbConsole {
     }
 }
 
+/// Parse one hexadecimal ASCII nibble into its numeric value.
 fn parse_hex_nibble(v: u8) -> Option<u8> {
     match v {
         b'0'..=b'9' => Some(v - b'0'),
@@ -276,6 +277,7 @@ fn parse_hex_nibble(v: u8) -> Option<u8> {
     }
 }
 
+/// Parse an ASCII hexadecimal string into `u32`.
 fn parse_hex_u32(bytes: &[u8]) -> Option<u32> {
     let mut v = 0u32;
     for &b in bytes {
@@ -285,12 +287,17 @@ fn parse_hex_u32(bytes: &[u8]) -> Option<u32> {
     Some(v)
 }
 
+/// Parse two hexadecimal ASCII characters into one byte.
 fn parse_hex_byte_pair(hi: u8, lo: u8) -> Option<u8> {
     let h = parse_hex_nibble(hi)?;
     let l = parse_hex_nibble(lo)?;
     Some((h << 4) | l)
 }
 
+/// Load ASCII-range glyphs from the boot module that contains `unifont.hex`.
+///
+/// Returns an empty map when the module is missing or invalid so the console
+/// can degrade gracefully instead of failing boot.
 fn load_unifont_ascii() -> BTreeMap<u32, Glyph> {
     let mut out = BTreeMap::new();
     let modules = crate::RUNTIME.modules();

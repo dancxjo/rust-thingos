@@ -3,6 +3,13 @@ use kernel::{FramebufferInfo, PixelFormat};
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
+/// SSE2-optimized `u32` fill for framebuffer rows.
+///
+/// # Safety
+/// - `buf` must be a valid, writable `u32` slice.
+/// - Uses unaligned vector stores (`_mm_storeu_si128`), so no extra alignment
+///   constraints are required beyond pointer validity.
+/// - Marked `unsafe` because it performs raw-pointer SIMD stores internally.
 unsafe fn fill_u32_sse2(buf: &mut [u32], color: u32) {
     use core::arch::x86_64::{__m128i, _mm_set1_epi32, _mm_storeu_si128};
     let chunks = buf.len() / 4;
