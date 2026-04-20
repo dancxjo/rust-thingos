@@ -24,9 +24,12 @@ pub static RUNTIME: arch::CurrentRuntime = arch::create_runtime();
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
     // Ultra-early Proof of Life (semihosting)
-    unsafe {
-        for &b in b"KMAIN\r\n" {
-            core::arch::asm!("hlt #0xF000", in("w0") 0x03, in("x1") &b);
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            for &b in b"KMAIN\r\n" {
+                core::arch::asm!("hlt #0xF000", in("w0") 0x03, in("x1") &b);
+            }
         }
     }
 
@@ -63,11 +66,14 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     kernel::kerror!("{}", info);
-    
+
     // Semihosting FAULT marker
-    unsafe {
-        for &b in b"FAULT\r\n" {
-            core::arch::asm!("hlt #0xF000", in("w0") 0x03, in("x1") &b);
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            for &b in b"FAULT\r\n" {
+                core::arch::asm!("hlt #0xF000", in("w0") 0x03, in("x1") &b);
+            }
         }
     }
 

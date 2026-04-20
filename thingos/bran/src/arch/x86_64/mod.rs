@@ -250,7 +250,6 @@ impl X86_64Runtime {
                     exec: true,
                     kind: MapKind::Normal,
                 },
-                MapKind::Normal,
                 &ProxyAllocator,
             )?;
         } else {
@@ -273,7 +272,6 @@ impl X86_64Runtime {
                     exec: false,
                     kind: MapKind::Normal,
                 },
-                MapKind::Normal,
                 &ProxyAllocator,
             )?;
         } else {
@@ -635,10 +633,9 @@ impl ArchRuntime for X86_64Runtime {
         virt: u64,
         phys: u64,
         perms: MapPerms,
-        kind: MapKind,
         allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()> {
-        paging::map_page(aspace, virt, phys, perms, kind, allocator)
+        paging::map_page(aspace, virt, phys, perms, perms.kind, allocator)
     }
     fn unmap_page(&self, aspace: Self::AddressSpace, virt: u64) -> Result<Option<u64>, ()> {
         paging::unmap_page(aspace, virt)
@@ -739,7 +736,6 @@ impl ArchRuntime for X86_64Runtime {
                     exec: false,
                     kind: MapKind::Normal,
                 },
-                MapKind::Normal,
                 &ProxyAllocator,
             )
             .map_err(|_| abi::errors::Errno::ENOMEM)?;
@@ -941,7 +937,6 @@ impl ArchRuntime for X86_64Runtime {
                     exec: true,
                     kind: MapKind::Device,
                 },
-                MapKind::Device,
                 &ProxyAllocator,
             )
             .map_err(|_| {
