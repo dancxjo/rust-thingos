@@ -236,6 +236,8 @@ pub const SCHED_HIST_BUCKETS: usize = 5;
 const PREPARE_SCHEDULE_PICK_BUDGET: usize = 16;
 const PREPARE_SCHEDULE_MISROUTE_REPAIR_BUDGET: usize = 8;
 const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
+/// Bits 1..=4 represent non-idle priority queues (Low..Realtime).
+const RUNNABLE_NONIDLE_MASK: u8 = 0b1_1110;
 // Keep steal scans bounded to limit idle-path latency while still peeking past
 // a small pinned/unstealable head segment.
 const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
@@ -249,8 +251,20 @@ const ANY_WAKE_WAKER_CPU_DEPTH_BIAS: usize = 1;
 const ANY_WAKE_BRIEF_SLEEP_TICKS: u64 = 4;
 const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 64;
+const PROACTIVE_REBALANCE_TICK_STRIDE: u64 = 8;
+const PROACTIVE_REBALANCE_LOCAL_DEPTH_MAX: usize = 0;
+const PROACTIVE_REBALANCE_MIN_BUSIEST_DEPTH: usize = 2;
+const PROACTIVE_REBALANCE_MIN_DEPTH_GAP: usize = 2;
+const PROACTIVE_REBALANCE_MIN_VARIANCE: u64 = 4;
+const PROACTIVE_REBALANCE_MIN_IMBALANCE_TICKS: u64 = 32;
 const RESCHED_IPI_NEVER_SENT: u64 = u64::MAX;
 const RESCHED_IPI_MIN_TICK_DELTA: u64 = 2;
+
+#[inline]
+fn highest_set_bit_u8(mask: u8) -> usize {
+    debug_assert!(mask != 0);
+    (u8::BITS as usize - 1) - mask.leading_zeros() as usize
+}
 
 /// Map a microsecond duration to a histogram bucket index.
 ///
@@ -777,7 +791,9 @@ pub(crate) fn enqueue_remote_wake_mailbox(
 }
 
 #[inline]
-fn take_remote_wake_mailbox(cpu: usize) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
+fn take_remote_wake_mailbox(
+    cpu: usize,
+) -> alloc::collections::VecDeque<types::RemoteWakeMailboxEntry> {
     if cpu >= types::MAX_CPUS {
         return alloc::collections::VecDeque::new();
     }
@@ -1347,8 +1363,24 @@ pub(crate) fn should_send_remote_resched_ipi(target_cpu: usize) -> bool {
 pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
     deferred_updates: alloc::vec::Vec<types::DeferredRegistrySync>,
 ) {
-    debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_syncs");
-    for update in deferred_updates {
+    #[inline]
+    fn merge_registry_sync(
+        dst: &mut types::DeferredRegistrySync,
+        src: types::DeferredRegistrySync,
+    ) {
+        if src.new_state.is_some() {
+            dst.new_state = src.new_state;
+        }
+        if src.new_enqueued_at_tick.is_some() {
+            dst.new_enqueued_at_tick = src.new_enqueued_at_tick;
+        }
+        if src.new_last_cpu.is_some() {
+            dst.new_last_cpu = src.new_last_cpu;
+        }
+    }
+
+    #[inline]
+    fn apply_registry_sync_update<R: BootRuntime>(update: types::DeferredRegistrySync) {
         if let Some(mut task) = crate::task::registry::get_task_mut::<R>(update.tid) {
             if let Some(state) = update.new_state {
                 task.state = state;
@@ -1360,6 +1392,28 @@ pub(crate) fn apply_deferred_registry_syncs<R: BootRuntime>(
                 task.last_cpu = Some(last_cpu);
             }
         }
+    }
+
+    debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_syncs");
+    if deferred_updates.is_empty() {
+        return;
+    }
+
+    // Batch per-task journal entries emitted while SCHEDULER was held so each
+    // task is synchronized to REGISTRY at most once in this replay pass.
+    let mut coalesced = alloc::vec::Vec::with_capacity(deferred_updates.len());
+    let mut coalesced_by_tid = alloc::collections::BTreeMap::new();
+    for update in deferred_updates {
+        if let Some(existing_idx) = coalesced_by_tid.get(&update.tid).copied() {
+            merge_registry_sync(&mut coalesced[existing_idx], update);
+        } else {
+            let next_idx = coalesced.len();
+            coalesced_by_tid.insert(update.tid, next_idx);
+            coalesced.push(update);
+        }
+    }
+    for update in coalesced {
+        apply_registry_sync_update::<R>(update);
     }
 }
 
@@ -1896,6 +1950,53 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
 }
 
 impl<R: BootRuntime> types::Scheduler<R> {
+    fn materialize_priority_aging_for_cpu(&mut self, cpu_idx: usize, now: u64) {
+        if cpu_idx >= self.state.per_cpu.len() {
+            return;
+        }
+
+        let mut promotions: alloc::vec::Vec<(TaskId, usize, usize)> = alloc::vec::Vec::new();
+
+        // Periodically materialize aging into runnable buckets so pick can stay
+        // a simple highest-priority queue selector.
+        // Skip Realtime priority: fairness aging is bounded to non-realtime work.
+        for p in (TaskPriority::Low as usize)..(TaskPriority::Realtime as usize) {
+            for &id in self.state.per_cpu[cpu_idx].runq[p].iter() {
+                let Some(sf) = self.state.get_thread(id) else {
+                    continue;
+                };
+                if sf.state != TaskState::Runnable || sf.runq_location != Some((cpu_idx, p)) {
+                    continue;
+                }
+
+                let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
+                let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
+                let boost = boost.min(types::MAX_PRIORITY_BOOST);
+                // Never age into Realtime; preserve explicit realtime priority semantics.
+                let target = (p + boost).min(TaskPriority::High as usize);
+                if target > p {
+                    promotions.push((id, p, target));
+                }
+            }
+        }
+
+        for (id, from_prio, to_prio) in promotions {
+            let still_in_source = self
+                .state
+                .get_thread(id)
+                .and_then(|sf| sf.runq_location)
+                == Some((cpu_idx, from_prio));
+            if !still_in_source {
+                continue;
+            }
+            if self.state.remove_task_from_runq(id) {
+                // Promoted tasks append at the destination bucket tail, preserving
+                // FIFO among already-materialized peers at that effective priority.
+                self.state.enqueue_task(cpu_idx, to_prio, id);
+            }
+        }
+    }
+
     pub fn schedule_point(&mut self, reason: ScheduleReason) -> Option<SwitchDecision> {
         let cpu_idx = current_cpu_index::<R>();
         let global_requested = global_need_resched_swap(cpu_idx, false, Ordering::Acquire);
@@ -1912,9 +2013,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
             ScheduleReason::PreemptTick => {
                 // Wake any sleeping tasks whose time has expired.
                 self.wake_sleepers();
+                self.materialize_priority_aging_for_cpu(cpu_idx, TICK_COUNT.load(Ordering::Relaxed));
 
                 // Check preemption watchdog
                 self.check_preempt_watchdog();
+
+                let now_tick = TICK_COUNT.load(Ordering::Relaxed);
+                self.maybe_proactive_rebalance(cpu_idx, now_tick);
 
                 let mut should_yield = global_requested || self.state.per_cpu[cpu_idx].need_resched;
                 self.state.per_cpu[cpu_idx].need_resched = false;
@@ -2040,81 +2145,52 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // placement can reuse the same balancing view without re-scanning all
         // per-CPU queues for each task.
         let mut wake_batch_loads = WakeBatchLoadSnapshot::new(&self.state);
-
-        while wake_budget > 0 {
-            let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() else {
-                break;
-            };
-            if wake_tick <= now {
-                let Some((_, mut tids)) = self.state.sleep_queue.pop_first() else {
-                    // Safety: In an SMP environment, even if we just checked first_key_value,
-                    // a concurrent removal (e.g. via task death) could have emptied the slot.
-                    // Skip and continue to maintain system liveness.
-                    break;
-                };
-                let to_take = core::cmp::min(wake_budget, tids.len());
-
-                for tid in tids.drain(..to_take) {
-                    // This task left the sleep queue (woken or dropped if task
-                    // record vanished), so clear direct membership now.
-                    self.state.sleep_membership.remove(&tid);
-                    // Read scheduling fields from the hot-field cache only.
-                    // REGISTRY is not accessed in this inner loop.
-                    if let Some(sf) = self.state.get_thread(tid) {
-                        let priority = sf.priority as usize;
-                        let affinity = sf.affinity;
-                        let last_cpu = sf.last_cpu;
-                        let last_wake_cpu = sf.wake_cpu;
-                        let target_cpu = match affinity {
-                            crate::task::Affinity::Pinned(cpu) => {
-                                wake_batch_loads.note_enqueue(cpu);
-                                cpu
-                            }
-                            crate::task::Affinity::Any => {
-                                // One-shot hint: consume the recorded requested sleep
-                                // duration as the task leaves the sleep queue.
-                                let requested_sleep_ticks =
-                                    self.sleep_duration_ticks_by_tid.remove(&tid);
-                                let preferred =
-                                    select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
-                                        self,
-                                        last_cpu,
-                                        last_wake_cpu,
-                                        requested_sleep_ticks,
-                                        &wake_batch_loads,
-                                    );
-                                let brief_sleep = requested_sleep_ticks
-                                    .map_or(false, |ticks| ticks <= ANY_WAKE_BRIEF_SLEEP_TICKS);
-                                let target = if brief_sleep {
-                                    preferred
-                                } else {
-                                    select_any_affinity_wake_cpu_from_snapshot::<R>(
-                                        self,
-                                        preferred,
-                                        &wake_batch_loads,
-                                    )
-                                };
-                                wake_batch_loads.note_enqueue(target);
-                                target
-                            }
-                        };
-                        to_wake.push((tid, priority, target_cpu));
+        let due_tids = self.state.take_due_sleepers(now, wake_budget);
+        let due_count = due_tids.len();
+        for tid in due_tids {
+            // Read scheduling fields from the hot-field cache only.
+            // REGISTRY is not accessed in this inner loop.
+            if let Some(sf) = self.state.get_thread(tid) {
+                let priority = sf.priority as usize;
+                let affinity = sf.affinity;
+                let last_cpu = sf.last_cpu;
+                let last_wake_cpu = sf.wake_cpu;
+                let target_cpu = match affinity {
+                    crate::task::Affinity::Pinned(cpu) => {
+                        wake_batch_loads.note_enqueue(cpu);
+                        cpu
                     }
-                    // If not in hot-field cache, skip (task was already removed).
-                }
-
-                wake_budget = wake_budget.saturating_sub(to_take);
-                if !tids.is_empty() {
-                    self.state.sleep_queue.insert(wake_tick, tids);
-                    // Remaining tids stayed in this bucket after budget limiting;
-                    // refresh their direct membership indices in one pass.
-                    self.state.refresh_sleep_bucket_membership(wake_tick);
-                    break;
-                }
-            } else {
-                break;
+                    crate::task::Affinity::Any => {
+                        // One-shot hint: consume the recorded requested sleep
+                        // duration as the task leaves the sleep queue.
+                        let requested_sleep_ticks = self.sleep_duration_ticks_by_tid.remove(&tid);
+                        let preferred = select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
+                            self,
+                            last_cpu,
+                            last_wake_cpu,
+                            requested_sleep_ticks,
+                            &wake_batch_loads,
+                        );
+                        let brief_sleep =
+                            requested_sleep_ticks.map_or(false, |ticks| ticks <= ANY_WAKE_BRIEF_SLEEP_TICKS);
+                        let target = if brief_sleep {
+                            preferred
+                        } else {
+                            select_any_affinity_wake_cpu_from_snapshot::<R>(
+                                self,
+                                preferred,
+                                &wake_batch_loads,
+                            )
+                        };
+                        wake_batch_loads.note_enqueue(target);
+                        target
+                    }
+                };
+                to_wake.push((tid, priority, target_cpu));
             }
+            // If not in hot-field cache, skip (task was already removed).
         }
+        wake_budget = wake_budget.saturating_sub(due_count);
 
         self.wake_sleepers_budget_carry = wake_budget;
 
@@ -2280,9 +2356,21 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if Some(current_id) != self.state.per_cpu[cpu_idx].idle_task {
             if let Some(t) = self.state.get_thread(current_id) {
                 if t.state != TaskState::Dead && t.state != TaskState::Blocked {
-                    let priority = t.priority;
+                    let priority = t.priority as usize;
+                    let projected_yields = t.voluntary_yields.saturating_add(1);
+                    let pathological_spin_yielder = projected_yields
+                        >= types::SPIN_YIELD_PENALTY_THRESHOLD
+                        && self.state.last_enqueue_cause(current_id)
+                            == crate::sched::state::EnqueueCause::YieldRequeue;
+                    let requeue_priority = if pathological_spin_yielder {
+                        priority
+                            .saturating_sub(types::SPIN_YIELD_PENALTY_BANDS)
+                            .max(TaskPriority::Low as usize)
+                    } else {
+                        priority
+                    };
                     // Push to LOCAL runq (we are yielding on this CPU)
-                    self.state.enqueue_task(cpu_idx, priority as usize, current_id);
+                    self.state.enqueue_task(cpu_idx, requeue_priority, current_id);
                     self.state.note_enqueue_cause(
                         current_id,
                         crate::sched::state::EnqueueCause::YieldRequeue,
@@ -2340,7 +2428,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let prio = sf.priority as usize;
         match sf.affinity {
             crate::task::Affinity::Pinned(cpu) if cpu < per_cpu_len => Some((prio, cpu)),
-            crate::task::Affinity::Pinned(_) => Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1))),
+            crate::task::Affinity::Pinned(_) => {
+                Some((queued_prio, queued_target_cpu.min(per_cpu_len - 1)))
+            }
             crate::task::Affinity::Any => {
                 let fallback = queued_target_cpu.min(per_cpu_len - 1);
                 Some((prio, sf.last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(fallback)))
@@ -2440,41 +2530,24 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Sample run-queue depth for this CPU before we start dequeuing.
         sample_runq_len(self, cpu_idx);
-
-        // Snapshot tick count once per scheduling decision so aging is both
-        // consistent across this pick and free of repeated tick loads.
         let now = TICK_COUNT.load(Ordering::Relaxed);
 
         let mut next_id = None;
         let mut pick_attempts = 0usize;
-        // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick
+        // Priority scan — pick the highest runnable bucket; fairness aging is
+        // materialized periodically outside this hot path.
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
             let mut best_q = None;
-            let mut best_eff = 0;
-
-            for p in (1..5).rev() {
-                if let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].front() {
-                    let mut eff = p; // Start with base priority (queue index)
-                    if p < 4 {
-                        // aging only applies up to High
-                        // Use the hot-field cache to avoid a nested REGISTRY lock.
-                        if let Some(sf) = self.state.get_thread(id) {
-                            let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
-                            let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
-                            let boost = boost.min(types::MAX_PRIORITY_BOOST);
-                            eff = (p + boost).min(4);
-                        }
-                    }
-                    // Use >= so that an aged lower-priority task wins the tie when its
-                    // boosted effective priority equals a higher-priority task's. We scan
-                    // from p=4 down to p=1; a later (lower-p) match with equal eff
-                    // replaces the earlier one, meaning the task that *needed* aging to
-                    // compete gets to run first, preventing indefinite starvation.
-                    if eff >= best_eff {
-                        best_eff = eff;
-                        best_q = Some(p);
-                    }
+            let mut candidate_mask =
+                self.state.per_cpu[cpu_idx].nonempty_runnable_mask & RUNNABLE_NONIDLE_MASK;
+            while candidate_mask != 0 {
+                let p = highest_set_bit_u8(candidate_mask);
+                candidate_mask &= !(1u8 << p);
+                if self.state.per_cpu[cpu_idx].runq[p].front().is_some() {
+                    best_q = Some(p);
+                    break;
                 }
+                self.state.per_cpu[cpu_idx].nonempty_runnable_mask &= !(1u8 << p);
             }
 
             if let Some(p) = best_q {
@@ -2551,7 +2624,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     // Attempt to steal a task from the most-loaded peer CPU before
                     // falling back to the idle task.  This prevents the scheduler from
                     // going idle on a CPU while other CPUs have run queues backed up.
-                    let stolen = self.steal_task_for(cpu_idx);
+                    let stolen = self.steal_task_for(cpu_idx, false);
                     if stolen.is_some() {
                         stolen
                     } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
@@ -2747,13 +2820,67 @@ impl<R: BootRuntime> types::Scheduler<R> {
         Some(SwitchDecision { cpu_idx, from_tid: current_id, to_tid: next_id })
     }
 
+    fn maybe_proactive_rebalance(&mut self, local_cpu: usize, now_tick: u64) {
+        if now_tick % PROACTIVE_REBALANCE_TICK_STRIDE != 0 {
+            return;
+        }
+
+        if !self.state.online_cpus.contains(&local_cpu) {
+            return;
+        }
+
+        let local_depth = runq_depth_for_cpu(&self.state, local_cpu);
+        if local_depth > PROACTIVE_REBALANCE_LOCAL_DEPTH_MAX {
+            return;
+        }
+
+        let per_cpu_len = self.state.per_cpu.len();
+        let busiest_depth = (0..per_cpu_len)
+            .filter(|&cpu| cpu != local_cpu && self.state.online_cpus.contains(&cpu))
+            .map(|cpu| runq_depth_for_cpu(&self.state, cpu))
+            .max()
+            .unwrap_or(0);
+        if busiest_depth < PROACTIVE_REBALANCE_MIN_BUSIEST_DEPTH
+            || busiest_depth < local_depth + PROACTIVE_REBALANCE_MIN_DEPTH_GAP
+        {
+            return;
+        }
+
+        let variance = PROF_RUNQ_DEPTH_VARIANCE_LAST.load(Ordering::Relaxed);
+        let imbalance_duration_crossed = self
+            .imbalance_active_since_mono
+            .map(|start| crate::runtime::<R>().mono_ticks().wrapping_sub(start))
+            .is_some_and(|elapsed| elapsed >= PROACTIVE_REBALANCE_MIN_IMBALANCE_TICKS);
+        if variance < PROACTIVE_REBALANCE_MIN_VARIANCE && !imbalance_duration_crossed {
+            return;
+        }
+
+        if let Some(stolen_id) = self.steal_task_for(local_cpu, true) {
+            let stolen_priority = self
+                .state
+                .get_task(stolen_id)
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(0);
+            let current_priority = self.state.per_cpu[local_cpu]
+                .current
+                .and_then(|tid| self.state.get_task(tid))
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(0);
+            let current_is_idle =
+                self.state.per_cpu[local_cpu].current == self.state.per_cpu[local_cpu].idle_task;
+            if current_is_idle || stolen_priority >= current_priority {
+                self.state.per_cpu[local_cpu].need_resched = true;
+            }
+        }
+    }
+
     /// Steal the highest-priority `Affinity::Any` task from the most-loaded
     /// peer CPU that has at least 2 runnable tasks.
     ///
-    /// Called when the local run queue is empty before falling back to the
-    /// idle task.  Only moves tasks whose affinity allows placement on any
-    /// CPU; pinned tasks are never stolen.
-    fn steal_task_for(&mut self, local_cpu: usize) -> Option<TaskId> {
+    /// When `enqueue_local_runq` is true, the stolen task is immediately enqueued
+    /// on the local run queue for proactive balancing. Otherwise the task is
+    /// returned detached so callers can dispatch it immediately.
+    fn steal_task_for(&mut self, local_cpu: usize, enqueue_local_runq: bool) -> Option<TaskId> {
         let per_cpu_len = self.state.per_cpu.len();
         // Find the peer CPU with the most queued work.
         let (busiest_cpu, busiest_depth) = (0..per_cpu_len)
@@ -2808,8 +2935,17 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     if let Some(sf) = self.state.get_task_mut(stolen_id) {
                         sf.wake_cpu = Some(local_cpu);
                     }
+                    let Some(stolen_priority) =
+                        self.state.get_task(stolen_id).map(|sf| sf.priority as usize)
+                    else {
+                        continue;
+                    };
                     self.state
                         .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
+                    if enqueue_local_runq {
+                        self.state.enqueue_task(local_cpu, stolen_priority, stolen_id);
+                        self.metrics.pushes += 1;
+                    }
                     self.metrics.steals += 1;
                     crate::kdebug!(
                         "SCHED: CPU {} stole task {} (prio {}) from CPU {} (depth {})",
@@ -4172,7 +4308,7 @@ pub fn dump_stats<R: BootRuntime>() {
         PROF_IMBALANCE_LONGEST_US.load(Ordering::Relaxed)
     );
 
-    crate::kprint!("Sleep queue: {} tasks\n", sched.state.sleep_queue.len());
+    crate::kprint!("Sleep queue: {} tasks\n", sched.state.sleep_task_count());
     crate::kprint!(
         "=== {} tasks, {} runnable ===\n\n",
         crate::task::registry::get_registry::<R>().threads.len(),
@@ -4824,17 +4960,23 @@ mod tests {
         // while the Normal task, enqueued at tick 600, only waits 400 ticks → no boost (eff = Normal=2).
         let now = types::AGING_THRESHOLD_TICKS * 2;
         TICK_COUNT.store(now, core::sync::atomic::Ordering::Relaxed);
+        sched.materialize_priority_aging_for_cpu(0, now);
+        assert_eq!(
+            sched.state.get_thread(1002).and_then(|t| t.runq_location),
+            Some((0, TaskPriority::High as usize)),
+            "aging sweep should promote the long-waiting low-priority task"
+        );
 
         // Request schedule. The Low task should be selected because its effective priority is higher
-        // than Normal due to wait time.
+        // than Normal due to materialized wait-time aging.
         let next_switch = sched.prepare_schedule().expect("Should find a task");
         assert_eq!(
             next_switch.to_tid, 1002,
             "Low priority task with aging should preempt normal task"
         );
 
-        // Verify it was popped from the Low queue, not moved to High queue
-        assert!(sched.state.per_cpu[0].runq[TaskPriority::Low as usize].is_empty());
+        // Verify aging promotion materialized in queue structure.
+        assert!(sched.state.get_thread(1002).and_then(|t| t.runq_location).is_none());
         assert!(!sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].is_empty());
     }
 
@@ -4970,6 +5112,75 @@ mod tests {
         let t1 = crate::task::registry::get_task::<MockRuntime>(2001).unwrap();
         assert_eq!(t1.enqueued_at_tick, 1000);
         assert_eq!(t1.state, TaskState::Runnable);
+    }
+
+    #[test]
+    fn deferred_registry_syncs_are_batched_per_tid() {
+        let _g = init_test_env();
+        let tid = 9100;
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(tid, TaskState::Blocked, TaskPriority::Normal),
+        ));
+
+        apply_deferred_registry_syncs::<MockRuntime>(alloc::vec![
+            types::DeferredRegistrySync {
+                tid,
+                new_state: Some(TaskState::Runnable),
+                new_enqueued_at_tick: Some(7),
+                new_last_cpu: None,
+            },
+            types::DeferredRegistrySync {
+                tid,
+                new_state: None,
+                new_enqueued_at_tick: Some(55),
+                new_last_cpu: Some(2),
+            },
+            types::DeferredRegistrySync {
+                tid,
+                new_state: Some(TaskState::Running),
+                new_enqueued_at_tick: None,
+                new_last_cpu: None,
+            },
+        ]);
+
+        let task = crate::task::registry::get_task::<MockRuntime>(tid).expect("task should exist");
+        assert_eq!(task.state, TaskState::Running);
+        assert_eq!(task.enqueued_at_tick, 55);
+        assert_eq!(task.last_cpu, Some(2));
+    }
+
+    #[test]
+    fn test_prepare_schedule_clears_stale_runnable_mask_bits() {
+        let _g = init_test_env();
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        let current = make_task(0, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+
+        // Inject a stale bit for a queue that is actually empty.
+        sched.state.per_cpu[0].nonempty_runnable_mask = 1u8 << TaskPriority::Realtime as usize;
+
+        let next = sched.prepare_schedule().expect("current task should remain schedulable");
+        assert_eq!(next.to_tid, 0);
+        assert_eq!(sched.state.per_cpu[0].nonempty_runnable_mask, 0);
     }
 
     #[test]
@@ -5113,6 +5324,68 @@ mod tests {
         let switch = switch.unwrap();
         assert_eq!(switch.to_tid, 3002, "Scheduler should switch to the RT task");
         assert_eq!(switch.from_tid, 3001, "Scheduler should switch away from the Normal task");
+    }
+
+    #[test]
+    fn test_prepare_yield_penalizes_pathological_spin_yielder_requeue_band() {
+        let _g = init_test_env();
+        crate::task::registry::init::<MockRuntime>();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        let spinner = make_task(3101, TaskState::Running, TaskPriority::Normal);
+        let peer = make_task(3102, TaskState::Runnable, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(spinner));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(peer));
+
+        sched.state.per_cpu[0].current = Some(3101);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 3101,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: types::SPIN_YIELD_PENALTY_THRESHOLD - 1,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 3102,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, 3102);
+        sched
+            .state
+            .note_enqueue_cause(3101, crate::sched::state::EnqueueCause::YieldRequeue);
+
+        let switch = sched
+            .prepare_yield()
+            .expect("spin-yield penalty should still produce a switch");
+        assert_eq!(switch.to_tid, 3102, "peer should run before penalized spinner");
+
+        let spinner_fields = sched.state.get_task(3101).expect("spinner task should exist");
+        assert_eq!(spinner_fields.priority, TaskPriority::Normal);
+        assert_eq!(spinner_fields.voluntary_yields, types::SPIN_YIELD_PENALTY_THRESHOLD);
+        assert_eq!(
+            spinner_fields.runq_location,
+            Some((0, TaskPriority::Low as usize)),
+            "pathological spin-yielder should be requeued one priority band lower"
+        );
     }
 
     /// Verify that `wake_sleepers` defers cross-CPU IPIs to `pending_wake_ipis`
@@ -5310,7 +5583,7 @@ mod tests {
             "wake_sleepers should honor per-tick wake budget"
         );
         assert_eq!(
-            sched.state.sleep_queue.get(&50).map(|v| v.len()),
+            sched.state.sleep_bucket_snapshot(50).map(|v| v.len()),
             Some(5),
             "sleep queue should retain remaining sleepers after budget is exhausted"
         );
@@ -5326,7 +5599,7 @@ mod tests {
             "second wake pass should process remaining sleepers"
         );
         assert!(
-            !sched.state.sleep_queue.contains_key(&50),
+            !sched.state.sleep_bucket_contains(50),
             "sleep queue entry should be removed once all sleepers wake"
         );
         assert_eq!(
@@ -6021,7 +6294,7 @@ mod tests {
 
         let task = crate::task::registry::get_task::<MockRuntime>(6001).unwrap();
         assert_eq!(task.state, TaskState::Runnable);
-        assert!(sched.state.sleep_queue.is_empty());
+        assert!(sched.state.sleep_queue_is_empty());
         assert!(
             sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].iter().any(|&id| id == 6001)
         );
@@ -6729,7 +7002,7 @@ mod tests {
             !sched.state.wait_queue.contains(&8303),
             "dead current task must be removed from the wait queue"
         );
-        assert_eq!(sched.state.sleep_queue.get(&55).cloned(), Some(alloc::vec![9999]));
+        assert_eq!(sched.state.sleep_bucket_snapshot(55), Some(alloc::vec![9999]));
     }
 
     #[test]
@@ -6883,7 +7156,7 @@ mod tests {
             !sched.state.wait_queue.contains(&8305),
             "reaped task must be removed from the wait queue"
         );
-        assert!(!sched.state.sleep_queue.contains_key(&77));
+        assert!(!sched.state.sleep_bucket_contains(77));
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
@@ -6921,7 +7194,7 @@ mod tests {
         register_timeout_wake::<MockRuntime>(8501, 42);
         register_timeout_wake::<MockRuntime>(8502, 42);
 
-        assert_eq!(sched.state.sleep_queue.get(&42).cloned().unwrap(), alloc::vec![8501, 8502]);
+        assert_eq!(sched.state.sleep_bucket_snapshot(42).unwrap(), alloc::vec![8501, 8502]);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
@@ -6945,8 +7218,8 @@ mod tests {
 
         unregister_timeout_wake::<MockRuntime>(8602);
 
-        assert_eq!(sched.state.sleep_queue.get(&11).cloned().unwrap(), alloc::vec![8601]);
-        assert_eq!(sched.state.sleep_queue.get(&12).cloned().unwrap(), alloc::vec![8603]);
+        assert_eq!(sched.state.sleep_bucket_snapshot(11).unwrap(), alloc::vec![8601]);
+        assert_eq!(sched.state.sleep_bucket_snapshot(12).unwrap(), alloc::vec![8603]);
         assert!(!sched.state.sleep_membership.contains_key(&8602));
         assert_eq!(
             sched.state.sleep_membership.get(&8603).copied(),
@@ -6954,7 +7227,7 @@ mod tests {
         );
 
         unregister_timeout_wake::<MockRuntime>(8603);
-        assert!(!sched.state.sleep_queue.contains_key(&12));
+        assert!(!sched.state.sleep_bucket_contains(12));
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
@@ -8806,7 +9079,7 @@ mod tests {
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9930);
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9931);
 
-        let stolen = sched.steal_task_for(0);
+        let stolen = sched.steal_task_for(0, false);
         assert_eq!(
             stolen,
             Some(9931),
@@ -8883,7 +9156,7 @@ mod tests {
         });
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, stealable_tid);
 
-        let stolen = sched.steal_task_for(0);
+        let stolen = sched.steal_task_for(0, false);
         assert_eq!(
             stolen, None,
             "steal scan must stay bounded and not inspect beyond configured depth"
@@ -8893,6 +9166,125 @@ mod tests {
                 .iter()
                 .any(|&tid| tid == stealable_tid),
             "stealable task beyond scan-depth cap should remain on donor queue"
+        );
+    }
+
+    #[test]
+    fn test_proactive_rebalance_pulls_work_before_local_cpu_goes_idle() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(9960, TaskState::Running, TaskPriority::Normal),
+        ));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9960,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.per_cpu[0].current = Some(9960);
+
+        for tid in [9961, 9962] {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        PROF_RUNQ_DEPTH_VARIANCE_LAST.store(PROACTIVE_REBALANCE_MIN_VARIANCE, Ordering::Relaxed);
+
+        sched.maybe_proactive_rebalance(0, PROACTIVE_REBALANCE_TICK_STRIDE);
+
+        assert_eq!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].len(),
+            1,
+            "proactive rebalance should pull one runnable task into local runq before idle fallback"
+        );
+        assert_eq!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len(),
+            1,
+            "donor runq should lose one task after proactive pull"
+        );
+        assert!(
+            sched.state.per_cpu[0].need_resched,
+            "local CPU should request reschedule after proactive pull"
+        );
+    }
+
+    #[test]
+    fn test_proactive_rebalance_requires_variance_or_duration_threshold() {
+        let _g = init_test_env();
+        use core::sync::atomic::Ordering;
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        for tid in [9970, 9971] {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        PROF_RUNQ_DEPTH_VARIANCE_LAST.store(0, Ordering::Relaxed);
+        sched.maybe_proactive_rebalance(0, PROACTIVE_REBALANCE_TICK_STRIDE);
+
+        assert!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].is_empty(),
+            "without telemetry threshold crossing, proactive rebalance should not pull work"
+        );
+        assert_eq!(
+            sched.state.per_cpu[1].runq[TaskPriority::Normal as usize].len(),
+            2,
+            "donor runq should remain unchanged when thresholds are not met"
         );
     }
 
