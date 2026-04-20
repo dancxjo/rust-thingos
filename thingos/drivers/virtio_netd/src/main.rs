@@ -27,7 +27,7 @@ use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, dev
 use stem::syscall::port_create;
 use stem::syscall::vfs::vfs_mount;
 use stem::{error, warn};
-use vfs_provider::{NetVfsState, handle_vfs_rpc};
+use vfs_provider::{HANDLE_EVENTS, HANDLE_RX, NetVfsState, handle_vfs_rpc};
 
 const DEFAULT_MOUNT_PATH: &str = "/dev/net/virtio0";
 const THINGOS_DRIVER_NAME: &[u8] = b"virtio_netd";
@@ -370,12 +370,22 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
             let event = if link_up { "link-up" } else { "link-down" };
             state.push_event(event);
             stem::debug!("VIRTIO_NETD: Link state changed: {}", event);
+            let _ = stem::syscall::vfs::vfs_notify(
+                req_write,
+                HANDLE_EVENTS,
+                abi::syscall::poll_flags::POLLIN,
+            );
         }
 
         // 2. Poll hardware for received frames and buffer them.
         if let Some(frame) = driver.poll_rx() {
             let frame_vec: alloc::vec::Vec<u8> = frame.to_vec();
             state.push_rx_frame(frame_vec);
+            let _ = stem::syscall::vfs::vfs_notify(
+                req_write,
+                HANDLE_RX,
+                abi::syscall::poll_flags::POLLIN,
+            );
         }
 
         // 3. Service any pending VFS RPC (non-blocking).

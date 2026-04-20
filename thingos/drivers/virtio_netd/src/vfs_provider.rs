@@ -45,10 +45,10 @@ const HANDLE_CTL: u64 = 1;
 const HANDLE_STATUS: u64 = 2;
 const HANDLE_MAC: u64 = 3;
 const HANDLE_MTU: u64 = 4;
-const HANDLE_RX: u64 = 5;
+pub const HANDLE_RX: u64 = 5;
 const HANDLE_TX: u64 = 6;
 const HANDLE_FEATURES: u64 = 7;
-const HANDLE_EVENTS: u64 = 8;
+pub const HANDLE_EVENTS: u64 = 8;
 
 // ── Mode bits ─────────────────────────────────────────────────────────────────
 

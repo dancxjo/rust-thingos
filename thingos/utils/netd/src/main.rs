@@ -259,7 +259,7 @@ fn main(arg: usize) -> ! {
 
         if !did_work {
             let mut pollfds = idle_pollfds(req_fd, events_fd, nic_watch_fd);
-            if vfs_poll(&mut pollfds, 1).unwrap_or(0) > 0 {
+            if vfs_poll(&mut pollfds, 100).unwrap_or(0) > 0 {
                 if (pollfds[1].revents & poll_flags::POLLIN) != 0 {
                     let now = VfsNicDevice::now();
                     let _ = iface.poll(now, &mut device, &mut socket_set);
