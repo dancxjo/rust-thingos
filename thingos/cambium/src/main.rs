@@ -233,8 +233,8 @@ fn run_daemon_mode() -> ! {
         match poll_result {
             Ok(ready) => {
                 if ready == 0 {
-                    // Fallback periodic refresh if event streams are quiet.
-                    catalog.scan();
+                    // Poll timeout: reconcile with the existing catalog to avoid
+                    // repeatedly rescanning immutable `/drivers` contents.
                     reconcile_due = true;
                 }
                 for p in &pollfds {
