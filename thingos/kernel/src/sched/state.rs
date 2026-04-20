@@ -45,6 +45,7 @@ pub const WAKE_LATENCY_HIST_BUCKETS: usize = 5;
 pub const IDLE_EPISODE_HIST_BUCKETS: usize = 4;
 const RUNQ_STALE_PURGE_BUDGET: usize = 32;
 const RUNQ_COMPACT_TRIGGER_MIN_LEN: usize = RUNQ_STALE_PURGE_BUDGET * 4;
+const SLEEP_WHEEL_SLOTS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnqueueCause {
@@ -244,7 +245,8 @@ pub struct SchedState {
     pub free_thread_slots: Vec<usize>,
     pub next_thread_slot: usize,
     pub per_cpu: Vec<PerCpu>,
-    pub sleep_queue: BTreeMap<u64, Vec<ThreadId>>,
+    pub sleep_queue: Vec<Vec<SleepEntry>>,
+    pub sleep_scan_tick: u64,
     pub sleep_membership: BTreeMap<ThreadId, SleepMembership>,
     pub wait_queue: BTreeSet<ThreadId>,
     pub wait_reasons: BTreeMap<ThreadId, WaitReason>,
@@ -325,7 +327,8 @@ impl SchedState {
             free_thread_slots: Vec::with_capacity(1024),
             next_thread_slot: 0,
             per_cpu: Vec::with_capacity(32),
-            sleep_queue: BTreeMap::new(),
+            sleep_queue: (0..SLEEP_WHEEL_SLOTS).map(|_| Vec::new()).collect(),
+            sleep_scan_tick: 0,
             sleep_membership: BTreeMap::new(),
             wait_queue: BTreeSet::new(),
             wait_reasons: BTreeMap::new(),
@@ -553,26 +556,31 @@ impl SchedState {
     }
 
     pub fn refresh_sleep_bucket_membership(&mut self, wake_tick: u64) {
-        // Callers must clear membership for tids removed from this bucket before
-        // invoking refresh. This helper only rebuilds indices for tids that are
-        // still present in `sleep_queue[wake_tick]`.
-        let Some(bucket) = self.sleep_queue.get(&wake_tick) else {
+        let slot = sleep_wheel_slot(wake_tick);
+        let Some(bucket) = self.sleep_queue.get(slot) else {
             return;
         };
-        for (idx, tid) in bucket.iter().copied().enumerate() {
-            self.sleep_membership.insert(tid, SleepMembership { wake_tick, bucket_index: idx });
+        for (idx, entry) in bucket.iter().enumerate() {
+            if entry.wake_tick == wake_tick {
+                self.sleep_membership
+                    .insert(entry.tid, SleepMembership { wake_tick, bucket_index: idx });
+            }
         }
     }
 
     pub fn add_task_to_sleep_queue(&mut self, tid: ThreadId, wake_tick: u64) {
         self.remove_task_from_sleep_queue(tid);
 
+        let slot = sleep_wheel_slot(wake_tick);
         let idx = {
-            let bucket = self.sleep_queue.entry(wake_tick).or_default();
-            bucket.push(tid);
+            let bucket = &mut self.sleep_queue[slot];
+            bucket.push(SleepEntry { tid, wake_tick });
             bucket.len() - 1
         };
         self.sleep_membership.insert(tid, SleepMembership { wake_tick, bucket_index: idx });
+        if wake_tick < self.sleep_scan_tick {
+            self.sleep_scan_tick = wake_tick;
+        }
     }
 
     pub fn remove_task_from_sleep_queue(&mut self, tid: ThreadId) -> bool {
@@ -581,31 +589,29 @@ impl SchedState {
         };
 
         let mut removed = false;
-        let mut remove_bucket = false;
         let mut moved: Option<(ThreadId, usize)> = None;
+        let slot = sleep_wheel_slot(membership.wake_tick);
 
-        if let Some(bucket) = self.sleep_queue.get_mut(&membership.wake_tick) {
-            let remove_idx = if bucket.get(membership.bucket_index) == Some(&tid) {
+        if let Some(bucket) = self.sleep_queue.get_mut(slot) {
+            let remove_idx = if bucket
+                .get(membership.bucket_index)
+                .is_some_and(|entry| entry.tid == tid && entry.wake_tick == membership.wake_tick)
+            {
                 Some(membership.bucket_index)
             } else {
                 // Metadata can become stale when tests or transitional code
                 // manipulate buckets directly; constrain fallback to this bucket
                 // (never a global map scan).
-                bucket.iter().position(|&id| id == tid)
+                bucket.iter().position(|entry| entry.tid == tid)
             };
 
             if let Some(idx) = remove_idx {
                 bucket.swap_remove(idx);
                 if idx < bucket.len() {
-                    moved = Some((bucket[idx], idx));
+                    moved = Some((bucket[idx].tid, idx));
                 }
-                remove_bucket = bucket.is_empty();
                 removed = true;
             }
-        }
-
-        if remove_bucket {
-            self.sleep_queue.remove(&membership.wake_tick);
         }
 
         self.sleep_membership.remove(&tid);
@@ -617,6 +623,80 @@ impl SchedState {
             );
         }
         removed
+    }
+
+    #[inline]
+    pub fn sleep_task_count(&self) -> usize {
+        self.sleep_membership.len()
+    }
+
+    #[inline]
+    pub fn sleep_queue_is_empty(&self) -> bool {
+        self.sleep_membership.is_empty()
+    }
+
+    #[inline]
+    pub fn sleep_bucket_contains(&self, wake_tick: u64) -> bool {
+        let slot = sleep_wheel_slot(wake_tick);
+        self.sleep_queue
+            .get(slot)
+            .is_some_and(|bucket| bucket.iter().any(|entry| entry.wake_tick == wake_tick))
+    }
+
+    pub fn sleep_bucket_snapshot(&self, wake_tick: u64) -> Option<Vec<ThreadId>> {
+        let slot = sleep_wheel_slot(wake_tick);
+        let bucket = self.sleep_queue.get(slot)?;
+        let tids: Vec<ThreadId> = bucket
+            .iter()
+            .filter_map(
+                |entry| {
+                    if entry.wake_tick == wake_tick { Some(entry.tid) } else { None }
+                },
+            )
+            .collect();
+        if tids.is_empty() { None } else { Some(tids) }
+    }
+
+    pub fn take_due_sleepers(&mut self, now: u64, mut budget: usize) -> Vec<ThreadId> {
+        let mut due = Vec::new();
+        if budget == 0 {
+            return due;
+        }
+        if self.sleep_membership.is_empty() {
+            self.sleep_scan_tick = now.saturating_add(1);
+            return due;
+        }
+
+        while budget > 0 && self.sleep_scan_tick <= now {
+            let scan_tick = self.sleep_scan_tick;
+            let slot = sleep_wheel_slot(scan_tick);
+            let (sleep_queue, sleep_membership) = (&mut self.sleep_queue, &mut self.sleep_membership);
+            let bucket = &mut sleep_queue[slot];
+            let mut idx = 0;
+            while idx < bucket.len() && budget > 0 {
+                if bucket[idx].wake_tick <= now {
+                    let entry = bucket.swap_remove(idx);
+                    sleep_membership.remove(&entry.tid);
+                    if idx < bucket.len() {
+                        let moved = bucket[idx];
+                        sleep_membership.insert(
+                            moved.tid,
+                            SleepMembership { wake_tick: moved.wake_tick, bucket_index: idx },
+                        );
+                    }
+                    due.push(entry.tid);
+                    budget -= 1;
+                } else {
+                    idx += 1;
+                }
+            }
+
+            if budget == 0 && bucket.iter().any(|entry| entry.wake_tick <= now) {
+                break;
+            }
+            self.sleep_scan_tick = self.sleep_scan_tick.saturating_add(1);
+        }
+        due
     }
 
     fn opportunistic_compact_runq(&mut self, cpu: usize, prio: usize) {
@@ -680,6 +760,11 @@ impl SchedState {
     pub fn remove_task(&mut self, tid: ThreadId) -> bool {
         self.remove_thread(tid)
     }
+}
+
+#[inline]
+fn sleep_wheel_slot(wake_tick: u64) -> usize {
+    (wake_tick as usize) % SLEEP_WHEEL_SLOTS
 }
 
 #[cfg(test)]
@@ -837,14 +922,14 @@ mod tests {
         state.add_task_to_sleep_queue(22, 100);
 
         assert!(state.remove_task_from_sleep_queue(21));
-        assert_eq!(state.sleep_queue.get(&100).cloned(), Some(alloc::vec![22]));
+        assert_eq!(state.sleep_bucket_snapshot(100), Some(alloc::vec![22]));
         assert_eq!(
             state.sleep_membership.get(&22).copied(),
             Some(SleepMembership { wake_tick: 100, bucket_index: 0 })
         );
 
         assert!(state.remove_task_from_sleep_queue(22));
-        assert!(!state.sleep_queue.contains_key(&100));
+        assert!(!state.sleep_bucket_contains(100));
         assert!(!state.sleep_membership.contains_key(&22));
     }
 
@@ -855,14 +940,39 @@ mod tests {
         state.add_task_to_sleep_queue(31, 12);
 
         assert!(
-            state.sleep_queue.get(&11).map_or(true, |v| v.is_empty()),
+            state.sleep_bucket_snapshot(11).map_or(true, |v| v.is_empty()),
             "old bucket should be absent or empty after moving sleep membership"
         );
-        assert_eq!(state.sleep_queue.get(&12).cloned(), Some(alloc::vec![31]));
+        assert_eq!(state.sleep_bucket_snapshot(12), Some(alloc::vec![31]));
         assert_eq!(
             state.sleep_membership.get(&31).copied(),
             Some(SleepMembership { wake_tick: 12, bucket_index: 0 })
         );
+    }
+
+    #[test]
+    fn sleep_wheel_slot_collision_preserves_independent_deadlines() {
+        let mut state = SchedState::new();
+        state.add_task_to_sleep_queue(1001, 5);
+        state.add_task_to_sleep_queue(1002, 5 + SLEEP_WHEEL_SLOTS as u64);
+
+        assert_eq!(state.sleep_bucket_snapshot(5), Some(alloc::vec![1001]));
+        assert_eq!(
+            state.sleep_bucket_snapshot(5 + SLEEP_WHEEL_SLOTS as u64),
+            Some(alloc::vec![1002])
+        );
+
+        let due_early = state.take_due_sleepers(5, 8);
+        assert_eq!(due_early, alloc::vec![1001]);
+        assert_eq!(
+            state.sleep_bucket_snapshot(5 + SLEEP_WHEEL_SLOTS as u64),
+            Some(alloc::vec![1002]),
+            "future deadline sharing the same slot must remain queued"
+        );
+
+        let due_late = state.take_due_sleepers(5 + SLEEP_WHEEL_SLOTS as u64, 8);
+        assert_eq!(due_late, alloc::vec![1002]);
+        assert!(state.sleep_queue_is_empty());
     }
 
     #[test]

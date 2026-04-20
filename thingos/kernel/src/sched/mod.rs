@@ -2014,65 +2014,38 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // per-CPU queues for each task.
         let mut wake_batch_loads = WakeBatchLoadSnapshot::new(&self.state);
 
-        while wake_budget > 0 {
-            let Some((&wake_tick, _)) = self.state.sleep_queue.first_key_value() else {
-                break;
-            };
-            if wake_tick <= now {
-                let Some((_, mut tids)) = self.state.sleep_queue.pop_first() else {
-                    // Safety: In an SMP environment, even if we just checked first_key_value,
-                    // a concurrent removal (e.g. via task death) could have emptied the slot.
-                    // Skip and continue to maintain system liveness.
-                    break;
-                };
-                let to_take = core::cmp::min(wake_budget, tids.len());
-
-                for tid in tids.drain(..to_take) {
-                    // This task left the sleep queue (woken or dropped if task
-                    // record vanished), so clear direct membership now.
-                    self.state.sleep_membership.remove(&tid);
-                    // Read scheduling fields from the hot-field cache only.
-                    // REGISTRY is not accessed in this inner loop.
-                    if let Some(sf) = self.state.get_thread(tid) {
-                        let priority = sf.priority as usize;
-                        let target_cpu = match sf.affinity {
-                            crate::task::Affinity::Pinned(cpu) => {
-                                wake_batch_loads.note_enqueue(cpu);
-                                cpu
-                            }
-                            crate::task::Affinity::Any => {
-                                let preferred =
-                                    select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
-                                        self,
-                                        sf.last_cpu,
-                                        &wake_batch_loads,
-                                    );
-                                let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
-                                    self,
-                                    preferred,
-                                    &wake_batch_loads,
-                                );
-                                wake_batch_loads.note_enqueue(target);
-                                target
-                            }
-                        };
-                        to_wake.push((tid, priority, target_cpu));
+        let due_tids = self.state.take_due_sleepers(now, wake_budget);
+        let due_count = due_tids.len();
+        for tid in due_tids {
+            // Read scheduling fields from the hot-field cache only.
+            // REGISTRY is not accessed in this inner loop.
+            if let Some(sf) = self.state.get_thread(tid) {
+                let priority = sf.priority as usize;
+                let target_cpu = match sf.affinity {
+                    crate::task::Affinity::Pinned(cpu) => {
+                        wake_batch_loads.note_enqueue(cpu);
+                        cpu
                     }
-                    // If not in hot-field cache, skip (task was already removed).
-                }
-
-                wake_budget = wake_budget.saturating_sub(to_take);
-                if !tids.is_empty() {
-                    self.state.sleep_queue.insert(wake_tick, tids);
-                    // Remaining tids stayed in this bucket after budget limiting;
-                    // refresh their direct membership indices in one pass.
-                    self.state.refresh_sleep_bucket_membership(wake_tick);
-                    break;
-                }
-            } else {
-                break;
+                    crate::task::Affinity::Any => {
+                        let preferred = select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
+                            self,
+                            sf.last_cpu,
+                            &wake_batch_loads,
+                        );
+                        let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
+                            self,
+                            preferred,
+                            &wake_batch_loads,
+                        );
+                        wake_batch_loads.note_enqueue(target);
+                        target
+                    }
+                };
+                to_wake.push((tid, priority, target_cpu));
             }
+            // If not in hot-field cache, skip (task was already removed).
         }
+        wake_budget = wake_budget.saturating_sub(due_count);
 
         self.wake_sleepers_budget_carry = wake_budget;
 
@@ -4123,7 +4096,7 @@ pub fn dump_stats<R: BootRuntime>() {
         PROF_IMBALANCE_LONGEST_US.load(Ordering::Relaxed)
     );
 
-    crate::kprint!("Sleep queue: {} tasks\n", sched.state.sleep_queue.len());
+    crate::kprint!("Sleep queue: {} tasks\n", sched.state.sleep_task_count());
     crate::kprint!(
         "=== {} tasks, {} runnable ===\n\n",
         crate::task::registry::get_registry::<R>().threads.len(),
@@ -5261,7 +5234,7 @@ mod tests {
             "wake_sleepers should honor per-tick wake budget"
         );
         assert_eq!(
-            sched.state.sleep_queue.get(&50).map(|v| v.len()),
+            sched.state.sleep_bucket_snapshot(50).map(|v| v.len()),
             Some(5),
             "sleep queue should retain remaining sleepers after budget is exhausted"
         );
@@ -5277,7 +5250,7 @@ mod tests {
             "second wake pass should process remaining sleepers"
         );
         assert!(
-            !sched.state.sleep_queue.contains_key(&50),
+            !sched.state.sleep_bucket_contains(50),
             "sleep queue entry should be removed once all sleepers wake"
         );
         assert_eq!(
@@ -5972,7 +5945,7 @@ mod tests {
 
         let task = crate::task::registry::get_task::<MockRuntime>(6001).unwrap();
         assert_eq!(task.state, TaskState::Runnable);
-        assert!(sched.state.sleep_queue.is_empty());
+        assert!(sched.state.sleep_queue_is_empty());
         assert!(
             sched.state.per_cpu[0].runq[TaskPriority::Normal as usize].iter().any(|&id| id == 6001)
         );
@@ -6680,7 +6653,7 @@ mod tests {
             !sched.state.wait_queue.contains(&8303),
             "dead current task must be removed from the wait queue"
         );
-        assert_eq!(sched.state.sleep_queue.get(&55).cloned(), Some(alloc::vec![9999]));
+        assert_eq!(sched.state.sleep_bucket_snapshot(55), Some(alloc::vec![9999]));
     }
 
     #[test]
@@ -6834,7 +6807,7 @@ mod tests {
             !sched.state.wait_queue.contains(&8305),
             "reaped task must be removed from the wait queue"
         );
-        assert!(!sched.state.sleep_queue.contains_key(&77));
+        assert!(!sched.state.sleep_bucket_contains(77));
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
@@ -6872,7 +6845,7 @@ mod tests {
         register_timeout_wake::<MockRuntime>(8501, 42);
         register_timeout_wake::<MockRuntime>(8502, 42);
 
-        assert_eq!(sched.state.sleep_queue.get(&42).cloned().unwrap(), alloc::vec![8501, 8502]);
+        assert_eq!(sched.state.sleep_bucket_snapshot(42).unwrap(), alloc::vec![8501, 8502]);
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
@@ -6896,8 +6869,8 @@ mod tests {
 
         unregister_timeout_wake::<MockRuntime>(8602);
 
-        assert_eq!(sched.state.sleep_queue.get(&11).cloned().unwrap(), alloc::vec![8601]);
-        assert_eq!(sched.state.sleep_queue.get(&12).cloned().unwrap(), alloc::vec![8603]);
+        assert_eq!(sched.state.sleep_bucket_snapshot(11).unwrap(), alloc::vec![8601]);
+        assert_eq!(sched.state.sleep_bucket_snapshot(12).unwrap(), alloc::vec![8603]);
         assert!(!sched.state.sleep_membership.contains_key(&8602));
         assert_eq!(
             sched.state.sleep_membership.get(&8603).copied(),
@@ -6905,7 +6878,7 @@ mod tests {
         );
 
         unregister_timeout_wake::<MockRuntime>(8603);
-        assert!(!sched.state.sleep_queue.contains_key(&12));
+        assert!(!sched.state.sleep_bucket_contains(12));
 
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
