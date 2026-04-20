@@ -12,6 +12,7 @@ use kernel::kinfo;
 static IRQ12_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ1_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ4_COUNT: AtomicU64 = AtomicU64::new(0);
+static HOTKEY_SHELL_TID: AtomicU64 = AtomicU64::new(0);
 static PAUSE_DUMP_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PAUSE_DUMP_OWNER_CPU: AtomicU64 = AtomicU64::new(u64::MAX);
 
@@ -681,6 +682,7 @@ const PS2_STATUS_AUX_DATA: u8 = 0x20;
 const PS2_SCANCODE_F12: u8 = 0x58;
 const PS2_SCANCODE_RELEASE_MASK: u8 = 0x80;
 const PS2_SCANCODE_KEY_MASK: u8 = 0x7F;
+const HOTKEY_SHELL_LOCKED: u64 = u64::MAX;
 
 #[inline]
 fn raw_inb(port: u16) -> u8 {
@@ -710,9 +712,7 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, usize) {
         if kernel::irq::ps2::buffer_scancode(byte) {
             pause_dump = true;
         }
-        let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
-        let scancode = byte & PS2_SCANCODE_KEY_MASK;
-        if !released && scancode == PS2_SCANCODE_F12 {
+        if kernel::irq::ps2::take_terminal_hotkey() {
             f12_press = true;
         }
     }
@@ -751,12 +751,85 @@ fn capture_ps2_keyboard_irq() -> bool {
 fn poll_ps2_keyboard_fallback() -> bool {
     let (pause_dump, f12_press, captured) = capture_ps2_keyboard(8);
     if f12_press {
-        crate::console::activate_onscreen_terminal();
+        activate_terminal_and_spawn_shell();
     }
     if captured != 0 {
         kernel::irq::dispatch_irq(0x21);
     }
     pause_dump
+}
+
+fn try_spawn_shell(path: &str) -> Option<u64> {
+    unsafe { kernel::sched::spawn_process_current(path, kernel::task::StartupArg::Raw(0)) }
+}
+
+fn hotkey_shell_is_alive(tid: u64) -> bool {
+    match unsafe { kernel::sched::task_status_current(tid) } {
+        Some((state, _)) => state != kernel::task::TaskState::Dead,
+        None => false,
+    }
+}
+
+fn try_lock_hotkey_shell_spawn() -> bool {
+    loop {
+        let current = HOTKEY_SHELL_TID.load(Ordering::Acquire);
+
+        if current == HOTKEY_SHELL_LOCKED {
+            return false;
+        }
+
+        if current != 0 {
+            if hotkey_shell_is_alive(current) {
+                return false;
+            }
+
+            if HOTKEY_SHELL_TID
+                .compare_exchange(current, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                continue;
+            }
+        }
+
+        if HOTKEY_SHELL_TID
+            .compare_exchange(0, HOTKEY_SHELL_LOCKED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+fn unlock_hotkey_shell_spawn(spawned_tid: Option<u64>) {
+    HOTKEY_SHELL_TID.store(spawned_tid.unwrap_or(0), Ordering::Release);
+}
+
+fn activate_terminal_and_spawn_shell() {
+    crate::console::activate_onscreen_terminal();
+
+    if !try_lock_hotkey_shell_spawn() {
+        let existing = HOTKEY_SHELL_TID.load(Ordering::Acquire);
+        if existing != 0 && existing != HOTKEY_SHELL_LOCKED {
+            kinfo!("F12 hotkey: shell already running (tid={})", existing);
+        }
+        return;
+    }
+
+    if let Some(tid) = try_spawn_shell("/bin/sh") {
+        unlock_hotkey_shell_spawn(Some(tid));
+        kinfo!("F12 hotkey: spawned {} as tid {}", "/bin/sh", tid);
+        return;
+    }
+
+    if let Some(tid) = try_spawn_shell("/bin/smallsh") {
+        unlock_hotkey_shell_spawn(Some(tid));
+        kinfo!("F12 hotkey: spawned {} as tid {}", "/bin/smallsh", tid);
+        return;
+    }
+
+    unlock_hotkey_shell_spawn(None);
+
+    kinfo!("F12 hotkey: failed to spawn /bin/sh and /bin/smallsh");
 }
 
 fn capture_control_state() -> (u64, u64, u64, u64) {
@@ -1087,7 +1160,7 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
     let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let (pause_dump, f12_press, captured) = capture_ps2_keyboard(32);
     if f12_press {
-        crate::console::activate_onscreen_terminal();
+        activate_terminal_and_spawn_shell();
     }
 
     if captured != 0 {

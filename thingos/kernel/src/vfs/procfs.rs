@@ -101,6 +101,13 @@ impl VfsDriver for ProcFs {
             // Reports controlling-terminal/session person-in-place semantics in
             // canonical Presence terms via `kernel::presence::bridge::presence_for_current`.
             "self/presence" => Ok(Arc::new(ProcSelfPresenceNode)),
+            // /proc/self/inbox — VFS access to the calling process's typed inbox.
+            "self/inbox" => {
+                let pinfo = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+                let inbox_id = pinfo.lock().unix_compat.message_inbox;
+                let inbox = crate::inbox::get_inbox(inbox_id).ok_or(Errno::ENOENT)?;
+                Ok(Arc::new(crate::vfs::inbox_node::InboxNode::new(inbox)))
+            }
             _ => {
                 // Try to match /proc/<pid>/... paths.
                 // `path` is already relative to the mount point, so it looks
@@ -272,6 +279,13 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
             let presence = crate::presence::bridge::presence_from_snapshot(&snap);
             let text = presence.as_text();
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), 300 + pid as u64 * 10 + 13)))
+        }
+        // /proc/<pid>/inbox — VFS access to the process's typed inbox.
+        "inbox" => {
+            let pinfo = crate::sched::process_info_for_tid_current(pid as u64).ok_or(Errno::ENOENT)?;
+            let inbox_id = pinfo.lock().unix_compat.message_inbox;
+            let inbox = crate::inbox::get_inbox(inbox_id).ok_or(Errno::ENOENT)?;
+            Ok(Arc::new(crate::vfs::inbox_node::InboxNode::new(inbox)))
         }
         _ => Err(Errno::ENOENT),
     }
@@ -491,6 +505,7 @@ impl VfsNode for ProcPidDirNode {
             "authority",
             "place",
             "presence",
+            "inbox",
         ];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
@@ -604,7 +619,7 @@ impl VfsNode for ProcSelfDirNode {
         Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 210, ..Default::default() })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let entries = ["exe", "authority", "place", "presence"];
+        let entries = ["exe", "authority", "place", "presence", "inbox"];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
 }

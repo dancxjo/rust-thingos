@@ -4101,6 +4101,9 @@ mod tests {
         }
         unsafe fn simd_save(&self, _ptr: *mut u8) {}
         unsafe fn simd_restore(&self, _ptr: *const u8) {}
+        fn get_kernel_cmdline(&self) -> &'static str {
+            ""
+        }
     }
     impl BootTasking for MockRuntime {
         type Runtime = MockRuntime;
@@ -4265,6 +4268,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 42);
 
@@ -4499,6 +4503,7 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         let task_normal = crate::task::Task {
             id: 1001,
@@ -4586,6 +4591,7 @@ mod tests {
             // hot-field cache reflects the correct wait time for aging.
             enqueued_at_tick: 600,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 1002,
@@ -4601,6 +4607,7 @@ mod tests {
             // hot-field cache reflects the correct wait time for aging.
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 1001);
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 1002);
@@ -4714,6 +4721,7 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 2002,
@@ -4727,6 +4735,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 500,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 2002);
 
@@ -4850,6 +4859,7 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 3002,
@@ -4864,6 +4874,7 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Put RT task in sleep queue with wake_tick in the past
@@ -4936,6 +4947,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Sleeping task pinned to CPU 1 (a different CPU from current_cpu_index == 0).
@@ -4955,6 +4967,7 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Put the sleeping task in the sleep queue with a wake_tick in the past.
@@ -5013,6 +5026,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
                 wake_pending: false,
+            voluntary_yields: 0,
             });
             sched.state.add_task_to_sleep_queue(tid, 50);
         }
@@ -5077,6 +5091,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Runnable task incorrectly queued on CPU 0 but pinned to CPU 1.
@@ -5096,6 +5111,7 @@ mod tests {
             enqueued_at_tick: 0,
             voluntary_yields: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9102);
 
@@ -5173,6 +5189,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             wake_pending: false,
+            voluntary_yields: 0,
         });
 
         // Fill CPU 0's normal queue with misrouted tasks pinned to CPU 1.

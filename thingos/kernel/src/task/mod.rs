@@ -261,7 +261,9 @@ pub struct ProcessUnixCompat {
     ///
     /// This queue is deliberately bounded to force explicit partial-failure
     /// behavior in early broadcast prototypes.
-    pub message_inbox: VecDeque<ProcessMessage>,
+    ///
+    /// FUTURE: This is now backed by a first-class kernel Inbox object.
+    pub message_inbox: crate::inbox::InboxId,
 
     /// Process group ID.
     ///
@@ -303,7 +305,7 @@ impl ProcessUnixCompat {
     pub fn isolated(pid: u32, is_session_leader: bool) -> Self {
         ProcessUnixCompat {
             signals: crate::signal::ProcessSignals::new(),
-            message_inbox: VecDeque::new(),
+            message_inbox: crate::inbox::create_inbox(PROCESS_MESSAGE_INBOX_CAPACITY),
             pgid: pid,
             sid: pid,
             session_leader: is_session_leader,
@@ -320,7 +322,7 @@ impl ProcessUnixCompat {
     pub fn inherit(parent: &ProcessUnixCompat) -> Self {
         ProcessUnixCompat {
             signals: crate::signal::ProcessSignals::new(),
-            message_inbox: VecDeque::new(),
+            message_inbox: crate::inbox::create_inbox(PROCESS_MESSAGE_INBOX_CAPACITY),
             pgid: parent.pgid,
             sid: parent.sid,
             session_leader: false,
@@ -331,24 +333,54 @@ impl ProcessUnixCompat {
 
     /// Enqueue one typed message into the process inbox.
     pub fn enqueue_message(&mut self, msg: ProcessMessage) -> Result<(), MessageEnqueueError> {
-        if self.message_inbox.len() >= PROCESS_MESSAGE_INBOX_CAPACITY {
-            return Err(MessageEnqueueError::InboxFull {
+        let inbox = crate::inbox::get_inbox(self.message_inbox).ok_or_else(|| {
+            // This should not happen for a live process.
+            MessageEnqueueError::InboxFull {
                 capacity: PROCESS_MESSAGE_INBOX_CAPACITY,
-            });
-        }
-        self.message_inbox.push_back(msg);
-        Ok(())
+            }
+        })?;
+
+        let envelope = crate::inbox::MessageEnvelope::with_sender(msg.message, msg.metadata.sender_tid);
+        inbox.send(envelope).map_err(|err| match err {
+            crate::inbox::SendError::Full { capacity } => MessageEnqueueError::InboxFull { capacity },
+            crate::inbox::SendError::Closed => {
+                // If the inbox is closed, we treat it as full/refusing for now.
+                MessageEnqueueError::InboxFull { capacity: PROCESS_MESSAGE_INBOX_CAPACITY }
+            }
+        })
     }
 
     /// Pop the next queued typed message from the process inbox.
     pub fn dequeue_message(&mut self) -> Option<ProcessMessage> {
-        self.message_inbox.pop_front()
+        let inbox = crate::inbox::get_inbox(self.message_inbox)?;
+        match inbox.try_recv() {
+            Ok(Some(envelope)) => Some(ProcessMessage {
+                message: envelope.message,
+                metadata: ProcessMessageMetadata {
+                    sender_tid: envelope.sender.unwrap_or(0),
+                    sender_job: None,
+                    target_group: None,
+                    delivery_kind: MessageDeliveryKind::Direct,
+                    broadcast_sequence: None,
+                },
+            }),
+            _ => None,
+        }
     }
 
     /// Current inbox depth for diagnostics and tests.
     pub fn message_inbox_len(&self) -> usize {
-        self.message_inbox.len()
+        crate::inbox::get_inbox(self.message_inbox).map(|i| i.len()).unwrap_or(0)
     }
+}
+
+impl Drop for ProcessUnixCompat {
+    fn drop(&mut self) {
+        crate::inbox::close_inbox(self.message_inbox);
+    }
+}
+
+impl ProcessUnixCompat {
 
     /// Borrow immutable typed spawn metadata.
     pub fn spawn_record(&self) -> &crate::spawn::bridge::SpawnRecord {

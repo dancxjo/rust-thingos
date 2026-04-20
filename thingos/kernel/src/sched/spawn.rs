@@ -2033,7 +2033,7 @@ mod tests {
         }
 
         crate::vfs::mount::init();
-        crate::vfs::mount::mount("/spawn_test_dir", alloc::sync::Arc::new(DirFs));
+        crate::vfs::mount::mount("/spawn_test_dir", alloc::sync::Arc::new(DirFs), 0);
 
         let result = unsafe {
             spawn_process_from_path::<MockRuntime>(

@@ -410,6 +410,7 @@ mod tests {
     use spin::Mutex;
 
     use super::*;
+    use crate::vfs::devfs::NullNode;
 
     fn alloc_port_pair(
         pinfo: &Arc<Mutex<crate::task::ProcessInfo>>,

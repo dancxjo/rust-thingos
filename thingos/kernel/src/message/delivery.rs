@@ -143,12 +143,6 @@ fn enqueue_to_process(
             MessageEnqueueError::InboxFull { .. } => DeliveryFailureReason::InboxFull,
         }
     })?;
-    let tids = process.job.thread_ids.clone();
-    drop(process);
-
-    for tid in tids {
-        unsafe { crate::sched::wake_task_erased(tid as u64) };
-    }
 
     Ok(())
 }

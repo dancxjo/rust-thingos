@@ -163,6 +163,7 @@ mod tests {
     use super::*;
     use crate::vfs::handle_table::HandleTable;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
+    use crate::ipc::IpcHandleTable;
 
     struct NullNode;
 

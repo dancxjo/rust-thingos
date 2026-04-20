@@ -58,6 +58,7 @@ static PS2_QUEUE: Ps2Queue = Ps2Queue::new();
 static EXTENDED_PREFIX: AtomicBool = AtomicBool::new(false);
 static ALT_DOWN: AtomicBool = AtomicBool::new(false);
 static F12_DOWN: AtomicBool = AtomicBool::new(false);
+static TERMINAL_HOTKEY_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn buffer_scancode(byte: u8) -> bool {
     PS2_QUEUE.push(byte);
@@ -66,6 +67,10 @@ pub fn buffer_scancode(byte: u8) -> bool {
 
 pub fn take_scancode() -> Option<u8> {
     PS2_QUEUE.pop()
+}
+
+pub fn take_terminal_hotkey() -> bool {
+    TERMINAL_HOTKEY_PENDING.swap(false, Ordering::AcqRel)
 }
 
 pub fn overlay_status(status: u8) -> u8 {
@@ -100,7 +105,16 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
                 false
             } else {
                 let first_press = !F12_DOWN.swap(true, Ordering::AcqRel);
-                first_press && ALT_DOWN.load(Ordering::Acquire)
+                if first_press {
+                    if ALT_DOWN.load(Ordering::Acquire) {
+                        true
+                    } else {
+                        TERMINAL_HOTKEY_PENDING.store(true, Ordering::Release);
+                        false
+                    }
+                } else {
+                    false
+                }
             }
         }
         _ => false,
@@ -116,6 +130,7 @@ mod tests {
         EXTENDED_PREFIX.store(false, Ordering::Release);
         ALT_DOWN.store(false, Ordering::Release);
         F12_DOWN.store(false, Ordering::Release);
+        TERMINAL_HOTKEY_PENDING.store(false, Ordering::Release);
     }
 
     #[test]
@@ -147,5 +162,24 @@ mod tests {
         assert_ne!(overlay_status(0) & PS2_STATUS_OUTPUT_FULL, 0);
         assert_eq!(take_scancode(), Some(0x1E));
         assert_eq!(overlay_status(0) & PS2_STATUS_OUTPUT_FULL, 0);
+    }
+
+    #[test]
+    fn plain_f12_sets_terminal_hotkey_once() {
+        reset_state();
+
+        assert!(!buffer_scancode(0x58));
+        assert!(take_terminal_hotkey());
+        assert!(!take_terminal_hotkey());
+
+        // Typematic repeat while held should not retrigger.
+        assert!(!buffer_scancode(0x58));
+        assert!(!take_terminal_hotkey());
+
+        // Release + press should retrigger.
+        assert!(!buffer_scancode(0xD8));
+        assert!(!take_terminal_hotkey());
+        assert!(!buffer_scancode(0x58));
+        assert!(take_terminal_hotkey());
     }
 }
