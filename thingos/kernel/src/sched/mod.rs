@@ -2232,7 +2232,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             if let Some((prio, target_cpu)) =
                 self.resolve_pending_misroute_requeue(queued_prio, queued_target_cpu, id)
             {
-                self.pending_misrouted_requeues[i] = (prio, target_cpu, id);
+                if (prio, target_cpu) != (queued_prio, queued_target_cpu) {
+                    self.pending_misrouted_requeues[i] = (prio, target_cpu, id);
+                }
                 i += 1;
             } else {
                 self.pending_misrouted_requeues.swap_remove(i);
