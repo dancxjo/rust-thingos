@@ -1,19 +1,12 @@
-# ✅ Scenario: Repeat cd into https and cat example content three times
+# ❌ Scenario: Repeat cd into https and cat example content three times
 
-> Last run: 2026-04-20 16:43:09
+> Last run: 2026-04-20 16:46:37
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 14420ms | - - - |
-| 2 | When I wait for the shell prompt | ✅ | 2204ms | - [📜](./02/serial.log) - |
-| 3 | And I type "cd /https" on the serial console | ✅ | 1513ms | - [📜](./03/serial.log) - |
-| 4 | And I type "cat www.example.com" on the serial console | ✅ | 2032ms | - [📜](./04/serial.log) - |
-| 5 | And I type "cd /https" on the serial console | ✅ | 1512ms | - [📜](./05/serial.log) - |
-| 6 | And I type "cat www.example.com" on the serial console | ✅ | 2030ms | - [📜](./06/serial.log) - |
-| 7 | And I type "cd /https" on the serial console | ✅ | 1511ms | - [📜](./07/serial.log) - |
-| 8 | And I type "cat www.example.com" on the serial console | ✅ | 2032ms | - [📜](./08/serial.log) - |
+| 1 | Given the machine is booted | ❌ | 6076ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

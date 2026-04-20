@@ -1,18 +1,12 @@
-# ✅ Scenario: Repeat ls five times
+# ❌ Scenario: Repeat ls five times
 
-> Last run: 2026-04-20 16:43:09
+> Last run: 2026-04-20 16:46:37
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 14559ms | - - - |
-| 2 | When I wait for the shell prompt | ✅ | 2203ms | - [📜](./02/serial.log) - |
-| 3 | And I type "ls" on the serial console | ✅ | 1159ms | - [📜](./03/serial.log) - |
-| 4 | And I type "ls" on the serial console | ✅ | 1153ms | - [📜](./04/serial.log) - |
-| 5 | And I type "ls" on the serial console | ✅ | 1155ms | - [📜](./05/serial.log) - |
-| 6 | And I type "ls" on the serial console | ✅ | 1153ms | - [📜](./06/serial.log) - |
-| 7 | And I type "ls" on the serial console | ✅ | 1151ms | - [📜](./07/serial.log) - |
+| 1 | Given the machine is booted | ❌ | 6086ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
