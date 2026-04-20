@@ -182,6 +182,7 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
     entries.dedup();
 
     let mut subdirs = Vec::new();
+    let mut listing_output = String::new();
 
     for name in entries {
         let mut full_path = String::from(path);
@@ -209,7 +210,7 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
                     };
 
                     if flags.long {
-                        print(&alloc::format!(
+                        listing_output.push_str(&alloc::format!(
                             "{} {:8} {}{}{}\n",
                             format_mode(child_stat.mode),
                             child_stat.size,
@@ -218,7 +219,7 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
                             if c_color.is_empty() { "" } else { COLOR_RESET }
                         ));
                     } else {
-                        print(&alloc::format!(
+                        listing_output.push_str(&alloc::format!(
                             "{}{}{}  ",
                             c_color,
                             name,
@@ -234,16 +235,20 @@ fn list_path(path: &str, flags: &Flags, is_nested: bool) {
             }
             Err(_) => {
                 if flags.long {
-                    print(&alloc::format!("?--------- ?        {}\n", name));
+                    listing_output.push_str(&alloc::format!("?--------- ?        {}\n", name));
                 } else {
-                    print(&alloc::format!("{}  ", name));
+                    listing_output.push_str(&alloc::format!("{}  ", name));
                 }
             }
         }
     }
 
     if !flags.long {
-        print("\n");
+        listing_output.push('\n');
+    }
+
+    if !listing_output.is_empty() {
+        print(&listing_output);
     }
 
     if flags.recursive && !subdirs.is_empty() {
