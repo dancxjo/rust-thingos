@@ -19,6 +19,38 @@ pub enum ThreadPriority {
 /// Backward-compatible alias — prefer `ThreadPriority` in new code.
 pub type TaskPriority = ThreadPriority;
 
+/// Scheduler class / latency domain for a runnable thread.
+///
+/// This separates high-level scheduling intent from the legacy single-priority
+/// lattice so class-specific policies can evolve independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadSchedClass {
+    NormalTimeslice,
+    Realtime,
+    /// Reserved class for explicit kernel interrupt-thread / bottom-half work.
+    ///
+    /// This class is intentionally not selected by `default_sched_class()`;
+    /// callers must opt in explicitly when class-aware admission is added.
+    InterruptBottomHalf,
+    BackgroundMaintenance,
+}
+/// Backward-compatible alias — prefer `ThreadSchedClass` in new code.
+pub type TaskSchedClass = ThreadSchedClass;
+
+impl ThreadPriority {
+    /// Current default class mapping for the existing priority lattice.
+    ///
+    /// This preserves current behavior while providing an explicit class seam
+    /// for future class-specific policy and queueing rules.
+    pub const fn default_sched_class(self) -> ThreadSchedClass {
+        match self {
+            ThreadPriority::Idle | ThreadPriority::Low => ThreadSchedClass::BackgroundMaintenance,
+            ThreadPriority::Normal | ThreadPriority::High => ThreadSchedClass::NormalTimeslice,
+            ThreadPriority::Realtime => ThreadSchedClass::Realtime,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Affinity {
     Any,
@@ -787,6 +819,45 @@ mod tests {
             wake_pending: false,
             voluntary_yields: 0,
         }
+    }
+
+    #[test]
+    fn default_sched_class_maps_priority_to_latency_domain() {
+        assert_eq!(
+            TaskPriority::Idle.default_sched_class(),
+            TaskSchedClass::BackgroundMaintenance
+        );
+        assert_eq!(
+            TaskPriority::Low.default_sched_class(),
+            TaskSchedClass::BackgroundMaintenance
+        );
+        assert_eq!(
+            TaskPriority::Normal.default_sched_class(),
+            TaskSchedClass::NormalTimeslice
+        );
+        assert_eq!(
+            TaskPriority::High.default_sched_class(),
+            TaskSchedClass::NormalTimeslice
+        );
+        assert_eq!(
+            TaskPriority::Realtime.default_sched_class(),
+            TaskSchedClass::Realtime
+        );
+    }
+
+    #[test]
+    fn interrupt_bottom_half_is_not_assigned_by_default_priority_mapping() {
+        let mapped = [
+            TaskPriority::Idle.default_sched_class(),
+            TaskPriority::Low.default_sched_class(),
+            TaskPriority::Normal.default_sched_class(),
+            TaskPriority::High.default_sched_class(),
+            TaskPriority::Realtime.default_sched_class(),
+        ];
+        assert!(
+            !mapped.contains(&TaskSchedClass::InterruptBottomHalf),
+            "interrupt-bottom-half class should remain explicit rather than priority-derived"
+        );
     }
 
     #[test]
