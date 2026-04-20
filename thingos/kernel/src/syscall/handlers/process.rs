@@ -644,7 +644,12 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
         };
     }
 
-    crate::kinfo!("SYSCALL SPAWN_PROCESS_EX: name='{}' TID={} PID={}", name, result.child_tid, result.child_pid);
+    crate::kdebug!(
+        "SYSCALL SPAWN_PROCESS_EX: name='{}' TID={} PID={}",
+        name,
+        result.child_tid,
+        result.child_pid
+    );
 
     Ok(result.child_tid as usize)
 }
@@ -829,10 +834,11 @@ pub fn sys_task_exec(
 
 #[cfg(test)]
 mod tests {
-    use super::serialize_auxv_to_buf;
-    use crate::authority::bridge::CAP_REBOOT;
     use abi::errors::Errno;
     use thingos::authority::Authority;
+
+    use super::serialize_auxv_to_buf;
+    use crate::authority::bridge::CAP_REBOOT;
 
     // AT_* constants used in tests (must match kernel/src/task/exec.rs).
     const AT_NULL: u64 = 0;
