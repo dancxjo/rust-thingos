@@ -14,11 +14,7 @@ impl RustGenerator {
         out.push_str("extern crate alloc;\n\n");
         out.push_str("use alloc::string::String;\n");
         out.push_str("use alloc::vec::Vec;\n");
-        out.push_str("// FIXME: This should be imported from abi::wire\n");
-        out.push_str("// use abi::wire::ThingId;\n");
-        out.push_str("#[repr(C)]\n");
-        out.push_str("#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]\n");
-        out.push_str("pub struct ThingId(pub [u8; 16]);\n\n");
+        out.push_str("use abi::wire::ThingId;\n\n");
 
         // Group by modules if we wanted, but for v1 we do flat with prefixes or just last segment
         // Let's do a single module for now but we'll collect all kinds and sort them
@@ -161,5 +157,24 @@ impl RustGenerator {
             "ref" => "ThingId".to_string(),
             _ => self.to_pascal_case(&ty.kind_ref),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RustGenerator;
+    use crate::ir::Schema;
+    use indexmap::IndexMap;
+
+    #[test]
+    fn generated_header_uses_abi_wire_thing_id() {
+        let schema = Schema {
+            version: 1,
+            kinds: IndexMap::new(),
+        };
+
+        let generated = RustGenerator.generate(&schema);
+        assert!(generated.contains("use abi::wire::ThingId;"));
+        assert!(!generated.contains("pub struct ThingId(pub [u8; 16]);"));
     }
 }

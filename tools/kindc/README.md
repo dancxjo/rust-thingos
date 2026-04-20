@@ -30,7 +30,7 @@ kind thingos.place.kind = enum {
 - **Enums**: Tagged unions with optional unit, tuple, or struct payloads.
 - **Type Aliases**: Create aliases for existing types (e.g., `kind byte = u8`).
 - **Generics**: Built-in containers like `list<T>`, `option<T>`, and `result<T, E>`.
-- **References**: `ref<T>` represents a 128-bit `ThingId` handle to a thing of kind `T`.
+- **References**: `ref<T>` represents a 128-bit `ThingId` handle to a thing of kind `T`, emitted as `abi::wire::ThingId` in generated Rust.
 - **Doc Comments**: Triple-slash `///` comments are propagated to generated code.
 - **KindId**: Every kind gets a stable 128-bit `KindId` derived from its name and structural shape (blake3 hash).
 
