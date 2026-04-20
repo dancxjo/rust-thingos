@@ -7,10 +7,11 @@ The Linux-hosted stage-1 cross-compiler bootstrap **succeeds** as of April 12,
 `just rustc-thingos`) drives `x.py` through all three stages
 successfully and caches the result under `target/rustc-thingos/`.
 
-The produced compiler is a **Linux-hosted cross-compiler** — it runs on
+The default produced compiler is a **Linux-hosted cross-compiler** — it runs on
 `x86_64-unknown-linux-gnu` and can cross-compile code targeting
 `x86_64-unknown-thingos`.  It is **not yet** a ThingOS-native compiler and is
-therefore **not staged into the ISO** by default.
+therefore **not staged into the ISO by default** unless a cached ThingOS-native
+toolchain is present and ISO toolchain staging is explicitly requested.
 
 ---
 
@@ -52,20 +53,22 @@ user binaries.
 
 ### #717 — Fix rustlib staging path and re-enable rustc-thingos in ISO build
 
-**Status: partially resolved** — wiring is in place; ISO staging remains
-intentionally disabled.
+**Status: resolved with explicit gating and validation.**
 
 - `xtask/src/image.rs` calls `stage_rustc_for_iso(sh, iso_root)` (line ~638).
 - `xtask/src/main.rs` calls `rustc_thingos::build_rustc_thingos(&sh, &env)` in
   all ISO/run paths.
 - `build_rustc_thingos` runs by default and respects the `SKIP_RUSTC_THINGOS=1`
   env-var opt-out gate.
-- `stage_rustc_for_iso` prints an advisory message and returns `Ok(())` without
-  copying anything — intentionally, because the cached binary is a Linux ELF.
+- `stage_rustc_for_iso` is gated behind `INCLUDE_RUST_TOOLCHAIN=1` and only
+  stages cached ThingOS-native artifacts (`thingos-rustc`, optional
+  `thingos-cargo`, and ThingOS rustlib tree).
+- After staging, `stage_rustc_for_iso` validates expected ISO artifacts:
+  `bin/rustc`, optional `bin/cargo`, and
+  `lib/rustlib/x86_64-unknown-thingos/lib` when ThingOS rustlib cache exists.
 
-When a ThingOS-native compiler is available the function body needs to be
-filled in to copy `rustlib/x86_64-unknown-thingos/` (not the full rustlib tree)
-and the `rustc` binary into the ISO.
+If the ThingOS-native cache is missing, staging is skipped with an advisory
+message and the ISO continues without a bundled Rust toolchain.
 
 ---
 
@@ -166,15 +169,15 @@ ThingOS target `.rlib` files currently come from the cargo output directory
 reconstructs a synthetic sysroot from the deps directory.  A cleaner approach
 is to promote the ThingOS sysroot to the canonical path via a bootstrap patch.
 
-### 4. ISO staging (blocked on items 2 and 3)
+### 4. ISO staging policy and constraints
 
-`stage_rustc_for_iso` in `xtask/src/rustc_thingos.rs` is a no-op today.
-Once a ThingOS-native compiler exists it should:
+ISO staging is implemented but intentionally **opt-in**:
 
-1. Copy `rustc` to `<iso_root>/bin/rustc`.
-2. Copy only `rustlib/x86_64-unknown-thingos/lib/` to
-   `<iso_root>/usr/lib/rustlib/x86_64-unknown-thingos/lib/` (not the full
-   linux-gnu sysroot).
+1. Set `INCLUDE_RUST_TOOLCHAIN=1` to request staging.
+2. A cached ThingOS-native `target/rustc-thingos/thingos-rustc` must exist.
+3. Validation fails the staging step if expected staged artifacts are missing.
+
+Owner: build/toolchain maintainers (`xtask` rustc-thingos flow).
 
 ---
 
@@ -182,4 +185,5 @@ Once a ThingOS-native compiler exists it should:
 
 *Last updated: April 12, 2026*
 *Status: Linux-hosted cross-compiler bootstrap succeeds; LLVM blockers resolved;
-ThingOS-native compiler and ISO staging pending.*
+ISO staging implemented with explicit gates; ThingOS-native compiler availability
+still determines whether a toolchain can be included.*

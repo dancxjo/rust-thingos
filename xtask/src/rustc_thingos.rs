@@ -484,7 +484,8 @@ pub fn stage_rustc_for_iso(sh: &Shell, iso_root: &Path) -> Result<()> {
     sh.copy_file(thingos_rustc, &iso_rustc)?;
 
     // Stage cargo
-    if thingos_cargo.exists() {
+    let staged_cargo = thingos_cargo.exists();
+    if staged_cargo {
         let iso_cargo = iso_bin.join("cargo");
         sh.copy_file(thingos_cargo, &iso_cargo)?;
         #[cfg(unix)]
@@ -503,6 +504,7 @@ pub fn stage_rustc_for_iso(sh: &Shell, iso_root: &Path) -> Result<()> {
     }
 
     let thingos_rustlib_src = Path::new(THINGOS_RUSTLIB_CACHE_DIR);
+    let staged_rustlib = thingos_rustlib_src.exists();
     if thingos_rustlib_src.exists() {
         let iso_rustlib = iso_root.join("lib/rustlib");
         sh.create_dir(iso_rustlib.parent().context("missing ISO lib parent")?)?;
@@ -517,5 +519,107 @@ pub fn stage_rustc_for_iso(sh: &Shell, iso_root: &Path) -> Result<()> {
         );
     }
 
+    validate_staged_iso_toolchain(iso_root, staged_cargo, staged_rustlib)?;
+
     Ok(())
+}
+
+fn validate_staged_iso_toolchain(
+    iso_root: &Path,
+    expect_cargo: bool,
+    expect_thingos_rustlib: bool,
+) -> Result<()> {
+    let rustc_path = iso_root.join("bin/rustc");
+    if !rustc_path.exists() {
+        bail!(
+            "rustc-thingos: ISO staging validation failed: expected staged rustc at {}",
+            rustc_path.display()
+        );
+    }
+
+    if expect_cargo {
+        let cargo_path = iso_root.join("bin/cargo");
+        if !cargo_path.exists() {
+            bail!(
+                "rustc-thingos: ISO staging validation failed: expected staged cargo at {}",
+                cargo_path.display()
+            );
+        }
+    }
+
+    if expect_thingos_rustlib {
+        let thingos_lib = iso_root.join("lib/rustlib/x86_64-unknown-thingos/lib");
+        if !thingos_lib.exists() {
+            bail!(
+                "rustc-thingos: ISO staging validation failed: expected ThingOS rustlib at {}",
+                thingos_lib.display()
+            );
+        }
+
+        let mut entries = std::fs::read_dir(&thingos_lib).with_context(|| {
+            format!(
+                "failed to read staged rustlib directory {}",
+                thingos_lib.display()
+            )
+        })?;
+        if entries.next().is_none() {
+            bail!(
+                "rustc-thingos: ISO staging validation failed: staged ThingOS rustlib is empty at {}",
+                thingos_lib.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::validate_staged_iso_toolchain;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos();
+        path.push(format!("thingos-xtask-{name}-{nanos}"));
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    #[test]
+    fn validate_staged_iso_toolchain_accepts_expected_layout() {
+        let iso_root = temp_dir("stage-validate-ok");
+        std::fs::create_dir_all(iso_root.join("bin")).expect("create bin");
+        std::fs::write(iso_root.join("bin/rustc"), b"rustc").expect("write rustc");
+        std::fs::write(iso_root.join("bin/cargo"), b"cargo").expect("write cargo");
+        std::fs::create_dir_all(iso_root.join("lib/rustlib/x86_64-unknown-thingos/lib"))
+            .expect("create rustlib");
+        std::fs::write(
+            iso_root.join("lib/rustlib/x86_64-unknown-thingos/lib/libcore.rlib"),
+            b"rlib",
+        )
+        .expect("write rustlib artifact");
+
+        let result = validate_staged_iso_toolchain(&iso_root, true, true);
+        std::fs::remove_dir_all(&iso_root).expect("cleanup temp dir");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_staged_iso_toolchain_rejects_missing_expected_rustlib() {
+        let iso_root = temp_dir("stage-validate-missing-rustlib");
+        std::fs::create_dir_all(iso_root.join("bin")).expect("create bin");
+        std::fs::write(iso_root.join("bin/rustc"), b"rustc").expect("write rustc");
+
+        let result = validate_staged_iso_toolchain(&iso_root, false, true);
+        std::fs::remove_dir_all(&iso_root).expect("cleanup temp dir");
+
+        assert!(result.is_err());
+    }
 }
