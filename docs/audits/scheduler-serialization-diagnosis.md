@@ -199,6 +199,28 @@ Scenario: `x86_64` QEMU with `-smp 6`, scheduler telemetry enabled (`SCHED_TELEM
 | Wake latency | scheduler wait/hold telemetry histograms (`wake_task`, `wake_sleepers`) | same counters after each wave | Wave 1 captured in linked child issues; Wave 2/3 pending |
 | Throughput | runnable transitions + per-CPU runq depth and dispatch stats | same counters after each wave | Wave 1 captured in linked child issues; Wave 2/3 pending |
 
+### Wave 3 focused hot-path reduction (issue #429)
+
+- **Targeted lock-held region**
+  - `wake_sleepers` remote-resched request loop (`kernel/src/sched/mod.rs`) previously called
+    `set_global_need_resched(actual_cpu)` for every remote wake candidate, even when a
+    same-batch wake had already queued that CPU in `pending_wake_ipis`.
+  - Under `-smp 6` wake storms with many wakeups routed to one worker CPU, this repeated
+    global pending-flag probing inside the scheduler lock.
+
+- **Change**
+  - Added in-batch CPU dedup check (`pending_ipi_bitmap`) before calling
+    `set_global_need_resched`.
+  - Duplicate same-batch remote wakes now count as suppressed immediately and skip the
+    extra global pending-flag operation while still producing only one deferred IPI.
+
+- **Before/after metric (same-batch fan-in, `-smp 6`)**
+  - Metric: global resched-pending probes performed inside `wake_sleepers` critical section.
+  - Baseline: `N` probes for `N` remote wakes targeting the same CPU in one wake batch.
+  - After: `1` probe for that CPU per batch (duplicates use local bitmap suppression path).
+  - Example: 64 same-batch wakes to one target CPU reduced from **64 → 1** probes in the
+    lock-held wake loop.
+
 ### Risk + correctness checklist (per change)
 
 - [x] Wakeup correctness preserved (no duplicate runnable enqueue, no lost wake) in wake/block paths
