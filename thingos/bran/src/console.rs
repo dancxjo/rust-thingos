@@ -7,6 +7,7 @@ use crate::framebuffer::Framebuffer;
 const CELL_H: u32 = 16;
 const CELL_W: u32 = 8;
 const CURSOR_W: u32 = 2;
+const CURSOR_BLINK_INTERVAL: u32 = 15;
 const TAB_WIDTH: usize = 4;
 const CSI_PARAM_CAP: usize = 8;
 const DEFAULT_FG: u32 = 0x00FF_FFFF;
@@ -49,6 +50,8 @@ pub struct FbConsole {
     active: bool,
     /// Whether the visual cursor bar is currently painted on the framebuffer.
     cursor_drawn: bool,
+    /// Tick counter for cursor blink; toggles every CURSOR_BLINK_INTERVAL ticks.
+    blink_tick: u32,
     /// Accumulation buffer for multi-byte UTF-8 sequences.
     utf8_buf: [u8; 4],
     /// Number of bytes accumulated so far.
@@ -72,6 +75,7 @@ impl FbConsole {
             ansi: AnsiState::Normal,
             active: false,
             cursor_drawn: false,
+            blink_tick: 0,
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_expected: 0,
@@ -189,6 +193,8 @@ impl FbConsole {
 
     fn put_visible_char(&mut self, ch: char) {
         self.erase_cursor();
+        // Reset blink counter so cursor stays visible right after typing.
+        self.blink_tick = 0;
         let code = ch as u32;
         let glyph = if (code as usize) < GLYPH_TABLE_LEN {
             self.glyphs[code as usize]
@@ -383,6 +389,21 @@ impl FbConsole {
         self.draw_cursor();
     }
 
+    /// Toggle cursor visibility. Call from the periodic timer tick.
+    fn blink(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.blink_tick = self.blink_tick.wrapping_add(1);
+        if self.blink_tick % CURSOR_BLINK_INTERVAL == 0 {
+            if self.cursor_drawn {
+                self.erase_cursor();
+            } else {
+                self.draw_cursor();
+            }
+        }
+    }
+
     pub fn put_char(&mut self, c: u8) {
         if !self.active {
             return;
@@ -554,6 +575,19 @@ pub fn put_char(c: u8) {
         console.put_char(c);
     }
     crate::RUNTIME.irq_restore(state);
+}
+
+/// Called from the timer IRQ to blink the cursor.
+pub fn blink_cursor() {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    // Use try_lock to avoid deadlock if the console is already held.
+    if let Some(ref mut guard) = CONSOLE.try_lock() {
+        if let Some(ref mut console) = **guard {
+            console.blink();
+        }
+    }
 }
 
 pub unsafe fn force_unlock() {
