@@ -244,6 +244,11 @@ const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
 // Allow local wake routing for Any-affinity tasks when the previous CPU is
 // meaningfully busier, while still preserving cache locality under similar load.
 const ANY_WAKE_LOCAL_DEPTH_BIAS: usize = 1;
+// Keep producer/consumer wakeups near the waking CPU when queue depths are
+// close enough that locality is likely to win.
+const ANY_WAKE_WAKER_CPU_DEPTH_BIAS: usize = 1;
+// Treat very short timed sleeps as cache-hot and avoid bouncing those wakeups.
+const ANY_WAKE_BRIEF_SLEEP_TICKS: u64 = 4;
 const TERMINATE_CURRENT_SWITCH_RETRY_BUDGET: usize = 32;
 const RUNQ_GLOBAL_TELEMETRY_SAMPLE_STRIDE: u64 = 64;
 const PROACTIVE_REBALANCE_TICK_STRIDE: u64 = 8;
@@ -1621,6 +1626,8 @@ fn select_any_affinity_wake_cpu_from_snapshot<R: BootRuntime>(
 pub(crate) fn select_preferred_any_affinity_wake_cpu<R: BootRuntime>(
     sched: &types::Scheduler<R>,
     last_cpu: Option<usize>,
+    last_wake_cpu: Option<usize>,
+    sleep_ticks: Option<u64>,
 ) -> usize {
     let local_cpu = current_cpu_index::<R>();
     let local_online =
@@ -1649,9 +1656,18 @@ pub(crate) fn select_preferred_any_affinity_wake_cpu<R: BootRuntime>(
         return last_cpu;
     }
 
+    if sleep_ticks.map_or(false, |ticks| ticks <= ANY_WAKE_BRIEF_SLEEP_TICKS) {
+        return last_cpu;
+    }
+
     // Compare total runnable depth across all priority queues on each CPU.
     let local_depth = runq_depth_for_cpu(&sched.state, local_cpu);
     let last_depth = runq_depth_for_cpu(&sched.state, last_cpu);
+    if last_wake_cpu == Some(local_cpu)
+        && local_depth <= last_depth.saturating_add(ANY_WAKE_WAKER_CPU_DEPTH_BIAS)
+    {
+        return local_cpu;
+    }
     // A bias of 1 preserves locality by keeping `last_cpu` unless local CPU has
     // at least 2 fewer queued tasks.
     // saturating_add is defensive for pathological queue lengths.
@@ -1665,6 +1681,8 @@ pub(crate) fn select_preferred_any_affinity_wake_cpu<R: BootRuntime>(
 fn select_preferred_any_affinity_wake_cpu_from_snapshot<R: BootRuntime>(
     sched: &types::Scheduler<R>,
     last_cpu: Option<usize>,
+    last_wake_cpu: Option<usize>,
+    sleep_ticks: Option<u64>,
     load_snapshot: &WakeBatchLoadSnapshot,
 ) -> usize {
     let local_cpu = current_cpu_index::<R>();
@@ -1692,8 +1710,17 @@ fn select_preferred_any_affinity_wake_cpu_from_snapshot<R: BootRuntime>(
         return last_cpu;
     }
 
+    if sleep_ticks.map_or(false, |ticks| ticks <= ANY_WAKE_BRIEF_SLEEP_TICKS) {
+        return last_cpu;
+    }
+
     let local_depth = load_snapshot.depth_for_cpu(local_cpu);
     let last_depth = load_snapshot.depth_for_cpu(last_cpu);
+    if last_wake_cpu == Some(local_cpu)
+        && local_depth <= last_depth.saturating_add(ANY_WAKE_WAKER_CPU_DEPTH_BIAS)
+    {
+        return local_cpu;
+    }
     if local_depth.saturating_add(ANY_WAKE_LOCAL_DEPTH_BIAS) < last_depth {
         local_cpu
     } else {
@@ -2118,7 +2145,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // placement can reuse the same balancing view without re-scanning all
         // per-CPU queues for each task.
         let mut wake_batch_loads = WakeBatchLoadSnapshot::new(&self.state);
-
         let due_tids = self.state.take_due_sleepers(now, wake_budget);
         let due_count = due_tids.len();
         for tid in due_tids {
@@ -2126,22 +2152,36 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // REGISTRY is not accessed in this inner loop.
             if let Some(sf) = self.state.get_thread(tid) {
                 let priority = sf.priority as usize;
-                let target_cpu = match sf.affinity {
+                let affinity = sf.affinity;
+                let last_cpu = sf.last_cpu;
+                let last_wake_cpu = sf.wake_cpu;
+                let target_cpu = match affinity {
                     crate::task::Affinity::Pinned(cpu) => {
                         wake_batch_loads.note_enqueue(cpu);
                         cpu
                     }
                     crate::task::Affinity::Any => {
+                        // One-shot hint: consume the recorded requested sleep
+                        // duration as the task leaves the sleep queue.
+                        let requested_sleep_ticks = self.sleep_duration_ticks_by_tid.remove(&tid);
                         let preferred = select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
                             self,
-                            sf.last_cpu,
+                            last_cpu,
+                            last_wake_cpu,
+                            requested_sleep_ticks,
                             &wake_batch_loads,
                         );
-                        let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
-                            self,
-                            preferred,
-                            &wake_batch_loads,
-                        );
+                        let brief_sleep =
+                            requested_sleep_ticks.map_or(false, |ticks| ticks <= ANY_WAKE_BRIEF_SLEEP_TICKS);
+                        let target = if brief_sleep {
+                            preferred
+                        } else {
+                            select_any_affinity_wake_cpu_from_snapshot::<R>(
+                                self,
+                                preferred,
+                                &wake_batch_loads,
+                            )
+                        };
                         wake_batch_loads.note_enqueue(target);
                         target
                     }
@@ -4020,6 +4060,12 @@ pub fn register_timeout_wake<R: BootRuntime>(tid: TaskId, wake_tick: u64) {
     let lock = SCHEDULER.lock();
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+        let now = TICK_COUNT.load(Ordering::Relaxed);
+        if wake_tick > now {
+            sched.sleep_duration_ticks_by_tid.insert(tid, wake_tick - now);
+        } else {
+            sched.sleep_duration_ticks_by_tid.remove(&tid);
+        }
         sched.state.add_task_to_sleep_queue(tid, wake_tick);
     }
     rt.irq_restore(_irq);
@@ -4031,6 +4077,7 @@ pub fn unregister_timeout_wake<R: BootRuntime>(tid: TaskId) {
     let lock = SCHEDULER.lock();
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
+        sched.sleep_duration_ticks_by_tid.remove(&tid);
         let _ = sched.state.remove_task_from_sleep_queue(tid);
     }
     rt.irq_restore(_irq);
@@ -8578,6 +8625,87 @@ mod tests {
     }
 
     #[test]
+    fn test_any_affinity_wakeup_prefers_waker_cpu_when_depths_are_close() {
+        let _g = init_test_env();
+        reset_any_wake_policy_for_tests();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.per_cpu[0].current = Some(0);
+
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(0, TaskState::Running, TaskPriority::Normal)));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(9922, TaskState::Blocked, TaskPriority::Normal),
+        ));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 0,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9922,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            // last_cpu differs from wake_cpu to force the waker-locality tie-break.
+            last_cpu: Some(1),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+
+        // Keep queue depths close so waker-locality (CPU 0) can win.
+        for (cpu, tid) in [(0usize, 44_000u64), (1usize, 44_001u64)] {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Low),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Low,
+                affinity: Affinity::Any,
+                last_cpu: Some(cpu),
+                wake_cpu: Some(cpu),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(cpu, TaskPriority::Low as usize, tid);
+        }
+
+        let (_ipi, _deferred) =
+            crate::sched::blocking::wake_task_locked::<MockRuntime>(&mut sched, 9922);
+        assert!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 9922),
+            "[policy] Any-affinity wakeup should co-locate on waker CPU when depths are close"
+        );
+        assert_eq!(sched.state.get_task(9922).and_then(|sf| sf.wake_cpu), Some(0));
+    }
+
+    #[test]
     fn test_any_wake_hysteresis_requires_persistent_overload_before_rebalance() {
         let _g = init_test_env();
         set_any_wake_policy_for_tests_with_streak("redirect", 2, 3);
@@ -8713,6 +8841,92 @@ mod tests {
             Some(1),
             "[policy] wake_sleepers should record redirected wake_cpu for Any-affinity task"
         );
+    }
+
+    #[test]
+    fn test_wake_sleepers_keeps_brief_sleep_on_last_cpu() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests("redirect", 2);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        let current_task = make_task(9932, TaskState::Running, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(current_task));
+        sched.state.per_cpu[0].current = Some(9932);
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9932,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+
+        let sleeping = make_task(9933, TaskState::Blocked, TaskPriority::Normal);
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(sleeping));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: 9933,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: None,
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+
+        // Keep CPU 0 overloaded so default redirect policy would choose CPU 1.
+        for id in 9934..9937 {
+            let runnable = make_task(id, TaskState::Runnable, TaskPriority::Low);
+            crate::task::registry::get_registry::<MockRuntime>()
+                .insert(alloc::boxed::Box::new(runnable));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid: id,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Low,
+                affinity: Affinity::Any,
+                last_cpu: Some(0),
+                wake_cpu: Some(0),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                voluntary_yields: 0,
+                wake_pending: false,
+            });
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
+        }
+
+        // Mark this as a very short sleep so wake placement preserves locality.
+        sched.sleep_duration_ticks_by_tid.insert(9933, 1);
+        TICK_COUNT.store(101, Ordering::Relaxed);
+        sched.state.add_task_to_sleep_queue(9933, 101);
+        sched.wake_sleepers();
+
+        assert!(
+            sched.state.per_cpu[0].runq[TaskPriority::Normal as usize]
+                .iter()
+                .any(|&tid| tid == 9933),
+            "[policy] brief sleepers should stay on last CPU even when redirect policy is enabled"
+        );
+        assert_eq!(sched.state.get_task(9933).and_then(|sf| sf.wake_cpu), Some(0));
     }
 
     #[test]

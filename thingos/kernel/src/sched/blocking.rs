@@ -229,8 +229,12 @@ pub fn wake_task_locked<R: BootRuntime>(
             let target_cpu = match sf.affinity {
                 crate::task::Affinity::Pinned(cpu) => cpu,
                 crate::task::Affinity::Any => {
-                    let preferred =
-                        super::select_preferred_any_affinity_wake_cpu::<R>(sched, sf.last_cpu);
+                    let preferred = super::select_preferred_any_affinity_wake_cpu::<R>(
+                        sched,
+                        sf.last_cpu,
+                        sf.wake_cpu,
+                        None,
+                    );
                     super::select_any_affinity_wake_cpu::<R>(sched, preferred)
                 }
             };
@@ -286,6 +290,7 @@ pub fn wake_task_locked<R: BootRuntime>(
 
         // Best-effort cleanup: the target may be blocked on non-timeout paths.
         let _ = sched.state.remove_task_from_sleep_queue(id);
+        sched.sleep_duration_ticks_by_tid.remove(&id);
 
         if safe_cpu >= sched.state.per_cpu.len() {
             safe_cpu = 0;
