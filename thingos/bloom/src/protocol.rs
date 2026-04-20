@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use abi::KindId;
 use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
 
@@ -18,6 +19,7 @@ pub const MSG_SET_OPAQUE_REGION: u16 = 7;
 pub const MSG_SET_DEST_RECT: u16 = 8;
 pub const MSG_SET_Z_ORDER: u16 = 9;
 pub const MSG_COMMIT: u16 = 10;
+pub const MSG_CONNECT_INBOX: u16 = 11;
 
 pub const EVT_ACK: u16 = 0x8001;
 pub const EVT_FRAME_DONE: u16 = 0x8002;
@@ -28,6 +30,21 @@ pub const EVT_POINTER_BUTTON: u16 = 0x8104;
 pub const EVT_KEYBOARD_ENTER: u16 = 0x8201;
 pub const EVT_KEYBOARD_LEAVE: u16 = 0x8202;
 pub const EVT_KEYBOARD_KEY: u16 = 0x8203;
+
+pub const KIND_POINTER_ENTER: KindId =
+    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'E', b'N', b'T', b'E', b'R', 0]);
+pub const KIND_POINTER_LEAVE: KindId =
+    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'L', b'E', b'A', b'V', b'E', 0]);
+pub const KIND_POINTER_MOTION: KindId =
+    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'M', b'O', b'V', b'E', 0, 0]);
+pub const KIND_POINTER_BUTTON: KindId =
+    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'P', b'T', b'R', b':', b'B', b'T', b'N', 0, 0, 0]);
+pub const KIND_KEYBOARD_ENTER: KindId =
+    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'K', b'B', b'D', b':', b'E', b'N', b'T', b'E', b'R', 0]);
+pub const KIND_KEYBOARD_LEAVE: KindId =
+    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'K', b'B', b'D', b':', b'L', b'E', b'A', b'V', b'E', 0]);
+pub const KIND_KEYBOARD_KEY: KindId =
+    KindId([b'B', b'L', b'O', b'O', b'M', b':', b'K', b'B', b'D', b':', b'K', b'E', b'Y', 0, 0, 0]);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
@@ -43,6 +60,15 @@ pub struct ConnectRequest {
     pub header: MessageHeader,
     pub reply_port: u32,
     pub event_port: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug)]
+pub struct ConnectInboxRequest {
+    pub header: MessageHeader,
+    pub reply_port: u32,
+    pub event_port: u32,
+    pub input_pid: u32,
 }
 
 #[repr(C, packed)]
@@ -109,6 +135,7 @@ pub struct CommitRequest {
 #[derive(Clone, Copy, Debug)]
 pub enum ClientRequest {
     Connect(ConnectRequest),
+    ConnectInbox(ConnectInboxRequest),
     CreateSurface(CreateSurfaceRequest),
     DestroySurface(DestroySurfaceRequest),
     AttachBuffer(AttachBufferRequest),
@@ -133,6 +160,9 @@ pub fn parse_request(raw: &[u8]) -> Option<ClientRequest> {
     match header.msg_type {
         MSG_CONNECT if raw.len() >= core::mem::size_of::<ConnectRequest>() => {
             read_packed::<ConnectRequest>(raw).map(ClientRequest::Connect)
+        }
+        MSG_CONNECT_INBOX if raw.len() >= core::mem::size_of::<ConnectInboxRequest>() => {
+            read_packed::<ConnectInboxRequest>(raw).map(ClientRequest::ConnectInbox)
         }
         MSG_CREATE_SURFACE if raw.len() >= core::mem::size_of::<CreateSurfaceRequest>() => {
             read_packed::<CreateSurfaceRequest>(raw).map(ClientRequest::CreateSurface)
