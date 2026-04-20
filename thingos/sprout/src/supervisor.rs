@@ -14,20 +14,12 @@ extern crate alloc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use abi::display_driver_protocol;
-use abi::supervisor_protocol::{
-    self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, MSG_BIND_READY, MSG_SERVICE_EXITING,
-    MSG_SERVICE_READY, classes,
-};
 use spin::Mutex;
-use stem::syscall::{PortHandle, port_create, port_send_all, vfs_mount};
-use stem::{debug, error, info, warn};
+use stem::{info, warn};
+use stem::syscall::PortHandle;
 
 use crate::ledger::DeviceLedger;
-use crate::pipelines::{
-    DisplayHandles, setup_audio_stack, setup_display_pipeline, setup_graphics_stack,
-    setup_input_broker, setup_network_stack, setup_serial_shell, setup_ui_services,
-};
+use crate::pipelines::{setup_serial_shell};
 use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
@@ -101,63 +93,13 @@ impl Supervisor {
     }
 
     pub fn run_forever(&mut self) -> ! {
-        stem::debug!("SPROUT: Supervisor session started (Sovereign mode)");
+        stem::debug!("SPROUT: Supervisor session started (MINIMAL MODE)");
 
-        // Stage 1: Discover boot modules
-        self.discover();
+        // Stage 1: Launch Serial Shell
+        info!("SPROUT: Launching serial shell...");
+        setup_serial_shell(self.tasks.clone());
 
-        // Stage 2: Create Sovereign Registrar port
-        let (supervisor_write, supervisor_read) =
-            port_create(4096).expect("Failed to create supervisor registrar port");
-
-        // Stage 3: Launch Serial Shell EARLY on its own processor
-        info!("SPROUT: Launching early serial shell...");
-        let tasks_cloned = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            setup_serial_shell(tasks_cloned);
-        });
-
-        // Stage 4: Launch cambium
-        info!("SPROUT: Launching cambium...");
-        self.spawn_cambium();
-
-        // Stage 5: Launch background network stack supervision.
-        // The driver side is handled by cambium; netd waits for the NIC VFS
-        // provider and should be kept alive automatically once sprout starts.
-        info!("SPROUT: Scheduling netd launch...");
-        setup_network_stack(self.tasks.clone());
-
-        // Stage 9: Optional readiness model verification test.
-        // Keep this opt-in so early-boot diagnosis is not perturbed by extra
-        // child process lifecycle traffic.
-        if RUN_POLL_MUX_SELF_TEST {
-            info!("SPROUT: Spawning poll_mux verification test...");
-            let _ = stem::syscall::spawn_process("/bin/poll_mux", 0);
-        } else {
-            info!("SPROUT: poll_mux verification test disabled");
-        }
-
-        // Stage 6: Graphics Stack Bring-up
-        info!("SPROUT: Bringing up graphics stack...");
-        let display_handles = setup_display_pipeline(
-            self.tasks.clone(),
-            supervisor_write,
-            0xB001,
-            self.config.force_bootfb,
-        );
-
-        // Stage 7: Wait for Display Driver to register its VFS provider
-        self.wait_for_display();
-
-        // Stage 8: High-level UI Services
-        info!("SPROUT: Launching UI services...");
-        let input_handles = setup_input_broker(self.tasks.clone());
-        setup_graphics_stack(self.tasks.clone(), display_handles, input_handles);
-        setup_ui_services(self.tasks.clone());
-
-        // Spawn a dedicated health-monitoring vine.  It owns the waitpid(-1)
-        // loop and all task restart logic so the registration loop below is
-        // never blocked by child-lifecycle work.
+        // Stage 2: Spawn health-monitoring vine for shell restarts.
         let tasks_health = self.tasks.clone();
         let _ = stem::thread::spawn_task(move || {
             loop {
@@ -166,18 +108,13 @@ impl Supervisor {
             }
         });
 
-        // Main supervisor vine: process driver registration messages only.
+        // Main loop: Minimal sleep.
         loop {
-            stem::trace!(
-                "SPROUT: --- Registration Loop Cycle Start (tasks={}) ---",
-                self.tasks.lock().len()
-            );
-            self.process_registrations();
-            stem::trace!("SPROUT: --- Registration Loop Cycle End ---");
-            stem::sleep_ms(50);
+            stem::sleep_ms(1000);
         }
     }
 
+    #[allow(dead_code)]
     fn wait_for_display(&mut self) {
         stem::debug!("SPROUT: Waiting for display driver registration...");
         let start = stem::monotonic_ns();
@@ -217,12 +154,14 @@ impl Supervisor {
         }
     }
 
+    #[allow(dead_code)]
     fn discover(&mut self) {
         // We no longer auto-spawn everything in /bin.
         // We only scan to keep the registry metadata if needed.
         stem::debug!("SPROUT: Discovery loop disabled in favor of cambium.");
     }
 
+    #[allow(dead_code)]
     fn spawn_cambium(&mut self) {
         let (write, read) = match stem::syscall::port_create(4096) {
             Ok(h) => h,
@@ -253,10 +192,12 @@ impl Supervisor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn monitor(&mut self) {
         run_health_vine(&self.tasks);
     }
 
+    #[allow(dead_code)]
     fn process_registrations(&mut self) {
         // Collect tasks that need polling. We only poll tasks that have a response
         // port and are currently alive.
@@ -365,6 +306,7 @@ impl Supervisor {
         }
     }
 
+    #[allow(dead_code)]
     fn handle_bind_ready(
         &mut self,
         task_name: &str,
@@ -373,8 +315,7 @@ impl Supervisor {
         bundled_fd: u32,
     ) {
         use abi::supervisor_protocol::{self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, classes};
-        use stem::syscall::vfs::vfs_close;
-        use stem::syscall::{port_send_all, vfs_mount};
+        use stem::syscall::{PortHandle, vfs_close, port_send_all, vfs_mount};
 
         // Helper: send MSG_BIND_FAILED back to the driver.
         let send_failed = |req_write: u32, id: u64, code: u32, msg: &[u8]| {

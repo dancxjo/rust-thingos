@@ -15,6 +15,17 @@ pub trait TtyHardware: Send + Sync {
     fn read_byte(&self) -> Option<u8>;
     /// Write one raw byte to the hardware.
     fn write_byte(&self, byte: u8);
+    /// Write a buffer atomically (no interleaving with kernel log messages).
+    /// The default falls back to per-byte writes; hardware backends that
+    /// share the serial port should override this.
+    fn write_buf(&self, buf: &[u8]) {
+        for &b in buf {
+            if b == b'\n' {
+                self.write_byte(b'\r');
+            }
+            self.write_byte(b);
+        }
+    }
     /// Get the window size of this TTY.
     fn winsize(&self) -> Winsize;
 }
@@ -274,12 +285,7 @@ impl VfsNode for TtyNode {
 
     fn write(&self, _offset: u64, buf: &[u8]) -> SysResult<usize> {
         self.enforce_job_control_before_write()?;
-        for &b in buf {
-            if b == b'\n' {
-                self.hw.write_byte(b'\r');
-            }
-            self.hw.write_byte(b);
-        }
+        self.hw.write_buf(buf);
         Ok(buf.len())
     }
 

@@ -27,6 +27,11 @@ static LOG_STATE: Mutex<LogBufferState> = Mutex::new(LogBufferState { head: 0, l
 static IN_GRAPH_LOG: AtomicBool = AtomicBool::new(false);
 static MUTE_SERIAL: AtomicBool = AtomicBool::new(false);
 
+/// Set by `force_unlock()` so any in-flight `write_str` on another CPU
+/// notices it should stop immediately, preventing garbled output after a
+/// panic handler yanks the logger lock away.
+static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Off)
 /// Default is 2 (warn).
 static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(4);
@@ -159,6 +164,11 @@ unsafe impl Send for Logger {}
 
 impl fmt::Write for Logger {
     fn write_str(&mut self, s: &str) -> fmt::Result {
+        // If a panic handler has seized the logger, abandon this write
+        // immediately so the panic message comes through cleanly.
+        if PANIC_ACTIVE.load(Ordering::Relaxed) {
+            return Err(fmt::Error);
+        }
         for b in s.bytes() {
             if b == b'\n' {
                 self.runtime.putchar(b'\r');
@@ -176,6 +186,11 @@ pub unsafe fn init(runtime: &'static dyn BootRuntimeBase) {
 }
 
 pub unsafe fn force_unlock() {
+    // Signal any in-flight write_str on other CPUs to bail out before we
+    // yank the lock from under them.  The Relaxed store is sufficient
+    // because the subsequent force_unlock provides the necessary fence.
+    PANIC_ACTIVE.store(true, Ordering::Relaxed);
+
     // SAFETY: Only called from panic handler when logger lock may be poisoned
     unsafe {
         GLOBAL_LOGGER.force_unlock();
@@ -355,6 +370,32 @@ pub fn _log_raw(args: fmt::Arguments) {
         if let (Some(r), Some(s)) = (rt, irq_state) {
             r.irq_restore(s);
         }
+    }
+}
+
+/// Write a raw byte buffer to the serial console under the `GLOBAL_LOGGER`
+/// lock.  Used by the TTY write path so that userspace console output does
+/// not interleave character-by-character with kernel log messages.
+pub fn write_bytes_locked(buf: &[u8]) {
+    if MUTE_SERIAL.load(Ordering::Relaxed) {
+        return;
+    }
+    let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+    let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
+
+    let mut lock = GLOBAL_LOGGER.lock();
+    if let Some(writer) = lock.as_mut() {
+        for &b in buf {
+            if b == b'\n' {
+                writer.runtime.putchar(b'\r');
+            }
+            writer.runtime.putchar(b);
+        }
+    }
+    drop(lock);
+
+    if let (Some(r), Some(s)) = (rt, irq_state) {
+        r.irq_restore(s);
     }
 }
 

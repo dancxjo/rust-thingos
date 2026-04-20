@@ -279,6 +279,9 @@ impl crate::vfs::tty::TtyHardware for SerialHardware {
     fn write_byte(&self, byte: u8) {
         crate::runtime_base().putchar(byte)
     }
+    fn write_buf(&self, buf: &[u8]) {
+        crate::logging::write_bytes_locked(buf);
+    }
     fn winsize(&self) -> abi::termios::Winsize {
         derive_winsize_from_bootfb()
     }
@@ -293,6 +296,11 @@ impl crate::vfs::tty::TtyHardware for FbHardware {
         // We need a way to write to FbConsole specifically.
         // For now, use the runtime's putchar which goes to both serial and FB.
         crate::runtime_base().putchar(byte);
+    }
+    fn write_buf(&self, buf: &[u8]) {
+        // FbHardware also routes through putchar which hits serial,
+        // so use the locked path to avoid interleaving.
+        crate::logging::write_bytes_locked(buf);
     }
     fn winsize(&self) -> abi::termios::Winsize {
         derive_winsize_from_bootfb()

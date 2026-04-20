@@ -28,6 +28,7 @@ fn main(arg0: usize) -> ! {
 
     info!("SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...");
 
+    /*
     match devtree::init() {
         Ok(ctx) => {
             if let Err(_) = devtree::build(&ctx) {
@@ -38,6 +39,7 @@ fn main(arg0: usize) -> ! {
             error!("SPROUT: Failed to initialize devtree context! (continuing)");
         }
     }
+    */
 
     stem::debug!("SPROUT: About to create Supervisor...");
     stem::debug!("SPROUT: Listing /bin directory...");
