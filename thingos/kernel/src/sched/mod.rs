@@ -978,7 +978,7 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
     // SAFETY: `ptr` is written from `init::<R>` and remains valid for kernel
     // lifetime; this function only reads scheduler state under SCHEDULER lock.
     let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
-    crate::kdebug!("SCHED-DBG: cpus_online={}", sched.state.online_cpu_count);
+    crate::ktrace!("SCHED-DBG: cpus_online={}", sched.state.online_cpu_count);
     for &i in &sched.state.online_cpus {
         let pc = &sched.state.per_cpu[i];
         let runq: usize = pc.runq.iter().map(|q| q.len()).sum();
@@ -987,7 +987,7 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         } else {
             pc.stats.runq_sample_total / pc.stats.runq_sample_count
         };
-        crate::kdebug!(
+        crate::ktrace!(
             "SCHED-DBG: cpu={} curr={:?} runq={} runq_avg={} runq_samples={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
             i,
             pc.current,
@@ -4078,11 +4078,13 @@ mod tests {
         }
 
         fn irq_disable(&self) -> crate::IrqState {
-            let prev = IRQ_DEPTH.try_with(|c| {
-                let d = c.get();
-                c.set(d + 1);
-                d
-            }).unwrap_or(0);
+            let prev = IRQ_DEPTH
+                .try_with(|c| {
+                    let d = c.get();
+                    c.set(d + 1);
+                    d
+                })
+                .unwrap_or(0);
             crate::IrqState(prev)
         }
         fn irq_restore(&self, state: crate::IrqState) {
