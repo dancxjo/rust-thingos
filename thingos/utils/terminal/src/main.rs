@@ -200,13 +200,7 @@ impl Terminal {
                     for &p in &params {
                         if p == 25 {
                             // DECTCEM — cursor visibility
-                            if show {
-                                self.cursor_visible = true;
-                                self.draw_cursor();
-                            } else {
-                                self.erase_cursor();
-                                self.cursor_visible = false;
-                            }
+                            self.cursor_visible = show;
                         }
                     }
                     self.ansi_state = AnsiState::Normal;
@@ -235,9 +229,76 @@ impl Terminal {
                     self.ansi_state = AnsiState::Normal;
                     return;
                 } else if c == 'H' {
-                    // Cursor home
-                    self.cursor_x = 0;
-                    self.cursor_y = 0;
+                    // Cursor home / position
+                    params.push(current_num.unwrap_or(0));
+                    let row = params.first().copied().unwrap_or(1).max(1) - 1;
+                    let col = params.get(1).copied().unwrap_or(1).max(1) - 1;
+                    self.cursor_y = row * 16;
+                    self.cursor_x = col * 8;
+                    if self.cursor_y + 16 > self.height {
+                        self.cursor_y = self.height.saturating_sub(16);
+                    }
+                    if self.cursor_x >= self.width {
+                        self.cursor_x = self.width.saturating_sub(8);
+                    }
+                    self.ansi_state = AnsiState::Normal;
+                    return;
+                } else if c == 'K' {
+                    // EL — Erase in Line
+                    params.push(current_num.unwrap_or(0));
+                    let mode = params.first().copied().unwrap_or(0);
+                    let y = self.cursor_y;
+                    match mode {
+                        0 => {
+                            // Cursor to end of line
+                            for x in self.cursor_x..self.width {
+                                for row in 0..16u32 {
+                                    self.set_pixel(x, y + row, self.current_bg);
+                                }
+                            }
+                        }
+                        1 => {
+                            // Beginning of line to cursor
+                            for x in 0..=self.cursor_x {
+                                for row in 0..16u32 {
+                                    self.set_pixel(x, y + row, self.current_bg);
+                                }
+                            }
+                        }
+                        2 => {
+                            // Entire line
+                            for x in 0..self.width {
+                                for row in 0..16u32 {
+                                    self.set_pixel(x, y + row, self.current_bg);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.ansi_state = AnsiState::Normal;
+                    return;
+                } else if c == 'C' {
+                    // CUF — Cursor Forward
+                    let n = current_num.unwrap_or(1).max(1);
+                    self.cursor_x = (self.cursor_x + n * 8).min(self.width.saturating_sub(8));
+                    self.ansi_state = AnsiState::Normal;
+                    return;
+                } else if c == 'D' {
+                    // CUB — Cursor Back
+                    let n = current_num.unwrap_or(1).max(1);
+                    self.cursor_x = self.cursor_x.saturating_sub(n * 8);
+                    self.ansi_state = AnsiState::Normal;
+                    return;
+                } else if c == 'A' {
+                    // CUU — Cursor Up
+                    let n = current_num.unwrap_or(1).max(1);
+                    self.cursor_y = self.cursor_y.saturating_sub(n * 16);
+                    self.ansi_state = AnsiState::Normal;
+                    return;
+                } else if c == 'B' {
+                    // CUD — Cursor Down
+                    let n = current_num.unwrap_or(1).max(1);
+                    self.cursor_y = (self.cursor_y + n * 16).min(self.height.saturating_sub(16));
                     self.ansi_state = AnsiState::Normal;
                     return;
                 } else {
@@ -349,9 +410,11 @@ impl Terminal {
     }
 
     fn write_str(&mut self, s: &str) {
+        self.erase_cursor();
         for c in s.chars() {
             self.putc(c);
         }
+        self.draw_cursor();
     }
 }
 

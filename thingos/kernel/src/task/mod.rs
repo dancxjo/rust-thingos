@@ -31,9 +31,11 @@ use crate::{BootRuntime, BootTasking};
 pub type ThreadId = crate::sched::state::ThreadId;
 /// Backward-compatible alias — prefer `ThreadId` in new code.
 pub type TaskId = ThreadId;
-pub use crate::sched::state::{Affinity, ThreadPriority, ThreadState};
+pub use crate::sched::state::{Affinity, ThreadPriority, ThreadSchedClass, ThreadState};
 /// Backward-compatible alias — prefer `ThreadPriority` in new code.
 pub type TaskPriority = ThreadPriority;
+/// Backward-compatible alias — prefer `ThreadSchedClass` in new code.
+pub type TaskSchedClass = ThreadSchedClass;
 /// Backward-compatible alias — prefer `ThreadState` in new code.
 pub type TaskState = ThreadState;
 

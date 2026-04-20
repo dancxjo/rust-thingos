@@ -348,8 +348,8 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
         self.poll_console_input();
         for &c in buf {
             self.arch.putchar(c);
-            crate::console::put_char(c);
         }
+        crate::console::put_buf(buf);
     }
     fn serial_putchar(&self, c: u8) {
         self.poll_console_input();
@@ -365,9 +365,7 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
         crate::console::put_char(c);
     }
     fn fb_putbuf(&self, buf: &[u8]) {
-        for &c in buf {
-            crate::console::put_char(c);
-        }
+        crate::console::put_buf(buf);
     }
     fn getchar(&self) -> Option<u8> {
         self.poll_console_input();

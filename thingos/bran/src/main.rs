@@ -131,6 +131,7 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
         kernel::kerror!("OOM: heap lock held, cannot get stats");
     }
 
+    crate::console::flush_sync();
     hcf()
 }
 
@@ -152,5 +153,8 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
     } else {
         kernel::kerror!("KERNEL PANIC Location: unknown Message: {}", info.message());
     }
+    // Flush deferred console output synchronously so the panic message
+    // appears on the framebuffer before we halt.
+    crate::console::flush_sync();
     hcf()
 }

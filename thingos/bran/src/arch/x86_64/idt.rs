@@ -1263,6 +1263,7 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
             trigger_pause_dump(snapshot);
         }
         kernel::sched::on_tick::<crate::arch::CurrentRuntime>();
+        crate::console::flush_deferred();
         crate::console::blink_cursor();
         // Boot display path disabled.
         // let now_ticks: u64;

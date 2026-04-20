@@ -24,25 +24,25 @@ trap_entry:
 
     // Check PRMD (CSR 0x1) to see if we came from User or Kernel
     csrrd $t0, 0x1
-    
+
     // Extract PPLv (bits 1:0). 3=User, 0=Kernel.
     andi $t0, $t0, 3
-    
+
     // Check if PPLv == 3 (User)
     // We can't easily branch without clobbering more regs or using tricky logic.
     // Instead, let's just do a conditional branch.
     // We need to be careful about what registers we use.
     // $t0 is dirty (holds PPLv). KS1 holds original $t0.
-    
+
     addi.d $t0, $t0, -3
-    bnez $t0, 1f 
-    
+    bnez $t0, 1f
+
     // -- USER MODE TRAP --
     // Swap SP with KS0 (User Stack <-> Kernel Stack)
     // Current SP is User SP. KS0 is Kernel Stack.
     csrwr $sp, 0x30
     // Now SP is Kernel Stack.
-    
+
     b 2f
 
 1:
@@ -52,19 +52,19 @@ trap_entry:
 2:
     // Restore original $t0 from KS1 to $t0 (for saving)
     csrrd $t0, 0x31
-    
+
     // Alloc frame
-    addi.d $sp, $sp, -288 
-    
+    addi.d $sp, $sp, -288
+
     // Save regs (r1..r31)
     st.d $r1, $sp, 0
-    st.d $r2, $sp, 8  
-    
+    st.d $r2, $sp, 8
+
     // For r3 (SP), we need to save the value it had BEFORE we alloc'd frame.
     // If from User, that's the User SP (now in KS0).
     // If from Kernel, that's (current SP + 288).
     // We'll calculate it and overwrite slot 16 later.
-    
+
     st.d $r4, $sp, 24
     st.d $r5, $sp, 32
     st.d $r6, $sp, 40
@@ -93,17 +93,17 @@ trap_entry:
     st.d $r29, $sp, 224
     st.d $r30, $sp, 232
     st.d $r31, $sp, 240
-    
+
     // Handle SP saving
     // Re-check PRMD
     csrrd $t0, 0x1
     andi $t0, $t0, 3
     addi.d $t0, $t0, -3
     bnez $t0, 3f
-    
+
     // User Mode: SP is in KS0
     csrrd $t0, 0x30
-    st.d $t0, $sp, 16 
+    st.d $t0, $sp, 16
     b 4f
 
 3:
@@ -116,30 +116,30 @@ trap_entry:
     // ERA (0x6)
     csrrd $t0, 0x6
     st.d $t0, $sp, 248
-    
+
     // PRMD (0x1)
     csrrd $t0, 0x1
     st.d $t0, $sp, 256
-    
+
     // BADV (0x7)
     csrrd $t0, 0x7
     st.d $t0, $sp, 264
-    
+
     // ESTAT (0x5)
     csrrd $t0, 0x5
     st.d $t0, $sp, 272
-    
+
     // Call Rust
     move $a0, $sp
     bl rust_trap_handler
-    
+
     // Restore CSRs
     ld.d $t0, $sp, 248
     csrwr $t0, 0x6
-    
+
     ld.d $t0, $sp, 256
     csrwr $t0, 0x1
-    
+
     // Restore regs
     ld.d $r1, $sp, 0
     ld.d $r2, $sp, 8
@@ -172,23 +172,23 @@ trap_entry:
     ld.d $r29, $sp, 224
     ld.d $r30, $sp, 232
     ld.d $r31, $sp, 240
-    
+
     // Decide if we restore User SP or just dealloc
     ld.d $t0, $sp, 256 // PRMD
     andi $t0, $t0, 3 // PPLv
     addi.d $t0, $t0, -3
     bnez $t0, 5f
-    
+
     // Returning to User:
     // Restore User SP from slot 16 to KS0
     ld.d $t0, $sp, 16
     csrwr $t0, 0x30
-    
+
     addi.d $sp, $sp, 288
-    
+
     // Swap, so $sp becomes User SP, and KS0 becomes Kernel Stack
     csrwr $sp, 0x30
-    
+
     ertn
 
 5:
@@ -244,17 +244,15 @@ pub unsafe extern "C" fn rust_trap_handler(tf: &mut UserTrapFrame) {
         if isr & (1 << 10) != 0 {
             // Timer interrupt (TI): advance time accounting and reschedule if needed.
             kernel::sched::on_tick::<crate::arch::CurrentRuntime>();
+            crate::console::flush_deferred();
+            crate::console::blink_cursor();
         } else if isr & (1 << 11) != 0 {
             // IPI interrupt: cross-CPU reschedule request.
             // Must NOT increment TICK_COUNT - only trigger a reschedule.
             kernel::sched::on_resched_ipi::<crate::arch::CurrentRuntime>();
         } else if isr != 0 {
             // Other hardware interrupt - no scheduler action needed.
-            kernel::kprintln!(
-                "Unhandled LoongArch interrupt: ESTAT={:#x} ISR={:#x}",
-                estat,
-                isr
-            );
+            kernel::kprintln!("Unhandled LoongArch interrupt: ESTAT={:#x} ISR={:#x}", estat, isr);
         } else {
             kernel::kprintln!(
                 "Unexpected LoongArch trap: ESTAT={:#x} ECODE={:#x} SUBCODE={:#x} ERA={:#x} BADV={:#x}",

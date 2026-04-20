@@ -352,7 +352,9 @@ impl Shell {
                         pgid,
                         command
                     );
+                    write_str("\x1B[?25l"); // hide cursor while child runs
                     self.wait_for_foreground_job(job_id);
+                    write_str("\x1B[?25h"); // show cursor when shell regains control
                 }
             }
             Err(err) => {
@@ -696,6 +698,7 @@ fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineRes
     }
 
     let _tty_guard = tty_guard;
+    write_str("\x1B[?25h"); // ensure cursor is visible for input
     let mut one = [0u8; 1];
     let mut bytes: Vec<u8> = Vec::new();
     // Byte index of the insertion point within `bytes`.
@@ -1299,6 +1302,7 @@ fn main(_arg: usize) -> ! {
     }
 
     let _ = vfs::tcsetpgrp(TTY_FD, shell.shell_pgid);
+    write_str("\x1B[?25h"); // restore cursor visibility on exit
     shell.terminate_jobs();
     syscall::exit(0)
 }
