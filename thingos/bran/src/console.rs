@@ -733,8 +733,12 @@ pub fn blink_cursor() {
 ///
 /// Processes up to `FLUSH_BATCH` bytes per call so a burst of log output
 /// doesn't monopolise the timer ISR.  Remaining bytes will be rendered on
-/// the next tick.
-const FLUSH_BATCH: usize = 512;
+/// the next tick or during idle-time flushing.
+const FLUSH_BATCH: usize = 64;
+
+/// Larger batch used by `flush_deferred_idle()` — called from the
+/// scheduler idle loop where there is no urgency to return quickly.
+const FLUSH_BATCH_IDLE: usize = 2048;
 
 pub fn flush_deferred() {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
@@ -775,6 +779,46 @@ pub fn flush_deferred() {
         }
         // If we can't re-lock the ring either, the bytes are lost — acceptable
         // for a debug console under extreme contention.
+    }
+}
+
+/// Idle-time flush — drains a larger batch from the deferred ring buffer.
+///
+/// Called from the scheduler idle loop (when the CPU has no runnable tasks)
+/// so that console rendering happens without delaying real work.  Still
+/// uses `try_lock` so it never blocks an IRQ handler.
+pub fn flush_deferred_idle() {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let mut local = [0u8; FLUSH_BATCH_IDLE];
+
+    let n = {
+        let mut ring = match DEFERRED.try_lock() {
+            Some(r) => r,
+            None => return,
+        };
+        if ring.is_empty() {
+            return;
+        }
+        ring.drain(&mut local)
+    };
+
+    if n == 0 {
+        return;
+    }
+
+    if let Some(ref mut guard) = CONSOLE.try_lock() {
+        if let Some(ref mut console) = **guard {
+            for &b in &local[..n] {
+                console.put_char(b);
+            }
+        }
+    } else {
+        if let Some(mut ring) = DEFERRED.try_lock() {
+            ring.push_slice(&local[..n]);
+        }
     }
 }
 

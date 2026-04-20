@@ -337,14 +337,15 @@ impl ProcessUnixCompat {
     pub fn enqueue_message(&mut self, msg: ProcessMessage) -> Result<(), MessageEnqueueError> {
         let inbox = crate::inbox::get_inbox(self.message_inbox).ok_or_else(|| {
             // This should not happen for a live process.
-            MessageEnqueueError::InboxFull {
-                capacity: PROCESS_MESSAGE_INBOX_CAPACITY,
-            }
+            MessageEnqueueError::InboxFull { capacity: PROCESS_MESSAGE_INBOX_CAPACITY }
         })?;
 
-        let envelope = crate::inbox::MessageEnvelope::with_sender(msg.message, msg.metadata.sender_tid);
+        let envelope =
+            crate::inbox::MessageEnvelope::with_sender(msg.message, msg.metadata.sender_tid);
         inbox.send(envelope).map_err(|err| match err {
-            crate::inbox::SendError::Full { capacity } => MessageEnqueueError::InboxFull { capacity },
+            crate::inbox::SendError::Full { capacity } => {
+                MessageEnqueueError::InboxFull { capacity }
+            }
             crate::inbox::SendError::Closed => {
                 // If the inbox is closed, we treat it as full/refusing for now.
                 MessageEnqueueError::InboxFull { capacity: PROCESS_MESSAGE_INBOX_CAPACITY }
@@ -383,7 +384,6 @@ impl Drop for ProcessUnixCompat {
 }
 
 impl ProcessUnixCompat {
-
     /// Borrow immutable typed spawn metadata.
     pub fn spawn_record(&self) -> &crate::spawn::bridge::SpawnRecord {
         &self.spawn_record
@@ -1038,7 +1038,9 @@ pub fn run_scheduler<R: BootRuntime>() -> ! {
     let mut idle_count: u64 = 0;
     loop {
         if !yield_now::<R>() {
-            // No runnable work — halt until next IRQ (timer tick, device, IPI).
+            // No runnable work — flush deferred console output while we
+            // have nothing better to do, then halt until the next IRQ.
+            crate::runtime_base().idle_flush_console();
             crate::runtime::<R>().wait_for_interrupt();
             crate::sched::DIAG_HLT_WAKE.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 

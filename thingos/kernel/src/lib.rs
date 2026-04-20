@@ -603,6 +603,13 @@ pub trait BootRuntimeBase: 'static {
 
     /// Activates the onscreen terminal if supported by the runtime.
     fn activate_onscreen_terminal(&self) {}
+
+    /// Flush deferred console output during idle time.
+    ///
+    /// Called from the scheduler idle loop when no tasks are runnable.
+    /// Implementations should drain more of the console ring buffer than
+    /// the timer ISR does, since idle time is free.
+    fn idle_flush_console(&self) {}
 }
 
 pub trait BootRuntime: BootRuntimeBase + Sized + 'static {
@@ -1206,6 +1213,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             // spinning in a tight loop that continuously acquires the scheduler
             // lock, which was the primary source of try_lock miss warnings under
             // SMP.
+            crate::runtime_base().idle_flush_console();
             crate::runtime::<R>().wait_for_interrupt();
         }
     }

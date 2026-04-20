@@ -500,6 +500,10 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     fn activate_onscreen_terminal(&self) {
         self.arch.activate_onscreen_terminal()
     }
+
+    fn idle_flush_console(&self) {
+        crate::console::flush_deferred_idle();
+    }
 }
 
 impl<A: ArchRuntime + 'static> BootRuntime for Runtime<A> {
