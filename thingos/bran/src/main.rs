@@ -2,6 +2,8 @@
 #![no_main]
 #![feature(alloc_error_handler)]
 
+extern crate alloc;
+
 mod arch;
 pub mod console;
 mod framebuffer;

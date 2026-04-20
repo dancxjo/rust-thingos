@@ -26,7 +26,7 @@ pub struct LineDiscipline {
     /// Current terminal settings.
     pub termios: Mutex<Termios>,
     /// Controlling session and foreground group.
-    pub presence: Mutex<crate::presence::ConsolePresenceState>,
+    pub presence: Arc<Mutex<crate::presence::ConsolePresenceState>>,
 }
 
 impl LineDiscipline {
@@ -34,7 +34,15 @@ impl LineDiscipline {
         Self {
             buf: Mutex::new(VecDeque::with_capacity(1024)),
             termios: Mutex::new(DEFAULT_TERMIOS),
-            presence: Mutex::new(crate::presence::ConsolePresenceState::default()),
+            presence: Arc::new(Mutex::new(crate::presence::ConsolePresenceState::default())),
+        }
+    }
+
+    pub fn with_presence(presence: Arc<Mutex<crate::presence::ConsolePresenceState>>) -> Self {
+        Self {
+            buf: Mutex::new(VecDeque::with_capacity(1024)),
+            termios: Mutex::new(DEFAULT_TERMIOS),
+            presence,
         }
     }
 
@@ -136,6 +144,13 @@ pub struct TtyNode {
     pub ld: Arc<LineDiscipline>,
 }
 
+#[derive(Clone, Copy)]
+struct TtyCaller {
+    sid: u32,
+    pgid: u32,
+    session_leader: bool,
+}
+
 impl TtyNode {
     pub fn new(hw: Arc<dyn TtyHardware>) -> Self {
         Self {
@@ -144,35 +159,6 @@ impl TtyNode {
         }
     }
 
-    fn current_caller(&self) -> Option<crate::vfs::devfs::ConsoleCaller> {
-        let pinfo = crate::sched::process_info_current()?;
-        let p = pinfo.lock();
-        // NOTE: We're reusing ConsoleCaller type for now, but it's just SID/PGID/Leader.
-        unsafe {
-            // This is a bit of a hack because ConsoleCaller is private in devfs.rs.
-            // I'll probably need to move it or use a generic one.
-            core::mem::transmute(crate::task::ProcessUnixCompat {
-                pid: p.pid,
-                ppid: p.ppid,
-                pgid: p.unix_compat.pgid,
-                sid: p.unix_compat.sid,
-                session_leader: p.unix_compat.session_leader,
-                ..p.unix_compat.clone()
-            })
-        }
-    }
-    // Wait, transmuting ProcessUnixCompat to ConsoleCaller is NOT safe.
-    // I should just define a local struct or use a tuple.
-}
-
-// Re-defining caller info locally to avoid dependency on private devfs types.
-struct TtyCaller {
-    sid: u32,
-    pgid: u32,
-    session_leader: bool,
-}
-
-impl TtyNode {
     fn get_caller(&self) -> Option<TtyCaller> {
         let pinfo = crate::sched::process_info_current()?;
         let p = pinfo.lock();
@@ -195,8 +181,8 @@ impl TtyNode {
     }
 
     fn is_background_caller(&self, caller: TtyCaller) -> bool {
-        let presence = self.ld.presence.lock();
-        match (presence.controlling_sid, presence.foreground_pgid) {
+        let presence_guard = self.ld.presence.lock();
+        match (presence_guard.controlling_sid, presence_guard.foreground_pgid) {
             (Some(sid), Some(fg_pgid)) => caller.sid == sid && caller.pgid != fg_pgid,
             _ => false,
         }

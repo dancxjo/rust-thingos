@@ -2,12 +2,17 @@ use core::mem::size_of;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use abi::trace::TraceEvent;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use alloc::{format, vec};
+
+use kernel::kinfo;
 
 pub const IRQ_TIMER_VECTOR: u8 = 0x20;
 pub const IRQ_PAUSE_DUMP_VECTOR: u8 = 0x31;
 pub const IRQ_RESCHED_VECTOR: u8 = 0x30;
 pub const IRQ_TLB_SHOOTDOWN_VECTOR: u8 = 0x41;
-use kernel::kinfo;
 
 static IRQ12_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ1_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -760,7 +765,24 @@ fn poll_ps2_keyboard_fallback() -> bool {
 }
 
 fn try_spawn_shell(path: &str) -> Option<u64> {
-    unsafe { kernel::sched::spawn_process_current(path, kernel::task::StartupArg::Raw(0)) }
+    kernel::irq::ps2::set_fb_input_enabled(true);
+    let tty_path = "/dev/tty0".to_string();
+    let res = unsafe {
+        kernel::sched::spawn_process_from_path_current(
+            path,
+            alloc::vec![path.as_bytes().to_vec()],
+            alloc::collections::BTreeMap::new(),
+            kernel::sched::StdioSpec::Path(tty_path.clone()),
+            kernel::sched::StdioSpec::Path(tty_path.clone()),
+            kernel::sched::StdioSpec::Path(tty_path),
+            0,
+            alloc::vec![],
+            Some("/".to_string()),
+            alloc::vec![],
+            None,
+        )
+    };
+    res.ok().map(|r| r.child_tid)
 }
 
 fn hotkey_shell_is_alive(tid: u64) -> bool {

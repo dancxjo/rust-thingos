@@ -256,13 +256,20 @@ impl VfsNode for DevDirNode {
     }
 }
 
+use spin::Once;
 /// Global tty line discipline for `/dev/console`.
-static CONSOLE_LD: once_cell::sync::Lazy<Arc<crate::vfs::tty::LineDiscipline>> =
-    once_cell::sync::Lazy::new(|| Arc::new(crate::vfs::tty::LineDiscipline::new()));
+static CONSOLE_LD: Once<Arc<crate::vfs::tty::LineDiscipline>> = Once::new();
+
+fn get_console_ld() -> Arc<crate::vfs::tty::LineDiscipline> {
+    CONSOLE_LD.call_once(|| Arc::new(crate::vfs::tty::LineDiscipline::with_presence(crate::presence::get_console_presence_state()))).clone()
+}
 
 /// Global tty line discipline for `/dev/tty0` (framebuffer terminal).
-static FB_TTY_LD: once_cell::sync::Lazy<Arc<crate::vfs::tty::LineDiscipline>> =
-    once_cell::sync::Lazy::new(|| Arc::new(crate::vfs::tty::LineDiscipline::new()));
+static FB_TTY_LD: Once<Arc<crate::vfs::tty::LineDiscipline>> = Once::new();
+
+fn get_fb_tty_ld() -> Arc<crate::vfs::tty::LineDiscipline> {
+    FB_TTY_LD.call_once(|| Arc::new(crate::vfs::tty::LineDiscipline::new())).clone()
+}
 
 struct SerialHardware;
 impl crate::vfs::tty::TtyHardware for SerialHardware {
@@ -311,7 +318,7 @@ fn derive_winsize_from_bootfb() -> abi::termios::Winsize {
 }
 
 pub(crate) fn console_foreground_pgid() -> Option<u32> {
-    CONSOLE_LD.presence.lock().foreground_pgid
+    get_console_ld().presence.lock().foreground_pgid
 }
 
 /// Character device node for `/dev/console`.
@@ -328,19 +335,19 @@ pub struct ConsoleNode;
 
 impl ConsoleNode {
     pub fn handle_runtime_input_byte<R: crate::BootRuntimeBase + ?Sized>(_rt: &R, c: u8) -> bool {
-        CONSOLE_LD.drain_input(&SerialHardware)
+        get_console_ld().drain_input(&SerialHardware)
     }
 
     pub fn poll_input() {
-        CONSOLE_LD.drain_input(&SerialHardware);
+        get_console_ld().drain_input(&SerialHardware);
     }
 
     pub fn get_termios() -> abi::termios::Termios {
-        *CONSOLE_LD.termios.lock()
+        *get_console_ld().termios.lock()
     }
 
     pub fn set_termios(t: abi::termios::Termios) {
-        *CONSOLE_LD.termios.lock() = t;
+        *get_console_ld().termios.lock() = t;
     }
 }
 
@@ -348,7 +355,7 @@ impl VfsNode for ConsoleNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode {
             hw: Arc::new(SerialHardware),
-            ld: CONSOLE_LD.clone(),
+            ld: get_console_ld(),
         };
         tty.read(offset, buf)
     }
@@ -356,7 +363,7 @@ impl VfsNode for ConsoleNode {
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode {
             hw: Arc::new(SerialHardware),
-            ld: CONSOLE_LD.clone(),
+            ld: get_console_ld(),
         };
         tty.write(offset, buf)
     }
@@ -379,7 +386,7 @@ impl VfsNode for ConsoleNode {
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode {
             hw: Arc::new(SerialHardware),
-            ld: CONSOLE_LD.clone(),
+            ld: get_console_ld(),
         };
         tty.device_call(call)
     }
@@ -391,7 +398,7 @@ impl VfsNode for FbTerminalNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode {
             hw: Arc::new(FbHardware),
-            ld: FB_TTY_LD.clone(),
+            ld: get_fb_tty_ld(),
         };
         tty.read(offset, buf)
     }
@@ -399,7 +406,7 @@ impl VfsNode for FbTerminalNode {
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode {
             hw: Arc::new(FbHardware),
-            ld: FB_TTY_LD.clone(),
+            ld: get_fb_tty_ld(),
         };
         tty.write(offset, buf)
     }
@@ -422,7 +429,7 @@ impl VfsNode for FbTerminalNode {
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode {
             hw: Arc::new(FbHardware),
-            ld: FB_TTY_LD.clone(),
+            ld: get_fb_tty_ld(),
         };
         tty.device_call(call)
     }

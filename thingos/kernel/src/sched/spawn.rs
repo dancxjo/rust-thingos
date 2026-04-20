@@ -873,7 +873,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
 }
 
 /// Stdio specification for a single stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StdioSpec {
     /// Inherit parent's handle (child gets a dup of the parent's fd).
     Inherit,
@@ -883,6 +883,8 @@ pub enum StdioSpec {
     Pipe,
     /// Clone the specified parent fd into this stdio slot.
     Fd(u32),
+    /// Open the specified VFS path for this stdio slot.
+    Path(alloc::string::String),
 }
 
 /// Populate the handle_table slots 0, 1, 2 in `handle_table` based on the given specs.
@@ -963,6 +965,14 @@ fn setup_stdio_fds<R: BootRuntime>(
                 );
             }
         }
+        StdioSpec::Path(ref path) => {
+            // NOTE: We're in kernel context, so we use the global namespace.
+            if let Ok(node) = crate::vfs::mount::lookup(path) {
+                let _ = handle_table.insert_at(0, node, OpenFlags::read_write(), path.clone());
+            } else {
+                let _ = handle_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
+            }
+        }
     }
 
     // fd 1 — stdout
@@ -1012,6 +1022,13 @@ fn setup_stdio_fds<R: BootRuntime>(
                 );
             }
         }
+        StdioSpec::Path(ref path) => {
+            if let Ok(node) = crate::vfs::mount::lookup(path) {
+                let _ = handle_table.insert_at(1, node, OpenFlags::read_write(), path.clone());
+            } else {
+                let _ = handle_table.insert_at(1, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+            }
+        }
     }
 
     // fd 2 — stderr
@@ -1049,7 +1066,14 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let _ = handle_table.insert_at(2, node, flags, path);
             } else {
                 let _ =
-                    handle_table.insert_at(2, null, OpenFlags::write_only(), "/dev/null".into());
+                    handle_table.insert_at(2, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+            }
+        }
+        StdioSpec::Path(ref path) => {
+            if let Ok(node) = crate::vfs::mount::lookup(path) {
+                let _ = handle_table.insert_at(2, node, OpenFlags::read_write(), path.clone());
+            } else {
+                let _ = handle_table.insert_at(2, null.clone(), OpenFlags::write_only(), "/dev/null".into());
             }
         }
     }
