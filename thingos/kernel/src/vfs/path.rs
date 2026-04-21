@@ -91,6 +91,7 @@ fn walk_path(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dyn 
         current_path.push('/');
         current_path.push_str(component);
 
+        crate::kinfo!("walk_path: component='{}' current_path='{}'", component, current_path);
         let is_last = i == components.len() - 1;
         let node = crate::vfs::mount::lookup(&current_path)?;
 
