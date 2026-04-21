@@ -232,10 +232,11 @@ fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
         }
         ATTR_OP_LIST => {
             let mut out = Vec::new();
-            for (name, ty, value_len) in [
+            let entries = [
                 ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
                 ("driver.class", AttrType::Utf8, ATTR_DRIVER_CLASS.len() as u32),
-            ] {
+            ];
+            for (name, ty, value_len) in entries {
                 let header = AttrListEntryHeader {
                     name_len: name.len() as u16,
                     value_type: ty as u8,
@@ -248,7 +249,7 @@ fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
                 out.extend_from_slice(&header.value_len.to_le_bytes());
                 out.extend_from_slice(name.as_bytes());
             }
-            ProviderResponse::ok_device_call(2, &out)
+            ProviderResponse::ok_device_call(entries.len() as u32, &out)
         }
         ATTR_OP_SET | ATTR_OP_REMOVE => ProviderResponse::err(Errno::EROFS),
         _ => ProviderResponse::err(Errno::ENOSYS),

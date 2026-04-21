@@ -248,10 +248,11 @@ fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
         ATTR_OP_SET | ATTR_OP_REMOVE => ProviderResponse::err(Errno::EROFS),
         ATTR_OP_LIST => {
             let mut out = alloc::vec![];
-            for (name, ty, value_len) in [
+            let entries = [
                 ("provider.is_demo", AttrType::Bool, 1u32),
                 ("provider.name", AttrType::Utf8, ATTR_PROVIDER_NAME.len() as u32),
-            ] {
+            ];
+            for (name, ty, value_len) in entries {
                 let hdr = AttrListEntryHeader {
                     name_len: name.len() as u16,
                     value_type: ty as u8,
@@ -264,7 +265,7 @@ fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
                 out.extend_from_slice(&hdr.value_len.to_le_bytes());
                 out.extend_from_slice(name.as_bytes());
             }
-            ProviderResponse::ok_device_call(2, &out)
+            ProviderResponse::ok_device_call(entries.len() as u32, &out)
         }
         _ => ProviderResponse::err(Errno::ENOSYS),
     }

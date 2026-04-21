@@ -243,11 +243,12 @@ fn attr_set(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
 
 fn attr_list() -> ProviderResponse {
     let mut out = Vec::new();
-    for (name, ty, value_len) in [
+    let entries = [
         ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
         ("net.mtu", AttrType::U64, 8u32),
         ("net.link_up", AttrType::Bool, 1u32),
-    ] {
+    ];
+    for (name, ty, value_len) in entries {
         let hdr = AttrListEntryHeader {
             name_len: name.len() as u16,
             value_type: ty as u8,
@@ -260,7 +261,7 @@ fn attr_list() -> ProviderResponse {
         out.extend_from_slice(&hdr.value_len.to_le_bytes());
         out.extend_from_slice(name.as_bytes());
     }
-    ProviderResponse::ok_device_call(3, &out)
+    ProviderResponse::ok_device_call(entries.len() as u32, &out)
 }
 
 // ── Lookup ────────────────────────────────────────────────────────────────────
