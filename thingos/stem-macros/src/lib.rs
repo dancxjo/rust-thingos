@@ -51,10 +51,11 @@ fn validate_signature(func: &ItemFn) -> Result<bool, syn::Error> {
         ));
     }
 
-    let args: Vec<&FnArg> = func.sig.inputs.iter().collect();
-    match args.as_slice() {
-        [] => Ok(false),
-        [FnArg::Typed(pat_ty)] => {
+    match func.sig.inputs.len() {
+        0 => Ok(false),
+        1 => {
+            let arg = &func.sig.inputs[0];
+            if let FnArg::Typed(pat_ty) = arg {
             if let Type::Path(path) = pat_ty.ty.as_ref() {
                 if path.path.is_ident("usize") {
                     Ok(true)
@@ -70,11 +71,13 @@ fn validate_signature(func: &ItemFn) -> Result<bool, syn::Error> {
                     "expected argument type usize",
                 ))
             }
+            } else {
+                Err(syn::Error::new_spanned(
+                    &func.sig.inputs,
+                    "unsupported argument pattern",
+                ))
+            }
         }
-        [_] => Err(syn::Error::new_spanned(
-            &func.sig.inputs,
-            "unsupported argument pattern",
-        )),
         _ => Err(syn::Error::new_spanned(
             &func.sig.inputs,
             "expected zero or one argument",
