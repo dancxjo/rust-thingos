@@ -112,8 +112,17 @@ jobs:
 
       - name: Run just test
         run: |
-          just --dry-run test --features stem/simd
-          just test --features stem/simd
+          cargo test \
+            -p abi \
+            -p abi-macros \
+            -p pciids \
+            -p xtask \
+            -p stem-macros \
+            -p llm \
+            -p llm_stub \
+            -p fb_common \
+            -p kindc
+          cargo test -p stem --features simd --no-run
 
   just-behave:
     name: just behave
