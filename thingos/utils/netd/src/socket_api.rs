@@ -562,6 +562,9 @@ impl SocketApi {
                 if socket.can_send() {
                     ready |= 0x0004; // POLLOUT
                 }
+                if !socket.is_active() {
+                    ready |= abi::syscall::poll_flags::POLLHUP as u32;
+                }
                 if ready != 0 {
                     trace!("SOCKET_API: poll handle={} state={:?} ready=0x{:04x}", api_handle, socket.state(), ready);
                 }
@@ -1774,7 +1777,7 @@ impl SocketApi {
 
             if revents != managed.last_revents {
                 managed.last_revents = revents;
-                let node_handle = base_handle | ((*api_handle as u64) << 8) | 1; // SF_DATA = 1
+                let node_handle = base_handle | ((*api_handle as u64) << 8) | 2; // SF_DATA = 2
                 trace!("SOCKET_API: vfs_notify node=0x{:x} revents=0x{:x}", node_handle, revents);
                 let _ = stem::syscall::vfs::vfs_notify(vfs_req_write, node_handle, revents);
             }

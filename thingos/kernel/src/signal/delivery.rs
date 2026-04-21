@@ -42,6 +42,11 @@
 
 use abi::errors::SysResult;
 
+#[inline]
+fn runtime_exit_code_for_signal_termination(sig: u8) -> i32 {
+    -(sig as i32)
+}
+
 // ── x86_64 ───────────────────────────────────────────────────────────────────
 
 #[cfg(target_arch = "x86_64")]
@@ -207,17 +212,9 @@ pub mod x86_64 {
             match default_action(sig) {
                 DefaultAction::Ignore => {}
                 DefaultAction::Terminate | DefaultAction::CoreDump => {
-                    // Encode termination-by-signal exit status.
-                    let status = abi::signal::w_term_sig(sig);
-                    // Queue lifecycle status before exiting.
-                    {
-                        let p = pinfo_arc.lock();
-                        let ppid = p.job.ppid;
-                        let pid = p.pid;
-                        drop(p);
-                        crate::signal::notify_parent_child_event(ppid, pid, status);
-                    }
-                    unsafe { crate::sched::exit_current(status) };
+                    unsafe {
+                        crate::sched::exit_current(runtime_exit_code_for_signal_termination(sig))
+                    };
                     return;
                 }
                 DefaultAction::Stop => {
@@ -248,16 +245,12 @@ pub mod x86_64 {
 
         // Validate that the target user stack range is writable.
         if validate_user_range(new_rsp as usize, frame_size as usize, true).is_err() {
-            // Stack fault — terminate with SIGSEGV.
-            let status = abi::signal::w_term_sig(abi::signal::SIGSEGV);
-            {
-                let p = pinfo_arc.lock();
-                let ppid = p.job.ppid;
-                let pid = p.pid;
-                drop(p);
-                crate::signal::notify_parent_child_event(ppid, pid, status);
-            }
-            unsafe { crate::sched::exit_current(status) };
+            // Stack fault while preparing the handler becomes a SIGSEGV termination.
+            unsafe {
+                crate::sched::exit_current(runtime_exit_code_for_signal_termination(
+                    abi::signal::SIGSEGV,
+                ))
+            };
             return;
         }
 
@@ -470,4 +463,16 @@ pub unsafe fn sys_sigreturn_inner(frame: *mut u8) -> abi::errors::SysResult<usiz
     }
     #[cfg(not(target_arch = "x86_64"))]
     Err(abi::errors::Errno::ENOSYS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_exit_code_for_signal_termination;
+
+    #[test]
+    fn fatal_signal_runtime_exit_code_is_negative_signal_number() {
+        assert_eq!(runtime_exit_code_for_signal_termination(abi::signal::SIGINT), -2);
+        assert_eq!(runtime_exit_code_for_signal_termination(abi::signal::SIGSEGV), -11);
+        assert_eq!(runtime_exit_code_for_signal_termination(abi::signal::SIGKILL), -9);
+    }
 }

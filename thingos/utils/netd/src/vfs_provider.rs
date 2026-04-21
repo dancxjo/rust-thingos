@@ -1296,6 +1296,9 @@ impl NetVfsProvider {
                     .handle_udp_send_to(socket_set, api_handle, dest_ip, dest_port, payload);
                 if r.len() >= 4 {
                     let sent = u16::from_le_bytes([r[2], r[3]]) as usize;
+                    if sent == 0 {
+                        return WriteResult::Error;
+                    }
                     self.tx_bytes += sent as u64;
                     self.tx_packets += 1;
                     WriteResult::Ok(10 + sent)
@@ -1347,6 +1350,9 @@ impl NetVfsProvider {
                 let r = socket_api.handle_icmp_send_to(socket_set, api_handle, dest_ip, payload);
                 if r.len() >= 4 {
                     let sent = u16::from_le_bytes([r[2], r[3]]) as usize;
+                    if sent == 0 {
+                        return WriteResult::Error;
+                    }
                     self.tx_bytes += sent as u64;
                     self.tx_packets += 1;
                     WriteResult::Ok(8 + sent)
@@ -1605,7 +1611,15 @@ impl NetVfsProvider {
 
     fn effective_dns_server(&self) -> Option<Ipv4Address> {
         self.ip_config.as_ref().map(|cfg| {
-            if cfg.dns_server != Ipv4Address::UNSPECIFIED { cfg.dns_server } else { cfg.gateway }
+            if cfg.dns_server != Ipv4Address::UNSPECIFIED {
+                cfg.dns_server
+            } else if cfg.gateway == Ipv4Address::new(10, 0, 2, 2) {
+                // QEMU user-mode networking exposes the NAT gateway at 10.0.2.2
+                // but answers DNS on 10.0.2.3.
+                Ipv4Address::new(10, 0, 2, 3)
+            } else {
+                cfg.gateway
+            }
         })
     }
 }
@@ -1665,10 +1679,17 @@ mod tests {
     }
 
     #[test]
-    fn effective_dns_server_falls_back_to_gateway() {
+    fn effective_dns_server_maps_qemu_usernet_gateway_to_slirp_dns() {
         let provider =
             provider_with_config(Ipv4Address::UNSPECIFIED, Ipv4Address::new(10, 0, 2, 2));
-        assert_eq!(provider.effective_dns_server(), Some(Ipv4Address::new(10, 0, 2, 2)));
+        assert_eq!(provider.effective_dns_server(), Some(Ipv4Address::new(10, 0, 2, 3)));
+    }
+
+    #[test]
+    fn effective_dns_server_falls_back_to_gateway_for_other_networks() {
+        let provider =
+            provider_with_config(Ipv4Address::UNSPECIFIED, Ipv4Address::new(192, 168, 1, 1));
+        assert_eq!(provider.effective_dns_server(), Some(Ipv4Address::new(192, 168, 1, 1)));
     }
 
     #[test]

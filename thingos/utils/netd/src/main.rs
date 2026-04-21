@@ -278,22 +278,11 @@ fn main(arg: usize) -> ! {
             stem::syscall::yield_now();
         } else {
             let delay_ms = iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(10);
-            let timeout = delay_ms.min(100).max(1) as i32;
-
-            let mut pollfds = [
-                PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-                PollHandle { handle: events_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-            ];
-            let mut n_fds = 2;
-            if let Some(watch_fd) = nic_watch_fd {
-                // If we had space for 3, we'd add it here.
-                // For now, let's just use the first two and rely on the next loop iteration.
-                let _ = watch_fd;
-            }
-
-            if vfs_poll(&mut pollfds[..n_fds], timeout as u64).unwrap_or(0) > 0 {
-                // Wake up and loop
-            }
+            let timeout_ms = delay_ms.min(100).max(1) as u64;
+            let _ = req_fd;
+            let _ = events_fd;
+            let _ = nic_watch_fd;
+            stem::time::sleep_ms(timeout_ms);
         }
     }
 }
