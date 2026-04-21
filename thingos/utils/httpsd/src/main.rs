@@ -22,7 +22,7 @@ use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use spin::Mutex;
 use stem::syscall::argv_get;
 use stem::syscall::vfs::{vfs_mount, vfs_umount};
-use stem::{debug, info, trace, warn};
+use stem::{debug, error, info, trace, warn};
 
 use crate::cache::{
     CacheDirectives, CacheEntry, CacheKey, HttpsCache, canonical_url, resolve_redirect,
@@ -260,10 +260,12 @@ impl HttpsProvider {
         let head = response.head().clone();
         let directives = CacheDirectives::from_head(&head);
         let fetched_at_ns = stem::syscall::monotonic_ns();
-        let expires_at_ns = directives.max_age.map(|s| fetched_at_ns.saturating_add(s * 1_000_000_000));
+        let expires_at_ns =
+            directives.max_age.map(|s| fetched_at_ns.saturating_add(s * 1_000_000_000));
         let is_redirect = head.is_redirect();
         let redirect_target = if is_redirect {
-            head.header("Location").map(|loc| resolve_redirect(&state.node.host, &state.node.path, loc))
+            head.header("Location")
+                .map(|loc| resolve_redirect(&state.node.host, &state.node.path, loc))
         } else {
             None
         };
@@ -501,10 +503,7 @@ impl HttpsProvider {
 /// `/https` mount.  HTTP URLs are coerced to HTTPS because `httpsd` only
 /// serves HTTPS.
 fn url_to_vfs_path(url: &str) -> String {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
     if rest.is_empty() {
         return MOUNT_POINT.to_string();
     }
@@ -551,7 +550,8 @@ impl CacheFsProvider {
         // Validate existence for concrete entry paths; root / index /
         // host directories always resolve (empty listings are fine).
         match &kind {
-            CachePathKind::EntryDir { host, path } | CachePathKind::EntryLeaf { host, path, .. } => {
+            CachePathKind::EntryDir { host, path }
+            | CachePathKind::EntryLeaf { host, path, .. } => {
                 let cache = self.shared.cache.lock();
                 if cache.peek(&CacheKey::new(host, path)).is_none() {
                     return Err(Errno::ENOENT);
@@ -580,9 +580,9 @@ impl CacheFsProvider {
 
     fn stat(&self, handle: u64) -> Result<(u32, u64, u64), Errno> {
         match self.kind_of(handle)? {
-            CachePathKind::Root | CachePathKind::HostDir { .. } | CachePathKind::EntryDir { .. } => {
-                Ok((0o040_555, 0, handle))
-            }
+            CachePathKind::Root
+            | CachePathKind::HostDir { .. }
+            | CachePathKind::EntryDir { .. } => Ok((0o040_555, 0, handle)),
             CachePathKind::Index => {
                 let bytes = cache_mount::render_index(&self.shared.cache.lock());
                 Ok((0o100_444, bytes.len() as u64, handle))
@@ -601,7 +601,9 @@ impl CacheFsProvider {
             return Ok(Vec::new());
         }
         let data = match self.kind_of(handle)? {
-            CachePathKind::Root | CachePathKind::HostDir { .. } | CachePathKind::EntryDir { .. } => {
+            CachePathKind::Root
+            | CachePathKind::HostDir { .. }
+            | CachePathKind::EntryDir { .. } => {
                 return Err(Errno::EISDIR);
             }
             CachePathKind::Index => cache_mount::render_index(&self.shared.cache.lock()),
@@ -621,9 +623,8 @@ impl CacheFsProvider {
     fn attr_list(&self, handle: u64) -> Result<Vec<u8>, Errno> {
         let kind = self.kind_of(handle)?;
         let (host, path) = match kind {
-            CachePathKind::EntryDir { host, path } | CachePathKind::EntryLeaf { host, path, .. } => {
-                (host, path)
-            }
+            CachePathKind::EntryDir { host, path }
+            | CachePathKind::EntryLeaf { host, path, .. } => (host, path),
             _ => return Ok(Vec::new()),
         };
         let cache = self.shared.cache.lock();
@@ -635,9 +636,8 @@ impl CacheFsProvider {
     fn attr_get(&self, handle: u64, name: &str) -> Result<(u8, Vec<u8>), Errno> {
         let kind = self.kind_of(handle)?;
         let (host, path) = match kind {
-            CachePathKind::EntryDir { host, path } | CachePathKind::EntryLeaf { host, path, .. } => {
-                (host, path)
-            }
+            CachePathKind::EntryDir { host, path }
+            | CachePathKind::EntryLeaf { host, path, .. } => (host, path),
             _ => return Err(Errno::ENOENT),
         };
         let cache = self.shared.cache.lock();
@@ -1078,10 +1078,7 @@ mod tests {
             "/https/example.com/index.html"
         );
         assert_eq!(url_to_vfs_path("https://example.com"), "/https/example.com");
-        assert_eq!(
-            url_to_vfs_path("http://example.com/legacy"),
-            "/https/example.com/legacy"
-        );
+        assert_eq!(url_to_vfs_path("http://example.com/legacy"), "/https/example.com/legacy");
     }
 
     #[test]
@@ -1114,10 +1111,7 @@ mod tests {
         let (mode, _, _) = provider.stat_node(handle).unwrap();
         // S_IFLNK = 0o120000
         assert_eq!(mode & 0o170_000, 0o120_000);
-        assert_eq!(
-            provider.redirect_target_for(handle).unwrap(),
-            "/https/b.example/new"
-        );
+        assert_eq!(provider.redirect_target_for(handle).unwrap(), "/https/b.example/new");
     }
 
     #[test]

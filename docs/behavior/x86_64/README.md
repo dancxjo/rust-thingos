@@ -1,9 +1,9 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-21 14:37:54
+> Last run: 2026-04-21 14:32:38
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [HTTPS Fetch](https-fetch/README.md) | 1/1 | ✅ |
+| [httpsd header/response cache](httpsd-header-response-cache/README.md) | 1/3 | ❌ |
