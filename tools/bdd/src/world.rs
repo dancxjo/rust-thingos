@@ -1,7 +1,8 @@
 //! BDD World - holds test state during scenario execution.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::sync::Arc;
 
 use cucumber::World;
@@ -43,6 +44,8 @@ pub struct ThingOsWorld {
 }
 
 impl ThingOsWorld {
+    fn bdd_cache_dir() -> PathBuf { PathBuf::from("target").join("bdd").join("cache") }
+
     fn env_flag(name: &str) -> bool {
         matches!(
             std::env::var(name).ok().as_deref().map(str::to_ascii_lowercase).as_deref(),
@@ -59,6 +62,80 @@ impl ThingOsWorld {
             .join(format!("thing-os-bdd-{}-{}.iso", arch, safe_resolution))
     }
 
+    fn fetch_cache_marker_path(arch: &str) -> PathBuf {
+        Self::bdd_cache_dir().join(format!("fetch-{}.stamp", arch))
+    }
+
+    fn fetch_prerequisites(arch: &str) -> Vec<PathBuf> {
+        vec![
+            PathBuf::from("assets/fonts/unifont.hex"),
+            PathBuf::from("vendor/limine/limine"),
+            PathBuf::from(format!("vendor/ovmf/ovmf-code-{}.fd", arch)),
+            PathBuf::from(format!("vendor/ovmf/ovmf-vars-{}.fd", arch)),
+        ]
+    }
+
+    fn fetch_prerequisites_ready(arch: &str) -> bool {
+        Self::fetch_prerequisites(arch).iter().all(|p| Path::new(p).exists())
+    }
+
+    async fn ensure_fetch_prerequisites(
+        &self,
+        arch: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        static GLOBAL_FETCH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        let lock = GLOBAL_FETCH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+        let _guard = lock.lock().await;
+
+        let force_fetch = Self::env_flag("BDD_FORCE_FETCH");
+        let stamp_path = Self::fetch_cache_marker_path(arch);
+        let prerequisites_ready = Self::fetch_prerequisites_ready(arch);
+
+        if !force_fetch && prerequisites_ready {
+            if stamp_path.exists() {
+                eprintln!("[bdd] Reusing cached fetch assets for arch {arch}");
+                return Ok(());
+            }
+            if let Some(parent) = stamp_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&stamp_path, b"ready\n")?;
+            eprintln!("[bdd] Fetch prerequisites already available for arch {arch}");
+            return Ok(());
+        }
+
+        eprintln!("[bdd] Running `xtask fetch` for BDD prerequisites (arch={arch})...");
+        let output = std::process::Command::new("cargo")
+            .args(["run", "-p", "xtask", "--", "fetch"])
+            .output()?;
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "Failed to fetch BDD prerequisites for arch {}.\nstdout:\n{}\nstderr:\n{}",
+                arch, stdout, stderr
+            )
+            .into());
+        }
+
+        if !Self::fetch_prerequisites_ready(arch) {
+            return Err(format!(
+                "Fetch completed but BDD prerequisites are still missing for arch {}: {:?}",
+                arch,
+                Self::fetch_prerequisites(arch)
+            )
+            .into());
+        }
+
+        if let Some(parent) = stamp_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&stamp_path, b"ready\n")?;
+        eprintln!("[bdd] Cached fetch prerequisites for arch {arch}");
+        Ok(())
+    }
+
     /// Boot the OS in QEMU for the given architecture.
     /// Reuses a cached ISO for the architecture/resolution when available.
     pub async fn boot(&mut self, arch: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -72,6 +149,7 @@ impl ThingOsWorld {
 
         self.work_dir = std::env::temp_dir().join(format!("thingos-bdd-{}-{}", pid, nanos));
         std::fs::create_dir_all(&self.work_dir)?;
+        self.ensure_fetch_prerequisites(arch).await?;
 
         // Get resolution from environment (default 1920x1080 for BDD tests)
         let resolution =
