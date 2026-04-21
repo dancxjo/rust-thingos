@@ -131,6 +131,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
 
       - name: Cache patched vendor crates
         id: vendor-cache
@@ -211,3 +213,12 @@ jobs:
 
       - name: Run just behave
         run: just behave
+
+      - name: Upload BDD behavior reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-behavior-readmes
+          path: docs/behavior
+          if-no-files-found: warn
+          retention-days: 7
