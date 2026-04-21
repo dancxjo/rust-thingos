@@ -10,6 +10,8 @@ pub enum DeviceKind {
     Terminal = 7,
     /// PCM audio stream or control node under `/dev/audio/card<N>/`.
     Audio = 8,
+    /// Typed provider attributes (xattr-like metadata for VFS provider nodes).
+    Attr = 9,
 }
 
 #[repr(C)]

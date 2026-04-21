@@ -11,7 +11,11 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use abi::device::DeviceCall;
+use abi::attrs::{
+    ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrNameHeader,
+    AttrSetHeader, AttrType, AttrValueHeader,
+};
+use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
     BufferHandle, BufferId, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
     DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, PlaneCommit,
@@ -101,6 +105,13 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
 
     let call_payload = &payload[8 + core::mem::size_of::<DeviceCall>()..];
 
+    if call.kind == DeviceKind::Attr {
+        return attr_device_call(handle, call.op, call_payload);
+    }
+    if call.kind != DeviceKind::Display {
+        return ProviderResponse::err(Errno::ENOSYS);
+    }
+
     match call.op {
         DISPLAY_OP_GET_INFO => {
             let info = driver.get_info();
@@ -185,11 +196,64 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
     }
 }
 
+fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
+    if handle != HANDLE_CARD {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    match op {
+        ATTR_OP_GET => {
+            if payload.len() < core::mem::size_of::<AttrNameHeader>() {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let name_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+            if payload.len() < core::mem::size_of::<AttrNameHeader>() + name_len {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let name =
+                match core::str::from_utf8(&payload[core::mem::size_of::<AttrNameHeader>()..][..name_len])
+                {
+                    Ok(v) => v,
+                    Err(_) => return ProviderResponse::err(Errno::EINVAL),
+                };
+            let (value_type, value_bytes): (AttrType, &[u8]) = match name {
+                "driver.name" => (AttrType::Utf8, b"display_bootfb"),
+                "driver.class" => (AttrType::Utf8, b"display"),
+                _ => return ProviderResponse::err(Errno::ENOENT),
+            };
+            let mut out = Vec::with_capacity(core::mem::size_of::<AttrValueHeader>() + value_bytes.len());
+            out.push(value_type as u8);
+            out.push(0);
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&(value_bytes.len() as u32).to_le_bytes());
+            out.extend_from_slice(value_bytes);
+            ProviderResponse::ok_device_call(value_bytes.len() as u32, &out)
+        }
+        ATTR_OP_LIST => {
+            let mut out = Vec::new();
+            for (name, ty, value_len) in [
+                ("driver.name", AttrType::Utf8, 14u32),
+                ("driver.class", AttrType::Utf8, 7u32),
+            ] {
+                let header = AttrListEntryHeader {
+                    name_len: name.len() as u16,
+                    value_type: ty as u8,
+                    flags: 0,
+                    value_len,
+                };
+                out.extend_from_slice(&header.name_len.to_le_bytes());
+                out.push(header.value_type);
+                out.push(header.flags);
+                out.extend_from_slice(&header.value_len.to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+            }
+            ProviderResponse::ok_device_call(2, &out)
+        }
+        ATTR_OP_SET | ATTR_OP_REMOVE => ProviderResponse::err(Errno::EROFS),
+        _ => ProviderResponse::err(Errno::ENOSYS),
+    }
+}
+
 /// Build a DeviceCall OK response payload: `[ret_val: u32][out_data_len: u32][out_data...]`.
 fn ok_device_call(ret_val: u32, out_data: &[u8]) -> ProviderResponse {
-    let mut payload = Vec::with_capacity(8 + out_data.len());
-    payload.extend_from_slice(&ret_val.to_le_bytes());
-    payload.extend_from_slice(&(out_data.len() as u32).to_le_bytes());
-    payload.extend_from_slice(out_data);
-    ProviderResponse::ok_bytes(&payload)
+    ProviderResponse::ok_device_call(ret_val, out_data)
 }
