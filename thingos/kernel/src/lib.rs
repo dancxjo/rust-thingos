@@ -850,7 +850,7 @@ fn _irq_restore_wrapper<R: BootRuntime>(state: IrqState) {
 
 const STARTUP_PERIWINKLE_LAVENDER_COLOR: u32 = 0x00_D9_D9_FC;
 
-fn paint_bootfb_solid(fb: FramebufferInfo, color: u32) {
+fn paint_bootfb_gradient(fb: FramebufferInfo, end_color: u32) {
     if fb.width == 0 || fb.height == 0 || fb.pitch < 4 || fb.byte_len < (fb.pitch as u64) {
         return;
     }
@@ -865,9 +865,21 @@ fn paint_bootfb_solid(fb: FramebufferInfo, color: u32) {
         return;
     }
 
+    let end_r = (end_color >> 16) & 0xFF;
+    let end_g = (end_color >> 8) & 0xFF;
+    let end_b = end_color & 0xFF;
+
     unsafe {
         for y in 0..rows {
-            let row = core::slice::from_raw_parts_mut(ptr.add(y * stride_px), width.min(stride_px));
+            // Vertical gradient from black (0,0,0) to end_color
+            let r = (end_r * y as u32 / rows as u32) & 0xFF;
+            let g = (end_g * y as u32 / rows as u32) & 0xFF;
+            let b = (end_b * y as u32 / rows as u32) & 0xFF;
+            let color = (r << 16) | (g << 8) | b;
+
+            let row_ptr = ptr.add(y * stride_px);
+            let row_len = width.min(stride_px);
+            let row = core::slice::from_raw_parts_mut(row_ptr, row_len);
             for pixel in row.iter_mut() {
                 *pixel = color;
             }
@@ -1232,7 +1244,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
     // Keep a visible startup background without auto-activating the F12 terminal.
     if let Some(fb) = runtime.framebuffer() {
-        paint_bootfb_solid(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
+        paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
     }
 
     kinfo!("Entering scheduler loop.");
