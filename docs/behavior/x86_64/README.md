@@ -1,9 +1,9 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-20 20:43:59
+> Last run: 2026-04-20 21:03:15
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [HTTPS Fetch](https-fetch/README.md) | 0/1 | ❌ |
+| [VFS Extended Attributes](vfs-extended-attributes/README.md) | 0/1 | ❌ |

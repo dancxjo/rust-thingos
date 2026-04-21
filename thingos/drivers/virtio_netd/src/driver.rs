@@ -321,7 +321,7 @@ impl VirtioNetDriver {
         for i in 0..1000 {
             if let Some(txq) = self.device.queue_mut(1) {
                 if txq.poll_used().is_some() {
-                    stem::info!("VirtIO-NET: TX complete after {} iterations", i);
+                    stem::debug!("VirtIO-NET: TX complete after {} iterations", i);
                     return Ok(());
                 }
             }
