@@ -279,6 +279,35 @@ impl ArchRuntime for AArch64Runtime {
         unsafe { task::switch(from, to) }
     }
 
+    unsafe fn switch_with_tls(
+        &self,
+        from: &mut Self::Context,
+        to: &Self::Context,
+        to_tid: u64,
+        from_user_fs_base: *mut u64,
+        to_user_fs_base: u64,
+    ) {
+        unsafe {
+            *from_user_fs_base = self.get_user_tls_base();
+            self.set_user_tls_base(to_user_fs_base);
+            task::switch(from, to);
+        }
+    }
+
+    fn get_user_tls_base(&self) -> u64 {
+        let base: u64;
+        unsafe {
+            asm!("mrs {}, tpidr_el0", out(reg) base, options(nomem, nostack));
+        }
+        base
+    }
+
+    fn set_user_tls_base(&self, base: u64) {
+        unsafe {
+            asm!("msr tpidr_el0, {}", in(reg) base, options(nomem, nostack));
+        }
+    }
+
     unsafe fn enter_user(&self, entry: UserEntry) -> ! {
         // Debug: Read current TTBR0
         let ttbr0: u64;

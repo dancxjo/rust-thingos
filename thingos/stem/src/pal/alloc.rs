@@ -11,7 +11,7 @@ use crate::utils::align_up;
 use crate::vm::vm_map;
 
 const PAGE_SIZE: usize = 4096;
-const HEAP_BASE: usize = 0x2000_0000;
+const HEAP_BASE: usize = 0x0100_0000;
 const HEAP_GROW_MIN: usize = 256 * 1024;
 
 /// Heap state tracking.
@@ -35,12 +35,13 @@ pub fn grow_heap(min_bytes: usize) -> Result<(), Errno> {
     let mut state = HEAP_STATE.lock();
     let grow_bytes = align_up(core::cmp::max(min_bytes, HEAP_GROW_MIN), PAGE_SIZE);
     let map_addr = state.base + state.size;
+    let flags = VmMapFlags::FIXED | VmMapFlags::PRIVATE;
 
     let req = VmMapReq {
         addr_hint: map_addr,
         len: grow_bytes,
         prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
-        flags: VmMapFlags::FIXED | VmMapFlags::PRIVATE,
+        flags,
         backing: VmBacking::Anonymous { zeroed: true },
     };
     let resp = vm_map(&req)?;
