@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 use abi::attrs::{
     ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrNameHeader,
-    AttrSetHeader, AttrType, AttrValueHeader,
+    AttrType, AttrValueHeader,
 };
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
@@ -121,7 +121,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
                     core::mem::size_of::<abi::display::DisplayInfo>(),
                 )
             };
-            ok_device_call(0, out_bytes)
+            ProviderResponse::ok_device_call(0, out_bytes)
         }
         DISPLAY_OP_IMPORT_BUFFER => {
             if call_payload.len() < core::mem::size_of::<BufferHandle>() {
@@ -130,7 +130,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             let buffer_handle: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
             match driver.import_buffer(&buffer_handle) {
-                Ok(id) => ok_device_call(id.0, &[]),
+                Ok(id) => ProviderResponse::ok_device_call(id.0, &[]),
                 Err(e) => ProviderResponse::err(e),
             }
         }
@@ -140,7 +140,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             }
             let id = BufferId(u32::from_le_bytes(call_payload[..4].try_into().unwrap()));
             match driver.release_buffer(id) {
-                Ok(()) => ok_device_call(0, &[]),
+                Ok(()) => ProviderResponse::ok_device_call(0, &[]),
                 Err(e) => ProviderResponse::err(e),
             }
         }
@@ -188,7 +188,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             };
 
             match driver.commit(req_ref) {
-                Ok(()) => ok_device_call(0, &[]),
+                Ok(()) => ProviderResponse::ok_device_call(0, &[]),
                 Err(e) => ProviderResponse::err(e),
             }
         }
@@ -251,9 +251,4 @@ fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
         ATTR_OP_SET | ATTR_OP_REMOVE => ProviderResponse::err(Errno::EROFS),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
-}
-
-/// Build a DeviceCall OK response payload: `[ret_val: u32][out_data_len: u32][out_data...]`.
-fn ok_device_call(ret_val: u32, out_data: &[u8]) -> ProviderResponse {
-    ProviderResponse::ok_device_call(ret_val, out_data)
 }

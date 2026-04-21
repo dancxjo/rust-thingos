@@ -235,7 +235,7 @@ fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
                 Err(_) => return ProviderResponse::err(Errno::EINVAL),
             };
             let (ty, value): (AttrType, &[u8]) = match name {
-                "provider.demo" => (AttrType::Bool, &[1u8]),
+                "provider.is_demo" => (AttrType::Bool, &[1u8]),
                 "provider.name" => (AttrType::Utf8, b"ipc_provider_demo"),
                 _ => return ProviderResponse::err(Errno::ENOENT),
             };
@@ -248,7 +248,7 @@ fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
         ATTR_OP_LIST => {
             let mut out = alloc::vec![];
             for (name, ty, value_len) in [
-                ("provider.demo", AttrType::Bool, 1u32),
+                ("provider.is_demo", AttrType::Bool, 1u32),
                 ("provider.name", AttrType::Utf8, 17u32),
             ] {
                 let hdr = AttrListEntryHeader {

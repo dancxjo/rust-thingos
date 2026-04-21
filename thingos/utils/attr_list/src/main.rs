@@ -55,7 +55,8 @@ fn main(_arg: usize) -> ! {
         }
     };
     let mut off = 0usize;
-    while off + 8 <= buf.len() {
+    let mut seen = 0usize;
+    while seen < count && off + 8 <= buf.len() {
         let name_len = u16::from_le_bytes([buf[off], buf[off + 1]]) as usize;
         let ty = AttrType::from_u8(buf[off + 2]);
         let value_len = u32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
@@ -77,6 +78,7 @@ fn main(_arg: usize) -> ! {
             ty.unwrap_or(AttrType::Bytes),
             value_len
         ));
+        seen += 1;
     }
     print(&alloc::format!("count={}\n", count));
     let _ = vfs_close(fd);

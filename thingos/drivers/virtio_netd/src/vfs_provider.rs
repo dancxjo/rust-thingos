@@ -221,7 +221,7 @@ fn attr_set(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
             if value_type != AttrType::U64 as u8 || value.len() != 8 {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let mtu = u64::from_le_bytes(value.try_into().unwrap_or([0; 8])) as u32;
+            let mtu = u64::from_le_bytes(value.try_into().unwrap()) as u32;
             state.mtu = mtu;
             ProviderResponse::ok_device_call(value.len() as u32, &[])
         }

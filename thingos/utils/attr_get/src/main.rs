@@ -60,11 +60,11 @@ fn main(_arg: usize) -> ! {
                     print(&alloc::format!("value={}\n", if n > 0 && buf[0] != 0 { "true" } else { "false" }));
                 }
                 AttrType::U64 if n >= 8 => {
-                    let v = u64::from_le_bytes(buf[..8].try_into().unwrap_or([0; 8]));
+                    let v = u64::from_le_bytes(buf[..8].try_into().unwrap());
                     print(&alloc::format!("value={}\n", v));
                 }
                 AttrType::I64 if n >= 8 => {
-                    let v = i64::from_le_bytes(buf[..8].try_into().unwrap_or([0; 8]));
+                    let v = i64::from_le_bytes(buf[..8].try_into().unwrap());
                     print(&alloc::format!("value={}\n", v));
                 }
                 _ => {}
