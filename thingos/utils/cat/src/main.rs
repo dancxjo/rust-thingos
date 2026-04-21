@@ -98,8 +98,10 @@ fn main(_arg: usize) -> ! {
                 continue;
             }
 
+            stem::info!("cat: opening '{}'", path);
             match vfs_open(path, vfs_flags::O_RDONLY) {
                 Ok(fd) => {
+                    stem::info!("cat: opened '{}' fd={}", path, fd);
                     if stream(fd, 1, &mut buf).is_err() {
                         print_error(&alloc::format!("error reading {}", path));
                     }

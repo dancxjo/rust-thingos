@@ -46,7 +46,7 @@ fn main(_arg: usize) -> ! {
         }
     };
     let mut buf = [0u8; 8192];
-    let count = match vfs_attr_list(fd, &mut buf) {
+    let total_bytes = match vfs_attr_list(fd, &mut buf) {
         Ok(v) => v,
         Err(e) => {
             print(&alloc::format!("attr_list: failed: {:?}\n", e));
@@ -57,7 +57,7 @@ fn main(_arg: usize) -> ! {
     let mut off = 0usize;
     let mut seen = 0usize;
     let header_len = core::mem::size_of::<AttrListEntryHeader>();
-    while seen < count && off + header_len <= buf.len() {
+    while off < total_bytes && off + header_len <= buf.len() {
         let name_len = u16::from_le_bytes([buf[off], buf[off + 1]]) as usize;
         let raw_ty = buf[off + 2];
         let ty = AttrType::from_u8(raw_ty);
@@ -81,7 +81,7 @@ fn main(_arg: usize) -> ! {
         }
         seen += 1;
     }
-    print(&alloc::format!("count={}\n", count));
+    print(&alloc::format!("count={}\n", seen));
     let _ = vfs_close(fd);
     exit(0)
 }

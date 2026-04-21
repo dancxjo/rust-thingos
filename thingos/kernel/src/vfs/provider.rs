@@ -257,6 +257,13 @@ unsafe impl Send for ProviderNode {}
 unsafe impl Sync for ProviderNode {}
 
 impl VfsNode for ProviderNode {
+    fn close(&self) -> SysResult<()> {
+        let mut payload = [0u8; 8];
+        payload[..8].copy_from_slice(&self.handle.to_le_bytes());
+        self.rpc.rpc(VfsRpcOp::Close, &payload)?;
+        Ok(())
+    }
+
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let len = buf.len().min(abi::vfs_rpc::VFS_RPC_MAX_DATA) as u32;
         let mut payload = [0u8; 20];

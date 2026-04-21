@@ -107,9 +107,6 @@ impl Supervisor {
         stem::debug!("SPROUT: Spawning netd...");
         self.spawn_netd();
 
-        // Stage 4: Mount httpsd (HTTPS VFS provider).
-        stem::debug!("SPROUT: Spawning httpsd...");
-        self.spawn_httpsd();
 
         // Stage 5: Mount iso9660d (ISO9660 VFS provider).
         stem::debug!("SPROUT: Spawning iso9660d...");
@@ -224,22 +221,6 @@ impl Supervisor {
         }
     }
 
-    fn spawn_httpsd(&mut self) {
-        match stem::syscall::spawn_process("/bin/httpsd", 0) {
-            Ok(pid) => {
-                stem::debug!("SPROUT: Spawned httpsd (PID={})", pid);
-                let mut tasks = self.tasks.lock();
-                tasks.push(ManagedTask {
-                    name: "httpsd".to_string(),
-                    kind: TaskKind::Service("svc.httpsd".to_string()),
-                    module_path: "/bin/httpsd".to_string(),
-                    pid: Some(pid),
-                    ..Default::default()
-                });
-            }
-            Err(e) => warn!("SPROUT: Failed to spawn httpsd: {:?}", e),
-        }
-    }
 
     fn spawn_iso9660d(&mut self) {
         match stem::syscall::spawn_process("/bin/iso9660d", 0) {

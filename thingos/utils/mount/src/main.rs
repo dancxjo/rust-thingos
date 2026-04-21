@@ -51,26 +51,44 @@ fn main(_arg: usize) -> ! {
         exit(status);
     }
 
-    if args.len() != 3 || args[0] != "-t" {
+    if (args.len() != 3 && args.len() != 4) || args[0] != "-t" {
         print_usage();
         exit(2);
     }
 
-    let fs_type = args[1].as_str();
-    let target = args[2].as_str();
-    match mount_one(fs_type, target) {
-        Ok(()) => {
-            exit(0);
+    if args.len() == 4 {
+        let fs_type = args[1].as_str();
+        let device = args[2].as_str();
+        let target = args[3].as_str();
+        match mount_one(fs_type, device, target) {
+            Ok(()) => {
+                exit(0);
+            }
+            Err(e) => {
+                err(&alloc::format!(
+                    "mount: failed to mount {} (device {}) on {}: {:?}\n",
+                    fs_type, device, target, e
+                ));
+                exit(1);
+            }
         }
-        Err(e) => {
-            err(&alloc::format!("mount: failed to mount {} on {}: {:?}\n", fs_type, target, e));
-            exit(1);
+    } else {
+        let fs_type = args[1].as_str();
+        let target = args[2].as_str();
+        match mount_one(fs_type, "none", target) {
+            Ok(()) => {
+                exit(0);
+            }
+            Err(e) => {
+                err(&alloc::format!("mount: failed to mount {} on {}: {:?}\n", fs_type, target, e));
+                exit(1);
+            }
         }
     }
 }
 
 fn print_usage() {
-    err("usage: mount -t <type> <target>\n       mount -a\n");
+    err("usage: mount -t <type> [device] <target>\n       mount -a\n");
 }
 
 fn mount_all_from_fstab(path: &str) -> i32 {
@@ -90,19 +108,20 @@ fn mount_all_from_fstab(path: &str) -> i32 {
             continue;
         }
         let fields: Vec<&str> = line.split_whitespace().collect();
-        let (fs_type, target) = if fields.len() >= 3 {
-            (fields[2], fields[1])
+        let (device, target, fs_type) = if fields.len() >= 3 {
+            (fields[0], fields[1], fields[2])
         } else if fields.len() >= 2 {
-            (fields[0], fields[1])
+            ("none", fields[1], fields[0])
         } else {
             continue;
         };
 
-        if let Err(e) = mount_one(fs_type, target) {
+        if let Err(e) = mount_one(fs_type, device, target) {
             had_error = true;
             err(&alloc::format!(
-                "mount: fstab entry failed for type={} target={}: {:?}\n",
+                "mount: fstab entry failed for type={} device={} target={}: {:?}\n",
                 fs_type,
+                device,
                 target,
                 e
             ));
@@ -112,13 +131,13 @@ fn mount_all_from_fstab(path: &str) -> i32 {
     if had_error { 1 } else { 0 }
 }
 
-fn mount_one(fs_type: &str, target: &str) -> Result<(), Errno> {
+fn mount_one(fs_type: &str, device: &str, target: &str) -> Result<(), Errno> {
     let provider_path = resolve_provider_binary(fs_type).ok_or(Errno::ENOENT)?;
-    let argv = [provider_path.as_bytes(), target.as_bytes()];
+    let argv = [provider_path.as_bytes(), device.as_bytes(), target.as_bytes()];
     let _resp = spawn_driver_ex(&provider_path, &argv, &BTreeMap::new(), 0, &[], None)?;
 
     wait_for_mount(target, MOUNT_VERIFICATION_ATTEMPTS, MOUNT_VERIFICATION_DELAY_MS)?;
-    out(&alloc::format!("mounted type={} target={}\n", fs_type, target));
+    out(&alloc::format!("mounted type={} device={} target={}\n", fs_type, device, target));
     Ok(())
 }
 

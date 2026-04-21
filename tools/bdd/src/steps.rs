@@ -1356,7 +1356,7 @@ async fn when_press_key(world: &mut ThingOsWorld) {
 async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // Wait for the prompt character. We use a delay after this to ensure
     // that any trailing escape sequences (like showing the cursor) have finished.
-    let found = world.wait_for_serial("> ", 60.0).await;
+    let found = world.wait_for_serial("] / > ", 60.0).await;
     if !found {
         return Err(StepError("Timed out waiting for shell prompt".to_string()));
     }

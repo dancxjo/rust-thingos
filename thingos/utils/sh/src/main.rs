@@ -1083,6 +1083,7 @@ fn spawn_job(
     }
 
     for (idx, cmd) in cmds.iter().enumerate() {
+        stem::info!("sh: spawning job cmd='{}'", cmd.program);
         let path = if cmd.program.starts_with('/') {
             String::from(cmd.program)
         } else {

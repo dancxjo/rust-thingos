@@ -156,11 +156,19 @@ struct HttpsProvider {
     next_handle: u64,
     handles: BTreeMap<u64, HttpsHandle>,
     shared: Arc<SharedState>,
+    fixed_host: Option<String>,
+    mount_point: String,
 }
 
 impl HttpsProvider {
-    fn new(shared: Arc<SharedState>) -> Self {
-        Self { next_handle: ROOT_HANDLE + 1, handles: BTreeMap::new(), shared }
+    fn new(shared: Arc<SharedState>, fixed_host: Option<String>, mount_point: String) -> Self {
+        Self {
+            next_handle: ROOT_HANDLE + 1,
+            handles: BTreeMap::new(),
+            shared,
+            fixed_host,
+            mount_point,
+        }
     }
 
     fn allocate_node(&mut self, host: &str, path: &str, response: Option<Response>) -> u64 {
@@ -180,27 +188,51 @@ impl HttpsProvider {
     }
 
     fn resolve_path(&mut self, path: &str) -> Result<u64, Errno> {
+        info!("httpsd: resolve_path path='{}'", path);
         let clean = path.trim_matches('/');
         if clean.is_empty() {
             debug!("httpsd: lookup '{}' -> root", path);
             return Ok(ROOT_HANDLE);
         }
 
-        let mut parts = clean.split('/');
-        let host = parts.next().ok_or(Errno::ENOENT)?;
-        if !Self::is_valid_host_label(host) {
-            debug!("httpsd: lookup '{}' rejected: invalid host '{}'", path, host);
-            return Err(Errno::ENOENT);
+        // Strip the virtual /@index suffix.  `/@index` is an identity
+        // operation: it resolves to "the document at this URL path itself",
+        // which avoids the UNIX file-vs-directory ambiguity.
+        let clean = if clean == "@index" {
+            ""
+        } else if let Some(prefix) = clean.strip_suffix("/@index") {
+            prefix
+        } else {
+            clean
+        };
+
+        if clean.is_empty() {
+            debug!("httpsd: lookup '{}' -> root (via @index)", path);
+            return Ok(ROOT_HANDLE);
         }
 
-        let rest = parts.collect::<Vec<_>>().join("/");
-        let node = HttpsNode::new(host, &rest);
+        let (host_owned, rest_str): (String, String) = if let Some(fixed) = &self.fixed_host {
+            (fixed.clone(), clean.to_string())
+        } else {
+            let mut parts = clean.split('/');
+            let host = parts.next().ok_or(Errno::ENOENT)?;
+            if !Self::is_valid_host_label(host) {
+                debug!("httpsd: lookup '{}' rejected: invalid host '{}'", path, host);
+                return Err(Errno::ENOENT);
+            }
+            let rest = parts.collect::<Vec<_>>().join("/");
+            (host.to_string(), rest)
+        };
+        let host = &host_owned;
+
         // Keep lookup side-effect free: actual network I/O is deferred to read.
+        let node = HttpsNode::new(host, &rest_str);
         debug!("httpsd: lookup '{}' -> staging {}", path, node.url());
-        let handle = self.allocate_node(host, &rest, None);
-        debug!("httpsd: lookup '{}' -> handle {}", path, handle);
+        let handle = self.allocate_node(host, &rest_str, None);
+        info!("httpsd: lookup '{}' -> handle {}", path, handle);
         Ok(handle)
     }
+
 
     fn is_valid_host_label(host: &str) -> bool {
         host.contains('.')
@@ -500,26 +532,41 @@ impl HttpsProvider {
         let target = entry.redirect_target.as_ref().ok_or(Errno::EINVAL)?;
         // Translate the absolute `https://host/path` target into a VFS path
         // under our `/https` mount so the kernel can follow the link in-tree.
-        Ok(url_to_vfs_path(target))
+        Ok(self.url_to_vfs_path(target))
     }
 }
 
 /// Convert an absolute `https://host/path` URL into a VFS path under the
-/// `/https` mount.  HTTP URLs are coerced to HTTPS because `httpsd` only
+/// mount.  HTTP URLs are coerced to HTTPS because `httpsd` only
 /// serves HTTPS.
-fn url_to_vfs_path(url: &str) -> String {
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
-    if rest.is_empty() {
-        return MOUNT_POINT.to_string();
-    }
-    let (host, path) = match rest.find('/') {
-        Some(idx) => (&rest[..idx], &rest[idx + 1..]),
-        None => (rest, ""),
-    };
-    if path.is_empty() {
-        alloc::format!("{}/{}", MOUNT_POINT, host)
-    } else {
-        alloc::format!("{}/{}/{}", MOUNT_POINT, host, path)
+impl HttpsProvider {
+    fn url_to_vfs_path(&self, url: &str) -> String {
+        let rest =
+            url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
+        if rest.is_empty() {
+            return self.mount_point.clone();
+        }
+        let (host, path) = match rest.find('/') {
+            Some(idx) => (&rest[..idx], &rest[idx + 1..]),
+            None => (rest, ""),
+        };
+
+        if let Some(fixed) = &self.fixed_host {
+            if host == fixed {
+                if path.is_empty() {
+                    return self.mount_point.clone();
+                } else {
+                    return alloc::format!("{}/{}", self.mount_point, path);
+                }
+            }
+        }
+
+        // Fallback for cross-domain redirects or discovery-mode paths.
+        if path.is_empty() {
+            alloc::format!("{}/{}", MOUNT_POINT, host)
+        } else {
+            alloc::format!("{}/{}/{}", MOUNT_POINT, host, path)
+        }
     }
 }
 
@@ -656,8 +703,8 @@ impl CacheFsProvider {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    let mount_point = mount_point_from_args();
-    run_provider(&mount_point)
+    let (fixed_host, mount_point) = parse_args();
+    run_provider(fixed_host, &mount_point)
 }
 
 #[used]
@@ -673,7 +720,7 @@ pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
 
 #[no_mangle]
 pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
-    let mount_point = mount_point_from_args();
+    let (_fixed_host, mount_point) = parse_args();
     match vfs_umount(&mount_point) {
         Ok(()) => {}
         Err(_) => return 1,
@@ -683,18 +730,18 @@ pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     0
 }
 
-fn run_provider(mount_point: &str) -> ! {
+fn run_provider(fixed_host: Option<String>, mount_point: &str) -> ! {
     let shared = Arc::new(SharedState::new());
 
     // Spawn the cache-mount loop first; a failure to set up the secondary
-    // mount should be logged but must not prevent the primary /https mount
-    // from running (operators can still use /https + xattrs).
+    // mount should be logged but must not prevent the primary mount
+    // from running (operators can still use xattrs).
     match spawn_cache_mount(shared.clone()) {
         Ok(()) => debug!("httpsd: cache mount started at {}", CACHE_MOUNT_POINT),
         Err(e) => warn!("httpsd: failed to start cache mount at {}: {:?}", CACHE_MOUNT_POINT, e),
     }
 
-    run_https_mount(mount_point, shared)
+    run_https_mount(fixed_host, mount_point, shared)
 }
 
 fn spawn_cache_mount(shared: Arc<SharedState>) -> Result<(), Errno> {
@@ -721,7 +768,7 @@ fn spawn_cache_mount(shared: Arc<SharedState>) -> Result<(), Errno> {
     Ok(())
 }
 
-fn run_https_mount(mount_point: &str, shared: Arc<SharedState>) -> ! {
+fn run_https_mount(fixed_host: Option<String>, mount_point: &str, shared: Arc<SharedState>) -> ! {
     let (req_write, req_read) = match stem::syscall::port::port_create(HTTPS_PORT_CAPACITY_BYTES) {
         Ok(pair) => pair,
         Err(e) => {
@@ -738,8 +785,9 @@ fn run_https_mount(mount_point: &str, shared: Arc<SharedState>) -> ! {
         }
     }
 
-    let mut provider = HttpsProvider::new(shared);
+    let mut provider = HttpsProvider::new(shared, fixed_host, mount_point.to_string());
     let mut lp = ProviderLoop::new(req_read);
+    info!("httpsd: entering main RPC loop for {}", mount_point);
     loop {
         let req = match lp.next_request() {
             Ok(r) => r,
@@ -752,6 +800,7 @@ fn run_https_mount(mount_point: &str, shared: Arc<SharedState>) -> ! {
         send_response(&lp, req.resp_port, resp);
     }
 
+    info!("httpsd: main RPC loop ended - exiting");
     stem::syscall::exit(0);
 }
 
@@ -771,30 +820,41 @@ fn send_response(lp: &ProviderLoop, resp_port: u32, resp: ProviderResponse) {
     }
 }
 
-fn mount_point_from_args() -> String {
+fn parse_args() -> (Option<String>, String) {
     let len = match argv_get(&mut []) {
         Ok(l) if l > 0 => l,
-        _ => return MOUNT_POINT.to_string(),
+        _ => return (None, MOUNT_POINT.to_string()),
     };
     let mut buf = alloc::vec![0u8; len];
     if argv_get(&mut buf).is_err() {
-        return MOUNT_POINT.to_string();
+        return (None, MOUNT_POINT.to_string());
     }
     let args = stem::utils::parse_argv(&buf);
-    if args.len() >= 2 {
-        if let Ok(path) = core::str::from_utf8(args[1]) {
-            if !path.is_empty() {
-                return path.to_string();
-            }
+    let mut args_str = args.iter().filter_map(|b| core::str::from_utf8(b).ok());
+
+    let _prog = args_str.next();
+    let arg1 = args_str.next();
+    let arg2 = args_str.next();
+
+    match (arg1, arg2) {
+        (Some(a1), Some(a2)) => {
+            // mount -t https <device> <target>
+            // argv[1] is device, argv[2] is target
+            let device = if a1 == "none" { None } else { Some(a1.to_string()) };
+            (device, a2.to_string())
         }
+        (Some(a1), None) => {
+            // mount -t https <target> (legacy or fstab without device)
+            (None, a1.to_string())
+        }
+        _ => (None, MOUNT_POINT.to_string()),
     }
-    MOUNT_POINT.to_string()
 }
 
 // ── RPC dispatch — /https mount ────────────────────────────────────────────
 
 fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
-    debug!("httpsd: rpc {:?} payload_len={}", op, payload.len());
+    info!("httpsd: RPC op={:?} payload_len={}", op, payload.len());
     match op {
         VfsRpcOp::Lookup => dispatch_lookup(provider, payload),
         VfsRpcOp::Read => dispatch_read(provider, payload),
@@ -822,6 +882,7 @@ fn dispatch_lookup(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderResp
     let Ok(path) = core::str::from_utf8(&payload[4..4 + path_len]) else {
         return ProviderResponse::err(Errno::EINVAL);
     };
+    info!("httpsd: dispatch_lookup path='{}'", path);
     match provider.resolve_path(path) {
         Ok(handle) => ProviderResponse::ok_u64(handle),
         Err(e) => ProviderResponse::err(e),
@@ -876,6 +937,7 @@ fn dispatch_attr_list(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderR
         return ProviderResponse::err(Errno::EINVAL);
     }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
+    info!("httpsd: dispatch_attr_list handle={}", handle);
     let entry = match provider.ensure_cached_entry(handle) {
         Ok(e) => e,
         Err(e) => return ProviderResponse::err(e),
@@ -912,6 +974,7 @@ fn dispatch_readlink(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderRe
         return ProviderResponse::err(Errno::EINVAL);
     }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
+    info!("httpsd: dispatch_readlink handle={}", handle);
     // Readlink is a cheap cache-only lookup: we explicitly do NOT trigger
     // an upstream fetch here, because the kernel calls `readlink()` on
     // every path component during resolution and each fetch would be an
@@ -1025,7 +1088,7 @@ mod tests {
     extern crate std;
 
     fn new_provider() -> HttpsProvider {
-        HttpsProvider::new(Arc::new(SharedState::new()))
+        HttpsProvider::new(Arc::new(SharedState::new()), None, MOUNT_POINT.to_string())
     }
 
     #[test]
@@ -1117,6 +1180,25 @@ mod tests {
         // S_IFLNK = 0o120000
         assert_eq!(mode & 0o170_000, 0o120_000);
         assert_eq!(provider.redirect_target_for(handle).unwrap(), "/https/b.example/new");
+    }
+
+    #[test]
+    fn fixed_host_resolution_uses_direct_path() {
+        let shared = Arc::new(SharedState::new());
+        let mut p = HttpsProvider::new(shared, Some("example.com".into()), "/https/ex".into());
+        let handle = p.resolve_path("/index.html").expect("resolve succeeds");
+        let state = p.handles.get(&handle).unwrap();
+        assert_eq!(state.node.host, "example.com");
+        assert_eq!(state.node.path, "index.html");
+        assert_eq!(state.node.url(), "https://example.com/index.html");
+    }
+
+    #[test]
+    fn fixed_host_url_translation_uses_mount_point() {
+        let shared = Arc::new(SharedState::new());
+        let p = HttpsProvider::new(shared, Some("example.com".into()), "/https/ex".into());
+        assert_eq!(p.url_to_vfs_path("https://example.com/foo"), "/https/ex/foo");
+        assert_eq!(p.url_to_vfs_path("https://other.com/bar"), "/https/other.com/bar");
     }
 
     #[test]
