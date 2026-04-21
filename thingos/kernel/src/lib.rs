@@ -51,6 +51,60 @@ fn boot_trace<R: BootRuntime>(runtime: &R, msg: &[u8]) {
     }
 }
 
+fn parse_loglevel_value(raw: &str) -> Option<u8> {
+    let value = raw.trim_matches('"').trim();
+    if let Ok(level) = value.parse::<u8>() {
+        return match level {
+            0..=5 => Some(level),
+            _ => None,
+        };
+    }
+
+    if value.eq_ignore_ascii_case("off") {
+        Some(0)
+    } else if value.eq_ignore_ascii_case("error") || value.eq_ignore_ascii_case("err") {
+        Some(1)
+    } else if value.eq_ignore_ascii_case("warn") || value.eq_ignore_ascii_case("warning") {
+        Some(2)
+    } else if value.eq_ignore_ascii_case("info") {
+        Some(3)
+    } else if value.eq_ignore_ascii_case("debug") {
+        Some(4)
+    } else if value.eq_ignore_ascii_case("trace") {
+        Some(5)
+    } else {
+        None
+    }
+}
+
+fn parse_cmdline_loglevel(cmdline: &str) -> Option<u8> {
+    let mut parsed = None;
+    let mut expect_value = false;
+
+    for token in cmdline.split_ascii_whitespace() {
+        if expect_value {
+            if let Some(level) = parse_loglevel_value(token) {
+                parsed = Some(level);
+            }
+            expect_value = false;
+            continue;
+        }
+
+        if let Some(value) = token.strip_prefix("loglevel=") {
+            if let Some(level) = parse_loglevel_value(value) {
+                parsed = Some(level);
+            }
+            continue;
+        }
+
+        if token.eq_ignore_ascii_case("loglevel") {
+            expect_value = true;
+        }
+    }
+
+    parsed
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
     // Decode x86_64 page fault error code bits
@@ -899,6 +953,10 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     init_runtime(runtime);
     boot_trace(runtime, b"[kernel:start] init_runtime ok\r\n");
 
+    if let Some(level) = parse_cmdline_loglevel(runtime.get_kernel_cmdline()) {
+        crate::logging::set_log_level(level);
+    }
+
     unsafe { crate::logging::init(runtime) };
     boot_trace(runtime, b"[kernel:start] logging init ok\r\n");
 
@@ -1470,5 +1528,39 @@ pub fn scan_pci() {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cmdline_loglevel_tests {
+    use super::parse_cmdline_loglevel;
+
+    #[test]
+    fn parses_numeric_loglevel() {
+        assert_eq!(parse_cmdline_loglevel("foo=bar loglevel=5"), Some(5));
+        assert_eq!(parse_cmdline_loglevel("loglevel=0"), Some(0));
+    }
+
+    #[test]
+    fn parses_named_loglevel() {
+        assert_eq!(parse_cmdline_loglevel("loglevel=trace"), Some(5));
+        assert_eq!(parse_cmdline_loglevel("loglevel=warn"), Some(2));
+        assert_eq!(parse_cmdline_loglevel("loglevel=ERROR"), Some(1));
+    }
+
+    #[test]
+    fn parses_space_separated_form() {
+        assert_eq!(parse_cmdline_loglevel("display=bootfb loglevel debug"), Some(4));
+    }
+
+    #[test]
+    fn ignores_invalid_values() {
+        assert_eq!(parse_cmdline_loglevel("loglevel=9"), None);
+        assert_eq!(parse_cmdline_loglevel("loglevel=verbose"), None);
+    }
+
+    #[test]
+    fn last_valid_occurrence_wins() {
+        assert_eq!(parse_cmdline_loglevel("loglevel=2 loglevel=trace"), Some(5));
     }
 }
