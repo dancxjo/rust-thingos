@@ -7,8 +7,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
-use kernel::kinfo;
 use kernel::kdebug;
+use kernel::kinfo;
 
 pub const IRQ_TIMER_VECTOR: u8 = 0x20;
 pub const IRQ_PAUSE_DUMP_VECTOR: u8 = 0x31;
@@ -1295,7 +1295,9 @@ pub extern "C" fn rust_pf_handler(frame: &InterruptStackFrame) {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
     }
 
-    if frame.cs & 3 == 3 {
+    // Any non-zero CPL is less-privileged than the kernel and should be
+    // handled via the userspace exception path.
+    if frame.cs & 3 != 0 {
         unsafe {
             unsafe extern "C" {
                 fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64);
@@ -1314,7 +1316,7 @@ pub extern "C" fn rust_pf_handler(frame: &InterruptStackFrame) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_gp_handler(frame: &InterruptStackFrame) -> ! {
-    if frame.cs & 3 == 3 {
+    if frame.cs & 3 != 0 {
         unsafe {
             unsafe extern "C" {
                 fn kernel_handle_exception(rip: u64, error_code: u64, rsp: u64, cs: u64, kind: u64);
@@ -1334,7 +1336,7 @@ pub extern "C" fn rust_gp_handler(frame: &InterruptStackFrame) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_invalid_opcode_handler(frame: &InterruptStackFrame) -> ! {
-    if frame.cs & 3 == 3 {
+    if frame.cs & 3 != 0 {
         // Diagnostic: Print the bytes at the faulting RIP
         unsafe {
             let rip = frame.rip as *const u8;
@@ -1362,7 +1364,7 @@ pub extern "C" fn rust_invalid_opcode_handler(frame: &InterruptStackFrame) -> ! 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_div0_handler(frame: &InterruptStackFrame) -> ! {
-    if frame.cs & 3 == 3 {
+    if frame.cs & 3 != 0 {
         unsafe {
             unsafe extern "C" {
                 fn kernel_handle_exception(rip: u64, error_code: u64, rsp: u64, cs: u64, kind: u64);
