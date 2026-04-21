@@ -32,7 +32,7 @@ use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_umount, vfs_watch_path};
 use stem::syscall::{argv_get, exit};
-use stem::{debug, warn};
+use stem::{debug, info, warn};
 use vfs_device::VfsNicDevice;
 use vfs_provider::NetVfsProvider;
 
@@ -147,9 +147,9 @@ fn main(arg: usize) -> ! {
         exit(0);
     }
 
-    debug!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
+    info!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
 
-    debug!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
+    info!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
     let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
         open_nic_device();
     let mtu = iface_mtu as usize;
@@ -208,7 +208,7 @@ fn main(arg: usize) -> ! {
         dhcp_config.gateway,
         dhcp_config.dns,
     );
-    debug!("NETD: Network ready — entering VFS service loop");
+    info!("NETD: Network ready — entering VFS service loop");
 
     let mut socket_api = SocketApi::new();
     let mut sockets_storage: [SocketStorage; 256] = [SocketStorage::EMPTY; 256];

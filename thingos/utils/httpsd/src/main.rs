@@ -16,7 +16,7 @@ use http::{HttpClient, Response};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use stem::syscall::argv_get;
 use stem::syscall::vfs::{vfs_mount, vfs_umount};
-use stem::{debug, trace, warn};
+use stem::{debug, info, trace, warn};
 
 const MOUNT_POINT: &str = "/https";
 const ROOT_HANDLE: u64 = 1;
@@ -174,7 +174,7 @@ impl HttpsProvider {
             return Err(Errno::EBADF);
         };
 
-        debug!(
+        info!(
             "httpsd: read handle={} url={} offset={} len={} cached={} start={} eof={}",
             handle,
             state.node.url(),
@@ -186,7 +186,7 @@ impl HttpsProvider {
         );
 
         if state.response.is_none() && !state.eof {
-            debug!("httpsd: opening upstream stream for handle={} {}", handle, state.node.url());
+            info!("httpsd: opening upstream stream for handle={} {}", handle, state.node.url());
             state.response = Some(HttpClient::get(&state.node.url()).map_err(|err| {
                 warn!(
                     "httpsd: upstream open failed for handle={} {}: {}",
@@ -235,7 +235,7 @@ impl HttpsProvider {
             })?;
             trace!("httpsd: read_chunk handle={} returned {} bytes", handle, chunk.len());
             if chunk.is_empty() {
-                debug!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
+                info!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
                 state.response = None;
                 state.eof = true;
                 break;
