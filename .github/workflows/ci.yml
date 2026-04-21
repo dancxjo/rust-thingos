@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_ALIAS_XTASK: run --package xtask --
+
 defaults:
   run:
     shell: bash
