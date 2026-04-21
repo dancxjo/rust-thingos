@@ -31,7 +31,7 @@ const HTTPS_PORT_CAPACITY_BYTES: usize = HTTPS_STREAM_CHUNK_SIZE * 2;
 const TLS_RECORD_READ_BUF_SIZE: usize = 16_640;
 // Write-side TLS record staging buffer.
 const TLS_RECORD_WRITE_BUF_SIZE: usize = 4_096;
-const DEFAULT_USER_AGENT: &str = "ThingOS-httpsd/0.1 (+https://github.com/dancxjo/thingos)";
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 fn deadline_after_ms(timeout_ms: u64) -> u64 {
     let now = stem::syscall::monotonic_ns();
