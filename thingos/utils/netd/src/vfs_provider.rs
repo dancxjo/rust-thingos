@@ -139,6 +139,8 @@ pub struct IpConfig {
 pub struct NetVfsProvider {
     /// Read-end of the VFS RPC port (provider reads requests from here).
     req_read: PortHandle,
+    /// Write-end of the VFS RPC port (used for vfs_notify).
+    pub req_write: PortHandle,
     /// MAC address of the first interface (eth0).
     pub mac: [u8; 6],
     /// MTU of eth0.
@@ -188,6 +190,7 @@ impl NetVfsProvider {
 
         Some(Self {
             req_read,
+            req_write,
             mac,
             mtu,
             link_up,
@@ -319,6 +322,12 @@ impl NetVfsProvider {
             | VfsRpcOp::AttrRemove
             | VfsRpcOp::AttrList => send_err(resp_port, E_NOTSUP),
         }
+    }
+
+    pub fn push_notifications(&mut self, socket_set: &mut SocketSet, socket_api: &mut SocketApi) {
+        socket_api.push_notifications(socket_set, self.req_write, TCP_DYN_BASE);
+        socket_api.push_notifications(socket_set, self.req_write, UDP_DYN_BASE);
+        socket_api.push_notifications(socket_set, self.req_write, ICMP_DYN_BASE);
     }
 
     // ── Lookup ────────────────────────────────────────────────────────────────

@@ -1,17 +1,17 @@
 # ✅ Scenario: Launch ps and verify reaping
 
-> Last run: 2026-04-20 20:26:24
+> Last run: 2026-04-20 22:43:29
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 10849ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ✅ | 2207ms | - [📜](./02/serial.log) - |
-| 3 | And I type "ps" on the serial console | ✅ | 1158ms | - [📜](./03/serial.log) - |
+| 1 | Given the machine is booted | ✅ | 13387ms | - [📜](./01/serial.log) - |
+| 2 | When I wait for the shell prompt | ✅ | 2307ms | - [📜](./02/serial.log) - |
+| 3 | And I type "ps" on the serial console | ✅ | 1160ms | - [📜](./03/serial.log) - |
 | 4 | Then the serial output should contain "PID" | ✅ | 1ms | - - - |
-| 5 | And the serial output should contain "sh" | ✅ | 2ms | - - - |
-| 6 | And the serial output should contain "ps" | ✅ | 0ms | - - - |
+| 5 | And the serial output should contain "sh" | ✅ | 1ms | - - - |
+| 6 | And the serial output should contain "ps" | ✅ | 1ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -29,7 +29,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:mem:init] frame allocator log ok
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [kernel:mem:init] tasking init ok
-[31563296259] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[39840806247] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -50,18 +50,18 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[34562789151] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[34566796242] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[34659800835] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[35438576184] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[35566932753] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[42983804457] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[42994557375] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[43087159830] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[43888449132] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[44112933513] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
 [1;32m
         .-.
        /   \        [1;36mTHING-OS[1;32m
       |     |       [0;36m"People, places, things."[1;32m
        \   /        
         `-'        
-       /   \        v0.1  •  
+       /   \        v0.1  ��  
       |     |       2026-04-16
        \   /
         `-'
@@ -75,26 +75,20 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
-[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[37957419555] [[32mINFO [0m] [netd] [CPU2] NETD: Starting network service...
-[38069196858] [[32mINFO [0m] [netd] [CPU2] NETD: Waiting for virtio_netd VFS provider at /dev/net/virtio*...
-[40146477459] [[32mINFO [0m] [netd::vfs_device] [CPU2] VFS_NIC: sending frame len=304 (IPv4 0.0.0.0 -> 255.255.255.255, proto=17)
-[40212610647] [[32mINFO [0m] [virtio_netd::driver] [CPU2] VirtIO-NET: TX complete after 0 iterations
-[40235892543] [[32mINFO [0m] [virtio_netd::driver] [CPU2] VirtIO-NET: RX frame! desc=0 len=600
-[40383484647] [[32mINFO [0m] [netd::vfs_device] [CPU2] VFS_NIC: received frame len=590 (IPv4 10.0.2.2 -> 255.255.255.255, proto=17)
-[40449564309] [[32mINFO [0m] [netd::vfs_device] [CPU2] VFS_NIC: sending frame len=316 (IPv4 0.0.0.0 -> 255.255.255.255, proto=17)
-[40527371676] [[32mINFO [0m] [virtio_netd::driver] [CPU2] VirtIO-NET: TX complete after 12 iterations
-[40540748061] [[32mINFO [0m] [virtio_netd::driver] [CPU2] VirtIO-NET: RX frame! desc=1 len=600
-[40690808037] [[32mINFO [0m] [netd::vfs_device] [CPU2] VFS_NIC: received frame len=590 (IPv4 10.0.2.2 -> 255.255.255.255, proto=17)
-[40806926457] [[32mINFO [0m] [netd] [CPU2] NETD: Network ready
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[46715161020] [[32mINFO [0m] [netd] [CPU2] NETD: Starting network service...
+[46782663345] [[32mINFO [0m] [netd] [CPU2] NETD: Waiting for virtio_netd VFS provider at /dev/net/virtio*...
+[46990630302] [[32mINFO [0m] [iso9660d] [CPU1] iso9660d: no ISO9660 filesystem found yet ��� retrying
 ps
   PID  PPID STAT COMMAND
 [?25l    5     0 S    
     6     5 S    /bin/sh
     7     5 S    /bin/cambium
-    8     5 S    /bin/netd
+    8     5 R    /bin/netd
     9     5 S    /bin/httpsd
-   11     7 R    /drivers/virtio_netd
-   12     7 S    /drivers/ahci_disk
-   13  
+   10     5 S    /bin/iso9660d
+   12     7 R    /drivers/virtio_netd
+   13     7 S    /drivers/ahci_disk
+   14     6 R    /bin/ps
+[?25h[1;95mTHING[0m
 ```
 </details>

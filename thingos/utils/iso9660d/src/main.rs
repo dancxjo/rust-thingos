@@ -343,7 +343,7 @@ const DISCOVERY_LOG_EVERY_ATTEMPTS: u32 = 20;
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let mount_point = mount_point_from_args();
-    debug!("iso9660d: starting ISO9660 VFS provider");
+    stem::debug!("iso9660d: starting ISO9660 VFS provider");
 
     // Keep probing until storage services and an ISO9660-capable block device appear.
     let mut attempts = 0u32;

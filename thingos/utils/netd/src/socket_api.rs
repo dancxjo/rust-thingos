@@ -13,6 +13,7 @@ use smoltcp::socket::icmp::{
     PacketMetadata as IcmpPacketMetadata, Socket as IcmpSocket,
 };
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer, State as TcpState};
+use smoltcp::socket::udp::Socket as UdpSocket;
 use smoltcp::time::Instant;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address};
 use stem::{debug, info, trace, warn};
@@ -84,6 +85,8 @@ struct ManagedSocket {
     pub udp_multicast_v6_groups: BTreeSet<(String, u32)>,
     /// Bound ICMP echo identifier, if any.
     pub icmp_ident: Option<u16>,
+    /// Last poll revents observed for this socket (used for vfs_notify).
+    pub last_revents: u16,
 }
 
 impl ManagedSocket {
@@ -267,6 +270,7 @@ impl SocketApi {
             udp_multicast_v4_groups: BTreeSet::new(),
             udp_multicast_v6_groups: BTreeSet::new(),
             icmp_ident: None,
+            last_revents: 0,
         }
     }
 
@@ -1720,6 +1724,61 @@ impl SocketApi {
     /// Return the number of currently tracked sockets
     pub fn socket_count(&self) -> usize {
         self.sockets.len()
+    }
+
+    pub fn push_notifications(
+        &mut self,
+        socket_set: &mut SocketSet,
+        vfs_req_write: u32,
+        base_handle: u64,
+    ) {
+        for (api_handle, managed) in self.sockets.iter_mut() {
+            let revents = match managed.kind {
+                SocketType::Tcp => {
+                    let socket = socket_set.get_mut::<TcpSocket>(managed.handle);
+                    let mut r = 0;
+                    if socket.can_recv() || !socket.is_active() {
+                        r |= abi::syscall::poll_flags::POLLIN;
+                    }
+                    if socket.can_send() {
+                        r |= abi::syscall::poll_flags::POLLOUT;
+                    }
+                    if !socket.is_active() {
+                        r |= abi::syscall::poll_flags::POLLHUP;
+                    }
+                    r
+                }
+                SocketType::Udp => {
+                    let socket = socket_set.get_mut::<UdpSocket>(managed.handle);
+                    let mut r = 0;
+                    if socket.can_recv() {
+                        r |= abi::syscall::poll_flags::POLLIN;
+                    }
+                    if socket.can_send() {
+                        r |= abi::syscall::poll_flags::POLLOUT;
+                    }
+                    r
+                }
+                SocketType::Icmp => {
+                    let socket = socket_set.get_mut::<IcmpSocket>(managed.handle);
+                    let mut r = 0;
+                    if socket.can_recv() {
+                        r |= abi::syscall::poll_flags::POLLIN;
+                    }
+                    if socket.can_send() {
+                        r |= abi::syscall::poll_flags::POLLOUT;
+                    }
+                    r
+                }
+            };
+
+            if revents != managed.last_revents {
+                managed.last_revents = revents;
+                let node_handle = base_handle | ((*api_handle as u64) << 8) | 1; // SF_DATA = 1
+                trace!("SOCKET_API: vfs_notify node=0x{:x} revents=0x{:x}", node_handle, revents);
+                let _ = stem::syscall::vfs::vfs_notify(vfs_req_write, node_handle, revents);
+            }
+        }
     }
 }
 

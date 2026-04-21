@@ -140,6 +140,14 @@ impl VfsNicDevice {
         self.link_up
     }
 
+    pub fn rx_fd(&self) -> u32 {
+        self.rx_fd
+    }
+
+    pub fn events_fd(&self) -> u32 {
+        self.events_fd
+    }
+
     fn poll_events(&mut self) {
         if self.events_fd == u32::MAX {
             return;

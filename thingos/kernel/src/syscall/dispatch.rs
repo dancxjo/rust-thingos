@@ -6,7 +6,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
     let syscall_id = n as u32;
 
     if (syscall_id & 0x4000) != 0 {
-        crate::kprintln!("VFS SYSCALL: 0x{:x} args=[{}, {}, {}, {}, {}, {}]", syscall_id, args[0], args[1], args[2], args[3], args[4], args[5]);
+        // crate::kprintln!("VFS SYSCALL: 0x{:x} args=[{}, {}, {}, {}, {}, {}]", syscall_id, args[0], args[1], args[2], args[3], args[4], args[5]);
     }
     let result = match syscall_id {
         SYS_EXIT => handlers::sys_exit(args[0] as i32),

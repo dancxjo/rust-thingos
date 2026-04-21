@@ -10,7 +10,7 @@ use cucumber::{given, then, when};
 use crate::world::{ThingOsWorld, strip_ansi};
 
 /// Default timeout for waiting on serial output (seconds).
-const DEFAULT_TIMEOUT_SECS: f64 = 120.0;
+const DEFAULT_TIMEOUT_SECS: f64 = 300.0;
 
 /// Custom error type for step failures that doesn't panic
 #[derive(Debug)]

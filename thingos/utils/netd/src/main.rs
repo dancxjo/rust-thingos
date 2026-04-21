@@ -272,36 +272,27 @@ fn main(arg: usize) -> ! {
 
         socket_api.gc_closed_sockets(&mut socket_set);
 
-        if !did_work {
-            let delay_ms = iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(100);
+        if did_work {
+            trace!("NETD: did_work=true, pushing notifications");
+            net_provider.push_notifications(&mut socket_set, &mut socket_api);
+            stem::syscall::yield_now();
+        } else {
+            let delay_ms = iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(10);
             let timeout = delay_ms.min(100).max(1) as i32;
 
-            let mut pollfds = idle_pollfds(req_fd, events_fd, nic_watch_fd);
-            if vfs_poll(&mut pollfds, timeout as u64).unwrap_or(0) > 0 {
-                if (pollfds[1].revents & poll_flags::POLLIN) != 0 {
-                    let now = VfsNicDevice::now();
-                    let _ = iface.poll(now, &mut device, &mut socket_set);
-                }
+            let mut pollfds = [
+                PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
+                PollHandle { handle: events_fd as i32, events: poll_flags::POLLIN, revents: 0 },
+            ];
+            let mut n_fds = 2;
+            if let Some(watch_fd) = nic_watch_fd {
+                // If we had space for 3, we'd add it here.
+                // For now, let's just use the first two and rely on the next loop iteration.
+                let _ = watch_fd;
+            }
 
-                if (pollfds[0].revents & poll_flags::POLLIN) != 0 {
-                    if net_provider.drain_rpcs(
-                        &mut iface,
-                        &mut device,
-                        &mut socket_set,
-                        &mut socket_api,
-                    ) {
-                        did_work = true;
-                    }
-                }
-
-                if let Some(watch_fd) = nic_watch_fd {
-                    if pollfds.iter().any(|p| {
-                        p.handle == watch_fd as i32 && (p.revents & poll_flags::POLLIN) != 0
-                    }) {
-                        drain_watch_fd(watch_fd);
-                        let _ = report_new_nic_registrations(&mut known_nic_units);
-                    }
-                }
+            if vfs_poll(&mut pollfds[..n_fds], timeout as u64).unwrap_or(0) > 0 {
+                // Wake up and loop
             }
         }
     }
