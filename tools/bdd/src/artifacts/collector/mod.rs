@@ -147,6 +147,13 @@ impl ArtifactCollector {
                 Ok(()) => {
                     let readme_path = scenario.dir.join("README.md");
                     eprintln!("│  │  └─ 📄 Generated: {}", readme_path.display());
+                    if !scenario.passed {
+                        crate::artifacts::print_readme_inline(
+                            "📄 Scenario Failure Details",
+                            &readme_path,
+                            "│  │      ",
+                        );
+                    }
                 }
                 Err(e) => eprintln!("│  │  └─ ⚠️ Failed to write scenario README: {}", e),
             }

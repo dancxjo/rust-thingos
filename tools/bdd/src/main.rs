@@ -75,13 +75,22 @@ fn main() {
     // ALWAYS generate the report, even if tests panicked
     let failed = tokio::runtime::Runtime::new().unwrap().block_on(async {
         let collector = artifacts::global().lock().await;
+        let mut arch_readme = None;
         // Generate architecture report
         match collector.generate_arch_readme() {
-            Ok(path) => eprintln!("[bdd] Generated: {}", path.display()),
+            Ok(path) => {
+                eprintln!("[bdd] Generated: {}", path.display());
+                arch_readme = Some(path);
+            }
             Err(e) => eprintln!("[bdd] WARNING: Failed to generate README: {}", e),
         }
 
         let (_, features_failed) = collector.count_features();
+        if features_failed > 0 {
+            if let Some(path) = arch_readme {
+                artifacts::print_readme_inline("[bdd] Inline architecture README", &path, "[bdd] ");
+            }
+        }
         features_failed > 0
     });
 
