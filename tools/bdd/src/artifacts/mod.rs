@@ -51,7 +51,10 @@ pub async fn get_latest_serial() -> String {
     if let Some(cache) = SERIAL_LOG.get() { cache.lock().await.clone() } else { String::new() }
 }
 
-/// Print README content inline in stderr output.
+/// Print README content inline to stderr.
+///
+/// `label` is printed once with the README path, and each README line is then
+/// printed with `line_prefix` to keep output grouped and readable in CI logs.
 pub fn print_readme_inline(label: &str, readme_path: &Path, line_prefix: &str) {
     eprintln!("{}{} ({})", line_prefix, label, readme_path.display());
     match fs::read_to_string(readme_path) {
