@@ -610,7 +610,7 @@ where
                     info!("http: headers complete body_start={}", body_start);
                     if let Ok(headers) = core::str::from_utf8(&response[..body_start]) {
                         for line in headers.lines() {
-                            info!("http: response header: {}", line);
+                            debug!("http: response header: {}", line);
                         }
                     }
                     break;
@@ -709,7 +709,96 @@ impl HttpClient {
             }
         };
 
-        Ok(Response { stream, buffer, cursor: body_start })
+        let head = ResponseHead::parse(&buffer[..body_start]);
+        Ok(Response { stream, buffer, cursor: body_start, head })
+    }
+}
+
+/// Parsed HTTP response head (status line + headers).
+///
+/// Populated from the raw response header block at response construction time
+/// so consumers can query status, headers, and cache directives without
+/// re-parsing.
+#[derive(Debug, Clone, Default)]
+pub struct ResponseHead {
+    /// HTTP status code (e.g. `200`, `301`).  `0` means the head could not be
+    /// parsed (malformed response).
+    pub status: u16,
+    /// HTTP reason phrase (e.g. `"OK"`, `"Moved Permanently"`).
+    pub reason: String,
+    /// Raw header bytes as received (including the trailing `\r\n\r\n`).
+    pub raw: Vec<u8>,
+    /// Ordered list of `(name, value)` pairs exactly as received, preserving
+    /// case and duplicates.  Lookups should use [`ResponseHead::header`] for
+    /// case-insensitive matching.
+    pub headers: Vec<(String, String)>,
+}
+
+impl ResponseHead {
+    /// Parse a raw HTTP response head (status line + headers, terminated by
+    /// `\r\n\r\n`).  Unparseable input yields a head with `status == 0` and
+    /// whatever headers we could recover, so callers can still surface the
+    /// raw bytes for debugging.
+    pub fn parse(raw: &[u8]) -> Self {
+        let mut head =
+            ResponseHead { status: 0, reason: String::new(), raw: raw.to_vec(), headers: Vec::new() };
+        let Ok(text) = core::str::from_utf8(raw) else {
+            return head;
+        };
+        let mut lines = text.split("\r\n");
+        let Some(status_line) = lines.next() else {
+            return head;
+        };
+        // "HTTP/1.1 200 OK"
+        let mut parts = status_line.splitn(3, ' ');
+        let _version = parts.next();
+        if let Some(code) = parts.next() {
+            if let Ok(n) = code.parse::<u16>() {
+                head.status = n;
+            }
+        }
+        if let Some(reason) = parts.next() {
+            head.reason = reason.trim().to_string();
+        }
+        for line in lines {
+            if line.is_empty() {
+                break;
+            }
+            if let Some(idx) = line.find(':') {
+                let name = line[..idx].trim().to_string();
+                let value = line[idx + 1..].trim().to_string();
+                if !name.is_empty() {
+                    head.headers.push((name, value));
+                }
+            }
+        }
+        head
+    }
+
+    /// Look up a header by name, case-insensitively.  Returns the first
+    /// matching value; use [`ResponseHead::headers_named`] to enumerate all
+    /// occurrences.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        for (k, v) in &self.headers {
+            if k.eq_ignore_ascii_case(name) {
+                return Some(v.as_str());
+            }
+        }
+        None
+    }
+
+    /// Iterate over all values for the given header name (case-insensitive).
+    pub fn headers_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.headers
+            .iter()
+            .filter(move |(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// True if the status code is in the 3xx redirect range and there is a
+    /// `Location` header.
+    pub fn is_redirect(&self) -> bool {
+        (300..400).contains(&self.status) && self.header("Location").is_some()
     }
 }
 
@@ -734,9 +823,40 @@ pub struct Response {
     stream: Option<ResponseStream>,
     buffer: Vec<u8>,
     cursor: usize,
+    head: ResponseHead,
 }
 
 impl Response {
+    /// HTTP status code (e.g. `200`).
+    pub fn status(&self) -> u16 {
+        self.head.status
+    }
+
+    /// HTTP reason phrase (e.g. `"OK"`).
+    pub fn reason(&self) -> &str {
+        &self.head.reason
+    }
+
+    /// Ordered list of response headers as received.
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.head.headers
+    }
+
+    /// First value of the named header (case-insensitive).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.head.header(name)
+    }
+
+    /// The full parsed response head.
+    pub fn head(&self) -> &ResponseHead {
+        &self.head
+    }
+
+    /// Raw response header bytes as received, terminated by `\r\n\r\n`.
+    pub fn raw_headers(&self) -> &[u8] {
+        &self.head.raw
+    }
+
     pub fn read_chunk(&mut self) -> Result<Vec<u8>, String> {
         if self.cursor < self.buffer.len() {
             let chunk = self.buffer[self.cursor..].to_vec();
@@ -958,5 +1078,49 @@ mod tests {
 
         let err = append_header_chunk_and_find_body_start(&mut buffer, b"b").unwrap_err();
         assert!(err.contains("response headers exceed max size"));
+    }
+
+    #[test]
+    fn response_head_parses_status_and_headers() {
+        let raw = b"HTTP/1.1 200 OK\r\n\
+                    Content-Type: text/html; charset=UTF-8\r\n\
+                    Content-Length: 42\r\n\
+                    ETag: \"abc123\"\r\n\r\n";
+        let head = ResponseHead::parse(raw);
+        assert_eq!(head.status, 200);
+        assert_eq!(head.reason, "OK");
+        assert_eq!(head.header("content-type"), Some("text/html; charset=UTF-8"));
+        assert_eq!(head.header("ETAG"), Some("\"abc123\""));
+        assert_eq!(head.header("content-length"), Some("42"));
+        assert!(!head.is_redirect());
+    }
+
+    #[test]
+    fn response_head_detects_redirect() {
+        let raw = b"HTTP/1.1 301 Moved Permanently\r\n\
+                    Location: https://example.com/target\r\n\
+                    Content-Length: 0\r\n\r\n";
+        let head = ResponseHead::parse(raw);
+        assert_eq!(head.status, 301);
+        assert_eq!(head.reason, "Moved Permanently");
+        assert!(head.is_redirect());
+        assert_eq!(head.header("location"), Some("https://example.com/target"));
+    }
+
+    #[test]
+    fn response_head_preserves_duplicate_headers() {
+        let raw = b"HTTP/1.1 200 OK\r\n\
+                    Set-Cookie: a=1\r\n\
+                    Set-Cookie: b=2\r\n\r\n";
+        let head = ResponseHead::parse(raw);
+        let cookies: alloc::vec::Vec<&str> = head.headers_named("set-cookie").collect();
+        assert_eq!(cookies, alloc::vec!["a=1", "b=2"]);
+    }
+
+    #[test]
+    fn response_head_parse_handles_malformed_input() {
+        let head = ResponseHead::parse(b"garbage without crlf");
+        assert_eq!(head.status, 0);
+        assert!(head.headers.is_empty());
     }
 }

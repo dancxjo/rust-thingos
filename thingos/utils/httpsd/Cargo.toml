@@ -7,4 +7,5 @@ edition = "2021"
 abi = { path = "../../abi" }
 http = { path = "../../libs/http" }
 ipc_helpers = { path = "../../libs/ipc_helpers" }
+spin = "0.9"
 stem = { path = "../../stem", features = ["rt", "global-alloc"] }

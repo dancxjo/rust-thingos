@@ -86,6 +86,16 @@ pub enum VfsRpcOp {
     AttrSet = 13,
     AttrRemove = 14,
     AttrList = 15,
+    /// Read the target of a symlink node.
+    ///
+    /// Payload: `[handle: u64]`
+    /// Response payload (on OK): raw target path bytes (UTF-8, not NUL-terminated).
+    ///
+    /// Providers that wish to surface a symlink should return the
+    /// `S_IFLNK | 0o777` mode from [`VfsRpcOp::Stat`] and answer `Readlink`
+    /// with the target path.  The kernel calls this while resolving a path
+    /// (up to `MAX_SYMLINK_FOLLOWS` times) to follow the link transparently.
+    Readlink = 16,
 }
 
 impl VfsRpcOp {
@@ -107,6 +117,7 @@ impl VfsRpcOp {
             13 => Some(Self::AttrSet),
             14 => Some(Self::AttrRemove),
             15 => Some(Self::AttrList),
+            16 => Some(Self::Readlink),
             _ => None,
         }
     }
