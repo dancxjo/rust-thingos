@@ -50,7 +50,7 @@ extern "C" fn pthread_start_trampoline(arg: usize) -> ! {
     pthread_exit(retval)
 }
 
-#[no_mangle]
+#[cfg_attr(any(target_os = "none", any(target_os = "thingos", target_env = "thingos")), no_mangle)]
 pub unsafe extern "C" fn pthread_create(
     thread: *mut pthread_t,
     _attr: *const pthread_attr_t,
@@ -88,7 +88,7 @@ pub unsafe extern "C" fn pthread_create(
     0
 }
 
-#[no_mangle]
+#[cfg_attr(any(target_os = "none", any(target_os = "thingos", target_env = "thingos")), no_mangle)]
 pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_void) -> c_int {
     let self_tid = match syscall::get_tid() {
         Ok(tid) => tid,
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn pthread_join(thread: pthread_t, retval: *mut *mut c_voi
     0
 }
 
-#[no_mangle]
+#[cfg_attr(any(target_os = "none", any(target_os = "thingos", target_env = "thingos")), no_mangle)]
 pub extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
     if let Ok(tid) = syscall::get_tid() {
         if let Some(record) = THREADS.lock().get_mut(&tid) {
@@ -143,12 +143,12 @@ pub extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
     syscall::exit(0)
 }
 
-#[no_mangle]
+#[cfg_attr(any(target_os = "none", any(target_os = "thingos", target_env = "thingos")), no_mangle)]
 pub extern "C" fn pthread_self() -> pthread_t {
     syscall::get_tid().unwrap_or(0)
 }
 
-#[no_mangle]
+#[cfg_attr(any(target_os = "none", any(target_os = "thingos", target_env = "thingos")), no_mangle)]
 pub extern "C" fn pthread_equal(t1: pthread_t, t2: pthread_t) -> c_int {
     (t1 == t2) as c_int
 }

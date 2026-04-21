@@ -1,13 +1,13 @@
 # ❌ Scenario: Launch ps and verify reaping
 
-> Last run: 2026-04-20 18:18:04
+> Last run: 2026-04-20 18:24:09
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 15142ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ❌ | 61078ms | - [📜](./02/serial.log) - |
+| 1 | Given the machine is booted | ✅ | 16188ms | - [📜](./01/serial.log) - |
+| 2 | When I wait for the shell prompt | ❌ | 61051ms | - [📜](./02/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -27,7 +27,7 @@ BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
 [kernel:mem:init] frame allocator log ok
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [kernel:mem:init] tasking init ok
-[788657301] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[854545882] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -48,17 +48,23 @@ BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[901192165] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[901318741] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[903444203] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[906659258] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41008000
-[911585886] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
-[933306248] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[934400032] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
-[934711881] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41008000 entry_pc=0x204388 user_sp=0x800000
-[935820022] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
-[945551074] [[31;1mERROR[0m] [bran] [CPU0] panicked at thingos/bran/src/arch/aarch64/trap.rs:16:9:
-Unhandled Sync EL0 Exception. ESR=0x92000046 EC=0x24 ELR=0x204434 FAR=0x1000000 SPSR=0x20000000
+[970894981] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[971307045] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[973618468] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[976811013] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41008000
+[981795647] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
+[1002184751] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[1003070208] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
+[1003247098] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41008000 entry_pc=0x204334 user_sp=0x800000
+[1004218773] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[1026702179] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x4106a000
+[1036771165] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41093000
+[1046935137] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x410bc000
+[1331788905] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41b0c000
+[1371481804] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x4106a000
+[1371794876] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x4106a000 entry_pc=0x20b584 user_sp=0x800000
+[1387547614] [[31;1mERROR[0m] [bran] [CPU0] panicked at thingos/kernel/src/sched/mod.rs:2947:13:
+scheduler invariant violated: terminate_current tid mismatch (cpu=0, scheduler_current=3, terminating_tid=0)
 FAULT
 
 ```

@@ -1,5 +1,4 @@
-
 #[stem_macros::main]
 fn main() -> ! {
-    loop {}
+    std::process::exit(0)
 }
