@@ -7,9 +7,9 @@ static mut HHDM_OFFSET: u64 = 0;
 
 pub fn init(offset: u64) {
     if offset == 0 {
-        kernel::kprintln!("CRITICAL: paging::init called with offset 0");
+        kernel::kerror!("CRITICAL: paging::init called with offset 0");
     } else {
-        kernel::kprintln!("paging::init setting HHDM_OFFSET = {:x}", offset);
+        kernel::kinfo!("paging::init setting HHDM_OFFSET = {:x}", offset);
     }
     unsafe { HHDM_OFFSET = offset };
 }
@@ -98,9 +98,9 @@ fn ensure_table(
         unsafe {
             let virt = phys + HHDM_OFFSET;
             if HHDM_OFFSET == 0 {
-                kernel::kprintln!("CRITICAL: HHDM_OFFSET is 0 in ensure_table!");
+                kernel::kerror!("CRITICAL: HHDM_OFFSET is 0 in ensure_table!");
             }
-            kernel::kprintln!("ensure_table: clearing virt={:x} (phys={:x})", virt, phys);
+            kernel::ktrace!("ensure_table: clearing virt={:x} (phys={:x})", virt, phys);
             core::ptr::write_bytes(virt as *mut u8, 0, 4096);
             // Non-leaf PTE: V=1, R=W=X=0, PPN set
             *parent.add(index as usize) = ((phys >> 12) << 10) | 1;

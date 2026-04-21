@@ -200,7 +200,7 @@ pub unsafe extern "C" fn rust_trap_handler(tf: &mut UserTrapFrame) {
             }
             _ => {
                 // Other interrupts (e.g. external, SEIP=9): no scheduler action.
-                kernel::kprintln!(
+                kernel::kwarn!(
                     "Unhandled riscv64 interrupt: scause={:#x} code={:#x}",
                     scause,
                     code
@@ -243,7 +243,7 @@ pub unsafe extern "C" fn rust_trap_handler(tf: &mut UserTrapFrame) {
             }
             _ => {
                 // Panic or loop
-                kernel::kprintln!(
+                kernel::kerror!(
                     "Unexpected trap: scause={:x} stval={:x} sepc={:x}",
                     scause,
                     tf.stval,

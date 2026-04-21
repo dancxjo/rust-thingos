@@ -60,7 +60,7 @@ impl Arena {
         self.cursor = new_cursor;
 
         // if layout.size() > 1024 {
-        //      crate::kprintln!("Arena[{}] Alloc: size={} ptr={:p}", self.tag, layout.size(), ptr);
+        //      crate::ktrace!("Arena[{}] Alloc: size={} ptr={:p}", self.tag, layout.size(), ptr);
         // }
 
         unsafe { Ok(NonNull::new_unchecked(ptr)) }

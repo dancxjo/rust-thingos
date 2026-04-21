@@ -171,7 +171,18 @@ impl ProviderLoop {
         // SAFETY: pending has at least hdr_size bytes; header is repr(C, packed).
         let hdr: VfsRpcReqHeader =
             unsafe { core::ptr::read_unaligned(self.pending.as_ptr() as *const VfsRpcReqHeader) };
-        let op = VfsRpcOp::from_u8(hdr.op).ok_or(Errno::EINVAL)?;
+        let op = match VfsRpcOp::from_u8(hdr.op) {
+            Some(op) => op,
+            None => {
+                // Since this is userspace and we might not have a logger ready,
+                // we'll just return EINVAL and hope the kernel log helps.
+                return Err(Errno::EINVAL);
+            }
+        };
+        // For debugging AttrList issue
+        if hdr.op == 15 {
+             // We recognized it, but let's be sure.
+        }
 
         let payload_len = match op {
             Lookup => {

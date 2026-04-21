@@ -70,6 +70,11 @@ impl ProviderRpc {
 
         // 2. Perform the actual I/O
         let res = self.do_rpc(op, payload);
+        if let Ok(ref resp) = res {
+            if resp.len() > 0 && resp[0] != 0 {
+                crate::kprintln!("VFS RPC: op={:?} returned error {}", op, resp[0]);
+            }
+        }
 
         // 3. Release sleep-lock
         self.busy.store(false, core::sync::atomic::Ordering::Release);

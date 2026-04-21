@@ -1263,7 +1263,7 @@ pub fn sys_fs_attr_list(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<
     let res = node.attr_list(&mut kbuf);
     match res {
         Ok(n) => {
-            crate::kinfo!("SYS_FS_ATTR_LIST: node.attr_list returned {}", n);
+            crate::ktrace!("SYS_FS_ATTR_LIST: node.attr_list returned {}", n);
             if n > 0 {
                 validate_user_range(buf_ptr, n, true)?;
                 unsafe { copyout(buf_ptr, &kbuf[..n])? };
@@ -1271,7 +1271,7 @@ pub fn sys_fs_attr_list(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<
             Ok(n)
         }
         Err(e) => {
-            crate::kinfo!("SYS_FS_ATTR_LIST: node.attr_list failed: {:?}", e);
+            crate::ktrace!("SYS_FS_ATTR_LIST: node.attr_list failed: {:?}", e);
             Err(e)
         }
     }

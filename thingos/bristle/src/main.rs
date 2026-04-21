@@ -17,7 +17,7 @@ use stem::syscall::vfs::{
     vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write,
 };
 use stem::syscall::{PortHandle, port_send_all};
-use stem::{debug, info};
+use stem::{debug, info, warn};
 
 fn ensure_session_roots() {
     let _ = vfs_mkdir("/session");
@@ -248,7 +248,7 @@ fn main(packed_handles: usize) -> ! {
         }
 
         if drop_counter > 0 && drop_counter % 100 == 0 {
-            info!("bristle: dropped {} events (port full)", drop_counter);
+            warn!("bristle: dropped {} events (port full)", drop_counter);
         }
     }
 }

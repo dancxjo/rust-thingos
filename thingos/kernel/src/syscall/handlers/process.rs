@@ -12,7 +12,7 @@ use crate::syscall::validate::validate_user_range;
 use crate::task::StartupArg;
 
 pub fn sys_exit(code: i32) -> SysResult<usize> {
-    // crate::kinfo!("SYSCALL EXIT: TID={} code={}", unsafe { crate::sched::current_tid_current() }, code);
+    // crate::ktrace!("SYSCALL EXIT: TID={} code={}", unsafe { crate::sched::current_tid_current() }, code);
     unsafe {
         crate::sched::exit_current(code);
     }
@@ -147,13 +147,13 @@ pub fn sys_task_poll(pid: usize) -> SysResult<usize> {
 }
 
 pub fn sys_task_wait(tid: usize) -> SysResult<usize> {
-    crate::kdebug!(
+    crate::ktrace!(
         "SYSCALL TASK_WAIT: TID={} waiting for TargetTID={}",
         unsafe { crate::sched::current_tid_current() },
         tid
     );
     let code = unsafe { crate::sched::task_wait_current(tid as u64)? };
-    crate::kdebug!(
+    crate::ktrace!(
         "SYSCALL TASK_WAIT: TID={} wake up, TargetTID={} exited with {}",
         unsafe { crate::sched::current_tid_current() },
         tid,
@@ -181,9 +181,9 @@ pub fn sys_waitpid(pid: usize, status_ptr: usize, flags: usize) -> SysResult<usi
         validate_user_range(status_ptr, core::mem::size_of::<i32>(), true)?;
     }
 
-    // crate::kprintln!("SYSCALL WAITPID: TID={} waiting for TargetPID={} flags={:x}", unsafe { crate::sched::current_tid_current() }, pid, flags);
+    // crate::ktrace!("SYSCALL WAITPID: TID={} waiting for TargetPID={} flags={:x}", unsafe { crate::sched::current_tid_current() }, pid, flags);
     let (child_pid, code) = unsafe { crate::sched::waitpid_current(pid, flags)? };
-    // crate::kprintln!("SYSCALL WAITPID: TID={} wake up, TargetPID={} ChildPID={} exited with {}", unsafe { crate::sched::current_tid_current() }, pid, child_pid, code);
+    // crate::ktrace!("SYSCALL WAITPID: TID={} wake up, TargetPID={} ChildPID={} exited with {}", unsafe { crate::sched::current_tid_current() }, pid, child_pid, code);
     if status_ptr != 0 {
         unsafe {
             super::copyout(status_ptr, &code.to_le_bytes())?;
@@ -644,7 +644,7 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
         };
     }
 
-    crate::kdebug!(
+    crate::ktrace!(
         "SYSCALL SPAWN_PROCESS_EX: name='{}' TID={} PID={}",
         name,
         result.child_tid,

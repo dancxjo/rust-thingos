@@ -1,6 +1,6 @@
 # Feature: VFS Extended Attributes
 
-> Last run: 2026-04-20 21:03:15
+> Last run: 2026-04-20 21:10:51
 
 ## Scenarios
 

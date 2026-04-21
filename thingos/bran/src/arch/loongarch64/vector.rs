@@ -252,9 +252,9 @@ pub unsafe extern "C" fn rust_trap_handler(tf: &mut UserTrapFrame) {
             kernel::sched::on_resched_ipi::<crate::arch::CurrentRuntime>();
         } else if isr != 0 {
             // Other hardware interrupt - no scheduler action needed.
-            kernel::kprintln!("Unhandled LoongArch interrupt: ESTAT={:#x} ISR={:#x}", estat, isr);
+            kernel::kwarn!("Unhandled LoongArch interrupt: ESTAT={:#x} ISR={:#x}", estat, isr);
         } else {
-            kernel::kprintln!(
+            kernel::kerror!(
                 "Unexpected LoongArch trap: ESTAT={:#x} ECODE={:#x} SUBCODE={:#x} ERA={:#x} BADV={:#x}",
                 estat,
                 ecode,
