@@ -14,6 +14,7 @@ use abi::syscall::{
     SYS_FS_READV, SYS_FS_REALPATH, SYS_FS_RENAME, SYS_FS_SEEK, SYS_FS_STAT, SYS_FS_SYMLINK,
     SYS_FS_SYNC, SYS_FS_UMOUNT, SYS_FS_UNLINK, SYS_FS_UTIMES, SYS_FS_WATCH_PATH,
     SYS_FS_WATCH_THING, SYS_FS_WRITE, SYS_FS_WRITEV, SYS_HANDLE_FROM_PORT, SYS_PIPE,
+    SYS_FS_ATTR_GET, SYS_FS_ATTR_SET, SYS_FS_ATTR_REMOVE, SYS_FS_ATTR_LIST,
 };
 
 use super::arch::raw_syscall6;
@@ -346,39 +347,22 @@ pub fn vfs_device_call_raw(thing: u32, call: &abi::device::DeviceCall) -> SysRes
     abi::errors::errno(ret).map(|v| v as u64)
 }
 
-/// Get a typed provider attribute by `name`.
-///
-/// On success returns `(value_type, value_len)` and copies up to `out.len()`
-/// bytes of value data into `out`.
 pub fn vfs_attr_get(thing: u32, name: &str, out: &mut [u8]) -> SysResult<(abi::attrs::AttrType, usize)> {
-    if name.len() > u16::MAX as usize {
-        return Err(Errno::EINVAL);
-    }
-    let mut req = Vec::with_capacity(core::mem::size_of::<abi::attrs::AttrNameHeader>() + name.len());
-    req.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    req.extend_from_slice(&0u16.to_le_bytes());
-    req.extend_from_slice(name.as_bytes());
-
-    let mut resp = alloc::vec![0u8; core::mem::size_of::<abi::attrs::AttrValueHeader>() + out.len()];
-    let call = abi::device::DeviceCall {
-        kind: abi::device::DeviceKind::Attr,
-        op: abi::attrs::ATTR_OP_GET,
-        in_ptr: req.as_ptr() as u64,
-        in_len: req.len() as u32,
-        out_ptr: resp.as_mut_ptr() as u64,
-        out_len: resp.len() as u32,
+    let mut val_type: u8 = 0;
+    let ret = unsafe {
+        raw_syscall6(
+            SYS_FS_ATTR_GET,
+            thing as usize,
+            name.as_ptr() as usize,
+            name.len(),
+            out.as_mut_ptr() as usize,
+            out.len(),
+            &mut val_type as *mut u8 as usize,
+        )
     };
-    let value_len = vfs_device_call_raw(thing, &call)? as usize;
-    let hdr_len = core::mem::size_of::<abi::attrs::AttrValueHeader>();
-    if resp.len() < hdr_len {
-        return Err(Errno::EIO);
-    }
-    let value_type = abi::attrs::AttrType::from_u8(resp[0]).ok_or(Errno::EINVAL)?;
-    let available = resp.len().saturating_sub(hdr_len).min(out.len());
-    if available > 0 {
-        out[..available].copy_from_slice(&resp[hdr_len..hdr_len + available]);
-    }
-    Ok((value_type, value_len))
+    let total_len = abi::errors::errno(ret)?;
+    let attr_type = abi::attrs::AttrType::from_u8(val_type).ok_or(Errno::EINVAL)?;
+    Ok((attr_type, total_len))
 }
 
 /// Set a typed provider attribute.
@@ -390,46 +374,35 @@ pub fn vfs_attr_set(
     value_type: abi::attrs::AttrType,
     value: &[u8],
 ) -> SysResult<usize> {
-    if name.len() > u16::MAX as usize {
-        return Err(Errno::EINVAL);
-    }
-    let mut req =
-        Vec::with_capacity(core::mem::size_of::<abi::attrs::AttrSetHeader>() + name.len() + value.len());
-    req.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    req.push(value_type as u8);
-    req.push(0); // flags
-    req.extend_from_slice(&(value.len() as u32).to_le_bytes());
-    req.extend_from_slice(name.as_bytes());
-    req.extend_from_slice(value);
-    let call = abi::device::DeviceCall {
-        kind: abi::device::DeviceKind::Attr,
-        op: abi::attrs::ATTR_OP_SET,
-        in_ptr: req.as_ptr() as u64,
-        in_len: req.len() as u32,
-        out_ptr: 0,
-        out_len: 0,
+    let type_and_flags = (value_type as usize) & 0xFF; // flags = 0 for now
+    let ret = unsafe {
+        raw_syscall6(
+            SYS_FS_ATTR_SET,
+            thing as usize,
+            name.as_ptr() as usize,
+            name.len(),
+            value.as_ptr() as usize,
+            value.len(),
+            type_and_flags,
+        )
     };
-    vfs_device_call_raw(thing, &call).map(|v| v as usize)
+    abi::errors::errno(ret)
 }
 
 /// Remove a provider attribute by name.
 pub fn vfs_attr_remove(thing: u32, name: &str) -> SysResult<()> {
-    if name.len() > u16::MAX as usize {
-        return Err(Errno::EINVAL);
-    }
-    let mut req = Vec::with_capacity(core::mem::size_of::<abi::attrs::AttrNameHeader>() + name.len());
-    req.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    req.extend_from_slice(&0u16.to_le_bytes());
-    req.extend_from_slice(name.as_bytes());
-    let call = abi::device::DeviceCall {
-        kind: abi::device::DeviceKind::Attr,
-        op: abi::attrs::ATTR_OP_REMOVE,
-        in_ptr: req.as_ptr() as u64,
-        in_len: req.len() as u32,
-        out_ptr: 0,
-        out_len: 0,
+    let ret = unsafe {
+        raw_syscall6(
+            SYS_FS_ATTR_REMOVE,
+            thing as usize,
+            name.as_ptr() as usize,
+            name.len(),
+            0,
+            0,
+            0,
+        )
     };
-    vfs_device_call_raw(thing, &call).map(|_| ())
+    abi::errors::errno(ret).map(|_| ())
 }
 
 /// List provider attributes into packed entries:
@@ -437,15 +410,18 @@ pub fn vfs_attr_remove(thing: u32, name: &str) -> SysResult<()> {
 ///
 /// Returns provider result value (typically entry count).
 pub fn vfs_attr_list(thing: u32, out: &mut [u8]) -> SysResult<usize> {
-    let call = abi::device::DeviceCall {
-        kind: abi::device::DeviceKind::Attr,
-        op: abi::attrs::ATTR_OP_LIST,
-        in_ptr: 0,
-        in_len: 0,
-        out_ptr: out.as_mut_ptr() as u64,
-        out_len: out.len() as u32,
+    let ret = unsafe {
+        raw_syscall6(
+            SYS_FS_ATTR_LIST,
+            thing as usize,
+            out.as_mut_ptr() as usize,
+            out.len(),
+            0,
+            0,
+            0,
+        )
     };
-    vfs_device_call_raw(thing, &call).map(|v| v as usize)
+    abi::errors::errno(ret)
 }
 
 /// Change the current working directory of the process.

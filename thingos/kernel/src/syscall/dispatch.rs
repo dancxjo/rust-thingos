@@ -151,6 +151,16 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_FS_WRITEV => handlers::vfs::sys_fs_writev(args[0], args[1], args[2]),
         SYS_FS_LUTIMES => handlers::vfs::sys_fs_lutimes(args[0], args[1], args[2]),
         SYS_FS_FLOCK => handlers::vfs::sys_fs_flock(args[0], args[1]),
+        SYS_FS_ATTR_GET => {
+            handlers::vfs::sys_fs_attr_get(args[0], args[1], args[2], args[3], args[4], args[5])
+        }
+        SYS_FS_ATTR_SET => {
+            handlers::vfs::sys_fs_attr_set(
+                args[0], args[1], args[2], args[3], args[4], args[5],
+            )
+        }
+        SYS_FS_ATTR_REMOVE => handlers::vfs::sys_fs_attr_remove(args[0], args[1], args[2]),
+        SYS_FS_ATTR_LIST => handlers::vfs::sys_fs_attr_list(args[0], args[1], args[2]),
 
         // ── Unix domain sockets ───────────────────────────────────────────
         SYS_SOCKET => handlers::sys_socket(args[0], args[1], args[2]),

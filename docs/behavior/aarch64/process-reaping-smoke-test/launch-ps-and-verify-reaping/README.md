@@ -1,15 +1,12 @@
 # ❌ Scenario: Launch ps and verify reaping
 
-> Last run: 2026-04-20 19:17:36
+> Last run: 2026-04-20 20:32:31
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 15864ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ✅ | 8225ms | - [📜](./02/serial.log) - |
-| 3 | And I type "ps" on the serial console | ✅ | 1157ms | - - - |
-| 4 | Then the serial output should contain "PID" | ❌ | 121077ms | - - - |
+| 1 | Given the machine is booted | ❌ | 1000ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

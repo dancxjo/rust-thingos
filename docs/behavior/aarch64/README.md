@@ -1,9 +1,9 @@
 # BDD Test Results: aarch64
 
-> Last run: 2026-04-20 20:16:54
+> Last run: 2026-04-20 20:33:19
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [HTTPS Fetch](https-fetch/README.md) | 1/1 | ✅ |
+| [VFS Extended Attributes](vfs-extended-attributes/README.md) | 0/1 | ❌ |

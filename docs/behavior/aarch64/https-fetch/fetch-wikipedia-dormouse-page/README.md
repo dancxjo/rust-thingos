@@ -1,15 +1,12 @@
-# ✅ Scenario: Fetch Wikipedia Dormouse page
+# ❌ Scenario: Fetch Wikipedia Dormouse page
 
-> Last run: 2026-04-20 20:16:54
+> Last run: 2026-04-20 20:31:23
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 14416ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ✅ | 12022ms | - [📜](./02/serial.log) - |
-| 3 | And I type "ping -c 1 en.wikipedia.org" on the serial console | ✅ | 2409ms | - - - |
-| 4 | And I wait for the serial output to contain "1 packets transmitted, 1 received" | ⏭️ | 0ms | - - - |
+| 1 | Given the machine is booted | ❌ | 1002ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

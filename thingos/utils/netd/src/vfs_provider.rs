@@ -314,6 +314,10 @@ impl NetVfsProvider {
             VfsRpcOp::Rename => send_err(resp_port, E_NOTSUP),
             VfsRpcOp::SubscribeReady => send_resp(resp_port, &[E_OK]),
             VfsRpcOp::UnsubscribeReady => send_resp(resp_port, &[E_OK]),
+            VfsRpcOp::AttrGet
+            | VfsRpcOp::AttrSet
+            | VfsRpcOp::AttrRemove
+            | VfsRpcOp::AttrList => send_err(resp_port, E_NOTSUP),
         }
     }
 

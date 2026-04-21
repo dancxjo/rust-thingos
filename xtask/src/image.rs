@@ -180,6 +180,10 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "test_dlopen", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "reboot", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "shutdown", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "attr_list", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "attr_get", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "attr_set", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "attr_rm", is_init: false, boot_module: true, features: vec![] },
     ]
 }
 

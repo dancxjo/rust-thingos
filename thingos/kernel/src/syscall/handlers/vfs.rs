@@ -1178,6 +1178,95 @@ pub fn sys_fs_device_call(fd: usize, call_ptr: usize) -> SysResult<usize> {
     node.device_call(&call)
 }
 
+pub fn sys_fs_attr_get(fd: usize, name_ptr: usize, name_len: usize, buf_ptr: usize, buf_len: usize, type_ptr: usize) -> SysResult<usize> {
+    validate_user_range(name_ptr, name_len, false)?;
+    let mut name_buf = vec![0u8; name_len];
+    unsafe { copyin(&mut name_buf, name_ptr)? };
+    let name = core::str::from_utf8(&name_buf).map_err(|_| Errno::EINVAL)?;
+
+    let node = {
+        let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+        let lock = pinfo_arc.lock();
+        lock.handle_table.get(fd as u32)?.node.clone()
+    };
+
+    let (val_type, val) = node.attr_get(name)?;
+    
+    if type_ptr != 0 {
+        validate_user_range(type_ptr, 1, true)?;
+        unsafe { copyout(type_ptr, &[val_type])? };
+    }
+
+    let copy_n = val.len().min(buf_len);
+    if buf_ptr != 0 && copy_n > 0 {
+        validate_user_range(buf_ptr, copy_n, true)?;
+        unsafe { copyout(buf_ptr, &val[..copy_n])? };
+    }
+    Ok(val.len())
+}
+
+pub fn sys_fs_attr_set(fd: usize, name_ptr: usize, name_len: usize, val_ptr: usize, val_len: usize, type_and_flags: usize) -> SysResult<usize> {
+    validate_user_range(name_ptr, name_len, false)?;
+    validate_user_range(val_ptr, val_len, false)?;
+    
+    let mut name_buf = vec![0u8; name_len];
+    let mut val_buf = vec![0u8; val_len];
+    unsafe {
+        copyin(&mut name_buf, name_ptr)?;
+        copyin(&mut val_buf, val_ptr)?;
+    }
+    let name = core::str::from_utf8(&name_buf).map_err(|_| Errno::EINVAL)?;
+
+    let node = {
+        let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+        let lock = pinfo_arc.lock();
+        lock.handle_table.get(fd as u32)?.node.clone()
+    };
+
+    let val_type = (type_and_flags & 0xFF) as u8;
+    let flags = ((type_and_flags >> 8) & 0xFF) as u8;
+    node.attr_set(name, &val_buf, val_type, flags)?;
+    Ok(0)
+}
+
+pub fn sys_fs_attr_remove(fd: usize, name_ptr: usize, name_len: usize) -> SysResult<usize> {
+    validate_user_range(name_ptr, name_len, false)?;
+    let mut name_buf = vec![0u8; name_len];
+    unsafe { copyin(&mut name_buf, name_ptr)? };
+    let name = core::str::from_utf8(&name_buf).map_err(|_| Errno::EINVAL)?;
+
+    let node = {
+        let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+        let lock = pinfo_arc.lock();
+        lock.handle_table.get(fd as u32)?.node.clone()
+    };
+
+    node.attr_remove(name)?;
+    Ok(0)
+}
+
+pub fn sys_fs_attr_list(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+    let node = {
+        let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+        let lock = pinfo_arc.lock();
+        lock.handle_table.get(fd as u32)?.node.clone()
+    };
+
+    if buf_ptr == 0 || buf_len == 0 {
+        // Just query total size? For now we just return EFAULT or similar if buf is null
+        // but maybe we want to allow querying size.
+        // POSIX listxattr returns size if size is 0.
+    }
+
+    let mut kbuf = vec![0u8; buf_len];
+    let n = node.attr_list(&mut kbuf)?;
+    if n > 0 {
+        validate_user_range(buf_ptr, n, true)?;
+        unsafe { copyout(buf_ptr, &kbuf[..n])? };
+    }
+    Ok(n)
+}
+
 // ── rename ──────────────────────────────────────────────────────────────────
 
 static NEXT_COOKIE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1);

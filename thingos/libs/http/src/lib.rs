@@ -20,9 +20,9 @@ use stem::{debug, info, trace, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
 const CONNECT_TIMEOUT_MS: u64 = 30_000;
-const HEADER_READ_TIMEOUT_MS: u64 = 60_000;
+const HEADER_READ_TIMEOUT_MS: u64 = 90_000;
 const PROVIDER_POLL_SLICE_MS: u64 = 500;
-const MAX_HEADER_READ_ITERATIONS: usize = 1000;
+const MAX_HEADER_READ_ITERATIONS: usize = 120;
 const HEADER_STAGING_CHUNK_SIZE: usize = 4_096;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const HTTPS_STREAM_CHUNK_SIZE: usize = 16_384;
@@ -572,7 +572,7 @@ where
         if let Err(e) = wait_fd_ready(
             read_fd,
             poll_flags::POLLIN,
-            deadline_after_ms(HEADER_READ_TIMEOUT_MS / 10), // Small slice per iteration
+            deadline_ns, // Share the outer deadline so we don't give up early
             "http header read",
         ) {
             info!("http: header read slice wait: {}", e);

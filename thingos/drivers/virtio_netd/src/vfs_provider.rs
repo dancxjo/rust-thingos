@@ -139,6 +139,10 @@ pub fn handle_vfs_rpc(
         VfsRpcOp::Rename => ProviderResponse::err(Errno::ENOSYS),
         VfsRpcOp::SubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
+        VfsRpcOp::AttrGet
+        | VfsRpcOp::AttrSet
+        | VfsRpcOp::AttrRemove
+        | VfsRpcOp::AttrList => ProviderResponse::err(Errno::ENOTSUP),
     }
 }
 
@@ -160,7 +164,7 @@ fn handle_device_call(state: &mut NetVfsState, payload: &[u8]) -> ProviderRespon
     match call.op {
         ATTR_OP_GET => attr_get(state, in_data),
         ATTR_OP_SET => attr_set(state, in_data),
-        ATTR_OP_REMOVE => ProviderResponse::err(Errno::ENOTSUP),
+        ATTR_OP_REMOVE => ProviderResponse::err(Errno::EOPNOTSUPP),
         ATTR_OP_LIST => attr_list(),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }

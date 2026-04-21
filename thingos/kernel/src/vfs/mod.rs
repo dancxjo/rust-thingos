@@ -401,6 +401,28 @@ pub trait VfsNode: Send + Sync {
     fn utimes(&self, _atime: Option<(u64, u32)>, _mtime: Option<(u64, u32)>) -> SysResult<()> {
         Err(abi::errors::Errno::EOPNOTSUPP)
     }
+
+    /// Get one attribute by name.
+    /// Returns (type, value).
+    fn attr_get(&self, _name: &str) -> SysResult<(u8, alloc::vec::Vec<u8>)> {
+        Err(abi::errors::Errno::EOPNOTSUPP)
+    }
+
+    /// Set one attribute.
+    fn attr_set(&self, _name: &str, _value: &[u8], _value_type: u8, _flags: u8) -> SysResult<()> {
+        Err(abi::errors::Errno::EOPNOTSUPP)
+    }
+
+    /// Remove one attribute by name.
+    fn attr_remove(&self, _name: &str) -> SysResult<()> {
+        Err(abi::errors::Errno::EOPNOTSUPP)
+    }
+
+    /// List all attribute names and their types.
+    /// Returns bytes in `abi::attrs::AttrListEntryHeader` + name format.
+    fn attr_list(&self, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(abi::errors::Errno::EOPNOTSUPP)
+    }
 }
 
 // ── VfsDriver ───────────────────────────────────────────────────────────────

@@ -387,6 +387,10 @@ fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> Provi
         VfsRpcOp::Close => dispatch_close(provider, payload),
         VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::Poll => ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN as u32),
+        VfsRpcOp::AttrGet
+        | VfsRpcOp::AttrSet
+        | VfsRpcOp::AttrRemove
+        | VfsRpcOp::AttrList => ProviderResponse::err(Errno::ENOTSUP),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }

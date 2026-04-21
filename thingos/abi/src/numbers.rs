@@ -275,6 +275,10 @@ pub const SYS_FS_MOUNT_EX: u32 = 0x4027;
 /// Bind an existing path to a new path in the namespace (Plan 9 style).
 /// Args: (src_path_ptr, src_path_len, dst_path_ptr, dst_path_len, flags) → 0
 pub const SYS_FS_BIND: u32 = 0x4028;
+pub const SYS_FS_ATTR_GET: u32 = 0x4029;
+pub const SYS_FS_ATTR_SET: u32 = 0x402A;
+pub const SYS_FS_ATTR_REMOVE: u32 = 0x402B;
+pub const SYS_FS_ATTR_LIST: u32 = 0x402C;
 
 const FS_SYSCALL_NUMBERS: &[u32] = &[
     SYS_FS_OPEN,
@@ -318,6 +322,10 @@ const FS_SYSCALL_NUMBERS: &[u32] = &[
     SYS_FS_ISATTY,
     SYS_FS_MOUNT_EX,
     SYS_FS_BIND,
+    SYS_FS_ATTR_GET,
+    SYS_FS_ATTR_SET,
+    SYS_FS_ATTR_REMOVE,
+    SYS_FS_ATTR_LIST,
 ];
 
 const fn all_unique(values: &[u32]) -> bool {

@@ -171,10 +171,21 @@ impl VfsNicDevice {
                 break;
             }
 
-            match vfs_read(self.rx_fd, &mut self.rx_staging[self.rx_staging_len..]) {
-                Ok(n) if n > 0 => self.rx_staging_len += n,
-                _ => break,
+            let n = match vfs_read(self.rx_fd, &mut self.rx_staging[self.rx_staging_len..]) {
+                Ok(n) => n,
+                Err(abi::errors::Errno::EAGAIN) => break,
+                Err(e) => {
+                    stem::warn!("VfsNicDevice: RX vfs_read error: {:?}", e);
+                    break;
+                }
+            };
+
+            if n == 0 {
+                break;
             }
+
+            trace!("VfsNicDevice: RX vfs_read(fd={}) returned {} bytes", self.rx_fd, n);
+            self.rx_staging_len += n;
         }
 
         let mut offset = 0usize;
@@ -213,7 +224,7 @@ impl VfsNicDevice {
                 "".into()
             };
 
-            info!("VFS_NIC: received frame len={}{}", frame_len, diag_info);
+            trace!("VFS_NIC: received frame len={}{}", frame_len, diag_info);
             self.rx_queue.push_back((frame, frame_len));
             offset += 4 + frame_len;
         }
@@ -244,7 +255,7 @@ impl VfsNicDevice {
             "".into()
         };
 
-        info!("VFS_NIC: sending frame len={}{}", frame_len, diag_info);
+        trace!("VFS_NIC: sending frame len={}{}", frame_len, diag_info);
         let mut msg = Vec::with_capacity(4 + data.len());
         msg.extend_from_slice(&frame_len.to_le_bytes());
         msg.extend_from_slice(data);

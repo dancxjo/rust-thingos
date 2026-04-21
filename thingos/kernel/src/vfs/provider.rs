@@ -298,6 +298,90 @@ impl VfsNode for ProviderNode {
         // this should be replaced with an asynchronous fire-and-forget port.
     }
 
+    fn attr_get(&self, name: &str) -> SysResult<(u8, alloc::vec::Vec<u8>)> {
+        let name_bytes = name.as_bytes();
+        let mut payload = vec![0u8; 8 + 2 + name_bytes.len()];
+        payload[..8].copy_from_slice(&self.handle.to_le_bytes());
+        payload[8..10].copy_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        payload[10..].copy_from_slice(name_bytes);
+
+        let resp = self.rpc.rpc(VfsRpcOp::AttrGet, &payload)?;
+        if resp.is_empty() {
+            return Err(Errno::EIO);
+        }
+        if resp[0] != 0 {
+            return Err(errno_from_u8(resp[0]));
+        }
+        if resp.len() < 2 {
+            return Err(Errno::EIO);
+        }
+        let val_type = resp[1];
+        Ok((val_type, resp[2..].to_vec()))
+    }
+
+    fn attr_set(&self, name: &str, value: &[u8], value_type: u8, flags: u8) -> SysResult<()> {
+        let name_bytes = name.as_bytes();
+        let mut payload = vec![0u8; 8 + 8 + name_bytes.len() + value.len()];
+        payload[..8].copy_from_slice(&self.handle.to_le_bytes());
+
+        let header = abi::attrs::AttrSetHeader {
+            name_len: name_bytes.len() as u16,
+            value_type,
+            flags,
+            value_len: value.len() as u32,
+        };
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &header as *const _ as *const u8,
+                payload[8..16].as_mut_ptr(),
+                8,
+            );
+        }
+        payload[16..16 + name_bytes.len()].copy_from_slice(name_bytes);
+        payload[16 + name_bytes.len()..].copy_from_slice(value);
+
+        let resp = self.rpc.rpc(VfsRpcOp::AttrSet, &payload)?;
+        if resp.is_empty() {
+            return Err(Errno::EIO);
+        }
+        if resp[0] != 0 {
+            return Err(errno_from_u8(resp[0]));
+        }
+        Ok(())
+    }
+
+    fn attr_remove(&self, name: &str) -> SysResult<()> {
+        let name_bytes = name.as_bytes();
+        let mut payload = vec![0u8; 8 + 2 + name_bytes.len()];
+        payload[..8].copy_from_slice(&self.handle.to_le_bytes());
+        payload[8..10].copy_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        payload[10..].copy_from_slice(name_bytes);
+
+        let resp = self.rpc.rpc(VfsRpcOp::AttrRemove, &payload)?;
+        if resp.is_empty() {
+            return Err(Errno::EIO);
+        }
+        if resp[0] != 0 {
+            return Err(errno_from_u8(resp[0]));
+        }
+        Ok(())
+    }
+
+    fn attr_list(&self, buf: &mut [u8]) -> SysResult<usize> {
+        let payload = self.handle.to_le_bytes();
+        let resp = self.rpc.rpc(VfsRpcOp::AttrList, &payload)?;
+        if resp.is_empty() {
+            return Err(Errno::EIO);
+        }
+        if resp[0] != 0 {
+            return Err(errno_from_u8(resp[0]));
+        }
+        let data = &resp[1..];
+        let n = data.len().min(buf.len());
+        buf[..n].copy_from_slice(&data[..n]);
+        Ok(n)
+    }
+
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
         let in_len = call.in_len as usize;
         let out_len = call.out_len as usize;

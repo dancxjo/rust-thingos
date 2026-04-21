@@ -1000,7 +1000,11 @@ fn main(boot_arg: usize) -> ! {
                             Some(VfsRpcOp::UnsubscribeReady) => {
                                 let _ = port_send(resp_port, &[0]); // E_OK
                             }
-                            Some(VfsRpcOp::Rename) => {
+                            Some(VfsRpcOp::Rename)
+                            | Some(VfsRpcOp::AttrGet)
+                            | Some(VfsRpcOp::AttrSet)
+                            | Some(VfsRpcOp::AttrRemove)
+                            | Some(VfsRpcOp::AttrList) => {
                                 let _ = port_send(resp_port, &[38]); // E_NOTSUP
                             }
                             _ => {

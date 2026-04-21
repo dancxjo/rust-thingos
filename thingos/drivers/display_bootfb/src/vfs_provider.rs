@@ -47,7 +47,12 @@ pub fn dispatch_vfs_rpc(driver: &mut BootFbDriver, req: &ProviderRequest) -> Pro
         VfsRpcOp::DeviceCall => device_call(driver, &req.payload),
         VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::Rename => ProviderResponse::err(Errno::ENOSYS),
-        _ => ProviderResponse::err(Errno::ENOSYS),
+        VfsRpcOp::AttrGet => handle_attr_get(&req.payload),
+        VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove => ProviderResponse::err(Errno::EROFS),
+        VfsRpcOp::AttrList => handle_attr_list(&req.payload),
+        VfsRpcOp::Read | VfsRpcOp::Write | VfsRpcOp::Readdir | VfsRpcOp::Poll => {
+            ProviderResponse::err(Errno::ENOSYS)
+        }
     }
 }
 
@@ -107,9 +112,6 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
 
     let call_payload = &payload[8 + core::mem::size_of::<DeviceCall>()..];
 
-    if call.kind == DeviceKind::Attr {
-        return attr_device_call(handle, call.op, call_payload);
-    }
     if call.kind != DeviceKind::Display {
         return ProviderResponse::err(Errno::ENOSYS);
     }
@@ -198,60 +200,70 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
     }
 }
 
-fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
+fn handle_attr_get(payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 8 + core::mem::size_of::<AttrNameHeader>() {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
     if handle != HANDLE_CARD {
         return ProviderResponse::err(Errno::EINVAL);
     }
-    match op {
-        ATTR_OP_GET => {
-            if payload.len() < core::mem::size_of::<AttrNameHeader>() {
-                return ProviderResponse::err(Errno::EINVAL);
-            }
-            let name_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
-            if payload.len() < core::mem::size_of::<AttrNameHeader>() + name_len {
-                return ProviderResponse::err(Errno::EINVAL);
-            }
-            let name =
-                match core::str::from_utf8(&payload[core::mem::size_of::<AttrNameHeader>()..][..name_len])
-                {
-                    Ok(v) => v,
-                    Err(_) => return ProviderResponse::err(Errno::EINVAL),
-                };
-            let (value_type, value_bytes): (AttrType, &[u8]) = match name {
-                "driver.name" => (AttrType::Utf8, ATTR_DRIVER_NAME.as_bytes()),
-                "driver.class" => (AttrType::Utf8, ATTR_DRIVER_CLASS.as_bytes()),
-                _ => return ProviderResponse::err(Errno::ENOENT),
-            };
-            let mut out = Vec::with_capacity(core::mem::size_of::<AttrValueHeader>() + value_bytes.len());
-            out.push(value_type as u8);
-            out.push(0);
-            out.extend_from_slice(&0u16.to_le_bytes());
-            out.extend_from_slice(&(value_bytes.len() as u32).to_le_bytes());
-            out.extend_from_slice(value_bytes);
-            ProviderResponse::ok_device_call(value_bytes.len() as u32, &out)
-        }
-        ATTR_OP_LIST => {
-            let mut out = Vec::new();
-            let entries = [
-                ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
-                ("driver.class", AttrType::Utf8, ATTR_DRIVER_CLASS.len() as u32),
-            ];
-            for (name, ty, value_len) in entries {
-                let header = AttrListEntryHeader {
-                    name_len: name.len() as u16,
-                    value_type: ty as u8,
-                    flags: 0,
-                    value_len,
-                };
-                out.extend_from_slice(&header.name_len.to_le_bytes());
-                out.push(header.value_type);
-                out.push(0);
-                out.extend_from_slice(&header.value_len.to_le_bytes());
-                out.extend_from_slice(name.as_bytes());
-            }
-            ProviderResponse::ok_device_call(entries.len() as u32, &out)
-        }
-        ATTR_OP_SET | ATTR_OP_REMOVE => ProviderResponse::err(Errno::EROFS),
-        _ => ProviderResponse::err(Errno::ENOSYS),
+
+    let header_start = 8;
+    let name_len = u16::from_le_bytes([payload[header_start], payload[header_start + 1]]) as usize;
+    if payload.len() < 8 + core::mem::size_of::<AttrNameHeader>() + name_len {
+        return ProviderResponse::err(Errno::EINVAL);
     }
+
+    let name = match core::str::from_utf8(
+        &payload[8 + core::mem::size_of::<AttrNameHeader>()..][..name_len],
+    ) {
+        Ok(v) => v,
+        Err(_) => return ProviderResponse::err(Errno::EINVAL),
+    };
+
+    let (value_type, value_bytes): (AttrType, &[u8]) = match name {
+        "driver.name" => (AttrType::Utf8, ATTR_DRIVER_NAME.as_bytes()),
+        "driver.class" => (AttrType::Utf8, ATTR_DRIVER_CLASS.as_bytes()),
+        _ => return ProviderResponse::err(Errno::ENOENT),
+    };
+
+    let mut out = Vec::with_capacity(core::mem::size_of::<AttrValueHeader>() + value_bytes.len());
+    out.push(value_type as u8);
+    out.push(0);
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(value_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(value_bytes);
+
+    ProviderResponse::ok_bytes(&out)
+}
+
+fn handle_attr_list(payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 8 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+    if handle != HANDLE_CARD {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+
+    let mut out = Vec::new();
+    let entries = [
+        ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
+        ("driver.class", AttrType::Utf8, ATTR_DRIVER_CLASS.len() as u32),
+    ];
+    for (name, ty, value_len) in entries {
+        let header = AttrListEntryHeader {
+            name_len: name.len() as u16,
+            value_type: ty as u8,
+            flags: 0,
+            value_len,
+        };
+        out.extend_from_slice(&header.name_len.to_le_bytes());
+        out.push(header.value_type);
+        out.push(0);
+        out.extend_from_slice(&header.value_len.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+    }
+    ProviderResponse::ok_bytes(&out)
 }

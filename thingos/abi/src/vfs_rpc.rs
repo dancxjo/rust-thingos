@@ -82,6 +82,10 @@ pub enum VfsRpcOp {
     /// Payload: `[old_path_len: u32][old_path bytes][new_path_len: u32][new_path bytes]`
     /// Response payload (on OK): (empty)
     Rename = 11,
+    AttrGet = 12,
+    AttrSet = 13,
+    AttrRemove = 14,
+    AttrList = 15,
 }
 
 impl VfsRpcOp {
@@ -99,6 +103,10 @@ impl VfsRpcOp {
             9 => Some(Self::SubscribeReady),
             10 => Some(Self::UnsubscribeReady),
             11 => Some(Self::Rename),
+            12 => Some(Self::AttrGet),
+            13 => Some(Self::AttrSet),
+            14 => Some(Self::AttrRemove),
+            15 => Some(Self::AttrList),
             _ => None,
         }
     }

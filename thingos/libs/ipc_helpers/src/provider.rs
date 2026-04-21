@@ -36,8 +36,8 @@
 
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp::{
-    Close, DeviceCall, Lookup, Poll, Read, Readdir, Rename, Stat, SubscribeReady, UnsubscribeReady,
-    Write,
+    AttrGet, AttrList, AttrRemove, AttrSet, Close, DeviceCall, Lookup, Poll, Read, Readdir, Rename,
+    Stat, SubscribeReady, UnsubscribeReady, Write,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
 use stem::syscall::port::{port_recv, port_send_all, port_try_recv};
@@ -122,6 +122,16 @@ impl ProviderResponse {
         payload[0..4].copy_from_slice(&ret_val.to_le_bytes());
         payload[4..8].copy_from_slice(&(out_data.len() as u32).to_le_bytes());
         payload[8..].copy_from_slice(out_data);
+        Self { status: 0, payload }
+    }
+
+    /// Successful `AttrGet` response payload.
+    ///
+    /// Wire layout: `[val_type: u8][value_bytes...]`.
+    pub fn ok_attr_get(val_type: u8, value: &[u8]) -> Self {
+        let mut payload = alloc::vec![0u8; 1 + value.len()];
+        payload[0] = val_type;
+        payload[1..].copy_from_slice(value);
         Self { status: 0, payload }
     }
 
@@ -213,6 +223,24 @@ impl ProviderLoop {
                 let new_len = u32::from_le_bytes([q[0], q[1], q[2], q[3]]) as usize;
                 4 + old_len + 4 + new_len
             }
+            AttrGet | AttrRemove => {
+                if self.pending.len() < hdr_size + 8 + 2 {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                let name_len = u16::from_le_bytes([p[8], p[9]]) as usize;
+                8 + 2 + name_len
+            }
+            AttrSet => {
+                if self.pending.len() < hdr_size + 8 + 8 {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                let name_len = u16::from_le_bytes([p[8], p[9]]) as usize;
+                let val_len = u32::from_le_bytes([p[12], p[13], p[14], p[15]]) as usize;
+                8 + 8 + name_len + val_len
+            }
+            AttrList => 8,
         };
 
         if payload_len > (VFS_RPC_MAX_REQ - hdr_size) {

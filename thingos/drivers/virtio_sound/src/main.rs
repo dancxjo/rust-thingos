@@ -611,9 +611,12 @@ fn dispatch_rpc(
             (ProviderResponse::ok_empty(), false)
         }
 
-        VfsRpcOp::Close => (ProviderResponse::ok_empty(), false),
-
         VfsRpcOp::Rename => (ProviderResponse::err(Errno::EROFS), false),
+        VfsRpcOp::Close => (ProviderResponse::ok_empty(), false),
+        VfsRpcOp::AttrGet
+        | VfsRpcOp::AttrSet
+        | VfsRpcOp::AttrRemove
+        | VfsRpcOp::AttrList => (ProviderResponse::err(Errno::ENOTSUP), false),
     }
 }
 
