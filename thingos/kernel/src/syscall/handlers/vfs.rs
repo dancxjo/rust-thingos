@@ -1246,7 +1246,7 @@ pub fn sys_fs_attr_remove(fd: usize, name_ptr: usize, name_len: usize) -> SysRes
 }
 
 pub fn sys_fs_attr_list(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
-    crate::kinfo!("SYS_FS_ATTR_LIST: fd={} buf_ptr={:x} buf_len={}", fd, buf_ptr, buf_len);
+    crate::kprintln!("SYS_FS_ATTR_LIST: fd={} buf_ptr={:x} buf_len={}", fd, buf_ptr, buf_len);
     let node = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
