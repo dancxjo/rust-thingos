@@ -30,6 +30,40 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v5
 
+      - name: Bootstrap patched vendor crates
+        run: |
+          set -euo pipefail
+          mkdir -p vendor
+
+          crate_version() {
+            local crate="$1"
+            awk -v crate="$crate" '
+              /^\[\[package\]\]$/ { in_pkg=1; name=""; version=""; next }
+              in_pkg && /^name = / { gsub(/"/, "", $3); name=$3; next }
+              in_pkg && /^version = / { gsub(/"/, "", $3); version=$3; next }
+              in_pkg && name == crate && version != "" { print version; exit }
+            ' Cargo.lock
+          }
+
+          fetch_crate() {
+            local crate="$1"
+            local version
+            version="$(crate_version "$crate")"
+            if [[ -z "$version" ]]; then
+              echo "Failed to determine version for $crate from Cargo.lock" >&2
+              exit 1
+            fi
+            rm -rf "vendor/$crate"
+            mkdir -p "vendor/$crate"
+            curl -fsSL "https://crates.io/api/v1/crates/$crate/$version/download" \
+              | tar -xz --strip-components=1 -C "vendor/$crate"
+          }
+
+          fetch_crate dirs
+          fetch_crate dirs-sys
+          fetch_crate errno
+          fetch_crate mio
+
       - name: Install just
         uses: extractions/setup-just@v3
 
@@ -43,6 +77,40 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v5
+
+      - name: Bootstrap patched vendor crates
+        run: |
+          set -euo pipefail
+          mkdir -p vendor
+
+          crate_version() {
+            local crate="$1"
+            awk -v crate="$crate" '
+              /^\[\[package\]\]$/ { in_pkg=1; name=""; version=""; next }
+              in_pkg && /^name = / { gsub(/"/, "", $3); name=$3; next }
+              in_pkg && /^version = / { gsub(/"/, "", $3); version=$3; next }
+              in_pkg && name == crate && version != "" { print version; exit }
+            ' Cargo.lock
+          }
+
+          fetch_crate() {
+            local crate="$1"
+            local version
+            version="$(crate_version "$crate")"
+            if [[ -z "$version" ]]; then
+              echo "Failed to determine version for $crate from Cargo.lock" >&2
+              exit 1
+            fi
+            rm -rf "vendor/$crate"
+            mkdir -p "vendor/$crate"
+            curl -fsSL "https://crates.io/api/v1/crates/$crate/$version/download" \
+              | tar -xz --strip-components=1 -C "vendor/$crate"
+          }
+
+          fetch_crate dirs
+          fetch_crate dirs-sys
+          fetch_crate errno
+          fetch_crate mio
 
       - name: Install just
         uses: extractions/setup-just@v3
