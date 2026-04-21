@@ -114,6 +114,17 @@ impl ProviderResponse {
         Self { status: 0, payload }
     }
 
+    /// Successful `DeviceCall` response payload.
+    ///
+    /// Wire layout: `[ret_val: u32][out_len: u32][out_bytes...]`.
+    pub fn ok_device_call(ret_val: u32, out_data: &[u8]) -> Self {
+        let mut payload = alloc::vec![0u8; 8 + out_data.len()];
+        payload[0..4].copy_from_slice(&ret_val.to_le_bytes());
+        payload[4..8].copy_from_slice(&(out_data.len() as u32).to_le_bytes());
+        payload[8..].copy_from_slice(out_data);
+        Self { status: 0, payload }
+    }
+
     /// Error response carrying an errno.
     pub fn err(e: Errno) -> Self {
         Self { status: e as u8, payload: alloc::vec![] }

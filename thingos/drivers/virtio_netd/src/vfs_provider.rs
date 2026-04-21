@@ -30,6 +30,11 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use abi::attrs::{
+    ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrNameHeader,
+    AttrType, AttrValueHeader,
+};
+use abi::device::{DeviceCall, DeviceKind};
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderRequest, ProviderResponse};
@@ -41,6 +46,7 @@ use crate::driver::VirtioNetDriver;
 
 /// Root directory handle.
 pub const HANDLE_ROOT: u64 = 0;
+const ATTR_DRIVER_NAME: &str = "virtio_netd";
 const HANDLE_CTL: u64 = 1;
 const HANDLE_STATUS: u64 = 2;
 const HANDLE_MAC: u64 = 3;
@@ -129,11 +135,133 @@ pub fn handle_vfs_rpc(
         VfsRpcOp::Stat => handle_stat(payload),
         VfsRpcOp::Close => ProviderResponse::ok_empty(),
         VfsRpcOp::Poll => handle_poll(state, payload),
-        VfsRpcOp::DeviceCall => ProviderResponse::err(Errno::ENOSYS),
+        VfsRpcOp::DeviceCall => handle_device_call(state, payload),
         VfsRpcOp::Rename => ProviderResponse::err(Errno::ENOSYS),
         VfsRpcOp::SubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
     }
+}
+
+fn handle_device_call(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
+    let dc_size = core::mem::size_of::<DeviceCall>();
+    if payload.len() < 8 + dc_size {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+    if handle == HANDLE_ROOT {
+        return ProviderResponse::err(Errno::EISDIR);
+    }
+    let call: DeviceCall =
+        unsafe { core::ptr::read_unaligned(payload[8..8 + dc_size].as_ptr() as *const _) };
+    if call.kind != DeviceKind::Attr {
+        return ProviderResponse::err(Errno::ENOSYS);
+    }
+    let in_data = &payload[8 + dc_size..];
+    match call.op {
+        ATTR_OP_GET => attr_get(state, in_data),
+        ATTR_OP_SET => attr_set(state, in_data),
+        ATTR_OP_REMOVE => ProviderResponse::err(Errno::ENOTSUP),
+        ATTR_OP_LIST => attr_list(),
+        _ => ProviderResponse::err(Errno::ENOSYS),
+    }
+}
+
+fn attr_get(state: &NetVfsState, payload: &[u8]) -> ProviderResponse {
+    if payload.len() < core::mem::size_of::<AttrNameHeader>() {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let name_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+    let off = core::mem::size_of::<AttrNameHeader>();
+    if payload.len() < off + name_len {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let name = match core::str::from_utf8(&payload[off..off + name_len]) {
+        Ok(v) => v,
+        Err(_) => return ProviderResponse::err(Errno::EINVAL),
+    };
+    let mut value_buf = [0u8; 8];
+    let (ty, bytes): (AttrType, &[u8]) = match name {
+        "driver.name" => (AttrType::Utf8, ATTR_DRIVER_NAME.as_bytes()),
+        "net.mtu" => {
+            value_buf.copy_from_slice(&(state.mtu as u64).to_le_bytes());
+            (AttrType::U64, &value_buf)
+        }
+        "net.link_up" => {
+            value_buf[0] = if state.link_up { 1 } else { 0 };
+            (AttrType::Bool, &value_buf[..1])
+        }
+        _ => return ProviderResponse::err(Errno::ENOENT),
+    };
+    let mut out = Vec::with_capacity(core::mem::size_of::<AttrValueHeader>() + bytes.len());
+    out.push(ty as u8);
+    out.push(0);
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(bytes);
+    ProviderResponse::ok_device_call(bytes.len() as u32, &out)
+}
+
+fn attr_set(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
+    if payload.len() < core::mem::size_of::<abi::attrs::AttrSetHeader>() {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let name_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+    let value_type = payload[2];
+    let value_len = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+    let off = core::mem::size_of::<abi::attrs::AttrSetHeader>();
+    if payload.len() < off + name_len + value_len {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let name = match core::str::from_utf8(&payload[off..off + name_len]) {
+        Ok(v) => v,
+        Err(_) => return ProviderResponse::err(Errno::EINVAL),
+    };
+    let value = &payload[off + name_len..off + name_len + value_len];
+    match name {
+        "net.mtu" => {
+            if value_type != AttrType::U64 as u8 || value.len() != 8 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let mtu_u64 = u64::from_le_bytes(value.try_into().unwrap());
+            if mtu_u64 > u32::MAX as u64 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let mtu = mtu_u64 as u32;
+            state.mtu = mtu;
+            ProviderResponse::ok_device_call(value.len() as u32, &[])
+        }
+        "net.link_up" => {
+            if value_type != AttrType::Bool as u8 || value.len() != 1 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            state.link_up = value[0] != 0;
+            ProviderResponse::ok_device_call(1, &[])
+        }
+        _ => ProviderResponse::err(Errno::ENOENT),
+    }
+}
+
+fn attr_list() -> ProviderResponse {
+    let mut out = Vec::new();
+    let entries = [
+        ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
+        ("net.mtu", AttrType::U64, 8u32),
+        ("net.link_up", AttrType::Bool, 1u32),
+    ];
+    for (name, ty, value_len) in entries {
+        let hdr = AttrListEntryHeader {
+            name_len: name.len() as u16,
+            value_type: ty as u8,
+            flags: 0,
+            value_len,
+        };
+        out.extend_from_slice(&hdr.name_len.to_le_bytes());
+        out.push(hdr.value_type);
+        out.push(0);
+        out.extend_from_slice(&hdr.value_len.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+    }
+    ProviderResponse::ok_device_call(entries.len() as u32, &out)
 }
 
 // ── Lookup ────────────────────────────────────────────────────────────────────

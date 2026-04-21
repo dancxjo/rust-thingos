@@ -54,6 +54,7 @@ const FILE_NAME: &[u8] = b"hello.txt";
 
 /// Synthetic handle value for hello.txt (any non-zero u64 is fine).
 const HELLO_HANDLE: u64 = 1;
+const ATTR_PROVIDER_NAME: &str = "ipc_provider_demo";
 
 /// Content served by READ.
 const HELLO_CONTENT: &[u8] = b"Hello from the VFS provider!\n";
@@ -197,7 +198,75 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
         // Poll always reports readable.
         VfsRpcOp::Poll => ProviderResponse::ok_bytes(&[1u8]),
 
+        // DeviceCall is used for typed attr CRUD/list.
+        VfsRpcOp::DeviceCall => dispatch_attr_device_call(payload),
+
         // All other operations are not implemented.
+        _ => ProviderResponse::err(Errno::ENOSYS),
+    }
+}
+
+fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
+    use abi::attrs::{
+        ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrType,
+    };
+    use abi::device::{DeviceCall, DeviceKind};
+
+    let dc_size = core::mem::size_of::<DeviceCall>();
+    if payload.len() < 8 + dc_size {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let call: DeviceCall =
+        unsafe { core::ptr::read_unaligned(payload[8..8 + dc_size].as_ptr() as *const _) };
+    if call.kind != DeviceKind::Attr {
+        return ProviderResponse::err(Errno::ENOSYS);
+    }
+    let in_data = &payload[8 + dc_size..];
+    match call.op {
+        ATTR_OP_GET => {
+            if in_data.len() < 4 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let name_len = u16::from_le_bytes([in_data[0], in_data[1]]) as usize;
+            if in_data.len() < 4 + name_len {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let name = match core::str::from_utf8(&in_data[4..4 + name_len]) {
+                Ok(v) => v,
+                Err(_) => return ProviderResponse::err(Errno::EINVAL),
+            };
+            let (ty, value): (AttrType, &[u8]) = match name {
+                "provider.is_demo" => (AttrType::Bool, &[1u8]),
+                "provider.name" => (AttrType::Utf8, ATTR_PROVIDER_NAME.as_bytes()),
+                _ => return ProviderResponse::err(Errno::ENOENT),
+            };
+            let mut out = alloc::vec![ty as u8, 0, 0, 0];
+            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            out.extend_from_slice(value);
+            ProviderResponse::ok_device_call(value.len() as u32, &out)
+        }
+        ATTR_OP_SET | ATTR_OP_REMOVE => ProviderResponse::err(Errno::EROFS),
+        ATTR_OP_LIST => {
+            let mut out = alloc::vec![];
+            let entries = [
+                ("provider.is_demo", AttrType::Bool, 1u32),
+                ("provider.name", AttrType::Utf8, ATTR_PROVIDER_NAME.len() as u32),
+            ];
+            for (name, ty, value_len) in entries {
+                let hdr = AttrListEntryHeader {
+                    name_len: name.len() as u16,
+                    value_type: ty as u8,
+                    flags: 0,
+                    value_len,
+                };
+                out.extend_from_slice(&hdr.name_len.to_le_bytes());
+                out.push(hdr.value_type);
+                out.push(0);
+                out.extend_from_slice(&hdr.value_len.to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+            }
+            ProviderResponse::ok_device_call(entries.len() as u32, &out)
+        }
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }
