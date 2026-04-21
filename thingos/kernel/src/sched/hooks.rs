@@ -189,6 +189,8 @@ pub(crate) static mut REGISTER_TIMEOUT_WAKE_HOOK: Option<fn(TaskId, u64)> = None
 pub(crate) static mut UNREGISTER_TIMEOUT_WAKE_HOOK: Option<fn(TaskId)> = None;
 /// Return a snapshot of all live processes (those that have process_info set).
 pub(crate) static mut LIST_PROCESSES_HOOK: Option<fn() -> Vec<ProcessSnapshot>> = None;
+/// Return the current PID membership snapshot for one Unix-compat process group.
+pub(crate) static mut LIST_PROCESS_IDS_BY_PGID_HOOK: Option<fn(u32) -> Vec<u32>> = None;
 pub(crate) static mut CURRENT_TASK_NAME_HOOK: Option<fn() -> [u8; 32]> = None;
 pub(crate) static mut TASK_EXEC_HOOK: Option<
     fn(u32, Vec<Vec<u8>>, BTreeMap<Vec<u8>, Vec<u8>>) -> Result<(), Errno>,
@@ -523,6 +525,10 @@ pub unsafe fn current_task_resource_id() -> Option<u64> {
 /// Return a snapshot of all live processes.
 pub fn list_processes_current() -> Vec<ProcessSnapshot> {
     if let Some(hook) = unsafe { LIST_PROCESSES_HOOK } { hook() } else { Vec::new() }
+}
+
+pub fn list_process_ids_by_pgid_current(pgid: u32) -> Vec<u32> {
+    if let Some(hook) = unsafe { LIST_PROCESS_IDS_BY_PGID_HOOK } { hook(pgid) } else { Vec::new() }
 }
 
 pub unsafe fn current_task_name_current() -> [u8; 32] {

@@ -218,7 +218,9 @@ fn main(arg: usize) -> ! {
     debug!("NETD: allocating sockets_storage...");
     let mut sockets_storage: Vec<SocketStorage> = Vec::with_capacity(256);
     for i in 0..256 {
-        if i % 64 == 0 { debug!("NETD: pushing socket storage {}...", i); }
+        if i % 64 == 0 {
+            debug!("NETD: pushing socket storage {}...", i);
+        }
         sockets_storage.push(SocketStorage::EMPTY);
     }
     debug!("NETD: creating SocketSet...");
@@ -277,7 +279,8 @@ fn main(arg: usize) -> ! {
             net_provider.push_notifications(&mut socket_set, &mut socket_api);
             stem::syscall::yield_now();
         } else {
-            let delay_ms = iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(10);
+            let delay_ms =
+                iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(10);
             let timeout_ms = delay_ms.min(100).max(1) as u64;
             let _ = req_fd;
             let _ = events_fd;

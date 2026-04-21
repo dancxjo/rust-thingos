@@ -123,13 +123,17 @@ fn preferred_local_port() -> u16 {
 fn bind_dns_socket(socket: &mut UdpSocket) -> Result<u16, DnsError> {
     let start = preferred_local_port();
     for attempt in 0..DNS_BIND_ATTEMPTS {
-        let local_port =
-            DNS_EPHEMERAL_PORT_BASE + (start.wrapping_sub(DNS_EPHEMERAL_PORT_BASE) + attempt)
-                % DNS_EPHEMERAL_PORT_SPAN;
+        let local_port = DNS_EPHEMERAL_PORT_BASE
+            + (start.wrapping_sub(DNS_EPHEMERAL_PORT_BASE) + attempt) % DNS_EPHEMERAL_PORT_SPAN;
         match socket.bind(local_port) {
             Ok(()) => return Ok(local_port),
             Err(e) => {
-                stem::debug!("DNS: bind port {} failed on attempt {}: {:?}", local_port, attempt, e);
+                stem::debug!(
+                    "DNS: bind port {} failed on attempt {}: {:?}",
+                    local_port,
+                    attempt,
+                    e
+                );
             }
         }
     }
@@ -141,11 +145,16 @@ fn build_dns_query(name: &str, txid: u16) -> Vec<u8> {
     query.extend_from_slice(&[
         (txid >> 8) as u8,
         txid as u8,
-        0x01, 0x00, // standard query
-        0x00, 0x01, // qdcount
-        0x00, 0x00, // ancount
-        0x00, 0x00, // nscount
-        0x00, 0x00, // arcount
+        0x01,
+        0x00, // standard query
+        0x00,
+        0x01, // qdcount
+        0x00,
+        0x00, // ancount
+        0x00,
+        0x00, // nscount
+        0x00,
+        0x00, // arcount
     ]);
 
     for part in name.split('.') {

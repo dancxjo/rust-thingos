@@ -218,16 +218,18 @@ impl VfsNicDevice {
 
             let mut frame = [0u8; MAX_FRAME_LEN];
             frame[..frame_len].copy_from_slice(&remaining[4..4 + frame_len]);
-            
+
             // Basic IPv4 header parsing for logging
             let diag_info = if frame_len >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
                 let src = &frame[26..30];
                 let dst = &frame[30..34];
                 let proto = frame[23];
-                alloc::format!(" (IPv4 {} -> {}, proto={})", 
+                alloc::format!(
+                    " (IPv4 {} -> {}, proto={})",
                     smoltcp::wire::Ipv4Address::from_bytes(src),
                     smoltcp::wire::Ipv4Address::from_bytes(dst),
-                    proto)
+                    proto
+                )
             } else {
                 "".into()
             };
@@ -249,16 +251,18 @@ impl VfsNicDevice {
 
     fn send_frame(&mut self, data: &[u8]) {
         let frame_len = data.len() as u32;
-        
+
         // Basic IPv4 header parsing for logging
         let diag_info = if frame_len >= 34 && data[12] == 0x08 && data[13] == 0x00 {
             let src = &data[26..30];
             let dst = &data[30..34];
             let proto = data[23];
-            alloc::format!(" (IPv4 {} -> {}, proto={})", 
+            alloc::format!(
+                " (IPv4 {} -> {}, proto={})",
                 smoltcp::wire::Ipv4Address::from_bytes(src),
                 smoltcp::wire::Ipv4Address::from_bytes(dst),
-                proto)
+                proto
+            )
         } else {
             "".into()
         };

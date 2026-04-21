@@ -3,7 +3,6 @@
 //! This module prototypes group broadcast as a delivery strategy layered on top
 //! of ordinary per-recipient inbox enqueue.
 
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use crate::message::Message;
@@ -148,25 +147,7 @@ fn enqueue_to_process(
 }
 
 fn snapshot_group_members_by_pgid(pgid: u32) -> Vec<u32> {
-    let mut seen = BTreeSet::new();
-    let mut members = Vec::new();
-
-    for snapshot in crate::sched::list_processes_current() {
-        if !seen.insert(snapshot.pid) {
-            continue;
-        }
-
-        let Some(pinfo) = crate::sched::process_info_for_tid_current(snapshot.pid as u64) else {
-            continue;
-        };
-
-        let process = pinfo.lock();
-        if process.unix_compat.pgid == pgid {
-            members.push(process.pid);
-        }
-    }
-
-    members
+    crate::sched::list_process_ids_by_pgid_current(pgid)
 }
 
 fn fanout_snapshot(

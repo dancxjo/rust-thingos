@@ -55,13 +55,12 @@ use alloc::vec::Vec;
 
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp, VfsRpcReqHeader};
 use smoltcp::iface::{Interface, SocketSet};
-use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 use stem::syscall::port::{PortHandle, port_create, port_send, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::{info, warn};
 
-use crate::socket_api::{CONN_RX, CONN_TX, SocketApi};
+use crate::socket_api::SocketApi;
 
 // ── errno shorthands ─────────────────────────────────────────────────────────
 
@@ -317,10 +316,9 @@ impl NetVfsProvider {
             VfsRpcOp::Rename => send_err(resp_port, E_NOTSUP),
             VfsRpcOp::SubscribeReady => send_resp(resp_port, &[E_OK]),
             VfsRpcOp::UnsubscribeReady => send_resp(resp_port, &[E_OK]),
-            VfsRpcOp::AttrGet
-            | VfsRpcOp::AttrSet
-            | VfsRpcOp::AttrRemove
-            | VfsRpcOp::AttrList => send_err(resp_port, E_NOTSUP),
+            VfsRpcOp::AttrGet | VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove | VfsRpcOp::AttrList => {
+                send_err(resp_port, E_NOTSUP)
+            }
         }
     }
 
@@ -328,6 +326,19 @@ impl NetVfsProvider {
         socket_api.push_notifications(socket_set, self.req_write, TCP_DYN_BASE);
         socket_api.push_notifications(socket_set, self.req_write, UDP_DYN_BASE);
         socket_api.push_notifications(socket_set, self.req_write, ICMP_DYN_BASE);
+    }
+
+    fn write_result_from_send(&mut self, response: &[u8], framing_overhead: usize) -> WriteResult {
+        if response.len() < 4 {
+            return WriteResult::Error;
+        }
+        let sent = u16::from_le_bytes([response[2], response[3]]) as usize;
+        if sent == 0 {
+            return WriteResult::Error;
+        }
+        self.tx_bytes += sent as u64;
+        self.tx_packets += 1;
+        WriteResult::Ok(framing_overhead + sent)
     }
 
     // ── Lookup ────────────────────────────────────────────────────────────────
@@ -667,13 +678,10 @@ impl NetVfsProvider {
                     warn!("NetVfsProvider: out of socket buffers for tcp/new");
                     return ReadResult::Error;
                 };
-                let rx_buf = SocketBuffer::new(unsafe { &mut CONN_RX[buf_idx][..] });
-                let tx_buf = SocketBuffer::new(unsafe { &mut CONN_TX[buf_idx][..] });
-                let socket = TcpSocket::new(rx_buf, tx_buf);
-                let shdl = socket_set.add(socket);
-                let api_handle = socket_api.alloc_socket_raw(shdl, buf_idx, false, 0);
-                let text = alloc::format!("{}\n", api_handle);
-                ReadResult::Data(text.into_bytes())
+                match socket_api.alloc_tcp_socket_raw(socket_set, buf_idx) {
+                    Some(id) => ReadResult::Data(alloc::format!("{}\n", id).into_bytes()),
+                    None => ReadResult::Error,
+                }
             }
             // udp/new: allocate a new UDP socket
             HANDLE_UDP_NEW => {
@@ -1294,17 +1302,7 @@ impl NetVfsProvider {
                 let payload = &raw[10..10 + payload_len];
                 let r = socket_api
                     .handle_udp_send_to(socket_set, api_handle, dest_ip, dest_port, payload);
-                if r.len() >= 4 {
-                    let sent = u16::from_le_bytes([r[2], r[3]]) as usize;
-                    if sent == 0 {
-                        return WriteResult::Error;
-                    }
-                    self.tx_bytes += sent as u64;
-                    self.tx_packets += 1;
-                    WriteResult::Ok(10 + sent)
-                } else {
-                    WriteResult::Error
-                }
+                self.write_result_from_send(&r, 10)
             }
             _ => WriteResult::ReadOnly,
         }
@@ -1348,17 +1346,7 @@ impl NetVfsProvider {
                 }
                 let payload = &raw[8..8 + payload_len];
                 let r = socket_api.handle_icmp_send_to(socket_set, api_handle, dest_ip, payload);
-                if r.len() >= 4 {
-                    let sent = u16::from_le_bytes([r[2], r[3]]) as usize;
-                    if sent == 0 {
-                        return WriteResult::Error;
-                    }
-                    self.tx_bytes += sent as u64;
-                    self.tx_packets += 1;
-                    WriteResult::Ok(8 + sent)
-                } else {
-                    WriteResult::Error
-                }
+                self.write_result_from_send(&r, 8)
             }
             _ => WriteResult::ReadOnly,
         }

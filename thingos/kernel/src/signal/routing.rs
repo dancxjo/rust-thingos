@@ -338,25 +338,7 @@ fn interrupt_or_wake_thread(tid: u64) {
 // ── Membership snapshot helper ────────────────────────────────────────────────
 
 fn snapshot_group_pids(pgid: u32) -> Vec<u32> {
-    use alloc::collections::BTreeSet;
-
-    let mut seen = BTreeSet::new();
-    let mut members = Vec::new();
-
-    for snapshot in crate::sched::list_processes_current() {
-        if !seen.insert(snapshot.pid) {
-            continue;
-        }
-        let Some(pinfo) = crate::sched::process_info_for_pid_current(snapshot.pid) else {
-            continue;
-        };
-        let p = pinfo.lock();
-        if p.unix_compat.pgid == pgid {
-            members.push(p.pid);
-        }
-    }
-
-    members
+    crate::sched::list_process_ids_by_pgid_current(pgid)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

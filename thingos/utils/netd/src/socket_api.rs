@@ -159,6 +159,35 @@ impl SocketApi {
         self.alloc_handle()
     }
 
+    fn record_tx(&mut self, handle: u32, bytes: usize) {
+        if bytes == 0 {
+            return;
+        }
+        if let Some(m) = self.sockets.get_mut(&handle) {
+            m.bytes_tx = m.bytes_tx.saturating_add(bytes as u64);
+            m.packets_tx = m.packets_tx.saturating_add(1);
+            m.last_seen_ms = Self::now_ms();
+        }
+    }
+
+    fn record_rx(&mut self, handle: u32, bytes: usize) {
+        if bytes == 0 {
+            return;
+        }
+        if let Some(m) = self.sockets.get_mut(&handle) {
+            m.bytes_rx = m.bytes_rx.saturating_add(bytes as u64);
+            m.packets_rx = m.packets_rx.saturating_add(1);
+            m.last_seen_ms = Self::now_ms();
+        }
+    }
+
+    fn set_remote_v4(&mut self, handle: u32, remote_ip: Ipv4Address, remote_port: u16) {
+        if let Some(m) = self.sockets.get_mut(&handle) {
+            m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
+            Self::sync_remote_edge(m);
+        }
+    }
+
     fn now_ms() -> u64 {
         stem::time::now().as_millis() as u64
     }
@@ -322,6 +351,19 @@ impl SocketApi {
         );
         self.sockets.insert(api_handle, managed);
         api_handle
+    }
+
+    /// Create a new TCP socket and register it. Returns the API handle, or None on error.
+    pub fn alloc_tcp_socket_raw<'a>(
+        &mut self,
+        socket_set: &mut SocketSet<'a>,
+        buf_idx: usize,
+    ) -> Option<u32> {
+        let rx_buf = SocketBuffer::new(unsafe { &mut CONN_RX[buf_idx][..] });
+        let tx_buf = SocketBuffer::new(unsafe { &mut CONN_TX[buf_idx][..] });
+        let socket = TcpSocket::new(rx_buf, tx_buf);
+        let socket_handle = socket_set.add(socket);
+        Some(self.alloc_socket_raw(socket_handle, buf_idx, false, 0))
     }
 
     /// Create a new UDP socket and register it. Returns the API handle, or None on error.
@@ -566,7 +608,12 @@ impl SocketApi {
                     ready |= abi::syscall::poll_flags::POLLHUP as u32;
                 }
                 if ready != 0 {
-                    trace!("SOCKET_API: poll handle={} state={:?} ready=0x{:04x}", api_handle, socket.state(), ready);
+                    trace!(
+                        "SOCKET_API: poll handle={} state={:?} ready=0x{:04x}",
+                        api_handle,
+                        socket.state(),
+                        ready
+                    );
                 }
                 ready
             }
@@ -670,11 +717,19 @@ impl SocketApi {
         let local_port = 49152 + (self.next_handle as u16 % 16384);
 
         let socket = socket_set.get_mut::<TcpSocket>(socket_handle);
-        debug!("SOCKET_API: connecting socket handle={} endpoint={} local_port={} state={:?}", 
-              api_handle, endpoint, local_port, socket.state());
+        debug!(
+            "SOCKET_API: connecting socket handle={} endpoint={} local_port={} state={:?}",
+            api_handle,
+            endpoint,
+            local_port,
+            socket.state()
+        );
         match socket.connect(iface.context(), endpoint, local_port) {
             Ok(()) => {
-                debug!("SOCKET_API: connect initiated for handle={} endpoint={}", api_handle, endpoint);
+                debug!(
+                    "SOCKET_API: connect initiated for handle={} endpoint={}",
+                    api_handle, endpoint
+                );
                 if let Some(m) = self.sockets.get_mut(&api_handle) {
                     m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
                     m.local =
@@ -1400,15 +1455,10 @@ impl SocketApi {
             }
         };
 
-        if let Some(m) = self.sockets.get_mut(&handle) {
-            if result.len() >= 4 && u16::from_le_bytes([result[2], result[3]]) != 0 {
-                m.bytes_tx = m.bytes_tx.saturating_add(data.len() as u64);
-                m.packets_tx = m.packets_tx.saturating_add(1);
-                m.last_seen_ms = Self::now_ms();
-            }
-            m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
-            Self::sync_remote_edge(m);
+        if result.len() >= 4 && u16::from_le_bytes([result[2], result[3]]) != 0 {
+            self.record_tx(handle, data.len());
         }
+        self.set_remote_v4(handle, remote_ip, remote_port);
 
         result
     }
@@ -1438,12 +1488,8 @@ impl SocketApi {
             }
         };
 
-        if let Some(m) = self.sockets.get_mut(&handle) {
-            if result.len() >= 4 && u16::from_le_bytes([result[2], result[3]]) != 0 {
-                m.bytes_tx = m.bytes_tx.saturating_add(data.len() as u64);
-                m.packets_tx = m.packets_tx.saturating_add(1);
-                m.last_seen_ms = Self::now_ms();
-            }
+        if result.len() >= 4 && u16::from_le_bytes([result[2], result[3]]) != 0 {
+            self.record_tx(handle, data.len());
         }
 
         result
@@ -1479,13 +1525,8 @@ impl SocketApi {
                     remote_port
                 );
 
-                if let Some(m) = self.sockets.get_mut(&handle) {
-                    m.bytes_rx = m.bytes_rx.saturating_add(data.len() as u64);
-                    m.packets_rx = m.packets_rx.saturating_add(1);
-                    m.last_seen_ms = Self::now_ms();
-                    m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
-                    Self::sync_remote_edge(m);
-                }
+                self.record_rx(handle, data.len());
+                self.set_remote_v4(handle, remote_ip, remote_port);
 
                 encode_udp_data(remote_ip, remote_port, data)
             }
@@ -1518,11 +1559,7 @@ impl SocketApi {
             Ok((data, endpoint)) => {
                 let IpAddress::Ipv4(remote_ip) = endpoint;
 
-                if let Some(m) = self.sockets.get_mut(&handle) {
-                    m.bytes_rx = m.bytes_rx.saturating_add(data.len() as u64);
-                    m.packets_rx = m.packets_rx.saturating_add(1);
-                    m.last_seen_ms = Self::now_ms();
-                }
+                self.record_rx(handle, data.len());
 
                 encode_icmp_data(remote_ip, data)
             }
@@ -1613,11 +1650,7 @@ impl SocketApi {
         match socket.recv_slice(&mut self.recv_scratch[..max_len]) {
             Ok(len) => {
                 trace!("SOCKET_API: TCP_RECV handle={} got {} bytes", handle, len);
-                if let Some(m) = self.sockets.get_mut(&handle) {
-                    m.bytes_rx = m.bytes_rx.saturating_add(len as u64);
-                    m.packets_rx = m.packets_rx.saturating_add(1);
-                    m.last_seen_ms = Self::now_ms();
-                }
+                self.record_rx(handle, len);
                 encode_data(&self.recv_scratch[..len])
             }
             Err(_) => {

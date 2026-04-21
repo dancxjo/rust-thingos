@@ -40,15 +40,16 @@ pub use hooks::{
     current_task_name_current, current_task_resource_id, current_tid_current,
     current_user_fs_base_current, dump_stats_current, exit_current, get_signal_mask_current,
     get_thread_pending_current, get_user_mapping_at_current, handle_user_stack_fault_current,
-    interrupt_task_current, kill_by_tid_current, list_processes_current, poll_task_exit_current,
-    process_info_current, process_info_for_pid_current, process_info_for_tid_current,
-    register_task_exit_waiter_current, register_timeout_wake_current, remove_user_mappings_current,
-    set_current_task_name_current, set_current_user_fs_base_current, set_priority_current,
-    set_signal_mask_current, set_thread_pending_current, sleep_ticks_current,
-    spawn_process_current, spawn_process_ex_current, spawn_process_from_path_current,
-    spawn_user_thread_current, take_pending_interrupt_current, task_exec_current,
-    task_status_current, task_wait_current, unregister_task_exit_waiter_current,
-    unregister_timeout_wake_current, waitpid_current, yield_now_current,
+    interrupt_task_current, kill_by_tid_current, list_process_ids_by_pgid_current,
+    list_processes_current, poll_task_exit_current, process_info_current,
+    process_info_for_pid_current, process_info_for_tid_current, register_task_exit_waiter_current,
+    register_timeout_wake_current, remove_user_mappings_current, set_current_task_name_current,
+    set_current_user_fs_base_current, set_priority_current, set_signal_mask_current,
+    set_thread_pending_current, sleep_ticks_current, spawn_process_current,
+    spawn_process_ex_current, spawn_process_from_path_current, spawn_user_thread_current,
+    take_pending_interrupt_current, task_exec_current, task_status_current, task_wait_current,
+    unregister_task_exit_waiter_current, unregister_timeout_wake_current, waitpid_current,
+    yield_now_current,
 };
 pub use sleep::{sleep_ms, sleep_ticks, sleep_until, yield_now};
 pub use spawn::{
@@ -1822,6 +1823,7 @@ pub fn init<R: BootRuntime>() {
             hooks::REGISTER_TIMEOUT_WAKE_HOOK = Some(register_timeout_wake::<R>);
             hooks::UNREGISTER_TIMEOUT_WAKE_HOOK = Some(unregister_timeout_wake::<R>);
             hooks::LIST_PROCESSES_HOOK = Some(list_processes::<R>);
+            hooks::LIST_PROCESS_IDS_BY_PGID_HOOK = Some(list_process_ids_by_pgid::<R>);
             hooks::CURRENT_TASK_NAME_HOOK = Some(current_task_name_impl::<R>);
             hooks::TASK_EXEC_HOOK = Some(crate::task::exec::task_exec_current::<R>);
             hooks::SET_CURRENT_USER_FS_BASE_HOOK = Some(set_current_user_fs_base::<R>);
@@ -3365,6 +3367,48 @@ pub fn list_processes<R: BootRuntime>() -> alloc::vec::Vec<hooks::ProcessSnapsho
     }
     rt.irq_restore(_irq);
     out
+}
+
+/// Return the current PID membership snapshot for one Unix-compat process group.
+///
+/// Unlike [`list_processes`], this helper never waits on a `ProcessInfo` mutex
+/// while the task registry is held. It first snapshots unique `ProcessInfo`
+/// Arcs from the registry, then drops the registry lock before inspecting
+/// `unix_compat.pgid`. This avoids registry -> process lock inversion on
+/// latency-sensitive paths such as TTY-generated `SIGINT` fanout.
+pub fn list_process_ids_by_pgid<R: BootRuntime>(pgid: u32) -> alloc::vec::Vec<u32> {
+    let rt = crate::runtime::<R>();
+    let _irq = rt.irq_disable();
+
+    let process_infos = {
+        let reg = crate::task::registry::get_registry::<R>();
+        let mut seen = alloc::collections::BTreeSet::new();
+        let mut infos = alloc::vec::Vec::new();
+
+        for task in reg.threads.iter() {
+            let Some(pi_arc) = &task.process_info else {
+                continue;
+            };
+            let key = alloc::sync::Arc::as_ptr(pi_arc) as usize;
+            if seen.insert(key) {
+                infos.push(pi_arc.clone());
+            }
+        }
+
+        infos
+    };
+
+    rt.irq_restore(_irq);
+
+    let mut members = alloc::vec::Vec::new();
+    for pinfo in process_infos {
+        let process = pinfo.lock();
+        if process.unix_compat.pgid == pgid {
+            members.push(process.pid);
+        }
+    }
+
+    members
 }
 
 fn register_task_exit_waiter<R: BootRuntime>(

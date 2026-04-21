@@ -68,7 +68,10 @@ fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Resul
                 if pollfd[0].revents == 0 {
                     continue;
                 }
-                info!("http: wait_fd_ready complete for {} revents=0x{:04x}", context, pollfd[0].revents);
+                info!(
+                    "http: wait_fd_ready complete for {} revents=0x{:04x}",
+                    context, pollfd[0].revents
+                );
                 return Ok(pollfd[0].revents);
             }
             Err(abi::errors::Errno::EINTR) => continue,
@@ -112,28 +115,18 @@ impl TcpStream {
 
         // 1. Allocate a new TCP socket via /net/tcp/new
         info!("http: opening /net/tcp/new");
-        let new_fd = vfs_open("/net/tcp/new", O_RDONLY | O_NONBLOCK)
+        let new_fd = vfs_open("/net/tcp/new", O_RDONLY)
             .map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
         let mut buf = [0u8; 16];
-        let deadline_ns = deadline_after_ms(CONNECT_TIMEOUT_MS);
-        let n = loop {
-            match vfs_read(new_fd, &mut buf) {
-                Ok(n) if n > 0 => break n,
-                Ok(_) | Err(abi::errors::Errno::EAGAIN) => {
-                    if let Err(e) = wait_fd_ready(
-                        new_fd,
-                        poll_flags::POLLIN,
-                        deadline_ns,
-                        "http connect new socket id",
-                    ) {
-                        let _ = vfs_close(new_fd);
-                        return Err(e);
-                    }
-                }
-                Err(e) => {
-                    let _ = vfs_close(new_fd);
-                    return Err(format!("failed to read socket id: {:?}", e));
-                }
+        let n = match vfs_read(new_fd, &mut buf) {
+            Ok(n) if n > 0 => n,
+            Ok(_) => {
+                let _ = vfs_close(new_fd);
+                return Err("failed to read socket id: EOF".to_string());
+            }
+            Err(e) => {
+                let _ = vfs_close(new_fd);
+                return Err(format!("failed to read socket id: {:?}", e));
             }
         };
         let _ = vfs_close(new_fd);
@@ -531,7 +524,10 @@ where
                         match port_send_all(write_handle, &buf[offset..n]) {
                             Ok(written) => {
                                 offset += written;
-                                info!("http: background task: forwarded {} bytes to foreground", written);
+                                info!(
+                                    "http: background task: forwarded {} bytes to foreground",
+                                    written
+                                );
                             }
                             Err(abi::errors::Errno::EAGAIN) => {
                                 stem::syscall::yield_now();
@@ -587,7 +583,10 @@ where
             break;
         }
 
-        info!("http: waiting for header data from port (attempt={}/{})", attempt, MAX_HEADER_READ_ITERATIONS);
+        info!(
+            "http: waiting for header data from port (attempt={}/{})",
+            attempt, MAX_HEADER_READ_ITERATIONS
+        );
         match recv_from_port_until(read_handle, &mut buf, deadline_ns, "http header read") {
             Ok(0) => {
                 info!("http: port closed early during header read");
@@ -829,8 +828,9 @@ fn append_header_chunk_and_find_body_start(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
+
+    use super::*;
     extern crate std;
 
     #[test]
