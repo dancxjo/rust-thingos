@@ -450,6 +450,12 @@ impl VfsNode for ProviderNode {
     fn remove_waiter(&self, tid: u64) {
         self.wait_queue.remove(tid);
     }
+
+    fn readlink(&self) -> SysResult<alloc::string::String> {
+        let payload = self.handle.to_le_bytes();
+        let resp = self.rpc.rpc(VfsRpcOp::Readlink, &payload)?;
+        parse_response_readlink(&resp)
+    }
 }
 
 pub fn notify_by_port(port_id: u32, handle: u64, revents: u16) -> SysResult<()> {
@@ -510,6 +516,23 @@ fn parse_response_stat(resp: &[u8]) -> SysResult<VfsStat> {
         resp[13], resp[14], resp[15], resp[16], resp[17], resp[18], resp[19], resp[20],
     ]);
     Ok(VfsStat { mode, size, ino, ..Default::default() })
+}
+
+/// Parse a `Readlink` response.
+///
+/// Wire layout on success: `[status=0][target_bytes...]`.  The target is
+/// returned as a UTF-8 string — non-UTF-8 targets produce `EIO`.
+fn parse_response_readlink(resp: &[u8]) -> SysResult<alloc::string::String> {
+    if resp.is_empty() {
+        return Err(Errno::EIO);
+    }
+    if resp[0] != 0 {
+        return Err(errno_from_u8(resp[0]));
+    }
+    match alloc::string::String::from_utf8(resp[1..].to_vec()) {
+        Ok(s) => Ok(s),
+        Err(_) => Err(Errno::EIO),
+    }
 }
 
 fn errno_from_u8(v: u8) -> Errno {
@@ -688,6 +711,43 @@ mod tests {
         let resp = vec![5u8]; // EIO
         let mut buf = [0u8; 8];
         assert!(matches!(parse_response_read(&resp, &mut buf), Err(Errno::EIO)));
+    }
+
+    // ── parse_response_readlink ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_response_readlink_ok() {
+        let target = "/https/b.example/new";
+        let mut resp = vec![0u8; 1 + target.len()];
+        resp[0] = 0;
+        resp[1..].copy_from_slice(target.as_bytes());
+        let got = parse_response_readlink(&resp).expect("readlink");
+        assert_eq!(got, target);
+    }
+
+    #[test]
+    fn parse_response_readlink_propagates_errno() {
+        // EINVAL — a non-symlink node.
+        let resp = vec![22u8];
+        assert!(matches!(parse_response_readlink(&resp), Err(Errno::EINVAL)));
+    }
+
+    #[test]
+    fn parse_response_readlink_empty_payload_is_ok_empty_string() {
+        // A provider may serve an empty target (unusual, but valid).
+        let resp = vec![0u8];
+        assert_eq!(parse_response_readlink(&resp).unwrap(), "");
+    }
+
+    #[test]
+    fn parse_response_readlink_non_utf8_maps_to_eio() {
+        let resp = vec![0u8, 0xFF, 0xFE, 0xFD];
+        assert!(matches!(parse_response_readlink(&resp), Err(Errno::EIO)));
+    }
+
+    #[test]
+    fn parse_response_readlink_empty_buf_is_eio() {
+        assert!(matches!(parse_response_readlink(&[]), Err(Errno::EIO)));
     }
 
     // ── Dead provider: request ring full → EIO ───────────────────────────────

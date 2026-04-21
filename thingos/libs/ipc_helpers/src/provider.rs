@@ -36,8 +36,8 @@
 
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp::{
-    AttrGet, AttrList, AttrRemove, AttrSet, Close, DeviceCall, Lookup, Poll, Read, Readdir, Rename,
-    Stat, SubscribeReady, UnsubscribeReady, Write,
+    AttrGet, AttrList, AttrRemove, AttrSet, Close, DeviceCall, Lookup, Poll, Read, Readdir,
+    Readlink, Rename, Stat, SubscribeReady, UnsubscribeReady, Write,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
 use stem::syscall::port::{port_recv, port_send_all, port_try_recv};
@@ -133,6 +133,13 @@ impl ProviderResponse {
         payload[0] = val_type;
         payload[1..].copy_from_slice(value);
         Self { status: 0, payload }
+    }
+
+    /// Successful `Readlink` response payload.
+    ///
+    /// Wire layout: raw target path bytes (UTF-8).
+    pub fn ok_readlink(target: &str) -> Self {
+        Self { status: 0, payload: target.as_bytes().to_vec() }
     }
 
     /// Error response carrying an errno.
@@ -252,6 +259,7 @@ impl ProviderLoop {
                 8 + 8 + name_len + val_len
             }
             AttrList => 8,
+            Readlink => 8,
         };
 
         if payload_len > (VFS_RPC_MAX_REQ - hdr_size) {
