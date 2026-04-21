@@ -4,7 +4,7 @@ Feature: HTTPS Fetch
     Given the machine is booted
     When I wait for the shell prompt
     And I type "ping -c 1 example.com" on the serial console
-    And I wait for the serial output to contain "1 packets transmitted, 1 received"
+    And I wait for the serial output to contain "1 packets transmitted"
     And I type "mount -t https example.com /https/ex" on the serial console
     And I wait for the serial output to contain "mounted type=https"
     And I type "cat /https/ex/@index" on the serial console

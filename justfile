@@ -193,11 +193,11 @@ limine:
 ovmf:
     {{xtask}} ovmf-all
 
-# Clean build artifacts plus fetched/vendor state.
+# Clean build artifacts, iso_root_* staging dirs, and *.iso images.
 clean:
     {{xtask}} clean
 
-# Compatibility alias for clean.
+# Deep clean — build artifacts, vendor trees, assets, iso_root_*, and *.iso images.
 distclean:
     {{xtask}} distclean
 

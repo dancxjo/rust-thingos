@@ -257,11 +257,12 @@ unsafe impl Send for ProviderNode {}
 unsafe impl Sync for ProviderNode {}
 
 impl VfsNode for ProviderNode {
-    fn close(&self) -> SysResult<()> {
+    fn close(&self) {
+        // Best-effort close: notify the provider but ignore errors so a
+        // stalled provider cannot wedge the calling task.
         let mut payload = [0u8; 8];
         payload[..8].copy_from_slice(&self.handle.to_le_bytes());
-        self.rpc.rpc(VfsRpcOp::Close, &payload)?;
-        Ok(())
+        let _ = self.rpc.rpc(VfsRpcOp::Close, &payload);
     }
 
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
@@ -299,15 +300,6 @@ impl VfsNode for ProviderNode {
         payload[16..20].copy_from_slice(&len.to_le_bytes());
         let resp = self.rpc.rpc(VfsRpcOp::Readdir, &payload)?;
         parse_response_read(&resp, buf)
-    }
-
-    fn close(&self) {
-        // Best-effort close only: do not synchronously round-trip to userland
-        // providers on FD teardown. A stalled provider Close handler must not
-        // wedge the calling task (e.g. shell waiting on `ls` completion).
-        //
-        // If providers need strict handle-lifetime notifications in the future,
-        // this should be replaced with an asynchronous fire-and-forget port.
     }
 
     fn attr_get(&self, name: &str) -> SysResult<(u8, alloc::vec::Vec<u8>)> {

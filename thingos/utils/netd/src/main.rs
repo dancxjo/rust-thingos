@@ -246,6 +246,14 @@ fn main(arg: usize) -> ! {
         };
     debug!("NETD: watch fd={:?}", nic_watch_fd);
 
+    // ── Async DNS state ──────────────────────────────────────────────────
+    // At most one DNS query is active at a time.  The query object lives
+    // across main-loop iterations so it can be polled incrementally.
+    let mut active_dns: Option<dns::AsyncDnsQuery> = None;
+    // Tracks whether the current DNS query is for a deferred TCP connect
+    // (true) or a `/net/dns/lookup` file read (false).
+    let mut dns_for_deferred_connect = false;
+
     loop {
         let mut did_work = false;
         trace!("NETD: main loop iteration");
@@ -262,6 +270,80 @@ fn main(arg: usize) -> ! {
         let now = VfsNicDevice::now();
         if iface.poll(now, &mut device, &mut socket_set) {
             did_work = true;
+        }
+
+        // ── Async DNS: start new queries if needed ───────────────────────
+        if active_dns.is_none() {
+            // Priority: deferred TCP connects first, then /net/dns/lookup
+            if let Some((hostname, dns_ip)) = net_provider.take_deferred_connect_pending() {
+                if let Some(query) =
+                    dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname)
+                {
+                    active_dns = Some(query);
+                    dns_for_deferred_connect = true;
+                    did_work = true;
+                } else {
+                    // Could not start DNS query — fail the deferred connect
+                    net_provider.complete_deferred_connect(
+                        None,
+                        &mut iface,
+                        &mut socket_set,
+                        &mut socket_api,
+                    );
+                }
+            } else if let Some((hostname, dns_ip)) = net_provider.take_dns_pending() {
+                if let Some(query) =
+                    dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname)
+                {
+                    active_dns = Some(query);
+                    dns_for_deferred_connect = false;
+                    did_work = true;
+                } else {
+                    net_provider.set_dns_result("error".into());
+                }
+            }
+        }
+
+        // ── Async DNS: poll active query ─────────────────────────────────
+        if let Some(query) = &mut active_dns {
+            did_work = true; // keep the loop alive while DNS is in-flight
+            match query.poll(&mut socket_set) {
+                dns::DnsProgress::Pending => {} // still waiting
+                dns::DnsProgress::Resolved(ip) => {
+                    let b = ip.as_bytes();
+                    let ip_str =
+                        alloc::format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
+                    debug!("NETD: async DNS resolved → {}", ip_str);
+                    if dns_for_deferred_connect {
+                        net_provider.complete_deferred_connect(
+                            Some(ip),
+                            &mut iface,
+                            &mut socket_set,
+                            &mut socket_api,
+                        );
+                    } else {
+                        net_provider.set_dns_result(ip_str);
+                    }
+                    // Take ownership to call cleanup
+                    let q = active_dns.take().unwrap();
+                    q.cleanup(&mut socket_set);
+                }
+                dns::DnsProgress::Failed(e) => {
+                    warn!("NETD: async DNS failed: {:?}", e);
+                    if dns_for_deferred_connect {
+                        net_provider.complete_deferred_connect(
+                            None,
+                            &mut iface,
+                            &mut socket_set,
+                            &mut socket_api,
+                        );
+                    } else {
+                        net_provider.set_dns_result("error".into());
+                    }
+                    let q = active_dns.take().unwrap();
+                    q.cleanup(&mut socket_set);
+                }
+            }
         }
 
         let current_link = device.link_up();

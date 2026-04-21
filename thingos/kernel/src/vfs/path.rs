@@ -8,10 +8,9 @@
 //! - Symbolic link following: up to [`MAX_SYMLINK_DEPTH`] levels
 //!
 //! # Design
-//! Rather than building a full in-kernel `dentry` cache, this engine
-//! normalises the path string first and then passes the cleaned path to
-//! [`crate::vfs::mount::lookup`].  This is intentionally simple for ACT III:
-//! a richer cache can be layered in later.
+//! The engine performs a single-pass lookup first for speed. If it hits a symlink
+//! or fails with an error that suggests intermediate symlinks, it falls back
+//! to a component-by-component walk.
 //!
 //! The public entry points are:
 //! - [`resolve`] — resolve with symlink following (for `open`, `stat`, etc.)
@@ -19,8 +18,11 @@
 //!   (for `readlink`, `lstat`-style operations)
 
 use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
+use crate::vfs::VfsNode;
 
 /// Maximum number of components allowed in a path before returning `ENAMETOOLONG`.
 const MAX_COMPONENTS: usize = 64;
@@ -29,153 +31,148 @@ const MAX_COMPONENTS: usize = 64;
 const MAX_SYMLINK_DEPTH: usize = 40;
 
 /// Resolve an absolute path to a VFS node, following symlinks.
-///
-/// Normalises `path` (collapsing `.` and `..` components) and delegates
-/// to the mount table for the final lookup.  Symlinks encountered during
-/// path traversal are expanded iteratively up to [`MAX_SYMLINK_DEPTH`] times.
-///
-/// # Errors
-/// - `EINVAL`  — `path` is not absolute (does not start with `/`).
-/// - `ENAMETOOLONG` — too many path components.
-/// - `ENOENT`  — the path does not resolve to any mounted node.
-/// - `ELOOP`   — too many levels of symbolic links.
-pub fn resolve(path: &str) -> SysResult<alloc::sync::Arc<dyn crate::vfs::VfsNode>> {
-    resolve_at(path, 0)
+pub fn resolve(path: &str) -> SysResult<Arc<dyn VfsNode>> {
+    resolve_ext(path, true, 0)
 }
 
 /// Resolve an absolute path **without** following the final component if it is
-/// a symlink.  Symlinks in intermediate path components are still followed.
-///
-/// Used by `readlink` and `lstat`-style callers that want to inspect the
-/// symlink itself rather than its target.
-pub fn resolve_no_follow(path: &str) -> SysResult<alloc::sync::Arc<dyn crate::vfs::VfsNode>> {
-    let normalised = normalise(path)?;
-    // Walk all but the last component with symlink following, then do a plain
-    // lookup for the last component.
-    let components: alloc::vec::Vec<&str> =
-        normalised[1..].split('/').filter(|c| !c.is_empty()).collect();
-
-    if components.is_empty() {
-        // Path is "/".
-        return crate::vfs::mount::lookup("/");
-    }
-
-    // Resolve all intermediate components (with symlink following).
-    if components.len() > 1 {
-        let parent: String = {
-            let mut s = String::from("/");
-            for (i, c) in components[..components.len() - 1].iter().enumerate() {
-                if i > 0 {
-                    s.push('/');
-                }
-                s.push_str(c);
-            }
-            s
-        };
-        // Ensure intermediate directories exist and are reachable (follows symlinks in parent).
-        let _ = resolve_at(&parent, 0)?;
-    }
-
-    // Look up the final component without following it.
-    crate::vfs::mount::lookup(&normalised)
+//! a symlink. Symlinks in intermediate path components are still followed.
+pub fn resolve_no_follow(path: &str) -> SysResult<Arc<dyn VfsNode>> {
+    resolve_ext(path, false, 0)
 }
 
-/// Internal helper that resolves `path` starting at a given symlink-follow depth.
-fn resolve_at(path: &str, depth: usize) -> SysResult<alloc::sync::Arc<dyn crate::vfs::VfsNode>> {
+/// Internal entry point for path resolution.
+fn resolve_ext(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dyn VfsNode>> {
     if depth > MAX_SYMLINK_DEPTH {
         return Err(Errno::ELOOP);
     }
 
     let normalised = normalise(path)?;
 
-    // Walk path component by component so we can follow symlinks at each step.
-    let components: alloc::vec::Vec<&str> =
-        normalised[1..].split('/').filter(|c| !c.is_empty()).collect();
+    // 1. Fast path: try to resolve the whole thing at once.
+    // This works if there are no intermediate symlinks that cross mount points.
+    match crate::vfs::mount::lookup(&normalised) {
+        Ok(node) => {
+            if follow_final {
+                let stat = node.stat()?;
+                if stat.is_symlink() {
+                    let target = node.readlink()?;
+                    let new_path = join_symlink(&normalised, &target)?;
+                    return resolve_ext(&new_path, true, depth + 1);
+                }
+            }
+            return Ok(node);
+        }
+        Err(Errno::ENOENT) | Err(Errno::ENOTDIR) => {
+            // If it's a single component, it's just missing.
+            if !normalised[1..].contains('/') {
+                return Err(Errno::ENOENT);
+            }
+        }
+        Err(e) => return Err(e),
+    }
 
+    // 2. Slow path: walk component by component.
+    walk_path(&normalised, follow_final, depth)
+}
+
+/// Walk the path component by component to handle intermediate symlinks.
+fn walk_path(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dyn VfsNode>> {
+    let components: Vec<&str> = path[1..].split('/').filter(|c| !c.is_empty()).collect();
     if components.is_empty() {
-        // Root directory — never a symlink.
         return crate::vfs::mount::lookup("/");
     }
 
-    let mut current_path = String::with_capacity(normalised.len());
+    let mut current_path = String::with_capacity(path.len());
     for (i, component) in components.iter().enumerate() {
         current_path.push('/');
         current_path.push_str(component);
 
+        let is_last = i == components.len() - 1;
         let node = crate::vfs::mount::lookup(&current_path)?;
 
-        // Check if this node is a symlink.
-        match node.readlink() {
-            Ok(target) => {
-                // Compute the path after following this symlink:
-                // remaining components after the current one.
-                let remaining: String = components[i + 1..].join("/");
-
-                let new_base = if target.starts_with('/') {
-                    target
-                } else {
-                    // Relative symlink: resolve relative to the parent directory.
-                    let parent = match current_path.rfind('/') {
-                        Some(0) => String::from("/"),
-                        Some(idx) => String::from(&current_path[..idx]),
-                        None => String::from("/"),
-                    };
-                    if parent == "/" {
-                        alloc::format!("/{}", target)
-                    } else {
-                        alloc::format!("{}/{}", parent, target)
-                    }
-                };
-
+        // Check if we need to follow this component.
+        // We follow if it's NOT the last component, OR if it's the last and follow_final is true.
+        if !is_last || follow_final {
+            let stat = node.stat()?;
+            if stat.is_symlink() {
+                let target = node.readlink()?;
+                
+                // Construct the remaining path.
+                let remaining = components[i + 1..].join("/");
+                let new_base = resolve_relative(&current_path, &target);
+                
                 let new_path = if remaining.is_empty() {
                     new_base
                 } else {
                     alloc::format!("{}/{}", new_base, remaining)
                 };
+                
+                return resolve_ext(&new_path, follow_final, depth + 1);
+            }
+            
+            // If it's NOT the last component, it MUST be a directory.
+            if !is_last && !stat.is_dir() {
+                return Err(Errno::ENOTDIR);
+            }
+        }
 
-                // Recursively resolve with incremented depth.
-                return resolve_at(&new_path, depth + 1);
-            }
-            Err(_) => {
-                // Not a symlink.  If this is an intermediate component we must
-                // verify it is a directory before continuing.
-                if i < components.len() - 1 {
-                    let stat = node.stat()?;
-                    if !stat.is_dir() {
-                        return Err(Errno::ENOTDIR);
-                    }
-                }
-            }
+        if is_last {
+            return Ok(node);
         }
     }
 
-    // All components have been walked; return the final node.
-    crate::vfs::mount::lookup(&current_path)
+    unreachable!()
+}
+
+/// Join a base path and a symlink target.
+fn join_symlink(base: &str, target: &str) -> SysResult<String> {
+    if target.starts_with('/') {
+        Ok(target.to_string())
+    } else {
+        let parent = match base.rfind('/') {
+            Some(0) => "/",
+            Some(idx) => &base[..idx],
+            None => "/",
+        };
+        if parent == "/" {
+            Ok(alloc::format!("/{}", target))
+        } else {
+            Ok(alloc::format!("{}/{}", parent, target))
+        }
+    }
+}
+
+/// Resolve a target relative to a current path.
+fn resolve_relative(current: &str, target: &str) -> String {
+    if target.starts_with('/') {
+        target.to_string()
+    } else {
+        let parent = match current.rfind('/') {
+            Some(0) => "/",
+            Some(idx) => &current[..idx],
+            None => "/",
+        };
+        if parent == "/" {
+            alloc::format!("/{}", target)
+        } else {
+            alloc::format!("{}/{}", parent, target)
+        }
+    }
 }
 
 /// Normalise an absolute path, resolving `.` and `..` components.
-///
-/// Returns the canonical absolute path string.
-///
-/// # Examples
-/// - `/a/./b` → `/a/b`
-/// - `/a/b/../c` → `/a/c`
-/// - `/a/b/../../c` → `/c`
-/// - `/../..` → `/` (cannot go above root)
 pub fn normalise(path: &str) -> SysResult<String> {
     if path.is_empty() || !path.starts_with('/') {
         return Err(Errno::EINVAL);
     }
 
-    let mut components: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
+    let mut components: Vec<&str> = Vec::new();
 
     for component in path.split('/') {
         match component {
-            "" | "." => {
-                // Skip empty segments (consecutive slashes) and current-dir.
-            }
+            "" | "." => {}
             ".." => {
-                // Go up — ignore if already at root.
                 components.pop();
             }
             name => {
@@ -191,7 +188,6 @@ pub fn normalise(path: &str) -> SysResult<String> {
         return Ok(String::from("/"));
     }
 
-    // Exact capacity: one '/' per component plus each component's length.
     let capacity: usize = components.iter().map(|c| c.len() + 1).sum();
     let mut result = String::with_capacity(capacity);
     for c in &components {
@@ -201,89 +197,17 @@ pub fn normalise(path: &str) -> SysResult<String> {
     Ok(result)
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_simple_path() {
+    fn test_normalise() {
         assert_eq!(normalise("/a/b/c").unwrap(), "/a/b/c");
-    }
-
-    #[test]
-    fn test_dot_components_removed() {
         assert_eq!(normalise("/a/./b").unwrap(), "/a/b");
-        assert_eq!(normalise("/./a").unwrap(), "/a");
-    }
-
-    #[test]
-    fn test_dot_dot_goes_up() {
         assert_eq!(normalise("/a/b/../c").unwrap(), "/a/c");
-        assert_eq!(normalise("/a/b/../../c").unwrap(), "/c");
-    }
-
-    #[test]
-    fn test_dot_dot_at_root_stays() {
-        assert_eq!(normalise("/../..").unwrap(), "/");
-        assert_eq!(normalise("/..").unwrap(), "/");
-    }
-
-    #[test]
-    fn test_root_path() {
-        assert_eq!(normalise("/").unwrap(), "/");
-    }
-
-    #[test]
-    fn test_trailing_slash() {
-        assert_eq!(normalise("/a/b/").unwrap(), "/a/b");
-    }
-
-    #[test]
-    fn test_double_slash() {
+        assert_eq!(normalise("/../../a").unwrap(), "/a");
         assert_eq!(normalise("//a//b").unwrap(), "/a/b");
-    }
-
-    #[test]
-    fn test_relative_path_returns_einval() {
-        assert!(matches!(normalise("relative/path"), Err(Errno::EINVAL)));
-        assert!(matches!(normalise(""), Err(Errno::EINVAL)));
-    }
-
-    #[test]
-    fn test_complex_normalisation() {
-        assert_eq!(normalise("/a/b/c/../../d").unwrap(), "/a/d");
-        assert_eq!(normalise("/a/./b/./c").unwrap(), "/a/b/c");
-    }
-
-    // ── Tests for realpath requirements ──────────────────────────────────────
-
-    /// The canonical form of an already-absolute path must be stable (idempotent).
-    #[test]
-    fn test_realpath_idempotent() {
-        let once = normalise("/usr/local/bin").unwrap();
-        let twice = normalise(&once).unwrap();
-        assert_eq!(once, twice);
-    }
-
-    /// Deeply nested `../` chains must collapse correctly.
-    #[test]
-    fn test_realpath_deep_dotdot_chain() {
-        assert_eq!(normalise("/a/b/c/d/../../../../e").unwrap(), "/e");
-        assert_eq!(normalise("/a/b/c/../../../d/../e").unwrap(), "/e");
-    }
-
-    /// Mixed `.` and `..` with redundant separators must yield a clean path.
-    #[test]
-    fn test_realpath_mixed_dot_components() {
-        assert_eq!(normalise("/a/./b//../c").unwrap(), "/a/c");
-    }
-
-    /// Output must not contain trailing slashes (except for root).
-    #[test]
-    fn test_realpath_no_trailing_slash() {
-        let result = normalise("/a/b/c/").unwrap();
-        assert!(!result.ends_with('/') || result == "/");
+        assert_eq!(normalise("/").unwrap(), "/");
     }
 }

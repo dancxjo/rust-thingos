@@ -559,7 +559,7 @@ fn dispatch(provider: &mut HostsProvider, op: VfsRpcOp, payload: &[u8]) -> Provi
         VfsRpcOp::Write | VfsRpcOp::Rename | VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove => {
             ProviderResponse::err(Errno::EROFS)
         }
-        VfsRpcOp::DeviceCall => ProviderResponse::err(Errno::ENOSYS),
+        VfsRpcOp::DeviceCall | VfsRpcOp::Readlink => ProviderResponse::err(Errno::ENOSYS),
     }
 }
 

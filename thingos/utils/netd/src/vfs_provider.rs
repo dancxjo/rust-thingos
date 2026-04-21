@@ -60,6 +60,21 @@ use stem::syscall::port::{PortHandle, port_create, port_send, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::{info, warn};
 
+/// A TCP connect request that is waiting for DNS resolution.
+#[derive(Clone)]
+pub struct DeferredConnect {
+    /// The API handle of the TCP socket awaiting connection.
+    pub api_handle: u32,
+    /// The original hostname (for DNS lookup).
+    pub hostname: alloc::string::String,
+    /// The destination port.
+    pub port: u16,
+    /// The response port to send the write result to.
+    pub resp_port: PortHandle,
+    /// Original write length (for the WriteResult::Ok response).
+    pub text_len: usize,
+}
+
 use crate::socket_api::SocketApi;
 
 // ── errno shorthands ─────────────────────────────────────────────────────────
@@ -159,6 +174,8 @@ pub struct NetVfsProvider {
     dns_pending: Option<alloc::string::String>,
     /// Resolved DNS result (dotted-decimal IPv4 or error text).
     dns_result: Option<alloc::string::String>,
+    /// TCP connect requests deferred while waiting for DNS resolution.
+    pub deferred_connects: Vec<DeferredConnect>,
 }
 
 impl NetVfsProvider {
@@ -201,6 +218,7 @@ impl NetVfsProvider {
             req_buf: alloc::vec![0u8; VFS_RPC_MAX_REQ],
             dns_pending: None,
             dns_result: None,
+            deferred_connects: Vec::new(),
         })
     }
 
@@ -225,8 +243,9 @@ impl NetVfsProvider {
     /// `socket_api` and `socket_set` are borrowed so that socket operations
     /// (open/connect/send/recv) can be dispatched inline without locking.
     ///
-    /// Also performs any pending DNS resolution synchronously when a hostname
-    /// has been written to `/net/dns/lookup`.
+    /// DNS resolution is **not** performed here.  When a hostname is written
+    /// to `/net/dns/lookup`, it is stored in `dns_pending` and the main loop
+    /// drives the async query via `take_dns_pending` / `set_dns_result`.
     pub fn drain_rpcs<D: smoltcp::phy::Device>(
         &mut self,
         iface: &mut Interface,
@@ -257,27 +276,73 @@ impl NetVfsProvider {
             }
         }
 
-        // If a DNS lookup was requested, resolve it now (synchronously in netd).
-        if self.dns_result.is_none() {
-            if let Some(hostname) = self.dns_pending.take() {
-                if let Some(dns_ip) = self.effective_dns_server() {
-                    match crate::dns::lookup_a(iface, device, dns_ip, &hostname) {
-                        Ok(ip) => {
-                            let b = ip.as_bytes();
-                            self.dns_result =
-                                Some(alloc::format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]));
-                        }
-                        Err(e) => {
-                            warn!("DNS lookup for '{}' failed: {:?}", hostname, e);
-                            self.dns_result = Some("error".into());
-                        }
-                    }
-                } else {
-                    self.dns_result = Some("error".into());
-                }
-            }
-        }
         did_work
+    }
+
+    // ── Async DNS interface for the main loop ────────────────────────────────
+
+    /// Take the pending DNS lookup hostname, if any.  Returns `Some((hostname,
+    /// dns_server))` when a new query should be started.
+    pub fn take_dns_pending(&mut self) -> Option<(alloc::string::String, Ipv4Address)> {
+        // Only start a new query if there is no result yet (avoids re-querying
+        // when the result hasn't been consumed by a read).
+        if self.dns_result.is_some() {
+            return None;
+        }
+        let hostname = self.dns_pending.take()?;
+        let dns_ip = match self.effective_dns_server() {
+            Some(ip) => ip,
+            None => {
+                self.dns_result = Some("error".into());
+                return None;
+            }
+        };
+        Some((hostname, dns_ip))
+    }
+
+    /// Set the result of an async DNS lookup.  The next read from
+    /// `/net/dns/lookup` will return this value.
+    pub fn set_dns_result(&mut self, result: alloc::string::String) {
+        self.dns_result = Some(result);
+    }
+
+    /// Take any pending hostname that needs DNS resolution for a TCP connect.
+    /// Returns `Some((hostname, dns_server))` together with the deferred
+    /// connect metadata when a deferred connect needs resolution.
+    pub fn take_deferred_connect_pending(&mut self) -> Option<(alloc::string::String, Ipv4Address)> {
+        if self.deferred_connects.is_empty() {
+            return None;
+        }
+        // Return the hostname of the first deferred connect
+        let hostname = self.deferred_connects[0].hostname.clone();
+        let dns_ip = self.effective_dns_server()?;
+        Some((hostname, dns_ip))
+    }
+
+    /// Complete a deferred TCP connect with the resolved IP address.
+    pub fn complete_deferred_connect(
+        &mut self,
+        resolved_ip: Option<Ipv4Address>,
+        iface: &mut Interface,
+        socket_set: &mut SocketSet,
+        socket_api: &mut SocketApi,
+    ) {
+        if self.deferred_connects.is_empty() {
+            return;
+        }
+        let dc = self.deferred_connects.remove(0);
+        if let Some(ip) = resolved_ip {
+            let r = socket_api.handle_connect_existing(
+                iface, socket_set, dc.api_handle, ip, dc.port,
+            );
+            if r {
+                send_write_ok(dc.resp_port, dc.text_len as u32);
+            } else {
+                send_err(dc.resp_port, E_IO);
+            }
+        } else {
+            send_err(dc.resp_port, E_IO);
+        }
     }
 
     // ── RPC dispatch ─────────────────────────────────────────────────────────
@@ -428,12 +493,13 @@ impl NetVfsProvider {
         }
         let data = &payload[20..20 + data_len];
 
-        let result = self.write_handle(handle, data, iface, device, socket_set, socket_api);
+        let result = self.write_handle(handle, data, resp_port, iface, device, socket_set, socket_api);
         match result {
             WriteResult::Ok(n) => send_write_ok(resp_port, n as u32),
             WriteResult::Error => send_err(resp_port, E_IO),
             WriteResult::ReadOnly => send_err(resp_port, E_ROFS),
             WriteResult::NotSupported => send_err(resp_port, E_NOTSUP),
+            WriteResult::Deferred => {} // Response will be sent later by complete_deferred_connect
         }
     }
 
@@ -937,6 +1003,7 @@ impl NetVfsProvider {
         &mut self,
         handle: u64,
         data: &[u8],
+        resp_port: PortHandle,
         iface: &mut Interface,
         device: &mut D,
         socket_set: &mut SocketSet,
@@ -975,7 +1042,7 @@ impl NetVfsProvider {
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - TCP_DYN_BASE) >> 8) as u32;
-                self.write_tcp(api_handle, sf, data, text, iface, device, socket_set, socket_api)
+                self.write_tcp(api_handle, sf, data, text, resp_port, iface, device, socket_set, socket_api)
             }
             // Dynamic UDP
             h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
@@ -1054,6 +1121,7 @@ impl NetVfsProvider {
         sf: u8,
         raw: &[u8],
         text: &str,
+        resp_port: PortHandle,
         iface: &mut Interface,
         device: &mut D,
         socket_set: &mut SocketSet,
@@ -1068,24 +1136,8 @@ impl NetVfsProvider {
                     if parts.len() >= 2 {
                         if let Ok(port) = parts[1].parse::<u16>() {
                             let host = parts[0];
-                            let resolved_ip = if let Some(ip) = parse_ipv4(host) {
-                                Some(ip)
-                            } else if let Some(dns_ip) = self.effective_dns_server() {
-                                match crate::dns::lookup_a(iface, device, dns_ip, host) {
-                                    Ok(ip) => Some(ip),
-                                    Err(e) => {
-                                        warn!(
-                                            "NetVfsProvider: TCP connect DNS lookup failed for '{}': {:?}",
-                                            host, e
-                                        );
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-
-                            if let Some(ip) = resolved_ip {
+                            if let Some(ip) = parse_ipv4(host) {
+                                // Direct IP — connect immediately
                                 let r = socket_api.handle_connect_existing(
                                     iface, socket_set, api_handle, ip, port,
                                 );
@@ -1094,6 +1146,22 @@ impl NetVfsProvider {
                                 } else {
                                     WriteResult::Error
                                 };
+                            } else {
+                                // Hostname — defer connect until DNS resolves.
+                                // The response will be sent by
+                                // complete_deferred_connect once the main loop
+                                // finishes the async DNS query.
+                                self.deferred_connects.push(DeferredConnect {
+                                    api_handle,
+                                    hostname: host.into(),
+                                    port,
+                                    resp_port,
+                                    text_len: text.len(),
+                                });
+                                // Return a sentinel — the caller must NOT send
+                                // a response for this write; it will be sent
+                                // later by complete_deferred_connect.
+                                return WriteResult::Deferred;
                             }
                         }
                     }
@@ -1707,6 +1775,9 @@ enum WriteResult {
     Error,
     ReadOnly,
     NotSupported,
+    /// The operation has been deferred (e.g. awaiting async DNS resolution).
+    /// The response will be sent later; `op_write` must not send one now.
+    Deferred,
 }
 
 // ── Wire helpers ─────────────────────────────────────────────────────────────
