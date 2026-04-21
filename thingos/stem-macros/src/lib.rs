@@ -90,13 +90,19 @@ mod tests {
     #[test]
     fn accepts_no_arg_main() {
         let f = parse_fn("fn app() -> ! { loop {} }");
-        assert_eq!(validate_signature(&f).expect("valid"), false);
+        assert_eq!(
+            validate_signature(&f).expect("should accept no-arg main function"),
+            false
+        );
     }
 
     #[test]
     fn accepts_single_usize_arg_main() {
         let f = parse_fn("fn app(arg: usize) -> ! { let _ = arg; loop {} }");
-        assert_eq!(validate_signature(&f).expect("valid"), true);
+        assert_eq!(
+            validate_signature(&f).expect("should accept single usize arg main function"),
+            true
+        );
     }
 
     #[test]
