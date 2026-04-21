@@ -231,8 +231,14 @@ impl NetVfsProvider {
         device: &mut D,
         socket_set: &mut SocketSet,
         socket_api: &mut SocketApi,
-    ) {
+    ) -> bool {
+        let mut did_work = false;
+        let mut count = 0;
         loop {
+            if count >= 16 {
+                did_work = true; // Ensure we loop again immediately but give main loop a chance
+                break;
+            }
             match port_try_recv(self.req_read, &mut self.req_buf) {
                 Ok(n) if n > 0 => {
                     let buf: &[u8] = unsafe {
@@ -241,6 +247,8 @@ impl NetVfsProvider {
                         core::slice::from_raw_parts(self.req_buf.as_ptr(), n)
                     };
                     self.handle_one(iface, device, socket_set, socket_api, buf);
+                    did_work = true;
+                    count += 1;
                 }
                 _ => break,
             }
@@ -328,9 +336,16 @@ impl NetVfsProvider {
             }
         };
 
+        info!("NETD: lookup path='{}'", path);
         match self.resolve_path(path) {
-            Some(handle) => send_handle(resp_port, handle),
-            None => send_err(resp_port, E_NOENT),
+            Some(handle) => {
+                trace!("NETD: lookup path='{}' -> handle {}", path, handle);
+                send_handle(resp_port, handle);
+            }
+            None => {
+                warn!("NETD: lookup path='{}' failed", path);
+                send_err(resp_port, E_NOENT);
+            }
         }
     }
 

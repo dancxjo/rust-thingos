@@ -135,11 +135,14 @@ impl TcpStream {
 
         // 3. Connect via ctl file
         let conn_cmd = format!("connect {} {}", host, port);
+        info!("http: issuing connect command: {}", conn_cmd.trim());
         if let Err(e) = vfs_write(ctl_fd, conn_cmd.as_bytes()) {
             let _ = vfs_close(data_fd);
             let _ = vfs_close(ctl_fd);
             return Err(format!("connect command failed: {:?}", e));
         }
+
+        info!("http: waiting for socket readiness...");
         let revents = wait_fd_ready(
             data_fd,
             poll_flags::POLLOUT | poll_flags::POLLIN,
@@ -540,12 +543,26 @@ where
     let mut headers_done = false;
     let deadline_ns = deadline_after_ms(HEADER_READ_TIMEOUT_MS);
 
+    let read_fd = stem::syscall::vfs::vfs_handle_from_port(read_handle as u32)
+        .map_err(|e| format!("failed to bridge read port: {:?}", e))?;
+
     for attempt in 0..MAX_HEADER_READ_ITERATIONS {
         if stem::syscall::monotonic_ns() >= deadline_ns {
             warn!("http: https header read timed out after {} iterations", attempt);
             break;
         }
+
         trace!("http: waiting for header data from port (attempt={})", attempt);
+        if let Err(e) = wait_fd_ready(
+            read_fd,
+            poll_flags::POLLIN,
+            deadline_after_ms(HEADER_READ_TIMEOUT_MS / 10), // Small slice per iteration
+            "http header read",
+        ) {
+            trace!("http: header read slice wait: {}", e);
+            continue;
+        }
+
         match port_recv(read_handle, &mut buf) {
             Ok(0) | Err(abi::errors::Errno::EPIPE) => {
                 // Port closed early
@@ -568,10 +585,10 @@ where
                     info!("http: headers complete body_start={}", body_start);
                     break;
                 }
-            }
-            Err(e) => return Err(format!("port_recv failed: {:?}", e)),
         }
     }
+
+    let _ = vfs_close(read_fd);
 
     if !headers_done {
         warn!("http: https headers not completed, initial buffer={}", response.len());
@@ -713,12 +730,20 @@ impl Response {
             }
             ResponseStream::Https(handle) => {
                 let mut buf = [0u8; HTTPS_STREAM_CHUNK_SIZE];
+
+                let fd = stem::syscall::vfs::vfs_handle_from_port(*handle as u32)
+                    .map_err(|e| format!("failed to bridge port to vfs: {:?}", e))?;
+
+                let _ = wait_fd_ready(
+                    fd,
+                    poll_flags::POLLIN,
+                    deadline_after_ms(IO_POLL_TIMEOUT_MS),
+                    "http read_chunk",
+                )?;
+
                 match port_recv(*handle, &mut buf) {
-                    Ok(0) | Err(abi::errors::Errno::EPIPE) => {
-                        debug!("http: https response stream EOF");
-                        Ok(Vec::new())
-                    }
                     Ok(n) => {
+                        let _ = vfs_close(fd);
                         let chunk = &buf[..n];
                         if chunk.starts_with(b"ERR: ") {
                             if let Ok(msg) = core::str::from_utf8(&chunk[5..]) {
@@ -726,10 +751,17 @@ impl Response {
                             }
                             return Err("Background thread reported unknown error".to_string());
                         }
-                        debug!("http: returning streamed https chunk bytes={}", n);
+                        if n == 0 {
+                            debug!("http: https response stream EOF");
+                        } else {
+                            debug!("http: returning streamed https chunk bytes={}", n);
+                        }
                         Ok(chunk.to_vec())
                     }
-                    Err(e) => Err(format!("port_recv failed: {:?}", e)),
+                    Err(e) => {
+                        let _ = vfs_close(fd);
+                        Err(format!("port_recv failed: {:?}", e))
+                    }
                 }
             }
         }

@@ -215,6 +215,7 @@ impl VfsNicDevice {
 
     fn send_frame(&mut self, data: &[u8]) {
         let frame_len = data.len() as u32;
+        info!("VFS_NIC: sending frame len={}", frame_len);
         let mut msg = Vec::with_capacity(4 + data.len());
         msg.extend_from_slice(&frame_len.to_le_bytes());
         msg.extend_from_slice(data);
@@ -259,7 +260,7 @@ impl Device for VfsNicDevice {
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.max_transmission_unit = self.mtu;
-        caps.max_burst_size = Some(1);
+        caps.max_burst_size = Some(16);
         caps.medium = Medium::Ethernet;
         caps
     }

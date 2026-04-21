@@ -1,15 +1,15 @@
 # ❌ Scenario: Fetch Wikipedia Dormouse page
 
-> Last run: 2026-04-20 19:24:28
+> Last run: 2026-04-20 19:46:53
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 10434ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ✅ | 2205ms | - [📜](./02/serial.log) - |
-| 3 | And I type "cat /https/en.wikipedia.org/wiki/Dormouse" on the serial console | ✅ | 3149ms | - [📜](./03/serial.log) - |
-| 4 | Then the serial output should contain "Gliridae" | ❌ | 121090ms | - - - |
+| 1 | Given the machine is booted | ✅ | 10741ms | - [📜](./01/serial.log) - |
+| 2 | When I wait for the shell prompt | ✅ | 2105ms | - [📜](./02/serial.log) - |
+| 3 | And I type "cat /https/en.wikipedia.org/wiki/Dormouse" on the serial console | ✅ | 3171ms | - [📜](./03/serial.log) - |
+| 4 | Then the serial output should contain "Gliridae" | ❌ | 121022ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -27,7 +27,7 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:mem:init] frame allocator log ok
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [kernel:mem:init] tasking init ok
-[30217393470] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[31216352178] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -48,11 +48,11 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[33063777549] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[33068007786] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[33137524959] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[33943604079] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[34138783602] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[34172042652] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[34175591241] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[34241190357] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[34888910562] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[34982609475] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
 [1;32m
         .-.
        /   \        [1;36mTHING-OS[1;32m
@@ -73,14 +73,19 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
-[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hcat /https/en.wikipedia.org/wiki/Dormouse
-[?25l[48505536288] [[32mINFO [0m] [httpsd] [CPU3] httpsd: read handle=2 url=https://en.wikipedia.org/wiki/Dormouse offset=0 len=32768 cached=0 start=0 eof=false
-[48510643929] [[32mINFO [0m] [httpsd] [CPU3] httpsd: opening upstream stream for handle=2 https://en.wikipedia.org/wiki/Dormouse
-[48547029960] [[32mINFO [0m] [http] [CPU2] http: connect host=en.wikipedia.org port=443
-[48550102062] [[32mINFO [0m] [http] [CPU2] http: opening /net/tcp/new
-[48690233526] [[32mINFO [0m] [http] [CPU3] http: allocated tcp socket id=1
-[48693095451] [[32mINFO [0m] [http] [CPU3] http: opening ctl path /net/tcp/1/ctl
-[48812567694] [[32mINFO [0m] [http] [CPU3] http: opening data path /net/tcp/1/data
-[50432988903
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[37695754470] [[32mINFO [0m] [netd] [CPU2] NETD: Starting network service (Phase 3 — /net/ VFS provider)
+[37709027994] [[32mINFO [0m] [netd] [CPU2] NETD: Waiting for virtio_netd VFS provider at /dev/net/virtio*...
+[40790448336] [[32mINFO [0m] [netd] [CPU2] NETD: Network ready — entering VFS service loop
+cat /https/en.wikipedia.org/wiki/Dormouse
+[?25l[49278271581] [[32mINFO [0m] [httpsd] [CPU3] httpsd: read handle=2 url=https://en.wikipedia.org/wiki/Dormouse offset=0 len=32768 cached=0 start=0 eof=false
+[49282419417] [[32mINFO [0m] [httpsd] [CPU3] httpsd: opening upstream stream for handle=2 https://en.wikipedia.org/wiki/Dormouse
+[49312204722] [[32mINFO [0m] [http] [CPU2] http: connect host=en.wikipedia.org port=443
+[49316749647] [[32mINFO [0m] [http] [CPU2] http: opening /net/tcp/new
+[49437056229] [[32mINFO [0m] [http] [CPU3] http: allocated tcp socket id=1
+[49439411208] [[32mINFO [0m] [http] [CPU3] http: opening ctl path /net/tcp/1/ctl
+[49538996991] [[32mINFO [0m] [http] [CPU3] http: opening data path /net/tcp/1/data
+[51094645074] [[32mINFO [0m] [sprout::supervisor] [CPU1] SPROUT: Task 'httpsd' (PID 9) died with code 0. Restarting...
+[51117364584] [[32mINFO [0m] [httpsd] [CPU3] httpsd: upstream open failed for handle=2 https://en.wikipedia.org/wiki/Dormouse: http connect failed: http connect socket: timed out waiting for readiness
+c
 ```
 </details>
