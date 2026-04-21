@@ -228,8 +228,12 @@ for architecture VM cleanup (page-table deallocation, TLB shootdown).
 ### Phase 4: Observability and future ABI hooks
 
 - Expose `Space` via a handle / capability for controlled cross-process mapping
-- Add procfs visibility (`/proc/<pid>/space`)
 - Prepare for future memfd / shared-mapping ABI anchored in `Space`
+
+### Implemented ahead of Phase 4
+
+- ✅ Procfs visibility for canonical Space is available at `/proc/<pid>/space`
+  and `/proc/self/space` via `kernel::space::bridge`.
 
 ---
 

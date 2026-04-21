@@ -14,6 +14,7 @@
 //! | `/proc/self`                     | Directory for the calling process |
 //! | `/proc/self/exe`                 | Symlink to calling process's executable |
 //! | `/proc/self/authority`           | Canonical `thingos::authority::Authority` for the calling process |
+//! | `/proc/self/space`               | Canonical `thingos::space::Space` for the calling process |
 //! | `/proc/self/place`               | Canonical `thingos::place::Place` — world/visibility context for the calling process (Phase 8) |
 //! | `/proc/self/presence`            | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
 //! | `/proc/<pid>/status`             | Process state, name, ppid |
@@ -30,6 +31,7 @@
 //! | `/proc/<pid>/group_kind`         | Canonical `thingos::group::GroupKind` — coordination role (Phase 4)     |
 //! | `/proc/<pid>/foreground_group`   | Canonical foreground membership — `true`/`false` in Group terms (Phase 4) |
 //! | `/proc/<pid>/authority`          | Canonical `thingos::authority::Authority` — permission context (Phase 7) |
+//! | `/proc/<pid>/space`              | Canonical `thingos::space::Space` — memory identity context |
 //! | `/proc/<pid>/place`              | Canonical `thingos::place::Place` — world/visibility context (Phase 8)  |
 //! | `/proc/<pid>/presence`           | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
 //! | `/proc/<pid>/job_observer`       | Write-only registration of caller inbox as `JobExit` observer |
@@ -85,6 +87,11 @@ impl VfsDriver for ProcFs {
             // This is the convenient self-introspection path: callers do not
             // need to know their own PID.
             "self/authority" => Ok(Arc::new(ProcSelfAuthorityNode)),
+            // /proc/self/space — canonical Space for the calling process.
+            //
+            // Reports memory identity in canonical Space terms via
+            // `kernel::space::bridge::space_for_current`.
+            "self/space" => Ok(Arc::new(ProcSelfSpaceNode)),
             // /proc/self/place — canonical Place for the calling process (Phase 8).
             //
             // Reports the execution world-context (cwd, namespace, root) of the
@@ -251,6 +258,16 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
             let authority = crate::authority::bridge::authority_from_snapshot(&snap);
             let text = authority.as_text();
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), 300 + pid as u64 * 10 + 10)))
+        }
+        // /proc/<pid>/space — canonical thingos::space::Space.
+        //
+        // Reports memory identity (id + mapping/sharing counts) in canonical
+        // Space terms, bridged from `ProcessSnapshot` via
+        // `kernel::space::bridge::space_from_snapshot`.
+        "space" => {
+            let space = crate::space::bridge::space_from_snapshot(&snap);
+            let text = space.as_text();
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), 300 + pid as u64 * 10 + 15)))
         }
         // /proc/<pid>/place — canonical thingos::place::Place (Phase 8).
         //
@@ -492,7 +509,7 @@ impl VfsNode for ProcPidDirNode {
         // Legacy procfs entries (transitional internal model):
         //   status, cmdline, fd, exe, task
         // Canonical schema entries (Phase 1–8):
-        //   task_state, job_state, job_exit, job_wait, group_kind, foreground_group, authority, place, presence
+        //   task_state, job_state, job_exit, job_wait, group_kind, foreground_group, authority, space, place, presence
         let entries = [
             "status",
             "cmdline",
@@ -506,6 +523,7 @@ impl VfsNode for ProcPidDirNode {
             "group_kind",
             "foreground_group",
             "authority",
+            "space",
             "place",
             "presence",
             "inbox",
@@ -678,7 +696,7 @@ impl VfsNode for ProcSelfDirNode {
         Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 210, ..Default::default() })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let entries = ["exe", "authority", "place", "presence", "inbox"];
+        let entries = ["exe", "authority", "space", "place", "presence", "inbox"];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
 }
@@ -742,6 +760,32 @@ impl VfsNode for ProcSelfAuthorityNode {
     }
     fn stat(&self) -> SysResult<VfsStat> {
         Ok(VfsStat { mode: VfsStat::S_IFREG | 0o444, size: 0, ino: 212, ..Default::default() })
+    }
+}
+
+// ── /proc/self/space — Space for the calling process ──────────────────────────
+
+/// A read-only node that reports the calling task's canonical Space.
+struct ProcSelfSpaceNode;
+
+impl VfsNode for ProcSelfSpaceNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let space = crate::space::bridge::space_for_current();
+        let text = space.as_text();
+        let data = text.as_bytes();
+        let off = offset as usize;
+        if off >= data.len() {
+            return Ok(0);
+        }
+        let n = (data.len() - off).min(buf.len());
+        buf[..n].copy_from_slice(&data[off..off + n]);
+        Ok(n)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EROFS)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat { mode: VfsStat::S_IFREG | 0o444, size: 0, ino: 215, ..Default::default() })
     }
 }
 
@@ -1252,6 +1296,15 @@ mod tests {
     }
 
     #[test]
+    fn test_proc_pid_dir_readdir_includes_space_entry() {
+        let node = ProcPidDirNode { pid: 1 };
+        let mut buf = [0u8; 512];
+        let n = node.readdir(0, &mut buf).unwrap();
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("space"), "pid readdir must list 'space': {s}");
+    }
+
+    #[test]
     fn test_readdir_root_lists_ipc() {
         let node = lookup("").unwrap();
         let mut buf = [0u8; 256];
@@ -1347,6 +1400,38 @@ mod tests {
         let n = node.readdir(0, &mut buf).unwrap();
         let s = core::str::from_utf8(&buf[..n]).unwrap();
         assert!(s.contains("authority"), "self readdir must list 'authority': {s}");
+    }
+
+    #[test]
+    fn test_lookup_self_space_succeeds() {
+        assert!(lookup("self/space").is_ok());
+    }
+
+    #[test]
+    fn test_self_space_is_readable() {
+        let node = lookup("self/space").unwrap();
+        let mut buf = [0u8; 256];
+        let n = node.read(0, &mut buf).unwrap();
+        assert!(n > 0);
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("id:"), "space text must contain 'id:': {s}");
+        assert!(s.contains("mapping_count:"), "space text must contain 'mapping_count:': {s}");
+        assert!(s.contains("sharing_count:"), "space text must contain 'sharing_count:': {s}");
+    }
+
+    #[test]
+    fn test_self_space_is_readonly() {
+        let node = lookup("self/space").unwrap();
+        assert!(matches!(node.write(0, b"x"), Err(Errno::EROFS)));
+    }
+
+    #[test]
+    fn test_self_dir_readdir_includes_space() {
+        let node = lookup("self").unwrap();
+        let mut buf = [0u8; 256];
+        let n = node.readdir(0, &mut buf).unwrap();
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("space"), "self readdir must list 'space': {s}");
     }
 
     #[test]

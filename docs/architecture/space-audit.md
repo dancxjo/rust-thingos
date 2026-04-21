@@ -245,14 +245,15 @@ introduce a separate counter for "number of tasks sharing this space".
 
 ---
 
-### B11. No VFS / procfs exposure of Space
+### B11. VFS / procfs exposure of Space
 
 **File:** `kernel/src/vfs/procfs.rs` (or equivalent)
-**Description:** The VFS `/proc/<pid>/` tree does not yet expose a `space` file
-showing the canonical `Space` representation.
+**Description:** Procfs now exposes canonical Space projections at
+`/proc/<pid>/space` (snapshot path) and `/proc/self/space` (current-task path).
 
-**Disposition:** Phase 2 should add `/proc/<pid>/space` populated via
-`kernel::space::bridge::space_from_snapshot`.
+**Disposition:** **Phase 2 ✅ complete.** Keep this path as the canonical procfs
+surface for memory identity and avoid adding ad-hoc Space fields to
+`/proc/<pid>/status`.
 
 ---
 
@@ -335,15 +336,15 @@ semantics and the spawn/clone API surface.
 
 ---
 
-### C6. `memfd` / shared anonymous mappings not yet present
+### C6. `memfd` exists; cross-Space shared-anon policy is still incomplete
 
-**Description:** There is no `memfd_create` equivalent and no shared-memory
-import/export mechanism.  All mappings are process-local anonymous or
-file-backed.
+**Description:** `memfd_create` and memfd-backed mappings exist, but the model
+is still implicit and process-local from an API perspective: VM syscalls do not
+yet accept explicit Space handles/ids for controlled cross-Space mapping.
 
-**Disposition:** After Phase 3 establishes `Space` identity, a `memfd`-backed
-mapping type can be introduced that references a shared physical backing from
-two different `Space` objects.
+**Disposition:** Phase 3+ should route shared-memory attach/detach through
+explicit Space-handle APIs so memfd-backed sharing policy is expressed in Space
+terms, not only by current-task convention.
 
 ---
 
@@ -355,6 +356,23 @@ ability to read/write/execute from a given `Space`.  Access is entirely implicit
 
 **Disposition:** Phase 4+ will define a capability/handle model for `Space`
 access.
+
+#### Incremental milestones for remaining Space primitives
+
+1. **M1 — Handle table object model (Phase 3)**  
+   Introduce internal `SpaceHandle` objects and a per-process handle table
+   namespace for Space references (open/dup/close semantics aligned with other
+   kernel handles).
+2. **M2 — Capability bitmask + checks (Phase 3/4)**  
+   Define minimum Space capabilities (`inspect`, `map_read`, `map_write`,
+   `map_exec`, `manage`) and enforce them on new Space-targeted VM operations.
+3. **M3 — VM syscall surface (Phase 4)**  
+   Add `_EX` variants for map/protect/unmap operations that optionally accept a
+   Space handle; preserve current-task behavior as the default compatibility
+   path.
+4. **M4 — Shared-anon / memfd attachment policy (Phase 4)**  
+   Bind memfd shared mappings to explicit Space handle + capability checks and
+   document transfer semantics for cross-process sharing.
 
 ---
 
@@ -388,13 +406,13 @@ via its canonical bridge.
 | B8: `ProcessAddressSpace` clone policy | Phase 2 | Low | Tiny |
 | B9: `Thread.mappings` update on Space replace | Phase 3 | High | Medium |
 | B10: `space_sharing_count` semantics | Phase 2 | Low | Tiny |
-| B11: `/proc/<pid>/space` | Phase 2 | Low | Small |
+| B11: `/proc/<pid>/space` | **Phase 2 ✅** | Low | Small |
 | B12: `space_for_current` test | Phase 2 | Low | Small |
 | C1: `Process` decomposition | Phase 3+ | High | XLarge |
 | C2: Signal path Space threading | Phase 3+ | Medium | Medium |
 | C3: Explicit Space in mmap/munmap | Phase 3+ | Medium | Large |
 | C4: Spawn with Space handle | Phase 3+ | Medium | Large |
 | C5: fork/clone semantics | Phase 3+ | Low | XLarge |
-| C6: memfd / shared mappings | Phase 4+ | Low | Large |
+| C6: memfd / shared mappings policy via explicit Space handles | Phase 4+ | Low | Large |
 | C7: Space capability/access control | Phase 4+ | Low | Large |
 | C8: procfs per-object files | Phase 4+ | Low | Medium |
