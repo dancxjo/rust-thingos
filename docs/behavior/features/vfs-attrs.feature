@@ -13,7 +13,7 @@ Feature: VFS Extended Attributes
     Then the serial output should contain "provider.name"
     And the serial output should contain "provider.is_demo"
     And the serial output should contain "provider.requests"
-    When I type "attr_set /run/cookbook/hello.txt user.comment utf8 'This_is_a_test'" on the serial console
+    When I type "attr_set /run/cookbook/hello.txt user.comment utf8 This_is_a_test" on the serial console
     And I wait for 1 seconds
     And I type "attr_get /run/cookbook/hello.txt user.comment" on the serial console
     Then the serial output should contain "type=Utf8 len=14"
@@ -23,4 +23,4 @@ Feature: VFS Extended Attributes
     When I type "attr_rm /run/cookbook/hello.txt user.comment" on the serial console
     And I wait for 1 seconds
     And I type "attr_list /run/cookbook/hello.txt" on the serial console
-    Then the log should not contain "user.comment"
+    Then the latest serial output should not contain "user.comment"

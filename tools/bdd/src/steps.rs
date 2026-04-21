@@ -485,7 +485,10 @@ async fn serial_contains(world: &mut ThingOsWorld, expected: String) -> Result<(
 }
 
 #[when(regex = r#"^I wait for the serial output to contain "(.+)"$"#)]
-async fn wait_for_serial_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+async fn wait_for_serial_contains(
+    world: &mut ThingOsWorld,
+    expected: String,
+) -> Result<(), StepError> {
     check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
 }
 
@@ -1355,17 +1358,50 @@ async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), Step
 #[when(regex = r#"^I type "(.+)" on the serial console$"#)]
 async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
     eprintln!("│  │  │      ⌨️ Typing on serial: {}", text);
-    
+
+    world.serial_checkpoint = world.get_serial_log().await.len();
+
     let mut data = text.into_bytes();
     data.push(b'\n');
-    
+
     for b in data {
-        world.serial_write(&[b]).await.map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+        world
+            .serial_write(&[b])
+            .await
+            .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    
+
     // Small delay to let the guest process the input
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    Ok(())
+}
+
+#[then(regex = r#"^the latest serial output should not contain "(.+)"$"#)]
+async fn latest_serial_not_contains(
+    world: &mut ThingOsWorld,
+    unexpected: String,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    let start = world.serial_checkpoint.min(log.len());
+    let recent = &log[start..];
+    let recent_norm = strip_ansi(recent).to_lowercase();
+    let needle_norm = strip_ansi(&unexpected).to_lowercase();
+
+    if recent_norm.contains(&needle_norm) {
+        eprintln!("\n=== Unexpected pattern found in latest serial output ===");
+        eprintln!("Pattern: {}", unexpected);
+        eprintln!("\n=== Recent Serial Output (since last command) ===");
+        for line in recent.lines().rev().take(40).collect::<Vec<_>>().into_iter().rev() {
+            eprintln!(">>> {}", line);
+        }
+        eprintln!("=== End Recent Output ===\n");
+        return Err(StepError(format!(
+            "Expected latest serial output to not contain '{}', but it was present",
+            unexpected
+        )));
+    }
+
     Ok(())
 }
 
@@ -1543,7 +1579,6 @@ async fn check_text_pixels(world: &mut ThingOsWorld, x: u32, y: u32) -> Result<(
     let img = image::open(&png_path)
         .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?;
     let rgb = img.to_rgb8();
-
 
     let search_radius = 40;
     let (width, height) = rgb.dimensions();

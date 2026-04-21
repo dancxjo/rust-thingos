@@ -2,8 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::OnceLock;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use cucumber::World;
 use regex::Regex;
@@ -41,10 +40,15 @@ pub struct ThingOsWorld {
     /// Sender for serial input (persistent connection)
     #[world(skip)]
     pub serial_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
+    /// Byte offset in serial_log captured before the last command was sent.
+    #[world(skip)]
+    pub serial_checkpoint: usize,
 }
 
 impl ThingOsWorld {
-    fn bdd_cache_dir() -> PathBuf { PathBuf::from("target").join("bdd").join("cache") }
+    fn bdd_cache_dir() -> PathBuf {
+        PathBuf::from("target").join("bdd").join("cache")
+    }
 
     fn env_flag(name: &str) -> bool {
         matches!(
@@ -156,7 +160,7 @@ impl ThingOsWorld {
         // Get resolution from environment (default 1920x1080 for BDD tests)
         let resolution =
             std::env::var("BDD_RESOLUTION").unwrap_or_else(|_| "1920x1080".to_string());
-        
+
         let loglevel = if diag_enabled() {
             "debug".to_string()
         } else {
