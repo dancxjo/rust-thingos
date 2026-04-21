@@ -36,10 +36,17 @@
 //! `userspace/iso9660d/` — full reference implementation.
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::default::Default;
 extern crate alloc;
 
+use abi::attrs::{
+    ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrNameHeader,
+    AttrSetHeader, AttrType, AttrValueHeader,
+};
+use abi::device::{DeviceCall, DeviceKind};
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
@@ -59,15 +66,23 @@ const ATTR_PROVIDER_NAME: &str = "ipc_provider_demo";
 /// Content served by READ.
 const HELLO_CONTENT: &[u8] = b"Hello from the VFS provider!\n";
 
+struct AttrValue {
+    ty: AttrType,
+    data: Vec<u8>,
+}
+
+struct ProviderState {
+    request_count: u64,
+    attrs: BTreeMap<String, AttrValue>,
+}
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     info!("ipc_provider_demo: starting up");
 
+    let mut state = ProviderState { request_count: 0, attrs: BTreeMap::new() };
+
     // ── 1. Create the provider port pair ──────────────────────────────
-    //
-    // port_create returns (write_handle, read_handle).
-    // The kernel sends VFS RPC requests to the write-handle; we read them
-    // from the read-handle.
     let (write_h, read_h) = match port_create(65536) {
         Ok(pair) => pair,
         Err(e) => {
@@ -78,24 +93,15 @@ fn main(_arg: usize) -> ! {
     info!("ipc_provider_demo: port pair write_h={} read_h={}", write_h, read_h);
 
     // ── 2. Mount the provider at MOUNT_POINT ─────────────────────────────
-    //
-    // The kernel accepts the write-handle and routes all VFS operations
-    // under the mount point through it.
     match vfs_mount(write_h, MOUNT_POINT) {
         Ok(()) => info!("ipc_provider_demo: mounted at {}", MOUNT_POINT),
         Err(e) => {
             warn!("ipc_provider_demo: vfs_mount failed: {:?} (continuing anyway for demo)", e);
-            // Continue so the provider loop still demonstrates the dispatch logic.
         }
     }
 
     // ── 3. Provider loop ──────────────────────────────────────────────────
-    //
-    // ProviderLoop reads raw VFS RPC frames from the port and decodes
-    // the header for us.  We only need to return a ProviderResponse for
-    // each request.
     let mut lp = ProviderLoop::new(read_h);
-    let mut request_count: u64 = 0;
 
     loop {
         let req = match lp.next_request() {
@@ -103,16 +109,16 @@ fn main(_arg: usize) -> ! {
             Err(e) => {
                 info!(
                     "ipc_provider_demo: port closed ({:?}) after {} requests — exiting",
-                    e, request_count
+                    e, state.request_count
                 );
                 break;
             }
         };
 
-        request_count += 1;
-        info!("ipc_provider_demo: request #{} op={:?}", request_count, req.op);
+        state.request_count += 1;
+        info!("ipc_provider_demo: request #{} op={:?}", state.request_count, req.op);
 
-        let resp = dispatch(&req.op, &req.payload);
+        let resp = dispatch(&mut state, &req.op, &req.payload);
         if let Err(e) = lp.send_response(req.resp_port, resp) {
             warn!("ipc_provider_demo: send_response failed: {:?}", e);
         }
@@ -123,10 +129,8 @@ fn main(_arg: usize) -> ! {
 }
 
 /// Dispatch a single VFS RPC operation and return the appropriate response.
-fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
+fn dispatch(state: &mut ProviderState, op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
     match op {
-        // Lookup resolves a path component to a handle.
-        // Payload layout: 4-byte parent handle (u32) + path bytes.
         VfsRpcOp::Lookup => {
             let path = if payload.len() > 4 {
                 core::str::from_utf8(&payload[4..]).unwrap_or("")
@@ -140,8 +144,6 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
             }
         }
 
-        // Read returns file content.
-        // Payload layout: 8-byte handle + 8-byte offset + 4-byte length.
         VfsRpcOp::Read => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
@@ -152,12 +154,10 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
             ProviderResponse::err(Errno::EBADF)
         }
 
-        // Stat returns mode, size, inode number.
         VfsRpcOp::Stat => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
                 if handle == HELLO_HANDLE {
-                    // regular file, world-readable, size = len(HELLO_CONTENT)
                     return ProviderResponse::ok_stat(
                         0o100_444,
                         HELLO_CONTENT.len() as u64,
@@ -168,8 +168,6 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
             ProviderResponse::err(Errno::EBADF)
         }
 
-        // Readdir lists directory entries.
-        // For the root handle (0) we return a single entry for hello.txt.
         VfsRpcOp::Readdir => {
             let handle = if payload.len() >= 8 {
                 u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]))
@@ -177,96 +175,137 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
                 0
             };
             if handle == 0 {
-                // Simple dirent: inode(u64) + name_len(u8) + name bytes
-                let mut entry = alloc::vec![0u8; 8 + 1 + FILE_NAME.len()];
-                entry[..8].copy_from_slice(&HELLO_HANDLE.to_le_bytes());
-                entry[8] = FILE_NAME.len() as u8;
-                entry[9..].copy_from_slice(FILE_NAME);
+                let mut entry = Vec::with_capacity(8 + 1 + FILE_NAME.len());
+                entry.extend_from_slice(&HELLO_HANDLE.to_le_bytes());
+                entry.push(FILE_NAME.len() as u8);
+                entry.extend_from_slice(FILE_NAME);
                 ProviderResponse::ok_read(&entry)
             } else {
-                // Non-root handles are not directories.
                 ProviderResponse::ok_read(&[])
             }
         }
 
-        // Close is a no-op (handles are stateless).
         VfsRpcOp::Close => ProviderResponse::ok_empty(),
-
-        // Write is not supported.
         VfsRpcOp::Write => ProviderResponse::err(Errno::EROFS),
-
-        // Poll always reports readable.
-        VfsRpcOp::Poll => ProviderResponse::ok_bytes(&[1u8]),
-
-        // DeviceCall is used for typed attr CRUD/list.
-        VfsRpcOp::DeviceCall => dispatch_attr_device_call(payload),
-
-        // All other operations are not implemented.
-        _ => ProviderResponse::err(Errno::ENOSYS),
-    }
-}
-
-fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
-    use abi::attrs::{
-        ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrType,
-    };
-    use abi::device::{DeviceCall, DeviceKind};
-
-    let dc_size = core::mem::size_of::<DeviceCall>();
-    if payload.len() < 8 + dc_size {
-        return ProviderResponse::err(Errno::EINVAL);
-    }
-    let call: DeviceCall =
-        unsafe { core::ptr::read_unaligned(payload[8..8 + dc_size].as_ptr() as *const _) };
-    if call.kind != DeviceKind::Attr {
-        return ProviderResponse::err(Errno::ENOSYS);
-    }
-    let in_data = &payload[8 + dc_size..];
-    match call.op {
-        ATTR_OP_GET => {
-            if in_data.len() < 4 {
+        VfsRpcOp::Poll => ProviderResponse::ok_poll(1),
+        VfsRpcOp::AttrGet => {
+            if payload.len() < 10 {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let name_len = u16::from_le_bytes([in_data[0], in_data[1]]) as usize;
-            if in_data.len() < 4 + name_len {
+            let name_len = u16::from_le_bytes([payload[8], payload[9]]) as usize;
+            if payload.len() < 10 + name_len {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let name = match core::str::from_utf8(&in_data[4..4 + name_len]) {
+            let name = match core::str::from_utf8(&payload[10..10 + name_len]) {
                 Ok(v) => v,
                 Err(_) => return ProviderResponse::err(Errno::EINVAL),
             };
-            let (ty, value): (AttrType, &[u8]) = match name {
-                "provider.is_demo" => (AttrType::Bool, &[1u8]),
-                "provider.name" => (AttrType::Utf8, ATTR_PROVIDER_NAME.as_bytes()),
-                _ => return ProviderResponse::err(Errno::ENOENT),
+
+            // 1. Check fixed/read-only attributes
+            let (ty, data): (AttrType, Vec<u8>) = match name {
+                "provider.is_demo" => (AttrType::Bool, Vec::from([1u8])),
+                "provider.name" => (AttrType::Utf8, ATTR_PROVIDER_NAME.as_bytes().to_vec()),
+                "provider.requests" => {
+                    (AttrType::U64, Vec::from(state.request_count.to_le_bytes()))
+                }
+                _ => {
+                    // 2. Check mutable attributes
+                    if let Some(val) = state.attrs.get(name) {
+                        (val.ty, val.data.clone())
+                    } else {
+                        return ProviderResponse::err(Errno::ENOENT);
+                    }
+                }
             };
-            let mut out = alloc::vec![ty as u8, 0, 0, 0];
-            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
-            out.extend_from_slice(value);
-            ProviderResponse::ok_device_call(value.len() as u32, &out)
+            ProviderResponse::ok_attr_get(ty as u8, &data)
         }
-        ATTR_OP_SET | ATTR_OP_REMOVE => ProviderResponse::err(Errno::EROFS),
-        ATTR_OP_LIST => {
-            let mut out = alloc::vec![];
-            let entries = [
+
+        VfsRpcOp::AttrSet => {
+            if payload.len() < 16 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let hdr: AttrSetHeader =
+                unsafe { core::ptr::read_unaligned(payload[8..16].as_ptr() as *const _) };
+            let name_len = hdr.name_len as usize;
+            let val_len = hdr.value_len as usize;
+            if payload.len() < 16 + name_len + val_len {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let name = match core::str::from_utf8(&payload[16..16 + name_len]) {
+                Ok(v) => v,
+                Err(_) => return ProviderResponse::err(Errno::EINVAL),
+            };
+            let data = payload[16 + name_len..16 + name_len + val_len].to_vec();
+            let ty = match AttrType::from_u8(hdr.value_type) {
+                Some(t) => t,
+                None => return ProviderResponse::err(Errno::EINVAL),
+            };
+
+            info!("ipc_provider_demo: set attr '{}' type={:?} len={}", name, ty, val_len);
+            state.attrs.insert(name.to_string(), AttrValue { ty, data });
+            ProviderResponse::ok_empty()
+        }
+
+        VfsRpcOp::AttrRemove => {
+            if payload.len() < 10 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let name_len = u16::from_le_bytes([payload[8], payload[9]]) as usize;
+            if payload.len() < 10 + name_len {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let name = match core::str::from_utf8(&payload[10..10 + name_len]) {
+                Ok(v) => v,
+                Err(_) => return ProviderResponse::err(Errno::EINVAL),
+            };
+
+            if state.attrs.remove(name).is_some() {
+                info!("ipc_provider_demo: removed attr '{}'", name);
+                ProviderResponse::ok_empty()
+            } else {
+                ProviderResponse::err(Errno::ENOENT)
+            }
+        }
+
+        VfsRpcOp::AttrList => {
+            let mut out = Vec::new();
+            // 1. List read-only attributes
+            let ro_entries = [
                 ("provider.is_demo", AttrType::Bool, 1u32),
                 ("provider.name", AttrType::Utf8, ATTR_PROVIDER_NAME.len() as u32),
+                ("provider.requests", AttrType::U64, 8u32),
             ];
-            for (name, ty, value_len) in entries {
+            for (name, ty, val_len) in ro_entries {
                 let hdr = AttrListEntryHeader {
                     name_len: name.len() as u16,
                     value_type: ty as u8,
                     flags: 0,
-                    value_len,
+                    value_len: val_len,
                 };
-                out.extend_from_slice(&hdr.name_len.to_le_bytes());
-                out.push(hdr.value_type);
-                out.push(0);
-                out.extend_from_slice(&hdr.value_len.to_le_bytes());
+                unsafe {
+                    let ptr = &hdr as *const _ as *const u8;
+                    out.extend_from_slice(core::slice::from_raw_parts(ptr, 8));
+                }
                 out.extend_from_slice(name.as_bytes());
             }
-            ProviderResponse::ok_device_call(entries.len() as u32, &out)
+            // 2. List mutable attributes
+            for (name, val) in &state.attrs {
+                let hdr = AttrListEntryHeader {
+                    name_len: name.len() as u16,
+                    value_type: val.ty as u8,
+                    flags: 0,
+                    value_len: val.data.len() as u32,
+                };
+                unsafe {
+                    let ptr = &hdr as *const _ as *const u8;
+                    out.extend_from_slice(core::slice::from_raw_parts(ptr, 8));
+                }
+                out.extend_from_slice(name.as_bytes());
+            }
+            ProviderResponse::ok_bytes(&out)
         }
+        VfsRpcOp::DeviceCall => ProviderResponse::err(Errno::ENOSYS),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }
+

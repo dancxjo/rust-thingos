@@ -95,6 +95,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 impl Errno {
     #[allow(non_upper_case_globals)]
     pub const NotSupported: Errno = Errno::ENOSYS;
+    #[allow(non_upper_case_globals)]
+    pub const ENOTSUP: Errno = Errno::EOPNOTSUPP;
     pub fn as_isize(self) -> isize {
         -(self as isize)
     }
