@@ -59,7 +59,8 @@ fn main(_arg: usize) -> ! {
     let header_len = core::mem::size_of::<AttrListEntryHeader>();
     while seen < count && off + header_len <= buf.len() {
         let name_len = u16::from_le_bytes([buf[off], buf[off + 1]]) as usize;
-        let ty = AttrType::from_u8(buf[off + 2]);
+        let raw_ty = buf[off + 2];
+        let ty = AttrType::from_u8(raw_ty);
         let value_len = u32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
         off += header_len;
         if off + name_len > buf.len() {
@@ -73,12 +74,11 @@ fn main(_arg: usize) -> ! {
             Err(_) => break,
         };
         off += name_len;
-        print(&alloc::format!(
-            "{}\t{:?}\t{}\n",
-            name,
-            ty.unwrap_or(AttrType::Bytes),
-            value_len
-        ));
+        if let Some(ty) = ty {
+            print(&alloc::format!("{}\t{:?}\t{}\n", name, ty, value_len));
+        } else {
+            print(&alloc::format!("{}\tunknown({})\t{}\n", name, raw_ty, value_len));
+        }
         seen += 1;
     }
     print(&alloc::format!("count={}\n", count));
