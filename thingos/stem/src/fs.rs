@@ -1,9 +1,7 @@
 //! High-level VFS utilities.
 
-use alloc::vec;
-
 use abi::errors::{Errno, SysResult};
-use abi::vfs_watch::{WatchEvent, flags, mask};
+use abi::vfs_watch::{WatchEvent, mask};
 
 use crate::syscall::{vfs_close, vfs_read, vfs_watch_path};
 
@@ -80,7 +78,7 @@ pub fn wait_until_exists(path: &str) -> SysResult<()> {
     }
 
     loop {
-        if let Some((event, event_name)) = watcher.read_event()? {
+        if let Some((_event, event_name)) = watcher.read_event()? {
             if event_name == name {
                 // Re-verify the file is actually accessible — it may have been
                 // removed or renamed immediately after the create/move event

@@ -4,6 +4,8 @@ use std::{env, fs};
 use pciids::{Mode, build_tables, filter_vendors, parse_pci_ids, render_rust};
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(target_os,values(\"thingos\"))");
+    println!("cargo:rustc-check-cfg=cfg(target_env,values(\"thingos\"))");
     println!("cargo:rerun-if-env-changed=PCI_IDS_MODE");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));

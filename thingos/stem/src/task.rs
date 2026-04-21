@@ -5,14 +5,13 @@
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use crate::errors::Errno;
-use crate::wait_set::{WaitEvents, WaitSet, WaitToken};
+use crate::wait_set::{WaitSet, WaitToken};
 
 /// A global pointer to the currently running reactor.
 /// While ThingOS is mostly single-threaded, `AtomicPtr` safe-guards concurrent
@@ -149,6 +148,7 @@ pub struct AsyncPort {
     handle: u64,
 }
 
+#[allow(deprecated)]
 impl AsyncPort {
     pub fn new(handle: u64) -> Self {
         Self { handle }
@@ -170,12 +170,14 @@ impl AsyncPort {
     }
 }
 
+#[allow(deprecated)]
 pub struct RecvFuture<'a> {
     port: &'a AsyncPort,
     buf: &'a mut [u8],
     registered_token: Option<WaitToken>,
 }
 
+#[allow(deprecated)]
 impl<'a> Future for RecvFuture<'a> {
     type Output = Result<usize, Errno>;
 

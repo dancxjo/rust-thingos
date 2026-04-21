@@ -129,7 +129,7 @@ pub fn alloc_tls_block(info: &TlsInfo) -> Result<usize, Errno> {
     // Match ELF TLS offsets with a conservative 16-byte minimum alignment.
     let tls_align = info.align.max(16);
     // Keep TP-relative layout identical to the ELF PT_TLS definition.
-    let data_size = info.memsz;
+    let data_size = round_up(info.memsz, tls_align);
     let tcb_size: usize = 16; // self-pointer (u64) + DTV pointer (u64)
     let total_size = data_size + tcb_size;
 

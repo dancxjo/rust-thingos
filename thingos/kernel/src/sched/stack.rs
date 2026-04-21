@@ -12,6 +12,36 @@ const MAX_USER_STACK_PAGES: usize = 256;
 
 static NEXT_USER_STACK: AtomicU64 = AtomicU64::new(0x7FFF_0000_0000);
 
+fn current_task_aspace<R: BootRuntime>()
+-> Result<<R::Tasking as BootTasking>::AddressSpace, MapError> {
+    let rt = crate::runtime::<R>();
+    let _irq = rt.irq_disable();
+    let lock = SCHEDULER.lock();
+    let ptr = match *lock {
+        Some(ptr) => ptr,
+        None => {
+            rt.irq_restore(_irq);
+            return Err(MapError::PageTableFault);
+        }
+    };
+    let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
+    let cpu = super::current_cpu_index::<R>();
+    let current_id = match sched.state.per_cpu.get(cpu).and_then(|pc| pc.current) {
+        Some(id) => id,
+        None => {
+            rt.irq_restore(_irq);
+            return Err(MapError::PageTableFault);
+        }
+    };
+
+    let aspace = crate::task::registry::get_task::<R>(current_id)
+        .map(|task| task.aspace)
+        .ok_or(MapError::PageTableFault);
+
+    rt.irq_restore(_irq);
+    aspace
+}
+
 pub fn alloc_user_stack<R: BootRuntime>(pages: usize) -> Option<usize> {
     let rt = crate::runtime::<R>();
     let page_size = rt.page_size() as u64;
@@ -54,14 +84,12 @@ pub unsafe fn map_user_page<R: BootRuntime>(virt: u64, phys: u64) -> Result<(), 
     }
 
     let rt = crate::runtime::<R>();
-    let aspace = rt.tasking().active_address_space();
+    let aspace = current_task_aspace::<R>()?;
     let perms =
         MapPerms { user: true, read: true, write: true, exec: false, kind: MapKind::Normal };
     let hook = MapHook;
 
-    rt.tasking()
-        .map_page(aspace, virt, phys, perms, &hook)
-        .map_err(|()| MapError::OutOfMemory)?;
+    rt.tasking().map_page(aspace, virt, phys, perms, &hook).map_err(|()| MapError::OutOfMemory)?;
     rt.tasking().tlb_flush_page(virt);
 
     Ok(())
@@ -83,12 +111,10 @@ pub unsafe fn map_user_page_perms<R: BootRuntime>(
     }
 
     let rt = crate::runtime::<R>();
-    let aspace = rt.tasking().active_address_space();
+    let aspace = current_task_aspace::<R>()?;
     let hook = MapHook;
 
-    rt.tasking()
-        .map_page(aspace, virt, phys, perms, &hook)
-        .map_err(|()| MapError::OutOfMemory)?;
+    rt.tasking().map_page(aspace, virt, phys, perms, &hook).map_err(|()| MapError::OutOfMemory)?;
     rt.tasking().tlb_flush_page(virt);
     Ok(())
 }
@@ -96,7 +122,7 @@ pub unsafe fn map_user_page_perms<R: BootRuntime>(
 /// Unmap a user page in the current address space
 pub unsafe fn unmap_user_page<R: BootRuntime>(virt: u64) -> Result<(), MapError> {
     let rt = crate::runtime::<R>();
-    let aspace = rt.tasking().active_address_space();
+    let aspace = current_task_aspace::<R>()?;
 
     rt.tasking().unmap_page(aspace, virt).map_err(|()| MapError::NotMapped)?;
     rt.tasking().tlb_flush_page(virt);
@@ -109,7 +135,7 @@ pub unsafe fn protect_user_page<R: BootRuntime>(
     perms: MapPerms,
 ) -> Result<(), MapError> {
     let rt = crate::runtime::<R>();
-    let aspace = rt.tasking().active_address_space();
+    let aspace = current_task_aspace::<R>()?;
 
     rt.tasking().protect_page(aspace, virt, perms).map_err(|()| MapError::PageTableFault)?;
     rt.tasking().tlb_flush_page(virt);

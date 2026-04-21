@@ -1,5 +1,3 @@
-use core::arch::asm;
-
 /// Raw syscall entry point.
 ///
 /// # Safety

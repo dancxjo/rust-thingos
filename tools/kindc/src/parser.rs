@@ -26,7 +26,6 @@ pub enum Token {
 }
 
 pub struct Lexer<'a> {
-    input: &'a str,
     chars: Peekable<Chars<'a>>,
     line: usize,
     col: usize,
@@ -35,7 +34,7 @@ pub struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     pub fn new(file: String, input: &'a str) -> Self {
-        Self { input, chars: input.chars().peekable(), line: 1, col: 1, file }
+        Self { chars: input.chars().peekable(), line: 1, col: 1, file }
     }
 
     fn peek(&mut self) -> Option<char> {

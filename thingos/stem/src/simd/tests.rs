@@ -431,7 +431,7 @@ mod tests {
 
     // Test AVX2 backend directly when available
     #[test]
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "simd"))]
     fn test_avx2_solid_masked_correctness() {
         use crate::simd::x86::is_avx2_available;
         if !is_avx2_available() {
@@ -459,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "simd"))]
     fn test_avx2_src_masked_correctness() {
         use crate::simd::x86::is_avx2_available;
         if !is_avx2_available() {
@@ -487,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "simd"))]
     fn test_avx2_fuzz() {
         use crate::simd::x86::is_avx2_available;
         if !is_avx2_available() {

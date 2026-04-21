@@ -208,10 +208,6 @@ impl Resolver {
         out
     }
 
-    fn compute_kind_id(&self, kind: &ir::ResolvedKind) -> [u8; 16] {
-        self.compute_kind_id_with_shape(&kind.canonical_name, &kind.shape)
-    }
-
     fn hash_type(&self, hasher: &mut blake3::Hasher, ty: &ir::ResolvedType) {
         hasher.update(ty.kind_ref.as_bytes());
         for arg in &ty.args {

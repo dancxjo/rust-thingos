@@ -263,7 +263,6 @@ mod tests {
     use super::*;
     extern crate alloc;
     use alloc::vec;
-    use alloc::vec::Vec;
 
     #[test]
     fn test_subpixel_conversion() {

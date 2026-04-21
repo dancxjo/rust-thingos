@@ -1,5 +1,4 @@
 #![no_std]
-#![no_std]
 extern crate alloc;
 
 #[cfg(all(target_os = "thingos", panic = "unwind"))]
