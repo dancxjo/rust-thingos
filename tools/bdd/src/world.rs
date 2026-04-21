@@ -44,6 +44,8 @@ pub struct ThingOsWorld {
 }
 
 impl ThingOsWorld {
+    const FETCH_CACHE_MARKER: &'static [u8] = b"ready\n";
+
     fn bdd_cache_dir() -> PathBuf { PathBuf::from("target").join("bdd").join("cache") }
 
     fn env_flag(name: &str) -> bool {
@@ -62,7 +64,7 @@ impl ThingOsWorld {
             .join(format!("thing-os-bdd-{}-{}.iso", arch, safe_resolution))
     }
 
-    fn fetch_stamp_path(arch: &str) -> PathBuf {
+    fn fetch_cache_marker_path(arch: &str) -> PathBuf {
         Self::bdd_cache_dir().join(format!("fetch-{}.stamp", arch))
     }
 
@@ -83,12 +85,12 @@ impl ThingOsWorld {
         &self,
         arch: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        static FETCH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-        let lock = FETCH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+        static FETCH_PREREQUISITES_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        let lock = FETCH_PREREQUISITES_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
         let _guard = lock.lock().await;
 
         let force_fetch = Self::env_flag("BDD_FORCE_FETCH");
-        let stamp_path = Self::fetch_stamp_path(arch);
+        let stamp_path = Self::fetch_cache_marker_path(arch);
         let prerequisites_ready = Self::fetch_prerequisites_ready(arch);
 
         if !force_fetch && prerequisites_ready && stamp_path.exists() {
@@ -100,7 +102,7 @@ impl ThingOsWorld {
             if let Some(parent) = stamp_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&stamp_path, b"ready\n")?;
+            std::fs::write(&stamp_path, Self::FETCH_CACHE_MARKER)?;
             eprintln!("[bdd] Fetch prerequisites already available for arch {arch}");
             return Ok(());
         }
@@ -133,7 +135,7 @@ impl ThingOsWorld {
         if let Some(parent) = stamp_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&stamp_path, b"ready\n")?;
+        std::fs::write(&stamp_path, Self::FETCH_CACHE_MARKER)?;
         eprintln!("[bdd] Cached fetch prerequisites for arch {arch}");
         Ok(())
     }
