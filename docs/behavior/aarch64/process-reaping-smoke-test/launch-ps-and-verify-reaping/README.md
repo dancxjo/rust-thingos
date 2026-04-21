@@ -1,13 +1,12 @@
 # ❌ Scenario: Launch ps and verify reaping
 
-> Last run: 2026-04-20 18:24:09
+> Last run: 2026-04-20 18:36:07
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 16188ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ❌ | 61051ms | - [📜](./02/serial.log) - |
+| 1 | Given the machine is booted | ❌ | 1001ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

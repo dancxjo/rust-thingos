@@ -308,10 +308,12 @@ impl<R: BootRuntime> Scheduler<R> {
                 None
             };
 
-        let aspace =
-            parent_task.map(|t| t.aspace).unwrap_or_else(|| rt.tasking().active_address_space());
+        let aspace = parent_task
+            .as_ref()
+            .map(|t| t.aspace)
+            .unwrap_or_else(|| rt.tasking().active_address_space());
 
-        let parent_pinfo = parent_task.and_then(|parent| parent.process_info.clone());
+        let parent_pinfo = parent_task.as_ref().and_then(|parent| parent.process_info.clone());
 
         // Clone the mappings Arc from the parent process (same underlying
         // MappingList object).  Fall back to an empty list only when there is
