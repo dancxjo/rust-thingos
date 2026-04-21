@@ -158,3 +158,49 @@ fn map_type_to_wire_type(ty: &Type) -> proc_macro2::TokenStream {
 
     quote!(abi::wire_schema::WireType::U8) // Fallback/Error?
 }
+
+#[cfg(test)]
+mod tests {
+    use quote::ToTokens;
+    use syn::parse_str;
+
+    use super::map_type_to_wire_type;
+
+    fn mapped(ty: &str) -> String {
+        let parsed = parse_str(ty).expect("valid type");
+        map_type_to_wire_type(&parsed).to_token_stream().to_string()
+    }
+
+    #[test]
+    fn maps_primitive_types() {
+        assert_eq!(mapped("u8"), "abi :: wire_schema :: WireType :: U8");
+        assert_eq!(mapped("u16"), "abi :: wire_schema :: WireType :: U16");
+        assert_eq!(mapped("i64"), "abi :: wire_schema :: WireType :: I64");
+        assert_eq!(mapped("bool"), "abi :: wire_schema :: WireType :: Bool");
+    }
+
+    #[test]
+    fn maps_known_id_types() {
+        assert_eq!(mapped("ThingId"), "abi :: wire_schema :: WireType :: ThingId");
+        assert_eq!(mapped("BlobId"), "abi :: wire_schema :: WireType :: BlobId");
+        assert_eq!(mapped("SymbolId"), "abi :: wire_schema :: WireType :: SymbolId");
+        assert_eq!(mapped("KindId"), "abi :: wire_schema :: WireType :: ThingId");
+        assert_eq!(mapped("PredicateId"), "abi :: wire_schema :: WireType :: ThingId");
+    }
+
+    #[test]
+    fn maps_arrays_recursively() {
+        assert_eq!(
+            mapped("[u16; 4]"),
+            "abi :: wire_schema :: WireType :: Array (& abi :: wire_schema :: WireType :: U16 , 4)"
+        );
+    }
+
+    #[test]
+    fn maps_custom_types_to_struct_schema() {
+        assert_eq!(
+            mapped("MyType"),
+            "abi :: wire_schema :: WireType :: Struct (< MyType as abi :: graphable :: Graphable > :: SCHEMA)"
+        );
+    }
+}
