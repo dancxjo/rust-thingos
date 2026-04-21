@@ -30,7 +30,31 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v5
 
+      - name: Cache patched vendor crates
+        id: vendor-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/dirs
+            vendor/dirs-sys
+            vendor/errno
+            vendor/mio
+          key: ${{ runner.os }}-vendor-patched-${{ hashFiles('Cargo.lock') }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Bootstrap patched vendor crates
+        if: steps.vendor-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p vendor
@@ -55,7 +79,7 @@ jobs:
             fi
             rm -rf "vendor/$crate"
             mkdir -p "vendor/$crate"
-            curl -fsSL "https://crates.io/api/v1/crates/$crate/$version/download" \
+            curl -fsSL --retry 5 --retry-all-errors "https://static.crates.io/crates/$crate/$crate-$version.crate" \
               | tar -xz --strip-components=1 -C "vendor/$crate"
           }
 
@@ -78,7 +102,31 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v5
 
+      - name: Cache patched vendor crates
+        id: vendor-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/dirs
+            vendor/dirs-sys
+            vendor/errno
+            vendor/mio
+          key: ${{ runner.os }}-vendor-patched-${{ hashFiles('Cargo.lock') }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Bootstrap patched vendor crates
+        if: steps.vendor-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p vendor
@@ -103,7 +151,7 @@ jobs:
             fi
             rm -rf "vendor/$crate"
             mkdir -p "vendor/$crate"
-            curl -fsSL "https://crates.io/api/v1/crates/$crate/$version/download" \
+            curl -fsSL --retry 5 --retry-all-errors "https://static.crates.io/crates/$crate/$crate-$version.crate" \
               | tar -xz --strip-components=1 -C "vendor/$crate"
           }
 
