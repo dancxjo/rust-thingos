@@ -72,7 +72,7 @@ impl ProviderRpc {
         let res = self.do_rpc(op, payload);
         if let Ok(ref resp) = res {
             if resp.len() > 0 && resp[0] != 0 {
-                crate::kprintln!("VFS RPC: op={:?} returned error {}", op, resp[0]);
+                crate::ktrace!("VFS RPC: op={:?} returned error {}", op, resp[0]);
             }
         }
 
