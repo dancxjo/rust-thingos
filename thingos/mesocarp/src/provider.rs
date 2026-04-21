@@ -112,7 +112,13 @@ impl HostsProvider {
     }
 
     /// Drop every host whose TTL has passed `now_ms`. `None` expiries are
-    /// treated as permanent.
+    /// treated as permanent (e.g. our own pinned self-entry).
+    ///
+    /// Handles are removed alongside entries: if the peer reappears, it
+    /// will get a fresh `u64` on the next upsert. Any stale kernel-side
+    /// file descriptors pointing at the old handle will cleanly see
+    /// `ENOENT`/`EBADF` on their next call, which is the desired
+    /// disconnected-peer signal.
     pub fn expire(&mut self, now_ms: u64) {
         let dead: Vec<String> = self
             .entries
@@ -124,8 +130,7 @@ impl HostsProvider {
             .collect();
         for name in dead {
             self.entries.remove(&name);
-            // Keep the handle assignment so if the entry reappears we
-            // reuse the same u64; simplifies stat() after a brief gap.
+            self.handles.remove(&name);
         }
     }
 
@@ -396,6 +401,9 @@ mod tests {
         p.expire(500);
         assert_eq!(p.len(), 1);
         assert!(p.entries.contains_key("y.local"));
+        // Handle for the expired host is dropped so we don't leak
+        // mappings over a long uptime with many transient peers.
+        assert!(!p.handles.contains_key("x.local"));
     }
 
     #[test]
