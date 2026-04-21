@@ -220,7 +220,7 @@ impl HttpsProvider {
         // Check shared cache first to avoid redundant network I/O for xattr/stat calls.
         let key = state.node.cache_key();
         if let Some(entry) = self.shared.cache.lock().peek(&key) {
-            info!("httpsd: found {} in cache, skipping upstream open", state.node.url());
+            info!("httpsd: ensure_upstream handle={} FOUND {} in cache", handle, state.node.url());
             state.is_redirect = entry.is_redirect();
             state.headers_cached = true;
             if state.is_redirect {
@@ -230,7 +230,7 @@ impl HttpsProvider {
         }
 
         let url = state.node.url();
-        info!("httpsd: opening upstream stream for handle={} {}", handle, url);
+        info!("httpsd: ensure_upstream handle={} MISS {} - opening network stream", handle, url);
         let response = HttpClient::get(&url).map_err(|err| {
             error!("httpsd: upstream open failed for handle={} {}: {}", handle, url, err);
             Errno::EIO
@@ -473,11 +473,16 @@ impl HttpsProvider {
             let state = self.handles.get(&handle).ok_or(Errno::EBADF)?;
             state.node.cache_key()
         };
+        info!("httpsd: ensure_cached_entry handle={} key={:?}", handle, key);
         if let Some(e) = self.shared.cache.lock().peek(&key) {
             return Ok(e.clone());
         }
         self.ensure_upstream(handle)?;
-        self.shared.cache.lock().peek(&key).cloned().ok_or(Errno::EIO)
+        let entry = self.shared.cache.lock().peek(&key).cloned().ok_or_else(|| {
+            error!("httpsd: ensure_cached_entry handle={} FAILED: not in cache after ensure_upstream", handle);
+            Errno::EIO
+        })?;
+        Ok(entry)
     }
 
     fn redirect_target_for(&self, handle: u64) -> Result<String, Errno> {

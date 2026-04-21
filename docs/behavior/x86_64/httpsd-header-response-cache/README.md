@@ -1,6 +1,6 @@
 # Feature: httpsd header/response cache
 
-> Last run: 2026-04-21 14:38:13
+> Last run: 2026-04-21 14:40:41
 
 ## Scenarios
 
