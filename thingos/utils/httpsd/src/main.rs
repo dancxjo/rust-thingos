@@ -1019,8 +1019,8 @@ mod tests {
 
     #[test]
     fn node_url_builds_https_paths() {
-        let node = HttpsNode::new("en.wikipedia.org", "wiki/Dormouse");
-        assert_eq!(node.url(), "https://en.wikipedia.org/wiki/Dormouse");
+        let node = HttpsNode::new("example.com", "index.html");
+        assert_eq!(node.url(), "https://example.com/index.html");
     }
 
     #[test]
@@ -1061,8 +1061,8 @@ mod tests {
     #[test]
     fn url_to_vfs_path_builds_under_https_mount() {
         assert_eq!(
-            url_to_vfs_path("https://en.wikipedia.org/wiki/Main_Page"),
-            "/https/en.wikipedia.org/wiki/Main_Page"
+            url_to_vfs_path("https://example.com/index.html"),
+            "/https/example.com/index.html"
         );
         assert_eq!(url_to_vfs_path("https://example.com"), "/https/example.com");
         assert_eq!(

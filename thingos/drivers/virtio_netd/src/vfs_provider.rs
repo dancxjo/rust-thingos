@@ -142,7 +142,8 @@ pub fn handle_vfs_rpc(
         VfsRpcOp::AttrGet
         | VfsRpcOp::AttrSet
         | VfsRpcOp::AttrRemove
-        | VfsRpcOp::AttrList => ProviderResponse::err(Errno::ENOTSUP),
+        | VfsRpcOp::AttrList
+        | VfsRpcOp::Readlink => ProviderResponse::err(Errno::ENOTSUP),
     }
 }
 

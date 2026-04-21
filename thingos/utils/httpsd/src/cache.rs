@@ -465,8 +465,8 @@ mod tests {
     #[test]
     fn url_to_host_path_round_trip() {
         assert_eq!(
-            url_to_host_path("https://en.wikipedia.org/wiki/Dormouse"),
-            ("en.wikipedia.org".to_string(), "wiki/Dormouse".to_string())
+            url_to_host_path("https://example.com/index.html"),
+            ("example.com".to_string(), "index.html".to_string())
         );
         assert_eq!(
             url_to_host_path("https://example.com"),

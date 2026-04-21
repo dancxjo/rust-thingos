@@ -49,7 +49,7 @@ Boot the image and fetch a page directly from the shell:
 ```sh
 just run
 # in the ThingOS shell:
-cat /https/en.wikipedia.org/wiki/Dormouse
+cat /https/example.com
 ```
 
 How this works at runtime:

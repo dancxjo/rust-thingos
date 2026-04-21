@@ -47,9 +47,11 @@ pub fn dispatch_vfs_rpc(driver: &mut BootFbDriver, req: &ProviderRequest) -> Pro
         VfsRpcOp::DeviceCall => device_call(driver, &req.payload),
         VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::Rename => ProviderResponse::err(Errno::ENOSYS),
-        VfsRpcOp::AttrGet => handle_attr_get(&req.payload),
-        VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove => ProviderResponse::err(Errno::EROFS),
-        VfsRpcOp::AttrList => handle_attr_list(&req.payload),
+        VfsRpcOp::AttrGet
+        | VfsRpcOp::AttrSet
+        | VfsRpcOp::AttrRemove
+        | VfsRpcOp::AttrList
+        | VfsRpcOp::Readlink => ProviderResponse::err(Errno::ENOTSUP),
         VfsRpcOp::Read | VfsRpcOp::Write | VfsRpcOp::Readdir | VfsRpcOp::Poll => {
             ProviderResponse::err(Errno::ENOSYS)
         }
