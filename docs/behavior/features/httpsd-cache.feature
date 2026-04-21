@@ -8,6 +8,8 @@ Feature: httpsd header/response cache
     When I wait for the shell prompt
     And I type "ping -c 1 example.com" on the serial console
     And I wait for the serial output to contain "1 packets transmitted, 1 received"
+    And I type "cat /https/example.com > /dev/null" on the serial console
+    And I wait for the shell prompt
     And I type "attr_list /https/example.com" on the serial console
     Then the serial output should contain "user.http.status_code" within 30s
     And the serial output should contain "user.http.content_type"

@@ -213,13 +213,26 @@ impl HttpsProvider {
     /// network traffic.
     fn ensure_upstream(&mut self, handle: u64) -> Result<(), Errno> {
         let state = self.handles.get_mut(&handle).ok_or(Errno::EBADF)?;
-        if state.response.is_some() || state.eof {
+        if state.response.is_some() || state.eof || state.headers_cached {
             return Ok(());
         }
+
+        // Check shared cache first to avoid redundant network I/O for xattr/stat calls.
+        let key = state.node.cache_key();
+        if let Some(entry) = self.shared.cache.lock().peek(&key) {
+            info!("httpsd: found {} in cache, skipping upstream open", state.node.url());
+            state.is_redirect = entry.is_redirect();
+            state.headers_cached = true;
+            if state.is_redirect {
+                state.eof = true;
+            }
+            return Ok(());
+        }
+
         let url = state.node.url();
         info!("httpsd: opening upstream stream for handle={} {}", handle, url);
         let response = HttpClient::get(&url).map_err(|err| {
-            warn!("httpsd: upstream open failed for handle={} {}: {}", handle, url, err);
+            error!("httpsd: upstream open failed for handle={} {}: {}", handle, url, err);
             Errno::EIO
         })?;
         state.response = Some(response);
