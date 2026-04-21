@@ -44,8 +44,6 @@ pub struct ThingOsWorld {
 }
 
 impl ThingOsWorld {
-    const FETCH_CACHE_MARKER: &'static [u8] = b"ready\n";
-
     fn bdd_cache_dir() -> PathBuf { PathBuf::from("target").join("bdd").join("cache") }
 
     fn env_flag(name: &str) -> bool {
@@ -85,24 +83,23 @@ impl ThingOsWorld {
         &self,
         arch: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        static FETCH_PREREQUISITES_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-        let lock = FETCH_PREREQUISITES_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+        static GLOBAL_FETCH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        let lock = GLOBAL_FETCH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
         let _guard = lock.lock().await;
 
         let force_fetch = Self::env_flag("BDD_FORCE_FETCH");
         let stamp_path = Self::fetch_cache_marker_path(arch);
         let prerequisites_ready = Self::fetch_prerequisites_ready(arch);
 
-        if !force_fetch && prerequisites_ready && stamp_path.exists() {
-            eprintln!("[bdd] Reusing cached fetch assets for arch {arch}");
-            return Ok(());
-        }
-
         if !force_fetch && prerequisites_ready {
+            if stamp_path.exists() {
+                eprintln!("[bdd] Reusing cached fetch assets for arch {arch}");
+                return Ok(());
+            }
             if let Some(parent) = stamp_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&stamp_path, Self::FETCH_CACHE_MARKER)?;
+            std::fs::write(&stamp_path, b"ready\n")?;
             eprintln!("[bdd] Fetch prerequisites already available for arch {arch}");
             return Ok(());
         }
@@ -110,7 +107,6 @@ impl ThingOsWorld {
         eprintln!("[bdd] Running `xtask fetch` for BDD prerequisites (arch={arch})...");
         let output = std::process::Command::new("cargo")
             .args(["run", "-p", "xtask", "--", "fetch"])
-            .env("RUSTFLAGS", "-Awarnings")
             .output()?;
 
         if !output.status.success() {
@@ -135,7 +131,7 @@ impl ThingOsWorld {
         if let Some(parent) = stamp_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&stamp_path, Self::FETCH_CACHE_MARKER)?;
+        std::fs::write(&stamp_path, b"ready\n")?;
         eprintln!("[bdd] Cached fetch prerequisites for arch {arch}");
         Ok(())
     }
