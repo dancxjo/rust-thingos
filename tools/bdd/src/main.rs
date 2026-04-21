@@ -18,18 +18,6 @@ use cucumber::World;
 use reporter::ThingOsReporter;
 use world::ThingOsWorld;
 
-fn print_readme_inline(prefix: &str, path: &std::path::Path) {
-    eprintln!("{}: {}", prefix, path.display());
-    match fs::read_to_string(path) {
-        Ok(contents) => {
-            for line in contents.lines() {
-                eprintln!("[bdd] {}", line);
-            }
-        }
-        Err(e) => eprintln!("[bdd] WARNING: Failed to read README inline: {}", e),
-    }
-}
-
 fn main() {
     // Get configuration from environment
     let arch = std::env::var("BDD_ARCH").unwrap_or_else(|_| "x86_64".to_string());
@@ -100,7 +88,7 @@ fn main() {
         let (_, features_failed) = collector.count_features();
         if features_failed > 0 {
             if let Some(path) = arch_readme_path {
-                print_readme_inline("[bdd] Inline architecture README", &path);
+                artifacts::print_readme_inline("[bdd] Inline architecture README", &path, "[bdd] ");
             }
         }
         features_failed > 0

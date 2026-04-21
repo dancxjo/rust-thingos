@@ -4,6 +4,8 @@
 //! Outputs to `/docs/behavior/${ARCH}/${FEATURE}/${SCENARIO}/${STEP}/`
 //! with markdown summaries at each level.
 
+use std::fs;
+use std::path::Path;
 use std::sync::OnceLock;
 
 use tokio::sync::Mutex;
@@ -47,4 +49,17 @@ pub async fn set_latest_serial(log: &str) {
 /// Get the latest serial log (for reporter to use).
 pub async fn get_latest_serial() -> String {
     if let Some(cache) = SERIAL_LOG.get() { cache.lock().await.clone() } else { String::new() }
+}
+
+/// Print README content inline in stderr output.
+pub fn print_readme_inline(label: &str, readme_path: &Path, line_prefix: &str) {
+    eprintln!("{}{} ({})", line_prefix, label, readme_path.display());
+    match fs::read_to_string(readme_path) {
+        Ok(contents) => {
+            for line in contents.lines() {
+                eprintln!("{}{}", line_prefix, line);
+            }
+        }
+        Err(e) => eprintln!("{}WARNING: Failed to read README inline: {}", line_prefix, e),
+    }
 }
