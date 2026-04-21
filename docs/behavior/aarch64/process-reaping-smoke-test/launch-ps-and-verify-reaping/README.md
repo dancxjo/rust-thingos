@@ -1,13 +1,13 @@
 # ❌ Scenario: Launch ps and verify reaping
 
-> Last run: 2026-04-20 16:57:49
+> Last run: 2026-04-20 17:50:40
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 14905ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ❌ | 61074ms | - [📜](./02/serial.log) - |
+| 1 | Given the machine is booted | ✅ | 15476ms | - [📜](./01/serial.log) - |
+| 2 | When I wait for the shell prompt | ❌ | 61118ms | - [📜](./02/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -27,7 +27,7 @@ BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
 [kernel:mem:init] frame allocator log ok
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [kernel:mem:init] tasking init ok
-[774700531] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[795446735] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -48,16 +48,16 @@ BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[893807295] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[894015972] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[896253577] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[899728949] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41008000
-[904708899] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
-[924873118] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[925771685] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
-[925994585] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41008000 entry_pc=0x2040f0 user_sp=0x800000
-[926873270] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
-[935254925] [[31;1mERROR[0m] [bran] [CPU0] panicked at thingos/bran/src/arch/aarch64/trap.rs:16:9:
+[922893483] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[923134997] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[926449871] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[929803197] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41008000
+[935505082] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
+[956645012] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[957839238] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
+[958336275] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41008000 entry_pc=0x2040f0 user_sp=0x800000
+[959781686] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[973137192] [[31;1mERROR[0m] [bran] [CPU0] panicked at thingos/bran/src/arch/aarch64/trap.rs:16:9:
 Unhandled Sync EL0 Exception. ESR=0x92000044 EC=0x24 ELR=0x20441c FAR=0x400000000000 SPSR=0x20000000
 FAULT
 
