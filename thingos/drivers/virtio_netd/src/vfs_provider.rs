@@ -46,6 +46,7 @@ use crate::driver::VirtioNetDriver;
 
 /// Root directory handle.
 pub const HANDLE_ROOT: u64 = 0;
+const ATTR_DRIVER_NAME: &str = "virtio_netd";
 const HANDLE_CTL: u64 = 1;
 const HANDLE_STATUS: u64 = 2;
 const HANDLE_MAC: u64 = 3;
@@ -180,7 +181,7 @@ fn attr_get(state: &NetVfsState, payload: &[u8]) -> ProviderResponse {
     };
     let mut value_buf = [0u8; 8];
     let (ty, bytes): (AttrType, &[u8]) = match name {
-        "driver.name" => (AttrType::Utf8, b"virtio_netd"),
+        "driver.name" => (AttrType::Utf8, ATTR_DRIVER_NAME.as_bytes()),
         "net.mtu" => {
             value_buf.copy_from_slice(&(state.mtu as u64).to_le_bytes());
             (AttrType::U64, &value_buf)
@@ -239,7 +240,7 @@ fn attr_set(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
 fn attr_list() -> ProviderResponse {
     let mut out = Vec::new();
     for (name, ty, value_len) in [
-        ("driver.name", AttrType::Utf8, 11u32),
+        ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
         ("net.mtu", AttrType::U64, 8u32),
         ("net.link_up", AttrType::Bool, 1u32),
     ] {

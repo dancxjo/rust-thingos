@@ -54,6 +54,7 @@ const FILE_NAME: &[u8] = b"hello.txt";
 
 /// Synthetic handle value for hello.txt (any non-zero u64 is fine).
 const HELLO_HANDLE: u64 = 1;
+const ATTR_PROVIDER_NAME: &str = "ipc_provider_demo";
 
 /// Content served by READ.
 const HELLO_CONTENT: &[u8] = b"Hello from the VFS provider!\n";
@@ -236,7 +237,7 @@ fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
             };
             let (ty, value): (AttrType, &[u8]) = match name {
                 "provider.is_demo" => (AttrType::Bool, &[1u8]),
-                "provider.name" => (AttrType::Utf8, b"ipc_provider_demo"),
+                "provider.name" => (AttrType::Utf8, ATTR_PROVIDER_NAME.as_bytes()),
                 _ => return ProviderResponse::err(Errno::ENOENT),
             };
             let mut out = alloc::vec![ty as u8, 0, 0, 0];
@@ -249,7 +250,7 @@ fn dispatch_attr_device_call(payload: &[u8]) -> ProviderResponse {
             let mut out = alloc::vec![];
             for (name, ty, value_len) in [
                 ("provider.is_demo", AttrType::Bool, 1u32),
-                ("provider.name", AttrType::Utf8, 17u32),
+                ("provider.name", AttrType::Utf8, ATTR_PROVIDER_NAME.len() as u32),
             ] {
                 let hdr = AttrListEntryHeader {
                     name_len: name.len() as u16,

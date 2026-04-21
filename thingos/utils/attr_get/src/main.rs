@@ -57,7 +57,8 @@ fn main(_arg: usize) -> ! {
                     }
                 }
                 AttrType::Bool => {
-                    print(&alloc::format!("value={}\n", if n > 0 && buf[0] != 0 { "true" } else { "false" }));
+                    let value = n > 0 && buf[0] != 0;
+                    print(&alloc::format!("value={}\n", if value { "true" } else { "false" }));
                 }
                 AttrType::U64 if n >= 8 => {
                     let v = u64::from_le_bytes(buf[..8].try_into().unwrap());

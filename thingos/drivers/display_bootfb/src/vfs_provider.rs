@@ -29,6 +29,8 @@ use crate::driver::BootFbDriver;
 // Handle IDs for this driver.
 pub const HANDLE_ROOT: u64 = 0;
 pub const HANDLE_CARD: u64 = 1;
+const ATTR_DRIVER_NAME: &str = "display_bootfb";
+const ATTR_DRIVER_CLASS: &str = "display";
 
 const S_IFDIR: u32 = 0o040000;
 const S_IFCHR: u32 = 0o020000;
@@ -216,8 +218,8 @@ fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
                     Err(_) => return ProviderResponse::err(Errno::EINVAL),
                 };
             let (value_type, value_bytes): (AttrType, &[u8]) = match name {
-                "driver.name" => (AttrType::Utf8, b"display_bootfb"),
-                "driver.class" => (AttrType::Utf8, b"display"),
+                "driver.name" => (AttrType::Utf8, ATTR_DRIVER_NAME.as_bytes()),
+                "driver.class" => (AttrType::Utf8, ATTR_DRIVER_CLASS.as_bytes()),
                 _ => return ProviderResponse::err(Errno::ENOENT),
             };
             let mut out = Vec::with_capacity(core::mem::size_of::<AttrValueHeader>() + value_bytes.len());
@@ -231,8 +233,8 @@ fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
         ATTR_OP_LIST => {
             let mut out = Vec::new();
             for (name, ty, value_len) in [
-                ("driver.name", AttrType::Utf8, 14u32),
-                ("driver.class", AttrType::Utf8, 7u32),
+                ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
+                ("driver.class", AttrType::Utf8, ATTR_DRIVER_CLASS.len() as u32),
             ] {
                 let header = AttrListEntryHeader {
                     name_len: name.len() as u16,
