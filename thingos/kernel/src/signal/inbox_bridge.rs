@@ -166,7 +166,7 @@ pub fn deliver_signal_to_inbox(
 
     let message = build_signal_message(signum, sender_tid, fault);
 
-    let Some(pinfo) = crate::sched::process_info_for_tid_current(pid as u64) else {
+    let Some(pinfo) = crate::sched::process_info_for_pid_current(pid) else {
         return Err("process not found");
     };
 

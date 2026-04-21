@@ -251,7 +251,7 @@ fn route_to_group(route: SignalRoute) -> Vec<(u64, SignalDeliveryOutcome)> {
 /// **unchanged** by this function.  The routing layer only controls who
 /// gets signaled, not what the signal means.
 pub fn deliver_to_recipient(pid: u32, sig: u8) -> SignalDeliveryOutcome {
-    let Some(pinfo) = crate::sched::process_info_for_tid_current(pid as u64) else {
+    let Some(pinfo) = crate::sched::process_info_for_pid_current(pid) else {
         return SignalDeliveryOutcome::RecipientNotFound;
     };
 
@@ -347,7 +347,7 @@ fn snapshot_group_pids(pgid: u32) -> Vec<u32> {
         if !seen.insert(snapshot.pid) {
             continue;
         }
-        let Some(pinfo) = crate::sched::process_info_for_tid_current(snapshot.pid as u64) else {
+        let Some(pinfo) = crate::sched::process_info_for_pid_current(snapshot.pid) else {
             continue;
         };
         let p = pinfo.lock();
