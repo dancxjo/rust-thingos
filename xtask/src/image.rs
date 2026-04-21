@@ -94,6 +94,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "virtio_netd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "rtl8168d", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "netd", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "mesocarp", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "fetchd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "httpsd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "find", is_init: false, boot_module: true, features: vec![] },
@@ -260,6 +261,7 @@ fn generate_limine_config(
     common_modules.push_str("    module_path: boot():/etc/profile\n");
     common_modules.push_str("    module_path: boot():/etc/motd\n");
     common_modules.push_str("    module_path: boot():/etc/fstab\n");
+    common_modules.push_str("    module_path: boot():/etc/hostname\n");
     if include_default_shell {
         common_modules.push_str("    module_path: boot():/etc/default/shell\n");
     }
@@ -446,8 +448,9 @@ pub fn build_iso_with_config(
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
     sh.write_file(
         iso_root.join("etc/fstab"),
-        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /mnt/iso iso9660 defaults 0 0\n",
+        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /mnt/iso iso9660 defaults 0 0\nnone /hosts mdns defaults 0 0\n",
     )?;
+    sh.write_file(iso_root.join("etc/hostname"), "thingos\n")?;
 
     let mut include_default_shell = false;
     if let Ok(default_shell) = std::env::var("THINGOS_DEFAULT_SHELL") {
@@ -938,6 +941,10 @@ fn is_driver(name: &str) -> bool {
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
     match name {
+        // mesocarp is the mDNS daemon; `mount -t mdns` resolves to /bin/mdns
+        // (or /bin/mdnsd). Aliases ensure both spellings land next to the
+        // real binary in the image.
+        "mesocarp" => &["mdns", "mdnsd"],
         _ => &[],
     }
 }

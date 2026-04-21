@@ -1,0 +1,11 @@
+[package]
+name = "mesocarp"
+version = "0.1.0"
+edition = "2021"
+description = "mDNS client/server daemon that exposes peers as a /hosts VFS tree."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+stem = { path = "../stem", features = ["rt", "global-alloc"] }
+abi = { path = "../abi" }
+ipc_helpers = { path = "../libs/ipc_helpers" }

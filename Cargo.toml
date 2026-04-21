@@ -32,6 +32,7 @@ members = [
   "thingos/libs/llm",
   "thingos/libs/llm_stub",
   "thingos/libs/ollama",
+  "thingos/mesocarp",
   "src/build_helper",
   "src/rustc-std-workspace/rustc-std-workspace-alloc",
   "src/rustc-std-workspace/rustc-std-workspace-core",
