@@ -309,16 +309,18 @@ impl ArchRuntime for AArch64Runtime {
     }
 
     unsafe fn enter_user(&self, entry: UserEntry) -> ! {
+        let tls_base = unsafe { kernel::sched::current_user_fs_base_current() };
         // Debug: Read current TTBR0
         let ttbr0: u64;
         unsafe {
             asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nomem, nostack));
         }
         kernel::kinfo!(
-            "enter_user: TTBR0={:#x} entry_pc={:#x} user_sp={:#x}",
+            "enter_user: TTBR0={:#x} entry_pc={:#x} user_sp={:#x} tls_base={:#x}",
             ttbr0,
             entry.entry_pc,
-            entry.user_sp
+            entry.user_sp,
+            tls_base
         );
 
         // Switch to EL1h (using SP_EL1) so we can safely set SP_EL0 for user mode.
@@ -338,12 +340,14 @@ impl ArchRuntime for AArch64Runtime {
                 "mov sp, {ksp}",
                 "msr sp_el0, {sp}",
                 "msr elr_el1, {pc}",
+                "msr tpidr_el0, {tls}",
                 "msr spsr_el1, {spsr}",
                 "mov x0, {arg}",
                 "eret",
                 ksp = in(reg) ksp,
                 sp = in(reg) entry.user_sp,
                 pc = in(reg) entry.entry_pc,
+                tls = in(reg) tls_base,
                 spsr = in(reg) spsr,
                 arg = in(reg) entry.arg0,
                 options(noreturn)
