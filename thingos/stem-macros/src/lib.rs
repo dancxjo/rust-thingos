@@ -53,7 +53,8 @@ fn validate_signature(func: &ItemFn) -> Result<bool, syn::Error> {
 
     match func.sig.inputs.len() {
         0 => Ok(false),
-        1 => match func.sig.inputs.first().expect("len checked") {
+        1 => match func.sig.inputs.first() {
+            Some(arg) => match arg {
             FnArg::Typed(pat_ty) => {
                 if let Type::Path(path) = pat_ty.ty.as_ref() {
                     if path.path.is_ident("usize") {
@@ -74,6 +75,11 @@ fn validate_signature(func: &ItemFn) -> Result<bool, syn::Error> {
             _ => Err(syn::Error::new_spanned(
                 &func.sig.inputs,
                 "unsupported argument pattern",
+            )),
+            },
+            None => Err(syn::Error::new_spanned(
+                &func.sig.inputs,
+                "expected exactly one argument",
             )),
         },
         _ => Err(syn::Error::new_spanned(
