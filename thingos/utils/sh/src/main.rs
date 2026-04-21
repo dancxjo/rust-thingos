@@ -200,6 +200,13 @@ enum ReadLineResult {
     Eof,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReapResult {
+    StatusUpdated,
+    NoChild,
+    NoStatus,
+}
+
 struct Shell {
     shell_pgid: u32,
     jobs: Vec<Job>,
@@ -273,24 +280,24 @@ impl Shell {
         String::from(line)
     }
 
-    fn reap_children(&mut self, nohang: bool) {
+    fn reap_children(&mut self, nohang: bool) -> ReapResult {
         let flags = (if nohang { waitpid_flags::WNOHANG } else { 0 })
             | waitpid_flags::WUNTRACED
             | waitpid_flags::WCONTINUED;
 
         loop {
             match syscall::waitpid(-1, flags) {
-                Ok((0, _)) => break,
+                Ok((0, _)) => return ReapResult::NoStatus,
                 Ok((pid, status)) if pid > 0 => {
                     self.handle_child_status(pid as u32, status);
                     if !nohang {
-                        break;
+                        return ReapResult::StatusUpdated;
                     }
                 }
-                Ok(_) => break,
-                Err(Errno::ECHILD) => break,
+                Ok(_) => return ReapResult::NoStatus,
+                Err(Errno::ECHILD) => return ReapResult::NoChild,
                 Err(Errno::EINTR) => continue,
-                Err(_) => break,
+                Err(_) => return ReapResult::NoStatus,
             }
         }
     }
@@ -372,7 +379,16 @@ impl Shell {
             if self.jobs[idx].state != JobState::Running {
                 break;
             }
-            self.reap_children(false);
+            if self.reap_children(false) == ReapResult::NoChild {
+                // Defensive fallback: if waitpid reports no children while this
+                // foreground job is still marked running, avoid spinning forever
+                // and return control to the shell.
+                self.jobs[idx].state = JobState::Completed;
+                if self.jobs[idx].last_status.is_none() {
+                    self.jobs[idx].last_status = Some(0);
+                }
+                break;
+            }
         }
 
         let _ = vfs::tcsetpgrp(TTY_FD, self.shell_pgid);
@@ -459,7 +475,7 @@ impl Shell {
             let _ = signal::kill(-(job.pgid as i32), SIGCONT);
             let _ = signal::kill(-(job.pgid as i32), abi::signal::SIGTERM);
         }
-        self.reap_children(true);
+        let _ = self.reap_children(true);
     }
 }
 
@@ -1230,7 +1246,7 @@ fn main(_arg: usize) -> ! {
     shell.load_profile("/etc/profile");
 
     loop {
-        shell.reap_children(true);
+        let _ = shell.reap_children(true);
         shell.print_job_notifications();
 
         prompt(shell.last_foreground_status);

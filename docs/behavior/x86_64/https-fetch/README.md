@@ -1,9 +1,9 @@
 # Feature: HTTPS Fetch
 
-> Last run: 2026-04-20 22:47:42
+> Last run: 2026-04-21 05:17:38
 
 ## Scenarios
 
 | Scenario | Steps | Status | Link |
 |----------|-------|--------|------|
-| Fetch Wikipedia Dormouse page | 5/6 | ❌ | [View Details](fetch-wikipedia-dormouse-page/README.md) |
+| Fetch Wikipedia Dormouse page | 8/8 | ✅ | [View Details](fetch-wikipedia-dormouse-page/README.md) |

@@ -336,6 +336,22 @@ core::arch::global_asm!(
         mov %rsp, %rdi
         call rust_pause_dump_ipi_handler
 
+        pop %r11
+        pop %r10
+        pop %r9
+        pop %r8
+        pop %rdi
+        pop %rsi
+        pop %rdx
+        pop %rcx
+        pop %rax
+
+        testb $3, 8(%rsp)
+        jz 2f
+        swapgs
+    2:
+        iretq
+
     .global irq_keyboard_handler_shim
     irq_keyboard_handler_shim:
         testb $3, 8(%rsp)
