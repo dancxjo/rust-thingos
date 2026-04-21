@@ -246,6 +246,7 @@ impl NetVfsProvider {
                         // completes before the next iteration touches req_buf.
                         core::slice::from_raw_parts(self.req_buf.as_ptr(), n)
                     };
+                    trace!("NETD: handling RPC n={}", n);
                     self.handle_one(iface, device, socket_set, socket_api, buf);
                     did_work = true;
                     count += 1;
@@ -274,6 +275,7 @@ impl NetVfsProvider {
                 }
             }
         }
+        did_work
     }
 
     // ── RPC dispatch ─────────────────────────────────────────────────────────
@@ -336,7 +338,7 @@ impl NetVfsProvider {
             }
         };
 
-        info!("NETD: lookup path='{}'", path);
+        trace!("NETD: lookup path='{}'", path);
         match self.resolve_path(path) {
             Some(handle) => {
                 trace!("NETD: lookup path='{}' -> handle {}", path, handle);
@@ -522,6 +524,8 @@ impl NetVfsProvider {
         let _events = u32::from_le_bytes(payload[8..12].try_into().unwrap());
 
         let revents = self.poll_handle(handle, socket_set, socket_api);
+
+        trace!("NETD: op_poll handle={} revents=0x{:04x}", handle, revents);
 
         let mut resp = [0u8; 5];
         resp[0] = E_OK;

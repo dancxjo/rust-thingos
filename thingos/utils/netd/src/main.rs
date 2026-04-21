@@ -140,15 +140,16 @@ fn print_usage() {
 
 #[stem::main]
 fn main(arg: usize) -> ! {
-    info!("NETD: binary v2 (with heap storage) starting...");
-    stem::debug!("NETD: main entry point, arg={}", arg);
+    info!("NETD: Starting network service...");
+    debug!("NETD: binary v2 (with heap storage) starting...");
+    debug!("NETD: main entry point, arg={}", arg);
     let cfg = parse_config();
     if cfg.help {
         print_usage();
         exit(0);
     }
 
-    info!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
+    debug!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
 
     info!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
     let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
@@ -209,29 +210,30 @@ fn main(arg: usize) -> ! {
         dhcp_config.gateway,
         dhcp_config.dns,
     );
-    info!("NETD: Network ready — entering VFS service loop");
+    info!("NETD: Network ready");
+    debug!("NETD: entering VFS service loop");
 
-    info!("NETD: creating SocketApi...");
+    debug!("NETD: creating SocketApi...");
     let mut socket_api = SocketApi::new();
-    info!("NETD: allocating sockets_storage...");
+    debug!("NETD: allocating sockets_storage...");
     let mut sockets_storage: Vec<SocketStorage> = Vec::with_capacity(256);
     for i in 0..256 {
-        if i % 64 == 0 { info!("NETD: pushing socket storage {}...", i); }
+        if i % 64 == 0 { debug!("NETD: pushing socket storage {}...", i); }
         sockets_storage.push(SocketStorage::EMPTY);
     }
-    info!("NETD: creating SocketSet...");
+    debug!("NETD: creating SocketSet...");
     let mut socket_set = SocketSet::new(&mut sockets_storage[..]);
-    info!("NETD: getting link state...");
+    debug!("NETD: getting link state...");
     let mut last_link_state = device.link_up();
-    info!("NETD: scanning NIC units...");
+    debug!("NETD: scanning NIC units...");
     let mut known_nic_units = scan_registered_nic_units();
-    info!("NETD: NIC units scanned.");
+    debug!("NETD: NIC units scanned.");
 
-    info!("NETD: bridging request port to fd...");
+    debug!("NETD: bridging request port to fd...");
     let req_fd =
         stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()).unwrap_or(0);
-    info!("NETD: request fd={}", req_fd);
-    info!("NETD: setting up /dev/net watch...");
+    debug!("NETD: request fd={}", req_fd);
+    debug!("NETD: setting up /dev/net watch...");
     let nic_watch_fd =
         match vfs_watch_path("/dev/net", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
             Ok(fd) => Some(fd),
@@ -240,11 +242,11 @@ fn main(arg: usize) -> ! {
                 None
             }
         };
-    info!("NETD: watch fd={:?}", nic_watch_fd);
+    debug!("NETD: watch fd={:?}", nic_watch_fd);
 
     loop {
         let mut did_work = false;
-        info!("NETD: main loop iteration");
+        trace!("NETD: main loop iteration");
 
         let now = VfsNicDevice::now();
         if iface.poll(now, &mut device, &mut socket_set) {
@@ -275,7 +277,7 @@ fn main(arg: usize) -> ! {
             let timeout = delay_ms.min(100).max(1) as i32;
 
             let mut pollfds = idle_pollfds(req_fd, events_fd, nic_watch_fd);
-            if vfs_poll(&mut pollfds, timeout).unwrap_or(0) > 0 {
+            if vfs_poll(&mut pollfds, timeout as u64).unwrap_or(0) > 0 {
                 if (pollfds[1].revents & poll_flags::POLLIN) != 0 {
                     let now = VfsNicDevice::now();
                     let _ = iface.poll(now, &mut device, &mut socket_set);
@@ -336,14 +338,14 @@ fn idle_pollfds(req_fd: u32, events_fd: u32, nic_watch_fd: Option<u32>) -> Vec<P
 }
 
 fn scan_registered_nic_units() -> [bool; MAX_VIRTIO_UNITS as usize] {
-    info!("NETD: scanning for registered NIC units...");
+    debug!("NETD: scanning for registered NIC units...");
     let mut seen = [false; MAX_VIRTIO_UNITS as usize];
     for unit in 0..MAX_VIRTIO_UNITS {
         if nic_unit_ready(unit) {
             seen[unit as usize] = true;
         }
     }
-    info!("NETD: NIC scan complete: {:?}", seen);
+    debug!("NETD: NIC scan complete: {:?}", seen);
     seen
 }
 
@@ -368,7 +370,7 @@ fn report_new_nic_registrations(known_units: &mut [bool; MAX_VIRTIO_UNITS as usi
 
 fn nic_unit_ready(unit: u32) -> bool {
     let rx_path = alloc::format!("{}{}{}", VIRTIO_PATH_PREFIX, unit, "/rx");
-    info!("NETD: checking nic unit {} at {}", unit, rx_path);
+    debug!("NETD: checking nic unit {} at {}", unit, rx_path);
     match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
         Ok(fd) => {
             let _ = vfs_close(fd);

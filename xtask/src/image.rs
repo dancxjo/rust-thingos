@@ -27,6 +27,7 @@ pub struct SharedLibraryConfig {
 pub struct IsoConfig<'a> {
     pub resolution: Option<&'a str>,
     pub iso_path: Option<&'a Path>,
+    pub loglevel: Option<&'a str>,
 }
 
 pub fn default_programs() -> Vec<ProgramConfig> {
@@ -191,6 +192,7 @@ fn generate_limine_config(
     programs: &[ProgramConfig],
     assets: &[PathBuf],
     resolution: Option<&str>,
+    loglevel: Option<&str>,
     include_busybox: bool,
     include_default_shell: bool,
 ) -> String {
@@ -262,20 +264,33 @@ fn generate_limine_config(
         common_modules.push_str("    module_path: boot():/bin/ash\n");
     }
 
-    struct LimineEntry<'a> {
-        title: &'a str,
-        kernel_cmdline: &'a str,
+    struct LimineEntry {
+        title: String,
+        kernel_cmdline: String,
     }
 
-    let entries = [
-        LimineEntry { title: "ThingOS", kernel_cmdline: "loglevel=info" },
+    let default_loglevel = loglevel.unwrap_or("info");
+    let mut entries = vec![
         LimineEntry {
-            title: "ThingOS (BootFB Fallback)",
-            kernel_cmdline: "loglevel=info display=bootfb",
+            title: "ThingOS".to_string(),
+            kernel_cmdline: format!("loglevel={}", default_loglevel),
         },
-        LimineEntry { title: "ThingOS (Debug)", kernel_cmdline: "loglevel=4" },
-        LimineEntry { title: "ThingOS (Trace)", kernel_cmdline: "loglevel=5" },
+        LimineEntry {
+            title: "ThingOS (BootFB Fallback)".to_string(),
+            kernel_cmdline: format!("loglevel={} display=bootfb", default_loglevel),
+        },
+        LimineEntry { title: "ThingOS (Debug)".to_string(), kernel_cmdline: "loglevel=4".to_string() },
+        LimineEntry { title: "ThingOS (Trace)".to_string(), kernel_cmdline: "loglevel=5".to_string() },
     ];
+
+    if let Some(l) = loglevel {
+        if l != "info" && l != "4" && l != "5" {
+            entries.insert(
+                0,
+                LimineEntry { title: "ThingOS (Custom)".to_string(), kernel_cmdline: format!("loglevel={l}") },
+            );
+        }
+    }
 
     for (index, entry) in entries.iter().enumerate() {
         if index > 0 {
@@ -525,6 +540,7 @@ pub fn build_iso_with_config(
         programs,
         &asset_files,
         config.resolution,
+        config.loglevel,
         include_busybox,
         include_default_shell,
     );
@@ -846,7 +862,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     sh.remove_path("motd")?;
 
     let limine_conf_content =
-        generate_limine_config(sh, programs, &asset_files, None, false, false);
+        generate_limine_config(sh, programs, &asset_files, None, None, false, false);
     let limine_cfg = "limine.generated.conf";
     sh.write_file(limine_cfg, limine_conf_content)?;
     cmd!(sh, "mcopy -i {hdd}@@1M {limine_cfg} ::/boot/limine/limine.conf").run()?;

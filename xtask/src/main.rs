@@ -70,6 +70,9 @@ enum Commands {
         /// Output ISO file path
         #[arg(long)]
         output: Option<String>,
+        /// Kernel log level
+        #[arg(long)]
+        loglevel: Option<String>,
     },
     /// Create an HDD image
     Hdd {
@@ -103,6 +106,9 @@ enum Commands {
         /// Enable dedicated QEMU monitor on stdio
         #[arg(short, long)]
         monitor: bool,
+        /// Kernel log level
+        #[arg(long)]
+        loglevel: Option<String>,
     },
     /// Run in QEMU (BIOS mode, x86_64 only)
     RunBios {
@@ -136,6 +142,9 @@ enum Commands {
         /// Enable dedicated QEMU monitor on stdio
         #[arg(short, long)]
         monitor: bool,
+        /// Kernel log level
+        #[arg(long)]
+        loglevel: Option<String>,
     },
     /// Clone and build Limine bootloader
     Limine,
@@ -162,6 +171,9 @@ enum Commands {
         /// Target architecture(s)
         #[arg(long, short = 'a', num_args = 1.., default_values_t = ["x86_64".to_string(), "aarch64".to_string(), "riscv64".to_string(), "loongarch64".to_string()])]
         arch: Vec<String>,
+        /// Kernel log level
+        #[arg(long)]
+        loglevel: Option<String>,
     },
     /// Kill running QEMU instances
     Kill,
@@ -190,16 +202,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Build { env, profile } => build(&sh, &env, &profile)?,
-        Commands::Iso { env, profile, init, resolution, output } => {
+        Commands::Iso { env, profile, init, resolution, output, loglevel } => {
             limine(&sh)?;
             build(&sh, &env, &profile)?;
             rustc_thingos::build_rustc_thingos(&sh, &env)?;
             let mut programs = default_programs();
             apply_init(&mut programs, init);
 
-            let path = if resolution.is_some() || output.is_some() {
+            let path = if resolution.is_some() || output.is_some() || loglevel.is_some() {
                 let output_path = output.as_deref().map(std::path::Path::new);
-                let config = IsoConfig { resolution: resolution.as_deref(), iso_path: output_path };
+                let config = IsoConfig {
+                    resolution: resolution.as_deref(),
+                    iso_path: output_path,
+                    loglevel: loglevel.as_deref(),
+                };
                 build_iso_with_config(&sh, &env, &programs, &config)?
             } else {
                 build_iso(&sh, &env, &programs)?
@@ -215,14 +231,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let path = build_hdd(&sh, &env, &programs)?;
             println!("{}HDD generated at: {}{}", COLOR_GREEN, path.display(), COLOR_RESET);
         }
-        Commands::Run { env, profile, init, qemu_flags, interactive, monitor } => {
+        Commands::Run { env, profile, init, qemu_flags, interactive, monitor, loglevel } => {
             fetch()?;
             limine(&sh)?;
             build(&sh, &env, &profile)?;
             rustc_thingos::build_rustc_thingos(&sh, &env)?;
             let mut programs = default_programs();
             apply_init(&mut programs, init);
-            let iso_path = build_iso(&sh, &env, &programs)?;
+            let config = IsoConfig { loglevel: loglevel.as_deref(), ..IsoConfig::default() };
+            let iso_path = build_iso_with_config(&sh, &env, &programs, &config)?;
             run(&sh, &env, &qemu_flags, &iso_path, interactive, monitor)?;
         }
         Commands::RunBios { qemu_flags, interactive, monitor } => {
@@ -232,7 +249,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let iso = build_iso(&sh, "x86_64", &programs)?;
             run_bios(&sh, &qemu_flags, &iso, interactive, monitor)?;
         }
-        Commands::RunHdd { env, profile, init, qemu_flags, interactive, monitor } => {
+        Commands::RunHdd { env, profile, init, qemu_flags, interactive, monitor, loglevel } => {
             fetch()?;
             limine(&sh)?;
             build(&sh, &env, &profile)?;
@@ -247,7 +264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::OvmfAll => fetch()?,
         Commands::Clean => clean(&sh)?,
         Commands::Distclean => distclean(&sh)?,
-        Commands::Bdd { feature, tags, arch } => bdd(&sh, feature, tags, arch)?,
+        Commands::Bdd { feature, tags, arch, loglevel } => bdd(&sh, feature, tags, arch, loglevel)?,
         Commands::Kill => kill::run()?,
         Commands::Fetch => fetch()?,
         Commands::RustcThingos => {

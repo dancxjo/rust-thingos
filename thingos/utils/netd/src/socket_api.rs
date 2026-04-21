@@ -559,7 +559,7 @@ impl SocketApi {
                     ready |= 0x0004; // POLLOUT
                 }
                 if ready != 0 {
-                    trace!("SOCKET_API: poll handle={} state={:?} ready={:04x}", api_handle, socket.state(), ready);
+                    trace!("SOCKET_API: poll handle={} state={:?} ready=0x{:04x}", api_handle, socket.state(), ready);
                 }
                 ready
             }
@@ -663,11 +663,11 @@ impl SocketApi {
         let local_port = 49152 + (self.next_handle as u16 % 16384);
 
         let socket = socket_set.get_mut::<TcpSocket>(socket_handle);
-        info!("SOCKET_API: connecting socket handle={} endpoint={} local_port={} state={:?}", 
+        debug!("SOCKET_API: connecting socket handle={} endpoint={} local_port={} state={:?}", 
               api_handle, endpoint, local_port, socket.state());
         match socket.connect(iface.context(), endpoint, local_port) {
             Ok(()) => {
-                info!("SOCKET_API: connect initiated for handle={}", api_handle);
+                debug!("SOCKET_API: connect initiated for handle={} endpoint={}", api_handle, endpoint);
                 if let Some(m) = self.sockets.get_mut(&api_handle) {
                     m.remote = Some(EndpointV4 { ip: remote_ip, port: remote_port });
                     m.local =

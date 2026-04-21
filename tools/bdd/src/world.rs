@@ -53,13 +53,15 @@ impl ThingOsWorld {
         )
     }
 
-    fn cached_iso_path(arch: &str, resolution: &str) -> PathBuf {
+    fn cached_iso_path(arch: &str, resolution: &str, loglevel: &str) -> PathBuf {
         let safe_resolution: String =
             resolution.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        let safe_loglevel: String =
+            loglevel.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
         PathBuf::from("target")
             .join("bdd")
             .join("images")
-            .join(format!("thing-os-bdd-{}-{}.iso", arch, safe_resolution))
+            .join(format!("thing-os-bdd-{}-{}-{}.iso", arch, safe_resolution, safe_loglevel))
     }
 
     fn fetch_cache_marker_path(arch: &str) -> PathBuf {
@@ -154,7 +156,14 @@ impl ThingOsWorld {
         // Get resolution from environment (default 1920x1080 for BDD tests)
         let resolution =
             std::env::var("BDD_RESOLUTION").unwrap_or_else(|_| "1920x1080".to_string());
-        let iso_path = Self::cached_iso_path(arch, &resolution);
+        
+        let loglevel = if diag_enabled() {
+            "debug".to_string()
+        } else {
+            std::env::var("BDD_LOGLEVEL").unwrap_or_else(|_| "info".to_string())
+        };
+
+        let iso_path = Self::cached_iso_path(arch, &resolution, &loglevel);
         let force_rebuild = Self::env_flag("BDD_FORCE_REBUILD_IMAGE");
 
         if let Some(parent) = iso_path.parent() {
@@ -190,6 +199,8 @@ impl ThingOsWorld {
                     &resolution,
                     "--output",
                     &iso_output,
+                    "--loglevel",
+                    &loglevel,
                 ])
                 .env("RUSTFLAGS", "-Awarnings")
                 .output()?;

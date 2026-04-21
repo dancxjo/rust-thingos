@@ -19,10 +19,10 @@ use stem::thread::spawn_task_detached;
 use stem::{debug, info, trace, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
-const CONNECT_TIMEOUT_MS: u64 = 5_000;
-const HEADER_READ_TIMEOUT_MS: u64 = 5_000;
-const PROVIDER_POLL_SLICE_MS: u64 = 100;
-const MAX_HEADER_READ_ITERATIONS: usize = 128;
+const CONNECT_TIMEOUT_MS: u64 = 30_000;
+const HEADER_READ_TIMEOUT_MS: u64 = 60_000;
+const PROVIDER_POLL_SLICE_MS: u64 = 500;
+const MAX_HEADER_READ_ITERATIONS: usize = 1000;
 const HEADER_STAGING_CHUNK_SIZE: usize = 4_096;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const HTTPS_STREAM_CHUNK_SIZE: usize = 16_384;
@@ -53,19 +53,22 @@ fn ns_to_timeout_ms(ns: u64) -> u64 {
 
 fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Result<u16, String> {
     let thing = i32::try_from(fd).map_err(|_| format!("{context}: fd out of range"))?;
+    info!("http: waiting for {} readiness (fd={})...", context, fd);
     loop {
         let timeout_ms = timeout_ms_until_deadline(deadline_ns)
             .map_err(|_| format!("{context}: timed out waiting for readiness"))?;
-        // Userland VFS providers do not always have a precise readiness wakeup path,
-        // so bound each wait and re-issue poll requests until the deadline.
         let timeout_ms = timeout_ms.min(PROVIDER_POLL_SLICE_MS);
         let mut pollfd = [PollHandle { handle: thing, events, revents: 0 }];
         match vfs_poll(&mut pollfd, timeout_ms) {
-            Ok(0) => return Err(format!("{context}: timed out waiting for readiness")),
+            Ok(0) => {
+                trace!("http: wait_fd_ready slice timeout for {}", context);
+                continue;
+            }
             Ok(_) => {
                 if pollfd[0].revents == 0 {
                     continue;
                 }
+                info!("http: wait_fd_ready complete for {} revents=0x{:04x}", context, pollfd[0].revents);
                 return Ok(pollfd[0].revents);
             }
             Err(abi::errors::Errno::EINTR) => continue,
@@ -461,6 +464,7 @@ where
         }
         info!("http: background task: TLS handshake complete for {}", host);
 
+        info!("http: background task: sending {} byte request", req_bytes.len());
         let mut offset = 0usize;
         while offset < req_bytes.len() {
             match tls.write(&req_bytes[offset..]) {
@@ -469,7 +473,10 @@ where
                     let _ = port_close(write_handle);
                     return;
                 }
-                Ok(written) => offset += written,
+                Ok(written) => {
+                    offset += written;
+                    info!("http: background task: wrote {} bytes (total={})", written, offset);
+                }
                 Err(e) => {
                     let msg = format!("ERR: https write failed: {:?}", e);
                     let _ = port_send_all(write_handle, msg.as_bytes());
@@ -479,6 +486,7 @@ where
             }
         }
 
+        info!("http: background task: flushing TLS stream");
         if let Err(e) = tls.flush() {
             let msg = format!("ERR: https flush failed: {:?}", e);
             let _ = port_send_all(write_handle, msg.as_bytes());
@@ -486,15 +494,23 @@ where
             return;
         }
 
+        info!("http: background task: entering read loop");
         let mut buf = [0u8; HTTPS_STREAM_CHUNK_SIZE];
         loop {
             match tls.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    info!("http: background task: TLS read returned EOF");
+                    break;
+                }
                 Ok(n) => {
+                    info!("http: background task: read {} bytes from TLS", n);
                     let mut offset = 0;
                     while offset < n {
                         match port_send_all(write_handle, &buf[offset..n]) {
-                            Ok(written) => offset += written,
+                            Ok(written) => {
+                                offset += written;
+                                info!("http: background task: forwarded {} bytes to foreground", written);
+                            }
                             Err(abi::errors::Errno::EAGAIN) => {
                                 stem::syscall::yield_now();
                                 continue;
@@ -552,23 +568,24 @@ where
             break;
         }
 
-        trace!("http: waiting for header data from port (attempt={})", attempt);
+        info!("http: waiting for header data from port (attempt={}/{})", attempt, MAX_HEADER_READ_ITERATIONS);
         if let Err(e) = wait_fd_ready(
             read_fd,
             poll_flags::POLLIN,
             deadline_after_ms(HEADER_READ_TIMEOUT_MS / 10), // Small slice per iteration
             "http header read",
         ) {
-            trace!("http: header read slice wait: {}", e);
+            info!("http: header read slice wait: {}", e);
             continue;
         }
 
         match port_recv(read_handle, &mut buf) {
             Ok(0) | Err(abi::errors::Errno::EPIPE) => {
-                // Port closed early
+                info!("http: port closed early during header read");
                 break;
             }
             Ok(n) => {
+                info!("http: received {} bytes from background TLS thread", n);
                 let chunk = &buf[..n];
                 // Check if it's an error message from the thread
                 if chunk.starts_with(b"ERR: ") {
@@ -585,6 +602,8 @@ where
                     info!("http: headers complete body_start={}", body_start);
                     break;
                 }
+            }
+            _ => break,
         }
     }
 

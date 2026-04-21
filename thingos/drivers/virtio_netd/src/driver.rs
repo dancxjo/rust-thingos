@@ -252,7 +252,7 @@ impl VirtioNetDriver {
         let rxq = self.device.queue_mut(0)?;
 
         if let Some((desc_id, len)) = rxq.poll_used() {
-            stem::debug!("VirtIO-NET: RX frame! desc={} len={}", desc_id, len);
+            stem::info!("VirtIO-NET: RX frame! desc={} len={}", desc_id, len);
 
             let buf_virt = self.rx_buffers_virt[desc_id as usize];
 
@@ -321,7 +321,7 @@ impl VirtioNetDriver {
         for i in 0..1000 {
             if let Some(txq) = self.device.queue_mut(1) {
                 if txq.poll_used().is_some() {
-                    stem::debug!("VirtIO-NET: TX complete after {} iterations", i);
+                    stem::info!("VirtIO-NET: TX complete after {} iterations", i);
                     return Ok(());
                 }
             }

@@ -1,15 +1,15 @@
-# ❌ Scenario: Fetch Wikipedia Dormouse page
+# ✅ Scenario: Fetch Wikipedia Dormouse page
 
-> Last run: 2026-04-20 19:18:33
+> Last run: 2026-04-20 20:16:54
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 15963ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ✅ | 9234ms | - [📜](./02/serial.log) - |
-| 3 | And I type "cat /https/en.wikipedia.org/wiki/Dormouse" on the serial console | ✅ | 3172ms | - - - |
-| 4 | Then the serial output should contain "Dormouse" | ❌ | 121028ms | - - - |
+| 1 | Given the machine is booted | ✅ | 14416ms | - [📜](./01/serial.log) - |
+| 2 | When I wait for the shell prompt | ✅ | 12022ms | - [📜](./02/serial.log) - |
+| 3 | And I type "ping -c 1 en.wikipedia.org" on the serial console | ✅ | 2409ms | - - - |
+| 4 | And I wait for the serial output to contain "1 packets transmitted, 1 received" | ⏭️ | 0ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
@@ -29,7 +29,7 @@ BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
 [kernel:mem:init] frame allocator log ok
 [kernel:mem:init] FRAME_ALLOCATOR init ok
 [kernel:mem:init] tasking init ok
-[818409430] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[753960412] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
 [kernel:global_alloc] enter
 [kernel:global_alloc] set expand hook
 [kernel:global_alloc] expand hook ok
@@ -50,28 +50,28 @@ BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
 [kernel:entropy] add_sample(timer) ok
 [kernel:entropy] mark_seeded(timer) ok
 [kernel:entropy] seed done
-[951455664] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[951641006] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[954164900] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[957965658] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41008000
-[964397516] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
-[987019269] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[988116488] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
-[988500368] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41008000 entry_pc=0x204334 user_sp=0x800000
-[989689243] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
-[1023959868] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x4106a000
-[1043940449] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41093000
-[1055917814] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x410bc000
-[1390315923] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41b0c000
-[1423136203] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x4106a000
-[1423479562] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x4106a000 entry_pc=0x20b584 user_sp=0x800000
+[844218203] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[844340426] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[846321581] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[849222156] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41008000
+[853615377] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
+[889240571] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[891095300] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
+[891722646] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41008000 entry_pc=0x204334 user_sp=0x800000 tls_base=0x0
+[894222504] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[961636862] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x4106a000
+[982837714] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41093000
+[1011779776] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x410bc000
+[1459237931] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] make_user_address_space: created aspace phys=0x41b0d000
+[1495929367] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x4106a000
+[1496475805] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x4106a000 entry_pc=0x20b584 user_sp=0x800000 tls_base=0x0
 [1;32m
         .-.
        /   \        [1;36mTHING-OS[1;32m
       |     |       [0;36m"People, places, things."[1;32m
        \   /        
         `-'        
-       /   \        v0.1  •  ACT IV
+       /   \        v0.1  •  
       |     |       2026-04-16
        \   /
         `-'
@@ -85,12 +85,17 @@ BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
-[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[1436544378] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x410bc000
-[1436723800] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x410bc000 entry_pc=0x2291c8 user_sp=0x800000
-[1464617571] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0xb6f7d000
-[1464810974] [[31;1mERROR[0m] [bran] [CPU0] panicked at thingos/bran/src/arch/aarch64/trap.rs:16:9:
-Unhandled Sync EL0 Exception. ESR=0x82000005 EC=0x20 ELR=0x202028 FAR=0x202028 SPSR=0x0
-FAULT
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[1520885674] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x410bc000
+[1521227062] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x410bc000 entry_pc=0x229ad4 user_sp=0x800000 tls_base=0x0
+[1521688207] [[32mINFO [0m] [netd] [CPU0] NETD: binary v2 (with heap storage) starting...
+[1531424961] [[32mINFO [0m] [netd] [CPU0] NETD: Starting network service (Phase 3 — /net/ VFS provider)
+[1531788423] [[32mINFO [0m] [netd] [CPU0] NETD: Waiting for virtio_netd VFS provider at /dev/net/virtio*...
+[1568729063] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41008000
+[1569537882] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0xb6f7b000
+[1570371368] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41b0d000
+[1570733855] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41b0d000 entry_pc=0x222f74 user_sp=0x800000 tls_base=0x0
+[1589509567] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] activate_address_space: setting TTBR0 to 0x41093000
+[1589974646] [[32mINFO [0m] [bran::arch::aarch64] [CPU0] enter_user: TTBR0=0x41093000 entry_pc=0x20c62c user_sp=0x800000 tls_base=0x0
 
 ```
 </details>

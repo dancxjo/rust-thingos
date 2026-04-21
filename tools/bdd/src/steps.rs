@@ -484,6 +484,11 @@ async fn serial_contains(world: &mut ThingOsWorld, expected: String) -> Result<(
     check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
 }
 
+#[when(regex = r#"^I wait for the serial output to contain "(.+)"$"#)]
+async fn wait_for_serial_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+    check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
+}
+
 async fn check_serial(
     world: &mut ThingOsWorld,
     expected: &str,
