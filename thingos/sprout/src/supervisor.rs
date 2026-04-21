@@ -111,7 +111,11 @@ impl Supervisor {
         stem::debug!("SPROUT: Spawning httpsd...");
         self.spawn_httpsd();
 
-        // Stage 5: Spawn health-monitoring vine for shell restarts.
+        // Stage 5: Mount iso9660d (ISO9660 VFS provider).
+        stem::debug!("SPROUT: Spawning iso9660d...");
+        self.spawn_iso9660d();
+
+        // Stage 6: Spawn health-monitoring vine for shell restarts.
         let tasks_health = self.tasks.clone();
         let _ = stem::thread::spawn_task(move || {
             loop {
@@ -234,6 +238,23 @@ impl Supervisor {
                 });
             }
             Err(e) => warn!("SPROUT: Failed to spawn httpsd: {:?}", e),
+        }
+    }
+
+    fn spawn_iso9660d(&mut self) {
+        match stem::syscall::spawn_process("/bin/iso9660d", 0) {
+            Ok(pid) => {
+                stem::debug!("SPROUT: Spawned iso9660d (PID={})", pid);
+                let mut tasks = self.tasks.lock();
+                tasks.push(ManagedTask {
+                    name: "iso9660d".to_string(),
+                    kind: TaskKind::Service("svc.iso9660d".to_string()),
+                    module_path: "/bin/iso9660d".to_string(),
+                    pid: Some(pid),
+                    ..Default::default()
+                });
+            }
+            Err(e) => warn!("SPROUT: Failed to spawn iso9660d: {:?}", e),
         }
     }
 
