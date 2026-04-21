@@ -53,6 +53,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Cache pci.ids
+        id: pciids-cache
+        uses: actions/cache@v4
+        with:
+          path: assets/pci/pci.ids
+          key: ${{ runner.os }}-pciids-v1
+
       - name: Bootstrap patched vendor crates
         if: steps.vendor-cache.outputs.cache-hit != 'true'
         run: |
@@ -87,6 +94,15 @@ jobs:
           fetch_crate dirs-sys
           fetch_crate errno
           fetch_crate mio
+
+      - name: Ensure pci.ids exists
+        if: steps.pciids-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p assets/pci
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://pci-ids.ucw.cz/v2.2/pci.ids" \
+            -o assets/pci/pci.ids
 
       - name: Install just
         uses: extractions/setup-just@v3
@@ -125,6 +141,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Cache pci.ids
+        id: pciids-cache
+        uses: actions/cache@v4
+        with:
+          path: assets/pci/pci.ids
+          key: ${{ runner.os }}-pciids-v1
+
       - name: Bootstrap patched vendor crates
         if: steps.vendor-cache.outputs.cache-hit != 'true'
         run: |
@@ -159,6 +182,15 @@ jobs:
           fetch_crate dirs-sys
           fetch_crate errno
           fetch_crate mio
+
+      - name: Ensure pci.ids exists
+        if: steps.pciids-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p assets/pci
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://pci-ids.ucw.cz/v2.2/pci.ids" \
+            -o assets/pci/pci.ids
 
       - name: Install just
         uses: extractions/setup-just@v3
