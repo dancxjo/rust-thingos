@@ -147,6 +147,9 @@ impl ArtifactCollector {
                 Ok(()) => {
                     let readme_path = scenario.dir.join("README.md");
                     eprintln!("│  │  └─ 📄 Generated: {}", readme_path.display());
+                    if !scenario.passed {
+                        Self::print_readme_inline("Scenario Failure Details", &readme_path, "│  │      ");
+                    }
                 }
                 Err(e) => eprintln!("│  │  └─ ⚠️ Failed to write scenario README: {}", e),
             }
@@ -265,5 +268,17 @@ impl ArtifactCollector {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("-")
+    }
+
+    fn print_readme_inline(label: &str, readme_path: &std::path::Path, line_prefix: &str) {
+        eprintln!("{}📄 {} ({})", line_prefix, label, readme_path.display());
+        match fs::read_to_string(readme_path) {
+            Ok(contents) => {
+                for line in contents.lines() {
+                    eprintln!("{}{}", line_prefix, line);
+                }
+            }
+            Err(e) => eprintln!("{}⚠️ Failed to read README inline: {}", line_prefix, e),
+        }
     }
 }
