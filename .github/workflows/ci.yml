@@ -240,6 +240,24 @@ jobs:
       - name: Run just behave
         run: just behave
 
+      - name: Upload BDD behavior reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-behavior-readmes
+          path: docs/behavior
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload BDD ISO images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-iso-images
+          path: target/bdd/images/*.iso
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Commit updated behavior artifacts
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]' }}
         run: |
@@ -261,21 +279,3 @@ jobs:
 
           git commit -m "ci: update behavior artifacts"
           git push origin "HEAD:${{ github.head_ref }}"
-
-      - name: Upload BDD behavior reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bdd-behavior-readmes
-          path: docs/behavior
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Upload BDD ISO images
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bdd-iso-images
-          path: target/bdd/images/*.iso
-          if-no-files-found: warn
-          retention-days: 7
