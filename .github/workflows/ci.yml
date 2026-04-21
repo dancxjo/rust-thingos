@@ -111,20 +111,6 @@ jobs:
             "https://pci-ids.ucw.cz/v2.2/pci.ids" \
             -o assets/pci/pci.ids
 
-      - name: Install and cache QEMU packages
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: qemu-system qemu-system-misc qemu-utils
-          version: 1.0
-
-      - name: Verify QEMU binaries
-        run: |
-          set -euo pipefail
-          command -v qemu-system-x86_64
-          command -v qemu-system-aarch64
-          command -v qemu-system-riscv64
-          command -v qemu-system-loongarch64
-
       - name: Install just
         uses: extractions/setup-just@v3
 
@@ -233,6 +219,20 @@ jobs:
           curl -fsSL --retry 5 --retry-all-errors \
             "https://pci-ids.ucw.cz/v2.2/pci.ids" \
             -o assets/pci/pci.ids
+
+      - name: Install and cache QEMU packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: qemu-system qemu-system-misc qemu-utils
+          version: 1.0
+
+      - name: Verify QEMU binaries
+        run: |
+          set -euo pipefail
+          command -v qemu-system-x86_64
+          command -v qemu-system-aarch64
+          command -v qemu-system-riscv64
+          command -v qemu-system-loongarch64
 
       - name: Install just
         uses: extractions/setup-just@v3
