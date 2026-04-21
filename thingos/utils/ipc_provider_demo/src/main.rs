@@ -42,11 +42,7 @@ use alloc::vec::Vec;
 use core::default::Default;
 extern crate alloc;
 
-use abi::attrs::{
-    ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrNameHeader,
-    AttrSetHeader, AttrType, AttrValueHeader,
-};
-use abi::device::{DeviceCall, DeviceKind};
+use abi::attrs::{AttrListEntryHeader, AttrSetHeader, AttrType};
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
