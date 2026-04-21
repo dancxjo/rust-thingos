@@ -129,7 +129,6 @@ pub fn init<R: BootRuntime>(_rt: &R) {
     crate::kdebug!("[kernel:global_alloc] inner allocator init ok");
     HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
     crate::kdebug!("[kernel:global_alloc] heap top store ok");
-
     crate::kdebug!("[kernel:global_alloc] init done");
 }
 

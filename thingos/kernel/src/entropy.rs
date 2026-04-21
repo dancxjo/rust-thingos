@@ -130,29 +130,29 @@ pub fn fill_or_weak(dst: &mut [u8]) {
 /// as seeded if successful.
 pub fn seed_from_hardware() {
     let rt = crate::runtime_base();
-    rt.serial_putbuf(b"[kernel:entropy] seed begin\r\n");
+    crate::kdebug!("[kernel:entropy] seed begin");
     let mut buf = [0u8; 64];
     let filled = rt.fill_entropy(&mut buf);
-    rt.serial_putbuf(b"[kernel:entropy] fill_entropy done\r\n");
+    crate::kdebug!("[kernel:entropy] fill_entropy done");
     if filled > 0 {
         add_sample(&buf[..filled]);
-        rt.serial_putbuf(b"[kernel:entropy] add_sample(hw) ok\r\n");
+        crate::kdebug!("[kernel:entropy] add_sample(hw) ok");
         mark_seeded();
-        rt.serial_putbuf(b"[kernel:entropy] mark_seeded(hw) ok\r\n");
+        crate::kdebug!("[kernel:entropy] mark_seeded(hw) ok");
         crate::kdebug!("ENTROPY: seeded {} bytes from hardware RNG", filled);
     } else {
         // Fallback: mix monotonic timer as weak entropy (not marked as seeded
         // because this alone isn't sufficient, but it adds diversity).
         let ticks = rt.mono_ticks();
         add_sample(&ticks.to_ne_bytes());
-        rt.serial_putbuf(b"[kernel:entropy] add_sample(timer) ok\r\n");
+        crate::kdebug!("[kernel:entropy] add_sample(timer) ok");
 
         // For v1, mark seeded anyway so the system doesn't deadlock.
         // This is a conscious tradeoff: weak entropy > no entropy > panic.
         mark_seeded();
-        rt.serial_putbuf(b"[kernel:entropy] mark_seeded(timer) ok\r\n");
+        crate::kdebug!("[kernel:entropy] mark_seeded(timer) ok");
         crate::kdebug!("ENTROPY: no hardware RNG available, using timer fallback (NOT seeded)");
         crate::kdebug!("ENTROPY: marked seeded with weak entropy (timer-only fallback)");
     }
-    rt.serial_putbuf(b"[kernel:entropy] seed done\r\n");
+    crate::kdebug!("[kernel:entropy] seed done");
 }
