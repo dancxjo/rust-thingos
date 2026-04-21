@@ -3105,6 +3105,7 @@ dependencies = [
  "abi",
  "http",
  "ipc_helpers",
+ "spin",
  "stem",
 ]
 

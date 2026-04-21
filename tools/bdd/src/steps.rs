@@ -484,6 +484,16 @@ async fn serial_contains(world: &mut ThingOsWorld, expected: String) -> Result<(
     check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
 }
 
+#[then(regex = r#"^the serial output should contain "(.+)" within ([0-9.]+)s$"#)]
+async fn serial_contains_with_timeout(
+    world: &mut ThingOsWorld,
+    expected: String,
+    timeout: String,
+) -> Result<(), StepError> {
+    let timeout_secs = timeout.parse::<f64>().unwrap_or(DEFAULT_TIMEOUT_SECS);
+    check_serial(world, &expected, timeout_secs).await
+}
+
 #[when(regex = r#"^I wait for the serial output to contain "(.+)"$"#)]
 async fn wait_for_serial_contains(
     world: &mut ThingOsWorld,

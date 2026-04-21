@@ -11,7 +11,7 @@ Feature: httpsd header/response cache
     And I type "cat /https/en.wikipedia.org/wiki/Dormouse > /dev/null" on the serial console
     And I wait for 2 seconds
     And I type "attr_list /https/en.wikipedia.org/wiki/Dormouse" on the serial console
-    Then the serial output should contain "user.http.status_code"
+    Then the serial output should contain "user.http.status_code" within 30s
     And the serial output should contain "user.http.content_type"
     And the serial output should contain "user.http.url"
     When I type "attr_get /https/en.wikipedia.org/wiki/Dormouse user.http.content_type" on the serial console
