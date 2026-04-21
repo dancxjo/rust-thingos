@@ -244,7 +244,7 @@ fn attr_device_call(handle: u64, op: u32, payload: &[u8]) -> ProviderResponse {
                 };
                 out.extend_from_slice(&header.name_len.to_le_bytes());
                 out.push(header.value_type);
-                out.push(header.flags);
+                out.push(0);
                 out.extend_from_slice(&header.value_len.to_le_bytes());
                 out.extend_from_slice(name.as_bytes());
             }

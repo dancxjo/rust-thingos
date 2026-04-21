@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use stem::abi::attrs::AttrType;
+use stem::abi::attrs::{AttrListEntryHeader, AttrType};
 use stem::syscall::{argv_get, exit, vfs_attr_list, vfs_close, vfs_open, vfs_write};
 
 fn get_args() -> Vec<String> {
@@ -56,11 +56,12 @@ fn main(_arg: usize) -> ! {
     };
     let mut off = 0usize;
     let mut seen = 0usize;
-    while seen < count && off + 8 <= buf.len() {
+    let header_len = core::mem::size_of::<AttrListEntryHeader>();
+    while seen < count && off + header_len <= buf.len() {
         let name_len = u16::from_le_bytes([buf[off], buf[off + 1]]) as usize;
         let ty = AttrType::from_u8(buf[off + 2]);
         let value_len = u32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
-        off += 8;
+        off += header_len;
         if off + name_len > buf.len() {
             break;
         }
