@@ -118,6 +118,10 @@ extern "C" fn generic_thread_trampoline<F>(arg: usize) -> !
 where
     F: FnOnce() + Send + 'static,
 {
+    if let Some(info) = crate::tls::read_tls_info() {
+        let _ = crate::tls::setup_thread_tls(&info);
+    }
+
     // Reconstruct the Box and take ownership of the closure
     let b = unsafe { Box::from_raw(arg as *mut BoxWrapper<F>) };
 

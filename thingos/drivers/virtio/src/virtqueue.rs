@@ -52,6 +52,41 @@ pub struct Virtqueue {
 }
 
 impl Virtqueue {
+    fn desc_ptr(&self) -> *mut VirtqDesc {
+        self.virt_base as *mut VirtqDesc
+    }
+
+    fn release_chain(&mut self, head: u16) -> Option<u16> {
+        if head >= self.size {
+            return None;
+        }
+
+        let desc_ptr = self.desc_ptr();
+        let mut count = 1u16;
+        let mut cur = head;
+
+        loop {
+            let flags = unsafe { read_volatile(&raw const (*desc_ptr.add(cur as usize)).flags) };
+            if (flags & VIRTQ_DESC_F_NEXT) == 0 {
+                break;
+            }
+
+            let next = unsafe { read_volatile(&raw const (*desc_ptr.add(cur as usize)).next) };
+            if next >= self.size || count >= self.size {
+                return None;
+            }
+            cur = next;
+            count += 1;
+        }
+
+        unsafe {
+            write_volatile(&raw mut (*desc_ptr.add(cur as usize)).next, self.free_head);
+        }
+        self.free_head = head;
+        self.num_free = self.num_free.saturating_add(count);
+        Some(count)
+    }
+
     pub fn new(virt_base: u64, phys_base: u64, size: u16) -> Self {
         // Initialize descriptor table
         let desc_ptr = virt_base as *mut VirtqDesc;
@@ -162,28 +197,18 @@ impl Virtqueue {
             let len = read_volatile(&raw const (*elem).len);
 
             self.last_used_idx = self.last_used_idx.wrapping_add(1);
-
-            // Count chain length by following NEXT flags
-            let desc_ptr = self.virt_base as *mut VirtqDesc;
-            let mut count = 1u16;
-            let mut cur = id as u16;
-            loop {
-                let flags = read_volatile(&raw const (*desc_ptr.add(cur as usize)).flags);
-                if (flags & VIRTQ_DESC_F_NEXT) == 0 {
-                    break;
-                }
-                let next = read_volatile(&raw const (*desc_ptr.add(cur as usize)).next);
-                cur = next;
-                count += 1;
+            let head = id as u16;
+            if self.release_chain(head).is_none() {
+                stem::warn!(
+                    "virtqueue: ignoring invalid used descriptor id={} size={} last_used_idx={}",
+                    id,
+                    self.size,
+                    self.last_used_idx.wrapping_sub(1)
+                );
+                return None;
             }
 
-            // Return descriptors to free list by linking the last descriptor
-            // in the chain to the current free_head
-            write_volatile(&raw mut (*desc_ptr.add(cur as usize)).next, self.free_head);
-            self.free_head = id as u16;
-            self.num_free += count;
-
-            Some((id as u16, len))
+            Some((head, len))
         }
     }
 
@@ -195,5 +220,43 @@ impl Virtqueue {
     /// Get the size (number of descriptors) of this virtqueue
     pub fn size(&self) -> u16 {
         self.size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::boxed::Box;
+    use alloc::vec;
+    extern crate std;
+
+    #[test]
+    fn poll_used_ignores_out_of_range_descriptor_ids() {
+        let size = 8u16;
+        let layout_len = 4096usize;
+        let boxed = vec![0u8; layout_len].into_boxed_slice();
+        let leaked = Box::leak(boxed);
+        let virt_base = leaked.as_mut_ptr() as u64;
+        let mut vq = Virtqueue::new(virt_base, virt_base, size);
+
+        let head = vq.add_buffer_single(0x1000, 64, true).expect("descriptor");
+        assert_eq!(head, 0);
+        assert_eq!(vq.num_free, size - 1);
+
+        let avail_offset = (size as usize) * core::mem::size_of::<VirtqDesc>();
+        let used_unaligned = avail_offset + 6 + (size as usize) * 2;
+        let used_offset = (used_unaligned + 3) & !3;
+        let used_ptr = (virt_base + used_offset as u64) as *mut VirtqUsed;
+        unsafe {
+            write_volatile(&raw mut (*used_ptr).idx, 1);
+            let ring_ptr = (used_ptr as *mut u8).add(4) as *mut VirtqUsedElem;
+            write_volatile(&raw mut (*ring_ptr).id, size as u32 + 3);
+            write_volatile(&raw mut (*ring_ptr).len, 128);
+        }
+
+        assert!(vq.poll_used().is_none());
+        assert_eq!(vq.last_used_idx, 1);
+        assert_eq!(vq.num_free, size - 1);
+        assert_eq!(vq.free_head, 1);
     }
 }

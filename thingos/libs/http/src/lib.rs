@@ -13,7 +13,7 @@ use embedded_tls::blocking::{
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use stem::syscall::port::{PortHandle, port_close, port_create, port_recv, port_send_all};
+use stem::syscall::port::{PortHandle, port_close, port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 use stem::thread::spawn_task_detached;
 use stem::{debug, info, trace, warn};
@@ -73,6 +73,28 @@ fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Resul
             }
             Err(abi::errors::Errno::EINTR) => continue,
             Err(e) => return Err(format!("{context}: poll failed: {:?}", e)),
+        }
+    }
+}
+
+fn recv_from_port_until(
+    handle: PortHandle,
+    buf: &mut [u8],
+    deadline_ns: u64,
+    context: &str,
+) -> Result<usize, String> {
+    loop {
+        match port_try_recv(handle, buf) {
+            Ok(n) => return Ok(n),
+            Err(abi::errors::Errno::EAGAIN) => {
+                if stem::syscall::monotonic_ns() >= deadline_ns {
+                    return Err(format!("{context}: timed out waiting for port data"));
+                }
+                stem::syscall::yield_now();
+            }
+            Err(abi::errors::Errno::EINTR) => continue,
+            Err(abi::errors::Errno::EPIPE) => return Ok(0),
+            Err(e) => return Err(format!("{context}: port recv failed: {:?}", e)),
         }
     }
 }
@@ -559,9 +581,6 @@ where
     let mut headers_done = false;
     let deadline_ns = deadline_after_ms(HEADER_READ_TIMEOUT_MS);
 
-    let read_fd = stem::syscall::vfs::vfs_handle_from_port(read_handle as u32)
-        .map_err(|e| format!("failed to bridge read port: {:?}", e))?;
-
     for attempt in 0..MAX_HEADER_READ_ITERATIONS {
         if stem::syscall::monotonic_ns() >= deadline_ns {
             warn!("http: https header read timed out after {} iterations", attempt);
@@ -569,18 +588,8 @@ where
         }
 
         info!("http: waiting for header data from port (attempt={}/{})", attempt, MAX_HEADER_READ_ITERATIONS);
-        if let Err(e) = wait_fd_ready(
-            read_fd,
-            poll_flags::POLLIN,
-            deadline_ns, // Share the outer deadline so we don't give up early
-            "http header read",
-        ) {
-            info!("http: header read slice wait: {}", e);
-            continue;
-        }
-
-        match port_recv(read_handle, &mut buf) {
-            Ok(0) | Err(abi::errors::Errno::EPIPE) => {
+        match recv_from_port_until(read_handle, &mut buf, deadline_ns, "http header read") {
+            Ok(0) => {
                 info!("http: port closed early during header read");
                 break;
             }
@@ -603,11 +612,12 @@ where
                     break;
                 }
             }
-            _ => break,
+            Err(e) => {
+                info!("http: header read slice wait: {}", e);
+                continue;
+            }
         }
     }
-
-    let _ = vfs_close(read_fd);
 
     if !headers_done {
         warn!("http: https headers not completed, initial buffer={}", response.len());
@@ -750,19 +760,13 @@ impl Response {
             ResponseStream::Https(handle) => {
                 let mut buf = [0u8; HTTPS_STREAM_CHUNK_SIZE];
 
-                let fd = stem::syscall::vfs::vfs_handle_from_port(*handle as u32)
-                    .map_err(|e| format!("failed to bridge port to vfs: {:?}", e))?;
-
-                let _ = wait_fd_ready(
-                    fd,
-                    poll_flags::POLLIN,
+                match recv_from_port_until(
+                    *handle,
+                    &mut buf,
                     deadline_after_ms(IO_POLL_TIMEOUT_MS),
                     "http read_chunk",
-                )?;
-
-                match port_recv(*handle, &mut buf) {
+                ) {
                     Ok(n) => {
-                        let _ = vfs_close(fd);
                         let chunk = &buf[..n];
                         if chunk.starts_with(b"ERR: ") {
                             if let Ok(msg) = core::str::from_utf8(&chunk[5..]) {
@@ -777,10 +781,7 @@ impl Response {
                         }
                         Ok(chunk.to_vec())
                     }
-                    Err(e) => {
-                        let _ = vfs_close(fd);
-                        Err(format!("port_recv failed: {:?}", e))
-                    }
+                    Err(e) => Err(e),
                 }
             }
         }
@@ -829,6 +830,7 @@ fn append_header_chunk_and_find_body_start(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     extern crate std;
 
     #[test]

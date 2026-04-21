@@ -43,6 +43,10 @@ const fn errno_code(errno: Errno) -> c_int {
 }
 
 extern "C" fn pthread_start_trampoline(arg: usize) -> ! {
+    if let Some(info) = crate::tls::read_tls_info() {
+        let _ = crate::tls::setup_thread_tls(&info);
+    }
+
     let start = unsafe { Box::from_raw(arg as *mut StartContext) };
     // ThingOS userspace is panic=abort; if the start routine panics the process
     // aborts and there is no pthread recovery path.

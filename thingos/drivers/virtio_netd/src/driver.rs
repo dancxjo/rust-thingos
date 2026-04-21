@@ -65,6 +65,26 @@ pub struct VirtioNetDriver {
 }
 
 impl VirtioNetDriver {
+    fn write_tx_header(&self) {
+        let header = VirtioNetHeader::zeroed();
+        let header_ptr = self.tx_buffer_virt as *mut u8;
+        let header_bytes = [
+            header.flags,
+            header.gso_type,
+            (header.hdr_len & 0xFF) as u8,
+            (header.hdr_len >> 8) as u8,
+            (header.gso_size & 0xFF) as u8,
+            (header.gso_size >> 8) as u8,
+            (header.csum_start & 0xFF) as u8,
+            (header.csum_start >> 8) as u8,
+            (header.csum_offset & 0xFF) as u8,
+            (header.csum_offset >> 8) as u8,
+        ];
+        unsafe {
+            core::ptr::copy_nonoverlapping(header_bytes.as_ptr(), header_ptr, header_bytes.len());
+        }
+    }
+
     /// Find and claim a VirtIO-NET device, then initialize it
     pub fn find_and_claim() -> Result<Self, Errno> {
         stem::debug!("VirtIO-NET: Searching for NIC device...");
@@ -287,11 +307,7 @@ impl VirtioNetDriver {
         stem::trace!("VirtIO-NET: TX {} bytes", data.len());
 
         // Write header
-        let header = VirtioNetHeader::zeroed();
-        let header_ptr = self.tx_buffer_virt as *mut VirtioNetHeader;
-        unsafe {
-            core::ptr::write_volatile(header_ptr, header);
-        }
+        self.write_tx_header();
 
         // Copy data after header
         let data_ptr = (self.tx_buffer_virt + NET_HEADER_SIZE as u64) as *mut u8;
