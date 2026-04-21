@@ -127,6 +127,8 @@ jobs:
   just-behave:
     name: just behave
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     continue-on-error: true
     steps:
       - name: Checkout source
@@ -213,6 +215,28 @@ jobs:
 
       - name: Run just behave
         run: just behave
+
+      - name: Commit updated behavior artifacts
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]' }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- docs/behavior; then
+            echo "No docs/behavior changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add docs/behavior
+          if git diff --cached --quiet; then
+            echo "No staged docs/behavior changes to commit."
+            exit 0
+          fi
+
+          git commit -m "ci: update behavior artifacts"
+          git push origin "HEAD:${{ github.head_ref }}"
 
       - name: Upload BDD behavior reports
         if: always()
