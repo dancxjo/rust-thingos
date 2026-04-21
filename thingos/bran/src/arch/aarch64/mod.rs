@@ -18,6 +18,7 @@ impl FrameAllocatorHook for DumbAlloc {
 }
 
 static UART_MAPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static CURRENT_TID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 pub struct AArch64Runtime {
     serial: SerialPort,
@@ -276,6 +277,7 @@ impl ArchRuntime for AArch64Runtime {
     }
 
     unsafe fn switch(&self, from: &mut Self::Context, to: &Self::Context, _to_tid: u64) {
+        self.set_current_tid(_to_tid);
         unsafe { task::switch(from, to) }
     }
 
@@ -290,6 +292,7 @@ impl ArchRuntime for AArch64Runtime {
         unsafe {
             *from_user_fs_base = self.get_user_tls_base();
             self.set_user_tls_base(to_user_fs_base);
+            self.set_current_tid(to_tid);
             task::switch(from, to);
         }
     }
@@ -405,6 +408,14 @@ impl ArchRuntime for AArch64Runtime {
 
     fn aspace_to_raw(&self, aspace: Self::AddressSpace) -> u64 {
         aspace.0
+    }
+
+    fn current_tid(&self) -> u64 {
+        CURRENT_TID.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn set_current_tid(&self, tid: u64) {
+        CURRENT_TID.store(tid, core::sync::atomic::Ordering::Relaxed);
     }
 }
 struct ProxyAllocator;
