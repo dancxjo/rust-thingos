@@ -97,9 +97,14 @@ impl ThingOsWorld {
             }
 
             let iso_output = iso_path.to_string_lossy().to_string();
-            let build_status = std::process::Command::new("cargo")
+            // Use `cargo run -p xtask -- ...` instead of `cargo xtask ...` so CI does not
+            // depend on Cargo alias resolution from .cargo/config.toml.
+            let build_output = std::process::Command::new("cargo")
                 .args([
+                    "run",
+                    "-p",
                     "xtask",
+                    "--",
                     "iso",
                     "--env",
                     arch,
@@ -109,10 +114,26 @@ impl ThingOsWorld {
                     &iso_output,
                 ])
                 .env("RUSTFLAGS", "-Awarnings")
-                .status()?;
+                .output()?;
 
-            if !build_status.success() {
-                return Err(format!("Failed to build ISO: {}", iso_path.display()).into());
+            if !build_output.status.success() {
+                let stdout = String::from_utf8_lossy(&build_output.stdout);
+                let stderr = String::from_utf8_lossy(&build_output.stderr);
+                return Err(format!(
+                    "Failed to build ISO: {}\nstdout:\n{}\nstderr:\n{}",
+                    iso_path.display(),
+                    stdout,
+                    stderr
+                )
+                .into());
+            }
+
+            if !iso_path.exists() {
+                return Err(format!(
+                    "Failed to build ISO: {} (xtask succeeded but output file was not created)",
+                    iso_path.display()
+                )
+                .into());
             }
         }
 
