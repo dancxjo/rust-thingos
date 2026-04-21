@@ -608,6 +608,11 @@ where
                     body_start = start;
                     headers_done = true;
                     info!("http: headers complete body_start={}", body_start);
+                    if let Ok(headers) = core::str::from_utf8(&response[..body_start]) {
+                        for line in headers.lines() {
+                            info!("http: response header: {}", line);
+                        }
+                    }
                     break;
                 }
             }
