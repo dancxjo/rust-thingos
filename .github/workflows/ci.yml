@@ -111,7 +111,7 @@ jobs:
         uses: extractions/setup-just@v3
 
       - name: Run just test
-        run: just test
+        run: just test --features stem/simd
 
   just-behave:
     name: just behave
