@@ -14,6 +14,11 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 - Clean: `just clean`
 - Audit platform boundary: `python3 scripts/audit_platform_boundary.py`
 
+## BDD expectations for agents
+- When adding a feature, add new BDD coverage and ensure the new BDD tests pass.
+- When fixing a bug, add or update scenarios in the appropriate existing `.feature` file for that behavior.
+- For bug fixes, follow fail-first workflow: make the scenario fail first, then fix the bug, then run the BDD suite again and confirm it passes.
+
 ## Top-level layout (what's what)
 - `abi/`: shared ABI types and syscalls between kernel/userspace.
 - `bran/`: core kernel runtime (boot/runtime abstraction).
