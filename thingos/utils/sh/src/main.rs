@@ -982,6 +982,19 @@ fn tokenize_line<'a>(line: &'a str) -> Vec<&'a str> {
                     idx += 1;
                 }
             }
+            b'\'' | b'"' => {
+                // Quoted arguments preserve internal whitespace and drop quote marks.
+                let quote = bytes[idx];
+                idx += 1;
+                let start = idx;
+                while idx < bytes.len() && bytes[idx] != quote {
+                    idx += 1;
+                }
+                tokens.push(&line[start..idx]);
+                if idx < bytes.len() {
+                    idx += 1;
+                }
+            }
             _ => {
                 let start = idx;
                 while idx < bytes.len()
