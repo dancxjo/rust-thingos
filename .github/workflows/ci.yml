@@ -44,17 +44,21 @@ jobs:
             vendor/mio
           key: ${{ runner.os }}-vendor-patched-${{ hashFiles('Cargo.lock') }}
 
-      - name: Cache Cargo registry
+      - name: Cache Rust toolchain
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/git/checkouts
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: ${{ runner.os }}-rustup-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-rustup-
+
+      - name: Cache Cargo and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          cache-on-failure: true
 
       - name: Cache pci.ids
         id: pciids-cache
@@ -107,6 +111,20 @@ jobs:
             "https://pci-ids.ucw.cz/v2.2/pci.ids" \
             -o assets/pci/pci.ids
 
+      - name: Install and cache QEMU packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: qemu-system qemu-system-misc qemu-utils
+          version: 1.0
+
+      - name: Verify QEMU binaries
+        run: |
+          set -euo pipefail
+          command -v qemu-system-x86_64
+          command -v qemu-system-aarch64
+          command -v qemu-system-riscv64
+          command -v qemu-system-loongarch64
+
       - name: Install just
         uses: extractions/setup-just@v3
 
@@ -147,17 +165,21 @@ jobs:
             vendor/mio
           key: ${{ runner.os }}-vendor-patched-${{ hashFiles('Cargo.lock') }}
 
-      - name: Cache Cargo registry
+      - name: Cache Rust toolchain
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/git/checkouts
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: ${{ runner.os }}-rustup-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-rustup-
+
+      - name: Cache Cargo and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          cache-on-failure: true
 
       - name: Cache pci.ids
         id: pciids-cache
@@ -244,5 +266,14 @@ jobs:
         with:
           name: bdd-behavior-readmes
           path: docs/behavior
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload BDD ISO images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-iso-images
+          path: target/bdd/images/*.iso
           if-no-files-found: warn
           retention-days: 7
