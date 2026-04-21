@@ -298,18 +298,20 @@ impl<R: BootRuntime> Scheduler<R> {
         }
         let kstack_top = (stack_base as u64) + KERNEL_STACK_SIZE as u64;
 
-        let aspace = rt.tasking().active_address_space();
-
-        // Inherit mappings and process_info from the current process (not the
+        // Inherit address space, mappings, and process_info from the current process (not the
         // current task) so that the canonical VM state is always sourced from
         // Process rather than from an arbitrary thread's cached copy.
-        let parent_pinfo =
+        let parent_task =
             if let Some(current_id) = self.state.per_cpu[super::current_cpu_index::<R>()].current {
                 crate::task::registry::get_task::<R>(current_id)
-                    .and_then(|parent| parent.process_info.clone())
             } else {
                 None
             };
+
+        let aspace =
+            parent_task.map(|t| t.aspace).unwrap_or_else(|| rt.tasking().active_address_space());
+
+        let parent_pinfo = parent_task.and_then(|parent| parent.process_info.clone());
 
         // Clone the mappings Arc from the parent process (same underlying
         // MappingList object).  Fall back to an empty list only when there is
@@ -627,9 +629,9 @@ pub unsafe fn spawn_user_thread<R: BootRuntime>(
     arg: StartupArg,
     stack_info: abi::types::StackInfo,
     priority: crate::task::TaskPriority,
-) -> TaskId { unsafe {
-    spawn_user_thread_ex::<R>(entry, stack, arg, stack_info, priority, 0, false)
-}}
+) -> TaskId {
+    unsafe { spawn_user_thread_ex::<R>(entry, stack, arg, stack_info, priority, 0, false) }
+}
 
 /// Extended version of `spawn_user_thread` with explicit TLS base and detached flag.
 pub unsafe fn spawn_user_thread_ex<R: BootRuntime>(
@@ -970,7 +972,12 @@ fn setup_stdio_fds<R: BootRuntime>(
             if let Ok(node) = crate::vfs::mount::lookup(path) {
                 let _ = handle_table.insert_at(0, node, OpenFlags::read_write(), path.clone());
             } else {
-                let _ = handle_table.insert_at(0, null.clone(), OpenFlags::read_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    0,
+                    null.clone(),
+                    OpenFlags::read_only(),
+                    "/dev/null".into(),
+                );
             }
         }
     }
@@ -1026,7 +1033,12 @@ fn setup_stdio_fds<R: BootRuntime>(
             if let Ok(node) = crate::vfs::mount::lookup(path) {
                 let _ = handle_table.insert_at(1, node, OpenFlags::read_write(), path.clone());
             } else {
-                let _ = handle_table.insert_at(1, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    1,
+                    null.clone(),
+                    OpenFlags::write_only(),
+                    "/dev/null".into(),
+                );
             }
         }
     }
@@ -1065,15 +1077,24 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let path = alloc::format!("fd:{}", fd);
                 let _ = handle_table.insert_at(2, node, flags, path);
             } else {
-                let _ =
-                    handle_table.insert_at(2, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    2,
+                    null.clone(),
+                    OpenFlags::write_only(),
+                    "/dev/null".into(),
+                );
             }
         }
         StdioSpec::Path(ref path) => {
             if let Ok(node) = crate::vfs::mount::lookup(path) {
                 let _ = handle_table.insert_at(2, node, OpenFlags::read_write(), path.clone());
             } else {
-                let _ = handle_table.insert_at(2, null.clone(), OpenFlags::write_only(), "/dev/null".into());
+                let _ = handle_table.insert_at(
+                    2,
+                    null.clone(),
+                    OpenFlags::write_only(),
+                    "/dev/null".into(),
+                );
             }
         }
     }

@@ -301,7 +301,7 @@ fn generate_motd() -> String {
         "      |     |       \x1b[0;36m\"People, places, things.\"\x1b[1;32m\n",
         "       \\   /        \n",
         "        `-'        \n",
-        "       /   \\        v0.1  \u{2022}  ACT IV\n",
+        "       /   \\        v0.1  \u{2022}  \n",
         "      |     |       2026-04-16\n",
         "       \\   /\n",
         "        `-'\n",
