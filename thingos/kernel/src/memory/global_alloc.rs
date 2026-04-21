@@ -40,59 +40,63 @@ struct TracingAllocator;
 
 #[cfg(not(test))]
 unsafe impl GlobalAlloc for TracingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 { unsafe {
-        let orig_size = layout.size();
-        let orig_align = layout.align();
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe {
+            let orig_size = layout.size();
+            let orig_align = layout.align();
 
-        // Workaround for linked_list_allocator bug with small leftover holes:
-        // By aligning the size to 32 bytes and ensuring a minimum of 32 bytes,
-        // we guarantee that any leftover block is at least 32 bytes long
-        // (which is > maximum alignment padding + Hole size), preventing it from
-        // creating < 24 byte holes that corrupt the free list.
-        let align = orig_align.max(8);
-        let mut size = orig_size.max(32);
-        if size % 32 != 0 {
-            size = size + (32 - (size % 32));
-        }
-
-        let safe_layout = Layout::from_size_align_unchecked(size, align);
-
-        let irq = crate::irq::irq_disable_erased();
-        let mut ptr = unsafe { INNER_ALLOCATOR.alloc(safe_layout) };
-        crate::irq::irq_restore_erased(irq);
-
-        if ptr.is_null() {
-            let needed_pages = (size + 4095) / 4096;
-            let grow_pages = core::cmp::max(GROWTH_HEAP_PAGES, needed_pages);
-            let expanded = unsafe {
-                if let Some(hook) = HEAP_EXPAND_HOOK { hook(grow_pages).is_ok() } else { false }
-            };
-            if expanded {
-                let irq = crate::irq::irq_disable_erased();
-                ptr = unsafe { INNER_ALLOCATOR.alloc(safe_layout) };
-                crate::irq::irq_restore_erased(irq);
+            // Workaround for linked_list_allocator bug with small leftover holes:
+            // By aligning the size to 32 bytes and ensuring a minimum of 32 bytes,
+            // we guarantee that any leftover block is at least 32 bytes long
+            // (which is > maximum alignment padding + Hole size), preventing it from
+            // creating < 24 byte holes that corrupt the free list.
+            let align = orig_align.max(8);
+            let mut size = orig_size.max(32);
+            if size % 32 != 0 {
+                size = size + (32 - (size % 32));
             }
+
+            let safe_layout = Layout::from_size_align_unchecked(size, align);
+
+            let irq = crate::irq::irq_disable_erased();
+            let mut ptr = unsafe { INNER_ALLOCATOR.alloc(safe_layout) };
+            crate::irq::irq_restore_erased(irq);
+
+            if ptr.is_null() {
+                let needed_pages = (size + 4095) / 4096;
+                let grow_pages = core::cmp::max(GROWTH_HEAP_PAGES, needed_pages);
+                let expanded = unsafe {
+                    if let Some(hook) = HEAP_EXPAND_HOOK { hook(grow_pages).is_ok() } else { false }
+                };
+                if expanded {
+                    let irq = crate::irq::irq_disable_erased();
+                    ptr = unsafe { INNER_ALLOCATOR.alloc(safe_layout) };
+                    crate::irq::irq_restore_erased(irq);
+                }
+            }
+
+            ptr
         }
+    }
 
-        ptr
-    }}
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            let orig_size = layout.size();
+            let orig_align = layout.align();
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe {
-        let orig_size = layout.size();
-        let orig_align = layout.align();
+            let align = orig_align.max(8);
+            let mut size = orig_size.max(32);
+            if size % 32 != 0 {
+                size = size + (32 - (size % 32));
+            }
 
-        let align = orig_align.max(8);
-        let mut size = orig_size.max(32);
-        if size % 32 != 0 {
-            size = size + (32 - (size % 32));
+            let safe_layout = Layout::from_size_align_unchecked(size, align);
+
+            let irq = crate::irq::irq_disable_erased();
+            unsafe { INNER_ALLOCATOR.dealloc(ptr, safe_layout) }
+            crate::irq::irq_restore_erased(irq);
         }
-
-        let safe_layout = Layout::from_size_align_unchecked(size, align);
-
-        let irq = crate::irq::irq_disable_erased();
-        unsafe { INNER_ALLOCATOR.dealloc(ptr, safe_layout) }
-        crate::irq::irq_restore_erased(irq);
-    }}
+    }
 }
 
 #[cfg(not(test))]
@@ -101,32 +105,32 @@ static ALLOCATOR: TracingAllocator = TracingAllocator;
 
 #[cfg(not(test))]
 pub fn init<R: BootRuntime>(_rt: &R) {
-    _rt.serial_putbuf(b"[kernel:global_alloc] enter\r\n");
+    crate::kdebug!("[kernel:global_alloc] enter");
     unsafe {
-        _rt.serial_putbuf(b"[kernel:global_alloc] set expand hook\r\n");
+        crate::kdebug!("[kernel:global_alloc] set expand hook");
         HEAP_EXPAND_HOOK = Some(expand_heap_impl::<R>);
     }
-    _rt.serial_putbuf(b"[kernel:global_alloc] expand hook ok\r\n");
+    crate::kdebug!("[kernel:global_alloc] expand hook ok");
 
-    _rt.serial_putbuf(b"[kernel:global_alloc] kernel_heap lock begin\r\n");
+    crate::kdebug!("[kernel:global_alloc] kernel_heap lock begin");
     let mut heap = kernel_heap().lock();
-    _rt.serial_putbuf(b"[kernel:global_alloc] kernel_heap lock ok\r\n");
+    crate::kdebug!("[kernel:global_alloc] kernel_heap lock ok");
     // Keep early boot fast: bootstrap with a smaller heap and grow on demand.
-    _rt.serial_putbuf(b"[kernel:global_alloc] reserve_region begin\r\n");
+    crate::kdebug!("[kernel:global_alloc] reserve_region begin");
     let (base, size) = heap
         .reserve_region::<R>(BOOTSTRAP_HEAP_PAGES)
         .expect("Failed to reserve kernel heap region");
-    _rt.serial_putbuf(b"[kernel:global_alloc] reserve_region ok\r\n");
+    crate::kdebug!("[kernel:global_alloc] reserve_region ok");
 
     unsafe {
-        _rt.serial_putbuf(b"[kernel:global_alloc] inner allocator init begin\r\n");
+        crate::kdebug!("[kernel:global_alloc] inner allocator init begin");
         INNER_ALLOCATOR.lock().init(base as *mut u8, size);
     }
-    _rt.serial_putbuf(b"[kernel:global_alloc] inner allocator init ok\r\n");
+    crate::kdebug!("[kernel:global_alloc] inner allocator init ok");
     HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
-    _rt.serial_putbuf(b"[kernel:global_alloc] heap top store ok\r\n");
+    crate::kdebug!("[kernel:global_alloc] heap top store ok");
 
-    _rt.serial_putbuf(b"[kernel:global_alloc] init done\r\n");
+    crate::kdebug!("[kernel:global_alloc] init done");
 }
 
 #[cfg(not(test))]
