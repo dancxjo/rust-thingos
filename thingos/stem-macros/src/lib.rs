@@ -56,21 +56,13 @@ fn validate_signature(func: &ItemFn) -> Result<bool, syn::Error> {
         1 => {
             let arg = &func.sig.inputs[0];
             if let FnArg::Typed(pat_ty) = arg {
-            if let Type::Path(path) = pat_ty.ty.as_ref() {
-                if path.path.is_ident("usize") {
-                    Ok(true)
-                } else {
-                    Err(syn::Error::new_spanned(
+                match pat_ty.ty.as_ref() {
+                    Type::Path(path) if path.path.is_ident("usize") => Ok(true),
+                    _ => Err(syn::Error::new_spanned(
                         &func.sig.inputs,
                         "expected argument type usize",
-                    ))
+                    )),
                 }
-            } else {
-                Err(syn::Error::new_spanned(
-                    &func.sig.inputs,
-                    "expected argument type usize",
-                ))
-            }
             } else {
                 Err(syn::Error::new_spanned(
                     &func.sig.inputs,
