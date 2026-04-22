@@ -93,14 +93,14 @@ pub fn sys_port_send_all(handle: usize, ptr: usize, len: usize) -> SysResult<usi
 
     if port.send_all(&buf[..len]) {
         let port_id = crate::ipc::find_port_id(&port).unwrap_or(crate::ipc::PortId(0));
-        crate::ktrace!("sys_port_send_all: wrote {} bytes to port {:?}", len, port_id);
+        // crate::ktrace!("sys_port_send_all: wrote {} bytes to port {:?}", len, port_id);
         crate::ipc::diag::PORT_SENDS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         crate::ipc::diag::PORT_BYTES_SENT
             .fetch_add(len as u64, core::sync::atomic::Ordering::Relaxed);
         Ok(len)
     } else {
         let port_id = crate::ipc::find_port_id(&port).unwrap_or(crate::ipc::PortId(0));
-        crate::ktrace!("sys_port_send_all: port {:?} FULL, returning EAGAIN", port_id);
+        // crate::ktrace!("sys_port_send_all: port {:?} FULL, returning EAGAIN", port_id);
         crate::ipc::diag::PORT_FULL_EVENTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         Err(Errno::EAGAIN)
     }
@@ -132,7 +132,7 @@ fn sys_port_recv_impl(handle: usize, ptr: usize, len: usize, blocking: bool) -> 
                 copyout(ptr, &buf[..read])?;
             }
             let port_id = crate::ipc::find_port_id(&port).unwrap_or(crate::ipc::PortId(0));
-            crate::ktrace!("sys_port_recv: read {} bytes from port {:?}", read, port_id);
+            // crate::ktrace!("sys_port_recv: read {} bytes from port {:?}", read, port_id);
             crate::ipc::diag::PORT_RECVS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             crate::ipc::diag::PORT_BYTES_RECV
                 .fetch_add(read as u64, core::sync::atomic::Ordering::Relaxed);
@@ -157,11 +157,13 @@ fn sys_port_recv_impl(handle: usize, ptr: usize, len: usize, blocking: bool) -> 
                 copyout(ptr, &buf[..read])?;
             }
             let port_id = crate::ipc::find_port_id(&port).unwrap_or(crate::ipc::PortId(0));
+            /*
             crate::ktrace!(
                 "sys_port_recv: read {} bytes from port {:?} after wait registration",
                 read,
                 port_id
             );
+            */
             crate::ipc::diag::PORT_RECVS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             crate::ipc::diag::PORT_BYTES_RECV
                 .fetch_add(read as u64, core::sync::atomic::Ordering::Relaxed);

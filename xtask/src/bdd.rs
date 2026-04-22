@@ -9,7 +9,7 @@ pub fn bdd(
     archs: Vec<String>,
     _loglevel: Option<String>,
 ) -> Result<()> {
-    let effective_loglevel = "5";
+    let effective_loglevel = "4";
 
     for arch in archs {
         println!("xtask: bdd running tests for arch={arch}...");

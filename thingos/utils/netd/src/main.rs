@@ -256,7 +256,7 @@ fn main(arg: usize) -> ! {
 
     loop {
         let mut did_work = false;
-        trace!("NETD: main loop iteration");
+        // trace!("NETD: main loop iteration");
 
         let now = VfsNicDevice::now();
         if iface.poll(now, &mut device, &mut socket_set) {

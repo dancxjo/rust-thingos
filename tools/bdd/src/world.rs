@@ -189,7 +189,7 @@ impl ThingOsWorld {
         let resolution =
             std::env::var("BDD_RESOLUTION").unwrap_or_else(|_| "1920x1080".to_string());
 
-        let loglevel = "5".to_string();
+        let loglevel = std::env::var("BDD_LOGLEVEL").unwrap_or_else(|_| "3".to_string());
 
         let iso_path = Self::cached_iso_path(arch, &resolution, &loglevel);
         let force_rebuild = Self::env_flag("BDD_FORCE_REBUILD_IMAGE");

@@ -435,12 +435,14 @@ fn start_provider_thread(
                     let op = req.op;
                     let resp_port = req.resp_port;
                     let req_payload_len = req.payload.len();
-                    stem::trace!(
-                        "VIRTIO_NETD: dispatch begin op={:?} resp_port={} payload_len={}",
-                        op,
-                        resp_port,
-                        req_payload_len
-                    );
+                    if op != abi::vfs_rpc::VfsRpcOp::Poll {
+                        stem::trace!(
+                            "VIRTIO_NETD: dispatch begin op={:?} resp_port={} payload_len={}",
+                            op,
+                            resp_port,
+                            req_payload_len
+                        );
+                    }
                     let resp = {
                         let mut state = shared.state.lock();
                         let mut driver = shared.driver.lock();
@@ -448,26 +450,32 @@ fn start_provider_thread(
                     };
                     let resp_status = resp.status;
                     let resp_payload_len = resp.payload.len();
-                    stem::trace!(
-                        "VIRTIO_NETD: dispatch end op={:?} resp_port={} status={} resp_payload_len={}",
-                        op,
-                        resp_port,
-                        resp_status,
-                        resp_payload_len
-                    );
-                    stem::trace!(
-                        "VIRTIO_NETD: send_response begin op={:?} resp_port={}",
-                        op,
-                        resp_port
-                    );
-                    if let Err(e) = provider_loop.send_response(resp_port, resp) {
-                        warn!("VIRTIO_NETD: send_response failed: {:?}", e);
-                    } else {
+                    if op != abi::vfs_rpc::VfsRpcOp::Poll {
                         stem::trace!(
-                            "VIRTIO_NETD: send_response end op={:?} resp_port={}",
+                            "VIRTIO_NETD: dispatch end op={:?} resp_port={} status={} resp_payload_len={}",
+                            op,
+                            resp_port,
+                            resp_status,
+                            resp_payload_len
+                        );
+                    }
+                    if op != abi::vfs_rpc::VfsRpcOp::Poll {
+                        stem::trace!(
+                            "VIRTIO_NETD: send_response begin op={:?} resp_port={}",
                             op,
                             resp_port
                         );
+                    }
+                    if let Err(e) = provider_loop.send_response(resp_port, resp) {
+                        warn!("VIRTIO_NETD: send_response failed: {:?}", e);
+                    } else {
+                        if op != abi::vfs_rpc::VfsRpcOp::Poll {
+                            stem::trace!(
+                                "VIRTIO_NETD: send_response end op={:?} resp_port={}",
+                                op,
+                                resp_port
+                            );
+                        }
                     }
                 }
                 Ok(None) => {}

@@ -780,7 +780,10 @@ fn run_https_mount(fixed_host: Option<String>, mount_point: &str, shared: Arc<Sh
     };
 
     match vfs_mount(req_write, mount_point) {
-        Ok(()) => debug!("httpsd: mounted at {}", mount_point),
+        Ok(()) => {
+            debug!("httpsd: mounted at {}", mount_point);
+            info!("HTTPSD_READY");
+        }
         Err(e) => {
             warn!("httpsd: failed to mount {}: {:?}", mount_point, e);
             stem::syscall::exit(1);

@@ -167,7 +167,7 @@ impl Port {
         self.waiters_read.wake_one();
 
         let tid = unsafe { crate::sched::current_tid_current() };
-        crate::ktrace!("PORT: Port written {} bytes from TID {}", to_write, tid);
+        // crate::ktrace!("PORT: Port written {} bytes from TID {}", to_write, tid);
 
         to_write
     }
@@ -232,7 +232,7 @@ impl Port {
         let tid = unsafe { crate::sched::current_tid_current() };
         self.msgs.enqueue(KernelMessage { data, caps })?;
         self.waiters_read.wake_one();
-        crate::ktrace!("PORT: Port message sent from TID {}", tid);
+        // crate::ktrace!("PORT: Port message sent from TID {}", tid);
         Ok(())
     }
 
@@ -310,7 +310,7 @@ impl Port {
         self.waiters_write.wake_one();
 
         let tid = unsafe { crate::sched::current_tid_current() };
-        crate::ktrace!("PORT: Port read {} bytes from TID {}", to_read, tid);
+        // crate::ktrace!("PORT: Port read {} bytes from TID {}", to_read, tid);
 
         to_read
     }
