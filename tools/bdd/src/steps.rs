@@ -1415,6 +1415,34 @@ async fn latest_serial_not_contains(
     Ok(())
 }
 
+#[then(regex = r#"^the latest serial output should contain "(.+)"$"#)]
+async fn latest_serial_contains(
+    world: &mut ThingOsWorld,
+    expected: String,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    let start = world.serial_checkpoint.min(log.len());
+    let recent = &log[start..];
+    let recent_norm = strip_ansi(recent).to_lowercase();
+    let needle_norm = strip_ansi(&expected).to_lowercase();
+
+    if !recent_norm.contains(&needle_norm) {
+        eprintln!("\n=== Expected pattern missing from latest serial output ===");
+        eprintln!("Pattern: {}", expected);
+        eprintln!("\n=== Recent Serial Output (since last command) ===");
+        for line in recent.lines().rev().take(40).collect::<Vec<_>>().into_iter().rev() {
+            eprintln!(">>> {}", line);
+        }
+        eprintln!("=== End Recent Output ===\n");
+        return Err(StepError(format!(
+            "Expected latest serial output to contain '{}', but it was not present",
+            expected
+        )));
+    }
+
+    Ok(())
+}
+
 #[when(regex = r#"^I press (.+)$"#)]
 async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
     if world.qmp_control.is_some() {
