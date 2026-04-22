@@ -982,6 +982,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     memory::global_alloc::init(runtime);
     boot_trace(runtime, b"[kernel:start] global_alloc::init ok\r\n");
     boot_trace(runtime, b"[kernel:start] after global_alloc marker\r\n");
+    let boot_timing_hz = runtime.mono_freq_hz();
+    let boot_timing_us = |ticks: u64| -> u64 {
+        if boot_timing_hz == 0 {
+            0
+        } else {
+            ((ticks as u128).saturating_mul(1_000_000) / boot_timing_hz as u128) as u64
+        }
+    };
 
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs begin\r\n");
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs query begin\r\n");
@@ -1017,12 +1025,26 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry scope done\r\n");
 
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs set_boot_fb begin\r\n");
+        let set_boot_fb_start = runtime.mono_ticks();
         crate::vfs::devfs::set_boot_fb(fb, fb_resource_id);
+        let set_boot_fb_elapsed = runtime.mono_ticks().wrapping_sub(set_boot_fb_start);
+        crate::kdebug!(
+            "[kernel:start] framebuffer/devfs set_boot_fb elapsed_ticks={} elapsed_us={}",
+            set_boot_fb_elapsed,
+            boot_timing_us(set_boot_fb_elapsed)
+        );
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs set_boot_fb ok\r\n");
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs register fb0 begin\r\n");
+        let register_fb0_start = runtime.mono_ticks();
         crate::vfs::devfs::register(
             "fb0",
             alloc::sync::Arc::new(crate::vfs::devfs::FbNode::new(fb, fb_resource_id)),
+        );
+        let register_fb0_elapsed = runtime.mono_ticks().wrapping_sub(register_fb0_start);
+        crate::kdebug!(
+            "[kernel:start] framebuffer/devfs register fb0 elapsed_ticks={} elapsed_us={}",
+            register_fb0_elapsed,
+            boot_timing_us(register_fb0_elapsed)
         );
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs register fb0 ok\r\n");
     } else {
@@ -1033,7 +1055,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] kdebug(entropy) begin\r\n");
     kdebug!("Seeding entropy pool...");
     boot_trace(runtime, b"[kernel:start] kdebug(entropy) ok\r\n");
+    let entropy_seed_start = runtime.mono_ticks();
     crate::entropy::seed_from_hardware();
+    let entropy_seed_elapsed = runtime.mono_ticks().wrapping_sub(entropy_seed_start);
+    crate::kdebug!(
+        "[kernel:start] entropy::seed_from_hardware elapsed_ticks={} elapsed_us={}",
+        entropy_seed_elapsed,
+        boot_timing_us(entropy_seed_elapsed)
+    );
     boot_trace(runtime, b"[kernel:start] entropy seeded\r\n");
 
     boot_trace(runtime, b"[kernel:start] kinfo(simd) begin\r\n");
