@@ -61,8 +61,9 @@ fn print(fd: u32, s: &str) {
 }
 
 fn wait_until(deadline: stem::time::Instant) {
-    while stem::time::now() < deadline {
-        stem::yield_now();
+    let now = stem::time::now();
+    if now < deadline {
+        stem::time::sleep(deadline - now);
     }
 }
 
