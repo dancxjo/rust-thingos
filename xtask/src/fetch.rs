@@ -362,7 +362,7 @@ fn fetch_chicago95_icons(assets: &Path) -> Result<()> {
     download_file(CHICAGO95_URL, &archive)?;
 
     println!("       Extracting Chicago95 icon set...");
-    run_cmd(Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&temp_dir))?;
+    run_cmd(Command::new("tar").arg("-xf").arg(&archive).arg("--no-same-owner").arg("-C").arg(&temp_dir))?;
 
     let extracted_root = fs::read_dir(&temp_dir)?
         .filter_map(|entry| entry.ok())
