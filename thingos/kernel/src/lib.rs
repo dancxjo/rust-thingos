@@ -1447,19 +1447,21 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     kinfo!("Entering scheduler loop.");
     boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
-    // Keep a visible startup background without blocking scheduler-loop entry.
-    if let Some(fb) = boot_framebuffer_for_paint {
-        let gradient_start = runtime.mono_ticks();
-        paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
-        let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
-        crate::kdebug!(
-            "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
-            gradient_elapsed,
-            boot_timing_us(gradient_elapsed)
-        );
-    }
+    let mut deferred_bootfb_gradient = boot_framebuffer_for_paint;
     loop {
         if !crate::task::yield_now::<R>() {
+            // Keep a visible startup background, but only when idle so task
+            // dispatch to the scheduler loop is never blocked by full-screen fill.
+            if let Some(fb) = deferred_bootfb_gradient.take() {
+                let gradient_start = runtime.mono_ticks();
+                paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
+                let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
+                crate::kdebug!(
+                    "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
+                    gradient_elapsed,
+                    boot_timing_us(gradient_elapsed)
+                );
+            }
             // No runnable work on this CPU — halt until the next interrupt
             // (timer tick, IPI, or device IRQ).  This is the same idle pattern
             // used by secondary CPUs in `run_scheduler` and prevents CPU 0 from
