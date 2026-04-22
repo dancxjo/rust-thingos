@@ -102,9 +102,12 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_ENTROPY_SEED => handlers::sys_entropy_seed(args[0], args[1]),
         SYS_LOG_SET_LEVEL => {
             let authority = crate::authority::bridge::authority_for_current();
-            crate::authority::bridge::check_privilege(&authority, "log_level")?;
-            crate::logging::set_log_level(args[0] as u8);
-            Ok(0)
+            if let Err(e) = crate::authority::bridge::check_privilege(&authority, "log_level") {
+                Err(e)
+            } else {
+                crate::logging::set_log_level(args[0] as u8);
+                Ok(0)
+            }
         }
 
         // ── VFS (thingos) ───────────────────────────────────────────────────
@@ -160,9 +163,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
             handlers::vfs::sys_fs_attr_get(args[0], args[1], args[2], args[3], args[4], args[5])
         }
         SYS_FS_ATTR_SET => {
-            handlers::vfs::sys_fs_attr_set(
-                args[0], args[1], args[2], args[3], args[4], args[5],
-            )
+            handlers::vfs::sys_fs_attr_set(args[0], args[1], args[2], args[3], args[4], args[5])
         }
         SYS_FS_ATTR_REMOVE => handlers::vfs::sys_fs_attr_remove(args[0], args[1], args[2]),
         SYS_FS_ATTR_LIST => handlers::vfs::sys_fs_attr_list(args[0], args[1], args[2]),
