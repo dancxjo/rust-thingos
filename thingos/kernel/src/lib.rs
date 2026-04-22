@@ -1114,19 +1114,44 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
     kdebug!("Initializing VFS...");
     boot_trace(runtime, b"[kernel:start] kdebug(vfs) ok\r\n");
+    let set_cmdline_start = runtime.mono_ticks();
     crate::vfs::devfs::set_cmdline(runtime.get_kernel_cmdline().to_string());
+    log_scheduler_entry_step(
+        runtime,
+        boot_timing_hz,
+        scheduler_entry_window_start,
+        "set_cmdline",
+        set_cmdline_start,
+    );
     boot_trace(runtime, b"[kernel:start] vfs::set_cmdline ok\r\n");
+    let vfs_init_start = runtime.mono_ticks();
     crate::vfs::init(runtime.modules());
+    log_scheduler_entry_step(
+        runtime,
+        boot_timing_hz,
+        scheduler_entry_window_start,
+        "vfs_init",
+        vfs_init_start,
+    );
     boot_trace(runtime, b"[kernel:start] vfs init ok\r\n");
 
     boot_trace(runtime, b"[kernel:start] kdebug(pci) begin\r\n");
     kdebug!("Scanning PCI bus...");
     boot_trace(runtime, b"[kernel:start] kdebug(pci) ok\r\n");
+    let pci_scan_start = runtime.mono_ticks();
     scan_pci();
+    log_scheduler_entry_step(
+        runtime,
+        boot_timing_hz,
+        scheduler_entry_window_start,
+        "scan_pci",
+        pci_scan_start,
+    );
     boot_trace(runtime, b"[kernel:start] pci scan ok\r\n");
 
     // Register legacy ISA devices
     boot_trace(runtime, b"[kernel:start] legacy device register begin\r\n");
+    let register_legacy_devices_start = runtime.mono_ticks();
     {
         let mut reg = crate::device_registry::REGISTRY.lock();
         // RTC CMOS (0x70, 0x71)
@@ -1142,6 +1167,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             0x60,
         ));
     }
+    log_scheduler_entry_step(
+        runtime,
+        boot_timing_hz,
+        scheduler_entry_window_start,
+        "register_legacy_devices",
+        register_legacy_devices_start,
+    );
     boot_trace(runtime, b"[kernel:start] legacy device register ok\r\n");
 
     // CRITICAL: Calibrate the BSP preemption timer BEFORE starting secondary CPUs.
@@ -1152,7 +1184,15 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] kdebug(preemption timer) begin\r\n");
     kdebug!("System initialized. Setting up preemption timer (100Hz)...");
     boot_trace(runtime, b"[kernel:start] kdebug(preemption timer) ok\r\n");
+    let setup_preemption_timer_start = runtime.mono_ticks();
     runtime.setup_preemption_timer(100);
+    log_scheduler_entry_step(
+        runtime,
+        boot_timing_hz,
+        scheduler_entry_window_start,
+        "setup_preemption_timer",
+        setup_preemption_timer_start,
+    );
     boot_trace(runtime, b"[kernel:start] preemption timer ok\r\n");
 
     // Bring up all secondary CPUs during early boot.
@@ -1447,19 +1487,21 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     kinfo!("Entering scheduler loop.");
     boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
-    // Keep a visible startup background without blocking scheduler-loop entry.
-    if let Some(fb) = boot_framebuffer_for_paint {
-        let gradient_start = runtime.mono_ticks();
-        paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
-        let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
-        crate::kdebug!(
-            "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
-            gradient_elapsed,
-            boot_timing_us(gradient_elapsed)
-        );
-    }
+    let mut deferred_bootfb_gradient = boot_framebuffer_for_paint;
     loop {
         if !crate::task::yield_now::<R>() {
+            // Keep a visible startup background, but only when idle so task
+            // dispatch to the scheduler loop is never blocked by full-screen fill.
+            if let Some(fb) = deferred_bootfb_gradient.take() {
+                let gradient_start = runtime.mono_ticks();
+                paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
+                let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
+                crate::kdebug!(
+                    "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
+                    gradient_elapsed,
+                    boot_timing_us(gradient_elapsed)
+                );
+            }
             // No runnable work on this CPU — halt until the next interrupt
             // (timer tick, IPI, or device IRQ).  This is the same idle pattern
             // used by secondary CPUs in `run_scheduler` and prevents CPU 0 from
