@@ -616,7 +616,7 @@ impl VfsNode for FbNode {
         }
 
         let mut shadow = self.shadow.lock();
-        let required_shadow_len = off.saturating_add(n);
+        let required_shadow_len = off.checked_add(n).ok_or(Errno::EINVAL)?;
         let max_shadow_len = self.fb.byte_len as usize;
         if required_shadow_len > max_shadow_len {
             return Err(Errno::EINVAL);
@@ -1554,6 +1554,7 @@ mod tests {
         let written = node.write(4, &[1u8, 2, 3, 4]).unwrap();
         assert_eq!(written, 4);
         assert_eq!(node.shadow.lock().bytes.len(), 8);
+        assert_eq!(&node.shadow.lock().bytes[0..4], &[0u8; 4]);
         assert_eq!(&node.shadow.lock().bytes[4..8], &[1u8, 2, 3, 4]);
     }
 
