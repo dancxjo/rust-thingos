@@ -84,6 +84,8 @@ required_features = [
 # -----------------------------------------------------------------------------
 # Unresolved feature-family roadmap (dependency ordered)
 # -----------------------------------------------------------------------------
+# Note: unresolved families currently roll up to umbrella issue #414 until
+# per-family child issues are split out.
 
 [[feature_families]]
 id = "family.exec_surface"
@@ -97,7 +99,7 @@ implementation_order = [
     "Add libc exec* wrappers (execv/execve/execvp/fexecve) over task_exec(fd, ...).",
 ]
 conformance_tests = [
-    "BDD: parent marks one fd CLOEXEC, child execs test binary, verify inherited fd set.",
+    "BDD: parent marks one fd CLOEXEC, child execs test binary, assert CLOEXEC fd is absent and explicitly read/write through a known non-CLOEXEC fd to prove inheritance.",
     "userspace/libc tests: execv/execvp argument/envp forwarding and errno mapping.",
 ]
 
@@ -140,6 +142,7 @@ title = "Runtime bootstrap data (auxv + random)"
 owner = "mixed"
 tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
 depends_on = ["family.exec_surface"]
+dependency_rationale = "auxv is produced during exec startup and needs that path settled; AT_RANDOM specifically consumes bytes from the runtime-bootstrap random source at exec-time process entry."
 features = ["runtime.auxv_basic", "misc.random"]
 implementation_order = [
     "Add kernel random source and userspace getrandom-style surface.",
@@ -155,7 +158,7 @@ id = "family.dynamic_loading"
 title = "Dynamic loader and dlopen ecosystem support"
 owner = "userspace"
 tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
-depends_on = ["family.runtime_bootstrap", "family.exec_surface"]
+depends_on = ["family.runtime_bootstrap"]
 features = ["dynamic.loader", "dynamic.dlopen"]
 implementation_order = [
     "Land minimal dynamic ELF interpreter (ld.so-style relocation + startup).",
