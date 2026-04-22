@@ -1187,7 +1187,7 @@ impl DispatchTrigger {
     #[inline]
     fn as_str(self) -> &'static str {
         match self {
-            DispatchTrigger::TimerTick => "timer",
+            DispatchTrigger::TimerTick => "timer_tick",
             DispatchTrigger::ReschedIpi => "resched_ipi",
         }
     }
@@ -9280,7 +9280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_trylock_miss_attributes_timer_trigger() {
+    fn test_trylock_miss_timer_counter_tracks_timer_trigger() {
         let _g = init_test_env();
 
         let mut sched = types::Scheduler::<MockRuntime>::new();
