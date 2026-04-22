@@ -9,10 +9,15 @@ use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{IpCidr, Ipv4Address};
 
+/// Overall DHCP attempt budget before declaring timeout.
 const DHCP_TIMEOUT_SECS: u64 = 30;
+/// Periodic progress log cadence while waiting for a lease.
 const DHCP_PROGRESS_LOG_SECS: u64 = 5;
+/// Cap unusually long smoltcp backoff delays so retry cadence stays observable.
 const DHCP_MAX_BACKOFF_MS: i64 = 4_000;
+/// Keep wakeups responsive while waiting for DHCP events.
 const DHCP_POLL_SLICE_MS: i64 = 100;
+/// Avoid infinite DHCP socket churn if the backoff cap keeps being exceeded.
 const DHCP_MAX_SOCKET_RESETS: u32 = 3;
 
 #[derive(Debug)]
@@ -111,7 +116,8 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
         }
 
         if let Some(poll_delay_ms) = poll_delay_ms {
-            if poll_delay_ms > DHCP_MAX_BACKOFF_MS && reset_count < DHCP_MAX_SOCKET_RESETS {
+            let exceeds_backoff_cap = poll_delay_ms > DHCP_MAX_BACKOFF_MS;
+            if exceeds_backoff_cap && reset_count < DHCP_MAX_SOCKET_RESETS {
                 reset_count += 1;
                 stem::warn!(
                     "DHCP: poll_delay_ms={} exceeds cap={}, resetting DHCP socket (resets={})",
@@ -119,10 +125,11 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                     DHCP_MAX_BACKOFF_MS,
                     reset_count
                 );
+                // `dhcp_handle` is owned by this loop and always valid here.
                 let _ = socket_set.remove::<Dhcpv4Socket>(dhcp_handle);
                 dhcp_handle = socket_set.add(Dhcpv4Socket::new());
                 continue;
-            } else if poll_delay_ms > DHCP_MAX_BACKOFF_MS {
+            } else if exceeds_backoff_cap {
                 stem::warn!(
                     "DHCP: poll_delay_ms={} exceeds cap={} but reset budget exhausted (resets={})",
                     poll_delay_ms,
