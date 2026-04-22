@@ -51,7 +51,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
     let timeout = start + Duration::from_secs(DHCP_TIMEOUT_SECS);
     let mut next_progress_log = start + Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
     let mut reset_count = 0u32;
-    let mut last_poll_delay_ms = i64::MIN;
+    let mut last_poll_delay_ms = DHCP_UNKNOWN_DELAY_MS;
 
     loop {
         let ts = now();
@@ -116,7 +116,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
         }
 
         if poll_delay_ms > DHCP_MAX_BACKOFF_MS && reset_count < DHCP_MAX_SOCKET_RESETS {
-            reset_count = reset_count.saturating_add(1);
+            reset_count += 1;
             stem::warn!(
                 "DHCP: poll_delay_ms={} exceeds cap={}, resetting DHCP socket (resets={})",
                 poll_delay_ms,
