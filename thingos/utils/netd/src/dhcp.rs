@@ -13,6 +13,8 @@ const DHCP_TIMEOUT_SECS: u64 = 30;
 const DHCP_PROGRESS_LOG_SECS: u64 = 5;
 const DHCP_MAX_BACKOFF_MS: i64 = 4_000;
 const DHCP_POLL_SLICE_MS: i64 = 100;
+const DHCP_UNKNOWN_DELAY_MS: i64 = -1;
+const DHCP_MAX_SOCKET_RESETS: u32 = 3;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -95,11 +97,14 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
         }
 
         let delay = iface.poll_delay(ts, &socket_set);
-        let poll_delay_ms = delay.map(|d| d.total_millis()).unwrap_or(-1);
+        let poll_delay_ms = delay.map(|d| d.total_millis()).unwrap_or(DHCP_UNKNOWN_DELAY_MS);
         if poll_delay_ms != last_poll_delay_ms {
             let elapsed_ms = (ts - start).total_millis();
-            let next_retry_deadline_ms =
-                if poll_delay_ms >= 0 { elapsed_ms + poll_delay_ms } else { -1 };
+            let next_retry_deadline_ms = if poll_delay_ms >= 0 {
+                elapsed_ms + poll_delay_ms
+            } else {
+                DHCP_UNKNOWN_DELAY_MS
+            };
             stem::debug!(
                 "DHCP: state=waiting_lease elapsed_ms={} poll_delay_ms={} next_retry_deadline_ms={} resets={}",
                 elapsed_ms,
@@ -110,7 +115,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             last_poll_delay_ms = poll_delay_ms;
         }
 
-        if poll_delay_ms > DHCP_MAX_BACKOFF_MS {
+        if poll_delay_ms > DHCP_MAX_BACKOFF_MS && reset_count < DHCP_MAX_SOCKET_RESETS {
             reset_count = reset_count.saturating_add(1);
             stem::warn!(
                 "DHCP: poll_delay_ms={} exceeds cap={}, resetting DHCP socket (resets={})",
@@ -121,6 +126,13 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             let _ = socket_set.remove::<Dhcpv4Socket>(dhcp_handle);
             dhcp_handle = socket_set.add(Dhcpv4Socket::new());
             continue;
+        } else if poll_delay_ms > DHCP_MAX_BACKOFF_MS {
+            stem::warn!(
+                "DHCP: poll_delay_ms={} exceeds cap={} but reset budget exhausted (resets={})",
+                poll_delay_ms,
+                DHCP_MAX_BACKOFF_MS,
+                reset_count
+            );
         }
 
         let wait_ms = delay.map(|d| d.total_millis()).unwrap_or(DHCP_POLL_SLICE_MS).min(DHCP_POLL_SLICE_MS);
