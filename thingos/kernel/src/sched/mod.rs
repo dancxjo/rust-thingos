@@ -162,6 +162,16 @@ pub static PROF_TRYLOCK_MISS_PENDING_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
     const ZERO: AtomicU64 = AtomicU64::new(0);
     [ZERO; types::MAX_CPUS]
 };
+pub static PROF_TRYLOCK_MISS_TIMER_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+pub static PROF_TRYLOCK_MISS_IPI_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
 
 /// Count of reschedule requests that were coalesced (flag was already set).
 pub static PROF_RESCHED_COALESCED: AtomicU64 = AtomicU64::new(0);
@@ -630,6 +640,20 @@ static TRYLOCK_MISS_WINDOW_START: [AtomicU64; types::MAX_CPUS] = {
 
 /// Per-CPU count of try-lock misses within the current warning window.
 static TRYLOCK_MISS_WINDOW_COUNT: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_ZERO: AtomicU64 = AtomicU64::new(0);
+    [ATOMIC_ZERO; types::MAX_CPUS]
+};
+
+/// Per-CPU count of timer-triggered try-lock misses within the current warning window.
+static TRYLOCK_MISS_WINDOW_TIMER_COUNT: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ATOMIC_ZERO: AtomicU64 = AtomicU64::new(0);
+    [ATOMIC_ZERO; types::MAX_CPUS]
+};
+
+/// Per-CPU count of IPI-triggered try-lock misses within the current warning window.
+static TRYLOCK_MISS_WINDOW_IPI_COUNT: [AtomicU64; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const ATOMIC_ZERO: AtomicU64 = AtomicU64::new(0);
     [ATOMIC_ZERO; types::MAX_CPUS]
@@ -1159,6 +1183,15 @@ impl DispatchTrigger {
             DispatchTrigger::ReschedIpi => ScheduleReason::ReschedIfNeeded,
         }
     }
+
+    /// Stable trigger label used in scheduler contention diagnostics.
+    #[inline]
+    fn as_str(self) -> &'static str {
+        match self {
+            DispatchTrigger::TimerTick => "timer_tick",
+            DispatchTrigger::ReschedIpi => "resched_ipi",
+        }
+    }
 }
 
 /// Interrupt-safe version of resched_if_needed - uses try_lock to avoid deadlock
@@ -1334,6 +1367,14 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     } else {
         PROF_RESCHED_TRYLOCK_MISS.fetch_add(1, Ordering::Relaxed);
         PROF_TRYLOCK_MISS_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+        match trigger {
+            DispatchTrigger::TimerTick => {
+                PROF_TRYLOCK_MISS_TIMER_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+            }
+            DispatchTrigger::ReschedIpi => {
+                PROF_TRYLOCK_MISS_IPI_PER_CPU[cpu_idx].fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
         // WATCHDOG: Detect if the lock has been held for an implausibly long time.
         // If it's held > 2 seconds, we likely have a deadlock or a lock leak.
@@ -1361,23 +1402,48 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         let window_ticks = rt.mono_freq_hz().max(1).saturating_mul(2);
         let window_start = &TRYLOCK_MISS_WINDOW_START[cpu_idx];
         let window_count = &TRYLOCK_MISS_WINDOW_COUNT[cpu_idx];
+        let window_timer_count = &TRYLOCK_MISS_WINDOW_TIMER_COUNT[cpu_idx];
+        let window_ipi_count = &TRYLOCK_MISS_WINDOW_IPI_COUNT[cpu_idx];
 
         let start = window_start.load(Ordering::Relaxed);
         if start == 0 || now.saturating_sub(start) > window_ticks {
             window_start.store(now, Ordering::Relaxed);
             window_count.store(1, Ordering::Relaxed);
+            match trigger {
+                DispatchTrigger::TimerTick => {
+                    window_timer_count.store(1, Ordering::Relaxed);
+                    window_ipi_count.store(0, Ordering::Relaxed);
+                }
+                DispatchTrigger::ReschedIpi => {
+                    window_timer_count.store(0, Ordering::Relaxed);
+                    window_ipi_count.store(1, Ordering::Relaxed);
+                }
+            }
         } else {
             let misses = window_count.fetch_add(1, Ordering::Relaxed) + 1;
+            match trigger {
+                DispatchTrigger::TimerTick => {
+                    window_timer_count.fetch_add(1, Ordering::Relaxed);
+                }
+                DispatchTrigger::ReschedIpi => {
+                    window_ipi_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             if misses == TRYLOCK_MISS_WARN_THRESHOLD {
                 let cooldown_ticks =
                     rt.mono_freq_hz().max(1).saturating_mul(TRYLOCK_MISS_WARN_COOLDOWN_SECS);
                 let last_warn = TRYLOCK_MISS_LAST_WARN_TICK[cpu_idx].load(Ordering::Relaxed);
                 if last_warn == 0 || now.saturating_sub(last_warn) >= cooldown_ticks {
                     TRYLOCK_MISS_LAST_WARN_TICK[cpu_idx].store(now, Ordering::Relaxed);
+                    let window_timer = window_timer_count.load(Ordering::Relaxed);
+                    let window_ipi = window_ipi_count.load(Ordering::Relaxed);
                     crate::kdebug!(
-                        "SCHED: CPU {} resched try_lock misses reached {} in 2s (suppressing until window reset)",
+                        "SCHED: CPU {} resched try_lock misses reached {} in 2s (timer={} ipi={} last_trigger={} suppressing until window reset)",
                         cpu_idx,
-                        TRYLOCK_MISS_WARN_THRESHOLD
+                        TRYLOCK_MISS_WARN_THRESHOLD,
+                        window_timer,
+                        window_ipi,
+                        trigger.as_str(),
                     );
                 }
             }
@@ -4264,7 +4330,7 @@ pub fn dump_stats<R: BootRuntime>() {
         let avg_runq = if sample_count == 0 { 0 } else { sample_total / sample_count };
         let idle_hist = pc.stats.idle_episode_hist;
         crate::kprint!(
-            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} idle_ticks={} idle_total_us={} idle_eps={} idle_longest_us={} idle_hist=[{},{},{},{}] dispatch={} steals_in={} steals_out={} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} rqchg={} wake={} lock_miss={} lock_miss_pending={} lock_blocked={}\n",
+            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} idle_ticks={} idle_total_us={} idle_eps={} idle_longest_us={} idle_hist=[{},{},{},{}] dispatch={} steals_in={} steals_out={} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} rqchg={} wake={} lock_miss={} lock_miss_pending={} lock_miss_timer={} lock_miss_ipi={} lock_blocked={}\n",
             i,
             pc.current,
             total,
@@ -4291,6 +4357,8 @@ pub fn dump_stats<R: BootRuntime>() {
             pc.stats.wakeups,
             PROF_TRYLOCK_MISS_PER_CPU[i].load(Ordering::Relaxed),
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[i].load(Ordering::Relaxed),
+            PROF_TRYLOCK_MISS_TIMER_PER_CPU[i].load(Ordering::Relaxed),
+            PROF_TRYLOCK_MISS_IPI_PER_CPU[i].load(Ordering::Relaxed),
             pc.stats.lock_blocked_dispatch
         );
     }
@@ -9168,6 +9236,10 @@ mod tests {
         let before_miss = PROF_TRYLOCK_MISS_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
         let before_pending =
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        let before_timer =
+            PROF_TRYLOCK_MISS_TIMER_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        let before_ipi =
+            PROF_TRYLOCK_MISS_IPI_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
         assert!(
             global_need_resched_slot(0).is_some(),
             "test requires CPU 0 GLOBAL_NEED_RESCHED slot"
@@ -9192,10 +9264,60 @@ mod tests {
             after_pending > before_pending,
             "[contention] per-CPU pending-resched trylock miss counter should increment"
         );
+        assert!(
+            PROF_TRYLOCK_MISS_IPI_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed)
+                > before_ipi,
+            "[contention] IPI-triggered trylock miss counter should increment"
+        );
+        assert_eq!(
+            PROF_TRYLOCK_MISS_TIMER_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed),
+            before_timer,
+            "[contention] timer-triggered trylock miss counter must not increment for IPI dispatch"
+        );
 
         drop(lock);
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
+    }
+
+    #[test]
+    fn test_trylock_miss_timer_attribution() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(0);
+
+        let mut lock = SCHEDULER.lock();
+        *lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+
+        let before_timer =
+            PROF_TRYLOCK_MISS_TIMER_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+        let before_ipi =
+            PROF_TRYLOCK_MISS_IPI_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
+
+        try_resched_if_needed::<MockRuntime>(DispatchTrigger::TimerTick);
+
+        assert!(
+            PROF_TRYLOCK_MISS_TIMER_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed)
+                > before_timer,
+            "[contention] timer-triggered trylock miss counter should increment"
+        );
+        assert_eq!(
+            PROF_TRYLOCK_MISS_IPI_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed),
+            before_ipi,
+            "[contention] IPI-triggered trylock miss counter must not increment for timer dispatch"
+        );
+
+        drop(lock);
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+    }
+
+    #[test]
+    fn test_dispatch_trigger_labels() {
+        assert_eq!(DispatchTrigger::TimerTick.as_str(), "timer_tick");
+        assert_eq!(DispatchTrigger::ReschedIpi.as_str(), "resched_ipi");
     }
 
     #[test]

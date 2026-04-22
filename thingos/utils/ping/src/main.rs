@@ -61,11 +61,8 @@ fn print(fd: u32, s: &str) {
 }
 
 fn wait_until(deadline: stem::time::Instant) {
-    loop {
-        let now = stem::time::now();
-        if now >= deadline {
-            break;
-        }
+    let now = stem::time::now();
+    if now < deadline {
         stem::time::sleep(deadline - now);
     }
 }
