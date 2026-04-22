@@ -108,10 +108,10 @@ fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
         return Err("cannot write /net/dns/lookup");
     }
 
-    let read_fd = vfs_open("/net/dns/lookup", O_RDONLY | O_NONBLOCK)
-        .map_err(|_| "cannot open /net/dns/lookup")?;
     let deadline = stem::time::now() + stem::time::Duration::from_millis(3_000);
     loop {
+        let read_fd = vfs_open("/net/dns/lookup", O_RDONLY | O_NONBLOCK)
+            .map_err(|_| "cannot open /net/dns/lookup")?;
         if !wait_readable(read_fd, deadline)? {
             let _ = vfs_close(read_fd);
             return Err("DNS timeout");
@@ -119,10 +119,10 @@ fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
 
         let mut buf = [0u8; 64];
         let read_result = vfs_read(read_fd, &mut buf);
+        let _ = vfs_close(read_fd);
 
         if let Ok(n) = read_result {
             if n > 0 {
-                let _ = vfs_close(read_fd);
                 let text = String::from(String::from_utf8_lossy(&buf[..n]).trim());
                 if text == "error" {
                     return Err("DNS failed");
@@ -135,7 +135,6 @@ fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
         } else if read_result == Err(Errno::EAGAIN) {
             continue;
         } else {
-            let _ = vfs_close(read_fd);
             return Err("DNS read failed");
         }
     }
