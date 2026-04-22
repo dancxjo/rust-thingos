@@ -4376,7 +4376,7 @@ pub fn dump_stats<R: BootRuntime>() {
         let avg_runq = if sample_count == 0 { 0 } else { sample_total / sample_count };
         let idle_hist = pc.stats.idle_episode_hist;
         crate::kprint!(
-            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} idle_ticks={} idle_total_us={} idle_eps={} idle_longest_us={} idle_hist=[{},{},{},{}] dispatch={} steals_in={} steals_out={} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} rqchg={} wake={} lock_miss={} lock_miss_pending={} lock_miss_timer={} lock_miss_ipi={} lock_miss_idle_timer={} lock_blocked={}\n",
+            "  CPU {}: current={:?} runq={} avg_runq={} idle={:?} idle_ticks={} idle_total_us={} idle_eps={} idle_longest_us={} idle_hist=[{},{},{},{}] dispatch={} steals_in={} steals_out={} ctxsw={} idle->busy={} tick={} ipi_rx={} enq={} deq={} rqchg={} wake={} lock_miss={} lock_miss_pending={} lock_miss_timer={} lock_miss_ipi={} lock_blocked={}\n",
             i,
             pc.current,
             total,
@@ -4405,7 +4405,6 @@ pub fn dump_stats<R: BootRuntime>() {
             PROF_TRYLOCK_MISS_PENDING_PER_CPU[i].load(Ordering::Relaxed),
             PROF_TRYLOCK_MISS_TIMER_PER_CPU[i].load(Ordering::Relaxed),
             PROF_TRYLOCK_MISS_IPI_PER_CPU[i].load(Ordering::Relaxed),
-            PROF_TRYLOCK_MISS_IDLE_TIMER_PER_CPU[i].load(Ordering::Relaxed),
             pc.stats.lock_blocked_dispatch
         );
     }
