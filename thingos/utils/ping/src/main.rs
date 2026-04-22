@@ -80,8 +80,8 @@ fn wait_readable(fd: u32, deadline: stem::time::Instant) -> Result<bool, &'stati
 
     let timeout_ms = (deadline - now).as_millis() as u64;
     let mut pollfds = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
-    let ready = vfs_poll(&mut pollfds, timeout_ms).map_err(|_| "poll failed")?;
-    Ok(ready > 0 && (pollfds[0].revents & poll_flags::POLLIN) != 0)
+    let _ = vfs_poll(&mut pollfds, timeout_ms).map_err(|_| "poll failed")?;
+    Ok((pollfds[0].revents & poll_flags::POLLIN) != 0)
 }
 
 fn parse_ipv4(text: &str) -> Option<Ipv4Address> {
