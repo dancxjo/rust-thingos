@@ -493,8 +493,8 @@ impl VfsDriver for RamFs {
         match &*dir {
             RamfsEntry::Dir(inner, _) => {
                 let mut lock = inner.lock();
-                let entry = lock.children.get(file_name).cloned().ok_or(Errno::ENOENT)?;
-                if let RamfsEntry::Dir(dir_inner, _) = &*entry {
+                let entry = lock.children.get(file_name).ok_or(Errno::ENOENT)?;
+                if let RamfsEntry::Dir(dir_inner, _) = &**entry {
                     if !dir_inner.lock().children.is_empty() {
                         return Err(Errno::ENOTEMPTY);
                     }
