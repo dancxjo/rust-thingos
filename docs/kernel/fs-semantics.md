@@ -109,17 +109,12 @@ them as absent.  Tracked as a known gap.
 | Behaviour | Status | Notes |
 |-----------|--------|-------|
 | Remove a regular file | ✅ | `SYS_FS_UNLINK` → `VfsDriver::unlink` |
-| Remove a directory | ✅ | Unified unlink handles both (no separate `rmdir` syscall yet) |
-| Non-empty directory removal | ⚠️ | Currently succeeds even if non-empty – **known gap** |
+| Remove an empty directory | ✅ | `SYS_FS_RMDIR` rejects non-directories (`ENOTDIR`) |
+| `unlink(2)` on a directory → `EISDIR` | ✅ | Enforced in `sys_fs_unlink` |
+| `rmdir(2)` on non-empty directory → `ENOTEMPTY` | ✅ | Enforced by filesystem driver (`ramfs`) |
 | Hard-link count decremented | ✅ | `nlink` updated in `VfsDriver::unlink` |
 | Path not found → `ENOENT` | ✅ | |
 | Parent not a directory → `ENOTDIR` | ✅ | |
-
-**Gap**: There is no separate `SYS_FS_RMDIR` syscall. The current `unlink`
-does not refuse to remove non-empty directories (`ENOTEMPTY` is unimplemented).
-POSIX `unlink(2)` should return `EISDIR` when called on a directory; POSIX
-`rmdir(2)` should return `ENOTEMPTY` for non-empty directories.  These will be
-addressed when a distinct `rmdir` syscall is added.
 
 ---
 
@@ -205,9 +200,8 @@ addressed when a distinct `rmdir` syscall is added.
 | FS-5 | `fcntl` `F_GETFL` / `F_SETFL` support is incomplete | Low | mixed |
 | FS-6 | No `O_DIRECTORY` flag enforcement on `open` | Low | kernel |
 | FS-7 | `devfs` does not support user-visible `mkdir` / `rename` / `unlink` on virtual device directories | Low | kernel |
-| FS-8 | `procfs` is a stub; most `/proc/*` files return empty or ENOENT | Medium | kernel |
+| FS-8 | `/proc/<pid>/fd` remains a stub directory (empty listing) | Medium | kernel |
 | FS-9 | No `faccessat` / `openat` / `mkdirat` AT_FDCWD variant syscalls | Low | kernel |
-| FS-10 | POSIX signals / `EINTR` not yet propagated through blocking VFS calls | High | kernel |
 
 ---
 
@@ -216,10 +210,10 @@ addressed when a distinct `rmdir` syscall is added.
 Kernel unit tests (run with `PCI_IDS_MODE=stub cargo test -p kernel --lib`):
 
 - `vfs::path::tests` — `normalise()` edge cases, `.` / `..` collapsing, `ENAMETOOLONG`
-- `vfs::ramfs::tests` — create, read, write, seek, mkdir (including EEXIST), unlink, rename, truncate, symlinks, hard links, stat timestamps
+- `vfs::ramfs::tests` — create, read, write, seek, mkdir (including EEXIST), unlink/rmdir semantics (`ENOTEMPTY` for non-empty directories), rename, truncate, symlinks, hard links, stat timestamps
 - `vfs::devfs::tests` — null/zero/console read/write/stat, directory listing
 - `vfs::union::tests` — layer shadowing, fallthrough, error propagation
-- `syscall::handlers::vfs::tests` — `sys_fs_seek` signed-offset semantics (all three whence values), `sys_fs_getcwd`, `sys_fs_chdir` input validation, `resolve_path` relative-path resolution, `sys_fs_poll` readiness
+- `syscall::handlers::vfs::tests` — `sys_fs_seek` signed-offset semantics (all three whence values), `sys_fs_getcwd`, `sys_fs_chdir` input validation, `resolve_path` relative-path resolution, `sys_fs_poll` readiness and `EINTR` interruption handling
 
 Userspace integration tests (`userspace/tests/test_fs`):
 

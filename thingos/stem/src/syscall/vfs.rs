@@ -5,16 +5,17 @@
 //! Filesystems).
 
 use alloc::vec::Vec;
+
 use abi::errors::{Errno, SysResult};
 use abi::syscall::{
-    PollHandle, SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL, SYS_FS_DUP,
-    SYS_FS_DUP2, SYS_FS_FCHMOD, SYS_FS_FCNTL, SYS_FS_FLOCK, SYS_FS_FTRUNCATE, SYS_FS_FUTIMES,
-    SYS_FS_GETCWD, SYS_FS_ISATTY, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_MKDIR, SYS_FS_MOUNT,
-    SYS_FS_NOTIFY, SYS_FS_OPEN, SYS_FS_POLL, SYS_FS_READ, SYS_FS_READDIR, SYS_FS_READLINK,
-    SYS_FS_READV, SYS_FS_REALPATH, SYS_FS_RENAME, SYS_FS_SEEK, SYS_FS_STAT, SYS_FS_SYMLINK,
-    SYS_FS_SYNC, SYS_FS_UMOUNT, SYS_FS_UNLINK, SYS_FS_UTIMES, SYS_FS_WATCH_PATH,
-    SYS_FS_WATCH_THING, SYS_FS_WRITE, SYS_FS_WRITEV, SYS_HANDLE_FROM_PORT, SYS_PIPE,
-    SYS_FS_ATTR_GET, SYS_FS_ATTR_SET, SYS_FS_ATTR_REMOVE, SYS_FS_ATTR_LIST,
+    PollHandle, SYS_FS_ATTR_GET, SYS_FS_ATTR_LIST, SYS_FS_ATTR_REMOVE, SYS_FS_ATTR_SET,
+    SYS_FS_CHDIR, SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DEVICE_CALL, SYS_FS_DUP, SYS_FS_DUP2,
+    SYS_FS_FCHMOD, SYS_FS_FCNTL, SYS_FS_FLOCK, SYS_FS_FTRUNCATE, SYS_FS_FUTIMES, SYS_FS_GETCWD,
+    SYS_FS_ISATTY, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_MKDIR, SYS_FS_MOUNT, SYS_FS_NOTIFY,
+    SYS_FS_OPEN, SYS_FS_POLL, SYS_FS_READ, SYS_FS_READDIR, SYS_FS_READLINK, SYS_FS_READV,
+    SYS_FS_REALPATH, SYS_FS_RENAME, SYS_FS_SEEK, SYS_FS_STAT, SYS_FS_SYMLINK, SYS_FS_SYNC,
+    SYS_FS_UMOUNT, SYS_FS_UNLINK, SYS_FS_UTIMES, SYS_FS_WATCH_PATH, SYS_FS_WATCH_THING,
+    SYS_FS_WRITE, SYS_FS_WRITEV, SYS_HANDLE_FROM_PORT, SYS_PIPE,
 };
 
 use super::arch::raw_syscall6;
@@ -162,6 +163,14 @@ pub fn vfs_isatty(thing: u32) -> SysResult<bool> {
 pub fn vfs_unlink(path: &str) -> SysResult<()> {
     let ret =
         unsafe { raw_syscall6(SYS_FS_UNLINK, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
+    abi::errors::errno(ret).map(|_| ())
+}
+
+/// Remove an empty directory at `path`.
+///
+/// Returns `Ok(())` on success, or an [`Errno`] on failure.
+pub fn vfs_rmdir(path: &str) -> SysResult<()> {
+    let ret = unsafe { raw_syscall6(SYS_FS_RMDIR, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
     abi::errors::errno(ret).map(|_| ())
 }
 
@@ -347,7 +356,11 @@ pub fn vfs_device_call_raw(thing: u32, call: &abi::device::DeviceCall) -> SysRes
     abi::errors::errno(ret).map(|v| v as u64)
 }
 
-pub fn vfs_attr_get(thing: u32, name: &str, out: &mut [u8]) -> SysResult<(abi::attrs::AttrType, usize)> {
+pub fn vfs_attr_get(
+    thing: u32,
+    name: &str,
+    out: &mut [u8],
+) -> SysResult<(abi::attrs::AttrType, usize)> {
     let mut val_type: u8 = 0;
     let ret = unsafe {
         raw_syscall6(

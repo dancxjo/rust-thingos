@@ -93,7 +93,7 @@ pub use vfs::{
     vfs_attr_set, vfs_chdir, vfs_chmod, vfs_close, vfs_device_call, vfs_device_call_raw,
     vfs_fchmod, vfs_fcntl, vfs_fsync, vfs_futimes, vfs_getcwd, vfs_handle_from_port, vfs_isatty,
     vfs_mkdir, vfs_mount, vfs_open, vfs_poll, vfs_read, vfs_readdir, vfs_readv, vfs_realpath,
-    vfs_rename, vfs_seek, vfs_stat, vfs_umount, vfs_unlink, vfs_utimes, vfs_watch_fd,
+    vfs_rename, vfs_rmdir, vfs_seek, vfs_stat, vfs_umount, vfs_unlink, vfs_utimes, vfs_watch_fd,
     vfs_watch_path, vfs_write, vfs_writev,
 };
 pub use wait::wait_many;

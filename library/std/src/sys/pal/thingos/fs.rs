@@ -28,20 +28,17 @@ use crate::hash::{Hash, Hasher};
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
 use crate::path::{Path, PathBuf};
 use crate::sync::Arc;
-use crate::sys::time::SystemTime;
 pub use crate::sys::fs::common::{Dir, copy, exists, remove_dir_all};
-use crate::{fmt, vec};
+use crate::sys::pal::raw_syscall6;
 use crate::sys::thingos_syscall_numbers::{
-    flock_flags,
-    vfs_flags,
     SYS_FS_CHMOD, SYS_FS_CLOSE, SYS_FS_DUP, SYS_FS_FCHMOD, SYS_FS_FLOCK, SYS_FS_FTRUNCATE,
     SYS_FS_FUTIMES, SYS_FS_LINK, SYS_FS_LSTAT, SYS_FS_LUTIMES, SYS_FS_MKDIR, SYS_FS_OPEN,
     SYS_FS_READ, SYS_FS_READDIR, SYS_FS_READLINK, SYS_FS_READV, SYS_FS_REALPATH, SYS_FS_RENAME,
-    SYS_FS_SEEK, SYS_FS_STAT, SYS_FS_SYNC, SYS_FS_SYMLINK, SYS_FS_UNLINK, SYS_FS_UTIMES,
-    SYS_FS_WRITE, SYS_FS_WRITEV,
+    SYS_FS_RMDIR, SYS_FS_SEEK, SYS_FS_STAT, SYS_FS_SYMLINK, SYS_FS_SYNC, SYS_FS_UNLINK,
+    SYS_FS_UTIMES, SYS_FS_WRITE, SYS_FS_WRITEV, flock_flags, vfs_flags,
 };
-
-use crate::sys::pal::raw_syscall6;
+use crate::sys::time::SystemTime;
+use crate::{fmt, vec};
 
 // ── Advisory lock flags (mirror abi::syscall::flock_flags) ───────────────────
 const LOCK_SH: u32 = flock_flags::LOCK_SH; // shared (read) lock
@@ -421,15 +418,7 @@ impl File {
         flags |= opts.get_creation_mode()?;
 
         let ret = unsafe {
-            raw_syscall6(
-                SYS_FS_OPEN,
-                path.as_ptr() as usize,
-                path.len(),
-                flags as usize,
-                0,
-                0,
-                0,
-            )
+            raw_syscall6(SYS_FS_OPEN, path.as_ptr() as usize, path.len(), flags as usize, 0, 0, 0)
         };
         let fd = cvt(ret)? as u32;
         Ok(File(FileDesc::from_raw(fd)))
@@ -453,8 +442,7 @@ impl File {
     }
 
     pub fn fsync(&self) -> crate::io::Result<()> {
-        let ret =
-            unsafe { raw_syscall6(SYS_FS_SYNC, self.0.raw() as usize, 0, 0, 0, 0, 0) };
+        let ret = unsafe { raw_syscall6(SYS_FS_SYNC, self.0.raw() as usize, 0, 0, 0, 0, 0) };
         cvt(ret).map(|_| ())
     }
 
@@ -490,9 +478,7 @@ impl File {
         };
         match cvt(ret) {
             Ok(_) => Ok(()),
-            Err(e) if e.kind() == crate::io::ErrorKind::WouldBlock => {
-                Err(TryLockError::WouldBlock)
-            }
+            Err(e) if e.kind() == crate::io::ErrorKind::WouldBlock => Err(TryLockError::WouldBlock),
             Err(e) => Err(TryLockError::Error(e)),
         }
     }
@@ -511,9 +497,7 @@ impl File {
         };
         match cvt(ret) {
             Ok(_) => Ok(()),
-            Err(e) if e.kind() == crate::io::ErrorKind::WouldBlock => {
-                Err(TryLockError::WouldBlock)
-            }
+            Err(e) if e.kind() == crate::io::ErrorKind::WouldBlock => Err(TryLockError::WouldBlock),
             Err(e) => Err(TryLockError::Error(e)),
         }
     }
@@ -549,10 +533,8 @@ impl File {
 
     pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> crate::io::Result<usize> {
         // Build a kernel-compatible iovec array and dispatch SYS_FS_READV.
-        let iovecs: vec::Vec<KernelIoVec> = bufs
-            .iter()
-            .map(|b| KernelIoVec { base: b.as_ptr() as usize, len: b.len() })
-            .collect();
+        let iovecs: vec::Vec<KernelIoVec> =
+            bufs.iter().map(|b| KernelIoVec { base: b.as_ptr() as usize, len: b.len() }).collect();
         let ret = unsafe {
             raw_syscall6(
                 SYS_FS_READV,
@@ -608,10 +590,8 @@ impl File {
 
     pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> crate::io::Result<usize> {
         // Build a kernel-compatible iovec array and dispatch SYS_FS_WRITEV.
-        let iovecs: vec::Vec<KernelIoVec> = bufs
-            .iter()
-            .map(|b| KernelIoVec { base: b.as_ptr() as usize, len: b.len() })
-            .collect();
+        let iovecs: vec::Vec<KernelIoVec> =
+            bufs.iter().map(|b| KernelIoVec { base: b.as_ptr() as usize, len: b.len() }).collect();
         let ret = unsafe {
             raw_syscall6(
                 SYS_FS_WRITEV,
@@ -665,15 +645,22 @@ impl File {
     }
 
     pub fn duplicate(&self) -> crate::io::Result<File> {
-        let ret =
-            unsafe { raw_syscall6(SYS_FS_DUP, self.0.raw() as usize, 0, 0, 0, 0, 0) };
+        let ret = unsafe { raw_syscall6(SYS_FS_DUP, self.0.raw() as usize, 0, 0, 0, 0, 0) };
         let new_fd = cvt(ret)? as u32;
         Ok(File(FileDesc::from_raw(new_fd)))
     }
 
     pub fn set_permissions(&self, perm: FilePermissions) -> crate::io::Result<()> {
         let ret = unsafe {
-            raw_syscall6(SYS_FS_FCHMOD, self.0.raw() as usize, (perm.mode & 0o7777) as usize, 0, 0, 0, 0)
+            raw_syscall6(
+                SYS_FS_FCHMOD,
+                self.0.raw() as usize,
+                (perm.mode & 0o7777) as usize,
+                0,
+                0,
+                0,
+                0,
+            )
         };
         cvt(ret).map(|_| ())
     }
@@ -681,7 +668,15 @@ impl File {
     pub fn set_times(&self, times: FileTimes) -> crate::io::Result<()> {
         let req = AbiUtimesRequest::from_file_times(&times);
         let ret = unsafe {
-            raw_syscall6(SYS_FS_FUTIMES, self.0.raw() as usize, &req as *const AbiUtimesRequest as usize, 0, 0, 0, 0)
+            raw_syscall6(
+                SYS_FS_FUTIMES,
+                self.0.raw() as usize,
+                &req as *const AbiUtimesRequest as usize,
+                0,
+                0,
+                0,
+                0,
+            )
         };
         cvt(ret).map(|_| ())
     }
@@ -771,18 +766,13 @@ impl DirBuilder {
 // ── Free functions ────────────────────────────────────────────────────────────
 
 /// Open a file descriptor for `path` (read-only), run `f`, then close it.
-fn with_path_fd<T>(path: &Path, f: impl FnOnce(u32) -> crate::io::Result<T>) -> crate::io::Result<T> {
+fn with_path_fd<T>(
+    path: &Path,
+    f: impl FnOnce(u32) -> crate::io::Result<T>,
+) -> crate::io::Result<T> {
     let path = path_to_bytes(path);
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_OPEN,
-            path.as_ptr() as usize,
-            path.len(),
-            O_RDONLY as usize,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_OPEN, path.as_ptr() as usize, path.len(), O_RDONLY as usize, 0, 0, 0)
     };
     let fd = cvt(ret)? as u32;
     let _guard = FileDesc::from_raw(fd);
@@ -793,15 +783,7 @@ pub fn stat(path: &Path) -> crate::io::Result<FileAttr> {
     with_path_fd(path, |fd| {
         let mut s = AbiFileStat::default();
         let ret = unsafe {
-            raw_syscall6(
-                SYS_FS_STAT,
-                fd as usize,
-                &mut s as *mut AbiFileStat as usize,
-                0,
-                0,
-                0,
-                0,
-            )
+            raw_syscall6(SYS_FS_STAT, fd as usize, &mut s as *mut AbiFileStat as usize, 0, 0, 0, 0)
         };
         cvt(ret)?;
         Ok(FileAttr { stat: s })
@@ -831,15 +813,7 @@ pub fn readdir(path: &Path) -> crate::io::Result<ReadDir> {
     let path = path_to_bytes(path);
     // Open the directory to get an fd.
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_OPEN,
-            path.as_ptr() as usize,
-            path.len(),
-            O_RDONLY as usize,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_OPEN, path.as_ptr() as usize, path.len(), O_RDONLY as usize, 0, 0, 0)
     };
     let fd = cvt(ret)? as u32;
     let desc = FileDesc::from_raw(fd);
@@ -878,23 +852,21 @@ pub fn readdir(path: &Path) -> crate::io::Result<ReadDir> {
 
 pub fn mkdir(path: &Path) -> crate::io::Result<()> {
     let path = path_to_bytes(path);
-    let ret = unsafe {
-        raw_syscall6(SYS_FS_MKDIR, path.as_ptr() as usize, path.len(), 0, 0, 0, 0)
-    };
+    let ret = unsafe { raw_syscall6(SYS_FS_MKDIR, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
     cvt(ret).map(|_| ())
 }
 
 pub fn unlink(path: &Path) -> crate::io::Result<()> {
     let path = path_to_bytes(path);
-    let ret = unsafe {
-        raw_syscall6(SYS_FS_UNLINK, path.as_ptr() as usize, path.len(), 0, 0, 0, 0)
-    };
+    let ret =
+        unsafe { raw_syscall6(SYS_FS_UNLINK, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
     cvt(ret).map(|_| ())
 }
 
 pub fn rmdir(path: &Path) -> crate::io::Result<()> {
-    // On ThingOS, rmdir and unlink use the same VFS unlink syscall.
-    unlink(path)
+    let path = path_to_bytes(path);
+    let ret = unsafe { raw_syscall6(SYS_FS_RMDIR, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) };
+    cvt(ret).map(|_| ())
 }
 
 pub fn rename(old: &Path, new: &Path) -> crate::io::Result<()> {
@@ -990,15 +962,7 @@ pub fn link(src: &Path, dst: &Path) -> crate::io::Result<()> {
 pub fn set_perm(path: &Path, perm: FilePermissions) -> crate::io::Result<()> {
     let path = path_to_bytes(path);
     let ret = unsafe {
-        raw_syscall6(
-            SYS_FS_CHMOD,
-            path.as_ptr() as usize,
-            path.len(),
-            perm.mode as usize,
-            0,
-            0,
-            0,
-        )
+        raw_syscall6(SYS_FS_CHMOD, path.as_ptr() as usize, path.len(), perm.mode as usize, 0, 0, 0)
     };
     cvt(ret).map(|_| ())
 }

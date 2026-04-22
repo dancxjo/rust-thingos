@@ -562,6 +562,46 @@ pub fn sys_fs_unlink(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
 
     let abs_path = resolve_path(path)?;
+    let target = vfs::mount::lookup(&abs_path)?;
+    if target.stat()?.is_dir() {
+        return Err(Errno::EISDIR);
+    }
+
+    // Resolve parent to emit event
+    let (parent_path, name) = split_parent(&abs_path);
+    let parent_node = vfs::mount::lookup(parent_path).ok();
+    let parent_mount_id = vfs::mount::mount_id_for_path(parent_path);
+
+    vfs::mount::unlink(&abs_path)?;
+
+    if let Some(parent) = parent_node {
+        crate::vfs::watch::emit_event(
+            &*parent,
+            abi::vfs_watch::mask::REMOVE,
+            Some(name),
+            0,
+            parent_mount_id,
+        );
+    }
+
+    Ok(0)
+}
+
+/// Remove an empty directory at `path` (`rmdir` semantics).
+pub fn sys_fs_rmdir(path_ptr: usize, path_len: usize) -> SysResult<usize> {
+    validate_user_range(path_ptr, path_len, false)?;
+    if path_len == 0 || path_len > 4096 {
+        return Err(Errno::EINVAL);
+    }
+    let mut path_buf = vec![0u8; path_len];
+    unsafe { copyin(&mut path_buf, path_ptr)? };
+    let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
+
+    let abs_path = resolve_path(path)?;
+    let target = vfs::mount::lookup(&abs_path)?;
+    if !target.stat()?.is_dir() {
+        return Err(Errno::ENOTDIR);
+    }
 
     // Resolve parent to emit event
     let (parent_path, name) = split_parent(&abs_path);
@@ -1228,7 +1268,14 @@ pub fn sys_fs_device_call(fd: usize, call_ptr: usize) -> SysResult<usize> {
     node.device_call(&call)
 }
 
-pub fn sys_fs_attr_get(fd: usize, name_ptr: usize, name_len: usize, buf_ptr: usize, buf_len: usize, type_ptr: usize) -> SysResult<usize> {
+pub fn sys_fs_attr_get(
+    fd: usize,
+    name_ptr: usize,
+    name_len: usize,
+    buf_ptr: usize,
+    buf_len: usize,
+    type_ptr: usize,
+) -> SysResult<usize> {
     validate_user_range(name_ptr, name_len, false)?;
     let mut name_buf = vec![0u8; name_len];
     unsafe { copyin(&mut name_buf, name_ptr)? };
@@ -1241,7 +1288,7 @@ pub fn sys_fs_attr_get(fd: usize, name_ptr: usize, name_len: usize, buf_ptr: usi
     };
 
     let (val_type, val) = node.attr_get(name)?;
-    
+
     if type_ptr != 0 {
         validate_user_range(type_ptr, 1, true)?;
         unsafe { copyout(type_ptr, &[val_type])? };
@@ -1255,10 +1302,17 @@ pub fn sys_fs_attr_get(fd: usize, name_ptr: usize, name_len: usize, buf_ptr: usi
     Ok(val.len())
 }
 
-pub fn sys_fs_attr_set(fd: usize, name_ptr: usize, name_len: usize, val_ptr: usize, val_len: usize, type_and_flags: usize) -> SysResult<usize> {
+pub fn sys_fs_attr_set(
+    fd: usize,
+    name_ptr: usize,
+    name_len: usize,
+    val_ptr: usize,
+    val_len: usize,
+    type_and_flags: usize,
+) -> SysResult<usize> {
     validate_user_range(name_ptr, name_len, false)?;
     validate_user_range(val_ptr, val_len, false)?;
-    
+
     let mut name_buf = vec![0u8; name_len];
     let mut val_buf = vec![0u8; val_len];
     unsafe {
@@ -1326,7 +1380,6 @@ pub fn sys_fs_attr_list(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<
         }
     }
 }
-
 
 // ── rename ──────────────────────────────────────────────────────────────────
 
@@ -1819,7 +1872,7 @@ pub fn sys_fs_flock(fd: usize, how: usize) -> SysResult<usize> {
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
-    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     use abi::errors::SysResult;
     use abi::syscall::{PollHandle, poll_flags};
@@ -1881,6 +1934,7 @@ mod tests {
     static UNREGISTER_TIMEOUT_CALLS: AtomicUsize = AtomicUsize::new(0);
     static LAST_REGISTERED_TID: AtomicU64 = AtomicU64::new(0);
     static LAST_REGISTERED_DEADLINE: AtomicU64 = AtomicU64::new(0);
+    static INTERRUPT_PENDING: AtomicBool = AtomicBool::new(false);
 
     fn process_info_hook() -> Option<Arc<Mutex<crate::task::ProcessInfo>>> {
         TEST_PROCESS_INFO.lock().clone()
@@ -1891,7 +1945,7 @@ mod tests {
     }
 
     fn test_take_interrupt() -> bool {
-        false
+        INTERRUPT_PENDING.swap(false, Ordering::SeqCst)
     }
 
     fn test_register_timeout(tid: u64, wake_tick: u64) {
@@ -1975,6 +2029,7 @@ mod tests {
         UNREGISTER_TIMEOUT_CALLS.store(0, Ordering::SeqCst);
         LAST_REGISTERED_TID.store(0, Ordering::SeqCst);
         LAST_REGISTERED_DEADLINE.store(0, Ordering::SeqCst);
+        INTERRUPT_PENDING.store(false, Ordering::SeqCst);
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -2100,6 +2155,37 @@ mod tests {
             0,
             "AlwaysReadyNode → ready"
         );
+    }
+
+    #[test]
+    fn poll_blocking_returns_eintr_when_interrupted() {
+        let _guard = TEST_POLL_GUARD.lock();
+        let node: Arc<dyn VfsNode> = Arc::new(NeverReadyNode);
+        let pinfo = make_process_info_with_nodes(&[(3, node)]);
+        let mut fds = [PollHandle { handle: 3, events: poll_flags::POLLIN, revents: 0 }];
+        let ptr = fds.as_mut_ptr() as usize;
+
+        reset_timeout_hooks();
+        INTERRUPT_PENDING.store(true, Ordering::SeqCst);
+        unsafe {
+            CURRENT_TID_HOOK = Some(test_current_tid);
+            crate::sched::hooks::PROCESS_INFO_HOOK = Some(process_info_hook);
+            crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK = Some(test_take_interrupt);
+        }
+        TEST_PROCESS_INFO.lock().replace(pinfo);
+
+        let res = sys_fs_poll(ptr, fds.len(), usize::MAX);
+
+        unsafe {
+            crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK = None;
+            crate::sched::hooks::PROCESS_INFO_HOOK = None;
+            CURRENT_TID_HOOK = None;
+        }
+        TEST_PROCESS_INFO.lock().take();
+        INTERRUPT_PENDING.store(false, Ordering::SeqCst);
+
+        assert_eq!(res, Err(Errno::EINTR));
+        assert_eq!(fds[0].revents, 0);
     }
 
     #[test]

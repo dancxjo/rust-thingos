@@ -122,6 +122,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         }
         SYS_PIPE => handlers::vfs::sys_pipe(args[0]),
         SYS_FS_UNLINK => handlers::vfs::sys_fs_unlink(args[0], args[1]),
+        SYS_FS_RMDIR => handlers::vfs::sys_fs_rmdir(args[0], args[1]),
         SYS_FS_MKDIR => handlers::vfs::sys_fs_mkdir(args[0], args[1]),
         SYS_FS_CHDIR => handlers::vfs::sys_fs_chdir(args[0], args[1]),
         SYS_FS_GETCWD => handlers::vfs::sys_fs_getcwd(args[0], args[1]),
