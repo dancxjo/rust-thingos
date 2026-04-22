@@ -1,6 +1,6 @@
 # Feature: Boot progress milestone text reporting
 
-> Last run: 2026-04-22 12:09:46
+> Last run: 2026-04-22 13:21:32
 
 ## Scenarios
 

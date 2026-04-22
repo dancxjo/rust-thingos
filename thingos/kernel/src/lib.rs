@@ -1495,7 +1495,8 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                     let start_ticks = runtime.mono_ticks();
                     
                     // Simple gradient to verify framebuffer access
-                    for y in 0..fb.height as usize {
+                    // DISABLED
+                    /*for y in 0..fb.height as usize {
                         for x in 0..fb.width as usize {
                             let r = (x * 255 / fb.width as usize) as u8;
                             let g = (y * 255 / fb.height as usize) as u8;
@@ -1506,7 +1507,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                                 *(addr as *mut u32) = color;
                             }
                         }
-                    }
+                    }*/
                     
                     let elapsed = runtime.mono_ticks().wrapping_sub(start_ticks);
                     kinfo!("deferred_bootfb_gradient elapsed_ticks={}", elapsed);
