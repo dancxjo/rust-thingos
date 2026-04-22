@@ -27,11 +27,18 @@ fn mode_allows_requested_access(mode: u32, want_read: bool, want_write: bool) ->
     // Transitional coarse gate: enforce requested read/write against any
     // corresponding permission class bit. Caller-vs-owner/group class matching
     // is deferred until full uid/gid ownership propagation is in place.
+    // This means if any class bit grants the requested access, the open is
+    // currently allowed.
     let read_ok = !want_read || (mode & 0o444) != 0;
     let write_ok = !want_write || (mode & 0o222) != 0;
     read_ok && write_ok
 }
 
+/// Transitional VFS open-time access gate.
+///
+/// Non-root callers are denied when node mode bits do not permit the requested
+/// read/write access. This currently uses coarse mode-bit checks; owner/group
+/// class matching is deferred until uid/gid ownership propagation is complete.
 fn enforce_open_access(node: &Arc<dyn vfs::VfsNode>, open_flags: OpenFlags) -> SysResult<()> {
     // Open requests with no read/write access mode do not perform data access
     // and remain allowed.
@@ -2088,14 +2095,14 @@ mod tests {
     }
 
     #[test]
-    fn mode_allows_requested_access_denies_when_mode_has_no_permission_bits() {
+    fn mode_denies_access_without_permission_bits() {
         assert!(!mode_allows_requested_access(0o000, true, false));
         assert!(!mode_allows_requested_access(0o000, false, true));
         assert!(!mode_allows_requested_access(0o000, true, true));
     }
 
     #[test]
-    fn mode_allows_requested_access_allows_with_matching_mode_bits() {
+    fn mode_allows_access_with_matching_bits() {
         assert!(mode_allows_requested_access(0o444, true, false));
         assert!(mode_allows_requested_access(0o222, false, true));
         assert!(mode_allows_requested_access(0o666, true, true));

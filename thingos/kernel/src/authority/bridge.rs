@@ -86,6 +86,7 @@ pub const CAP_IOPORT: u64 = 1 << 6;
 /// Capability bit: direct CPU IRQ vector subscription/wait.
 pub const CAP_IRQ_VECTOR: u64 = 1 << 7;
 
+// Keep this list in sync with capability constants and `capability_name`.
 const CAPABILITY_BITS: [u64; 8] = [
     CAP_REBOOT,
     CAP_SIGNAL,

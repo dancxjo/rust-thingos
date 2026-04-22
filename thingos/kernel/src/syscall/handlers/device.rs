@@ -231,6 +231,11 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
 ///   arg1: device interrupt index
 ///
 /// Returns: 0 on success
+fn require_irq_vector_privilege() -> SysResult<()> {
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "irq_vector")
+}
+
 pub fn sys_device_irq_subscribe(arg0: usize, arg1: usize, mode: usize) -> SysResult<usize> {
     match mode as u8 {
         DEVICE_IRQ_SUBSCRIBE_DEVICE => {
@@ -254,8 +259,7 @@ pub fn sys_device_irq_subscribe(arg0: usize, arg1: usize, mode: usize) -> SysRes
             Ok(0)
         }
         DEVICE_IRQ_SUBSCRIBE_VECTOR | _ => {
-            let authority = crate::authority::bridge::authority_for_current();
-            crate::authority::bridge::check_privilege(&authority, "irq_vector")?;
+            require_irq_vector_privilege()?;
             let vector = arg0;
             if vector > 255 {
                 return Err(Errno::EINVAL);
@@ -288,8 +292,7 @@ pub fn sys_device_irq_wait(arg0: usize, arg1: usize, mode: usize) -> SysResult<u
             vector
         }
         DEVICE_IRQ_SUBSCRIBE_VECTOR | _ => {
-            let authority = crate::authority::bridge::authority_for_current();
-            crate::authority::bridge::check_privilege(&authority, "irq_vector")?;
+            require_irq_vector_privilege()?;
             if arg0 > 255 {
                 return Err(Errno::EINVAL);
             }
