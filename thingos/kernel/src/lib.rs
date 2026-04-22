@@ -1076,6 +1076,20 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] kinfo(task) ok\r\n");
     crate::task::init::<R>();
     boot_trace(runtime, b"[kernel:start] task init ok\r\n");
+    let scheduler_entry_window_start = runtime.mono_ticks();
+    let log_scheduler_entry_step = |step: &str, step_start: u64| {
+        let now = runtime.mono_ticks();
+        let step_elapsed = now.wrapping_sub(step_start);
+        let total_elapsed = now.wrapping_sub(scheduler_entry_window_start);
+        crate::kdebug!(
+            "[kernel:start] scheduler-entry step='{}' elapsed_ticks={} elapsed_us={} total_ticks={} total_us={}",
+            step,
+            step_elapsed,
+            boot_timing_us(step_elapsed),
+            total_elapsed,
+            boot_timing_us(total_elapsed)
+        );
+    };
 
     boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
     kdebug!("Initializing VFS...");
@@ -1125,6 +1139,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] cpu_total_count begin\r\n");
     let cpu_total = runtime.cpu_total_count();
     boot_trace(runtime, b"[kernel:start] cpu_total_count ok\r\n");
+    let smp_bringup_start = runtime.mono_ticks();
     if cpu_total > 1 {
         boot_trace(runtime, b"[kernel:start] smp start_secondary begin\r\n");
         crate::kdebug!(
@@ -1140,6 +1155,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     } else {
         crate::kdebug!("Kernel: Detected {} CPU.", cpu_total);
     }
+    log_scheduler_entry_step("start_secondary_cpus", smp_bringup_start);
     boot_trace(runtime, b"[kernel:start] smp bring-up stage done\r\n");
 
     // Store global boot info for syscalls
@@ -1187,11 +1203,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         let _hook = GlobalAllocHook;
 
         // Load Sprout
+        let load_module_start = runtime.mono_ticks();
         let (user_entry, stack_info, mut regions, _aux_info) =
             crate::task::loader::load_module(runtime, aspace, mod_desc)
                 .expect("Failed to load sprout");
+        log_scheduler_entry_step("load_init_module", load_module_start);
 
         // Prepare Module Registry Page
+        let boot_registry_prepare_start = runtime.mono_ticks();
         let reg_phys = crate::memory::alloc_frame().expect("OOM Registry");
         let reg_virt = reg_phys + runtime.phys_to_virt_offset();
 
@@ -1230,9 +1249,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 string_offset_bytes += name_len;
             }
         }
+        log_scheduler_entry_step("prepare_boot_registry", boot_registry_prepare_start);
 
         // Map Registry to fixed user address 0x600000
         // We map it read-only for user
+        let boot_registry_map_start = runtime.mono_ticks();
         runtime
             .tasking()
             .map_page(
@@ -1249,6 +1270,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 &GlobalAllocHook,
             )
             .unwrap();
+        log_scheduler_entry_step("map_boot_registry", boot_registry_map_start);
 
         regions.push(VmRegionInfo {
             start: 0x600000,
@@ -1260,9 +1282,12 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         });
 
         // Flush TLB by reloading CR3
+        let activate_aspace_start = runtime.mono_ticks();
         runtime.tasking().activate_address_space(aspace);
+        log_scheduler_entry_step("activate_init_aspace", activate_aspace_start);
 
         kdebug!("Spawning sprout with registry at 0x600000...");
+        let spawn_init_start = runtime.mono_ticks();
         unsafe {
             kdebug!("Spawning init process...");
             let mut entry = user_entry;
@@ -1276,6 +1301,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 crate::task::TaskPriority::Normal,
             );
         }
+        log_scheduler_entry_step("spawn_init_task", spawn_init_start);
         boot_trace(runtime, b"[kernel:start] init process spawned\r\n");
     } else {
         boot_trace(runtime, b"[kernel:start] no init module; fallback path\r\n");
@@ -1287,9 +1313,12 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             if let Some(mod_desc) = modules.iter().find(|m| m.name.contains("threads_demo")) {
                 kdebug!("Found threads_demo fallback...");
                 let aspace = runtime.tasking().make_user_address_space();
+                let load_fallback_module_start = runtime.mono_ticks();
                 let (user_entry, stack_info, regions) =
                     crate::task::loader::load_module(runtime, aspace, mod_desc)
                         .expect("Failed to load threads_demo");
+                log_scheduler_entry_step("load_fallback_module", load_fallback_module_start);
+                let spawn_fallback_start = runtime.mono_ticks();
                 unsafe {
                     crate::sched::spawn_user_task_full::<R>(
                         user_entry,
@@ -1299,6 +1328,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                         crate::task::TaskPriority::Normal,
                     );
                 }
+                log_scheduler_entry_step("spawn_fallback_task", spawn_fallback_start);
                 spawned_fallback = true;
             }
         }
@@ -1326,18 +1356,35 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     }
 
     // Transition out of early-boot mode.
+    let end_bringup_start = runtime.mono_ticks();
     crate::sched::end_bringup::<R>();
+    log_scheduler_entry_step("end_bringup", end_bringup_start);
     boot_trace(runtime, b"[kernel:start] end_bringup\r\n");
-
-    // Keep a visible startup background without auto-activating the F12 terminal.
-    if let Some(fb) = runtime.framebuffer() {
-        paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
-    }
+    let mut deferred_bootfb_gradient = runtime.framebuffer();
+    let scheduler_entry_total = runtime
+        .mono_ticks()
+        .wrapping_sub(scheduler_entry_window_start);
+    crate::kdebug!(
+        "[kernel:start] scheduler-entry total elapsed_ticks={} elapsed_us={}",
+        scheduler_entry_total,
+        boot_timing_us(scheduler_entry_total)
+    );
 
     kinfo!("Entering scheduler loop.");
     boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
     loop {
+        // Keep a visible startup background without blocking scheduler-loop entry.
+        if let Some(fb) = deferred_bootfb_gradient.take() {
+            let gradient_start = runtime.mono_ticks();
+            paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
+            let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
+            crate::kdebug!(
+                "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
+                gradient_elapsed,
+                boot_timing_us(gradient_elapsed)
+            );
+        }
         if !crate::task::yield_now::<R>() {
             // No runnable work on this CPU — halt until the next interrupt
             // (timer tick, IPI, or device IRQ).  This is the same idle pattern
