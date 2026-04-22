@@ -6,5 +6,5 @@ Feature: Scheduler entry latency instrumentation
     Given the machine is started
     When I wait for the system to boot
     Then the serial output should contain "scheduler-entry total elapsed_ticks="
-    And I should see "Entering scheduler loop." after "Scheduler initialized"
-    And I should see "deferred_bootfb_gradient elapsed_ticks=" after "Entering scheduler loop."
+    And the serial log shows "Entering scheduler loop." after "Scheduler initialized"
+    And the serial log shows "deferred_bootfb_gradient elapsed_ticks=" after "Entering scheduler loop."

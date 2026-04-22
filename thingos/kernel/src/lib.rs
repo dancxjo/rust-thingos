@@ -1483,8 +1483,35 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     kinfo!("Entering scheduler loop.");
     boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
+    static PAINTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
     loop {
         if !crate::task::yield_now::<R>() {
+            // First idle period: perform the deferred bootfb paint instrumentation
+            // if we haven't done it yet. This provides a landmark for BDD latency tests.
+            if !PAINTED.swap(true, core::sync::atomic::Ordering::SeqCst) {
+                if let Some(fb) = runtime.framebuffer() {
+                    let start_ticks = runtime.mono_ticks();
+                    
+                    // Simple gradient to verify framebuffer access
+                    for y in 0..fb.height as usize {
+                        for x in 0..fb.width as usize {
+                            let r = (x * 255 / fb.width as usize) as u8;
+                            let g = (y * 255 / fb.height as usize) as u8;
+                            let b = 128u8;
+                            let color = (r as u32) << 16 | (g as u32) << 8 | (b as u32);
+                            let addr = fb.addr + (y * fb.pitch as usize + x * 4) as u64;
+                            unsafe {
+                                *(addr as *mut u32) = color;
+                            }
+                        }
+                    }
+                    
+                    let elapsed = runtime.mono_ticks().wrapping_sub(start_ticks);
+                    kinfo!("deferred_bootfb_gradient elapsed_ticks={}", elapsed);
+                }
+            }
+
             // No runnable work on this CPU — halt until the next interrupt
             // (timer tick, IPI, or device IRQ).  This is the same idle pattern
             // used by secondary CPUs in `run_scheduler` and prevents CPU 0 from

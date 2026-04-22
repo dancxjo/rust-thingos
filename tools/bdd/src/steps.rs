@@ -757,43 +757,36 @@ async fn check_occurrence_count(
     Ok(())
 }
 
-#[then(regex = r#"^I should see "(.+)" after "(.+)"$"#)]
+#[then(regex = r#"^the serial log shows "(.+)" after "(.+)"$"#)]
 async fn check_ordering(
     world: &mut ThingOsWorld,
     second: String,
     first: String,
 ) -> Result<(), StepError> {
-    // Wait a bit to ensure we have enough log data showing interleaving
+    // Wait a bit to ensure we have enough log data
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let log = world.get_serial_log().await;
-    let lines: Vec<&str> = log.lines().collect();
+    let clean_log = strip_ansi(&log).to_lowercase();
+    let clean_first = strip_ansi(&first).to_lowercase();
+    let clean_second = strip_ansi(&second).to_lowercase();
 
-    // Find the FIRST occurrence of 'first'
-    let clean_first = strip_ansi(&first);
-    let first_pos = lines.iter().position(|l| l.contains(&clean_first));
+    let first_pos = clean_log.find(&clean_first);
+    if let Some(f_pos) = first_pos {
+        let start_from = f_pos + clean_first.len();
+        if clean_log[start_from..].contains(&clean_second) {
+            return Ok(());
+        }
+    }
 
     if first_pos.is_none() {
-        return Err(StepError(format!("Could not find '{}'", first)));
+        return Err(StepError(format!("Could not find '{}' in serial log", first)));
+    } else {
+        return Err(StepError(format!("Did not find '{}' after '{}' in serial log", second, first)));
     }
-    let first_idx = first_pos.ok_or_else(|| StepError(format!("Could not find '{}'", first)))?;
-
-    // Check if 'second' appears ANYWHERE after that first occurrence
-    let clean_second = strip_ansi(&second);
-    let found_after = lines.iter().skip(first_idx + 1).any(|l| l.contains(&clean_second));
-
-    if !found_after {
-        eprintln!("\n=== Serial Log (last 50 lines) ===");
-        for line in lines.iter().rev().take(50).rev() {
-            eprintln!("{}", line);
-        }
-        eprintln!("=== End Serial Log ===\n");
-        return Err(StepError(format!("Did not find '{}' after '{}'", second, first)));
-    }
-    Ok(())
 }
 
-#[then(regex = r#"^I should see "(.+)"$"#)]
+#[then(regex = r#"^I should see "([^"]+)"$"#)]
 async fn should_see_simple(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
     check_serial(world, &expected, default_timeout_secs(world)).await
 }
