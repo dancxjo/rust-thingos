@@ -101,10 +101,10 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             let elapsed_ms = (ts - start).total_millis();
             let next_retry_deadline_ms = poll_delay_ms.map(|ms| elapsed_ms + ms);
             stem::debug!(
-                "DHCP: state=waiting_lease elapsed_ms={} poll_delay_ms={} next_retry_deadline_ms={} resets={}",
+                "DHCP: state=waiting_lease elapsed_ms={} poll_delay_ms={:?} next_retry_deadline_ms={:?} resets={}",
                 elapsed_ms,
-                poll_delay_ms.unwrap_or(-1),
-                next_retry_deadline_ms.unwrap_or(-1),
+                poll_delay_ms,
+                next_retry_deadline_ms,
                 reset_count
             );
             last_poll_delay_ms = poll_delay_ms;
@@ -132,7 +132,8 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             }
         }
 
-        let wait_ms = delay.map(|d| d.total_millis()).unwrap_or(DHCP_POLL_SLICE_MS).min(DHCP_POLL_SLICE_MS);
+        let wait_ms =
+            delay.map(|d| d.total_millis().min(DHCP_POLL_SLICE_MS)).unwrap_or(DHCP_POLL_SLICE_MS);
         let deadline = ts + Duration::from_millis(wait_ms);
         wait_until(deadline);
     }
