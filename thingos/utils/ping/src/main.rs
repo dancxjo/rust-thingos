@@ -1,6 +1,7 @@
 //! Simple ICMP echo utility.
 //!
 //! Usage: ping [-c count] <host>
+//! Note: the first RTT sample may include ARP neighbor resolution time.
 #![no_std]
 #![no_main]
 
@@ -18,6 +19,8 @@ const DEFAULT_COUNT: u32 = 4;
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_PAYLOAD_LEN: usize = 56;
+const FIRST_SAMPLE_NOTE: &str =
+    "note: first RTT sample may include ARP warm-up and appear higher\n";
 
 fn get_args() -> Vec<String> {
     let mut len = 0;
@@ -276,6 +279,7 @@ fn main(_arg: usize) -> ! {
 
     let header = alloc::format!("PING {} ({}) {} bytes of data\n", host, ip, DEFAULT_PAYLOAD_LEN);
     print(1, &header);
+    print(1, FIRST_SAMPLE_NOTE);
 
     let mut transmitted = 0u32;
     let mut received = 0u32;
