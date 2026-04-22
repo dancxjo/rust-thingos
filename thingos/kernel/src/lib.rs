@@ -959,15 +959,19 @@ fn log_scheduler_entry_step<R: BootRuntime>(
     step_start: u64,
 ) {
     let now = runtime.mono_ticks();
+    // mono_ticks is a wrapping monotonic counter; wrapping_sub keeps elapsed
+    // durations correct across counter rollover.
     let step_elapsed = now.wrapping_sub(step_start);
     let total_elapsed = now.wrapping_sub(scheduler_entry_window_start);
+    let step_elapsed_us = boot_timing_us_from_hz(step_elapsed, boot_timing_hz);
+    let total_elapsed_us = boot_timing_us_from_hz(total_elapsed, boot_timing_hz);
     crate::kdebug!(
         "[kernel:start] scheduler-entry step='{}' elapsed_ticks={} elapsed_us={} total_ticks={} total_us={}",
         step,
         step_elapsed,
-        boot_timing_us_from_hz(step_elapsed, boot_timing_hz),
+        step_elapsed_us,
         total_elapsed,
-        boot_timing_us_from_hz(total_elapsed, boot_timing_hz)
+        total_elapsed_us
     );
 }
 
@@ -1425,7 +1429,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         end_bringup_start,
     );
     boot_trace(runtime, b"[kernel:start] end_bringup\r\n");
-    let pending_bootfb_paint = runtime.framebuffer();
+    let boot_framebuffer_for_paint = runtime.framebuffer();
     let scheduler_entry_total = runtime
         .mono_ticks()
         .wrapping_sub(scheduler_entry_window_start);
@@ -1439,7 +1443,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
     // Keep a visible startup background without blocking scheduler-loop entry.
-    if let Some(fb) = pending_bootfb_paint {
+    if let Some(fb) = boot_framebuffer_for_paint {
         let gradient_start = runtime.mono_ticks();
         paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
         let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
