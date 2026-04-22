@@ -53,12 +53,12 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
     let start = now();
     let timeout = start + Duration::from_secs(DHCP_TIMEOUT_SECS);
-    let max_socket_resets = ((DHCP_TIMEOUT_SECS * 1_000) / (DHCP_MAX_BACKOFF_MS as u64)).max(1) as u32;
+    let computed_max_socket_resets =
+        ((DHCP_TIMEOUT_SECS * 1_000) / (DHCP_MAX_BACKOFF_MS as u64)).max(1) as u32;
     let mut next_progress_log = start + Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
     let mut reset_count = 0u32;
     let mut next_reset_allowed_at = start;
     let mut last_poll_delay_ms: Option<i64> = None;
-    let mut last_wait_ms: Option<i64> = None;
 
     loop {
         let ts = now();
@@ -110,24 +110,27 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             .unwrap_or(DHCP_POLL_SLICE_MS);
         if poll_delay_ms != last_poll_delay_ms {
             let elapsed_ms = (ts - start).total_millis();
-            let now_ms = ts.total_millis();
+            let now_absolute_ms = ts.total_millis();
             let next_retry_deadline_ms = poll_delay_ms.map(|ms| elapsed_ms + ms);
             stem::debug!(
                 "DHCP: state=waiting_lease now_ms={} elapsed_ms={} poll_delay_ms={:?} next_retry_deadline_ms={:?} next_wake_ms={} resets={}/{}",
-                now_ms,
+                now_absolute_ms,
                 elapsed_ms,
                 poll_delay_ms,
                 next_retry_deadline_ms,
-                now_ms + wait_ms,
+                now_absolute_ms + wait_ms,
                 reset_count,
-                max_socket_resets
+                computed_max_socket_resets
             );
             last_poll_delay_ms = poll_delay_ms;
         }
 
         if let Some(poll_delay_ms) = poll_delay_ms {
             let exceeds_backoff_cap = poll_delay_ms > DHCP_MAX_BACKOFF_MS;
-            if exceeds_backoff_cap && ts >= next_reset_allowed_at && reset_count < max_socket_resets {
+            if exceeds_backoff_cap
+                && ts >= next_reset_allowed_at
+                && reset_count < computed_max_socket_resets
+            {
                 reset_count += 1;
                 next_reset_allowed_at = ts + Duration::from_millis(DHCP_RESET_COOLDOWN_MS);
                 stem::warn!(
@@ -135,7 +138,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                     poll_delay_ms,
                     DHCP_MAX_BACKOFF_MS,
                     reset_count,
-                    max_socket_resets,
+                    computed_max_socket_resets,
                     next_reset_allowed_at.total_millis()
                 );
                 // `dhcp_handle` is owned by this loop and always valid here; any
@@ -156,18 +159,9 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                     poll_delay_ms,
                     DHCP_MAX_BACKOFF_MS,
                     reset_count,
-                    max_socket_resets
+                    computed_max_socket_resets
                 );
             }
-        }
-
-        if Some(wait_ms) != last_wait_ms {
-            stem::trace!(
-                "DHCP: wait_slice_ms={} (poll_delay_ms={:?})",
-                wait_ms,
-                poll_delay_ms
-            );
-            last_wait_ms = Some(wait_ms);
         }
         let deadline = ts + Duration::from_millis(wait_ms);
         wait_until(deadline);
