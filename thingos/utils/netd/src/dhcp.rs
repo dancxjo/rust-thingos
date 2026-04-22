@@ -1,6 +1,5 @@
 //! DHCPv4 client using smoltcp.
 extern crate alloc;
-use alloc::string::ToString;
 use core::default::Default;
 
 use smoltcp::iface::{Interface, SocketSet, SocketStorage};
@@ -14,11 +13,11 @@ const DHCP_TIMEOUT_SECS: u64 = 30;
 /// Periodic progress log cadence while waiting for a lease.
 const DHCP_PROGRESS_LOG_SECS: u64 = 5;
 /// Cap unusually long smoltcp backoff delays so retry cadence stays observable.
-const DHCP_MAX_BACKOFF_MS: i64 = 4_000;
+const DHCP_MAX_BACKOFF_MS: u64 = 4_000;
 /// Keep wakeups responsive while waiting for DHCP events.
-const DHCP_POLL_SLICE_MS: i64 = 100;
+const DHCP_POLL_SLICE_MS: u64 = 100;
 /// Avoid immediate repeated socket resets while over-cap backoff is observed.
-const DHCP_RESET_COOLDOWN_MS: i64 = DHCP_MAX_BACKOFF_MS;
+const DHCP_RESET_COOLDOWN_MS: u64 = DHCP_MAX_BACKOFF_MS;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -53,12 +52,11 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
     let start = now();
     let timeout = start + Duration::from_secs(DHCP_TIMEOUT_SECS);
-    let computed_max_socket_resets =
-        ((DHCP_TIMEOUT_SECS * 1_000) / (DHCP_MAX_BACKOFF_MS as u64)).max(1) as u32;
+    let computed_max_socket_resets = ((DHCP_TIMEOUT_SECS * 1_000) / DHCP_MAX_BACKOFF_MS).max(1) as u32;
     let mut next_progress_log = start + Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
     let mut reset_count = 0u32;
     let mut next_reset_allowed_at = start;
-    let mut last_poll_delay_ms: Option<i64> = None;
+    let mut last_poll_delay_ms: Option<u64> = None;
 
     loop {
         let ts = now();
@@ -143,7 +141,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                 );
                 // `dhcp_handle` is owned by this loop and always valid here; any
                 // failure would indicate a logic bug rather than runtime recovery.
-                let _ = socket_set.remove::<Dhcpv4Socket>(dhcp_handle);
+                let _ = socket_set.remove(dhcp_handle);
                 dhcp_handle = socket_set.add(Dhcpv4Socket::new());
                 continue;
             } else if exceeds_backoff_cap && ts < next_reset_allowed_at {
