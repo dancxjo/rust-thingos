@@ -553,8 +553,8 @@ impl FbShadow {
     }
 
     fn ensure_bytes(&mut self, byte_len: usize) -> &mut [u8] {
-        let bytes = self.bytes.get_or_insert_with(|| vec![0u8; byte_len]);
-        bytes.as_mut_slice()
+        let byte_vec = self.bytes.get_or_insert_with(|| vec![0u8; byte_len]);
+        byte_vec.as_mut_slice()
     }
 }
 
@@ -1532,6 +1532,8 @@ mod tests {
 
         assert_eq!(node.write(4, &[1u8, 2, 3, 4]).unwrap(), 4);
         assert!(node.shadow.lock().bytes.is_some());
+        assert_eq!(&backing[..4], &[1u8, 2, 3, 4]);
+        assert_eq!(&backing[4..8], &[1u8, 2, 3, 4]);
     }
 
     #[test]
