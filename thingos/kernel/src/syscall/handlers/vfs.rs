@@ -562,6 +562,46 @@ pub fn sys_fs_unlink(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
 
     let abs_path = resolve_path(path)?;
+    let target = vfs::mount::lookup(&abs_path)?;
+    if target.stat()?.is_dir() {
+        return Err(Errno::EISDIR);
+    }
+
+    // Resolve parent to emit event
+    let (parent_path, name) = split_parent(&abs_path);
+    let parent_node = vfs::mount::lookup(parent_path).ok();
+    let parent_mount_id = vfs::mount::mount_id_for_path(parent_path);
+
+    vfs::mount::unlink(&abs_path)?;
+
+    if let Some(parent) = parent_node {
+        crate::vfs::watch::emit_event(
+            &*parent,
+            abi::vfs_watch::mask::REMOVE,
+            Some(name),
+            0,
+            parent_mount_id,
+        );
+    }
+
+    Ok(0)
+}
+
+/// Remove an empty directory at `path` (`rmdir` semantics).
+pub fn sys_fs_rmdir(path_ptr: usize, path_len: usize) -> SysResult<usize> {
+    validate_user_range(path_ptr, path_len, false)?;
+    if path_len == 0 || path_len > 4096 {
+        return Err(Errno::EINVAL);
+    }
+    let mut path_buf = vec![0u8; path_len];
+    unsafe { copyin(&mut path_buf, path_ptr)? };
+    let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
+
+    let abs_path = resolve_path(path)?;
+    let target = vfs::mount::lookup(&abs_path)?;
+    if !target.stat()?.is_dir() {
+        return Err(Errno::ENOTDIR);
+    }
 
     // Resolve parent to emit event
     let (parent_path, name) = split_parent(&abs_path);
@@ -719,8 +759,7 @@ pub fn sys_fs_mount_ex(
     path_len: usize,
     flags: u32,
 ) -> SysResult<usize> {
-    let authority = crate::authority::bridge::authority_for_current();
-    crate::authority::bridge::check_privilege(&authority, "mount")?;
+    require_namespace_mount_privilege()?;
 
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
@@ -798,6 +837,8 @@ pub fn sys_fs_bind(
     dst_len: usize,
     flags: u32,
 ) -> SysResult<usize> {
+    require_namespace_mount_privilege()?;
+
     validate_user_range(src_ptr, src_len, false)?;
     validate_user_range(dst_ptr, dst_len, false)?;
     if src_len == 0 || src_len > 4096 || dst_len == 0 || dst_len > 4096 {
@@ -830,8 +871,7 @@ pub fn sys_fs_bind(
 
 /// Unmount the VFS provider at the given path prefix.
 pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
-    let authority = crate::authority::bridge::authority_for_current();
-    crate::authority::bridge::check_privilege(&authority, "mount")?;
+    require_namespace_mount_privilege()?;
 
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
@@ -1228,7 +1268,14 @@ pub fn sys_fs_device_call(fd: usize, call_ptr: usize) -> SysResult<usize> {
     node.device_call(&call)
 }
 
-pub fn sys_fs_attr_get(fd: usize, name_ptr: usize, name_len: usize, buf_ptr: usize, buf_len: usize, type_ptr: usize) -> SysResult<usize> {
+pub fn sys_fs_attr_get(
+    fd: usize,
+    name_ptr: usize,
+    name_len: usize,
+    buf_ptr: usize,
+    buf_len: usize,
+    type_ptr: usize,
+) -> SysResult<usize> {
     validate_user_range(name_ptr, name_len, false)?;
     let mut name_buf = vec![0u8; name_len];
     unsafe { copyin(&mut name_buf, name_ptr)? };
@@ -1241,7 +1288,7 @@ pub fn sys_fs_attr_get(fd: usize, name_ptr: usize, name_len: usize, buf_ptr: usi
     };
 
     let (val_type, val) = node.attr_get(name)?;
-    
+
     if type_ptr != 0 {
         validate_user_range(type_ptr, 1, true)?;
         unsafe { copyout(type_ptr, &[val_type])? };
@@ -1255,10 +1302,17 @@ pub fn sys_fs_attr_get(fd: usize, name_ptr: usize, name_len: usize, buf_ptr: usi
     Ok(val.len())
 }
 
-pub fn sys_fs_attr_set(fd: usize, name_ptr: usize, name_len: usize, val_ptr: usize, val_len: usize, type_and_flags: usize) -> SysResult<usize> {
+pub fn sys_fs_attr_set(
+    fd: usize,
+    name_ptr: usize,
+    name_len: usize,
+    val_ptr: usize,
+    val_len: usize,
+    type_and_flags: usize,
+) -> SysResult<usize> {
     validate_user_range(name_ptr, name_len, false)?;
     validate_user_range(val_ptr, val_len, false)?;
-    
+
     let mut name_buf = vec![0u8; name_len];
     let mut val_buf = vec![0u8; val_len];
     unsafe {
@@ -1326,7 +1380,6 @@ pub fn sys_fs_attr_list(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<
         }
     }
 }
-
 
 // ── rename ──────────────────────────────────────────────────────────────────
 
@@ -1399,6 +1452,17 @@ fn split_parent(path: &str) -> (&str, &str) {
         Some(idx) => (&trimmed[..idx], &trimmed[idx + 1..]),
         None => ("/", trimmed),
     }
+}
+
+fn require_namespace_mount_privilege() -> SysResult<()> {
+    if let Some(pinfo) = crate::sched::process_info_current() {
+        if pinfo.lock().namespace.is_isolated() {
+            return Ok(());
+        }
+    }
+
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "mount")
 }
 
 pub fn resolve_path(path: &str) -> SysResult<alloc::string::String> {
@@ -1819,7 +1883,7 @@ pub fn sys_fs_flock(fd: usize, how: usize) -> SysResult<usize> {
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
-    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     use abi::errors::SysResult;
     use abi::syscall::{PollHandle, poll_flags};
@@ -1881,6 +1945,7 @@ mod tests {
     static UNREGISTER_TIMEOUT_CALLS: AtomicUsize = AtomicUsize::new(0);
     static LAST_REGISTERED_TID: AtomicU64 = AtomicU64::new(0);
     static LAST_REGISTERED_DEADLINE: AtomicU64 = AtomicU64::new(0);
+    static INTERRUPT_PENDING: AtomicBool = AtomicBool::new(false);
 
     fn process_info_hook() -> Option<Arc<Mutex<crate::task::ProcessInfo>>> {
         TEST_PROCESS_INFO.lock().clone()
@@ -1891,7 +1956,7 @@ mod tests {
     }
 
     fn test_take_interrupt() -> bool {
-        false
+        INTERRUPT_PENDING.swap(false, Ordering::SeqCst)
     }
 
     fn test_register_timeout(tid: u64, wake_tick: u64) {
@@ -1975,6 +2040,7 @@ mod tests {
         UNREGISTER_TIMEOUT_CALLS.store(0, Ordering::SeqCst);
         LAST_REGISTERED_TID.store(0, Ordering::SeqCst);
         LAST_REGISTERED_DEADLINE.store(0, Ordering::SeqCst);
+        INTERRUPT_PENDING.store(false, Ordering::SeqCst);
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -2100,6 +2166,37 @@ mod tests {
             0,
             "AlwaysReadyNode → ready"
         );
+    }
+
+    #[test]
+    fn poll_blocking_returns_eintr_when_interrupted() {
+        let _guard = TEST_POLL_GUARD.lock();
+        let node: Arc<dyn VfsNode> = Arc::new(NeverReadyNode);
+        let pinfo = make_process_info_with_nodes(&[(3, node)]);
+        let mut fds = [PollHandle { handle: 3, events: poll_flags::POLLIN, revents: 0 }];
+        let ptr = fds.as_mut_ptr() as usize;
+
+        reset_timeout_hooks();
+        INTERRUPT_PENDING.store(true, Ordering::SeqCst);
+        unsafe {
+            CURRENT_TID_HOOK = Some(test_current_tid);
+            crate::sched::hooks::PROCESS_INFO_HOOK = Some(process_info_hook);
+            crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK = Some(test_take_interrupt);
+        }
+        TEST_PROCESS_INFO.lock().replace(pinfo);
+
+        let res = sys_fs_poll(ptr, fds.len(), usize::MAX);
+
+        unsafe {
+            crate::sched::hooks::TAKE_PENDING_INTERRUPT_HOOK = None;
+            crate::sched::hooks::PROCESS_INFO_HOOK = None;
+            CURRENT_TID_HOOK = None;
+        }
+        TEST_PROCESS_INFO.lock().take();
+        INTERRUPT_PENDING.store(false, Ordering::SeqCst);
+
+        assert_eq!(res, Err(Errno::EINTR));
+        assert_eq!(fds[0].revents, 0);
     }
 
     #[test]
@@ -2349,6 +2446,31 @@ mod tests {
         res
     }
 
+    fn run_with_process_info<R>(
+        pinfo: Arc<Mutex<crate::task::ProcessInfo>>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        struct HookCleanupGuard;
+        impl Drop for HookCleanupGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    crate::sched::hooks::PROCESS_INFO_HOOK = None;
+                    CURRENT_TID_HOOK = None;
+                }
+                TEST_PROCESS_INFO.lock().take();
+            }
+        }
+
+        let _guard = TEST_POLL_GUARD.lock();
+        let _cleanup = HookCleanupGuard;
+        unsafe {
+            CURRENT_TID_HOOK = Some(test_current_tid);
+            crate::sched::hooks::PROCESS_INFO_HOOK = Some(process_info_hook);
+        }
+        TEST_PROCESS_INFO.lock().replace(pinfo);
+        f()
+    }
+
     /// A relative path is joined with the CWD and normalised.
     #[test]
     fn resolve_path_relative_joined_with_cwd() {
@@ -2382,6 +2504,46 @@ mod tests {
     fn resolve_path_cwd_with_trailing_slash() {
         let result = resolve_relative("/tmp/", "file.txt").unwrap();
         assert_eq!(result, "/tmp/file.txt");
+    }
+
+    #[test]
+    fn namespace_mount_privilege_denies_global_without_capability() {
+        let pinfo = make_process_info_with_nodes(&[]);
+        {
+            let mut pi = pinfo.lock();
+            pi.namespace = crate::vfs::NamespaceRef::global();
+            pi.authority = crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
+        }
+        let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
+        assert_eq!(res, Err(Errno::EPERM));
+    }
+
+    #[test]
+    fn namespace_mount_privilege_allows_global_with_capability() {
+        let pinfo = make_process_info_with_nodes(&[]);
+        {
+            let mut pi = pinfo.lock();
+            pi.namespace = crate::vfs::NamespaceRef::global();
+            pi.authority = crate::task::ProcessAuthority {
+                uid: 1000,
+                gid: 1000,
+                capability_mask: crate::authority::bridge::CAP_MOUNT,
+            };
+        }
+        let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
+        assert_eq!(res, Ok(()));
+    }
+
+    #[test]
+    fn namespace_mount_privilege_allows_isolated_without_capability() {
+        let pinfo = make_process_info_with_nodes(&[]);
+        {
+            let mut pi = pinfo.lock();
+            pi.namespace = crate::vfs::NamespaceRef::isolated();
+            pi.authority = crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
+        }
+        let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
+        assert_eq!(res, Ok(()));
     }
 
     // ── sys_fs_chdir – input validation ──────────────────────────────────────

@@ -546,12 +546,10 @@ impl FbNode {
 }
 
 impl FbShadow {
-    fn new(fb: crate::FramebufferInfo) -> Self {
-        // Avoid eagerly reading the boot framebuffer MMIO range during early boot.
-        // The shadow is updated from write payloads before scanout publication.
-        // This Vec lives in normal memory; constructing it does not touch the
-        // framebuffer MMIO region, so existing scanout contents stay unchanged.
-        Self { bytes: vec![0u8; fb.byte_len as usize] }
+    fn new(_fb: crate::FramebufferInfo) -> Self {
+        // Keep boot-time /dev/fb0 construction lightweight by deferring shadow
+        // allocation until the first write reaches the framebuffer node.
+        Self { bytes: Vec::new() }
     }
 }
 
@@ -618,6 +616,14 @@ impl VfsNode for FbNode {
         }
 
         let mut shadow = self.shadow.lock();
+        let required_shadow_len = off.checked_add(n).ok_or(Errno::EINVAL)?;
+        let max_shadow_len = self.fb.byte_len as usize;
+        if required_shadow_len > max_shadow_len {
+            return Err(Errno::EINVAL);
+        }
+        if shadow.bytes.len() < required_shadow_len {
+            shadow.bytes.resize(required_shadow_len, 0);
+        }
         shadow.bytes[off..off + n].copy_from_slice(&buf[..n]);
 
         let expected_frame_bytes = (self.fb.height as usize) * (self.fb.pitch as usize);
@@ -1528,6 +1534,28 @@ mod tests {
         let written = node.write(0, &new_frame).unwrap();
         assert_eq!(written, new_frame.len());
         assert_eq!(&backing[..], &new_frame);
+    }
+
+    #[test]
+    fn test_fbnode_shadow_is_lazy_until_first_write() {
+        let mut backing = vec![0u8; 16];
+        let fb = crate::FramebufferInfo {
+            addr: backing.as_mut_ptr() as u64,
+            byte_len: backing.len() as u64,
+            width: 2,
+            height: 2,
+            pitch: 8,
+            bpp: 32,
+            format: crate::PixelFormat::Bgra8888,
+        };
+        let node = FbNode::new(fb, 0);
+
+        assert!(node.shadow.lock().bytes.is_empty());
+        let written = node.write(4, &[1u8, 2, 3, 4]).unwrap();
+        assert_eq!(written, 4);
+        assert_eq!(node.shadow.lock().bytes.len(), 8);
+        assert_eq!(&node.shadow.lock().bytes[0..4], &[0u8; 4]);
+        assert_eq!(&node.shadow.lock().bytes[4..8], &[1u8, 2, 3, 4]);
     }
 
     #[test]

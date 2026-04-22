@@ -279,6 +279,9 @@ pub const SYS_FS_ATTR_GET: u32 = 0x4029;
 pub const SYS_FS_ATTR_SET: u32 = 0x402A;
 pub const SYS_FS_ATTR_REMOVE: u32 = 0x402B;
 pub const SYS_FS_ATTR_LIST: u32 = 0x402C;
+/// Remove an empty directory (`rmdir` semantics).
+/// Args: (path_ptr, path_len) → 0
+pub const SYS_FS_RMDIR: u32 = 0x402D;
 
 const FS_SYSCALL_NUMBERS: &[u32] = &[
     SYS_FS_OPEN,
@@ -326,6 +329,7 @@ const FS_SYSCALL_NUMBERS: &[u32] = &[
     SYS_FS_ATTR_SET,
     SYS_FS_ATTR_REMOVE,
     SYS_FS_ATTR_LIST,
+    SYS_FS_RMDIR,
 ];
 
 const fn all_unique(values: &[u32]) -> bool {

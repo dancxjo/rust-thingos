@@ -2,8 +2,8 @@
 //!
 //! Usage: ping [-c count] <host>
 //! Note: the first RTT sample may include ARP neighbor resolution time.
-//! When more than one reply is received, an additional "rtt warm" line is shown
-//! with min/avg/max excluding the first successful sample.
+//! When more than one reply is received, an additional RTT line is shown with
+//! min/avg/max excluding the first sample.
 #![no_std]
 #![no_main]
 
@@ -23,6 +23,53 @@ const DEFAULT_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_PAYLOAD_LEN: usize = 56;
 const FIRST_SAMPLE_NOTE: &str =
     "note: first RTT sample may include ARP warm-up and appear higher\n";
+
+#[derive(Clone, Copy)]
+struct RttAccumulator {
+    received: u32,
+    total_ms: u64,
+    min_ms: u64,
+    max_ms: u64,
+}
+
+impl RttAccumulator {
+    const fn new() -> Self {
+        Self { received: 0, total_ms: 0, min_ms: u64::MAX, max_ms: 0 }
+    }
+
+    fn observe(&mut self, ms: u64) {
+        self.received += 1;
+        self.total_ms += ms;
+        if ms < self.min_ms {
+            self.min_ms = ms;
+        }
+        if ms > self.max_ms {
+            self.max_ms = ms;
+        }
+    }
+
+    fn summary(&self) -> Option<(u64, u64, u64)> {
+        if self.received == 0 {
+            return None;
+        }
+        Some((self.min_ms, self.total_ms / self.received as u64, self.max_ms))
+    }
+}
+
+fn record_rtt(
+    seq: u32,
+    ms: u64,
+    first_sample_ms: &mut Option<u64>,
+    overall: &mut RttAccumulator,
+    post_warmup: &mut RttAccumulator,
+) {
+    overall.observe(ms);
+    if seq == 1 {
+        *first_sample_ms = Some(ms);
+    } else {
+        post_warmup.observe(ms);
+    }
+}
 
 fn get_args() -> Vec<String> {
     let mut len = 0;
@@ -285,14 +332,9 @@ fn main(_arg: usize) -> ! {
 
     let mut transmitted = 0u32;
     let mut received = 0u32;
-    let mut total_ms = 0u64;
-    let mut min_ms = u64::MAX;
-    let mut max_ms = 0u64;
-    let mut first_success_seen = false;
-    let mut warm_received = 0u32;
-    let mut warm_total_ms = 0u64;
-    let mut warm_min_ms = u64::MAX;
-    let mut warm_max_ms = 0u64;
+    let mut overall_rtt = RttAccumulator::new();
+    let mut post_warmup_rtt = RttAccumulator::new();
+    let mut first_sample_ms = None;
 
     let start = stem::time::now();
     for seq in 1..=count {
@@ -303,25 +345,13 @@ fn main(_arg: usize) -> ! {
         match ping_once(&data_path, ip, ident, seq as u16, DEFAULT_PAYLOAD_LEN) {
             Ok(ms) => {
                 received += 1;
-                total_ms += ms;
-                if ms < min_ms {
-                    min_ms = ms;
-                }
-                if ms > max_ms {
-                    max_ms = ms;
-                }
-                if !first_success_seen {
-                    first_success_seen = true;
-                } else {
-                    warm_received += 1;
-                    warm_total_ms += ms;
-                    if ms < warm_min_ms {
-                        warm_min_ms = ms;
-                    }
-                    if ms > warm_max_ms {
-                        warm_max_ms = ms;
-                    }
-                }
+                record_rtt(
+                    seq,
+                    ms,
+                    &mut first_sample_ms,
+                    &mut overall_rtt,
+                    &mut post_warmup_rtt,
+                );
                 let line = alloc::format!(
                     "{} bytes from {}: icmp_seq={} time={}ms\n",
                     DEFAULT_PAYLOAD_LEN + 8,
@@ -353,21 +383,52 @@ fn main(_arg: usize) -> ! {
     );
     print(1, &summary);
 
-    if received > 0 {
-        let avg = total_ms / received as u64;
-        let stats = alloc::format!("rtt min/avg/max = {}/{}/{} ms\n", min_ms, avg, max_ms);
+    if let Some((min_ms, avg_ms, max_ms)) = overall_rtt.summary() {
+        let stats = alloc::format!("rtt min/avg/max = {}/{}/{} ms\n", min_ms, avg_ms, max_ms);
         print(1, &stats);
-        if warm_received > 0 {
-            let warm_avg = warm_total_ms / warm_received as u64;
-            let warm_stats = alloc::format!(
-                "rtt (warm) min/avg/max (excluding first successful sample) = {}/{}/{} ms\n",
-                warm_min_ms,
-                warm_avg,
-                warm_max_ms
-            );
-            print(1, &warm_stats);
-        }
+    }
+    if let Some(ms) = first_sample_ms {
+        let line = alloc::format!(
+            "rtt first sample (icmp_seq=1, may include ARP warm-up) = {} ms\n",
+            ms
+        );
+        print(1, &line);
+    }
+    if let Some((min_ms, avg_ms, max_ms)) = post_warmup_rtt.summary() {
+        let stats = alloc::format!(
+            "rtt min/avg/max (excluding first sample) = {}/{}/{} ms\n",
+            min_ms,
+            avg_ms,
+            max_ms
+        );
+        print(1, &stats);
     }
 
     stem::syscall::exit(if received > 0 { 0 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtt_accumulator_summary_is_none_when_empty() {
+        let stats = RttAccumulator::new();
+        assert_eq!(stats.summary(), None);
+    }
+
+    #[test]
+    fn first_sample_is_tracked_separately_from_post_warmup() {
+        let mut first_sample = None;
+        let mut overall = RttAccumulator::new();
+        let mut post_warmup = RttAccumulator::new();
+
+        record_rtt(1, 1540, &mut first_sample, &mut overall, &mut post_warmup);
+        record_rtt(2, 315, &mut first_sample, &mut overall, &mut post_warmup);
+        record_rtt(3, 412, &mut first_sample, &mut overall, &mut post_warmup);
+
+        assert_eq!(first_sample, Some(1540));
+        assert_eq!(overall.summary(), Some((315, 755, 1540)));
+        assert_eq!(post_warmup.summary(), Some((315, 363, 412)));
+    }
 }

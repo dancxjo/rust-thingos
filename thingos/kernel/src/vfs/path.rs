@@ -4,7 +4,7 @@
 //! - Multi-component paths: `/a/b/c`
 //! - Current-directory component (`.`): ignored
 //! - Parent-directory component (`..`): pops the last resolved component
-//! - Mount-point crossings: delegated to the global mount table
+//! - Mount-point crossings: delegated to the calling process's namespace table
 //! - Symbolic link following: up to [`MAX_SYMLINK_DEPTH`] levels
 //!
 //! # Design

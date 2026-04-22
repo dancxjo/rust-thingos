@@ -60,6 +60,16 @@ fn main() {
         tokio::runtime::Runtime::new().unwrap().block_on(
             ThingOsWorld::cucumber()
                 .max_concurrent_scenarios(1) // Force sequential execution to avoid global artifact race conditions
+                .before(|feature, _rule, scenario, world| {
+                    Box::pin(async move {
+                        world.scenario_timeout_secs = feature
+                            .tags
+                            .iter()
+                            .chain(scenario.tags.iter())
+                            .filter_map(ThingOsWorld::parse_timeout_tag)
+                            .last();
+                    })
+                })
                 .with_writer(cucumber::writer::Tee::new(reporter, json_writer))
                 .after(|_feature, _rule, _scenario, _ev, world: Option<&mut ThingOsWorld>| {
                     Box::pin(async move {
