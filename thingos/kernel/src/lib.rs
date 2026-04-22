@@ -1067,12 +1067,19 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             boot_timing_us(set_boot_fb_elapsed)
         );
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs set_boot_fb ok\r\n");
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs fbnode new begin\r\n");
+        let fbnode_new_start = runtime.mono_ticks();
+        let fb_node = alloc::sync::Arc::new(crate::vfs::devfs::FbNode::new(fb, fb_resource_id));
+        let fbnode_new_elapsed = runtime.mono_ticks().wrapping_sub(fbnode_new_start);
+        crate::kdebug!(
+            "[kernel:start] framebuffer/devfs FbNode::new elapsed_ticks={} elapsed_us={}",
+            fbnode_new_elapsed,
+            boot_timing_us(fbnode_new_elapsed)
+        );
+        boot_trace(runtime, b"[kernel:start] framebuffer/devfs fbnode new ok\r\n");
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs register fb0 begin\r\n");
         let register_fb0_start = runtime.mono_ticks();
-        crate::vfs::devfs::register(
-            "fb0",
-            alloc::sync::Arc::new(crate::vfs::devfs::FbNode::new(fb, fb_resource_id)),
-        );
+        crate::vfs::devfs::register("fb0", fb_node);
         let register_fb0_elapsed = runtime.mono_ticks().wrapping_sub(register_fb0_start);
         crate::kdebug!(
             "[kernel:start] framebuffer/devfs register fb0 elapsed_ticks={} elapsed_us={}",

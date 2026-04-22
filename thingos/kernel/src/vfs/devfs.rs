@@ -536,22 +536,25 @@ pub struct FbNode {
 }
 
 struct FbShadow {
-    bytes: Vec<u8>,
+    // Allocate the full shadow lazily so /dev/fb0 registration during early boot
+    // does not pay framebuffer-sized allocation/zeroing cost.
+    bytes: Option<Vec<u8>>,
 }
 
 impl FbNode {
     pub fn new(fb: crate::FramebufferInfo, resource_id: u64) -> Self {
-        Self { fb, resource_id, shadow: Mutex::new(FbShadow::new(fb)) }
+        Self { fb, resource_id, shadow: Mutex::new(FbShadow::new()) }
     }
 }
 
 impl FbShadow {
-    fn new(fb: crate::FramebufferInfo) -> Self {
-        // Avoid eagerly reading the boot framebuffer MMIO range during early boot.
-        // The shadow is updated from write payloads before scanout publication.
-        // This Vec lives in normal memory; constructing it does not touch the
-        // framebuffer MMIO region, so existing scanout contents stay unchanged.
-        Self { bytes: vec![0u8; fb.byte_len as usize] }
+    fn new() -> Self {
+        Self { bytes: None }
+    }
+
+    fn ensure_bytes(&mut self, byte_len: usize) -> &mut [u8] {
+        let bytes = self.bytes.get_or_insert_with(|| vec![0u8; byte_len]);
+        bytes.as_mut_slice()
     }
 }
 
@@ -617,9 +620,6 @@ impl VfsNode for FbNode {
             return Ok(0);
         }
 
-        let mut shadow = self.shadow.lock();
-        shadow.bytes[off..off + n].copy_from_slice(&buf[..n]);
-
         let expected_frame_bytes = (self.fb.height as usize) * (self.fb.pitch as usize);
 
         // Full-frame writes are staged first, then published in one pass so
@@ -640,9 +640,8 @@ impl VfsNode for FbNode {
             {
                 let dst_u64 =
                     unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u64, n / 8) };
-                let src_u64 = unsafe {
-                    core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u64, n / 8)
-                };
+                let src_u64 =
+                    unsafe { core::slice::from_raw_parts(buf.as_ptr() as *const u64, n / 8) };
 
                 if row_bytes == payload_bytes {
                     dst_u64.copy_from_slice(src_u64);
@@ -666,9 +665,8 @@ impl VfsNode for FbNode {
             {
                 let dst_u32 =
                     unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u32, n / 4) };
-                let src_u32 = unsafe {
-                    core::slice::from_raw_parts(shadow.bytes.as_ptr() as *const u32, n / 4)
-                };
+                let src_u32 =
+                    unsafe { core::slice::from_raw_parts(buf.as_ptr() as *const u32, n / 4) };
 
                 if row_bytes == payload_bytes {
                     dst_u32.copy_from_slice(src_u32);
@@ -691,7 +689,7 @@ impl VfsNode for FbNode {
             let dst_slice = unsafe { core::slice::from_raw_parts_mut(self.fb.addr as *mut u8, n) };
 
             if row_bytes == payload_bytes {
-                dst_slice.copy_from_slice(&shadow.bytes[..n]);
+                dst_slice.copy_from_slice(&buf[..n]);
             } else {
                 for y in 0..(self.fb.height as usize) {
                     let start = y * row_bytes;
@@ -699,15 +697,18 @@ impl VfsNode for FbNode {
                         break;
                     }
                     dst_slice[start..start + payload_bytes]
-                        .copy_from_slice(&shadow.bytes[start..start + payload_bytes]);
+                        .copy_from_slice(&buf[start..start + payload_bytes]);
                 }
             }
             return Ok(n);
         }
 
+        let mut shadow = self.shadow.lock();
+        let shadow_bytes = shadow.ensure_bytes(self.fb.byte_len as usize);
+        shadow_bytes[off..off + n].copy_from_slice(&buf[..n]);
         let dst_slice =
             unsafe { core::slice::from_raw_parts_mut((self.fb.addr as usize + off) as *mut u8, n) };
-        dst_slice.copy_from_slice(&shadow.bytes[off..off + n]);
+        dst_slice.copy_from_slice(&shadow_bytes[off..off + n]);
         Ok(n)
     }
 
@@ -1508,6 +1509,29 @@ mod tests {
         let st = DevDirNode.stat().unwrap();
         assert!(st.is_dir());
         assert!(st.nlink >= 2, "dev dir nlink should be >= 2, got {}", st.nlink);
+    }
+
+    #[test]
+    fn test_fbnode_shadow_is_lazy_until_partial_write() {
+        let mut backing = vec![0u8; 16];
+        let fb = crate::FramebufferInfo {
+            addr: backing.as_mut_ptr() as u64,
+            byte_len: backing.len() as u64,
+            width: 2,
+            height: 2,
+            pitch: 8,
+            bpp: 32,
+            format: crate::PixelFormat::Bgra8888,
+        };
+        let node = FbNode::new(fb, 0);
+        assert!(node.shadow.lock().bytes.is_none());
+
+        let new_frame = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        assert_eq!(node.write(0, &new_frame).unwrap(), new_frame.len());
+        assert!(node.shadow.lock().bytes.is_none());
+
+        assert_eq!(node.write(4, &[1u8, 2, 3, 4]).unwrap(), 4);
+        assert!(node.shadow.lock().bytes.is_some());
     }
 
     #[test]
