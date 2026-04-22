@@ -72,7 +72,7 @@ fn wait_until(deadline: stem::time::Instant) {
     }
 }
 
-fn wait_readable(fd: u32, deadline: stem::time::Instant) -> Result<bool, &'static str> {
+fn wait_readable(fd: u32, deadline: stem::time::Instant) -> Result<bool, Errno> {
     let now = stem::time::now();
     if now >= deadline {
         return Ok(false);
@@ -80,7 +80,7 @@ fn wait_readable(fd: u32, deadline: stem::time::Instant) -> Result<bool, &'stati
 
     let timeout_ms = (deadline - now).as_millis() as u64;
     let mut pollfds = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
-    let _ = vfs_poll(&mut pollfds, timeout_ms).map_err(|_| "poll failed")?;
+    let _ = vfs_poll(&mut pollfds, timeout_ms)?;
     Ok((pollfds[0].revents & poll_flags::POLLIN) != 0)
 }
 
@@ -112,7 +112,7 @@ fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
     loop {
         let read_fd = vfs_open("/net/dns/lookup", O_RDONLY | O_NONBLOCK)
             .map_err(|_| "cannot open /net/dns/lookup")?;
-        if !wait_readable(read_fd, deadline)? {
+        if !wait_readable(read_fd, deadline).map_err(|_| "DNS poll failed")? {
             let _ = vfs_close(read_fd);
             return Err("DNS timeout");
         }
@@ -176,7 +176,7 @@ fn send_echo(data_path: &str, dest_ip: Ipv4Address, packet: &[u8]) -> Result<(),
     result.map_err(|_| "cannot send echo request")
 }
 
-fn recv_echo(data_fd: u32) -> Result<Option<(Ipv4Address, Vec<u8>)>, &'static str> {
+fn recv_echo(data_fd: u32) -> Result<Option<(Ipv4Address, Vec<u8>)>, Errno> {
     let mut buf = alloc::vec![0u8; 2048];
     let read_result = vfs_read(data_fd, &mut buf);
 
@@ -188,13 +188,13 @@ fn recv_echo(data_fd: u32) -> Result<Option<(Ipv4Address, Vec<u8>)>, &'static st
             let src_ip = Ipv4Address::from_bytes(&buf[..4]);
             let payload_len = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
             if n < 8 + payload_len {
-                return Err("short icmp packet");
+                return Err(Errno::EINVAL);
             }
             buf.truncate(8 + payload_len);
             Ok(Some((src_ip, buf[8..].to_vec())))
         }
         Err(Errno::EAGAIN) => Ok(None),
-        Err(_) => Err("cannot read icmp response"),
+        Err(err) => Err(err),
     }
 }
 
@@ -229,17 +229,21 @@ fn ping_once(
     ident: u16,
     seq_no: u16,
     payload_len: usize,
-) -> Result<u64, &'static str> {
+) -> Result<u64, String> {
     let packet = build_echo_request(ident, seq_no, payload_len);
     let started = stem::time::now();
-    send_echo(data_path, dest_ip, &packet)?;
+    send_echo(data_path, dest_ip, &packet).map_err(String::from)?;
 
     let deadline = started + stem::time::Duration::from_millis(DEFAULT_TIMEOUT_MS);
     loop {
-        if !wait_readable(data_fd, deadline)? {
-            return Err("timeout");
+        if !wait_readable(data_fd, deadline)
+            .map_err(|err| alloc::format!("icmp poll failed: {:?}", err))?
+        {
+            return Err(String::from("timeout"));
         }
-        if let Some((src_ip, reply)) = recv_echo(data_fd)? {
+        if let Some((src_ip, reply)) =
+            recv_echo(data_fd).map_err(|err| alloc::format!("icmp read failed: {:?}", err))?
+        {
             if src_ip == dest_ip && is_matching_echo_reply(&reply, ident, seq_no) {
                 return Ok((stem::time::now() - started).as_millis() as u64);
             }
