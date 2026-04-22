@@ -23,6 +23,48 @@ use abi::syscall::{PollHandle, fcntl_cmd, handle_flags, poll_flags, vfs_flags};
 use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
 
+const MODE_READ_ANY: u32 = 0o444;
+const MODE_WRITE_ANY: u32 = 0o222;
+
+/// Returns whether `mode` permits the requested read/write access.
+///
+/// Transitional behavior: this currently checks whether any owner/group/other
+/// class bit grants the requested access.
+fn mode_allows_requested_access(mode: u32, want_read: bool, want_write: bool) -> bool {
+    // Transitional coarse gate: enforce requested read/write against any
+    // corresponding permission class bit. Caller-vs-owner/group class matching
+    // is deferred until full uid/gid ownership propagation is in place.
+    // This means if any class bit grants the requested access, the open is
+    // currently allowed.
+    let read_ok = !want_read || (mode & MODE_READ_ANY) != 0;
+    let write_ok = !want_write || (mode & MODE_WRITE_ANY) != 0;
+    read_ok && write_ok
+}
+
+/// Transitional VFS open-time access gate.
+///
+/// Non-root callers are denied when node mode bits do not permit the requested
+/// read/write access. This currently uses coarse mode-bit checks; owner/group
+/// class matching is deferred until uid/gid ownership propagation is complete.
+fn enforce_open_access(node: &Arc<dyn vfs::VfsNode>, open_flags: OpenFlags) -> SysResult<()> {
+    // Open requests with no read/write access mode do not perform data access
+    // and remain allowed.
+    if !open_flags.is_readable() && !open_flags.is_writable() {
+        return Ok(());
+    }
+    let authority = crate::authority::bridge::authority_for_current();
+    // Root remains the privileged principal and bypasses file mode checks.
+    if authority.uid == 0 {
+        return Ok(());
+    }
+    let stat = node.stat()?;
+    if mode_allows_requested_access(stat.mode, open_flags.is_readable(), open_flags.is_writable()) {
+        Ok(())
+    } else {
+        Err(Errno::EACCES)
+    }
+}
+
 // ── open ────────────────────────────────────────────────────────────────────
 
 pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<usize> {
@@ -71,6 +113,8 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     } else {
         vfs::mount::lookup(&abs_path)?
     };
+
+    enforce_open_access(&node, open_flags)?;
 
     if path == "/dev/fb0" {
         match node.stat() {
@@ -715,6 +759,9 @@ pub fn sys_fs_mount_ex(
     path_len: usize,
     flags: u32,
 ) -> SysResult<usize> {
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "mount")?;
+
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
         return Err(Errno::EINVAL);
@@ -823,6 +870,9 @@ pub fn sys_fs_bind(
 
 /// Unmount the VFS provider at the given path prefix.
 pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "mount")?;
+
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
         return Err(Errno::EINVAL);
@@ -2136,6 +2186,20 @@ mod tests {
 
         assert_eq!(res, Err(Errno::EINTR));
         assert_eq!(fds[0].revents, 0);
+    }
+
+    #[test]
+    fn mode_denies_access_without_permission_bits() {
+        assert!(!mode_allows_requested_access(0o000, true, false));
+        assert!(!mode_allows_requested_access(0o000, false, true));
+        assert!(!mode_allows_requested_access(0o000, true, true));
+    }
+
+    #[test]
+    fn mode_allows_access_with_matching_bits() {
+        assert!(mode_allows_requested_access(0o444, true, false));
+        assert!(mode_allows_requested_access(0o222, false, true));
+        assert!(mode_allows_requested_access(0o666, true, true));
     }
 
     // ── sys_fs_lstat input validation ─────────────────────────────────────────
