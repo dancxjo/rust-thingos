@@ -359,10 +359,8 @@ fn main(arg: usize) -> ! {
             let delay_ms =
                 iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(10);
             let timeout_ms = delay_ms.min(100).max(1) as u64;
-            let _ = req_fd;
-            let _ = events_fd;
-            let _ = nic_watch_fd;
-            stem::time::sleep_ms(timeout_ms);
+            let mut pollfds = idle_pollfds(req_fd, events_fd, nic_watch_fd);
+            let _ = stem::syscall::vfs::vfs_poll(&mut pollfds, timeout_ms);
         }
     }
 }
