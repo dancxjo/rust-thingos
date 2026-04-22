@@ -1,6 +1,6 @@
 # Feature: Serial Shell Boot
 
-> Last run: 2026-04-22 08:47:12
+> Last run: 2026-04-22 12:09:46
 
 ## Scenarios
 

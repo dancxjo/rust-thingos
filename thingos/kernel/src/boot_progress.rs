@@ -235,6 +235,11 @@ pub fn set_unifont_data(data: &'static [u8]) {
 /// - Emits a kernel INFO log line so the milestone is visible on the serial
 ///   console and can be captured by BDD tests.
 pub fn push(phase: BootPhase, message: &str) {
+    // ── Milestone text → serial / kernel log ────────────────────────────────
+    // Safe to call even before logging::init() — the logger silently no-ops
+    // when the global logger has not yet been installed.
+    crate::kinfo!("boot_progress: milestone=\"{}\"", message);
+
     // ── Visual update (lock held) ────────────────────────────────────────────
     {
         let mut guard = BOOT_PROGRESS.lock();
@@ -268,11 +273,6 @@ pub fn push(phase: BootPhase, message: &str) {
         state.next_index += 1;
         // Lock dropped here.
     }
-
-    // ── Milestone text → serial / kernel log ────────────────────────────────
-    // Safe to call even before logging::init() — the logger silently no-ops
-    // when the global logger has not yet been installed.
-    crate::kinfo!("boot_progress: milestone=\"{}\"", message);
 }
 
 /// Mark the last active cell as complete and fill the progress bar to 100 %.
