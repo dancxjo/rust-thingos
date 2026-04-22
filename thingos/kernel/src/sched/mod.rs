@@ -1433,11 +1433,12 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         let window_ipi_count = &TRYLOCK_MISS_WINDOW_IPI_COUNT[cpu_idx];
         let window_idle_timer_count = &TRYLOCK_MISS_WINDOW_IDLE_TIMER_COUNT[cpu_idx];
         let window_pending_count = &TRYLOCK_MISS_WINDOW_PENDING_COUNT[cpu_idx];
+        let is_actionable_miss = !idle_timer_miss;
 
         let start = window_start.load(Ordering::Relaxed);
         if start == 0 || now.saturating_sub(start) > window_ticks {
             window_start.store(now, Ordering::Relaxed);
-            window_count.store((!idle_timer_miss) as u64, Ordering::Relaxed);
+            window_count.store(is_actionable_miss as u64, Ordering::Relaxed);
             match trigger {
                 DispatchTrigger::TimerTick => {
                     window_timer_count.store(1, Ordering::Relaxed);
@@ -1474,7 +1475,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                         let window_idle_timer = window_idle_timer_count.load(Ordering::Relaxed);
                         let window_pending = window_pending_count.load(Ordering::Relaxed);
                         crate::kdebug!(
-                            "SCHED: CPU {} resched try_lock actionable misses reached {} in 2s (timer={} ipi={} pending={} idle_timer={} last_trigger={} suppressing until window reset)",
+                            "SCHED: CPU {} resched try_lock actionable misses (excluding idle timer-only misses) reached {} in 2s (timer={} ipi={} pending={} idle_timer={} last_trigger={} suppressing until window reset)",
                             cpu_idx,
                             TRYLOCK_MISS_WARN_THRESHOLD,
                             window_timer,
