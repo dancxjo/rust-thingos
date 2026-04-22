@@ -279,7 +279,14 @@ fn fetch_fonts(assets: &Path) -> Result<()> {
 }
 
 fn fetch_icons(assets: &Path) -> Result<()> {
-    println!("==> Fetching Icons (Tango)...");
+    println!("==> Fetching Icons...");
+    fetch_tango_icons(assets)?;
+    fetch_chicago95_icons(assets)?;
+    Ok(())
+}
+
+fn fetch_tango_icons(assets: &Path) -> Result<()> {
+    println!("    -> Tango");
     require_tool("curl")?;
     require_tool("tar")?;
 
@@ -318,6 +325,85 @@ fn fetch_icons(assets: &Path) -> Result<()> {
         println!("    Installed Tango icon set to icons/tango/");
     }
 
+    let _ = fs::remove_dir_all(&temp_dir);
+    Ok(())
+}
+
+fn fetch_chicago95_icons(assets: &Path) -> Result<()> {
+    println!("    -> Chicago95");
+    require_tool("curl")?;
+    require_tool("tar")?;
+
+    const CHICAGO95_TAG: &str = "v3.0.1";
+    const CHICAGO95_URL: &str =
+        "https://github.com/grassmunk/Chicago95/archive/refs/tags/v3.0.1.tar.gz";
+
+    let icons_dir = assets.join("icons");
+    let chicago_dir = icons_dir.join("chicago95");
+    fs::create_dir_all(&icons_dir)?;
+
+    if chicago_dir.join("index.theme").exists() {
+        println!("       Chicago95 icon set already exists.");
+        return Ok(());
+    }
+
+    let root = project_root();
+    let temp_dir = root.join("target/temp_chicago95_icons");
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir)?;
+    }
+    fs::create_dir_all(&temp_dir)?;
+
+    let archive = temp_dir.join("chicago95.tar.gz");
+    println!("       Downloading Chicago95 {CHICAGO95_TAG}...");
+    download_file(CHICAGO95_URL, &archive)?;
+
+    println!("       Extracting Chicago95 icon set...");
+    run_cmd(Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&temp_dir))?;
+
+    let extracted_root = fs::read_dir(&temp_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("Chicago95-"))
+        })
+        .context("Failed to locate extracted Chicago95 archive root")?;
+
+    let upstream_theme = extracted_root.join("Icons/Chicago95");
+    ensure!(
+        upstream_theme.join("index.theme").exists(),
+        "Chicago95 archive did not contain Icons/Chicago95/index.theme"
+    );
+
+    if chicago_dir.exists() {
+        fs::remove_dir_all(&chicago_dir)?;
+    }
+    fs::rename(&upstream_theme, &chicago_dir)?;
+
+    let credits_src = extracted_root.join("CREDITS");
+    if credits_src.exists() {
+        fs::copy(&credits_src, chicago_dir.join("CREDITS.upstream"))?;
+    }
+
+    let readme_src = extracted_root.join("README.md");
+    if readme_src.exists() {
+        fs::copy(&readme_src, chicago_dir.join("README.upstream.md"))?;
+    }
+
+    fs::write(
+        chicago_dir.join("UPSTREAM.txt"),
+        format!(
+            "Source: grassmunk/Chicago95\nTag: {tag}\nArchive: {url}\nTheme path: Icons/Chicago95\nRepo-declared license: GPL-3.0+/MIT\n",
+            tag = CHICAGO95_TAG,
+            url = CHICAGO95_URL
+        ),
+    )?;
+
+    println!("       Installed Chicago95 icon set to icons/chicago95/");
     let _ = fs::remove_dir_all(&temp_dir);
     Ok(())
 }

@@ -25,6 +25,7 @@ use crate::task::{ManagedTask, TaskKind};
 const RUN_POLL_MUX_SELF_TEST: bool = false;
 const NETD_PROVIDER_PATH: &str = "/dev/net/virtio0/rx";
 const NETD_WAIT_POLL_MS: u64 = 100;
+const SERIAL_SHELL_HEADSTART_MS: u64 = 250;
 
 pub struct Config {
     pub force_bootfb: bool,
@@ -100,8 +101,25 @@ impl Supervisor {
         // Stage 1: Launch Serial Shell
         stem::debug!("SPROUT: Launching serial shell...");
         setup_serial_shell(self.tasks.clone());
-        stem::debug!("SPROUT: Serial shell launched; continuing supervisor startup in background");
-        self.spawn_background_startup();
+        stem::debug!(
+            "SPROUT: Serial shell launched; yielding {}ms so the prompt can take the foreground",
+            SERIAL_SHELL_HEADSTART_MS
+        );
+        stem::sleep_ms(SERIAL_SHELL_HEADSTART_MS);
+        stem::debug!("SPROUT: Continuing supervisor startup");
+
+        // Stage 2: Start cambium for driver discovery.
+        stem::debug!("SPROUT: Spawning cambium for driver discovery...");
+        self.spawn_cambium();
+
+        // Stage 3: Mount iso9660d (ISO9660 VFS provider).
+        stem::debug!("SPROUT: Spawning iso9660d...");
+        self.spawn_iso9660d();
+
+        // Stage 4: Start netd only after the network driver publishes its VFS tree.
+        stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
+        self.spawn_netd_when_ready();
+
         stem::debug!("SPROUT: Running registration + health supervision loop");
 
         // Main loop: keep health monitoring active without spawning a helper
@@ -181,24 +199,6 @@ impl Supervisor {
 
     fn spawn_iso9660d(&mut self) {
         spawn_iso9660d_task(self.tasks.clone());
-    }
-
-    fn spawn_background_startup(&self) {
-        let tasks = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            stem::debug!("SPROUT: Background startup thread running");
-            spawn_cambium_task(tasks.clone());
-            spawn_iso9660d_task(tasks.clone());
-            info!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
-            loop {
-                if path_exists(NETD_PROVIDER_PATH) {
-                    info!("SPROUT: {} is ready; spawning netd.", NETD_PROVIDER_PATH);
-                    spawn_netd_task(tasks.clone());
-                    break;
-                }
-                stem::sleep_ms(NETD_WAIT_POLL_MS);
-            }
-        });
     }
 
     #[allow(dead_code)]

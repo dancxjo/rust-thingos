@@ -2,25 +2,24 @@ use spin::Mutex;
 
 use crate::{FramebufferInfo, PixelFormat};
 
-const GLYPH_SIDE: usize = 8;
-const PANEL_BG: u32 = 0x00_10_10_10;
+const ICON_SIDE: usize = 16;
+const PANEL_BG: u32 = 0x00_16_16_16;
 const PANEL_BORDER: u32 = 0x00_D0_D0_D0;
-const GLYPH_COLOR: u32 = 0x00_F2_F2_F2;
 
 static BOOT_PROGRESS: Mutex<Option<BootProgressState>> = Mutex::new(None);
 
 const ICON_FRAMEBUFFER: &[u8] =
-    include_bytes!("../assets/boot_progress/framebuffer.txt");
-const ICON_MEMORY: &[u8] = include_bytes!("../assets/boot_progress/memory.txt");
-const ICON_ALLOCATOR: &[u8] = include_bytes!("../assets/boot_progress/allocator.txt");
-const ICON_DEVICES: &[u8] = include_bytes!("../assets/boot_progress/devices.txt");
-const ICON_COMPUTE: &[u8] = include_bytes!("../assets/boot_progress/compute.txt");
-const ICON_VFS: &[u8] = include_bytes!("../assets/boot_progress/vfs.txt");
-const ICON_PCI: &[u8] = include_bytes!("../assets/boot_progress/pci.txt");
-const ICON_CPU: &[u8] = include_bytes!("../assets/boot_progress/cpu.txt");
-const ICON_MODULES: &[u8] = include_bytes!("../assets/boot_progress/modules.txt");
-const ICON_INIT: &[u8] = include_bytes!("../assets/boot_progress/init.txt");
-const ICON_SCHEDULER: &[u8] = include_bytes!("../assets/boot_progress/scheduler.txt");
+    include_bytes!("../assets/boot_progress/framebuffer.rgba");
+const ICON_MEMORY: &[u8] = include_bytes!("../assets/boot_progress/memory.rgba");
+const ICON_ALLOCATOR: &[u8] = include_bytes!("../assets/boot_progress/allocator.rgba");
+const ICON_DEVICES: &[u8] = include_bytes!("../assets/boot_progress/devices.rgba");
+const ICON_COMPUTE: &[u8] = include_bytes!("../assets/boot_progress/compute.rgba");
+const ICON_VFS: &[u8] = include_bytes!("../assets/boot_progress/vfs.rgba");
+const ICON_PCI: &[u8] = include_bytes!("../assets/boot_progress/pci.rgba");
+const ICON_CPU: &[u8] = include_bytes!("../assets/boot_progress/cpu.rgba");
+const ICON_MODULES: &[u8] = include_bytes!("../assets/boot_progress/modules.rgba");
+const ICON_INIT: &[u8] = include_bytes!("../assets/boot_progress/init.rgba");
+const ICON_SCHEDULER: &[u8] = include_bytes!("../assets/boot_progress/scheduler.rgba");
 
 #[derive(Clone, Copy)]
 pub enum BootPhase {
@@ -43,7 +42,7 @@ struct Layout {
     panel_y: usize,
     panel_side: usize,
     margin: usize,
-    cell_px: usize,
+    icon_px: usize,
     gap_px: usize,
     rows: usize,
     cols: usize,
@@ -109,23 +108,23 @@ impl Layout {
             return None;
         }
 
-        let scale = if min_dim >= 900 {
-            4
-        } else if min_dim >= 600 {
+        let scale = if min_dim >= 1200 {
             3
-        } else {
+        } else if min_dim >= 700 {
             2
+        } else {
+            1
         };
-        let margin = scale * 2;
-        let gap_px = scale;
-        let cell_px = GLYPH_SIDE * scale;
-        let target_side = (min_dim / 3).clamp(64, 192);
+        let margin = scale * 8;
+        let gap_px = scale * 8;
+        let icon_px = ICON_SIDE * scale;
+        let target_side = (min_dim / 3).clamp(96, 240);
 
         let usable = target_side.saturating_sub(margin * 2);
-        let rows = ((usable + gap_px) / (cell_px + gap_px)).max(1);
+        let rows = ((usable + gap_px) / (icon_px + gap_px)).max(1);
         let cols = rows;
         let panel_side = (margin * 2)
-            .saturating_add(rows * cell_px)
+            .saturating_add(rows * icon_px)
             .saturating_add(rows.saturating_sub(1) * gap_px);
 
         Some(Self {
@@ -133,7 +132,7 @@ impl Layout {
             panel_y: height.saturating_sub(panel_side) / 2,
             panel_side,
             margin,
-            cell_px,
+            icon_px,
             gap_px,
             rows,
             cols,
@@ -162,21 +161,12 @@ impl BootProgressState {
     fn draw_icon(&mut self, col: usize, row: usize, icon: &[u8]) {
         let x = self.layout.panel_x
             + self.layout.margin
-            + col.saturating_mul(self.layout.cell_px + self.layout.gap_px);
+            + col.saturating_mul(self.layout.icon_px + self.layout.gap_px);
         let y = self.layout.panel_y
             + self.layout.margin
-            + row.saturating_mul(self.layout.cell_px + self.layout.gap_px);
-        let scale = self.layout.cell_px / GLYPH_SIDE;
-
-        for gy in 0..GLYPH_SIDE {
-            for gx in 0..GLYPH_SIDE {
-                let idx = gy * (GLYPH_SIDE + 1) + gx;
-                if icon.get(idx).copied() != Some(b'#') {
-                    continue;
-                }
-                self.fill_rect(x + gx * scale, y + gy * scale, scale, scale, GLYPH_COLOR);
-            }
-        }
+            + row.saturating_mul(self.layout.icon_px + self.layout.gap_px);
+        let scale = self.layout.icon_px / ICON_SIDE;
+        self.blit_rgba_icon(x, y, scale.max(1), icon);
     }
 
     fn stroke_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
@@ -217,6 +207,53 @@ impl BootProgressState {
             }
         }
     }
+
+    fn blit_rgba_icon(&mut self, x: usize, y: usize, scale: usize, icon: &[u8]) {
+        if icon.len() < ICON_SIDE * ICON_SIDE * 4 {
+            return;
+        }
+
+        let pitch_px = (self.fb.pitch as usize) / 4;
+        let width = self.fb.width as usize;
+        let height = self.fb.height as usize;
+        let ptr = self.fb.addr as *mut u32;
+        if ptr.is_null() || pitch_px == 0 {
+            return;
+        }
+
+        unsafe {
+            for sy in 0..ICON_SIDE {
+                for sx in 0..ICON_SIDE {
+                    let src_idx = (sy * ICON_SIDE + sx) * 4;
+                    let sr = icon[src_idx] as u32;
+                    let sg = icon[src_idx + 1] as u32;
+                    let sb = icon[src_idx + 2] as u32;
+                    let sa = icon[src_idx + 3] as u32;
+                    if sa == 0 {
+                        continue;
+                    }
+
+                    let src_color = (sr << 16) | (sg << 8) | sb;
+                    let dx = x + sx * scale;
+                    let dy = y + sy * scale;
+                    for oy in 0..scale {
+                        let py = dy + oy;
+                        if py >= height {
+                            continue;
+                        }
+                        let row = core::slice::from_raw_parts_mut(ptr.add(py * pitch_px), pitch_px);
+                        for ox in 0..scale {
+                            let px = dx + ox;
+                            if px >= width {
+                                continue;
+                            }
+                            row[px] = blend_rgb(row[px], src_color, sa);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn is_supported_format(fb: FramebufferInfo) -> bool {
@@ -228,6 +265,27 @@ fn grid_position(index: usize, rows: usize) -> (usize, usize) {
         return (0, 0);
     }
     (index / rows, index % rows)
+}
+
+fn blend_rgb(dst: u32, src: u32, alpha: u32) -> u32 {
+    if alpha >= 255 {
+        return src;
+    }
+    let inv = 255u32.saturating_sub(alpha);
+
+    let dr = (dst >> 16) & 0xFF;
+    let dg = (dst >> 8) & 0xFF;
+    let db = dst & 0xFF;
+
+    let sr = (src >> 16) & 0xFF;
+    let sg = (src >> 8) & 0xFF;
+    let sb = src & 0xFF;
+
+    let r = (sr * alpha + dr * inv + 127) / 255;
+    let g = (sg * alpha + dg * inv + 127) / 255;
+    let b = (sb * alpha + db * inv + 127) / 255;
+
+    (r << 16) | (g << 8) | b
 }
 
 #[cfg(test)]
