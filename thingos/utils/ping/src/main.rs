@@ -360,7 +360,7 @@ fn main(_arg: usize) -> ! {
         if warm_received > 0 {
             let warm_avg = warm_total_ms / warm_received as u64;
             let warm_stats = alloc::format!(
-                "rtt warm min/avg/max (excluding first successful sample) = {}/{}/{} ms\n",
+                "rtt (warm) min/avg/max (excluding first successful sample) = {}/{}/{} ms\n",
                 warm_min_ms,
                 warm_avg,
                 warm_max_ms
