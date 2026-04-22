@@ -49,6 +49,7 @@ kernel_trampoline:
 .global user_trampoline
 user_trampoline:
     // r12 = user_entry, r13 = user_stack, r14 = aspace.0 (cr3), r15 = arg
+    cli
     swapgs
     mov cr3, r14
     

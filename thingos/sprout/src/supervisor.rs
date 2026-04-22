@@ -249,13 +249,6 @@ impl Supervisor {
             .collect::<Vec<_>>();
 
         if !pollfds.is_empty() {
-            let mut poll_trace = alloc::string::String::new();
-            for t in &tasks_to_poll {
-                use core::fmt::Write;
-                let _ = write!(&mut poll_trace, " {}:{}", t.2, t.0);
-            }
-            stem::trace!("SPROUT: Polling FDs:{}", poll_trace);
-
             match stem::syscall::vfs::vfs_poll(&mut pollfds, 100) {
                 Ok(n) => {
                     if n > 0 {
@@ -270,7 +263,7 @@ impl Supervisor {
         }
 
         // DRAIN MESSAGES
-        for ((resp_fd, drv_req_write, task_name), pollfd) in
+        for ((resp_fd, drv_req_write, task_name), _pollfd) in
             tasks_to_poll.into_iter().zip(pollfds.iter())
         {
             let mut msg_data = [0u8; 1024];

@@ -220,10 +220,10 @@ struct Shell {
 impl Shell {
     fn new() -> Self {
         let shell_pid = syscall::getpid();
-        let _ = signal::setsid();
-        let _ = signal::setpgid(0, 0);
+        // Avoid hard dependency on early job-control setup during bootstrap.
+        // The shell remains usable for BDD command execution even if session
+        // leadership is not established immediately.
         let shell_pgid = signal::getpgrp().unwrap_or(shell_pid as i32) as u32;
-        let _ = vfs::tcsetpgrp(TTY_FD, shell_pgid);
         Self {
             shell_pgid,
             jobs: Vec::new(),
@@ -1253,11 +1253,16 @@ fn print_motd() {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    write_str("DEBUG: sh starting\n");
     install_signal_handlers();
+    write_str("DEBUG: sh sig handlers installed\n");
     print_motd();
+    write_str("DEBUG: sh motd printed\n");
 
     let mut shell = Shell::new();
+    write_str("DEBUG: sh shell object created\n");
     shell.load_profile("/etc/profile");
+    write_str("DEBUG: sh profile loaded\n");
 
     loop {
         let _ = shell.reap_children(true);

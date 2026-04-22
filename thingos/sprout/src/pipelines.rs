@@ -648,28 +648,50 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     debug!("SPROUT: Setting up serial shell on /dev/console...");
     let shell_path = select_serial_shell();
 
-    let console_fd =
-        match stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR) {
-            Ok(fd) => fd,
-            Err(e) => {
-                warn!("SPROUT: Failed to open /dev/console for shell: {:?}", e);
-                return;
-            }
-        };
+    let open_console = || stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR);
+
+    // Use separate handles for stdin/stdout/stderr so spawn handoff does not
+    // invalidate shell output streams when one handle is consumed.
+    let stdin_fd = match open_console() {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("SPROUT: Failed to open /dev/console for shell stdin: {:?}", e);
+            return;
+        }
+    };
+    let stdout_fd = match open_console() {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("SPROUT: Failed to open /dev/console for shell stdout: {:?}", e);
+            let _ = vfs_close(stdin_fd);
+            return;
+        }
+    };
+    let stderr_fd = match open_console() {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("SPROUT: Failed to open /dev/console for shell stderr: {:?}", e);
+            let _ = vfs_close(stdin_fd);
+            let _ = vfs_close(stdout_fd);
+            return;
+        }
+    };
 
     match stem::syscall::spawn_process_ex(
         &shell_path,
         &[shell_path.as_bytes()],
         &alloc::collections::BTreeMap::new(),
-        abi::types::stdio_mode::handle(console_fd), // stdin
-        abi::types::stdio_mode::handle(console_fd), // stdout
-        abi::types::stdio_mode::handle(console_fd), // stderr
+        abi::types::stdio_mode::handle(stdin_fd), // stdin
+        abi::types::stdio_mode::handle(stdout_fd), // stdout
+        abi::types::stdio_mode::handle(stderr_fd), // stderr
         0,
         &[],
     ) {
         Ok(resp) => {
             debug!("SPROUT: Spawned serial shell '{}' (PID={})", shell_path, resp.child_tid);
-            let _ = vfs_close(console_fd);
+            let _ = vfs_close(stdin_fd);
+            let _ = vfs_close(stdout_fd);
+            let _ = vfs_close(stderr_fd);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
                 name: "shell".to_string(),
@@ -688,7 +710,9 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         }
         Err(e) => {
             warn!("SPROUT: Failed to spawn serial shell: {:?}", e);
-            let _ = vfs_close(console_fd);
+            let _ = vfs_close(stdin_fd);
+            let _ = vfs_close(stdout_fd);
+            let _ = vfs_close(stderr_fd);
         }
     }
 }

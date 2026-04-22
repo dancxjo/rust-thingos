@@ -79,7 +79,7 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
 
     let tid = unsafe { crate::sched::current_tid_current() };
-    crate::ktrace!("VFS: sys_fs_open path='{}' tid={}", path, tid);
+    crate::kdebug!("VFS: sys_fs_open path='{}' tid={}", path, tid);
 
     if path == "/dev/fb0" {
         crate::kdebug!("sys_fs_open: path='{}' len={} flags=0x{:x}", path, path_len, flags);
@@ -251,6 +251,10 @@ pub fn sys_fs_fcntl(fd: usize, cmd: usize, arg: usize) -> SysResult<usize> {
 // ── read ────────────────────────────────────────────────────────────────────
 
 pub fn sys_fs_read(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+    let tid = unsafe { crate::sched::current_tid_current() };
+    if tid == 7 || tid == 8 {
+        crate::kdebug!("sys_fs_read: tid={} fd={} len={}", tid, fd, buf_len);
+    }
     validate_user_range(buf_ptr, buf_len, true)?;
     if buf_len == 0 {
         return Ok(0);
@@ -318,6 +322,10 @@ pub fn sys_fs_isatty(fd: usize) -> SysResult<usize> {
 }
 
 pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+    let tid = unsafe { crate::sched::current_tid_current() };
+    if tid == 7 || tid == 8 {
+        crate::kdebug!("sys_fs_readdir: tid={} fd={} len={}", tid, fd, buf_len);
+    }
     validate_user_range(buf_ptr, buf_len, true)?;
     if buf_len == 0 {
         return Ok(0);
@@ -377,13 +385,22 @@ pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<us
 // ── write ───────────────────────────────────────────────────────────────────
 
 pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+    let tid = unsafe { crate::sched::current_tid_current() };
+    if tid == 7 || tid == 8 {
+        crate::kdebug!("sys_fs_write: tid={} fd={} len={}", tid, fd, buf_len);
+    }
+    crate::ktrace!("sys_fs_write: tid={} fd={} len={}", tid, fd, buf_len);
     validate_user_range(buf_ptr, buf_len, false)?;
     if buf_len == 0 {
         return Ok(0);
     }
 
     let mut kbuf = vec![0u8; buf_len];
-    unsafe { copyin(&mut kbuf, buf_ptr)? };
+    unsafe { 
+        crate::kdebug!("sys_fs_write: tid={} fd={} starting copyin", tid, fd);
+        copyin(&mut kbuf, buf_ptr)?;
+        crate::kdebug!("sys_fs_write: tid={} fd={} copyin ok", tid, fd);
+    };
 
     let (node, offset_cell, status_flags, mount_id) = {
         let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
@@ -391,9 +408,14 @@ pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usiz
         let file = lock.handle_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_writable() {
+            crate::kwarn!(
+                "VFS: sys_fs_write fd={} EBADF (not writable, path={:?})",
+                fd,
+                file.path
+            );
             return Err(Errno::EBADF);
         }
-        let mid = vfs::mount::mount_id_for_path(&file.path);
+        let mid = vfs::mount::mount_id_for_path_in_namespace(lock.namespace.id(), &file.path);
         (file.node.clone(), file.offset.clone(), status_flags, mid)
     };
 
@@ -517,7 +539,7 @@ pub fn sys_fs_writev(fd: usize, iovec_ptr: usize, iovec_count: usize) -> SysResu
         if !status_flags.is_writable() {
             return Err(Errno::EBADF);
         }
-        let mid = vfs::mount::mount_id_for_path(&file.path);
+        let mid = vfs::mount::mount_id_for_path_in_namespace(lock.namespace.id(), &file.path);
         (file.node.clone(), file.offset.clone(), status_flags, mid)
     };
 
@@ -1164,7 +1186,7 @@ pub fn sys_watch_fd(fd: usize, mask: usize, flags: usize) -> SysResult<usize> {
     let (node, mount_id) = {
         let lock = pinfo_arc.lock();
         let file = lock.handle_table.get(fd as u32)?;
-        let mid = vfs::mount::mount_id_for_path(&file.path);
+        let mid = vfs::mount::mount_id_for_path_in_namespace(lock.namespace.id(), &file.path);
         (file.node.clone(), mid)
     };
 

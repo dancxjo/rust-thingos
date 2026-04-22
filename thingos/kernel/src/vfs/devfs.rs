@@ -367,11 +367,15 @@ impl ConsoleNode {
 
 impl VfsNode for ConsoleNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let pid = crate::sched::process_info_current().map(|p| p.lock().pid).unwrap_or(0);
+        crate::ktrace!("vfs: /dev/console read by PID={} len={}", pid, buf.len());
         let tty = crate::vfs::tty::TtyNode { hw: Arc::new(SerialHardware), ld: get_console_ld() };
         tty.read(offset, buf)
     }
 
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize> {
+        let pid = crate::sched::process_info_current().map(|p| p.lock().pid).unwrap_or(0);
+        crate::ktrace!("vfs: /dev/console write by PID={} len={}", pid, buf.len());
         let tty = crate::vfs::tty::TtyNode { hw: Arc::new(SerialHardware), ld: get_console_ld() };
         tty.write(offset, buf)
     }

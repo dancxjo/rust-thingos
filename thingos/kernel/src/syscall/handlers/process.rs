@@ -453,6 +453,8 @@ pub(crate) fn serialize_auxv_to_buf(entries: &[(u64, u64)], out: &mut [u8]) -> u
 /// Returns the total bytes needed (includes the sentinel).  Callers should
 /// first pass `buf_len = 0` to learn the size, then retry with a larger buffer.
 pub fn sys_auxv_get(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+    let tid = unsafe { crate::sched::current_tid_current() };
+    crate::kdebug!("sys_auxv_get: tid={} buf_len={}", tid, buf_len);
     let info = scheduler::process_info_current().ok_or(Errno::ENOENT)?;
     let pi = info.lock();
     let spawn_record = crate::spawn::bridge::spawn_record_from_process(&pi);

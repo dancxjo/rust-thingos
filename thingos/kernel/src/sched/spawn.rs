@@ -906,6 +906,13 @@ fn setup_stdio_fds<R: BootRuntime>(
 
     use crate::vfs::{OpenFlags, VfsNode};
 
+    crate::kdebug!(
+        "SETUP_STDIO: stdin={:?} stdout={:?} stderr={:?}",
+        stdin_spec,
+        stdout_spec,
+        stderr_spec
+    );
+
     let console: Arc<dyn VfsNode> = Arc::new(crate::vfs::devfs::ConsoleNode);
     let null: Arc<dyn VfsNode> = Arc::new(crate::vfs::devfs::NullNode);
 
@@ -961,11 +968,15 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let path = alloc::format!("fd:{}", fd);
                 let _ = handle_table.insert_at(0, node, flags, path);
             } else {
+                crate::kwarn!(
+                    "SPAWN: stdin explicit fd {} missing in parent; falling back to /dev/console",
+                    fd
+                );
                 let _ = handle_table.insert_at(
                     0,
-                    null.clone(),
+                    console.clone(),
                     OpenFlags::read_only(),
-                    "/dev/null".into(),
+                    "/dev/console".into(),
                 );
             }
         }
@@ -1023,11 +1034,15 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let path = alloc::format!("fd:{}", fd);
                 let _ = handle_table.insert_at(1, node, flags, path);
             } else {
+                crate::kwarn!(
+                    "SPAWN: stdout explicit fd {} missing in parent; falling back to /dev/console",
+                    fd
+                );
                 let _ = handle_table.insert_at(
                     1,
-                    null.clone(),
+                    console.clone(),
                     OpenFlags::write_only(),
-                    "/dev/null".into(),
+                    "/dev/console".into(),
                 );
             }
         }
@@ -1079,11 +1094,15 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let path = alloc::format!("fd:{}", fd);
                 let _ = handle_table.insert_at(2, node, flags, path);
             } else {
+                crate::kwarn!(
+                    "SPAWN: stderr explicit fd {} missing in parent; falling back to /dev/console",
+                    fd
+                );
                 let _ = handle_table.insert_at(
                     2,
-                    null.clone(),
+                    console.clone(),
                     OpenFlags::write_only(),
-                    "/dev/null".into(),
+                    "/dev/console".into(),
                 );
             }
         }
@@ -1203,6 +1222,12 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     } else {
         crate::vfs::handle_table::HandleTable::new()
     };
+
+    // Clear stdio slots inherited from parent so setup_stdio_fds's insert_at
+    // calls don't fail silently with EBADF (slot already occupied).
+    let _ = handle_table.close(0);
+    let _ = handle_table.close(1);
+    let _ = handle_table.close(2);
 
     let (stdin_pipe_id, stdout_pipe_id, stderr_pipe_id) =
         setup_stdio_fds::<R>(&mut handle_table, stdin_spec, stdout_spec, stderr_spec);
@@ -1537,6 +1562,12 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     } else {
         (crate::vfs::handle_table::HandleTable::new(), crate::ipc::IpcHandleTable::new())
     };
+
+    // Clear stdio slots inherited from parent so setup_stdio_fds's insert_at
+    // calls don't fail silently with EBADF (slot already occupied).
+    let _ = handle_table.close(0);
+    let _ = handle_table.close(1);
+    let _ = handle_table.close(2);
 
     let (stdin_pipe_id, stdout_pipe_id, stderr_pipe_id) =
         setup_stdio_fds::<R>(&mut handle_table, stdin_spec, stdout_spec, stderr_spec);

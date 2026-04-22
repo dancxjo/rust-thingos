@@ -54,10 +54,10 @@ fn resolve_ext(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dy
     // This works if there are no intermediate symlinks that cross mount points.
     match crate::vfs::mount::lookup(&normalised) {
         Ok(node) => {
-            crate::kinfo!("resolve_ext: fast-path lookup success for '{}'", normalised);
+            crate::ktrace!("resolve_ext: fast-path lookup success for '{}'", normalised);
             if follow_final {
                 let stat = node.stat()?;
-                crate::kinfo!("resolve_ext: fast-path stat success mode=0o{:o}", stat.mode);
+                crate::ktrace!("resolve_ext: fast-path stat success mode=0o{:o}", stat.mode);
                 if stat.is_symlink() {
                     let target = node.readlink()?;
                     let new_path = join_symlink(&normalised, &target)?;
@@ -75,7 +75,7 @@ fn resolve_ext(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dy
         Err(e) => return Err(e),
     }
 
-    crate::kinfo!("resolve_ext: falling back to slow-path walk for '{}'", normalised);
+    crate::ktrace!("resolve_ext: falling back to slow-path walk for '{}'", normalised);
     // 2. Slow path: walk component by component.
     walk_path(&normalised, follow_final, depth)
 }
@@ -92,7 +92,7 @@ fn walk_path(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dyn 
         current_path.push('/');
         current_path.push_str(component);
 
-        crate::kinfo!("walk_path: component='{}' current_path='{}'", component, current_path);
+        crate::ktrace!("walk_path: component='{}' current_path='{}'", component, current_path);
         let is_last = i == components.len() - 1;
         let node = crate::vfs::mount::lookup(&current_path)?;
 

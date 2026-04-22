@@ -179,6 +179,7 @@ pub struct TtyNode {
 
 #[derive(Clone, Copy)]
 struct TtyCaller {
+    pid: u32,
     sid: u32,
     pgid: u32,
     session_leader: bool,
@@ -193,6 +194,7 @@ impl TtyNode {
         let pinfo = crate::sched::process_info_current()?;
         let p = pinfo.lock();
         Some(TtyCaller {
+            pid: p.pid,
             sid: p.unix_compat.sid,
             pgid: p.unix_compat.pgid,
             session_leader: p.unix_compat.session_leader,
@@ -206,6 +208,7 @@ impl TtyNode {
             }
             let mut presence = self.ld.presence.lock();
             if presence.controlling_sid.is_none() {
+                crate::ktrace!("tty: process PID={} SID={} PGID={} ACQUIRING controlling tty", c.pid, c.sid, c.pgid);
                 presence.controlling_sid = Some(c.sid);
                 presence.foreground_pgid = Some(c.pgid);
             }
@@ -215,7 +218,20 @@ impl TtyNode {
     fn is_background_caller(&self, caller: TtyCaller) -> bool {
         let presence_guard = self.ld.presence.lock();
         match (presence_guard.controlling_sid, presence_guard.foreground_pgid) {
-            (Some(sid), Some(fg_pgid)) => caller.sid == sid && caller.pgid != fg_pgid,
+            (Some(sid), Some(fg_pgid)) => {
+                let is_bg = caller.sid == sid && caller.pgid != fg_pgid;
+                if is_bg {
+                    crate::ktrace!(
+                        "TTY: checking background caller: pid={} pgid={} (sid={}) vs foreground_pgid={} (sid={}) -> TRUE",
+                        caller.pid,
+                        caller.pgid,
+                        caller.sid,
+                        fg_pgid,
+                        sid
+                    );
+                }
+                is_bg
+            }
             _ => false,
         }
     }
@@ -227,6 +243,10 @@ impl TtyNode {
         };
         self.maybe_acquire_controlling_tty(Some(caller));
         if self.is_background_caller(caller) {
+            crate::ktrace!(
+                "TTY: sending SIGTTIN to background group pgid={}",
+                caller.pgid
+            );
             crate::signal::send_signal_to_group(caller.pgid, abi::signal::SIGTTIN);
             return Err(Errno::EINTR);
         }
@@ -241,6 +261,10 @@ impl TtyNode {
         self.maybe_acquire_controlling_tty(Some(caller));
         let tostop = (self.ld.termios.lock().c_lflag & TOSTOP) != 0;
         if tostop && self.is_background_caller(caller) {
+            crate::ktrace!(
+                "TTY: sending SIGTTOU to background group pgid={}",
+                caller.pgid
+            );
             crate::signal::send_signal_to_group(caller.pgid, abi::signal::SIGTTOU);
             return Err(Errno::EINTR);
         }
