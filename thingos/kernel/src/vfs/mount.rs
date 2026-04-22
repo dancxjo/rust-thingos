@@ -11,6 +11,8 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use alloc::collections::btree_map::Entry;
+use alloc::collections::BTreeMap;
 
 use abi::errors::{Errno, SysResult};
 use abi::syscall::mount_flags;
@@ -18,6 +20,7 @@ use spin::RwLock;
 
 use super::VfsDriver;
 
+#[derive(Clone)]
 struct MountLayer {
     driver: Arc<dyn VfsDriver>,
     /// Stable per-mount identifier, assigned once at mount time.
@@ -26,20 +29,49 @@ struct MountLayer {
     flags: u32,
 }
 
+#[derive(Clone)]
 struct MountEntry {
     /// The canonical mount point, e.g. `"/dev"` (no trailing slash).
     prefix: String,
     stack: Vec<MountLayer>,
 }
 
-static MOUNT_TABLE: RwLock<Vec<MountEntry>> = RwLock::new(Vec::new());
+const GLOBAL_NAMESPACE_ID: u64 = 1;
+
+static MOUNT_TABLES: RwLock<BTreeMap<u64, Vec<MountEntry>>> = RwLock::new(BTreeMap::new());
 static INIT_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static NEXT_MOUNT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+fn current_namespace_id() -> u64 {
+    if let Some(pinfo) = crate::sched::process_info_current() {
+        pinfo.lock().namespace.id()
+    } else {
+        GLOBAL_NAMESPACE_ID
+    }
+}
+
+fn ensure_namespace_table_exists_locked(tables: &mut BTreeMap<u64, Vec<MountEntry>>, ns_id: u64) {
+    match tables.entry(ns_id) {
+        Entry::Occupied(_) => {}
+        Entry::Vacant(slot) => {
+            let initial_mount_table = tables.get(&GLOBAL_NAMESPACE_ID).cloned().unwrap_or_default();
+            slot.insert(initial_mount_table);
+        }
+    }
+}
+
+fn ensure_namespace(ns_id: u64) {
+    let mut tables = MOUNT_TABLES.write();
+    ensure_namespace_table_exists_locked(&mut tables, ns_id);
+}
 
 /// initialize the mount table storage.  Must be called once before any
 /// [`mount`] or [`lookup`] call.
 pub fn init() {
-    // The static RwLock<Vec<_>> is already valid; mark init complete.
+    let mut tables = MOUNT_TABLES.write();
+    tables.clear();
+    tables.insert(GLOBAL_NAMESPACE_ID, Vec::new());
+    // The static tables are now ready.
     INIT_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
 }
 
@@ -47,9 +79,16 @@ pub fn init() {
 ///
 /// Thread-safe.
 pub fn mount(mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
+    mount_for_namespace(current_namespace_id(), mount_point, driver, flags);
+}
+
+/// Mount a filesystem driver at `mount_point` in `ns_id`.
+pub fn mount_for_namespace(ns_id: u64, mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
     let prefix = normalise(mount_point);
     let id = NEXT_MOUNT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    let mut table = MOUNT_TABLE.write();
+    let mut tables = MOUNT_TABLES.write();
+    ensure_namespace_table_exists_locked(&mut tables, ns_id);
+    let table = tables.get_mut(&ns_id).expect("namespace table should exist after ensure");
 
     let layer = MountLayer { driver, id, flags };
 
@@ -73,8 +112,15 @@ pub fn mount(mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
 ///
 /// Returns `Err(ENOENT)` if nothing is mounted there.
 pub fn umount(mount_point: &str) -> SysResult<()> {
+    umount_for_namespace(current_namespace_id(), mount_point)
+}
+
+/// Unmount the filesystem at `mount_point` in `ns_id`.
+pub fn umount_for_namespace(ns_id: u64, mount_point: &str) -> SysResult<()> {
     let prefix = normalise(mount_point);
-    let mut table = MOUNT_TABLE.write();
+    let mut tables = MOUNT_TABLES.write();
+    ensure_namespace_table_exists_locked(&mut tables, ns_id);
+    let table = tables.get_mut(&ns_id).expect("namespace table should exist after ensure");
     let before = table.len();
     table.retain(|e| e.prefix != prefix);
     if table.len() == before { Err(Errno::ENOENT) } else { Ok(()) }
@@ -85,6 +131,12 @@ pub fn umount(mount_point: &str) -> SysResult<()> {
 ///
 /// `path` must be absolute (start with `/`).
 pub fn lookup(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
+    lookup_for_namespace(current_namespace_id(), path)
+}
+
+/// Resolve `path` in `ns_id`.
+pub fn lookup_for_namespace(ns_id: u64, path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
+    ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
@@ -92,7 +144,10 @@ pub fn lookup(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
     // Capture matching drivers into a local list to avoid holding the read
     // lock during potentially blocking driver lookups.
     let matches: Vec<(String, Vec<Arc<dyn VfsDriver>>)> = {
-        let table = MOUNT_TABLE.read();
+        let tables = MOUNT_TABLES.read();
+        let Some(table) = tables.get(&ns_id) else {
+            return Err(Errno::ENOENT);
+        };
         table
             .iter()
             .filter_map(|entry| {
@@ -131,8 +186,17 @@ pub fn lookup(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
 /// For example, if we have mounts at `/dev`, `/dev/display/card0`, and `/sys`,
 /// `get_mounts_under("/dev/display")` would return `["card0"]`.
 pub fn get_mounts_under(parent_path: &str) -> Vec<String> {
+    get_mounts_under_for_namespace(current_namespace_id(), parent_path)
+}
+
+/// Return mount points immediately under `parent_path` in `ns_id`.
+pub fn get_mounts_under_for_namespace(ns_id: u64, parent_path: &str) -> Vec<String> {
+    ensure_namespace(ns_id);
     let prefix = normalise(parent_path);
-    let table = MOUNT_TABLE.read();
+    let tables = MOUNT_TABLES.read();
+    let Some(table) = tables.get(&ns_id) else {
+        return Vec::new();
+    };
     let mut results = Vec::new();
 
     for entry in table.iter() {
@@ -157,10 +221,19 @@ pub fn get_mounts_under(parent_path: &str) -> Vec<String> {
 /// Returns `0` if no mount covers `path` (which should not happen for valid
 /// absolute paths after the VFS is initialized).
 pub fn mount_id_for_path(path: &str) -> u64 {
+    mount_id_for_path_in_namespace(current_namespace_id(), path)
+}
+
+/// Return the stable mount ID for `path` in `ns_id`.
+pub fn mount_id_for_path_in_namespace(ns_id: u64, path: &str) -> u64 {
+    ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return 0;
     }
-    let table = MOUNT_TABLE.read();
+    let tables = MOUNT_TABLES.read();
+    let Some(table) = tables.get(&ns_id) else {
+        return 0;
+    };
     // The table is sorted longest-prefix first, so the first match is the
     // most specific mount. We return the topmost layer's ID.
     for entry in table.iter() {
@@ -175,10 +248,19 @@ pub fn mount_id_for_path(path: &str) -> u64 {
 
 /// Return the VFS driver associated with `path`.
 pub fn get_driver_for_path(path: &str) -> SysResult<Arc<dyn VfsDriver>> {
+    get_driver_for_path_in_namespace(current_namespace_id(), path)
+}
+
+/// Return the VFS driver associated with `path` in `ns_id`.
+pub fn get_driver_for_path_in_namespace(ns_id: u64, path: &str) -> SysResult<Arc<dyn VfsDriver>> {
+    ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
-    let table = MOUNT_TABLE.read();
+    let tables = MOUNT_TABLES.read();
+    let Some(table) = tables.get(&ns_id) else {
+        return Err(Errno::ENOENT);
+    };
     for entry in table.iter() {
         if strip_prefix(path, &entry.prefix).is_some() {
             if let Some(top) = entry.stack.first() {
@@ -193,11 +275,20 @@ pub fn get_driver_for_path(path: &str) -> SysResult<Arc<dyn VfsDriver>> {
 ///
 /// `path` must be absolute.  Returns the new open node on success.
 pub fn create(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
+    create_in_namespace(current_namespace_id(), path)
+}
+
+/// Create a regular file at `path` in `ns_id`.
+pub fn create_in_namespace(ns_id: u64, path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
+    ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.read();
+        let tables = MOUNT_TABLES.read();
+        let Some(table) = tables.get(&ns_id) else {
+            return Err(Errno::ENOENT);
+        };
         table
             .iter()
             .find_map(|entry| {
@@ -219,11 +310,20 @@ pub fn create(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
 ///
 /// `path` must be absolute.
 pub fn mkdir(path: &str) -> SysResult<()> {
+    mkdir_in_namespace(current_namespace_id(), path)
+}
+
+/// Create a directory at `path` in `ns_id`.
+pub fn mkdir_in_namespace(ns_id: u64, path: &str) -> SysResult<()> {
+    ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.read();
+        let tables = MOUNT_TABLES.read();
+        let Some(table) = tables.get(&ns_id) else {
+            return Err(Errno::ENOENT);
+        };
         table
             .iter()
             .find_map(|entry| {
@@ -245,11 +345,20 @@ pub fn mkdir(path: &str) -> SysResult<()> {
 ///
 /// `path` must be absolute.
 pub fn unlink(path: &str) -> SysResult<()> {
+    unlink_in_namespace(current_namespace_id(), path)
+}
+
+/// Remove the file or empty directory at `path` in `ns_id`.
+pub fn unlink_in_namespace(ns_id: u64, path: &str) -> SysResult<()> {
+    ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.read();
+        let tables = MOUNT_TABLES.read();
+        let Some(table) = tables.get(&ns_id) else {
+            return Err(Errno::ENOENT);
+        };
         table
             .iter()
             .find_map(|entry| {
@@ -271,11 +380,20 @@ pub fn unlink(path: &str) -> SysResult<()> {
 ///
 /// `link_path` must be absolute.
 pub fn symlink(target: &str, link_path: &str) -> SysResult<()> {
+    symlink_in_namespace(current_namespace_id(), target, link_path)
+}
+
+/// Create a symbolic link in `ns_id`.
+pub fn symlink_in_namespace(ns_id: u64, target: &str, link_path: &str) -> SysResult<()> {
+    ensure_namespace(ns_id);
     if !link_path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
     let (rel, driver): (String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.read();
+        let tables = MOUNT_TABLES.read();
+        let Some(table) = tables.get(&ns_id) else {
+            return Err(Errno::ENOENT);
+        };
         table
             .iter()
             .find_map(|entry| {
@@ -299,11 +417,20 @@ pub fn symlink(target: &str, link_path: &str) -> SysResult<()> {
 /// Returns `EXDEV` if the paths are on different mount points, and `ENOENT`
 /// if either path has no matching mount.
 pub fn link(src_path: &str, dst_path: &str) -> SysResult<()> {
+    link_in_namespace(current_namespace_id(), src_path, dst_path)
+}
+
+/// Create a hard link in `ns_id`.
+pub fn link_in_namespace(ns_id: u64, src_path: &str, dst_path: &str) -> SysResult<()> {
+    ensure_namespace(ns_id);
     if !src_path.starts_with('/') || !dst_path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
     let (src_rel, dst_rel, driver): (String, String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.read();
+        let tables = MOUNT_TABLES.read();
+        let Some(table) = tables.get(&ns_id) else {
+            return Err(Errno::ENOENT);
+        };
         let src_entry = table
             .iter()
             .find_map(|entry| {
@@ -342,11 +469,20 @@ pub fn link(src_path: &str, dst_path: &str) -> SysResult<()> {
 ///
 /// Both paths must be absolute and within the same mount point.
 pub fn rename(old_path: &str, new_path: &str) -> SysResult<()> {
+    rename_in_namespace(current_namespace_id(), old_path, new_path)
+}
+
+/// Rename a file or directory in `ns_id`.
+pub fn rename_in_namespace(ns_id: u64, old_path: &str, new_path: &str) -> SysResult<()> {
+    ensure_namespace(ns_id);
     if !old_path.starts_with('/') || !new_path.starts_with('/') {
         return Err(Errno::ENOENT);
     }
     let (old_rel, new_rel, driver): (String, String, Arc<dyn VfsDriver>) = {
-        let table = MOUNT_TABLE.read();
+        let tables = MOUNT_TABLES.read();
+        let Some(table) = tables.get(&ns_id) else {
+            return Err(Errno::ENOENT);
+        };
         table
             .iter()
             .find_map(|entry| {
@@ -372,7 +508,16 @@ pub fn rename(old_path: &str, new_path: &str) -> SysResult<()> {
 /// ```
 /// Used by `/proc/mounts`.
 pub fn mounts_text() -> alloc::string::String {
-    let table = MOUNT_TABLE.read();
+    mounts_text_for_namespace(current_namespace_id())
+}
+
+/// Return text listing of mounts in `ns_id`.
+pub fn mounts_text_for_namespace(ns_id: u64) -> alloc::string::String {
+    ensure_namespace(ns_id);
+    let tables = MOUNT_TABLES.read();
+    let Some(table) = tables.get(&ns_id) else {
+        return alloc::string::String::new();
+    };
     let mut out = alloc::string::String::new();
     for entry in table.iter() {
         out.push_str(&entry.prefix);
@@ -436,7 +581,9 @@ mod tests {
     }
 
     fn fresh_table() {
-        MOUNT_TABLE.write().clear();
+        let mut tables = MOUNT_TABLES.write();
+        tables.clear();
+        tables.insert(GLOBAL_NAMESPACE_ID, Vec::new());
         INIT_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
     }
 
@@ -488,5 +635,23 @@ mod tests {
         assert_eq!(strip_prefix("/dev", "/dev"), Some(""));
         assert_eq!(strip_prefix("/other/path", "/dev"), None);
         assert_eq!(strip_prefix("/hello", "/"), Some("hello"));
+    }
+
+    #[test]
+    fn test_isolated_namespace_starts_with_global_mounts_but_diverges() {
+        fresh_table();
+        let global_ns = GLOBAL_NAMESPACE_ID;
+        let isolated_ns = GLOBAL_NAMESPACE_ID + 7;
+        mount_for_namespace(global_ns, "/shared", Arc::new(DummyFs), mount_flags::MREPL);
+
+        assert!(lookup_for_namespace(global_ns, "/shared/thing").is_ok());
+        assert!(lookup_for_namespace(isolated_ns, "/shared/thing").is_ok());
+
+        mount_for_namespace(isolated_ns, "/private", Arc::new(DummyFs), mount_flags::MREPL);
+        assert!(lookup_for_namespace(isolated_ns, "/private/thing").is_ok());
+        assert!(matches!(
+            lookup_for_namespace(global_ns, "/private/thing"),
+            Err(Errno::ENOENT)
+        ));
     }
 }

@@ -759,8 +759,7 @@ pub fn sys_fs_mount_ex(
     path_len: usize,
     flags: u32,
 ) -> SysResult<usize> {
-    let authority = crate::authority::bridge::authority_for_current();
-    crate::authority::bridge::check_privilege(&authority, "mount")?;
+    require_namespace_mount_privilege()?;
 
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
@@ -838,6 +837,8 @@ pub fn sys_fs_bind(
     dst_len: usize,
     flags: u32,
 ) -> SysResult<usize> {
+    require_namespace_mount_privilege()?;
+
     validate_user_range(src_ptr, src_len, false)?;
     validate_user_range(dst_ptr, dst_len, false)?;
     if src_len == 0 || src_len > 4096 || dst_len == 0 || dst_len > 4096 {
@@ -870,8 +871,7 @@ pub fn sys_fs_bind(
 
 /// Unmount the VFS provider at the given path prefix.
 pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
-    let authority = crate::authority::bridge::authority_for_current();
-    crate::authority::bridge::check_privilege(&authority, "mount")?;
+    require_namespace_mount_privilege()?;
 
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
@@ -1452,6 +1452,17 @@ fn split_parent(path: &str) -> (&str, &str) {
         Some(idx) => (&trimmed[..idx], &trimmed[idx + 1..]),
         None => ("/", trimmed),
     }
+}
+
+fn require_namespace_mount_privilege() -> SysResult<()> {
+    if let Some(pinfo) = crate::sched::process_info_current() {
+        if pinfo.lock().namespace.is_isolated() {
+            return Ok(());
+        }
+    }
+
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "mount")
 }
 
 pub fn resolve_path(path: &str) -> SysResult<alloc::string::String> {
@@ -2435,6 +2446,31 @@ mod tests {
         res
     }
 
+    fn run_with_process_info<R>(
+        pinfo: Arc<Mutex<crate::task::ProcessInfo>>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        struct HookCleanupGuard;
+        impl Drop for HookCleanupGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    crate::sched::hooks::PROCESS_INFO_HOOK = None;
+                    CURRENT_TID_HOOK = None;
+                }
+                TEST_PROCESS_INFO.lock().take();
+            }
+        }
+
+        let _guard = TEST_POLL_GUARD.lock();
+        let _cleanup = HookCleanupGuard;
+        unsafe {
+            CURRENT_TID_HOOK = Some(test_current_tid);
+            crate::sched::hooks::PROCESS_INFO_HOOK = Some(process_info_hook);
+        }
+        TEST_PROCESS_INFO.lock().replace(pinfo);
+        f()
+    }
+
     /// A relative path is joined with the CWD and normalised.
     #[test]
     fn resolve_path_relative_joined_with_cwd() {
@@ -2468,6 +2504,46 @@ mod tests {
     fn resolve_path_cwd_with_trailing_slash() {
         let result = resolve_relative("/tmp/", "file.txt").unwrap();
         assert_eq!(result, "/tmp/file.txt");
+    }
+
+    #[test]
+    fn namespace_mount_privilege_denies_global_without_capability() {
+        let pinfo = make_process_info_with_nodes(&[]);
+        {
+            let mut pi = pinfo.lock();
+            pi.namespace = crate::vfs::NamespaceRef::global();
+            pi.authority = crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
+        }
+        let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
+        assert_eq!(res, Err(Errno::EPERM));
+    }
+
+    #[test]
+    fn namespace_mount_privilege_allows_global_with_capability() {
+        let pinfo = make_process_info_with_nodes(&[]);
+        {
+            let mut pi = pinfo.lock();
+            pi.namespace = crate::vfs::NamespaceRef::global();
+            pi.authority = crate::task::ProcessAuthority {
+                uid: 1000,
+                gid: 1000,
+                capability_mask: crate::authority::bridge::CAP_MOUNT,
+            };
+        }
+        let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
+        assert_eq!(res, Ok(()));
+    }
+
+    #[test]
+    fn namespace_mount_privilege_allows_isolated_without_capability() {
+        let pinfo = make_process_info_with_nodes(&[]);
+        {
+            let mut pi = pinfo.lock();
+            pi.namespace = crate::vfs::NamespaceRef::isolated();
+            pi.authority = crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
+        }
+        let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
+        assert_eq!(res, Ok(()));
     }
 
     // ── sys_fs_chdir – input validation ──────────────────────────────────────

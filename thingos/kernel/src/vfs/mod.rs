@@ -497,10 +497,8 @@ pub trait VfsDriver: Send + Sync {
 ///
 /// # What is intentionally NOT guaranteed today
 ///
-/// - Mount isolation for VFS lookups: path resolution still uses the shared
-///   mount table implementation.
-/// - Privilege checking: `SYS_FS_MOUNT` does not verify ownership.
 /// - Snapshot-on-spawn: spawning a child does not fork the mount table.
+/// - Explicit namespace ownership metadata (beyond global-vs-isolated policy).
 ///
 /// # Roadmap
 ///
