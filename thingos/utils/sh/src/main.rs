@@ -1253,16 +1253,11 @@ fn print_motd() {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    write_str("DEBUG: sh starting\n");
     install_signal_handlers();
-    write_str("DEBUG: sh sig handlers installed\n");
     print_motd();
-    write_str("DEBUG: sh motd printed\n");
 
     let mut shell = Shell::new();
-    write_str("DEBUG: sh shell object created\n");
     shell.load_profile("/etc/profile");
-    write_str("DEBUG: sh profile loaded\n");
 
     loop {
         let _ = shell.reap_children(true);
