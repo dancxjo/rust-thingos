@@ -11,6 +11,9 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+/// Default timeout for step helpers that poll for asynchronous behavior.
+pub const DEFAULT_STEP_TIMEOUT_SECS: f64 = 300.0;
+
 /// The test world shared across all steps in a scenario.
 #[derive(Debug, Default, World)]
 pub struct ThingOsWorld {
@@ -43,9 +46,34 @@ pub struct ThingOsWorld {
     /// Byte offset in serial_log captured before the last command was sent.
     #[world(skip)]
     pub serial_checkpoint: usize,
+    /// Scenario-wide default timeout derived from feature/scenario tags.
+    #[world(skip)]
+    pub scenario_timeout_secs: Option<f64>,
 }
 
 impl ThingOsWorld {
+    pub fn default_step_timeout_secs() -> f64 {
+        std::env::var("BDD_STEP_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| *value > 0.0)
+            .unwrap_or(DEFAULT_STEP_TIMEOUT_SECS)
+    }
+
+    pub fn effective_step_timeout_secs(&self) -> f64 {
+        self.scenario_timeout_secs.unwrap_or_else(Self::default_step_timeout_secs)
+    }
+
+    pub fn parse_timeout_tag(tag: impl AsRef<str>) -> Option<f64> {
+        let tag = tag.as_ref().trim_start_matches('@');
+        let value = tag
+            .strip_prefix("timeout.")
+            .or_else(|| tag.strip_prefix("timeout="))
+            .or_else(|| tag.strip_prefix("timeout-"))?;
+        let value = value.strip_suffix('s').unwrap_or(value);
+        value.parse::<f64>().ok().filter(|parsed| *parsed > 0.0)
+    }
+
     fn bdd_cache_dir() -> PathBuf {
         PathBuf::from("target").join("bdd").join("cache")
     }
@@ -678,4 +706,23 @@ pub fn strip_ansi(s: &str) -> String {
             .expect("Invalid ANSI regex")
     });
     re.replace_all(s, "").replace('\r', "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThingOsWorld;
+
+    #[test]
+    fn parses_supported_timeout_tags() {
+        assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.30s"), Some(30.0));
+        assert_eq!(ThingOsWorld::parse_timeout_tag("timeout=45"), Some(45.0));
+        assert_eq!(ThingOsWorld::parse_timeout_tag("@timeout-7.5s"), Some(7.5));
+    }
+
+    #[test]
+    fn rejects_invalid_timeout_tags() {
+        assert_eq!(ThingOsWorld::parse_timeout_tag("smoke"), None);
+        assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.0s"), None);
+        assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.bad"), None);
+    }
 }

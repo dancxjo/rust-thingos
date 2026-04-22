@@ -1,5 +1,6 @@
 Feature: Scheduler entry latency instrumentation
 
+  @timeout.30s
   @smoke
   Scenario: Scheduler loop entry is reached before deferred boot framebuffer paint
     Given the machine is started

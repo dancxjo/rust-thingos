@@ -7,10 +7,7 @@ use std::collections::HashMap;
 
 use cucumber::{given, then, when};
 
-use crate::world::{ThingOsWorld, strip_ansi};
-
-/// Default timeout for waiting on serial output (seconds).
-const DEFAULT_TIMEOUT_SECS: f64 = 300.0;
+use crate::world::{DEFAULT_STEP_TIMEOUT_SECS, ThingOsWorld, strip_ansi};
 
 /// Custom error type for step failures that doesn't panic
 #[derive(Debug)]
@@ -23,6 +20,10 @@ impl std::fmt::Display for StepError {
 }
 
 impl std::error::Error for StepError {}
+
+fn default_timeout_secs(world: &ThingOsWorld) -> f64 {
+    world.effective_step_timeout_secs()
+}
 
 // ===== Pixel Verification Helpers =====
 
@@ -470,18 +471,18 @@ async fn check_serial_message_with_timeout(
     expected: String,
     timeout: String,
 ) -> Result<(), StepError> {
-    let timeout_secs = timeout.parse::<f64>().unwrap_or(DEFAULT_TIMEOUT_SECS);
+    let timeout_secs = timeout.parse::<f64>().unwrap_or(DEFAULT_STEP_TIMEOUT_SECS);
     check_serial(world, &expected, timeout_secs).await
 }
 
 #[then(regex = r#"^I should see a message in the serial output that says "(.+)"$"#)]
 async fn check_serial_message(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
-    check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
+    check_serial(world, &expected, default_timeout_secs(world)).await
 }
 
 #[then(regex = r#"^the serial output should contain "(.+)"$"#)]
 async fn serial_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
-    check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
+    check_serial(world, &expected, default_timeout_secs(world)).await
 }
 
 #[then(regex = r#"^the serial output should contain "(.+)" within ([0-9.]+)s$"#)]
@@ -490,7 +491,7 @@ async fn serial_contains_with_timeout(
     expected: String,
     timeout: String,
 ) -> Result<(), StepError> {
-    let timeout_secs = timeout.parse::<f64>().unwrap_or(DEFAULT_TIMEOUT_SECS);
+    let timeout_secs = timeout.parse::<f64>().unwrap_or(DEFAULT_STEP_TIMEOUT_SECS);
     check_serial(world, &expected, timeout_secs).await
 }
 
@@ -499,7 +500,7 @@ async fn wait_for_serial_contains(
     world: &mut ThingOsWorld,
     expected: String,
 ) -> Result<(), StepError> {
-    check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
+    check_serial(world, &expected, default_timeout_secs(world)).await
 }
 
 async fn check_serial(
@@ -534,7 +535,7 @@ async fn shutdown_system(world: &mut ThingOsWorld) {
 
 #[then("I should see that the machine has halted")]
 async fn check_system_halted(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    check_serial(world, "System halted", DEFAULT_TIMEOUT_SECS).await
+    check_serial(world, "System halted", default_timeout_secs(world)).await
 }
 
 #[then(regex = r#"^the screen should be filled with "(.+)"$"#)]
@@ -794,7 +795,7 @@ async fn check_ordering(
 
 #[then(regex = r#"^I should see "(.+)"$"#)]
 async fn should_see_simple(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
-    check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
+    check_serial(world, &expected, default_timeout_secs(world)).await
 }
 
 #[given("the machine is booting")]
@@ -804,7 +805,7 @@ async fn machine_is_booting(world: &mut ThingOsWorld) -> Result<(), StepError> {
 
 #[then(regex = r#"^the log should contain "(.+)"$"#)]
 async fn log_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
-    check_serial(world, &expected, DEFAULT_TIMEOUT_SECS).await
+    check_serial(world, &expected, default_timeout_secs(world)).await
 }
 
 // ===== Consolidated Boot Feature Steps =====
@@ -1234,7 +1235,7 @@ async fn wait_for_clock_ticks_impl(
 
 #[then("watch overflows should be 0")]
 async fn watch_overflows_zero(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    let report = wait_for_perf_report(world, DEFAULT_TIMEOUT_SECS).await?;
+    let report = wait_for_perf_report(world, default_timeout_secs(world)).await?;
     let mut found = false;
     for (name, avg) in &report.counters {
         if name == "watch_overflows" || name.starts_with("watch_overflows.") {
@@ -1260,7 +1261,7 @@ async fn dirty_nodes_layout_below(
     world: &mut ThingOsWorld,
     threshold: u64,
 ) -> Result<(), StepError> {
-    let report = wait_for_perf_report(world, DEFAULT_TIMEOUT_SECS).await?;
+    let report = wait_for_perf_report(world, default_timeout_secs(world)).await?;
     let avg = report
         .counters
         .get("dirty_nodes_layout")
@@ -1280,7 +1281,7 @@ async fn traverse_all_absent_or_below(
     world: &mut ThingOsWorld,
     threshold_ms: f64,
 ) -> Result<(), StepError> {
-    let report = wait_for_perf_report(world, DEFAULT_TIMEOUT_SECS).await?;
+    let report = wait_for_perf_report(world, default_timeout_secs(world)).await?;
     if let Some(avg) = report.spans.get("ui.snap.traverse_all").copied() {
         if avg > threshold_ms {
             return Err(StepError(format!(
@@ -1297,7 +1298,7 @@ async fn average_frame_time_below(
     world: &mut ThingOsWorld,
     threshold_ms: u64,
 ) -> Result<(), StepError> {
-    let report = wait_for_perf_report(world, DEFAULT_TIMEOUT_SECS).await?;
+    let report = wait_for_perf_report(world, default_timeout_secs(world)).await?;
     let avg_ns = report
         .counters
         .get("frame.work_ns")
