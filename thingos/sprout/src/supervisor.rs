@@ -100,26 +100,14 @@ impl Supervisor {
         // Stage 1: Launch Serial Shell
         stem::debug!("SPROUT: Launching serial shell...");
         setup_serial_shell(self.tasks.clone());
-
-        // Stage 2: Start cambium for driver discovery.
-        stem::debug!("SPROUT: Spawning cambium for driver discovery...");
-        self.spawn_cambium();
-
-        // Stage 3: Mount iso9660d (ISO9660 VFS provider).
-        stem::debug!("SPROUT: Spawning iso9660d...");
-        self.spawn_iso9660d();
-
-        // Stage 4: Start netd only after the network driver publishes its VFS tree.
-        stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
-        self.spawn_netd_when_ready();
-
-        // Stage 6: Run health monitoring inline. This preserves restart logic
-        // without creating an extra helper thread during early boot.
-        stem::debug!("SPROUT: Running health-monitoring vine inline");
+        stem::debug!("SPROUT: Serial shell launched; continuing supervisor startup in background");
+        self.spawn_background_startup();
+        stem::debug!("SPROUT: Running registration + health supervision loop");
 
         // Main loop: keep health monitoring active without spawning a helper
         // thread, which can wedge this boot path before driver bring-up.
         loop {
+            self.process_registrations();
             run_health_vine(&self.tasks);
             stem::sleep_ms(200);
         }
@@ -173,33 +161,7 @@ impl Supervisor {
     }
 
     fn spawn_cambium(&mut self) {
-        let (write, read) = match stem::syscall::port_create(4096) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        // We could pass the registrar port to cambium if it needs to register things,
-        // but for now cambium just spawns drivers.
-        match stem::syscall::spawn_process("/bin/cambium", 0) {
-            Ok(pid) => {
-                stem::debug!("SPROUT: Spawned cambium (PID={})", pid);
-                let mut tasks = self.tasks.lock();
-                tasks.push(ManagedTask {
-                    name: "cambium".to_string(),
-                    kind: TaskKind::Service("svc.cambium".to_string()),
-                    module_path: "/bin/cambium".to_string(),
-                    pid: Some(pid),
-                    restarts: 0,
-                    spawn_arg: 0,
-                    bind_instance_id: 0,
-                    drv_req_write: write,
-                    drv_resp_read: read,
-                    boot_req_read: 0,
-                    boot_resp_write: 0,
-                    resp_fd: None,
-                });
-            }
-            Err(e) => warn!("SPROUT: Failed to spawn cambium: {:?}", e),
-        }
+        spawn_cambium_task(self.tasks.clone());
     }
 
     fn spawn_netd_when_ready(&self) {
@@ -218,20 +180,25 @@ impl Supervisor {
     }
 
     fn spawn_iso9660d(&mut self) {
-        match stem::syscall::spawn_process("/bin/iso9660d", 0) {
-            Ok(pid) => {
-                stem::debug!("SPROUT: Spawned iso9660d (PID={})", pid);
-                let mut tasks = self.tasks.lock();
-                tasks.push(ManagedTask {
-                    name: "iso9660d".to_string(),
-                    kind: TaskKind::Service("svc.iso9660d".to_string()),
-                    module_path: "/bin/iso9660d".to_string(),
-                    pid: Some(pid),
-                    ..Default::default()
-                });
+        spawn_iso9660d_task(self.tasks.clone());
+    }
+
+    fn spawn_background_startup(&self) {
+        let tasks = self.tasks.clone();
+        let _ = stem::thread::spawn_task(move || {
+            stem::debug!("SPROUT: Background startup thread running");
+            spawn_cambium_task(tasks.clone());
+            spawn_iso9660d_task(tasks.clone());
+            info!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
+            loop {
+                if path_exists(NETD_PROVIDER_PATH) {
+                    info!("SPROUT: {} is ready; spawning netd.", NETD_PROVIDER_PATH);
+                    spawn_netd_task(tasks.clone());
+                    break;
+                }
+                stem::sleep_ms(NETD_WAIT_POLL_MS);
             }
-            Err(e) => warn!("SPROUT: Failed to spawn iso9660d: {:?}", e),
-        }
+        });
     }
 
     #[allow(dead_code)]
@@ -506,6 +473,34 @@ fn path_exists(path: &str) -> bool {
     }
 }
 
+fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    let (write, read) = match stem::syscall::port_create(4096) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    match stem::syscall::spawn_process("/bin/cambium", 0) {
+        Ok(pid) => {
+            stem::debug!("SPROUT: Spawned cambium (PID={})", pid);
+            let mut tasks = tasks.lock();
+            tasks.push(ManagedTask {
+                name: "cambium".to_string(),
+                kind: TaskKind::Service("svc.cambium".to_string()),
+                module_path: "/bin/cambium".to_string(),
+                pid: Some(pid),
+                restarts: 0,
+                spawn_arg: 0,
+                bind_instance_id: 0,
+                drv_req_write: write,
+                drv_resp_read: read,
+                boot_req_read: 0,
+                boot_resp_write: 0,
+                resp_fd: None,
+            });
+        }
+        Err(e) => warn!("SPROUT: Failed to spawn cambium: {:?}", e),
+    }
+}
+
 fn spawn_netd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     match stem::syscall::spawn_process("/bin/netd", 0) {
         Ok(pid) => {
@@ -520,6 +515,23 @@ fn spawn_netd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
             });
         }
         Err(e) => warn!("SPROUT: Failed to spawn netd: {:?}", e),
+    }
+}
+
+fn spawn_iso9660d_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    match stem::syscall::spawn_process("/bin/iso9660d", 0) {
+        Ok(pid) => {
+            stem::debug!("SPROUT: Spawned iso9660d (PID={})", pid);
+            let mut tasks = tasks.lock();
+            tasks.push(ManagedTask {
+                name: "iso9660d".to_string(),
+                kind: TaskKind::Service("svc.iso9660d".to_string()),
+                module_path: "/bin/iso9660d".to_string(),
+                pid: Some(pid),
+                ..Default::default()
+            });
+        }
+        Err(e) => warn!("SPROUT: Failed to spawn iso9660d: {:?}", e),
     }
 }
 
