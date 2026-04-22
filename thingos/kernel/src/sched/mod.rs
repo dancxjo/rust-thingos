@@ -1145,8 +1145,28 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         return;
     }
 
-    let cpus_online;
-    let mut cpu_logs = alloc::vec::Vec::new();
+    #[derive(Copy, Clone)]
+    struct CpuStats {
+        i: usize,
+        curr: Option<crate::sched::TaskId>,
+        runq: usize,
+        runq_avg: u64,
+        runq_samples: u64,
+        ctxsw: u64,
+        idle2busy: u64,
+        tick: u64,
+        ipi: u64,
+        enq: u64,
+        deq: u64,
+        wake: u64,
+        lock_miss: u64,
+        lock_pending: u64,
+        lock_blocked: u64,
+    }
+    let mut cpus_online = 0;
+    let mut stats_buf = [core::mem::MaybeUninit::<CpuStats>::uninit(); 32];
+    let mut num_stats = 0;
+
     {
         let Some(lock) = SCHEDULER.try_lock() else {
             return;
@@ -1159,6 +1179,7 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
         cpus_online = sched.state.online_cpu_count;
         for &i in &sched.state.online_cpus {
+            if num_stats >= stats_buf.len() { break; }
             let pc = &sched.state.per_cpu[i];
             let runq: usize = pc.runq.iter().map(|q| q.len()).sum();
             let runq_avg = if pc.stats.runq_sample_count == 0 {
@@ -1166,29 +1187,48 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
             } else {
                 pc.stats.runq_sample_total / pc.stats.runq_sample_count
             };
-            cpu_logs.push(alloc::format!(
-                "SCHED-DBG: cpu={} curr={:?} runq={} runq_avg={} runq_samples={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
+            stats_buf[num_stats].write(CpuStats {
                 i,
-                pc.current,
+                curr: pc.current,
                 runq,
                 runq_avg,
-                pc.stats.runq_sample_count,
-                pc.stats.context_switches,
-                pc.stats.idle_to_nonidle,
-                pc.stats.timer_interrupts,
-                pc.stats.resched_ipi_received,
-                pc.stats.runnable_enqueues,
-                pc.stats.runnable_dequeues,
-                pc.stats.wakeups,
-                pc.stats.lock_trylock_misses,
-                pc.stats.lock_trylock_misses_with_pending_resched,
-                pc.stats.lock_blocked_dispatch
-            ));
+                runq_samples: pc.stats.runq_sample_count,
+                ctxsw: pc.stats.context_switches,
+                idle2busy: pc.stats.idle_to_nonidle,
+                tick: pc.stats.timer_interrupts,
+                ipi: pc.stats.resched_ipi_received,
+                enq: pc.stats.runnable_enqueues,
+                deq: pc.stats.runnable_dequeues,
+                wake: pc.stats.wakeups,
+                lock_miss: pc.stats.lock_trylock_misses,
+                lock_pending: pc.stats.lock_trylock_misses_with_pending_resched,
+                lock_blocked: pc.stats.lock_blocked_dispatch,
+            });
+            num_stats += 1;
         }
     } // drop lock
+
     crate::ktrace!("SCHED-DBG: cpus_online={}", cpus_online);
-    for log in cpu_logs {
-        crate::ktrace!("{}", log);
+    for idx in 0..num_stats {
+        let s = unsafe { stats_buf[idx].assume_init_ref() };
+        crate::ktrace!(
+            "SCHED-DBG: cpu={} curr={:?} runq={} runq_avg={} runq_samples={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
+            s.i,
+            s.curr,
+            s.runq,
+            s.runq_avg,
+            s.runq_samples,
+            s.ctxsw,
+            s.idle2busy,
+            s.tick,
+            s.ipi,
+            s.enq,
+            s.deq,
+            s.wake,
+            s.lock_miss,
+            s.lock_pending,
+            s.lock_blocked
+        );
     }
 }
 

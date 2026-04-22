@@ -34,7 +34,7 @@ static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Off)
 /// Default is 2 (warn).
-static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(3);
+static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(2);
 
 /// Set the minimum log level for output (0=Off, 1=Error+, 2=Warn+, etc.)
 pub fn set_log_level(level: u8) {
