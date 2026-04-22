@@ -74,7 +74,7 @@ const DOT_ACTIVE_COLOR: u32 = 0x00AADD;
 
 const BAR_H: usize = 6;
 const DOT_SIZE: usize = 8;
-const MSG_H: usize = 12;
+const MSG_H: usize = 16;
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -230,7 +230,7 @@ pub fn finish() {
 
 // ── Helper: icon bitmap lookup ────────────────────────────────────────────────
 
-fn icon_bits_for_phase(phase: BootPhase) -> &'static [u128; 80] {
+fn icon_bits_for_phase(phase: BootPhase) -> &'static [[u128; 2]; 80] {
     match phase {
         BootPhase::Framebuffer => &ICON_FRAMEBUFFER,
         BootPhase::Memory => &ICON_MEMORY,
@@ -283,6 +283,16 @@ impl BootProgressState {
         // Erase cell background.
         self.fill_rect(x, y, size, size, PANEL_BG);
 
+        // Old-timey bezel: Sunken look (dark top/left, light bottom/right)
+        let shadow = 0x080808;
+        let highlight = 0x222222;
+        for i in 0..size {
+            self.put_pixel(x + i, y, shadow);
+            self.put_pixel(x, y + i, shadow);
+            self.put_pixel(x + i, y + size - 1, highlight);
+            self.put_pixel(x + size - 1, y + i, highlight);
+        }
+
         let color = if active {
             ACTIVE_FG
         } else if complete {
@@ -290,12 +300,14 @@ impl BootProgressState {
         } else {
             PENDING_FG
         };
-        self.blit_bit_icon_colored(x, y, size, icon_bits_for_phase(phase), color);
+        
+        // Draw icon slightly inset within the bezel
+        self.blit_bit_icon_colored(x + 2, y + 2, size.saturating_sub(4), icon_bits_for_phase(phase), color);
 
         // Small green square in the top-right corner marks completion.
         if complete {
             let marker = (size / 6).clamp(3, 8);
-            self.fill_rect(x + size - marker, y, marker, marker, CHECK_COLOR);
+            self.fill_rect(x + size - marker - 2, y + 2, marker, marker, CHECK_COLOR);
         }
     }
 
@@ -352,7 +364,8 @@ impl BootProgressState {
 
     /// Replace the milestone text row with `msg`, centred within the panel.
     fn update_message(&mut self, msg: &str) {
-        self.fill_rect(self.layout.panel_x, self.layout.msg_y, self.layout.panel_side, MSG_H, 0);
+        // Clear 18 pixels to ensure no artifacts remain from 16-pixel Unifont.
+        self.fill_rect(self.layout.panel_x, self.layout.msg_y, self.layout.panel_side, 18, 0);
         if self.unifont_data.is_some() {
             let char_w = 8;
             let text_w = msg.len() * char_w;
@@ -365,16 +378,54 @@ impl BootProgressState {
         }
     }
 
-    fn blit_bit_icon_colored(&mut self, x: usize, y: usize, size: usize, bits: &[u128; ICON_SIDE], color: u32) {
-        let scale = (size / ICON_SIDE).max(1);
-        for row in 0..ICON_SIDE {
-            let row_bits = bits[row];
-            for col in 0..ICON_SIDE {
-                if (row_bits >> (127 - col)) & 1 != 0 {
-                    self.fill_rect(x + col * scale, y + row * scale, scale, scale, color);
+    fn blit_bit_icon_colored(&mut self, x: usize, y: usize, size: usize, bits: &[[u128; 2]; ICON_SIDE], color: u32) {
+        for dy in 0..size {
+            let row = (dy * ICON_SIDE) / size;
+            let row_hi = bits[row][0];
+            let row_lo = bits[row][1];
+            for dx in 0..size {
+                let col = (dx * ICON_SIDE) / size;
+                let hi = (row_hi >> (127 - col)) & 1;
+                let lo = (row_lo >> (127 - col)) & 1;
+                let alpha_idx = (hi << 1) | lo;
+                if alpha_idx == 0 {
+                    continue;
                 }
+
+                let mut pixel_color = if alpha_idx == 3 {
+                    color
+                } else {
+                    self.blend(PANEL_BG, color, alpha_idx as u32)
+                };
+
+                // Old-timey scanline effect: dim every second screen row
+                if (y + dy) % 2 == 1 {
+                    pixel_color = self.dim(pixel_color, 210); // slightly less aggressive dimming
+                }
+                
+                self.put_pixel(x + dx, y + dy, pixel_color);
             }
         }
+    }
+
+    /// Linear blend between bg and fg based on 2-bit alpha index (1=33%, 2=66%).
+    fn blend(&self, bg: u32, fg: u32, alpha_idx: u32) -> u32 {
+        let (f_a, b_a) = match alpha_idx {
+            1 => (85, 170),
+            2 => (170, 85),
+            _ => (255, 0),
+        };
+
+        let rb = (((fg & 0x00FF00FF) * f_a + (bg & 0x00FF00FF) * b_a) >> 8) & 0x00FF00FF;
+        let g = (((fg & 0x0000FF00) * f_a + (bg & 0x0000FF00) * b_a) >> 8) & 0x0000FF00;
+        rb | g
+    }
+
+    /// Reduce brightness of a color by a factor (0-255).
+    fn dim(&self, color: u32, factor: u32) -> u32 {
+        let rb = (((color & 0x00FF00FF) * factor) >> 8) & 0x00FF00FF;
+        let g = (((color & 0x0000FF00) * factor) >> 8) & 0x0000FF00;
+        rb | g
     }
 
     fn draw_char(&mut self, x: usize, y: usize, c: char, color: u32) {

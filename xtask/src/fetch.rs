@@ -607,23 +607,29 @@ fn fetch_lucide_icons(assets: &Path) -> Result<()> {
 
         resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-        let mut bitmap = [0u128; 80];
+        let mut bitmap_hi = [0u128; 80];
+        let mut bitmap_lo = [0u128; 80];
         for y in 0..80 {
-            let mut row = 0u128;
+            let mut row_hi = 0u128;
+            let mut row_lo = 0u128;
             for x in 0..80 {
                 let pixel = pixmap.pixel(x, y).unwrap();
-                if pixel.alpha() > 128 { // Use alpha channel to determine if it's solid
-                    row |= 1u128 << (127 - x);
+                let a = pixel.alpha();
+                let bits = a / 64; // 0, 1, 2, 3
+                if (bits >> 1) & 1 != 0 {
+                    row_hi |= 1u128 << (127 - x);
+                }
+                if bits & 1 != 0 {
+                    row_lo |= 1u128 << (127 - x);
                 }
             }
-            bitmap[y as usize] = row;
+            bitmap_hi[y as usize] = row_hi;
+            bitmap_lo[y as usize] = row_lo;
         }
 
-        generated_rs.push_str(&format!("pub const {}: [u128; 80] = [\n", const_name));
+        generated_rs.push_str(&format!("pub const {}: [[u128; 2]; 80] = [\n", const_name));
         for i in 0..80 {
-            if i % 4 == 0 { generated_rs.push_str("    "); }
-            generated_rs.push_str(&format!("0x{:032x}, ", bitmap[i]));
-            if i % 4 == 3 { generated_rs.push_str("\n"); }
+            generated_rs.push_str(&format!("    [0x{:032x}, 0x{:032x}],\n", bitmap_hi[i], bitmap_lo[i]));
         }
         generated_rs.push_str("];\n\n");
     }
