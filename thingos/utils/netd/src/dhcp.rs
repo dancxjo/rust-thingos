@@ -108,10 +108,9 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             .unwrap_or(DHCP_POLL_SLICE_MS);
         if poll_delay_ms != last_poll_delay_ms {
             let elapsed_ms = (ts - start).total_millis();
-            let now_absolute_ms = ts.total_millis();
-            let next_retry_deadline_ms = poll_delay_ms.map(|ms| {
-                now_absolute_ms.saturating_add(i64::try_from(ms).unwrap_or(i64::MAX))
-            });
+            let now_absolute_ms = u64::try_from(ts.total_millis()).unwrap_or(0);
+            let next_retry_deadline_ms =
+                poll_delay_ms.map(|ms| now_absolute_ms.saturating_add(ms));
             let wake_reason = match poll_delay_ms {
                 Some(ms) if ms > wait_ms => "slice_cap",
                 Some(_) => "poll_delay",
