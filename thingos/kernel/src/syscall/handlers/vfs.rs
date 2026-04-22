@@ -2364,19 +2364,25 @@ mod tests {
         pinfo: Arc<Mutex<crate::task::ProcessInfo>>,
         f: impl FnOnce() -> R,
     ) -> R {
+        struct HookCleanupGuard;
+        impl Drop for HookCleanupGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    crate::sched::hooks::PROCESS_INFO_HOOK = None;
+                    CURRENT_TID_HOOK = None;
+                }
+                TEST_PROCESS_INFO.lock().take();
+            }
+        }
+
         let _guard = TEST_POLL_GUARD.lock();
+        let _cleanup = HookCleanupGuard;
         unsafe {
             CURRENT_TID_HOOK = Some(test_current_tid);
             crate::sched::hooks::PROCESS_INFO_HOOK = Some(process_info_hook);
         }
         TEST_PROCESS_INFO.lock().replace(pinfo);
-        let out = f();
-        unsafe {
-            crate::sched::hooks::PROCESS_INFO_HOOK = None;
-            CURRENT_TID_HOOK = None;
-        }
-        TEST_PROCESS_INFO.lock().take();
-        out
+        f()
     }
 
     /// A relative path is joined with the CWD and normalised.

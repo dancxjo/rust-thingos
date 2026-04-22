@@ -12,7 +12,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::collections::btree_map::Entry;
-use alloc::{collections::BTreeMap, vec};
+use alloc::collections::BTreeMap;
 
 use abi::errors::{Errno, SysResult};
 use abi::syscall::mount_flags;
@@ -50,7 +50,7 @@ fn current_namespace_id() -> u64 {
     }
 }
 
-fn ensure_namespace_locked(tables: &mut BTreeMap<u64, Vec<MountEntry>>, ns_id: u64) {
+fn ensure_namespace_table_exists_locked(tables: &mut BTreeMap<u64, Vec<MountEntry>>, ns_id: u64) {
     match tables.entry(ns_id) {
         Entry::Occupied(_) => {}
         Entry::Vacant(slot) => {
@@ -62,7 +62,7 @@ fn ensure_namespace_locked(tables: &mut BTreeMap<u64, Vec<MountEntry>>, ns_id: u
 
 fn ensure_namespace(ns_id: u64) {
     let mut tables = MOUNT_TABLES.write();
-    ensure_namespace_locked(&mut tables, ns_id);
+    ensure_namespace_table_exists_locked(&mut tables, ns_id);
 }
 
 /// initialize the mount table storage.  Must be called once before any
@@ -87,7 +87,7 @@ pub fn mount_for_namespace(ns_id: u64, mount_point: &str, driver: Arc<dyn VfsDri
     let prefix = normalise(mount_point);
     let id = NEXT_MOUNT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let mut tables = MOUNT_TABLES.write();
-    ensure_namespace_locked(&mut tables, ns_id);
+    ensure_namespace_table_exists_locked(&mut tables, ns_id);
     let Some(table) = tables.get_mut(&ns_id) else {
         return;
     };
@@ -104,7 +104,7 @@ pub fn mount_for_namespace(ns_id: u64, mount_point: &str, driver: Arc<dyn VfsDri
             table[pos].stack.push(layer);
         }
     } else {
-        table.push(MountEntry { prefix, stack: vec![layer] });
+        table.push(MountEntry { prefix, stack: alloc::vec![layer] });
         // Keep longest-prefix first so that `/dev/pts` beats `/dev`.
         table.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
     }
@@ -121,7 +121,7 @@ pub fn umount(mount_point: &str) -> SysResult<()> {
 pub fn umount_for_namespace(ns_id: u64, mount_point: &str) -> SysResult<()> {
     let prefix = normalise(mount_point);
     let mut tables = MOUNT_TABLES.write();
-    ensure_namespace_locked(&mut tables, ns_id);
+    ensure_namespace_table_exists_locked(&mut tables, ns_id);
     let Some(table) = tables.get_mut(&ns_id) else {
         return Err(Errno::ENOENT);
     };
