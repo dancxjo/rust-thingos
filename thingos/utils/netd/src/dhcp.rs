@@ -17,8 +17,8 @@ const DHCP_PROGRESS_LOG_SECS: u64 = 5;
 const DHCP_MAX_BACKOFF_MS: i64 = 4_000;
 /// Keep wakeups responsive while waiting for DHCP events.
 const DHCP_POLL_SLICE_MS: i64 = 100;
-/// Avoid infinite DHCP socket churn if the backoff cap keeps being exceeded.
-const DHCP_MAX_SOCKET_RESETS: u32 = 3;
+/// Avoid immediate repeated socket resets while over-cap backoff is observed.
+const DHCP_RESET_COOLDOWN_MS: i64 = DHCP_MAX_BACKOFF_MS;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -53,9 +53,12 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
     let start = now();
     let timeout = start + Duration::from_secs(DHCP_TIMEOUT_SECS);
+    let max_socket_resets = ((DHCP_TIMEOUT_SECS * 1_000) / (DHCP_MAX_BACKOFF_MS as u64)).max(1) as u32;
     let mut next_progress_log = start + Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
     let mut reset_count = 0u32;
+    let mut next_reset_allowed_at = start;
     let mut last_poll_delay_ms: Option<i64> = None;
+    let mut last_wait_ms: Option<i64> = None;
 
     loop {
         let ts = now();
@@ -102,47 +105,70 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
         let delay = iface.poll_delay(ts, &socket_set);
         let poll_delay_ms = delay.map(|d| d.total_millis());
+        let wait_ms = poll_delay_ms
+            .map(|ms| ms.min(DHCP_POLL_SLICE_MS))
+            .unwrap_or(DHCP_POLL_SLICE_MS);
         if poll_delay_ms != last_poll_delay_ms {
             let elapsed_ms = (ts - start).total_millis();
+            let now_ms = ts.total_millis();
             let next_retry_deadline_ms = poll_delay_ms.map(|ms| elapsed_ms + ms);
             stem::debug!(
-                "DHCP: state=waiting_lease elapsed_ms={} poll_delay_ms={:?} next_retry_deadline_ms={:?} resets={}",
+                "DHCP: state=waiting_lease now_ms={} elapsed_ms={} poll_delay_ms={:?} next_retry_deadline_ms={:?} next_wake_ms={} resets={}/{}",
+                now_ms,
                 elapsed_ms,
                 poll_delay_ms,
                 next_retry_deadline_ms,
-                reset_count
+                now_ms + wait_ms,
+                reset_count,
+                max_socket_resets
             );
             last_poll_delay_ms = poll_delay_ms;
         }
 
         if let Some(poll_delay_ms) = poll_delay_ms {
             let exceeds_backoff_cap = poll_delay_ms > DHCP_MAX_BACKOFF_MS;
-            if exceeds_backoff_cap && reset_count < DHCP_MAX_SOCKET_RESETS {
+            if exceeds_backoff_cap && ts >= next_reset_allowed_at && reset_count < max_socket_resets {
                 reset_count += 1;
+                next_reset_allowed_at = ts + Duration::from_millis(DHCP_RESET_COOLDOWN_MS);
                 stem::warn!(
-                    "DHCP: poll_delay_ms={} exceeds cap={}, resetting DHCP socket (resets={})",
+                    "DHCP: poll_delay_ms={} exceeds cap={}, resetting DHCP socket (resets={}/{} next_reset_allowed_ms={})",
                     poll_delay_ms,
                     DHCP_MAX_BACKOFF_MS,
-                    reset_count
+                    reset_count,
+                    max_socket_resets,
+                    next_reset_allowed_at.total_millis()
                 );
                 // `dhcp_handle` is owned by this loop and always valid here; any
                 // failure would indicate a logic bug rather than runtime recovery.
                 let _ = socket_set.remove::<Dhcpv4Socket>(dhcp_handle);
                 dhcp_handle = socket_set.add(Dhcpv4Socket::new());
                 continue;
-            } else if exceeds_backoff_cap {
-                stem::warn!(
-                    "DHCP: poll_delay_ms={} exceeds cap={} but reset budget exhausted (resets={})",
+            } else if exceeds_backoff_cap && ts < next_reset_allowed_at {
+                stem::debug!(
+                    "DHCP: poll_delay_ms={} exceeds cap={}, waiting until reset cooldown expires at {} ms",
                     poll_delay_ms,
                     DHCP_MAX_BACKOFF_MS,
-                    reset_count
+                    next_reset_allowed_at.total_millis()
+                );
+            } else if exceeds_backoff_cap {
+                stem::warn!(
+                    "DHCP: poll_delay_ms={} exceeds cap={} but reset budget exhausted (resets={}/{})",
+                    poll_delay_ms,
+                    DHCP_MAX_BACKOFF_MS,
+                    reset_count,
+                    max_socket_resets
                 );
             }
         }
 
-        let wait_ms = poll_delay_ms
-            .map(|ms| ms.min(DHCP_POLL_SLICE_MS))
-            .unwrap_or(DHCP_POLL_SLICE_MS);
+        if Some(wait_ms) != last_wait_ms {
+            stem::trace!(
+                "DHCP: wait_slice_ms={} (poll_delay_ms={:?})",
+                wait_ms,
+                poll_delay_ms
+            );
+            last_wait_ms = Some(wait_ms);
+        }
         let deadline = ts + Duration::from_millis(wait_ms);
         wait_until(deadline);
     }
