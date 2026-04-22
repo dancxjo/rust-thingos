@@ -599,31 +599,31 @@ fn fetch_lucide_icons(assets: &Path) -> Result<()> {
         let opt = usvg::Options::default();
         let tree = usvg::Tree::from_str(&svg_data, &opt).unwrap();
 
-        let width = 32;
-        let height = 32;
+        let width = 80;
+        let height = 80;
         let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).unwrap();
 
-        let transform = resvg::tiny_skia::Transform::from_scale(32.0 / 24.0, 32.0 / 24.0);
+        let transform = resvg::tiny_skia::Transform::from_scale(80.0 / 24.0, 80.0 / 24.0);
 
         resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-        let mut bitmap = [0u32; 32];
-        for y in 0..32 {
-            let mut row = 0u32;
-            for x in 0..32 {
+        let mut bitmap = [0u128; 80];
+        for y in 0..80 {
+            let mut row = 0u128;
+            for x in 0..80 {
                 let pixel = pixmap.pixel(x, y).unwrap();
                 if pixel.alpha() > 128 { // Use alpha channel to determine if it's solid
-                    row |= 1 << (31 - x);
+                    row |= 1u128 << (127 - x);
                 }
             }
             bitmap[y as usize] = row;
         }
 
-        generated_rs.push_str(&format!("pub const {}: [u32; 32] = [\n", const_name));
-        for i in 0..32 {
-            if i % 8 == 0 { generated_rs.push_str("    "); }
-            generated_rs.push_str(&format!("0x{:08x}, ", bitmap[i]));
-            if i % 8 == 7 { generated_rs.push_str("\n"); }
+        generated_rs.push_str(&format!("pub const {}: [u128; 80] = [\n", const_name));
+        for i in 0..80 {
+            if i % 4 == 0 { generated_rs.push_str("    "); }
+            generated_rs.push_str(&format!("0x{:032x}, ", bitmap[i]));
+            if i % 4 == 3 { generated_rs.push_str("\n"); }
         }
         generated_rs.push_str("];\n\n");
     }

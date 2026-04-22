@@ -1,7 +1,7 @@
 use spin::Mutex;
 use crate::{FramebufferInfo, PixelFormat};
 
-const ICON_SIDE: usize = 32;
+const ICON_SIDE: usize = 80;
 
 /// Total boot tasks matching the 16 sequential `push()` calls in `kernel::start`.
 const TOTAL_TASKS: usize = 16;
@@ -230,7 +230,7 @@ pub fn finish() {
 
 // ── Helper: icon bitmap lookup ────────────────────────────────────────────────
 
-fn icon_bits_for_phase(phase: BootPhase) -> &'static [u32; 32] {
+fn icon_bits_for_phase(phase: BootPhase) -> &'static [u128; 80] {
     match phase {
         BootPhase::Framebuffer => &ICON_FRAMEBUFFER,
         BootPhase::Memory => &ICON_MEMORY,
@@ -365,12 +365,12 @@ impl BootProgressState {
         }
     }
 
-    fn blit_bit_icon_colored(&mut self, x: usize, y: usize, size: usize, bits: &[u32; ICON_SIDE], color: u32) {
+    fn blit_bit_icon_colored(&mut self, x: usize, y: usize, size: usize, bits: &[u128; ICON_SIDE], color: u32) {
         let scale = (size / ICON_SIDE).max(1);
         for row in 0..ICON_SIDE {
             let row_bits = bits[row];
             for col in 0..ICON_SIDE {
-                if (row_bits >> (31 - col)) & 1 != 0 {
+                if (row_bits >> (127 - col)) & 1 != 0 {
                     self.fill_rect(x + col * scale, y + row * scale, scale, scale, color);
                 }
             }
