@@ -942,6 +942,8 @@ fn paint_bootfb_gradient(fb: FramebufferInfo, end_color: u32) {
 }
 
 #[inline]
+/// Convert monotonic timer ticks to microseconds for a given timer frequency.
+/// Returns 0 when `hz` is 0 to avoid divide-by-zero during early boot.
 fn boot_timing_us_from_hz(ticks: u64, hz: u64) -> u64 {
     if hz == 0 {
         0
@@ -951,6 +953,9 @@ fn boot_timing_us_from_hz(ticks: u64, hz: u64) -> u64 {
 }
 
 #[inline]
+/// Log elapsed timing for a scheduler-entry boot step.
+/// Reports both per-step elapsed time and cumulative elapsed time since
+/// `scheduler_entry_window_start`.
 fn log_scheduler_entry_step<R: BootRuntime>(
     runtime: &R,
     boot_timing_hz: u64,
