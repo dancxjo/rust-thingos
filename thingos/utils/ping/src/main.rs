@@ -2,6 +2,8 @@
 //!
 //! Usage: ping [-c count] <host>
 //! Note: the first RTT sample may include ARP neighbor resolution time.
+//! When more than one reply is received, an additional "rtt warm" line is shown
+//! with min/avg/max excluding the first successful sample.
 #![no_std]
 #![no_main]
 
@@ -286,6 +288,11 @@ fn main(_arg: usize) -> ! {
     let mut total_ms = 0u64;
     let mut min_ms = u64::MAX;
     let mut max_ms = 0u64;
+    let mut first_success_seen = false;
+    let mut warm_received = 0u32;
+    let mut warm_total_ms = 0u64;
+    let mut warm_min_ms = u64::MAX;
+    let mut warm_max_ms = 0u64;
 
     let start = stem::time::now();
     for seq in 1..=count {
@@ -302,6 +309,18 @@ fn main(_arg: usize) -> ! {
                 }
                 if ms > max_ms {
                     max_ms = ms;
+                }
+                if !first_success_seen {
+                    first_success_seen = true;
+                } else {
+                    warm_received += 1;
+                    warm_total_ms += ms;
+                    if ms < warm_min_ms {
+                        warm_min_ms = ms;
+                    }
+                    if ms > warm_max_ms {
+                        warm_max_ms = ms;
+                    }
                 }
                 let line = alloc::format!(
                     "{} bytes from {}: icmp_seq={} time={}ms\n",
@@ -338,6 +357,16 @@ fn main(_arg: usize) -> ! {
         let avg = total_ms / received as u64;
         let stats = alloc::format!("rtt min/avg/max = {}/{}/{} ms\n", min_ms, avg, max_ms);
         print(1, &stats);
+        if warm_received > 0 {
+            let warm_avg = warm_total_ms / warm_received as u64;
+            let warm_stats = alloc::format!(
+                "rtt warm min/avg/max (excluding first successful sample) = {}/{}/{} ms\n",
+                warm_min_ms,
+                warm_avg,
+                warm_max_ms
+            );
+            print(1, &warm_stats);
+        }
     }
 
     stem::syscall::exit(if received > 0 { 0 } else { 1 })
