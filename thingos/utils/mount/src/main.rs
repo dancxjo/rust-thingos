@@ -67,7 +67,10 @@ fn main(_arg: usize) -> ! {
             Err(e) => {
                 err(&alloc::format!(
                     "mount: failed to mount {} (device {}) on {}: {:?}\n",
-                    fs_type, device, target, e
+                    fs_type,
+                    device,
+                    target,
+                    e
                 ));
                 exit(1);
             }

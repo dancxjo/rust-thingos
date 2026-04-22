@@ -283,7 +283,8 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         }
         // /proc/<pid>/inbox — VFS access to the process's typed inbox.
         "inbox" => {
-            let pinfo = crate::sched::process_info_for_tid_current(pid as u64).ok_or(Errno::ENOENT)?;
+            let pinfo =
+                crate::sched::process_info_for_tid_current(pid as u64).ok_or(Errno::ENOENT)?;
             let inbox_id = pinfo.lock().unix_compat.message_inbox;
             let inbox = crate::inbox::get_inbox(inbox_id).ok_or(Errno::ENOENT)?;
             Ok(Arc::new(crate::vfs::inbox_node::InboxNode::new(inbox)))
@@ -543,7 +544,8 @@ impl VfsNode for ProcPidJobObserverNode {
             (caller_lock.pid, caller_lock.unix_compat.message_inbox)
         };
 
-        let target = crate::sched::process_info_for_tid_current(self.pid as u64).ok_or(Errno::ESRCH)?;
+        let target =
+            crate::sched::process_info_for_tid_current(self.pid as u64).ok_or(Errno::ESRCH)?;
         let allowed = {
             let target_lock = target.lock();
             caller_pid == self.pid || target_lock.job.ppid == caller_pid

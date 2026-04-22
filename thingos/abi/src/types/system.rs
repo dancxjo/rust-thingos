@@ -1,7 +1,6 @@
 //! Shared types used in syscall payloads.
 //! Must be #[repr(C)] to ensure stable layout.
 
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TimeSpec {

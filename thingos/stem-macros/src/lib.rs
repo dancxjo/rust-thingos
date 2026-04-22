@@ -64,16 +64,10 @@ fn validate_signature(func: &ItemFn) -> Result<bool, syn::Error> {
                     )),
                 }
             } else {
-                Err(syn::Error::new_spanned(
-                    &func.sig.inputs,
-                    "unsupported argument pattern",
-                ))
+                Err(syn::Error::new_spanned(&func.sig.inputs, "unsupported argument pattern"))
             }
         }
-        _ => Err(syn::Error::new_spanned(
-            &func.sig.inputs,
-            "expected zero or one argument",
-        )),
+        _ => Err(syn::Error::new_spanned(&func.sig.inputs, "expected zero or one argument")),
     }
 }
 
@@ -90,10 +84,7 @@ mod tests {
     #[test]
     fn accepts_no_arg_main() {
         let f = parse_fn("fn app() -> ! { loop {} }");
-        assert_eq!(
-            validate_signature(&f).expect("should accept no-arg main function"),
-            false
-        );
+        assert_eq!(validate_signature(&f).expect("should accept no-arg main function"), false);
     }
 
     #[test]

@@ -8,3 +8,4 @@ stem = { path = "../../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../../abi" }
 virtio = { path = "../virtio" }
 ipc_helpers = { path = "../../libs/ipc_helpers" }
+spin = "0.9"

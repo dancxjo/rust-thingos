@@ -162,16 +162,14 @@ impl RustGenerator {
 
 #[cfg(test)]
 mod tests {
+    use indexmap::IndexMap;
+
     use super::RustGenerator;
     use crate::ir::Schema;
-    use indexmap::IndexMap;
 
     #[test]
     fn generates_abi_wire_thingid_import_without_local_struct() {
-        let schema = Schema {
-            version: 1,
-            kinds: IndexMap::new(),
-        };
+        let schema = Schema { version: 1, kinds: IndexMap::new() };
 
         let generated = RustGenerator.generate(&schema);
         assert!(generated.contains("use abi::wire::ThingId;"));

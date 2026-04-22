@@ -1,4 +1,3 @@
-
 use crate::BootRuntime;
 
 pub struct SimdGuard<'a, R: BootRuntime> {

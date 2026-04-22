@@ -161,9 +161,9 @@ pub fn resolve_write_port_compat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::IpcHandleTable;
     use crate::vfs::handle_table::HandleTable;
     use crate::vfs::{OpenFlags, VfsNode, VfsStat};
-    use crate::ipc::IpcHandleTable;
 
     struct NullNode;
 

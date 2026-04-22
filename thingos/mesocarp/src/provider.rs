@@ -18,9 +18,9 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec::Vec;
 #[cfg(test)]
 use alloc::string::ToString;
+use alloc::vec::Vec;
 
 use abi::attrs::{AttrListEntryHeader, AttrType};
 use abi::errors::Errno;
@@ -53,20 +53,15 @@ pub struct HostEntry {
 
 impl HostEntry {
     fn body(&self) -> Vec<u8> {
-        let mut s = alloc::format!(
-            "{}.{}.{}.{}\n",
-            self.ipv4[0], self.ipv4[1], self.ipv4[2], self.ipv4[3]
-        );
+        let mut s =
+            alloc::format!("{}.{}.{}.{}\n", self.ipv4[0], self.ipv4[1], self.ipv4[2], self.ipv4[3]);
         // Truncate to a max size just in case.
         s.truncate(64);
         s.into_bytes()
     }
 
     fn ipv4_string(&self) -> String {
-        alloc::format!(
-            "{}.{}.{}.{}",
-            self.ipv4[0], self.ipv4[1], self.ipv4[2], self.ipv4[3]
-        )
+        alloc::format!("{}.{}.{}.{}", self.ipv4[0], self.ipv4[1], self.ipv4[2], self.ipv4[3])
     }
 }
 
@@ -88,11 +83,7 @@ impl Default for HostsProvider {
 
 impl HostsProvider {
     pub fn new() -> Self {
-        Self {
-            entries: BTreeMap::new(),
-            handles: BTreeMap::new(),
-            next_handle: HANDLE_HOST_BASE,
-        }
+        Self { entries: BTreeMap::new(), handles: BTreeMap::new(), next_handle: HANDLE_HOST_BASE }
     }
 
     /// Insert or update a host. Returns `true` if this is a new entry.
@@ -200,11 +191,7 @@ impl HostsProvider {
             if idx < start_idx {
                 continue;
             }
-            let handle = self
-                .handles
-                .get(name)
-                .copied()
-                .unwrap_or(HANDLE_ROOT);
+            let handle = self.handles.get(name).copied().unwrap_or(HANDLE_ROOT);
             let display = entry.name.as_bytes();
             let name_len = display.len().min(255) as u8;
             if name_len == 0 {
@@ -312,7 +299,11 @@ mod tests {
     #[test]
     fn root_lookup_returns_root_handle() {
         let mut p = HostsProvider::new();
-        assert_eq!(p.handle_lookup("").payload, std::vec![] as std::vec::Vec<u8>, "trivial payload");
+        assert_eq!(
+            p.handle_lookup("").payload,
+            std::vec![] as std::vec::Vec<u8>,
+            "trivial payload"
+        );
         // ok_u64 payload is 8 bytes little-endian.
         let r = p.handle_lookup("/");
         assert_eq!(r.status, 0);

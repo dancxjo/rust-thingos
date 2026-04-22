@@ -52,7 +52,8 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
     let start = now();
     let timeout = start + Duration::from_secs(DHCP_TIMEOUT_SECS);
-    let computed_max_socket_resets = ((DHCP_TIMEOUT_SECS * 1_000) / DHCP_MAX_BACKOFF_MS).max(1) as u32;
+    let computed_max_socket_resets =
+        ((DHCP_TIMEOUT_SECS * 1_000) / DHCP_MAX_BACKOFF_MS).max(1) as u32;
     let mut next_progress_log = start + Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
     let mut reset_count = 0u32;
     let mut next_reset_allowed_at = start;
@@ -103,14 +104,12 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
 
         let delay = iface.poll_delay(ts, &socket_set);
         let poll_delay_ms = delay.map(|d| d.total_millis());
-        let wait_ms = poll_delay_ms
-            .map(|ms| ms.min(DHCP_POLL_SLICE_MS))
-            .unwrap_or(DHCP_POLL_SLICE_MS);
+        let wait_ms =
+            poll_delay_ms.map(|ms| ms.min(DHCP_POLL_SLICE_MS)).unwrap_or(DHCP_POLL_SLICE_MS);
         if poll_delay_ms != last_poll_delay_ms {
             let elapsed_ms = (ts - start).total_millis();
             let now_absolute_ms = u64::try_from(ts.total_millis()).unwrap_or(0);
-            let next_retry_deadline_ms =
-                poll_delay_ms.map(|ms| now_absolute_ms.saturating_add(ms));
+            let next_retry_deadline_ms = poll_delay_ms.map(|ms| now_absolute_ms.saturating_add(ms));
             let wake_reason = match poll_delay_ms {
                 Some(ms) if ms > wait_ms => "slice_cap",
                 Some(_) => "poll_delay",

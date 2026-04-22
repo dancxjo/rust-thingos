@@ -41,7 +41,11 @@ struct ProviderRpc {
 }
 
 impl ProviderRpc {
-    fn new(req_port: Arc<crate::ipc::Port>, resp_port: Arc<crate::ipc::Port>, resp_write_handle: u32) -> Self {
+    fn new(
+        req_port: Arc<crate::ipc::Port>,
+        resp_port: Arc<crate::ipc::Port>,
+        resp_write_handle: u32,
+    ) -> Self {
         Self {
             req: crate::ipc::Sender::new(req_port),
             resp: crate::ipc::Receiver::new(resp_port),
@@ -184,7 +188,6 @@ impl ProviderFs {
         waiters.entry(handle).or_insert_with(|| Arc::new(WaitQueue::new())).clone()
     }
 }
-
 
 impl VfsDriver for ProviderFs {
     fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {

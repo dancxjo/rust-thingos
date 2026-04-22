@@ -303,7 +303,10 @@ impl<'a> Parser<'a> {
                             self.advance()?;
                         }
                         _ => {
-                            return Err(format!("Expected version number, found {:?}", self.curr.0));
+                            return Err(format!(
+                                "Expected version number, found {:?}",
+                                self.curr.0
+                            ));
                         }
                     }
                 }

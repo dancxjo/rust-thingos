@@ -304,4 +304,3 @@ fn dispatch(state: &mut ProviderState, op: &VfsRpcOp, payload: &[u8]) -> Provide
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }
-

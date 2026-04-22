@@ -309,7 +309,9 @@ impl NetVfsProvider {
     /// Take any pending hostname that needs DNS resolution for a TCP connect.
     /// Returns `Some((hostname, dns_server))` together with the deferred
     /// connect metadata when a deferred connect needs resolution.
-    pub fn take_deferred_connect_pending(&mut self) -> Option<(alloc::string::String, Ipv4Address)> {
+    pub fn take_deferred_connect_pending(
+        &mut self,
+    ) -> Option<(alloc::string::String, Ipv4Address)> {
         if self.deferred_connects.is_empty() {
             return None;
         }
@@ -332,9 +334,8 @@ impl NetVfsProvider {
         }
         let dc = self.deferred_connects.remove(0);
         if let Some(ip) = resolved_ip {
-            let r = socket_api.handle_connect_existing(
-                iface, socket_set, dc.api_handle, ip, dc.port,
-            );
+            let r =
+                socket_api.handle_connect_existing(iface, socket_set, dc.api_handle, ip, dc.port);
             if r {
                 send_write_ok(dc.resp_port, dc.text_len as u32);
             } else {
@@ -382,10 +383,10 @@ impl NetVfsProvider {
             VfsRpcOp::SubscribeReady => send_resp(resp_port, &[E_OK]),
             VfsRpcOp::UnsubscribeReady => send_resp(resp_port, &[E_OK]),
             VfsRpcOp::AttrGet
-                | VfsRpcOp::AttrSet
-                | VfsRpcOp::AttrRemove
-                | VfsRpcOp::AttrList
-                | VfsRpcOp::Readlink => send_err(resp_port, E_NOTSUP),
+            | VfsRpcOp::AttrSet
+            | VfsRpcOp::AttrRemove
+            | VfsRpcOp::AttrList
+            | VfsRpcOp::Readlink => send_err(resp_port, E_NOTSUP),
         }
     }
 
@@ -493,7 +494,8 @@ impl NetVfsProvider {
         }
         let data = &payload[20..20 + data_len];
 
-        let result = self.write_handle(handle, data, resp_port, iface, device, socket_set, socket_api);
+        let result =
+            self.write_handle(handle, data, resp_port, iface, device, socket_set, socket_api);
         match result {
             WriteResult::Ok(n) => send_write_ok(resp_port, n as u32),
             WriteResult::Error => send_err(resp_port, E_IO),
@@ -1042,7 +1044,9 @@ impl NetVfsProvider {
             h if h >= TCP_DYN_BASE && h < UDP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - TCP_DYN_BASE) >> 8) as u32;
-                self.write_tcp(api_handle, sf, data, text, resp_port, iface, device, socket_set, socket_api)
+                self.write_tcp(
+                    api_handle, sf, data, text, resp_port, iface, device, socket_set, socket_api,
+                )
             }
             // Dynamic UDP
             h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {

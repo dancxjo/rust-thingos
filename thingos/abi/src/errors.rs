@@ -50,6 +50,7 @@ pub enum Errno {
     ERANGE = 34,
     ENAMETOOLONG = 36,
     ENOSYS = 38,
+    ENOTEMPTY = 39,
     /// Too many levels of symbolic links.
     ELOOP = 40,
     EOVERFLOW = 75,
@@ -140,6 +141,7 @@ impl Errno {
             Errno::ERANGE => "numerical result out of range",
             Errno::ENAMETOOLONG => "file name too long",
             Errno::ENOSYS => "function not implemented",
+            Errno::ENOTEMPTY => "directory not empty",
             Errno::ELOOP => "too many levels of symbolic links",
             Errno::EOVERFLOW => "value too large for defined data type",
             Errno::EMSGSIZE => "message too long",
@@ -208,6 +210,7 @@ pub fn errno(ret: isize) -> core::result::Result<usize, Errno> {
             34 => Err(Errno::ERANGE),
             36 => Err(Errno::ENAMETOOLONG),
             38 => Err(Errno::ENOSYS),
+            39 => Err(Errno::ENOTEMPTY),
             40 => Err(Errno::ELOOP),
             75 => Err(Errno::EOVERFLOW),
             90 => Err(Errno::EMSGSIZE),
@@ -257,6 +260,11 @@ mod tests {
     #[test]
     fn errno_recognizes_eio() {
         assert_eq!(errno(-5), Err(Errno::EIO));
+    }
+
+    #[test]
+    fn errno_recognizes_enotempty() {
+        assert_eq!(errno(-39), Err(Errno::ENOTEMPTY));
     }
 
     #[test]

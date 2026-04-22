@@ -57,7 +57,9 @@ impl<T> OnceCell<T> {
     pub fn set(&self, value: T) {
         // Claim the write right.  If the state is not UNINIT (either WRITING
         // or READY), another caller got here first — panic as documented.
-        if self.state.compare_exchange(UNINIT, WRITING, Ordering::Acquire, Ordering::Relaxed)
+        if self
+            .state
+            .compare_exchange(UNINIT, WRITING, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
             panic!("OnceCell::set() called on already-initialized cell");

@@ -75,8 +75,10 @@ pub fn take_input_char() -> Option<u8> {
     INPUT_QUEUE.pop()
 }
 
-const SCANCODE_MAP_NORMAL: &[u8] = b"\0\x1b1234567890-=\x08\tqwertyuiop[]\n\0asdfghjkl;'` \0zxcvbnm,./\0*\0 ";
-const SCANCODE_MAP_SHIFT: &[u8] = b"\0\x1b!@#$%^&*()_+\x08\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~ \0ZXCVBNM<>?\0*\0 ";
+const SCANCODE_MAP_NORMAL: &[u8] =
+    b"\0\x1b1234567890-=\x08\tqwertyuiop[]\n\0asdfghjkl;'` \0zxcvbnm,./\0*\0 ";
+const SCANCODE_MAP_SHIFT: &[u8] =
+    b"\0\x1b!@#$%^&*()_+\x08\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~ \0ZXCVBNM<>?\0*\0 ";
 
 pub fn buffer_scancode(byte: u8) -> bool {
     PS2_QUEUE.push(byte);
@@ -114,9 +116,17 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
 
     // Track modifiers
     match (extended, scancode) {
-        (false, 0x2A) | (false, 0x36) => { SHIFT_DOWN.store(!released, Ordering::Release); }
-        (false, 0x1D) | (true, 0x1D) => { CTRL_DOWN.store(!released, Ordering::Release); }
-        (false, 0x3A) => { if !released { CAPS_LOCK.fetch_xor(true, Ordering::Release); } }
+        (false, 0x2A) | (false, 0x36) => {
+            SHIFT_DOWN.store(!released, Ordering::Release);
+        }
+        (false, 0x1D) | (true, 0x1D) => {
+            CTRL_DOWN.store(!released, Ordering::Release);
+        }
+        (false, 0x3A) => {
+            if !released {
+                CAPS_LOCK.fetch_xor(true, Ordering::Release);
+            }
+        }
         _ => {}
     }
 
@@ -146,8 +156,12 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
         (false, s) if !released && FB_INPUT_ENABLED.load(Ordering::Acquire) => {
             let shift = SHIFT_DOWN.load(Ordering::Acquire) ^ CAPS_LOCK.load(Ordering::Acquire);
             let ctrl = CTRL_DOWN.load(Ordering::Acquire);
-            
-            let map = if SHIFT_DOWN.load(Ordering::Acquire) { SCANCODE_MAP_SHIFT } else { SCANCODE_MAP_NORMAL };
+
+            let map = if SHIFT_DOWN.load(Ordering::Acquire) {
+                SCANCODE_MAP_SHIFT
+            } else {
+                SCANCODE_MAP_NORMAL
+            };
             if (s as usize) < map.len() {
                 let mut c = map[s as usize];
                 if c != 0 {

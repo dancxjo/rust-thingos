@@ -2512,7 +2512,8 @@ mod tests {
         {
             let mut pi = pinfo.lock();
             pi.namespace = crate::vfs::NamespaceRef::global();
-            pi.authority = crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
+            pi.authority =
+                crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
         }
         let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
         assert_eq!(res, Err(Errno::EPERM));
@@ -2540,7 +2541,8 @@ mod tests {
         {
             let mut pi = pinfo.lock();
             pi.namespace = crate::vfs::NamespaceRef::isolated();
-            pi.authority = crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
+            pi.authority =
+                crate::task::ProcessAuthority { uid: 1000, gid: 1000, capability_mask: 0 };
         }
         let res = run_with_process_info(pinfo, require_namespace_mount_privilege);
         assert_eq!(res, Ok(()));

@@ -14,9 +14,10 @@
 
 extern crate alloc;
 
-use abi::attrs::{AttrListEntryHeader, AttrType};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+use abi::attrs::{AttrListEntryHeader, AttrType};
 
 use crate::cache::CacheEntry;
 
@@ -70,7 +71,11 @@ pub fn entry_attrs(entry: &CacheEntry) -> Vec<Attr> {
     out.push(Attr::u64("user.http.hits", entry.hits));
     out.push(Attr::u64("user.http.body_bytes_cached", entry.body.len() as u64));
     if entry.body_truncated {
-        out.push(Attr { name: "user.http.body_truncated".into(), ty: AttrType::Bool, value: alloc::vec![1] });
+        out.push(Attr {
+            name: "user.http.body_truncated".into(),
+            ty: AttrType::Bool,
+            value: alloc::vec![1],
+        });
     }
 
     // ── Convenience aliases for well-known headers ───────────────────────
@@ -103,10 +108,18 @@ pub fn entry_attrs(entry: &CacheEntry) -> Vec<Attr> {
         out.push(Attr::u64("user.http.max_age", m));
     }
     if entry.directives.no_store {
-        out.push(Attr { name: "user.http.no_store".into(), ty: AttrType::Bool, value: alloc::vec![1] });
+        out.push(Attr {
+            name: "user.http.no_store".into(),
+            ty: AttrType::Bool,
+            value: alloc::vec![1],
+        });
     }
     if entry.directives.no_cache {
-        out.push(Attr { name: "user.http.no_cache".into(), ty: AttrType::Bool, value: alloc::vec![1] });
+        out.push(Attr {
+            name: "user.http.no_cache".into(),
+            ty: AttrType::Bool,
+            value: alloc::vec![1],
+        });
     }
     if let Some(v) = entry.redirect_target.as_deref() {
         out.push(Attr::utf8("user.http.location", v));
@@ -124,11 +137,7 @@ pub fn entry_attrs(entry: &CacheEntry) -> Vec<Attr> {
             continue;
         }
         seen.push(lower.clone());
-        let joined: Vec<String> = entry
-            .head
-            .headers_named(name)
-            .map(|v| v.to_string())
-            .collect();
+        let joined: Vec<String> = entry.head.headers_named(name).map(|v| v.to_string()).collect();
         let value = joined.join("\n");
         let attr_name = alloc::format!("{}{}", XATTR_HEADER_PREFIX, lower);
         out.push(Attr::utf8(&attr_name, &value));
@@ -194,9 +203,10 @@ fn lowercase_ascii(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use http::ResponseHead;
+
     use super::*;
     use crate::cache::{CacheDirectives, CacheEntry};
-    use http::ResponseHead;
     extern crate std;
 
     fn sample_entry() -> CacheEntry {

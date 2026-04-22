@@ -5,6 +5,7 @@
 //! keeping these semantics as ad-hoc fields.
 
 use alloc::sync::Arc;
+
 use spin::{Mutex, Once};
 
 pub mod bridge;

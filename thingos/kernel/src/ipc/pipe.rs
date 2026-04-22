@@ -256,8 +256,7 @@ pub fn write(pipe_id: u64, src: &[u8]) -> Result<usize, abi::errors::Errno> {
             } else if !data.buf.is_full() {
                 let n = data.buf.enqueue(src);
                 pair.write_waitq.remove(tid as u64);
-                crate::ipc::diag::PIPE_WRITES
-                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                crate::ipc::diag::PIPE_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 crate::ipc::diag::PIPE_BYTES_WRITTEN
                     .fetch_add(n as u64, core::sync::atomic::Ordering::Relaxed);
                 Some(Ok(n))

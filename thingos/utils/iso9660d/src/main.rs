@@ -217,10 +217,9 @@ fn dispatch_request(fs: &IsoFs, dev: &PortBlockDevice, req: &ProviderRequest) ->
             ProviderResponse::ok_bytes(&1u32.to_le_bytes())
         }
         VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
-        VfsRpcOp::AttrGet
-        | VfsRpcOp::AttrSet
-        | VfsRpcOp::AttrRemove
-        | VfsRpcOp::AttrList => ProviderResponse::err(Errno::ENOTSUP),
+        VfsRpcOp::AttrGet | VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove | VfsRpcOp::AttrList => {
+            ProviderResponse::err(Errno::ENOTSUP)
+        }
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }

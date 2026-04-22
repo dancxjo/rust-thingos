@@ -209,11 +209,8 @@ fn process_client_message(
 
     match req {
         ClientRequest::Connect(req) => {
-            let client_id = if req.event_port == 0 {
-                0
-            } else {
-                scene.register_client(req.event_port, None)
-            };
+            let client_id =
+                if req.event_port == 0 { 0 } else { scene.register_client(req.event_port, None) };
             send_ack(req.reply_port, 0, client_id, 0);
             client_id != 0
         }

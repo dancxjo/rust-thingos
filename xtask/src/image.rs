@@ -286,15 +286,24 @@ fn generate_limine_config(
             title: "ThingOS (BootFB Fallback)".to_string(),
             kernel_cmdline: format!("loglevel={} display=bootfb", default_loglevel),
         },
-        LimineEntry { title: "ThingOS (Debug)".to_string(), kernel_cmdline: "loglevel=4".to_string() },
-        LimineEntry { title: "ThingOS (Trace)".to_string(), kernel_cmdline: "loglevel=5".to_string() },
+        LimineEntry {
+            title: "ThingOS (Debug)".to_string(),
+            kernel_cmdline: "loglevel=4".to_string(),
+        },
+        LimineEntry {
+            title: "ThingOS (Trace)".to_string(),
+            kernel_cmdline: "loglevel=5".to_string(),
+        },
     ];
 
     if let Some(l) = loglevel {
         if l != "info" && l != "4" && l != "5" {
             entries.insert(
                 0,
-                LimineEntry { title: "ThingOS (Custom)".to_string(), kernel_cmdline: format!("loglevel={l}") },
+                LimineEntry {
+                    title: "ThingOS (Custom)".to_string(),
+                    kernel_cmdline: format!("loglevel={l}"),
+                },
             );
         }
     }

@@ -655,9 +655,7 @@ mod tests {
         std::fs::create_dir_all(iso_root.path().join(format!("lib/rustlib/{target_triple}/lib")))
             .expect("create rustlib");
         std::fs::write(
-            iso_root
-                .path()
-                .join(format!("lib/rustlib/{target_triple}/lib/libcore.rlib")),
+            iso_root.path().join(format!("lib/rustlib/{target_triple}/lib/libcore.rlib")),
             b"rlib",
         )
         .expect("write rustlib artifact");

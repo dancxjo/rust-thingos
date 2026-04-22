@@ -188,7 +188,7 @@ impl ProviderLoop {
         };
         // For debugging AttrList issue
         if hdr.op == 15 {
-             // We recognized it, but let's be sure.
+            // We recognized it, but let's be sure.
         }
 
         let payload_len = match op {

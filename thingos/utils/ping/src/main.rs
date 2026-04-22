@@ -337,19 +337,15 @@ fn main(_arg: usize) -> ! {
     let start = stem::time::now();
     for seq in 1..=count {
         let send_deadline = start
-            + stem::time::Duration::from_millis(DEFAULT_INTERVAL_MS.saturating_mul((seq - 1) as u64));
+            + stem::time::Duration::from_millis(
+                DEFAULT_INTERVAL_MS.saturating_mul((seq - 1) as u64),
+            );
         wait_until(send_deadline);
 
         match ping_once(&data_path, ip, ident, seq as u16, DEFAULT_PAYLOAD_LEN) {
             Ok(ms) => {
                 received += 1;
-                record_rtt(
-                    seq,
-                    ms,
-                    &mut first_sample_ms,
-                    &mut overall_rtt,
-                    &mut post_warmup_rtt,
-                );
+                record_rtt(seq, ms, &mut first_sample_ms, &mut overall_rtt, &mut post_warmup_rtt);
                 let line = alloc::format!(
                     "{} bytes from {}: icmp_seq={} time={}ms\n",
                     DEFAULT_PAYLOAD_LEN + 8,
@@ -386,10 +382,8 @@ fn main(_arg: usize) -> ! {
         print(1, &stats);
     }
     if let Some(ms) = first_sample_ms {
-        let line = alloc::format!(
-            "rtt first sample (icmp_seq=1, may include ARP warm-up) = {} ms\n",
-            ms
-        );
+        let line =
+            alloc::format!("rtt first sample (icmp_seq=1, may include ARP warm-up) = {} ms\n", ms);
         print(1, &line);
     }
     if let Some((min_ms, avg_ms, max_ms)) = post_warmup_rtt.summary() {

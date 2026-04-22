@@ -1,6 +1,5 @@
 //! Display Device Ops (IOCTLs)
 
-
 /// Retrieve display device information and capabilities.
 /// Output: DisplayInfo
 pub const DISPLAY_OP_GET_INFO: u32 = 1;

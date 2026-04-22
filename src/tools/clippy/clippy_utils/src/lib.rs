@@ -6,11 +6,7 @@
 #![feature(assert_matches)]
 #![feature(unwrap_infallible)]
 #![recursion_limit = "512"]
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::must_use_candidate,
-)]
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc, clippy::must_use_candidate)]
 #![warn(
     trivial_casts,
     trivial_numeric_casts,

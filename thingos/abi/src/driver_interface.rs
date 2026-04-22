@@ -122,6 +122,7 @@ pub enum BusKind {
     Virtio = 2,
     Platform = 3,
     Usb = 4,
+    Isa = 5,
 }
 
 #[repr(u32)]

@@ -7,7 +7,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-
 /// Source of SVG data for rasterization
 #[derive(Debug, Clone)]
 pub enum SvgSource {

@@ -5337,10 +5337,12 @@ mod tests {
         let mut sched = types::Scheduler::<MockRuntime>::new();
         sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
 
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(make_task(6001, TaskState::Running, TaskPriority::High)));
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(make_task(6002, TaskState::Runnable, TaskPriority::Realtime)));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(6001, TaskState::Running, TaskPriority::High),
+        ));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(6002, TaskState::Runnable, TaskPriority::Realtime),
+        ));
 
         sched.state.per_cpu[0].current = Some(6001);
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -5371,9 +5373,7 @@ mod tests {
             wake_pending: false,
             voluntary_yields: 0,
         });
-        sched
-            .state
-            .note_enqueue_cause(6001, crate::sched::state::EnqueueCause::YieldRequeue);
+        sched.state.note_enqueue_cause(6001, crate::sched::state::EnqueueCause::YieldRequeue);
         sched.state.enqueue_task(0, TaskPriority::Realtime as usize, 6002);
 
         let switch = sched.prepare_yield().expect("high-priority peer should run");
@@ -5395,10 +5395,12 @@ mod tests {
         let mut sched = types::Scheduler::<MockRuntime>::new();
         sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
 
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(make_task(6101, TaskState::Running, TaskPriority::Normal)));
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(make_task(6102, TaskState::Runnable, TaskPriority::High)));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(6101, TaskState::Running, TaskPriority::Normal),
+        ));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+            make_task(6102, TaskState::Runnable, TaskPriority::High),
+        ));
 
         sched.state.per_cpu[0].current = Some(6101);
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -5429,9 +5431,7 @@ mod tests {
             wake_pending: false,
             voluntary_yields: 0,
         });
-        sched
-            .state
-            .note_enqueue_cause(6101, crate::sched::state::EnqueueCause::Wake);
+        sched.state.note_enqueue_cause(6101, crate::sched::state::EnqueueCause::Wake);
         sched.state.enqueue_task(0, TaskPriority::High as usize, 6102);
 
         let switch = sched.prepare_yield().expect("high-priority peer should run");
@@ -9393,7 +9393,8 @@ mod tests {
         clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
         crate::runtime::<MockRuntime>().set_idle_task_current(true);
         let before_window_actionable = TRYLOCK_MISS_WINDOW_COUNT[0].load(Ordering::Relaxed);
-        let before_window_idle_timer = TRYLOCK_MISS_WINDOW_IDLE_TIMER_COUNT[0].load(Ordering::Relaxed);
+        let before_window_idle_timer =
+            TRYLOCK_MISS_WINDOW_IDLE_TIMER_COUNT[0].load(Ordering::Relaxed);
         let before_idle_timer =
             PROF_TRYLOCK_MISS_IDLE_TIMER_PER_CPU[0].load(core::sync::atomic::Ordering::Relaxed);
 
@@ -9409,7 +9410,8 @@ mod tests {
             "idle timer-only misses should not count toward actionable warning threshold"
         );
         assert!(
-            TRYLOCK_MISS_WINDOW_IDLE_TIMER_COUNT[0].load(Ordering::Relaxed) > before_window_idle_timer,
+            TRYLOCK_MISS_WINDOW_IDLE_TIMER_COUNT[0].load(Ordering::Relaxed)
+                > before_window_idle_timer,
             "idle timer-only misses should be attributed in the dedicated window counter"
         );
         assert!(

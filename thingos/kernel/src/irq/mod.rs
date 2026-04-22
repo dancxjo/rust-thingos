@@ -14,23 +14,27 @@ pub static IRQ_DISABLE_HOOK: core::sync::atomic::AtomicPtr<()> =
 pub static IRQ_RESTORE_HOOK: core::sync::atomic::AtomicPtr<()> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
-pub unsafe fn irq_disable_erased() -> crate::IrqState { unsafe {
-    let ptr = IRQ_DISABLE_HOOK.load(Ordering::SeqCst);
-    if !ptr.is_null() {
-        let hook: fn() -> crate::IrqState = core::mem::transmute(ptr);
-        hook()
-    } else {
-        crate::IrqState(0)
+pub unsafe fn irq_disable_erased() -> crate::IrqState {
+    unsafe {
+        let ptr = IRQ_DISABLE_HOOK.load(Ordering::SeqCst);
+        if !ptr.is_null() {
+            let hook: fn() -> crate::IrqState = core::mem::transmute(ptr);
+            hook()
+        } else {
+            crate::IrqState(0)
+        }
     }
-}}
+}
 
-pub unsafe fn irq_restore_erased(state: crate::IrqState) { unsafe {
-    let ptr = IRQ_RESTORE_HOOK.load(Ordering::SeqCst);
-    if !ptr.is_null() {
-        let hook: fn(crate::IrqState) = core::mem::transmute(ptr);
-        hook(state);
+pub unsafe fn irq_restore_erased(state: crate::IrqState) {
+    unsafe {
+        let ptr = IRQ_RESTORE_HOOK.load(Ordering::SeqCst);
+        if !ptr.is_null() {
+            let hook: fn(crate::IrqState) = core::mem::transmute(ptr);
+            hook(state);
+        }
     }
-}}
+}
 
 pub const EXTERNAL_VECTOR_START: u8 = 0x40;
 pub const EXTERNAL_VECTOR_END: u8 = 0xEF;

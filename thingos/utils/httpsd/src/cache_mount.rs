@@ -204,9 +204,10 @@ pub fn resolve(path: &str) -> CachePathKind {
 
 #[cfg(test)]
 mod tests {
+    use http::ResponseHead;
+
     use super::*;
     use crate::cache::{CacheDirectives, CacheEntry};
-    use http::ResponseHead;
     extern crate std;
 
     fn sample() -> CacheEntry {

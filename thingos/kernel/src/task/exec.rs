@@ -350,9 +350,11 @@ pub fn build_auxv(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::sync::Arc;
+
     use spin::Mutex;
+
+    use super::*;
     use crate::task::ProcessInfo;
     use crate::task::loader::LoaderAuxInfo;
 
@@ -883,7 +885,9 @@ mod tests {
     // ── No stale pre-exec metadata invariants ─────────────────────────────────
 
     /// Helper: build a ProcessInfo pre-loaded with realistic pre-exec metadata.
-    fn make_pinfo_with_metadata(pid: u32) -> alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>> {
+    fn make_pinfo_with_metadata(
+        pid: u32,
+    ) -> alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>> {
         let mut handle_table = crate::vfs::handle_table::HandleTable::new();
         // fd 0: stays open (no HANDLE_CLOEXEC)
         handle_table.insert_at(0, null_node(), OpenFlags::read_only(), "/stdin".into()).unwrap();

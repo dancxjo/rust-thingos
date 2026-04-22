@@ -8,11 +8,10 @@
 //! at boot; reads happen on every `open(2)` syscall, so a shared read lock
 //! greatly reduces contention on the hot lookup path.
 
+use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use alloc::collections::btree_map::Entry;
-use alloc::collections::BTreeMap;
 
 use abi::errors::{Errno, SysResult};
 use abi::syscall::mount_flags;
@@ -51,13 +50,12 @@ fn current_namespace_id() -> u64 {
 }
 
 fn ensure_namespace_table_exists_locked(tables: &mut BTreeMap<u64, Vec<MountEntry>>, ns_id: u64) {
-    match tables.entry(ns_id) {
-        Entry::Occupied(_) => {}
-        Entry::Vacant(slot) => {
-            let initial_mount_table = tables.get(&GLOBAL_NAMESPACE_ID).cloned().unwrap_or_default();
-            slot.insert(initial_mount_table);
-        }
+    if tables.contains_key(&ns_id) {
+        return;
     }
+
+    let initial_mount_table = tables.get(&GLOBAL_NAMESPACE_ID).cloned().unwrap_or_default();
+    tables.insert(ns_id, initial_mount_table);
 }
 
 fn ensure_namespace(ns_id: u64) {
@@ -135,7 +133,10 @@ pub fn lookup(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
 }
 
 /// Resolve `path` in `ns_id`.
-pub fn lookup_for_namespace(ns_id: u64, path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
+pub fn lookup_for_namespace(
+    ns_id: u64,
+    path: &str,
+) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
     ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
@@ -279,7 +280,10 @@ pub fn create(path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
 }
 
 /// Create a regular file at `path` in `ns_id`.
-pub fn create_in_namespace(ns_id: u64, path: &str) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
+pub fn create_in_namespace(
+    ns_id: u64,
+    path: &str,
+) -> SysResult<alloc::sync::Arc<dyn super::VfsNode>> {
     ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
@@ -649,9 +653,6 @@ mod tests {
 
         mount_for_namespace(isolated_ns, "/private", Arc::new(DummyFs), mount_flags::MREPL);
         assert!(lookup_for_namespace(isolated_ns, "/private/thing").is_ok());
-        assert!(matches!(
-            lookup_for_namespace(global_ns, "/private/thing"),
-            Err(Errno::ENOENT)
-        ));
+        assert!(matches!(lookup_for_namespace(global_ns, "/private/thing"), Err(Errno::ENOENT)));
     }
 }

@@ -23,9 +23,9 @@
 extern crate alloc;
 
 use alloc::string::String;
-use alloc::vec::Vec;
 #[cfg(test)]
 use alloc::string::ToString;
+use alloc::vec::Vec;
 
 /// Record type code for an A (IPv4 address) record.
 pub const RTYPE_A: u16 = 1;
@@ -241,12 +241,7 @@ pub fn parse(buf: &[u8]) -> Option<Message> {
         let rtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
         // Strip the mDNS cache-flush bit from the class.
         let rclass = u16::from_be_bytes([buf[pos + 2], buf[pos + 3]]) & 0x7FFF;
-        let ttl = u32::from_be_bytes([
-            buf[pos + 4],
-            buf[pos + 5],
-            buf[pos + 6],
-            buf[pos + 7],
-        ]);
+        let ttl = u32::from_be_bytes([buf[pos + 4], buf[pos + 5], buf[pos + 6], buf[pos + 7]]);
         let rdlen = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
         pos += 10;
         if pos + rdlen > buf.len() {
@@ -276,8 +271,9 @@ pub fn is_local_name(name: &str) -> bool {
 mod tests {
     extern crate std;
 
-    use super::*;
     use alloc::string::ToString;
+
+    use super::*;
 
     #[test]
     fn query_roundtrips_through_parser() {

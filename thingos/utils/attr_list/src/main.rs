@@ -61,7 +61,8 @@ fn main(_arg: usize) -> ! {
         let name_len = u16::from_le_bytes([buf[off], buf[off + 1]]) as usize;
         let raw_ty = buf[off + 2];
         let ty = AttrType::from_u8(raw_ty);
-        let value_len = u32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
+        let value_len =
+            u32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
         off += header_len;
         if off + name_len > buf.len() {
             break;

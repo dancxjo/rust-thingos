@@ -740,8 +740,12 @@ impl ResponseHead {
     /// whatever headers we could recover, so callers can still surface the
     /// raw bytes for debugging.
     pub fn parse(raw: &[u8]) -> Self {
-        let mut head =
-            ResponseHead { status: 0, reason: String::new(), raw: raw.to_vec(), headers: Vec::new() };
+        let mut head = ResponseHead {
+            status: 0,
+            reason: String::new(),
+            raw: raw.to_vec(),
+            headers: Vec::new(),
+        };
         let Ok(text) = core::str::from_utf8(raw) else {
             return head;
         };

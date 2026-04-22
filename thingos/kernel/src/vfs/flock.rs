@@ -102,8 +102,7 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
 
             if how & LOCK_SH != 0 {
                 // Conflict: another process holds an exclusive lock.
-                let contended =
-                    entry.exclusive_holder.is_some_and(|holder| holder != pid);
+                let contended = entry.exclusive_holder.is_some_and(|holder| holder != pid);
                 if !contended {
                     // Acquire shared lock (may replace a prior EX lock held by
                     // same pid, i.e. downgrade).
@@ -116,8 +115,7 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
             } else if how & LOCK_EX != 0 {
                 // Conflict: any lock held by another process.
                 let other_shared = entry.shared_holders.iter().any(|&p| p != pid);
-                let other_exclusive =
-                    entry.exclusive_holder.is_some_and(|holder| holder != pid);
+                let other_exclusive = entry.exclusive_holder.is_some_and(|holder| holder != pid);
                 let contended = other_shared || other_exclusive;
                 if !contended {
                     // Acquire exclusive lock (may replace a prior SH lock held
@@ -164,9 +162,9 @@ pub fn flock(ino: u64, pid: u32, how: u32) -> SysResult<()> {
 /// case for most programs.
 pub fn process_has_locks(pid: u32) -> bool {
     let table = FLOCK_TABLE.lock();
-    table.values().any(|entry| {
-        entry.shared_holders.contains(&pid) || entry.exclusive_holder == Some(pid)
-    })
+    table
+        .values()
+        .any(|entry| entry.shared_holders.contains(&pid) || entry.exclusive_holder == Some(pid))
 }
 
 /// Release any advisory lock held by `pid` on `ino` and wake blocked waiters.
@@ -331,8 +329,9 @@ mod tests {
     /// Verify that releasing a lock wakes any registered waiters.
     #[test]
     fn release_wakes_and_clears_wait_queue() {
-        use crate::sched::blocking::WAKE_TASK_HOOK;
         use core::sync::atomic::{AtomicUsize, Ordering as AOrdering};
+
+        use crate::sched::blocking::WAKE_TASK_HOOK;
 
         static WOKEN: AtomicUsize = AtomicUsize::new(0);
         fn record_wake(_id: u64) {

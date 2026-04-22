@@ -251,14 +251,9 @@ impl UdpSocket {
         write_ctl(&ctl_path, &alloc::format!("bind {}", MDNS_PORT))?;
         let _ = write_ctl(&ctl_path, "multicast_loop_v4 0");
         let _ = write_ctl(&ctl_path, "multicast_ttl_v4 255");
-        let group = alloc::format!(
-            "{}.{}.{}.{}",
-            MDNS_IPV4[0], MDNS_IPV4[1], MDNS_IPV4[2], MDNS_IPV4[3]
-        );
-        let _ = write_ctl(
-            &ctl_path,
-            &alloc::format!("join_multicast_v4 {} {}", group, MDNS_IFACE),
-        );
+        let group =
+            alloc::format!("{}.{}.{}.{}", MDNS_IPV4[0], MDNS_IPV4[1], MDNS_IPV4[2], MDNS_IPV4[3]);
+        let _ = write_ctl(&ctl_path, &alloc::format!("join_multicast_v4 {} {}", group, MDNS_IFACE));
         Ok(Self { id, data_path })
     }
 
@@ -291,8 +286,7 @@ impl UdpSocket {
             Ok(n) if n >= 10 => {
                 let src = [buf[0], buf[1], buf[2], buf[3]];
                 let port = u16::from_le_bytes([buf[4], buf[5]]);
-                let plen =
-                    u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]) as usize;
+                let plen = u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]) as usize;
                 if n < 10 + plen {
                     return Ok(None);
                 }
@@ -446,8 +440,7 @@ fn run(mount_point: &str) -> ! {
 
         // 4. Periodic unsolicited announcement of our own hostname.
         if let Some(sock) = udp.as_ref() {
-            if now.saturating_sub(last_announce_ms) >= ANNOUNCE_INTERVAL_MS
-                || last_announce_ms == 0
+            if now.saturating_sub(last_announce_ms) >= ANNOUNCE_INTERVAL_MS || last_announce_ms == 0
             {
                 if let Some(ip) = read_own_ipv4() {
                     let pkt = mdns::build_a_response(&self_name, ip, mdns::DEFAULT_TTL);

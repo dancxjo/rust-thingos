@@ -654,9 +654,10 @@ impl SchedState {
         let slot = sleep_wheel_slot(membership.wake_tick);
 
         if let Some(bucket) = self.sleep_queue.get_mut(slot) {
-            let remove_idx = if bucket.get(membership.bucket_index).is_some_and(|entry| {
-                entry.tid == tid && entry.wake_tick == membership.wake_tick
-            }) {
+            let remove_idx = if bucket
+                .get(membership.bucket_index)
+                .is_some_and(|entry| entry.tid == tid && entry.wake_tick == membership.wake_tick)
+            {
                 Some(membership.bucket_index)
             } else {
                 // Metadata can become stale when tests or transitional code
@@ -730,7 +731,8 @@ impl SchedState {
         while budget > 0 && self.sleep_scan_tick <= now {
             let scan_tick = self.sleep_scan_tick;
             let slot = sleep_wheel_slot(scan_tick);
-            let (sleep_queue, sleep_membership) = (&mut self.sleep_queue, &mut self.sleep_membership);
+            let (sleep_queue, sleep_membership) =
+                (&mut self.sleep_queue, &mut self.sleep_membership);
             let bucket = &mut sleep_queue[slot];
             let mut idx = 0;
             while idx < bucket.len() && budget > 0 {
@@ -853,26 +855,11 @@ mod tests {
 
     #[test]
     fn default_sched_class_maps_priority_to_latency_domain() {
-        assert_eq!(
-            TaskPriority::Idle.default_sched_class(),
-            TaskSchedClass::BackgroundMaintenance
-        );
-        assert_eq!(
-            TaskPriority::Low.default_sched_class(),
-            TaskSchedClass::BackgroundMaintenance
-        );
-        assert_eq!(
-            TaskPriority::Normal.default_sched_class(),
-            TaskSchedClass::NormalTimeslice
-        );
-        assert_eq!(
-            TaskPriority::High.default_sched_class(),
-            TaskSchedClass::NormalTimeslice
-        );
-        assert_eq!(
-            TaskPriority::Realtime.default_sched_class(),
-            TaskSchedClass::Realtime
-        );
+        assert_eq!(TaskPriority::Idle.default_sched_class(), TaskSchedClass::BackgroundMaintenance);
+        assert_eq!(TaskPriority::Low.default_sched_class(), TaskSchedClass::BackgroundMaintenance);
+        assert_eq!(TaskPriority::Normal.default_sched_class(), TaskSchedClass::NormalTimeslice);
+        assert_eq!(TaskPriority::High.default_sched_class(), TaskSchedClass::NormalTimeslice);
+        assert_eq!(TaskPriority::Realtime.default_sched_class(), TaskSchedClass::Realtime);
     }
 
     #[test]

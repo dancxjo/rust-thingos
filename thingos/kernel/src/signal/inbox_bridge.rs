@@ -102,9 +102,7 @@ pub fn build_signal_payload(
 /// # Format
 ///
 /// See module-level documentation for the byte layout.
-pub fn parse_signal_payload(
-    payload: &[u8],
-) -> Option<(u8, u64, Option<SignalFaultContext>)> {
+pub fn parse_signal_payload(payload: &[u8]) -> Option<(u8, u64, Option<SignalFaultContext>)> {
     if payload.len() < 10 {
         return None;
     }
@@ -176,8 +174,7 @@ pub fn deliver_signal_to_inbox(
         return Err("inbox not found");
     };
 
-    let envelope =
-        crate::inbox::MessageEnvelope::with_sender(message, sender_tid);
+    let envelope = crate::inbox::MessageEnvelope::with_sender(message, sender_tid);
 
     match inbox.send(envelope) {
         Ok(()) => {
@@ -190,19 +187,11 @@ pub fn deliver_signal_to_inbox(
             Ok(())
         }
         Err(crate::inbox::SendError::Full { .. }) => {
-            crate::kdebug!(
-                "signal::inbox_bridge: inbox full sig={} pid={}",
-                signum,
-                pid
-            );
+            crate::kdebug!("signal::inbox_bridge: inbox full sig={} pid={}", signum, pid);
             Err("inbox full")
         }
         Err(crate::inbox::SendError::Closed) => {
-            crate::kdebug!(
-                "signal::inbox_bridge: inbox closed sig={} pid={}",
-                signum,
-                pid
-            );
+            crate::kdebug!("signal::inbox_bridge: inbox closed sig={} pid={}", signum, pid);
             Err("inbox closed")
         }
     }
@@ -233,7 +222,8 @@ mod tests {
     fn payload_round_trip_with_fault() {
         let signum = 11u8; // SIGSEGV
         let sender_tid = 0u64; // kernel
-        let fault_ctx = SignalFaultContext { fault_addr: 0xdeadbeef, rip: 0x400100, rsp: 0x7fff0000 };
+        let fault_ctx =
+            SignalFaultContext { fault_addr: 0xdeadbeef, rip: 0x400100, rsp: 0x7fff0000 };
         let payload = build_signal_payload(signum, sender_tid, Some(fault_ctx));
         assert_eq!(payload.len(), 34);
 
@@ -285,11 +275,8 @@ mod tests {
     #[test]
     fn signal_message_with_fault_has_longer_payload() {
         let no_fault = build_signal_message(11, 0, None);
-        let with_fault = build_signal_message(
-            11,
-            0,
-            Some(SignalFaultContext { fault_addr: 1, rip: 2, rsp: 3 }),
-        );
+        let with_fault =
+            build_signal_message(11, 0, Some(SignalFaultContext { fault_addr: 1, rip: 2, rsp: 3 }));
         assert!(with_fault.payload.len() > no_fault.payload.len());
         assert_eq!(no_fault.payload.len(), 10);
         assert_eq!(with_fault.payload.len(), 34);

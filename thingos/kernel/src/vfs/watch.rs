@@ -12,8 +12,8 @@ use abi::errors::{Errno, SysResult};
 use abi::vfs_watch::{self, WatchEvent};
 use spin::Mutex;
 
-use crate::sched::wait_queue::WaitQueue;
 use super::{VfsNode, VfsStat};
+use crate::sched::wait_queue::WaitQueue;
 
 /// A ring buffer of VFS events.
 pub struct EventQueue {
@@ -371,7 +371,6 @@ mod tests {
         let after = REGISTRY.lock().len();
         assert_eq!(after, baseline, "registry must not grow after close");
     }
-
 
     struct FixedInoNode(u64);
 

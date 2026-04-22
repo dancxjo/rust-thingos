@@ -1,7 +1,7 @@
+use abi::KindId;
 use abi::hid::{
     BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
-use abi::KindId;
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
 
@@ -11,8 +11,8 @@ use crate::protocol::{
     EVT_POINTER_ENTER, EVT_POINTER_LEAVE, EVT_POINTER_MOTION, KIND_KEYBOARD_ENTER,
     KIND_KEYBOARD_KEY, KIND_KEYBOARD_LEAVE, KIND_POINTER_BUTTON, KIND_POINTER_ENTER,
     KIND_POINTER_LEAVE, KIND_POINTER_MOTION, KeyboardEnterEvent, KeyboardKeyEvent,
-    KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent, PointerLeaveEvent, PointerMotionEvent,
-    msg_header, to_vec,
+    KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent, PointerLeaveEvent,
+    PointerMotionEvent, msg_header, to_vec,
 };
 use crate::scene::Scene;
 

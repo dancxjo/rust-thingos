@@ -975,7 +975,67 @@ impl ArchRuntime for X86_64Runtime {
                 apic_id,
                 vector
             );
-            ioapic::send_fixed_ipi(apic_id, vector);
+            let hhdm = self.hhdm_offset.load(Ordering::SeqCst);
+            if hhdm == 0 {
+                kernel::kwarn!(
+                    "SMP: send_ipi skipped (hhdm unmapped): cpu_index={} apic_id={} vector=0x{:x}",
+                    cpu_index,
+                    apic_id,
+                    vector
+                );
+                return;
+            }
+
+            let lapic_base = match self.lapic_base_phys() {
+                Ok(base) => base,
+                Err(err) => {
+                    kernel::kwarn!(
+                        "SMP: send_ipi skipped (no LAPIC base: {:?}): cpu_index={} apic_id={} vector=0x{:x}",
+                        err,
+                        cpu_index,
+                        apic_id,
+                        vector
+                    );
+                    return;
+                }
+            };
+            let lapic_virt = lapic_base + hhdm;
+            if paging::try_translate(self.active_address_space(), lapic_virt).is_none() {
+                kernel::kwarn!(
+                    "SMP: send_ipi skipped (LAPIC unmapped): cpu_index={} apic_id={} vector=0x{:x}",
+                    cpu_index,
+                    apic_id,
+                    vector
+                );
+                return;
+            }
+
+            if !self.wait_lapic_icr_idle(lapic_virt, Self::LAPIC_ICR_DELIVERY_TIMEOUT_US) {
+                kernel::kwarn!(
+                    "SMP: send_ipi dropped (ICR busy pre-send): cpu_index={} apic_id={} vector=0x{:x}",
+                    cpu_index,
+                    apic_id,
+                    vector
+                );
+                return;
+            }
+
+            unsafe {
+                core::ptr::write_volatile((lapic_virt + 0x310) as *mut u32, apic_id << 24);
+                core::ptr::write_volatile(
+                    (lapic_virt + 0x300) as *mut u32,
+                    (1 << 14) | vector as u32,
+                );
+            }
+
+            if !self.wait_lapic_icr_idle(lapic_virt, Self::LAPIC_ICR_DELIVERY_TIMEOUT_US) {
+                kernel::kwarn!(
+                    "SMP: send_ipi post-send still busy: cpu_index={} apic_id={} vector=0x{:x}",
+                    cpu_index,
+                    apic_id,
+                    vector
+                );
+            }
         }
     }
 

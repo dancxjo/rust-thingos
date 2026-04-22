@@ -276,9 +276,7 @@ fn main(arg: usize) -> ! {
         if active_dns.is_none() {
             // Priority: deferred TCP connects first, then /net/dns/lookup
             if let Some((hostname, dns_ip)) = net_provider.take_deferred_connect_pending() {
-                if let Some(query) =
-                    dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname)
-                {
+                if let Some(query) = dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname) {
                     active_dns = Some(query);
                     dns_for_deferred_connect = true;
                     did_work = true;
@@ -292,9 +290,7 @@ fn main(arg: usize) -> ! {
                     );
                 }
             } else if let Some((hostname, dns_ip)) = net_provider.take_dns_pending() {
-                if let Some(query) =
-                    dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname)
-                {
+                if let Some(query) = dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname) {
                     active_dns = Some(query);
                     dns_for_deferred_connect = false;
                     did_work = true;
@@ -311,8 +307,7 @@ fn main(arg: usize) -> ! {
                 dns::DnsProgress::Pending => {} // still waiting
                 dns::DnsProgress::Resolved(ip) => {
                     let b = ip.as_bytes();
-                    let ip_str =
-                        alloc::format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
+                    let ip_str = alloc::format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
                     debug!("NETD: async DNS resolved → {}", ip_str);
                     if dns_for_deferred_connect {
                         net_provider.complete_deferred_connect(

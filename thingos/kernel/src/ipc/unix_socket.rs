@@ -676,7 +676,11 @@ impl VfsNode for UnixSocketNode {
                 events
             }
             SocketState::Listening { listener, .. } => {
-                if listener.queue_len() > 0 { POLLIN } else { 0 }
+                if listener.queue_len() > 0 {
+                    POLLIN
+                } else {
+                    0
+                }
             }
             _ => 0,
         }
@@ -742,7 +746,7 @@ impl VfsNode for UnixSocketNode {
             let state = self.state.lock();
             match &*state {
                 SocketState::Connected { side, peer, shutdown_wr, .. } => {
-                (peer.clone(), *side, *shutdown_wr)
+                    (peer.clone(), *side, *shutdown_wr)
                 }
                 SocketState::Closed => return Err(abi::errors::Errno::EBADF),
                 _ => return Err(abi::errors::Errno::ENOTCONN),

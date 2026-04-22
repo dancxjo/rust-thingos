@@ -229,11 +229,7 @@ mod tests {
         let key = futex_key_for_scope(scope, &val as *const u32 as usize);
 
         // Manually enqueue three waiters (FIFO: 10 is oldest, 12 is newest).
-        FUTEX_TABLE
-            .lock()
-            .entry(key)
-            .or_insert_with(VecDeque::new)
-            .extend([10u64, 11u64, 12u64]);
+        FUTEX_TABLE.lock().entry(key).or_insert_with(VecDeque::new).extend([10u64, 11u64, 12u64]);
 
         // Wake only 2 (FIFO: should wake 10 and 11, leaving 12).
         let to_wake: Vec<u64> = {

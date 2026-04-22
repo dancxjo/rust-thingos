@@ -1,6 +1,5 @@
 //! Port IPC syscalls
 
-
 use abi::errors::{Errno, SysResult};
 
 use super::{copyin, copyout};

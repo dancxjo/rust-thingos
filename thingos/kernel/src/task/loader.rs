@@ -290,9 +290,7 @@ pub fn load_module_at<R: BootRuntime>(
                     }
                 }
 
-                rt.tasking()
-                    .map_page(aspace, virt, phys, page_perms, &hook)
-                    .unwrap();
+                rt.tasking().map_page(aspace, virt, phys, page_perms, &hook).unwrap();
 
                 last_virt_page = virt;
                 last_phys_page = phys;

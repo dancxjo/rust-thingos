@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod authority;
+mod boot_progress;
 pub mod device_registry;
 pub mod entropy;
 pub mod group;
@@ -902,54 +903,11 @@ fn _irq_restore_wrapper<R: BootRuntime>(state: IrqState) {
     runtime::<R>().irq_restore(state);
 }
 
-const STARTUP_PERIWINKLE_LAVENDER_COLOR: u32 = 0x00_D9_D9_FC;
-
-fn paint_bootfb_gradient(fb: FramebufferInfo, end_color: u32) {
-    if fb.width == 0 || fb.height == 0 || fb.pitch < 4 || fb.byte_len < (fb.pitch as u64) {
-        return;
-    }
-
-    let width = fb.width as usize;
-    let height = fb.height as usize;
-    let stride_px = (fb.pitch as usize) / 4;
-    let rows = core::cmp::min(height, (fb.byte_len / fb.pitch as u64) as usize);
-
-    let ptr = fb.addr as *mut u32;
-    if ptr.is_null() || stride_px == 0 || rows == 0 {
-        return;
-    }
-
-    let end_r = (end_color >> 16) & 0xFF;
-    let end_g = (end_color >> 8) & 0xFF;
-    let end_b = end_color & 0xFF;
-
-    unsafe {
-        for y in 0..rows {
-            // Vertical gradient from black (0,0,0) to end_color
-            let r = (end_r * y as u32 / rows as u32) & 0xFF;
-            let g = (end_g * y as u32 / rows as u32) & 0xFF;
-            let b = (end_b * y as u32 / rows as u32) & 0xFF;
-            let color = (r << 16) | (g << 8) | b;
-
-            let row_ptr = ptr.add(y * stride_px);
-            let row_len = width.min(stride_px);
-            let row = core::slice::from_raw_parts_mut(row_ptr, row_len);
-            for pixel in row.iter_mut() {
-                *pixel = color;
-            }
-        }
-    }
-}
-
 #[inline]
 /// Convert monotonic timer ticks to microseconds for a given timer frequency.
 /// Returns 0 when `hz` is 0 to avoid divide-by-zero during early boot.
 fn boot_timing_us_from_hz(ticks: u64, hz: u64) -> u64 {
-    if hz == 0 {
-        0
-    } else {
-        ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
-    }
+    if hz == 0 { 0 } else { ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64 }
 }
 
 #[inline]
@@ -992,6 +950,12 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     init_runtime(runtime);
     boot_trace(runtime, b"[kernel:start] init_runtime ok\r\n");
 
+    let early_fb = runtime.framebuffer();
+    if let Some(fb) = early_fb {
+        crate::boot_progress::init(fb);
+        crate::boot_progress::push(crate::boot_progress::BootPhase::Framebuffer);
+    }
+
     if let Some(level) = parse_cmdline_loglevel(runtime.get_kernel_cmdline()) {
         crate::logging::set_log_level(level);
     }
@@ -1013,6 +977,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] memory::init\r\n");
     memory::init(runtime);
     boot_trace(runtime, b"[kernel:start] memory::init ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Memory);
     boot_trace(runtime, b"[kernel:start] after memory::init marker\r\n");
     boot_trace(runtime, b"[kernel:start] kinfo(global_alloc) begin\r\n");
     kinfo!("Initializing global allocator...");
@@ -1020,6 +985,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] global_alloc::init\r\n");
     memory::global_alloc::init(runtime);
     boot_trace(runtime, b"[kernel:start] global_alloc::init ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Allocator);
     boot_trace(runtime, b"[kernel:start] after global_alloc marker\r\n");
     let boot_timing_hz = runtime.mono_freq_hz();
     let boot_timing_us = |ticks: u64| -> u64 { boot_timing_us_from_hz(ticks, boot_timing_hz) };
@@ -1091,12 +1057,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs no fb\r\n");
     }
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices);
 
     boot_trace(runtime, b"[kernel:start] kinfo(simd) begin\r\n");
     kinfo!("Initializing SIMD...");
     boot_trace(runtime, b"[kernel:start] kinfo(simd) ok\r\n");
     runtime.simd_init_cpu();
     boot_trace(runtime, b"[kernel:start] simd init ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute);
 
     boot_trace(runtime, b"[kernel:start] kdebug(entropy) begin\r\n");
     kdebug!("Seeding entropy pool...");
@@ -1110,12 +1078,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         boot_timing_us(entropy_seed_elapsed)
     );
     boot_trace(runtime, b"[kernel:start] entropy seeded\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute);
 
     boot_trace(runtime, b"[kernel:start] kinfo(task) begin\r\n");
     kinfo!("Initializing tasking...");
     boot_trace(runtime, b"[kernel:start] kinfo(task) ok\r\n");
     crate::task::init::<R>();
     boot_trace(runtime, b"[kernel:start] task init ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu);
     let scheduler_entry_window_start = runtime.mono_ticks();
 
     boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
@@ -1141,6 +1111,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         vfs_init_start,
     );
     boot_trace(runtime, b"[kernel:start] vfs init ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Vfs);
 
     boot_trace(runtime, b"[kernel:start] kdebug(pci) begin\r\n");
     kdebug!("Scanning PCI bus...");
@@ -1155,6 +1126,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         pci_scan_start,
     );
     boot_trace(runtime, b"[kernel:start] pci scan ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Pci);
 
     // Register legacy ISA devices
     boot_trace(runtime, b"[kernel:start] legacy device register begin\r\n");
@@ -1173,6 +1145,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             crate::device_registry::PS2_IOPORT_RANGES,
             0x60,
         ));
+        // Legacy ISA IDE controller: primary (0x1F0) + secondary (0x170) channels.
+        // Exposed as `isa-01f0` in sysfs with kind="dev.storage.ata" so cambium
+        // can auto-discover and spawn the ata_disk userland driver.
+        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+            "dev.storage.ata",
+            crate::device_registry::ATA_LEGACY_IOPORT_RANGES,
+            0x1F0,
+        ));
     }
     log_scheduler_entry_step(
         runtime,
@@ -1182,6 +1162,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         register_legacy_devices_start,
     );
     boot_trace(runtime, b"[kernel:start] legacy device register ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices);
 
     // CRITICAL: Calibrate the BSP preemption timer BEFORE starting secondary CPUs.
     // Secondary CPUs read timer_vector/timer_init_cnt in init_secondary_cpu().
@@ -1201,6 +1182,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         setup_preemption_timer_start,
     );
     boot_trace(runtime, b"[kernel:start] preemption timer ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu);
 
     // Bring up all secondary CPUs during early boot.
     boot_trace(runtime, b"[kernel:start] cpu_total_count begin\r\n");
@@ -1230,6 +1212,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         smp_bringup_start,
     );
     boot_trace(runtime, b"[kernel:start] smp bring-up stage done\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu);
 
     // Store global boot info for syscalls
     crate::boot_info::set(crate::boot_info::BootSyscallInfo {
@@ -1241,6 +1224,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         dtb_ptr: runtime.dtb_ptr(),
     });
     boot_trace(runtime, b"[kernel:start] boot_info set\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Modules);
 
     boot_trace(runtime, b"[kernel:start] modules enumerate begin\r\n");
     let modules = runtime.modules();
@@ -1256,6 +1240,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         );
     }
     boot_trace(runtime, b"[kernel:start] modules enumerate loop ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Modules);
 
     // Look for module with "init" in cmdline, otherwise fallback to "sprout" by name
     let init_module = modules
@@ -1406,6 +1391,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             spawn_init_start,
         );
         boot_trace(runtime, b"[kernel:start] init process spawned\r\n");
+        crate::boot_progress::push(crate::boot_progress::BootPhase::Init);
     } else {
         boot_trace(runtime, b"[kernel:start] no init module; fallback path\r\n");
         kdebug!("Sprout not found. Checking fallback...");
@@ -1481,10 +1467,8 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         end_bringup_start,
     );
     boot_trace(runtime, b"[kernel:start] end_bringup\r\n");
-    let boot_framebuffer_for_paint = runtime.framebuffer();
-    let scheduler_entry_total = runtime
-        .mono_ticks()
-        .wrapping_sub(scheduler_entry_window_start);
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Scheduler);
+    let scheduler_entry_total = runtime.mono_ticks().wrapping_sub(scheduler_entry_window_start);
     crate::kdebug!(
         "[kernel:start] scheduler-entry total elapsed_ticks={} elapsed_us={}",
         scheduler_entry_total,
@@ -1494,21 +1478,8 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     kinfo!("Entering scheduler loop.");
     boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
-    let mut deferred_bootfb_gradient = boot_framebuffer_for_paint;
     loop {
         if !crate::task::yield_now::<R>() {
-            // Keep a visible startup background, but only when idle so task
-            // dispatch to the scheduler loop is never blocked by full-screen fill.
-            if let Some(fb) = deferred_bootfb_gradient.take() {
-                let gradient_start = runtime.mono_ticks();
-                paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
-                let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
-                crate::kdebug!(
-                    "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
-                    gradient_elapsed,
-                    boot_timing_us(gradient_elapsed)
-                );
-            }
             // No runnable work on this CPU — halt until the next interrupt
             // (timer tick, IPI, or device IRQ).  This is the same idle pattern
             // used by secondary CPUs in `run_scheduler` and prevents CPU 0 from

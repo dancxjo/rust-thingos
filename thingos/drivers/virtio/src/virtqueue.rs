@@ -225,9 +225,10 @@ impl Virtqueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::boxed::Box;
     use alloc::vec;
+
+    use super::*;
     extern crate std;
 
     #[test]

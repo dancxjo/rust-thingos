@@ -279,12 +279,12 @@ pub fn send_fault_signal_to_process(
     let fault = inbox_bridge::SignalFaultContext { fault_addr, rip, rsp };
 
     // ── Step 1: Inbox delivery with rich fault context ────────────────────
-    if let Err(reason) =
-        inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, Some(fault))
-    {
+    if let Err(reason) = inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, Some(fault)) {
         crate::kdebug!(
             "signal: fault inbox delivery failed sig={} pid={} reason={}",
-            sig, pid, reason
+            sig,
+            pid,
+            reason
         );
     }
 

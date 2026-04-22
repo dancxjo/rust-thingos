@@ -11,6 +11,8 @@
 #![no_main]
 extern crate alloc;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 mod driver;
 mod vfs_provider;
@@ -23,6 +25,7 @@ use abi::driver_interface::{
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::VirtioNetDriver;
 use ipc_helpers::provider::ProviderLoop;
+use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::port_create;
 use stem::syscall::vfs::vfs_mount;
@@ -122,6 +125,11 @@ struct SupervisorBootstrap {
     bind_instance_id: u64,
 }
 
+struct ProviderShared {
+    driver: Mutex<VirtioNetDriver>,
+    state: Mutex<NetVfsState>,
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn thing_driver_entry_v1(ctx_ptr: u64, ctx_len: u32) -> i32 {
     let claimed_path =
@@ -205,7 +213,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     stem::debug!("VIRTIO_NETD: Initializing hardware driver...");
 
     // Initialize VirtIO-NET driver.
-    let mut driver: VirtioNetDriver = match if !claimed_path.is_empty() {
+    let driver: VirtioNetDriver = match if !claimed_path.is_empty() {
         VirtioNetDriver::claim_device(&claimed_path)
     } else {
         VirtioNetDriver::find_and_claim()
@@ -256,6 +264,19 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
             }
         }
     };
+
+    let shared = Arc::new(ProviderShared {
+        driver: Mutex::new(driver),
+        state: Mutex::new(NetVfsState::new(mac, initial_link_up, features)),
+    });
+    let provider_started = Arc::new(AtomicBool::new(false));
+
+    start_provider_thread(shared, req_write, req_read, provider_started.clone())
+        .expect("virtio_netd: failed to start provider thread");
+
+    while !provider_started.load(Ordering::Acquire) {
+        stem::syscall::yield_now();
+    }
 
     if let Some(bootstrap) = bootstrap {
         let drv_resp_write_fd = stem::syscall::vfs::vfs_handle_from_port(bootstrap.drv_resp_write)
@@ -357,80 +378,106 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         }
     }
 
-    // Initialize shared VFS state.
-    let mut state = NetVfsState::new(mac, initial_link_up, features);
-    stem::debug!("VIRTIO_NETD: Entering VFS provider service loop at {}", DEFAULT_MOUNT_PATH);
-
-    // Main loop: interleave hardware polling with VFS RPC handling.
-    let mut provider_loop = ProviderLoop::new(req_read);
+    stem::debug!("VIRTIO_NETD: Provider thread live at {}", DEFAULT_MOUNT_PATH);
     loop {
-        // 1. Poll for link-state changes and queue events.
-        if let Some(link_up) = driver.poll_link_change() {
-            state.link_up = link_up;
-            let event = if link_up { "link-up" } else { "link-down" };
-            state.push_event(event);
-            stem::debug!("VIRTIO_NETD: Link state changed: {}", event);
-            let _ = stem::syscall::vfs::vfs_notify(
-                req_write,
-                HANDLE_EVENTS,
-                abi::syscall::poll_flags::POLLIN,
-            );
-        }
+        stem::yield_now();
+    }
+}
 
-        // 2. Poll hardware for received frames and buffer them.
-        if let Some(frame) = driver.poll_rx() {
-            let frame_vec: alloc::vec::Vec<u8> = frame.to_vec();
-            state.push_rx_frame(frame_vec);
-            let _ = stem::syscall::vfs::vfs_notify(
-                req_write,
-                HANDLE_RX,
-                abi::syscall::poll_flags::POLLIN,
-            );
-        }
+fn start_provider_thread(
+    shared: Arc<ProviderShared>,
+    req_write: u32,
+    req_read: u32,
+    provider_started: Arc<AtomicBool>,
+) -> Result<(), abi::errors::Errno> {
+    stem::thread::spawn_task_detached(move || {
+        stem::debug!("VIRTIO_NETD: Entering VFS provider service loop at {}", DEFAULT_MOUNT_PATH);
+        let mut provider_loop = ProviderLoop::new(req_read);
+        provider_started.store(true, Ordering::Release);
 
-        // 3. Service any pending VFS RPC (non-blocking).
-        match provider_loop.try_next_request() {
-            Ok(Some(req)) => {
-                let op = req.op;
-                let resp_port = req.resp_port;
-                let req_payload_len = req.payload.len();
-                stem::trace!(
-                    "VIRTIO_NETD: dispatch begin op={:?} resp_port={} payload_len={}",
-                    op,
-                    resp_port,
-                    req_payload_len
-                );
-                let resp = handle_vfs_rpc(&mut state, &mut driver, &req);
-                let resp_status = resp.status;
-                let resp_payload_len = resp.payload.len();
-                stem::trace!(
-                    "VIRTIO_NETD: dispatch end op={:?} resp_port={} status={} resp_payload_len={}",
-                    op,
-                    resp_port,
-                    resp_status,
-                    resp_payload_len
-                );
-                stem::trace!(
-                    "VIRTIO_NETD: send_response begin op={:?} resp_port={}",
-                    op,
-                    resp_port
-                );
-                if let Err(e) = provider_loop.send_response(resp_port, resp) {
-                    warn!("VIRTIO_NETD: send_response failed: {:?}", e);
-                } else {
-                    stem::trace!(
-                        "VIRTIO_NETD: send_response end op={:?} resp_port={}",
-                        op,
-                        resp_port
+        loop {
+            {
+                let mut driver = shared.driver.lock();
+                if let Some(link_up) = driver.poll_link_change() {
+                    let event = if link_up { "link-up" } else { "link-down" };
+                    {
+                        let mut state = shared.state.lock();
+                        state.link_up = link_up;
+                        state.push_event(event);
+                    }
+                    stem::debug!("VIRTIO_NETD: Link state changed: {}", event);
+                    let _ = stem::syscall::vfs::vfs_notify(
+                        req_write,
+                        HANDLE_EVENTS,
+                        abi::syscall::poll_flags::POLLIN,
                     );
                 }
             }
-            Ok(None) => {} // no request ready
-            Err(e) => {
-                warn!("VIRTIO_NETD: provider port error: {:?}", e);
-            }
-        }
 
-        stem::yield_now();
-    }
+            {
+                let mut driver = shared.driver.lock();
+                if let Some(frame) = driver.poll_rx() {
+                    let frame_vec: alloc::vec::Vec<u8> = frame.to_vec();
+                    {
+                        let mut state = shared.state.lock();
+                        state.push_rx_frame(frame_vec);
+                    }
+                    let _ = stem::syscall::vfs::vfs_notify(
+                        req_write,
+                        HANDLE_RX,
+                        abi::syscall::poll_flags::POLLIN,
+                    );
+                }
+            }
+
+            match provider_loop.try_next_request() {
+                Ok(Some(req)) => {
+                    let op = req.op;
+                    let resp_port = req.resp_port;
+                    let req_payload_len = req.payload.len();
+                    stem::trace!(
+                        "VIRTIO_NETD: dispatch begin op={:?} resp_port={} payload_len={}",
+                        op,
+                        resp_port,
+                        req_payload_len
+                    );
+                    let resp = {
+                        let mut state = shared.state.lock();
+                        let mut driver = shared.driver.lock();
+                        handle_vfs_rpc(&mut state, &mut driver, &req)
+                    };
+                    let resp_status = resp.status;
+                    let resp_payload_len = resp.payload.len();
+                    stem::trace!(
+                        "VIRTIO_NETD: dispatch end op={:?} resp_port={} status={} resp_payload_len={}",
+                        op,
+                        resp_port,
+                        resp_status,
+                        resp_payload_len
+                    );
+                    stem::trace!(
+                        "VIRTIO_NETD: send_response begin op={:?} resp_port={}",
+                        op,
+                        resp_port
+                    );
+                    if let Err(e) = provider_loop.send_response(resp_port, resp) {
+                        warn!("VIRTIO_NETD: send_response failed: {:?}", e);
+                    } else {
+                        stem::trace!(
+                            "VIRTIO_NETD: send_response end op={:?} resp_port={}",
+                            op,
+                            resp_port
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warn!("VIRTIO_NETD: provider port error: {:?}", e);
+                }
+            }
+
+            stem::yield_now();
+        }
+    })?;
+    Ok(())
 }

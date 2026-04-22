@@ -264,12 +264,12 @@ pub fn deliver_to_recipient(pid: u32, sig: u8) -> SignalDeliveryOutcome {
     // SIGKILL/SIGSTOP are excluded by the bridge (uncatchable).
     // Failures are non-fatal diagnostics; the legacy path below is authoritative.
     let sender_tid = unsafe { crate::sched::current_tid_current() };
-    if let Err(reason) =
-        super::inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, None)
-    {
+    if let Err(reason) = super::inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, None) {
         crate::kdebug!(
             "signal::route inbox delivery failed sig={} pid={} reason={}",
-            sig, pid, reason
+            sig,
+            pid,
+            reason
         );
     }
 
@@ -308,12 +308,12 @@ pub fn deliver_to_thread_recipient(tid: u64, sig: u8) -> SignalDeliveryOutcome {
     // ── Step 1: Inbox delivery (canonical new model) ──────────────────────
     let sender_tid = unsafe { crate::sched::current_tid_current() };
     let pid = pinfo.lock().pid;
-    if let Err(reason) =
-        super::inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, None)
-    {
+    if let Err(reason) = super::inbox_bridge::deliver_signal_to_inbox(pid, sig, sender_tid, None) {
         crate::kdebug!(
             "signal::route thread inbox delivery failed sig={} tid={} reason={}",
-            sig, tid, reason
+            sig,
+            tid,
+            reason
         );
     }
 

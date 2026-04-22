@@ -233,7 +233,6 @@ impl HttpsProvider {
         Ok(handle)
     }
 
-
     fn is_valid_host_label(host: &str) -> bool {
         host.contains('.')
             && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
@@ -511,7 +510,10 @@ impl HttpsProvider {
         }
         self.ensure_upstream(handle)?;
         let entry = self.shared.cache.lock().peek(&key).cloned().ok_or_else(|| {
-            error!("httpsd: ensure_cached_entry handle={} FAILED: not in cache after ensure_upstream", handle);
+            error!(
+                "httpsd: ensure_cached_entry handle={} FAILED: not in cache after ensure_upstream",
+                handle
+            );
             Errno::EIO
         })?;
         Ok(entry)

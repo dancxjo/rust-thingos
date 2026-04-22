@@ -3,7 +3,6 @@
 //! Handles are indices into a per-task table that map to ports with
 //! specific access modes (read or write).
 
-
 /// A handle is an index into the process handle table
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IpcHandle(pub u32);

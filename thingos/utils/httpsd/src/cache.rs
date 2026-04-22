@@ -380,10 +380,7 @@ pub fn resolve_redirect(base_host: &str, base_path: &str, location: &str) -> Str
 /// Falls back to `(url, "")` for malformed input — callers typically treat
 /// malformed URLs as opaque strings.
 pub fn url_to_host_path(url: &str) -> (String, String) {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
     match rest.find('/') {
         Some(idx) => {
             let host = rest[..idx].to_string();
@@ -502,12 +499,8 @@ mod tests {
     #[test]
     fn cache_insert_and_peek() {
         let mut c = HttpsCache::new();
-        let e = make_entry(
-            "example.com",
-            "foo",
-            b"HTTP/1.1 200 OK\r\nETag: \"x\"\r\n\r\n",
-            b"hello",
-        );
+        let e =
+            make_entry("example.com", "foo", b"HTTP/1.1 200 OK\r\nETag: \"x\"\r\n\r\n", b"hello");
         c.insert(e);
         let found = c.peek(&CacheKey::new("example.com", "foo")).expect("cached");
         assert_eq!(found.head.status, 200);

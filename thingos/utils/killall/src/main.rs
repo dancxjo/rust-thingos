@@ -6,9 +6,9 @@
 #![no_main]
 extern crate alloc;
 
+use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::collections::BTreeSet;
 
 use abi::signal::*;
 use stem::syscall::{

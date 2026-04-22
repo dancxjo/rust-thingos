@@ -13,8 +13,8 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use abi::driver_interface::{
-    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
-    ProbeResult, Status,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
+    DriverStartContext, ProbeResult, Status,
 };
 use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -68,19 +68,32 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -
     thingos_driver_start(ctx)
 }
 
-unsafe extern "C" fn thingos_driver_probe(
-    _dev: *const DeviceInfo,
-    out: *mut ProbeResult,
-) -> Status {
+unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
     if out.is_null() {
         return Status::InvalidArgument;
     }
     let out = &mut *out;
-    out.matched = 0;
-    out.score = 0;
     out.claimed_class = DriverClass::Block;
     out.flags = 0;
-    Status::NoMatch
+
+    // Match ISA legacy IDE devices (registered with BusKind::Isa).
+    // Also accept Unknown bus (default for sysfs-registered ISA devices).
+    let is_isa = if dev.is_null() {
+        false
+    } else {
+        let dev = &*dev;
+        dev.bus == BusKind::Isa as u32 || dev.bus == BusKind::Unknown as u32
+    };
+
+    if is_isa {
+        out.matched = 1;
+        out.score = 700;
+        Status::Ok
+    } else {
+        out.matched = 0;
+        out.score = 0;
+        Status::NoMatch
+    }
 }
 
 unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {

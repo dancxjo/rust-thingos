@@ -23,6 +23,8 @@ use crate::pipelines::setup_serial_shell;
 use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
+const NETD_PROVIDER_PATH: &str = "/dev/net/virtio0/rx";
+const NETD_WAIT_POLL_MS: u64 = 100;
 
 pub struct Config {
     pub force_bootfb: bool,
@@ -103,27 +105,23 @@ impl Supervisor {
         stem::debug!("SPROUT: Spawning cambium for driver discovery...");
         self.spawn_cambium();
 
-        // Stage 3: Start network stack.
-        stem::debug!("SPROUT: Spawning netd...");
-        self.spawn_netd();
-
-
-        // Stage 5: Mount iso9660d (ISO9660 VFS provider).
+        // Stage 3: Mount iso9660d (ISO9660 VFS provider).
         stem::debug!("SPROUT: Spawning iso9660d...");
         self.spawn_iso9660d();
 
-        // Stage 6: Spawn health-monitoring vine for shell restarts.
-        let tasks_health = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            loop {
-                run_health_vine(&tasks_health);
-                stem::sleep_ms(200);
-            }
-        });
+        // Stage 4: Start netd only after the network driver publishes its VFS tree.
+        stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
+        self.spawn_netd_when_ready();
 
-        // Main loop: Minimal sleep.
+        // Stage 6: Run health monitoring inline. This preserves restart logic
+        // without creating an extra helper thread during early boot.
+        stem::debug!("SPROUT: Running health-monitoring vine inline");
+
+        // Main loop: keep health monitoring active without spawning a helper
+        // thread, which can wedge this boot path before driver bring-up.
         loop {
-            stem::sleep_ms(1000);
+            run_health_vine(&self.tasks);
+            stem::sleep_ms(200);
         }
     }
 
@@ -204,23 +202,20 @@ impl Supervisor {
         }
     }
 
-    fn spawn_netd(&mut self) {
-        match stem::syscall::spawn_process("/bin/netd", 0) {
-            Ok(pid) => {
-                stem::debug!("SPROUT: Spawned netd (PID={})", pid);
-                let mut tasks = self.tasks.lock();
-                tasks.push(ManagedTask {
-                    name: "netd".to_string(),
-                    kind: TaskKind::Service("svc.netd".to_string()),
-                    module_path: "/bin/netd".to_string(),
-                    pid: Some(pid),
-                    ..Default::default()
-                });
+    fn spawn_netd_when_ready(&self) {
+        let tasks = self.tasks.clone();
+        let _ = stem::thread::spawn_task(move || {
+            info!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
+            loop {
+                if path_exists(NETD_PROVIDER_PATH) {
+                    info!("SPROUT: {} is ready; spawning netd.", NETD_PROVIDER_PATH);
+                    spawn_netd_task(tasks.clone());
+                    break;
+                }
+                stem::sleep_ms(NETD_WAIT_POLL_MS);
             }
-            Err(e) => warn!("SPROUT: Failed to spawn netd: {:?}", e),
-        }
+        });
     }
-
 
     fn spawn_iso9660d(&mut self) {
         match stem::syscall::spawn_process("/bin/iso9660d", 0) {
@@ -501,6 +496,33 @@ impl Supervisor {
     }
 }
 
+fn path_exists(path: &str) -> bool {
+    match stem::syscall::vfs::vfs_open(path, abi::syscall::vfs_flags::O_RDONLY) {
+        Ok(fd) => {
+            let _ = stem::syscall::vfs::vfs_close(fd);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn spawn_netd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    match stem::syscall::spawn_process("/bin/netd", 0) {
+        Ok(pid) => {
+            stem::debug!("SPROUT: Spawned netd (PID={})", pid);
+            let mut tasks = tasks.lock();
+            tasks.push(ManagedTask {
+                name: "netd".to_string(),
+                kind: TaskKind::Service("svc.netd".to_string()),
+                module_path: "/bin/netd".to_string(),
+                pid: Some(pid),
+                ..Default::default()
+            });
+        }
+        Err(e) => warn!("SPROUT: Failed to spawn netd: {:?}", e),
+    }
+}
+
 /// Health-monitoring vine body.
 ///
 /// This runs on its own kernel task so it never blocks the registration loop.
@@ -512,11 +534,20 @@ impl Supervisor {
 /// 2. If every supervised task has exited, trigger a clean system shutdown.
 /// 3. Restart any task whose PID slot was cleared by step 1.
 fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
-    // Step 1: drain all pending child exits.
-    loop {
-        match stem::syscall::waitpid(-1, abi::types::waitpid_flags::WNOHANG) {
-            Ok((0, _)) => break, // No more exited children right now.
-            Ok((child_pid, wait_status)) => {
+    // Step 1: poll each supervised child directly. This avoids broad
+    // waitpid(-1) scans during early boot and keeps supervision scoped.
+    let tracked_children: Vec<u64> = {
+        let task_list = tasks.lock();
+        task_list.iter().filter_map(|t| t.pid).collect()
+    };
+
+    for child_pid in tracked_children {
+        let wait_res = stem::syscall::waitpid(child_pid as i64, abi::types::waitpid_flags::WNOHANG);
+        match wait_res {
+            Ok((0, _)) => {
+                // Child still running.
+            }
+            Ok((reaped_pid, wait_status)) if reaped_pid > 0 => {
                 // Decode exit code: normal exits carry the code in bits [15:8];
                 // signal-terminated exits carry the raw wait_status (negative by
                 // convention so callers can distinguish them from clean exits).
@@ -525,26 +556,38 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
                 } else {
                     wait_status
                 };
-                let child_pid = child_pid as u64;
+
                 let mut task_list = tasks.lock();
-                if let Some(task) = task_list.iter_mut().find(|t| t.pid == Some(child_pid)) {
+                if let Some(task) = task_list.iter_mut().find(|t| t.pid == Some(reaped_pid as u64))
+                {
                     info!(
                         "SPROUT: Task '{}' (PID {}) died with code {}. Restarting...",
-                        task.name, child_pid, exit_code
+                        task.name, reaped_pid, exit_code
                     );
                     task.pid = None;
                     if let Some(fd) = task.resp_fd.take() {
                         let _ = stem::syscall::vfs::vfs_close(fd);
                     }
                     task.restarts += 1;
-                } else {
-                    info!("SPROUT: Unknown child PID {} exited (code {})", child_pid, exit_code);
                 }
             }
-            Err(abi::errors::Errno::ECHILD) => break, // No children remain; expected.
+            Ok(_) => {
+                // Non-matching success tuple; ignore and continue supervision.
+            }
+            Err(abi::errors::Errno::ECHILD) => {
+                // If the kernel says this PID is no longer our child, clear it so
+                // restart logic can recover the managed task slot.
+                let mut task_list = tasks.lock();
+                if let Some(task) = task_list.iter_mut().find(|t| t.pid == Some(child_pid)) {
+                    task.pid = None;
+                    if let Some(fd) = task.resp_fd.take() {
+                        let _ = stem::syscall::vfs::vfs_close(fd);
+                    }
+                    task.restarts += 1;
+                }
+            }
             Err(e) => {
-                warn!("SPROUT: waitpid(-1, WNOHANG) returned unexpected error: {:?}", e);
-                break;
+                warn!("SPROUT: waitpid({}, WNOHANG) returned unexpected error: {:?}", child_pid, e);
             }
         }
     }
