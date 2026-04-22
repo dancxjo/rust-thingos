@@ -96,7 +96,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                     return Ok(DhcpConfig { ip, prefix_len, gateway, dns });
                 }
                 Event::Deconfigured => {
-                    stem::warn!("DHCP: Deconfigured");
+                    stem::warn!("DHCP: state=deconfigured");
                 }
             }
         }
@@ -108,15 +108,22 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             .unwrap_or(DHCP_POLL_SLICE_MS);
         if poll_delay_ms != last_poll_delay_ms {
             let elapsed_ms = (ts - start).total_millis();
-            let now_absolute_ms = ts.total_millis();
-            let next_retry_deadline_ms = poll_delay_ms.map(|ms| elapsed_ms + ms);
+            let now_absolute_ms = u64::try_from(ts.total_millis()).unwrap_or(0);
+            let next_retry_deadline_ms =
+                poll_delay_ms.map(|ms| now_absolute_ms.saturating_add(ms));
+            let wake_reason = match poll_delay_ms {
+                Some(ms) if ms > wait_ms => "slice_cap",
+                Some(_) => "poll_delay",
+                None => "default_slice",
+            };
             stem::debug!(
-                "DHCP: state=waiting_lease now_ms={} elapsed_ms={} poll_delay_ms={:?} next_retry_deadline_ms={:?} next_wake_ms={} resets={}/{}",
+                "DHCP: state=waiting_lease now_ms={} elapsed_ms={} poll_delay_ms={:?} next_retry_deadline_ms={:?} next_wake_ms={} wake_reason={} resets={}/{}",
                 now_absolute_ms,
                 elapsed_ms,
                 poll_delay_ms,
                 next_retry_deadline_ms,
                 now_absolute_ms + wait_ms,
+                wake_reason,
                 reset_count,
                 computed_max_socket_resets
             );
