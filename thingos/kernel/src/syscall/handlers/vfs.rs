@@ -23,6 +23,28 @@ use abi::syscall::{PollHandle, fcntl_cmd, handle_flags, poll_flags, vfs_flags};
 use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
 
+fn mode_allows_requested_access(mode: u32, want_read: bool, want_write: bool) -> bool {
+    let read_ok = !want_read || (mode & 0o444) != 0;
+    let write_ok = !want_write || (mode & 0o222) != 0;
+    read_ok && write_ok
+}
+
+fn enforce_open_access(node: &Arc<dyn vfs::VfsNode>, open_flags: OpenFlags) -> SysResult<()> {
+    if !open_flags.is_readable() && !open_flags.is_writable() {
+        return Ok(());
+    }
+    let authority = crate::authority::bridge::authority_for_current();
+    if authority.uid == 0 {
+        return Ok(());
+    }
+    let stat = node.stat()?;
+    if mode_allows_requested_access(stat.mode, open_flags.is_readable(), open_flags.is_writable()) {
+        Ok(())
+    } else {
+        Err(Errno::EACCES)
+    }
+}
+
 // ── open ────────────────────────────────────────────────────────────────────
 
 pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<usize> {
@@ -71,6 +93,8 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     } else {
         vfs::mount::lookup(&abs_path)?
     };
+
+    enforce_open_access(&node, open_flags)?;
 
     if path == "/dev/fb0" {
         match node.stat() {
@@ -675,6 +699,9 @@ pub fn sys_fs_mount_ex(
     path_len: usize,
     flags: u32,
 ) -> SysResult<usize> {
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "mount")?;
+
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
         return Err(Errno::EINVAL);
@@ -783,6 +810,9 @@ pub fn sys_fs_bind(
 
 /// Unmount the VFS provider at the given path prefix.
 pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "mount")?;
+
     validate_user_range(path_ptr, path_len, false)?;
     if path_len == 0 || path_len > 4096 {
         return Err(Errno::EINVAL);
@@ -2050,6 +2080,20 @@ mod tests {
             0,
             "AlwaysReadyNode → ready"
         );
+    }
+
+    #[test]
+    fn mode_allows_requested_access_denies_when_mode_has_no_permission_bits() {
+        assert!(!mode_allows_requested_access(0o000, true, false));
+        assert!(!mode_allows_requested_access(0o000, false, true));
+        assert!(!mode_allows_requested_access(0o000, true, true));
+    }
+
+    #[test]
+    fn mode_allows_requested_access_allows_with_matching_mode_bits() {
+        assert!(mode_allows_requested_access(0o444, true, false));
+        assert!(mode_allows_requested_access(0o222, false, true));
+        assert!(mode_allows_requested_access(0o666, true, true));
     }
 
     // ── sys_fs_lstat input validation ─────────────────────────────────────────

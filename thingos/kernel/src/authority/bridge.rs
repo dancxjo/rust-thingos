@@ -77,6 +77,14 @@ pub const CAP_SIGNAL: u64 = 1 << 1;
 pub const CAP_KILL: u64 = 1 << 2;
 /// Capability bit: realtime priority escalation.
 pub const CAP_REALTIME_PRIORITY: u64 = 1 << 3;
+/// Capability bit: mount and unmount operations.
+pub const CAP_MOUNT: u64 = 1 << 4;
+/// Capability bit: kernel log-level control.
+pub const CAP_LOG_LEVEL: u64 = 1 << 5;
+/// Capability bit: raw I/O port access.
+pub const CAP_IOPORT: u64 = 1 << 6;
+/// Capability bit: direct CPU IRQ vector subscription/wait.
+pub const CAP_IRQ_VECTOR: u64 = 1 << 7;
 
 fn capability_name(bit: u64) -> Option<&'static str> {
     match bit {
@@ -84,13 +92,26 @@ fn capability_name(bit: u64) -> Option<&'static str> {
         CAP_SIGNAL => Some("signal"),
         CAP_KILL => Some("kill"),
         CAP_REALTIME_PRIORITY => Some("realtime_priority"),
+        CAP_MOUNT => Some("mount"),
+        CAP_LOG_LEVEL => Some("log_level"),
+        CAP_IOPORT => Some("ioport"),
+        CAP_IRQ_VECTOR => Some("irq_vector"),
         _ => None,
     }
 }
 
 fn capabilities_from_mask(mask: u64) -> alloc::vec::Vec<alloc::string::String> {
     let mut out = alloc::vec::Vec::new();
-    for bit in [CAP_REBOOT, CAP_SIGNAL, CAP_KILL, CAP_REALTIME_PRIORITY] {
+    for bit in [
+        CAP_REBOOT,
+        CAP_SIGNAL,
+        CAP_KILL,
+        CAP_REALTIME_PRIORITY,
+        CAP_MOUNT,
+        CAP_LOG_LEVEL,
+        CAP_IOPORT,
+        CAP_IRQ_VECTOR,
+    ] {
         if (mask & bit) != 0 {
             if let Some(name) = capability_name(bit) {
                 out.push(alloc::string::String::from(name));
@@ -106,6 +127,10 @@ fn required_capability(privilege: &str) -> Option<u64> {
         "signal" => Some(CAP_SIGNAL),
         "kill" => Some(CAP_KILL),
         "realtime_priority" => Some(CAP_REALTIME_PRIORITY),
+        "mount" => Some(CAP_MOUNT),
+        "log_level" => Some(CAP_LOG_LEVEL),
+        "ioport" => Some(CAP_IOPORT),
+        "irq_vector" => Some(CAP_IRQ_VECTOR),
         _ => None,
     }
 }
@@ -347,6 +372,30 @@ mod tests {
         auth.capability_mask = CAP_SIGNAL;
         assert!(check_privilege(&auth, "signal").is_ok());
         assert_eq!(check_privilege(&auth, "reboot"), Err(Errno::EPERM));
+    }
+
+    #[test]
+    fn test_check_privilege_new_enforcement_classes_require_matching_capabilities() {
+        let mut auth = authority_from_snapshot(&make_snapshot("svc", "/bin/svc"));
+        auth.uid = 1000;
+        auth.capability_mask = CAP_MOUNT | CAP_LOG_LEVEL | CAP_IOPORT | CAP_IRQ_VECTOR;
+
+        assert!(check_privilege(&auth, "mount").is_ok());
+        assert!(check_privilege(&auth, "log_level").is_ok());
+        assert!(check_privilege(&auth, "ioport").is_ok());
+        assert!(check_privilege(&auth, "irq_vector").is_ok());
+    }
+
+    #[test]
+    fn test_check_privilege_new_enforcement_classes_fail_without_capabilities() {
+        let mut auth = authority_from_snapshot(&make_snapshot("svc", "/bin/svc"));
+        auth.uid = 1000;
+        auth.capability_mask = 0;
+
+        assert_eq!(check_privilege(&auth, "mount"), Err(Errno::EPERM));
+        assert_eq!(check_privilege(&auth, "log_level"), Err(Errno::EPERM));
+        assert_eq!(check_privilege(&auth, "ioport"), Err(Errno::EPERM));
+        assert_eq!(check_privilege(&auth, "irq_vector"), Err(Errno::EPERM));
     }
 
     #[test]

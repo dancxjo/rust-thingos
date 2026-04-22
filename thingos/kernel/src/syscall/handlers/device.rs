@@ -254,6 +254,8 @@ pub fn sys_device_irq_subscribe(arg0: usize, arg1: usize, mode: usize) -> SysRes
             Ok(0)
         }
         DEVICE_IRQ_SUBSCRIBE_VECTOR | _ => {
+            let authority = crate::authority::bridge::authority_for_current();
+            crate::authority::bridge::check_privilege(&authority, "irq_vector")?;
             let vector = arg0;
             if vector > 255 {
                 return Err(Errno::EINVAL);
@@ -286,6 +288,8 @@ pub fn sys_device_irq_wait(arg0: usize, arg1: usize, mode: usize) -> SysResult<u
             vector
         }
         DEVICE_IRQ_SUBSCRIBE_VECTOR | _ => {
+            let authority = crate::authority::bridge::authority_for_current();
+            crate::authority::bridge::check_privilege(&authority, "irq_vector")?;
             if arg0 > 255 {
                 return Err(Errno::EINVAL);
             }
@@ -433,6 +437,8 @@ pub fn sys_device_dma_phys(virt_addr: usize) -> SysResult<usize> {
 }
 
 pub fn sys_device_ioport(port: usize, val: usize, write: bool, width: usize) -> SysResult<usize> {
+    let authority = crate::authority::bridge::authority_for_current();
+    crate::authority::bridge::check_privilege(&authority, "ioport")?;
     if write {
         match width {
             1 => crate::ioport_write_u8(port as u16, val as u8),
