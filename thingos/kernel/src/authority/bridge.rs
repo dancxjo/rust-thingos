@@ -86,6 +86,17 @@ pub const CAP_IOPORT: u64 = 1 << 6;
 /// Capability bit: direct CPU IRQ vector subscription/wait.
 pub const CAP_IRQ_VECTOR: u64 = 1 << 7;
 
+const CAPABILITY_BITS: [u64; 8] = [
+    CAP_REBOOT,
+    CAP_SIGNAL,
+    CAP_KILL,
+    CAP_REALTIME_PRIORITY,
+    CAP_MOUNT,
+    CAP_LOG_LEVEL,
+    CAP_IOPORT,
+    CAP_IRQ_VECTOR,
+];
+
 fn capability_name(bit: u64) -> Option<&'static str> {
     match bit {
         CAP_REBOOT => Some("reboot"),
@@ -102,16 +113,7 @@ fn capability_name(bit: u64) -> Option<&'static str> {
 
 fn capabilities_from_mask(mask: u64) -> alloc::vec::Vec<alloc::string::String> {
     let mut out = alloc::vec::Vec::new();
-    for bit in [
-        CAP_REBOOT,
-        CAP_SIGNAL,
-        CAP_KILL,
-        CAP_REALTIME_PRIORITY,
-        CAP_MOUNT,
-        CAP_LOG_LEVEL,
-        CAP_IOPORT,
-        CAP_IRQ_VECTOR,
-    ] {
+    for bit in CAPABILITY_BITS {
         if (mask & bit) != 0 {
             if let Some(name) = capability_name(bit) {
                 out.push(alloc::string::String::from(name));

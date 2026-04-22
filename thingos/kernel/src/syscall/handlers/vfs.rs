@@ -24,12 +24,17 @@ use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
 
 fn mode_allows_requested_access(mode: u32, want_read: bool, want_write: bool) -> bool {
+    // Transitional coarse gate: enforce requested read/write against any
+    // corresponding permission class bit. Caller-vs-owner/group class matching
+    // is deferred until full uid/gid ownership propagation is in place.
     let read_ok = !want_read || (mode & 0o444) != 0;
     let write_ok = !want_write || (mode & 0o222) != 0;
     read_ok && write_ok
 }
 
 fn enforce_open_access(node: &Arc<dyn vfs::VfsNode>, open_flags: OpenFlags) -> SysResult<()> {
+    // Open requests with no read/write access mode do not perform data access
+    // and remain allowed.
     if !open_flags.is_readable() && !open_flags.is_writable() {
         return Ok(());
     }
