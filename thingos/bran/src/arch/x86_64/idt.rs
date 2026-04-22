@@ -766,8 +766,9 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
     reboot
 }
 
-fn capture_ps2_keyboard_irq() -> bool {
-    capture_ps2_keyboard(32).0
+fn capture_ps2_keyboard_irq() -> (bool, bool) {
+    let (pause, f12, _) = capture_ps2_keyboard(32);
+    (pause, f12)
 }
 
 fn poll_ps2_keyboard_fallback() -> bool {
@@ -1230,6 +1231,7 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
     }
 
     let mut pause_dump = false;
+    let mut f12_press = false;
 
     if resolved == 0x21 {
         let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1238,7 +1240,9 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
             kinfo!("IRQ1 fired (count={})", count);
         }
         */
-        pause_dump = capture_ps2_keyboard_irq();
+        let (pause, f12) = capture_ps2_keyboard_irq();
+        pause_dump = pause;
+        f12_press = f12;
     }
 
     if resolved == 0x2C {
@@ -1260,6 +1264,10 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
     if pause_dump {
         let snapshot = if irq_snapshot.is_null() { None } else { Some(unsafe { &*irq_snapshot }) };
         trigger_pause_dump(snapshot);
+    }
+
+    if f12_press {
+        activate_terminal_and_spawn_shell();
     }
 
     if resolved == 0x24 {
