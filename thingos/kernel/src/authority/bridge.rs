@@ -402,6 +402,23 @@ mod tests {
     }
 
     #[test]
+    fn test_capability_bits_array_covers_known_capabilities() {
+        assert_eq!(
+            CAPABILITY_BITS,
+            [
+                CAP_REBOOT,
+                CAP_SIGNAL,
+                CAP_KILL,
+                CAP_REALTIME_PRIORITY,
+                CAP_MOUNT,
+                CAP_LOG_LEVEL,
+                CAP_IOPORT,
+                CAP_IRQ_VECTOR,
+            ]
+        );
+    }
+
+    #[test]
     fn test_check_privilege_unknown_privilege_fails_closed() {
         let auth = authority_from_snapshot(&make_snapshot("svc", "/bin/svc"));
         assert_eq!(check_privilege(&auth, "unknown_privilege"), Err(Errno::EPERM));

@@ -26,6 +26,10 @@ use crate::vfs::{self, OpenFlags};
 const MODE_READ_ANY: u32 = 0o444;
 const MODE_WRITE_ANY: u32 = 0o222;
 
+/// Returns whether `mode` permits the requested read/write access.
+///
+/// Transitional behavior: this currently checks whether any owner/group/other
+/// class bit grants the requested access.
 fn mode_allows_requested_access(mode: u32, want_read: bool, want_write: bool) -> bool {
     // Transitional coarse gate: enforce requested read/write against any
     // corresponding permission class bit. Caller-vs-owner/group class matching
@@ -49,6 +53,7 @@ fn enforce_open_access(node: &Arc<dyn vfs::VfsNode>, open_flags: OpenFlags) -> S
         return Ok(());
     }
     let authority = crate::authority::bridge::authority_for_current();
+    // Root remains the privileged principal and bypasses file mode checks.
     if authority.uid == 0 {
         return Ok(());
     }
