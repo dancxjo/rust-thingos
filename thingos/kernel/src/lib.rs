@@ -941,6 +941,15 @@ fn paint_bootfb_gradient(fb: FramebufferInfo, end_color: u32) {
     }
 }
 
+#[inline]
+fn boot_timing_us_from_hz(ticks: u64, hz: u64) -> u64 {
+    if hz == 0 {
+        0
+    } else {
+        ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
+    }
+}
+
 pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] enter\r\n");
 
@@ -983,13 +992,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] global_alloc::init ok\r\n");
     boot_trace(runtime, b"[kernel:start] after global_alloc marker\r\n");
     let boot_timing_hz = runtime.mono_freq_hz();
-    let boot_timing_us = |ticks: u64| -> u64 {
-        if boot_timing_hz == 0 {
-            0
-        } else {
-            ((ticks as u128).saturating_mul(1_000_000) / boot_timing_hz as u128) as u64
-        }
-    };
+    let boot_timing_us = |ticks: u64| -> u64 { boot_timing_us_from_hz(ticks, boot_timing_hz) };
 
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs begin\r\n");
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs query begin\r\n");
@@ -1077,7 +1080,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     crate::task::init::<R>();
     boot_trace(runtime, b"[kernel:start] task init ok\r\n");
     let scheduler_entry_window_start = runtime.mono_ticks();
-    let log_scheduler_entry_step = |step: &str, step_start: u64| {
+    fn log_scheduler_entry_step<R: BootRuntime>(
+        runtime: &R,
+        boot_timing_hz: u64,
+        scheduler_entry_window_start: u64,
+        step: &str,
+        step_start: u64,
+    ) {
         let now = runtime.mono_ticks();
         let step_elapsed = now.wrapping_sub(step_start);
         let total_elapsed = now.wrapping_sub(scheduler_entry_window_start);
@@ -1085,11 +1094,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             "[kernel:start] scheduler-entry step='{}' elapsed_ticks={} elapsed_us={} total_ticks={} total_us={}",
             step,
             step_elapsed,
-            boot_timing_us(step_elapsed),
+            boot_timing_us_from_hz(step_elapsed, boot_timing_hz),
             total_elapsed,
-            boot_timing_us(total_elapsed)
+            boot_timing_us_from_hz(total_elapsed, boot_timing_hz)
         );
-    };
+    }
 
     boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
     kdebug!("Initializing VFS...");
@@ -1155,7 +1164,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     } else {
         crate::kdebug!("Kernel: Detected {} CPU.", cpu_total);
     }
-    log_scheduler_entry_step("start_secondary_cpus", smp_bringup_start);
+    log_scheduler_entry_step(
+        runtime,
+        boot_timing_hz,
+        scheduler_entry_window_start,
+        "start_secondary_cpus",
+        smp_bringup_start,
+    );
     boot_trace(runtime, b"[kernel:start] smp bring-up stage done\r\n");
 
     // Store global boot info for syscalls
@@ -1207,7 +1222,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         let (user_entry, stack_info, mut regions, _aux_info) =
             crate::task::loader::load_module(runtime, aspace, mod_desc)
                 .expect("Failed to load sprout");
-        log_scheduler_entry_step("load_init_module", load_module_start);
+        log_scheduler_entry_step(
+            runtime,
+            boot_timing_hz,
+            scheduler_entry_window_start,
+            "load_init_module",
+            load_module_start,
+        );
 
         // Prepare Module Registry Page
         let boot_registry_prepare_start = runtime.mono_ticks();
@@ -1249,7 +1270,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 string_offset_bytes += name_len;
             }
         }
-        log_scheduler_entry_step("prepare_boot_registry", boot_registry_prepare_start);
+        log_scheduler_entry_step(
+            runtime,
+            boot_timing_hz,
+            scheduler_entry_window_start,
+            "prepare_boot_registry",
+            boot_registry_prepare_start,
+        );
 
         // Map Registry to fixed user address 0x600000
         // We map it read-only for user
@@ -1270,7 +1297,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 &GlobalAllocHook,
             )
             .unwrap();
-        log_scheduler_entry_step("map_boot_registry", boot_registry_map_start);
+        log_scheduler_entry_step(
+            runtime,
+            boot_timing_hz,
+            scheduler_entry_window_start,
+            "map_boot_registry",
+            boot_registry_map_start,
+        );
 
         regions.push(VmRegionInfo {
             start: 0x600000,
@@ -1284,7 +1317,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         // Flush TLB by reloading CR3
         let activate_aspace_start = runtime.mono_ticks();
         runtime.tasking().activate_address_space(aspace);
-        log_scheduler_entry_step("activate_init_aspace", activate_aspace_start);
+        log_scheduler_entry_step(
+            runtime,
+            boot_timing_hz,
+            scheduler_entry_window_start,
+            "activate_init_aspace",
+            activate_aspace_start,
+        );
 
         kdebug!("Spawning sprout with registry at 0x600000...");
         let spawn_init_start = runtime.mono_ticks();
@@ -1301,7 +1340,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 crate::task::TaskPriority::Normal,
             );
         }
-        log_scheduler_entry_step("spawn_init_task", spawn_init_start);
+        log_scheduler_entry_step(
+            runtime,
+            boot_timing_hz,
+            scheduler_entry_window_start,
+            "spawn_init_task",
+            spawn_init_start,
+        );
         boot_trace(runtime, b"[kernel:start] init process spawned\r\n");
     } else {
         boot_trace(runtime, b"[kernel:start] no init module; fallback path\r\n");
@@ -1317,7 +1362,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 let (user_entry, stack_info, regions) =
                     crate::task::loader::load_module(runtime, aspace, mod_desc)
                         .expect("Failed to load threads_demo");
-                log_scheduler_entry_step("load_fallback_module", load_fallback_module_start);
+                log_scheduler_entry_step(
+                    runtime,
+                    boot_timing_hz,
+                    scheduler_entry_window_start,
+                    "load_fallback_module",
+                    load_fallback_module_start,
+                );
                 let spawn_fallback_start = runtime.mono_ticks();
                 unsafe {
                     crate::sched::spawn_user_task_full::<R>(
@@ -1328,7 +1379,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                         crate::task::TaskPriority::Normal,
                     );
                 }
-                log_scheduler_entry_step("spawn_fallback_task", spawn_fallback_start);
+                log_scheduler_entry_step(
+                    runtime,
+                    boot_timing_hz,
+                    scheduler_entry_window_start,
+                    "spawn_fallback_task",
+                    spawn_fallback_start,
+                );
                 spawned_fallback = true;
             }
         }
@@ -1358,9 +1415,15 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     // Transition out of early-boot mode.
     let end_bringup_start = runtime.mono_ticks();
     crate::sched::end_bringup::<R>();
-    log_scheduler_entry_step("end_bringup", end_bringup_start);
+    log_scheduler_entry_step(
+        runtime,
+        boot_timing_hz,
+        scheduler_entry_window_start,
+        "end_bringup",
+        end_bringup_start,
+    );
     boot_trace(runtime, b"[kernel:start] end_bringup\r\n");
-    let mut deferred_bootfb_gradient = runtime.framebuffer();
+    let mut deferred_bootfb = runtime.framebuffer();
     let scheduler_entry_total = runtime
         .mono_ticks()
         .wrapping_sub(scheduler_entry_window_start);
@@ -1375,7 +1438,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
     loop {
         // Keep a visible startup background without blocking scheduler-loop entry.
-        if let Some(fb) = deferred_bootfb_gradient.take() {
+        if let Some(fb) = deferred_bootfb.take() {
             let gradient_start = runtime.mono_ticks();
             paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
             let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
