@@ -9280,7 +9280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_trylock_miss_timer_counter_tracks_timer_trigger() {
+    fn test_trylock_miss_timer_attribution() {
         let _g = init_test_env();
 
         let mut sched = types::Scheduler::<MockRuntime>::new();
@@ -9311,6 +9311,12 @@ mod tests {
         drop(lock);
         let mut sched_lock = SCHEDULER.lock();
         *sched_lock = None;
+    }
+
+    #[test]
+    fn test_dispatch_trigger_labels() {
+        assert_eq!(DispatchTrigger::TimerTick.as_str(), "timer_tick");
+        assert_eq!(DispatchTrigger::ReschedIpi.as_str(), "resched_ipi");
     }
 
     #[test]
