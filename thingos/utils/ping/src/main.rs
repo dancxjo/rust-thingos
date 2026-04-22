@@ -96,25 +96,28 @@ fn parse_ipv4(text: &str) -> Option<Ipv4Address> {
     Some(Ipv4Address::new(parts[0], parts[1], parts[2], parts[3]))
 }
 
-fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
+fn resolve(name: &str) -> Result<Ipv4Address, String> {
     if let Some(ip) = parse_ipv4(name) {
         return Ok(ip);
     }
 
-    let fd = vfs_open("/net/dns/lookup", O_WRONLY).map_err(|_| "cannot open /net/dns/lookup")?;
+    let fd = vfs_open("/net/dns/lookup", O_WRONLY)
+        .map_err(|err| alloc::format!("cannot open /net/dns/lookup: {:?}", err))?;
     let write_ok = vfs_write(fd, name.as_bytes()).is_ok();
     let _ = vfs_close(fd);
     if !write_ok {
-        return Err("cannot write /net/dns/lookup");
+        return Err(String::from("cannot write /net/dns/lookup"));
     }
 
     let deadline = stem::time::now() + stem::time::Duration::from_millis(3_000);
     loop {
         let read_fd = vfs_open("/net/dns/lookup", O_RDONLY | O_NONBLOCK)
-            .map_err(|_| "cannot open /net/dns/lookup")?;
-        if !wait_readable(read_fd, deadline).map_err(|_| "DNS poll failed")? {
+            .map_err(|err| alloc::format!("cannot open /net/dns/lookup: {:?}", err))?;
+        if !wait_readable(read_fd, deadline)
+            .map_err(|err| alloc::format!("DNS poll failed: {:?}", err))?
+        {
             let _ = vfs_close(read_fd);
-            return Err("DNS timeout");
+            return Err(String::from("DNS timeout"));
         }
 
         let mut buf = [0u8; 64];
@@ -125,17 +128,17 @@ fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
             if n > 0 {
                 let text = String::from(String::from_utf8_lossy(&buf[..n]).trim());
                 if text == "error" {
-                    return Err("DNS failed");
+                    return Err(String::from("DNS failed"));
                 }
                 if let Some(ip) = parse_ipv4(&text) {
                     return Ok(ip);
                 }
-                return Err("invalid DNS response");
+                return Err(String::from("invalid DNS response"));
             }
         } else if read_result == Err(Errno::EAGAIN) {
             continue;
         } else {
-            return Err("DNS read failed");
+            return Err(alloc::format!("DNS read failed: {:?}", read_result.unwrap_err()));
         }
     }
 }
