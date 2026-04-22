@@ -9,6 +9,17 @@ use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{IpCidr, Ipv4Address};
 
+/// Overall DHCP attempt budget before declaring timeout.
+const DHCP_TIMEOUT_SECS: u64 = 30;
+/// Periodic progress log cadence while waiting for a lease.
+const DHCP_PROGRESS_LOG_SECS: u64 = 5;
+/// Cap unusually long smoltcp backoff delays so retry cadence stays observable.
+const DHCP_MAX_BACKOFF_MS: i64 = 4_000;
+/// Keep wakeups responsive while waiting for DHCP events.
+const DHCP_POLL_SLICE_MS: i64 = 100;
+/// Avoid infinite DHCP socket churn if the backoff cap keeps being exceeded.
+const DHCP_MAX_SOCKET_RESETS: u32 = 3;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum DhcpError {
@@ -36,13 +47,15 @@ fn wait_until(deadline: Instant) {
 pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<DhcpConfig, DhcpError> {
     let mut sockets_storage: [SocketStorage; 1] = Default::default();
     let mut socket_set = SocketSet::new(&mut sockets_storage[..]);
-    let dhcp_handle = socket_set.add(Dhcpv4Socket::new());
+    let mut dhcp_handle = socket_set.add(Dhcpv4Socket::new());
 
     stem::debug!("DHCP: Starting discovery...");
 
     let start = now();
-    let timeout = start + Duration::from_secs(30);
-    let mut next_progress_log = start + Duration::from_secs(5);
+    let timeout = start + Duration::from_secs(DHCP_TIMEOUT_SECS);
+    let mut next_progress_log = start + Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
+    let mut reset_count = 0u32;
+    let mut last_poll_delay_ms: Option<i64> = None;
 
     loop {
         let ts = now();
@@ -53,7 +66,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
         if ts >= next_progress_log {
             let elapsed_ms = (ts - start).total_millis();
             stem::debug!("DHCP: Still waiting for lease ({} ms elapsed)", elapsed_ms);
-            next_progress_log += Duration::from_secs(5);
+            next_progress_log += Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
         }
 
         let _ = iface.poll(ts, device, &mut socket_set);
@@ -88,7 +101,48 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
         }
 
         let delay = iface.poll_delay(ts, &socket_set);
-        let wait_ms = delay.map(|d| d.total_millis()).unwrap_or(100).min(100);
+        let poll_delay_ms = delay.map(|d| d.total_millis());
+        if poll_delay_ms != last_poll_delay_ms {
+            let elapsed_ms = (ts - start).total_millis();
+            let next_retry_deadline_ms = poll_delay_ms.map(|ms| elapsed_ms + ms);
+            stem::debug!(
+                "DHCP: state=waiting_lease elapsed_ms={} poll_delay_ms={:?} next_retry_deadline_ms={:?} resets={}",
+                elapsed_ms,
+                poll_delay_ms,
+                next_retry_deadline_ms,
+                reset_count
+            );
+            last_poll_delay_ms = poll_delay_ms;
+        }
+
+        if let Some(poll_delay_ms) = poll_delay_ms {
+            let exceeds_backoff_cap = poll_delay_ms > DHCP_MAX_BACKOFF_MS;
+            if exceeds_backoff_cap && reset_count < DHCP_MAX_SOCKET_RESETS {
+                reset_count += 1;
+                stem::warn!(
+                    "DHCP: poll_delay_ms={} exceeds cap={}, resetting DHCP socket (resets={})",
+                    poll_delay_ms,
+                    DHCP_MAX_BACKOFF_MS,
+                    reset_count
+                );
+                // `dhcp_handle` is owned by this loop and always valid here; any
+                // failure would indicate a logic bug rather than runtime recovery.
+                let _ = socket_set.remove::<Dhcpv4Socket>(dhcp_handle);
+                dhcp_handle = socket_set.add(Dhcpv4Socket::new());
+                continue;
+            } else if exceeds_backoff_cap {
+                stem::warn!(
+                    "DHCP: poll_delay_ms={} exceeds cap={} but reset budget exhausted (resets={})",
+                    poll_delay_ms,
+                    DHCP_MAX_BACKOFF_MS,
+                    reset_count
+                );
+            }
+        }
+
+        let wait_ms = poll_delay_ms
+            .map(|ms| ms.min(DHCP_POLL_SLICE_MS))
+            .unwrap_or(DHCP_POLL_SLICE_MS);
         let deadline = ts + Duration::from_millis(wait_ms);
         wait_until(deadline);
     }
