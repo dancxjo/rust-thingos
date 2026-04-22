@@ -109,9 +109,6 @@ pub fn block_current<R: BootRuntime>() {
                 was_wake_pending = true;
             } else {
                 sf.state = TaskState::Blocked;
-                if current_id == 6 {
-                    crate::kdebug!("SCHED[TID6]: blocked");
-                }
             }
         }
 
@@ -411,6 +408,7 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
 
     let wait_start = rt.mono_ticks();
 
+    crate::ktrace!("WAKE_TASK: ID={} taking SCHEDULER lock", id);
     // Collect any pending IPI target and deferred REGISTRY update inside the
     // lock, then apply both *after* the lock is dropped to avoid holding
     // SCHEDULER during IPI delivery and to eliminate the nested REGISTRY lock.
@@ -426,14 +424,12 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         );
         let lock_start = rt.mono_ticks();
 
-        crate::ktrace!("WAKE_TASK: ID={} taking SCHEDULER lock", id);
         let result = if let Some(ptr) = *lock_sched {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             wake_task_locked::<R>(sched, id)
         } else {
             (None, None)
         };
-        crate::ktrace!("WAKE_TASK: ID={} wake_task_locked returned IPI_CPU={:?}", id, result.0);
 
         super::record_sched_lock_hold::<R>(
             &super::PROF_SCHED_LOCK_WAKE_TASK_CALLS,
@@ -447,6 +443,7 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         result
     };
     // SCHEDULER lock released here.
+    crate::ktrace!("WAKE_TASK: ID={} wake_task_locked returned IPI_CPU={:?}", id, ipi_cpu);
 
     // Apply the deferred REGISTRY update outside the SCHEDULER lock to avoid
     // the nested SCHEDULER → REGISTRY lock ordering that caused contention.

@@ -1145,42 +1145,50 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         return;
     }
 
-    let Some(lock) = SCHEDULER.try_lock() else {
-        return;
-    };
-    let Some(ptr) = *lock else {
-        return;
-    };
-    // SAFETY: `ptr` is written from `init::<R>` and remains valid for kernel
-    // lifetime; this function only reads scheduler state under SCHEDULER lock.
-    let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
-    crate::ktrace!("SCHED-DBG: cpus_online={}", sched.state.online_cpu_count);
-    for &i in &sched.state.online_cpus {
-        let pc = &sched.state.per_cpu[i];
-        let runq: usize = pc.runq.iter().map(|q| q.len()).sum();
-        let runq_avg = if pc.stats.runq_sample_count == 0 {
-            0
-        } else {
-            pc.stats.runq_sample_total / pc.stats.runq_sample_count
+    let cpus_online;
+    let mut cpu_logs = alloc::vec::Vec::new();
+    {
+        let Some(lock) = SCHEDULER.try_lock() else {
+            return;
         };
-        crate::ktrace!(
-            "SCHED-DBG: cpu={} curr={:?} runq={} runq_avg={} runq_samples={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
-            i,
-            pc.current,
-            runq,
-            runq_avg,
-            pc.stats.runq_sample_count,
-            pc.stats.context_switches,
-            pc.stats.idle_to_nonidle,
-            pc.stats.timer_interrupts,
-            pc.stats.resched_ipi_received,
-            pc.stats.runnable_enqueues,
-            pc.stats.runnable_dequeues,
-            pc.stats.wakeups,
-            pc.stats.lock_trylock_misses,
-            pc.stats.lock_trylock_misses_with_pending_resched,
-            pc.stats.lock_blocked_dispatch
-        );
+        let Some(ptr) = *lock else {
+            return;
+        };
+        // SAFETY: `ptr` is written from `init::<R>` and remains valid for kernel
+        // lifetime; this function only reads scheduler state under SCHEDULER lock.
+        let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
+        cpus_online = sched.state.online_cpu_count;
+        for &i in &sched.state.online_cpus {
+            let pc = &sched.state.per_cpu[i];
+            let runq: usize = pc.runq.iter().map(|q| q.len()).sum();
+            let runq_avg = if pc.stats.runq_sample_count == 0 {
+                0
+            } else {
+                pc.stats.runq_sample_total / pc.stats.runq_sample_count
+            };
+            cpu_logs.push(alloc::format!(
+                "SCHED-DBG: cpu={} curr={:?} runq={} runq_avg={} runq_samples={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
+                i,
+                pc.current,
+                runq,
+                runq_avg,
+                pc.stats.runq_sample_count,
+                pc.stats.context_switches,
+                pc.stats.idle_to_nonidle,
+                pc.stats.timer_interrupts,
+                pc.stats.resched_ipi_received,
+                pc.stats.runnable_enqueues,
+                pc.stats.runnable_dequeues,
+                pc.stats.wakeups,
+                pc.stats.lock_trylock_misses,
+                pc.stats.lock_trylock_misses_with_pending_resched,
+                pc.stats.lock_blocked_dispatch
+            ));
+        }
+    } // drop lock
+    crate::ktrace!("SCHED-DBG: cpus_online={}", cpus_online);
+    for log in cpu_logs {
+        crate::ktrace!("{}", log);
     }
 }
 
@@ -2867,25 +2875,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 old_sched.enqueued_at_tick = now;
                 old_registry_sync.new_state = Some(TaskState::Runnable);
                 old_registry_sync.new_enqueued_at_tick = Some(now);
-                if current_id == 6 {
-                    crate::ktrace!(
-                        "SCHED[TID6]: Running → Runnable (cpu={}, next={})",
-                        cpu_idx,
-                        next_id
-                    );
-                }
             }
             old_sched.last_cpu = Some(cpu_idx);
             self.pending_registry_syncs.push(old_registry_sync);
         } else {
             // Task already removed from scheduler state (reaped).
             // resolve_switch_params will handle saving its registers into ghost storage.
-            crate::kdebug!(
-                "SCHED: current_id {} missing from state (reaped?) on CPU {}, switching to {}",
-                current_id,
-                cpu_idx,
-                next_id
-            );
         }
 
         let mut migrated = false;
@@ -3031,14 +3026,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     self.state
                         .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
                     self.metrics.steals += 1;
-                    crate::kdebug!(
-                        "SCHED: CPU {} stole task {} (prio {}) from CPU {} (depth {})",
-                        local_cpu,
-                        stolen_id,
-                        p,
-                        busiest_cpu,
-                        busiest_depth
-                    );
                     return Some(stolen_id);
                 }
             }
@@ -3852,7 +3839,6 @@ pub fn kill_by_tid<R: BootRuntime>(tid: u64) -> bool {
                             crate::kdebug!("DEVICE: released {} claims for task {}", released, tid);
                         }
 
-                        crate::kdebug!("SCHED: Killed task {} (SIGKILL)", tid);
                         (true, waiters)
                     }
                 }

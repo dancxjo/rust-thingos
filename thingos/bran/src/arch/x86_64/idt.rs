@@ -1324,9 +1324,19 @@ pub extern "C" fn rust_pf_handler(frame: &InterruptStackFrame) {
         return;
     }
 
+    let mut stack_dump = alloc::string::String::new();
+    unsafe {
+        let rsp_ptr = frame.rsp as *const u64;
+        for i in 0..16 {
+            use core::fmt::Write;
+            let val = *rsp_ptr.add(i);
+            let _ = write!(&mut stack_dump, "\n  [rsp+{:#04x}]: {:#018x}", i * 8, val);
+        }
+    }
+
     panic!(
-        "PAGE FAULT at 0x{:x} RIP=0x{:x} CS=0x{:x} ERR=0x{:x}",
-        cr2, frame.rip, frame.cs, frame.error_code
+        "PAGE FAULT at 0x{:x} RIP=0x{:x} CS=0x{:x} ERR=0x{:x} RSP=0x{:x}{}",
+        cr2, frame.rip, frame.cs, frame.error_code, frame.rsp, stack_dump
     );
 }
 
