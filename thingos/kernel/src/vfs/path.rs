@@ -22,6 +22,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
+
 use crate::vfs::VfsNode;
 
 /// Maximum number of components allowed in a path before returning `ENAMETOOLONG`.
@@ -36,7 +37,7 @@ pub fn resolve(path: &str) -> SysResult<Arc<dyn VfsNode>> {
 }
 
 /// Resolve an absolute path **without** following the final component if it is
-//! a symlink. Symlinks in intermediate path components are still followed.
+/// a symlink. Symlinks in intermediate path components are still followed.
 pub fn resolve_no_follow(path: &str) -> SysResult<Arc<dyn VfsNode>> {
     resolve_ext(path, false, 0)
 }
@@ -101,20 +102,20 @@ fn walk_path(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dyn 
             let stat = node.stat()?;
             if stat.is_symlink() {
                 let target = node.readlink()?;
-                
+
                 // Construct the remaining path.
                 let remaining = components[i + 1..].join("/");
                 let new_base = resolve_relative(&current_path, &target);
-                
+
                 let new_path = if remaining.is_empty() {
                     new_base
                 } else {
                     alloc::format!("{}/{}", new_base, remaining)
                 };
-                
+
                 return resolve_ext(&new_path, follow_final, depth + 1);
             }
-            
+
             // If it's NOT the last component, it MUST be a directory.
             if !is_last && !stat.is_dir() {
                 return Err(Errno::ENOTDIR);
@@ -132,7 +133,7 @@ fn walk_path(path: &str, follow_final: bool, depth: usize) -> SysResult<Arc<dyn 
 /// Join a base path and a symlink target.
 fn join_symlink(base: &str, target: &str) -> SysResult<String> {
     if target.starts_with('/') {
-        Ok(target.to_string())
+        Ok(String::from(target))
     } else {
         let parent = match base.rfind('/') {
             Some(0) => "/",
@@ -150,7 +151,7 @@ fn join_symlink(base: &str, target: &str) -> SysResult<String> {
 /// Resolve a target relative to a current path.
 fn resolve_relative(current: &str, target: &str) -> String {
     if target.starts_with('/') {
-        target.to_string()
+        String::from(target)
     } else {
         let parent = match current.rfind('/') {
             Some(0) => "/",
