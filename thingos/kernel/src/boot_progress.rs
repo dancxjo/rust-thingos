@@ -3,6 +3,13 @@ use crate::{FramebufferInfo, PixelFormat};
 
 const ICON_SIDE: usize = 32;
 
+/// Total boot tasks matching the 16 sequential `push()` calls in `kernel::start`.
+const TOTAL_TASKS: usize = 16;
+/// Grid columns; TOTAL_TASKS / GRID_COLS gives the number of rows.
+const GRID_COLS: usize = 4;
+/// Number of milestone dots displayed below the progress bar.
+const NUM_DOTS: usize = 8;
+
 const ICON_FRAMEBUFFER: [u32; 32] = [
     0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x07ffffe0, 0x0fffffe0,
     0x0c000020, 0x0c000020, 0x0c000020, 0x0c000020, 0x0c000020, 0x0c000020, 0x0c000020, 0x0c000020,
@@ -85,9 +92,55 @@ pub enum BootPhase {
     Scheduler,
 }
 
+/// Phase for each of the 16 sequential `push()` calls (in boot order).
+/// Used to pre-populate the grid with pending icons and to redraw cells on
+/// state transitions without requiring the caller to pass the phase twice.
+const TASK_PHASES: [BootPhase; TOTAL_TASKS] = [
+    BootPhase::Framebuffer, // 00 – Framebuffer Initialized
+    BootPhase::Memory,      // 01 – Memory Map OK
+    BootPhase::Allocator,   // 02 – Global Allocator
+    BootPhase::Devices,     // 03 – Display Registry
+    BootPhase::Compute,     // 04 – SIMD Ready
+    BootPhase::Compute,     // 05 – SIMD Ready (entropy)
+    BootPhase::Cpu,         // 06 – Tasking Initialized
+    BootPhase::Vfs,         // 07 – VFS Root Ready
+    BootPhase::Pci,         // 08 – PCI Bus Scanned
+    BootPhase::Devices,     // 09 – Legacy Devices
+    BootPhase::Cpu,         // 10 – BSP Timer OK
+    BootPhase::Cpu,         // 11 – SMP Bring-up
+    BootPhase::Modules,     // 12 – Boot Info OK
+    BootPhase::Modules,     // 13 – Modules Scanned
+    BootPhase::Init,        // 14 – Spawning Sprout
+    BootPhase::Scheduler,   // 15 – Entering Scheduler
+];
+
+/// Milestone dot[i] lights up (green) when `pushed_count >= DOT_THRESHOLDS[i]`.
+const DOT_THRESHOLDS: [usize; NUM_DOTS] = [1, 3, 5, 7, 9, 11, 13, 16];
+
+/// Short phase labels rendered below each milestone dot when a font is available.
+const DOT_LABELS: [&str; NUM_DOTS] = [
+    "FB", "MEM", "CPU", "BUS", "DEV", "CLK", "MOD", "INIT",
+];
+
+// ── Colour palette ────────────────────────────────────────────────────────────
 const PANEL_BG: u32 = 0x111111;
-const ICON_FG: u32 = 0x00AADD; // Cyan
-const TEXT_FG: u32 = 0xFFFFFF; // White
+const PENDING_FG: u32 = 0x2A2A2A;   // very dim – task not yet reached
+const ACTIVE_FG: u32 = 0x00AADD;    // cyan  – task just pushed (in progress)
+const COMPLETE_FG: u32 = 0x55AACC;  // light cyan – task finished
+const CHECK_COLOR: u32 = 0x00CC55;  // green corner marker for complete cells
+const TEXT_FG: u32 = 0xCCCCCC;      // milestone label text
+const LABEL_FG: u32 = 0x666666;     // dot phase labels
+const BAR_BG: u32 = 0x222222;       // unfilled bar
+const BAR_FG: u32 = 0x00AA44;       // filled bar (green)
+const DOT_PENDING_COLOR: u32 = 0x2D2D2D;
+const DOT_COMPLETE_COLOR: u32 = 0x00AA44;
+const DOT_ACTIVE_COLOR: u32 = 0x00AADD;
+
+const BAR_H: usize = 6;
+const DOT_SIZE: usize = 8;
+const MSG_H: usize = 12;
+
+// ── Layout ────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
 struct Layout {
@@ -96,44 +149,74 @@ struct Layout {
     panel_side: usize,
     icon_px: usize,
     gap_px: usize,
-    rows: usize,
-    cols: usize,
+    /// Y position of the current-milestone text row.
+    msg_y: usize,
+    /// Y position of the thin progress bar.
+    bar_y: usize,
+    /// Y position of the phase milestone dots.
+    dot_y: usize,
+    /// Y position of the short dot-phase labels (drawn when font available).
+    dot_label_y: usize,
 }
+
+// ── State ─────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
 struct BootProgressState {
     fb: FramebufferInfo,
     layout: Layout,
+    /// How many times `push()` has been called (= index of the next task to push).
     next_index: usize,
     unifont_data: Option<&'static [u8]>,
+    /// Stores the phase that was passed to each push() call so cells can be
+    /// correctly redrawn (e.g. Active → Complete) later.
+    pushed_phases: [BootPhase; TOTAL_TASKS],
 }
 
 static BOOT_PROGRESS: Mutex<Option<BootProgressState>> = Mutex::new(None);
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn init(fb: FramebufferInfo) {
     if fb.width == 0 || fb.height == 0 || fb.pitch < 4 {
         return;
     }
 
-    let min_dim = fb.width.min(fb.height) as usize;
-    let target_side = (min_dim / 3).clamp(128, 320);
-    let icon_px = (target_side / 5).clamp(16, 48);
-    let gap_px = icon_px / 2;
-    let rows = 3;
-    let cols = 4;
-    
-    let layout = Layout {
-        panel_x: (fb.width as usize - target_side) / 2,
-        panel_y: (fb.height as usize - target_side) / 2 - 20,
-        panel_side: target_side,
-        icon_px,
-        gap_px,
-        rows,
-        cols,
-    };
+    let w = fb.width as usize;
+    let h = fb.height as usize;
+    let min_dim = w.min(h);
 
-    let mut state = BootProgressState { fb, layout, next_index: 0, unifont_data: None };
-    state.draw_panel();
+    // Panel occupies ~half of the narrower screen dimension.
+    let panel_side_raw = min_dim / 2;
+    // icon_px = panel_side / 5, then gap fills the rest across 5 gap slots.
+    let icon_px = (panel_side_raw / 5).clamp(32, 80);
+    let gap_px = ((panel_side_raw).saturating_sub(4 * icon_px)) / 5;
+    let gap_px = gap_px.max(2);
+    // Recompute exact panel_side from the clamped values.
+    let panel_side = 4 * icon_px + 5 * gap_px;
+
+    // Vertical space needed below the icon grid.
+    let below_h = MSG_H + 4 + BAR_H + 4 + DOT_SIZE + 3 + 10;
+    let total_h = panel_side + below_h + 10;
+
+    let panel_x = w.saturating_sub(panel_side) / 2;
+    let panel_y = h.saturating_sub(total_h) / 2;
+
+    let msg_y = panel_y + panel_side + 6;
+    let bar_y = msg_y + MSG_H + 4;
+    let dot_y = bar_y + BAR_H + 4;
+    let dot_label_y = dot_y + DOT_SIZE + 3;
+
+    let layout = Layout { panel_x, panel_y, panel_side, icon_px, gap_px, msg_y, bar_y, dot_y, dot_label_y };
+
+    let mut state = BootProgressState {
+        fb,
+        layout,
+        next_index: 0,
+        unifont_data: None,
+        pushed_phases: [BootPhase::Framebuffer; TOTAL_TASKS],
+    };
+    state.draw_initial_panel();
     *BOOT_PROGRESS.lock() = Some(state);
 }
 
@@ -144,35 +227,72 @@ pub fn set_unifont_data(data: &'static [u8]) {
     }
 }
 
+/// Record that a boot task has completed.
+///
+/// - Transitions the **previous** active cell to the *complete* visual state.
+/// - Draws the **current** cell in the *active* state.
+/// - Advances the progress bar and milestone dots.
+/// - Emits a kernel INFO log line so the milestone is visible on the serial
+///   console and can be captured by BDD tests.
 pub fn push(phase: BootPhase, message: &str) {
-    let mut guard = BOOT_PROGRESS.lock();
-    let Some(state) = guard.as_mut() else {
-        return;
-    };
+    // ── Visual update (lock held) ────────────────────────────────────────────
+    {
+        let mut guard = BOOT_PROGRESS.lock();
+        let Some(state) = guard.as_mut() else { return };
 
-    let (col, row) = (state.next_index % state.layout.cols, state.next_index / state.layout.cols);
-    if row < state.layout.rows {
-        let x = state.layout.panel_x + state.layout.gap_px + col * (state.layout.icon_px + state.layout.gap_px);
-        let y = state.layout.panel_y + state.layout.gap_px + row * (state.layout.icon_px + state.layout.gap_px);
-        
-        state.blit_bit_icon(x, y, state.layout.icon_px, icon_bits_for_phase(phase));
+        let idx = state.next_index;
+
+        // Store the caller's phase for use when this cell is later redrawn as Complete.
+        if idx < TOTAL_TASKS {
+            state.pushed_phases[idx] = phase;
+        }
+
+        // Transition the previous active cell to Complete.
+        if idx > 0 && idx - 1 < TOTAL_TASKS {
+            let prev_phase = state.pushed_phases[idx - 1];
+            state.redraw_cell(idx - 1, prev_phase, false, true);
+        }
+
+        // Draw the current cell as Active.
+        if idx < TOTAL_TASKS {
+            state.redraw_cell(idx, phase, true, false);
+        }
+
+        // Progress bar and dots count pushed tasks (the active task counts as
+        // in-progress, so the fill reflects idx completed + 1 active).
+        let pushed = (idx + 1).min(TOTAL_TASKS);
+        state.draw_progress_bar(pushed);
+        state.draw_phase_dots(pushed);
+        state.update_message(message);
+
         state.next_index += 1;
+        // Lock dropped here.
     }
 
-    // Clear previous message area (approximate)
-    state.fill_rect(
-        state.layout.panel_x,
-        state.layout.panel_y + state.layout.panel_side + 5,
-        state.layout.panel_side,
-        20,
-        0, // Black background
-    );
-
-    // Draw new message centered below panel
-    let text_x = state.layout.panel_x + (state.layout.panel_side.saturating_sub(message.len() * 8)) / 2;
-    let text_y = state.layout.panel_y + state.layout.panel_side + 5;
-    state.draw_string(text_x, text_y, message, TEXT_FG);
+    // ── Milestone text → serial / kernel log ────────────────────────────────
+    // Safe to call even before logging::init() — the logger silently no-ops
+    // when the global logger has not yet been installed.
+    crate::kinfo!("boot_progress: milestone=\"{}\"", message);
 }
+
+/// Mark the last active cell as complete and fill the progress bar to 100 %.
+/// Call this once after the final `push()` (i.e. just before entering the
+/// scheduler loop) so the display shows a fully completed grid.
+pub fn finish() {
+    let mut guard = BOOT_PROGRESS.lock();
+    let Some(state) = guard.as_mut() else { return };
+
+    let last = state.next_index.saturating_sub(1);
+    if last < TOTAL_TASKS {
+        let phase = state.pushed_phases[last];
+        state.redraw_cell(last, phase, false, true);
+    }
+    state.draw_progress_bar(TOTAL_TASKS);
+    state.draw_phase_dots(TOTAL_TASKS);
+    state.update_message("BOOT COMPLETE");
+}
+
+// ── Helper: icon bitmap lookup ────────────────────────────────────────────────
 
 fn icon_bits_for_phase(phase: BootPhase) -> &'static [u32; 32] {
     match phase {
@@ -190,24 +310,132 @@ fn icon_bits_for_phase(phase: BootPhase) -> &'static [u32; 32] {
     }
 }
 
+// ── BootProgressState impls ───────────────────────────────────────────────────
+
 impl BootProgressState {
-    fn draw_panel(&mut self) {
-        self.fill_rect(
-            self.layout.panel_x,
-            self.layout.panel_y,
-            self.layout.panel_side,
-            self.layout.panel_side,
-            PANEL_BG,
-        );
+    /// Draw the full initial panel: background + all 16 cells as Pending + bar + dots.
+    fn draw_initial_panel(&mut self) {
+        self.fill_rect(self.layout.panel_x, self.layout.panel_y, self.layout.panel_side, self.layout.panel_side, PANEL_BG);
+        for i in 0..TOTAL_TASKS {
+            self.redraw_cell(i, TASK_PHASES[i], false, false);
+        }
+        self.draw_progress_bar(0);
+        self.draw_phase_dots(0);
+        self.update_message("BOOTING...");
     }
 
-    fn blit_bit_icon(&mut self, x: usize, y: usize, size: usize, bits: &[u32; 32]) {
-        let scale = size / 32;
-        for row in 0..32 {
+    /// Pixel coordinate of the top-left corner of cell `idx`.
+    fn cell_xy(&self, idx: usize) -> (usize, usize) {
+        let col = idx % GRID_COLS;
+        let row = idx / GRID_COLS;
+        let stride = self.layout.icon_px + self.layout.gap_px;
+        let x = self.layout.panel_x + self.layout.gap_px + col * stride;
+        let y = self.layout.panel_y + self.layout.gap_px + row * stride;
+        (x, y)
+    }
+
+    /// Redraw a single grid cell in the requested state.
+    ///
+    /// * `active`   – cyan; currently executing
+    /// * `complete` – light cyan with a small green corner marker; done
+    /// * neither    – pending; very dim gray
+    fn redraw_cell(&mut self, idx: usize, phase: BootPhase, active: bool, complete: bool) {
+        if idx >= TOTAL_TASKS { return; }
+        let (x, y) = self.cell_xy(idx);
+        let size = self.layout.icon_px;
+
+        // Erase cell background.
+        self.fill_rect(x, y, size, size, PANEL_BG);
+
+        let color = if active {
+            ACTIVE_FG
+        } else if complete {
+            COMPLETE_FG
+        } else {
+            PENDING_FG
+        };
+        self.blit_bit_icon_colored(x, y, size, icon_bits_for_phase(phase), color);
+
+        // Small green square in the top-right corner marks completion.
+        if complete {
+            let marker = (size / 6).clamp(3, 8);
+            self.fill_rect(x + size - marker, y, marker, marker, CHECK_COLOR);
+        }
+    }
+
+    /// Draw (or redraw) the thin horizontal progress bar.
+    ///
+    /// `pushed_count` is the number of tasks that have been pushed so far
+    /// (including the currently active one).
+    fn draw_progress_bar(&mut self, pushed_count: usize) {
+        let x = self.layout.panel_x;
+        let y = self.layout.bar_y;
+        let total_w = self.layout.panel_side;
+
+        let filled = if total_w > 0 {
+            (pushed_count * total_w) / TOTAL_TASKS
+        } else {
+            0
+        };
+
+        self.fill_rect(x, y, total_w, BAR_H, BAR_BG);
+        if filled > 0 {
+            self.fill_rect(x, y, filled, BAR_H, BAR_FG);
+        }
+    }
+
+    /// Draw (or redraw) the row of 8 milestone dots below the bar.
+    ///
+    /// A dot is green when its threshold has been met, cyan when the previous
+    /// threshold has been met but this one hasn't yet, otherwise dark gray.
+    fn draw_phase_dots(&mut self, pushed_count: usize) {
+        let spacing = self.layout.panel_side / NUM_DOTS;
+
+        for i in 0..NUM_DOTS {
+            let dot_x = self.layout.panel_x + i * spacing + spacing / 2 - DOT_SIZE / 2;
+            let dot_y = self.layout.dot_y;
+
+            let color = if pushed_count >= DOT_THRESHOLDS[i] {
+                DOT_COMPLETE_COLOR
+            } else if i == 0 || pushed_count >= DOT_THRESHOLDS[i - 1] {
+                DOT_ACTIVE_COLOR
+            } else {
+                DOT_PENDING_COLOR
+            };
+
+            self.fill_rect(dot_x, dot_y, DOT_SIZE, DOT_SIZE, color);
+
+            // Short phase label below the dot (only when unifont is loaded).
+            if self.unifont_data.is_some() {
+                let label = DOT_LABELS[i];
+                let lx = self.layout.panel_x + i * spacing;
+                self.draw_string(lx, self.layout.dot_label_y, label, LABEL_FG);
+            }
+        }
+    }
+
+    /// Replace the milestone text row with `msg`, centred within the panel.
+    fn update_message(&mut self, msg: &str) {
+        self.fill_rect(self.layout.panel_x, self.layout.msg_y, self.layout.panel_side, MSG_H, 0);
+        if self.unifont_data.is_some() {
+            let char_w = 8;
+            let text_w = msg.len() * char_w;
+            let text_x = if text_w < self.layout.panel_side {
+                self.layout.panel_x + (self.layout.panel_side - text_w) / 2
+            } else {
+                self.layout.panel_x
+            };
+            self.draw_string(text_x, self.layout.msg_y, msg, TEXT_FG);
+        }
+    }
+
+    fn blit_bit_icon_colored(&mut self, x: usize, y: usize, size: usize, bits: &[u32; ICON_SIDE], color: u32) {
+        let scale = (size / ICON_SIDE).max(1);
+        for row in 0..ICON_SIDE {
             let row_bits = bits[row];
-            for col in 0..32 {
+            for col in 0..ICON_SIDE {
                 if (row_bits >> (31 - col)) & 1 != 0 {
-                    self.fill_rect(x + col * scale, y + row * scale, scale, scale, ICON_FG);
+                    self.fill_rect(x + col * scale, y + row * scale, scale, scale, color);
                 }
             }
         }
@@ -284,14 +512,14 @@ fn lookup_unifont_glyph(data: &[u8], c: char) -> Option<[u16; 32]> {
             let is_wide = bitmap_hex.len() == 64;
             let rows = 16;
             let step = if is_wide { 4 } else { 2 };
-            
+
             for i in 0..rows {
                 let start = i * step;
-                glyph[i] = parse_hex(&bitmap_hex[start..start+step])? as u16;
+                glyph[i] = parse_hex(&bitmap_hex[start..start + step])? as u16;
             }
             return Some(glyph);
         }
-        
+
         if code > target_code { break; }
     }
     None
