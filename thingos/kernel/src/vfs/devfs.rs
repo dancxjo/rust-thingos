@@ -547,14 +547,11 @@ impl FbNode {
 
 impl FbShadow {
     fn new(fb: crate::FramebufferInfo) -> Self {
-        let len = fb.byte_len as usize;
-        let mut bytes = vec![0u8; len];
-        if len > 0 {
-            unsafe {
-                core::ptr::copy_nonoverlapping(fb.addr as *const u8, bytes.as_mut_ptr(), len);
-            }
-        }
-        Self { bytes }
+        // Avoid eagerly reading the boot framebuffer MMIO range during early boot.
+        // The shadow is updated from write payloads before scanout publication.
+        // This Vec lives in normal memory; constructing it does not touch the
+        // framebuffer MMIO region, so existing scanout contents stay unchanged.
+        Self { bytes: vec![0u8; fb.byte_len as usize] }
     }
 }
 

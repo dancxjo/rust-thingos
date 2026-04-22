@@ -283,7 +283,12 @@ fn main(_arg: usize) -> ! {
     let mut min_ms = u64::MAX;
     let mut max_ms = 0u64;
 
+    let start = stem::time::now();
     for seq in 1..=count {
+        let send_deadline = start
+            + stem::time::Duration::from_millis(DEFAULT_INTERVAL_MS.saturating_mul((seq - 1) as u64));
+        wait_until(send_deadline);
+
         match ping_once(&data_path, ip, ident, seq as u16, DEFAULT_PAYLOAD_LEN) {
             Ok(ms) => {
                 received += 1;
@@ -310,9 +315,6 @@ fn main(_arg: usize) -> ! {
         }
 
         transmitted += 1;
-        if seq < count {
-            wait_until(stem::time::now() + stem::time::Duration::from_millis(DEFAULT_INTERVAL_MS));
-        }
     }
 
     close_icmp_socket(&ctl_path);
