@@ -125,7 +125,8 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                     DHCP_MAX_BACKOFF_MS,
                     reset_count
                 );
-                // `dhcp_handle` is owned by this loop and always valid here.
+                // `dhcp_handle` is owned by this loop and always valid here; any
+                // failure would indicate a logic bug rather than runtime recovery.
                 let _ = socket_set.remove::<Dhcpv4Socket>(dhcp_handle);
                 dhcp_handle = socket_set.add(Dhcpv4Socket::new());
                 continue;
@@ -139,8 +140,9 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             }
         }
 
-        let wait_ms =
-            delay.map(|d| d.total_millis().min(DHCP_POLL_SLICE_MS)).unwrap_or(DHCP_POLL_SLICE_MS);
+        let wait_ms = poll_delay_ms
+            .map(|ms| ms.min(DHCP_POLL_SLICE_MS))
+            .unwrap_or(DHCP_POLL_SLICE_MS);
         let deadline = ts + Duration::from_millis(wait_ms);
         wait_until(deadline);
     }
