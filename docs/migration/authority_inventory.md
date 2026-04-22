@@ -132,23 +132,23 @@ made. Where a check is absent but should exist, it is noted as **missing**.
 |---|---|---|---|---|---|---|
 | `SYS_SPAWN_THREAD` | `process.rs` | exec_in_progress gate | `Process.lifecycle.exec_in_progress` | lifecycle | yes (in scope) | Only prevents concurrent thread+exec |
 | `SYS_SPAWN_THREAD` | `process.rs` | Stack layout sanity | request fields | range validation | yes | Not authority, safety |
-| `SYS_TASK_KILL` | `process.rs` | Target TID existence | scheduler | existence only | **missing** | No relationship check; any thread can kill any other |
+| `SYS_TASK_KILL` | `process.rs` | `Authority` kill privilege + target TID existence | `Authority` + scheduler | capability + existence | yes | Enforced through `authority::bridge::check_privilege("kill")` |
 | `SYS_SET_PRIORITY` | `process.rs` | Priority range [0–4] | request arg | bounds only | partial | No cap on Realtime escalation |
 | `SYS_KILL` | `signal.rs` | Signal number range | sig arg | bounds | yes | No sender/receiver permission check |
 | `SYS_SETPGID` | `signal.rs` | `setpgid_current` internal logic | pgid, current session | partial POSIX rules | partial | Incomplete POSIX enforcement; no uid check |
 | `SYS_SETSID` | `signal.rs` | Not already a group leader | `pgid == pid` check | existence | partial | No extra privilege required |
 | `SYS_REBOOT` | `process.rs` | Command constant + reboot privilege | cmd arg + `Authority` | bounds + capability (`root` or `CAP_REBOOT`) | yes | Enforced through `authority::bridge::check_privilege("reboot")` |
-| `SYS_LOG_SET_LEVEL` | `dispatch.rs` | None | none | — | **missing** | Zero-gate privileged operation |
+| `SYS_LOG_SET_LEVEL` | `dispatch.rs` | Log-level privilege | `Authority` | capability (`root` or `CAP_LOG_LEVEL`) | yes | Enforced through `authority::bridge::check_privilege("log_level")` |
 | `SYS_CONSOLE_DISABLE` | `handlers/mod.rs` | None (assumed) | none | — | **missing** | No privilege check confirmed |
-| `SYS_FS_OPEN` | `vfs.rs` | Process has process_info | scheduler hook | existence | partial | No path/mode access control |
+| `SYS_FS_OPEN` | `vfs.rs` | Process has process_info + mode-based read/write gate | scheduler hook + `VfsStat.mode` | existence + permission bits | partial | Coarse mode-bit enforcement at open; owner/group-class enforcement still deferred |
 | `SYS_FS_CHMOD` / `SYS_FS_FCHMOD` | `vfs.rs` | None (delegates to node) | node.chmod | driver-dependent | partial | Caller identity not checked; depends on node implementation |
-| `SYS_FS_MOUNT` | `vfs.rs` | None | path string | — | **missing** | Any process can mount at any path |
-| `SYS_FS_UMOUNT` | `vfs.rs` | None | path string | — | **missing** | Any process can unmount any mount point |
+| `SYS_FS_MOUNT` | `vfs.rs` | Mount privilege + path validation | `Authority` + path string | capability (`root` or `CAP_MOUNT`) + bounds | yes | Enforced through `authority::bridge::check_privilege("mount")` |
+| `SYS_FS_UMOUNT` | `vfs.rs` | Mount privilege + path validation | `Authority` + path string | capability (`root` or `CAP_MOUNT`) + bounds | yes | Enforced through `authority::bridge::check_privilege("mount")` |
 | `SYS_DEVICE_CLAIM` | `device.rs` | Device slot exists; not already claimed | device registry + TID | ownership (first-claimer) | enforced | Single-claim exclusive ownership |
 | `SYS_DEVICE_MAP_MMIO` | `device.rs` | `verify_claim(handle, task_id)` | device registry + TID | ownership | enforced | TID-bound claim check |
 | `SYS_DEVICE_IRQ_SUBSCRIBE` (DEVICE mode) | `device.rs` | `verify_claim(handle, task_id)` | device registry + TID | ownership | enforced | Claim check present |
-| `SYS_DEVICE_IRQ_SUBSCRIBE` (VECTOR mode) | `device.rs` | None | none | — | **missing** | Fallthrough skips claim check; any process |
-| `SYS_DEVICE_IOPORT_READ/WRITE` | `device.rs` | None | none | — | **missing** | Unrestricted I/O port access |
+| `SYS_DEVICE_IRQ_SUBSCRIBE` (VECTOR mode) | `device.rs` | IRQ vector privilege + vector bounds | `Authority` + vector arg | capability (`root` or `CAP_IRQ_VECTOR`) + bounds | yes | Enforced through `authority::bridge::check_privilege("irq_vector")` |
+| `SYS_DEVICE_IOPORT_READ/WRITE` | `device.rs` | I/O port privilege + width validation | `Authority` + width arg | capability (`root` or `CAP_IOPORT`) + bounds | yes | Enforced through `authority::bridge::check_privilege("ioport")` |
 | `SYS_DEVICE_ALLOC_DMA` | `device.rs` | `verify_claim(handle, task_id)` | device registry + TID | ownership | enforced | Claim check present |
 | `SYS_CHANNEL_SEND/RECV` | `port.rs` | Handle valid + mode match | `GLOBAL_HANDLE_TABLE` | possession + mode | partial | Global table; no per-process ownership isolation |
 | `SYS_CHANNEL_SEND_MSG` | `port.rs` | Handle valid + mode; embedded handles not verified | handle table | possession only | partial | Sender can embed arbitrary handle numbers |
@@ -161,8 +161,8 @@ made. Where a check is absent but should exist, it is noted as **missing**.
 
 | Operation | File | Check | Complete? | Notes |
 |---|---|---|---|---|
-| `VfsNode::read` | driver-specific | None at VFS layer | **missing** | Permission bits on node never gated |
-| `VfsNode::write` | driver-specific | None at VFS layer | **missing** | Write access not checked against mode bits |
+| `VfsNode::read` | driver-specific | Gated at `SYS_FS_OPEN` by mode bits | partial | Read permission now enforced at open time; owner/group-class semantics deferred |
+| `VfsNode::write` | driver-specific | Gated at `SYS_FS_OPEN` by mode bits | partial | Write permission now enforced at open time; owner/group-class semantics deferred |
 | `VfsNode::chmod` | driver-specific | Depends on driver | partial | ramfs supports it; devfs may not; no caller check |
 | Mount point lookup | `vfs::mount` | Path prefix matching only | implicit | No namespace isolation; all processes share mounts |
 
@@ -172,7 +172,7 @@ made. Where a check is absent but should exist, it is noted as **missing**.
 |---|---|---|
 | `/dev/fb0` (framebuffer) | open succeeds if node exists; debug logs only | Any process that can open `/dev/fb0` owns the framebuffer |
 | PCI devices | exclusive claim by TID required before MMIO/IRQ/DMA | Enforced |
-| I/O ports | **none** | Any process can issue `IN`/`OUT` instructions via `SYS_DEVICE_IOPORT_*` |
+| I/O ports | `Authority` privilege gate (`ioport`) + width validation | Restricted to root or `CAP_IOPORT` |
 | `/dev/urandom` (random) | open only | Read-only; no write |
 | Pipes / channels | possession of read or write handle | Mode enforced; no ownership audit |
 
@@ -321,14 +321,14 @@ For each authority item, the conceptual future home in the ThingOS object model.
 | Channel handle table | `GLOBAL_HANDLE_TABLE` (global) | Per-process handle table with ownership | Requires process-scoped handle tables |
 | Handle-in-message | message payload | Capability transfer with sender verification | Capability object system required |
 | Device claim | device registry + TID | Capability tied to handle / Authority object | Extend from current claim model |
-| I/O port access | unchecked | Capability / device claim (should gate ioport) | Straightforward addition to claim model |
-| IRQ vector subscription | unchecked (VECTOR mode) | Device claim (unify with DEVICE mode) | Low-effort fix |
-| File permission bits | VFS node stat.mode | Enforced at VFS open layer against caller Authority | Requires caller credential in VFS |
-| Mount authority | unchecked | Authority capability (`CAP_MOUNT`-equivalent) | Requires Authority in VFS layer |
-| Process kill (by TID) | unchecked | Job-scoped kill or Authority capability | Requires relationship model |
+| I/O port access | `authority::bridge::check_privilege("ioport")` in `sys_device_ioport` | Capability / device claim | Claim-coupling still optional follow-up; capability gate is active |
+| IRQ vector subscription | `authority::bridge::check_privilege("irq_vector")` in VECTOR-mode subscribe/wait | Device claim (unify with DEVICE mode) | Capability gate active; claim-unification remains follow-up |
+| File permission bits | `SYS_FS_OPEN` mode-bit gate (`VfsStat.mode`) | Enforced at VFS open layer against caller Authority | Coarse mode-bit enforcement active; owner/group-class matching deferred |
+| Mount authority | `authority::bridge::check_privilege("mount")` in mount/umount handlers | Authority capability (`CAP_MOUNT`-equivalent) | Active in VFS syscall layer |
+| Process kill (by TID) | `authority::bridge::check_privilege("kill")` in `sys_task_kill` | Job-scoped kill or Authority capability | Capability gate active; relationship model follow-up |
 | Signal send | unchecked | Authority capability or job membership | Requires uid/gid or capability |
 | Reboot/halt | gated (`root` or `CAP_REBOOT`) | Keep `Authority` capability enforcement | Enforced in syscall path |
-| Log level set | unchecked | Authority capability | Trivial to gate once Authority is in syscall path |
+| Log level set | `authority::bridge::check_privilege("log_level")` in syscall dispatch | Authority capability | Active in syscall path |
 | Console disable | unchecked | Authority capability | Same as log level |
 | Priority escalation | unchecked | Authority capability (`CAP_SYS_NICE`-equivalent) | Gate at `sys_set_priority` |
 | uid/gid | **not present** | `Authority` fields | Must be added to Process first |
