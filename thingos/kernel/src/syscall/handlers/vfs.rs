@@ -23,14 +23,17 @@ use abi::syscall::{PollHandle, fcntl_cmd, handle_flags, poll_flags, vfs_flags};
 use crate::syscall::validate::{copyin, copyout, validate_user_range};
 use crate::vfs::{self, OpenFlags};
 
+const MODE_READ_ANY: u32 = 0o444;
+const MODE_WRITE_ANY: u32 = 0o222;
+
 fn mode_allows_requested_access(mode: u32, want_read: bool, want_write: bool) -> bool {
     // Transitional coarse gate: enforce requested read/write against any
     // corresponding permission class bit. Caller-vs-owner/group class matching
     // is deferred until full uid/gid ownership propagation is in place.
     // This means if any class bit grants the requested access, the open is
     // currently allowed.
-    let read_ok = !want_read || (mode & 0o444) != 0;
-    let write_ok = !want_write || (mode & 0o222) != 0;
+    let read_ok = !want_read || (mode & MODE_READ_ANY) != 0;
+    let write_ok = !want_write || (mode & MODE_WRITE_ANY) != 0;
     read_ok && write_ok
 }
 
