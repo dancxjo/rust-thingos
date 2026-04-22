@@ -950,6 +950,27 @@ fn boot_timing_us_from_hz(ticks: u64, hz: u64) -> u64 {
     }
 }
 
+#[inline]
+fn log_scheduler_entry_step<R: BootRuntime>(
+    runtime: &R,
+    boot_timing_hz: u64,
+    scheduler_entry_window_start: u64,
+    step: &str,
+    step_start: u64,
+) {
+    let now = runtime.mono_ticks();
+    let step_elapsed = now.wrapping_sub(step_start);
+    let total_elapsed = now.wrapping_sub(scheduler_entry_window_start);
+    crate::kdebug!(
+        "[kernel:start] scheduler-entry step='{}' elapsed_ticks={} elapsed_us={} total_ticks={} total_us={}",
+        step,
+        step_elapsed,
+        boot_timing_us_from_hz(step_elapsed, boot_timing_hz),
+        total_elapsed,
+        boot_timing_us_from_hz(total_elapsed, boot_timing_hz)
+    );
+}
+
 pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] enter\r\n");
 
@@ -1080,25 +1101,6 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     crate::task::init::<R>();
     boot_trace(runtime, b"[kernel:start] task init ok\r\n");
     let scheduler_entry_window_start = runtime.mono_ticks();
-    fn log_scheduler_entry_step<R: BootRuntime>(
-        runtime: &R,
-        boot_timing_hz: u64,
-        scheduler_entry_window_start: u64,
-        step: &str,
-        step_start: u64,
-    ) {
-        let now = runtime.mono_ticks();
-        let step_elapsed = now.wrapping_sub(step_start);
-        let total_elapsed = now.wrapping_sub(scheduler_entry_window_start);
-        crate::kdebug!(
-            "[kernel:start] scheduler-entry step='{}' elapsed_ticks={} elapsed_us={} total_ticks={} total_us={}",
-            step,
-            step_elapsed,
-            boot_timing_us_from_hz(step_elapsed, boot_timing_hz),
-            total_elapsed,
-            boot_timing_us_from_hz(total_elapsed, boot_timing_hz)
-        );
-    }
 
     boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
     kdebug!("Initializing VFS...");
@@ -1423,7 +1425,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         end_bringup_start,
     );
     boot_trace(runtime, b"[kernel:start] end_bringup\r\n");
-    let mut deferred_bootfb = runtime.framebuffer();
+    let pending_bootfb_paint = runtime.framebuffer();
     let scheduler_entry_total = runtime
         .mono_ticks()
         .wrapping_sub(scheduler_entry_window_start);
@@ -1436,18 +1438,18 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     kinfo!("Entering scheduler loop.");
     boot_trace(runtime, b"[kernel:start] kinfo(scheduler loop) ok\r\n");
     boot_trace(runtime, b"[kernel:start] scheduler loop\r\n");
+    // Keep a visible startup background without blocking scheduler-loop entry.
+    if let Some(fb) = pending_bootfb_paint {
+        let gradient_start = runtime.mono_ticks();
+        paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
+        let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
+        crate::kdebug!(
+            "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
+            gradient_elapsed,
+            boot_timing_us(gradient_elapsed)
+        );
+    }
     loop {
-        // Keep a visible startup background without blocking scheduler-loop entry.
-        if let Some(fb) = deferred_bootfb.take() {
-            let gradient_start = runtime.mono_ticks();
-            paint_bootfb_gradient(fb, STARTUP_PERIWINKLE_LAVENDER_COLOR);
-            let gradient_elapsed = runtime.mono_ticks().wrapping_sub(gradient_start);
-            crate::kdebug!(
-                "[kernel:start] deferred_bootfb_gradient elapsed_ticks={} elapsed_us={}",
-                gradient_elapsed,
-                boot_timing_us(gradient_elapsed)
-            );
-        }
         if !crate::task::yield_now::<R>() {
             // No runnable work on this CPU — halt until the next interrupt
             // (timer tick, IPI, or device IRQ).  This is the same idle pattern
