@@ -493,6 +493,12 @@ impl VfsDriver for RamFs {
         match &*dir {
             RamfsEntry::Dir(inner, _) => {
                 let mut lock = inner.lock();
+                let entry = lock.children.get(file_name).cloned().ok_or(Errno::ENOENT)?;
+                if let RamfsEntry::Dir(dir_inner, _) = &*entry {
+                    if !dir_inner.lock().children.is_empty() {
+                        return Err(Errno::ENOTEMPTY);
+                    }
+                }
                 let entry = lock.children.remove(file_name).ok_or(Errno::ENOENT)?;
                 let ts = now();
                 lock.mtime = ts;
@@ -781,6 +787,24 @@ mod tests {
     fn test_driver_unlink_empty_path_returns_einval() {
         let fs = RamFs::new();
         assert!(matches!(fs.unlink(""), Err(Errno::EINVAL)));
+    }
+
+    #[test]
+    fn test_driver_unlink_empty_directory_succeeds() {
+        let fs = RamFs::new();
+        fs.mkdir("empty_dir").unwrap();
+        fs.unlink("empty_dir").unwrap();
+        assert!(matches!(fs.lookup("empty_dir"), Err(Errno::ENOENT)));
+    }
+
+    #[test]
+    fn test_driver_unlink_non_empty_directory_returns_enotempty() {
+        let fs = RamFs::new();
+        fs.mkdir("dir").unwrap();
+        fs.create_file("dir/file.txt", b"x".to_vec()).unwrap();
+
+        assert!(matches!(fs.unlink("dir"), Err(Errno::ENOTEMPTY)));
+        assert!(fs.lookup("dir").is_ok(), "directory should still exist");
     }
 
     // ── truncate ────────────────────────────────────────────────────────────

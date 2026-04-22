@@ -117,6 +117,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         }
         SYS_PIPE => handlers::vfs::sys_pipe(args[0]),
         SYS_FS_UNLINK => handlers::vfs::sys_fs_unlink(args[0], args[1]),
+        SYS_FS_RMDIR => handlers::vfs::sys_fs_rmdir(args[0], args[1]),
         SYS_FS_MKDIR => handlers::vfs::sys_fs_mkdir(args[0], args[1]),
         SYS_FS_CHDIR => handlers::vfs::sys_fs_chdir(args[0], args[1]),
         SYS_FS_GETCWD => handlers::vfs::sys_fs_getcwd(args[0], args[1]),
@@ -158,9 +159,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
             handlers::vfs::sys_fs_attr_get(args[0], args[1], args[2], args[3], args[4], args[5])
         }
         SYS_FS_ATTR_SET => {
-            handlers::vfs::sys_fs_attr_set(
-                args[0], args[1], args[2], args[3], args[4], args[5],
-            )
+            handlers::vfs::sys_fs_attr_set(args[0], args[1], args[2], args[3], args[4], args[5])
         }
         SYS_FS_ATTR_REMOVE => handlers::vfs::sys_fs_attr_remove(args[0], args[1], args[2]),
         SYS_FS_ATTR_LIST => handlers::vfs::sys_fs_attr_list(args[0], args[1], args[2]),
