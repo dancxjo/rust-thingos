@@ -1,6 +1,5 @@
 //! DHCPv4 client using smoltcp.
 extern crate alloc;
-use alloc::string::ToString;
 use core::default::Default;
 
 use smoltcp::iface::{Interface, SocketSet, SocketStorage};
@@ -14,9 +13,9 @@ const DHCP_TIMEOUT_SECS: u64 = 30;
 /// Periodic progress log cadence while waiting for a lease.
 const DHCP_PROGRESS_LOG_SECS: u64 = 5;
 /// Cap unusually long smoltcp backoff delays so retry cadence stays observable.
-const DHCP_MAX_BACKOFF_MS: i64 = 4_000;
+const DHCP_MAX_BACKOFF_MS: u64 = 4_000;
 /// Keep wakeups responsive while waiting for DHCP events.
-const DHCP_POLL_SLICE_MS: i64 = 100;
+const DHCP_POLL_SLICE_MS: u64 = 100;
 /// Avoid infinite DHCP socket churn if the backoff cap keeps being exceeded.
 const DHCP_MAX_SOCKET_RESETS: u32 = 3;
 
@@ -55,7 +54,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
     let timeout = start + Duration::from_secs(DHCP_TIMEOUT_SECS);
     let mut next_progress_log = start + Duration::from_secs(DHCP_PROGRESS_LOG_SECS);
     let mut reset_count = 0u32;
-    let mut last_poll_delay_ms: Option<i64> = None;
+    let mut last_poll_delay_ms: Option<u64> = None;
 
     loop {
         let ts = now();
@@ -127,7 +126,7 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
                 );
                 // `dhcp_handle` is owned by this loop and always valid here; any
                 // failure would indicate a logic bug rather than runtime recovery.
-                let _ = socket_set.remove::<Dhcpv4Socket>(dhcp_handle);
+                let _ = socket_set.remove(dhcp_handle);
                 dhcp_handle = socket_set.add(Dhcpv4Socket::new());
                 continue;
             } else if exceeds_backoff_cap {
@@ -140,9 +139,8 @@ pub fn run_dhcp<D: Device>(iface: &mut Interface, device: &mut D) -> Result<Dhcp
             }
         }
 
-        let wait_ms = poll_delay_ms
-            .map(|ms| ms.min(DHCP_POLL_SLICE_MS))
-            .unwrap_or(DHCP_POLL_SLICE_MS);
+        let wait_ms =
+            poll_delay_ms.map(|ms| ms.min(DHCP_POLL_SLICE_MS)).unwrap_or(DHCP_POLL_SLICE_MS);
         let deadline = ts + Duration::from_millis(wait_ms);
         wait_until(deadline);
     }
