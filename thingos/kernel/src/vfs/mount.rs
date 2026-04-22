@@ -11,6 +11,7 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use alloc::collections::btree_map::Entry;
 use alloc::{collections::BTreeMap, vec};
 
 use abi::errors::{Errno, SysResult};
@@ -50,11 +51,13 @@ fn current_namespace_id() -> u64 {
 }
 
 fn ensure_namespace_locked(tables: &mut BTreeMap<u64, Vec<MountEntry>>, ns_id: u64) {
-    if tables.contains_key(&ns_id) {
-        return;
+    match tables.entry(ns_id) {
+        Entry::Occupied(_) => {}
+        Entry::Vacant(slot) => {
+            let initial_mount_table = tables.get(&GLOBAL_NAMESPACE_ID).cloned().unwrap_or_default();
+            slot.insert(initial_mount_table);
+        }
     }
-    let seed = tables.get(&GLOBAL_NAMESPACE_ID).cloned().unwrap_or_default();
-    tables.insert(ns_id, seed);
 }
 
 fn ensure_namespace(ns_id: u64) {
@@ -81,11 +84,13 @@ pub fn mount(mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
 
 /// Mount a filesystem driver at `mount_point` in `ns_id`.
 pub fn mount_for_namespace(ns_id: u64, mount_point: &str, driver: Arc<dyn VfsDriver>, flags: u32) {
-    ensure_namespace(ns_id);
     let prefix = normalise(mount_point);
     let id = NEXT_MOUNT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let mut tables = MOUNT_TABLES.write();
-    let table = tables.get_mut(&ns_id).expect("namespace table should exist");
+    ensure_namespace_locked(&mut tables, ns_id);
+    let Some(table) = tables.get_mut(&ns_id) else {
+        return;
+    };
 
     let layer = MountLayer { driver, id, flags };
 
@@ -114,10 +119,12 @@ pub fn umount(mount_point: &str) -> SysResult<()> {
 
 /// Unmount the filesystem at `mount_point` in `ns_id`.
 pub fn umount_for_namespace(ns_id: u64, mount_point: &str) -> SysResult<()> {
-    ensure_namespace(ns_id);
     let prefix = normalise(mount_point);
     let mut tables = MOUNT_TABLES.write();
-    let table = tables.get_mut(&ns_id).expect("namespace table should exist");
+    ensure_namespace_locked(&mut tables, ns_id);
+    let Some(table) = tables.get_mut(&ns_id) else {
+        return Err(Errno::ENOENT);
+    };
     let before = table.len();
     table.retain(|e| e.prefix != prefix);
     if table.len() == before { Err(Errno::ENOENT) } else { Ok(()) }
@@ -478,7 +485,7 @@ pub fn rename_in_namespace(ns_id: u64, old_path: &str, new_path: &str) -> SysRes
     let (old_rel, new_rel, driver): (String, String, Arc<dyn VfsDriver>) = {
         let tables = MOUNT_TABLES.read();
         let Some(table) = tables.get(&ns_id) else {
-            return Err(Errno::EXDEV);
+            return Err(Errno::ENOENT);
         };
         table
             .iter()
