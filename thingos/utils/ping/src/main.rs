@@ -10,10 +10,12 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
+use abi::errors::Errno;
+use abi::syscall::{PollHandle, poll_flags};
+use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, Ipv4Address};
-use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_read, vfs_write};
+use stem::syscall::{argv_get, vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 
 const DEFAULT_COUNT: u32 = 4;
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
@@ -70,6 +72,18 @@ fn wait_until(deadline: stem::time::Instant) {
     }
 }
 
+fn wait_readable(fd: u32, deadline: stem::time::Instant) -> Result<bool, &'static str> {
+    let now = stem::time::now();
+    if now >= deadline {
+        return Ok(false);
+    }
+
+    let timeout_ms = (deadline - now).as_millis() as u64;
+    let mut pollfds = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
+    let ready = vfs_poll(&mut pollfds, timeout_ms).map_err(|_| "poll failed")?;
+    Ok(ready > 0 && (pollfds[0].revents & poll_flags::POLLIN) != 0)
+}
+
 fn parse_ipv4(text: &str) -> Option<Ipv4Address> {
     let mut parts = [0u8; 4];
     let mut iter = text.trim().split('.');
@@ -94,16 +108,21 @@ fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
         return Err("cannot write /net/dns/lookup");
     }
 
+    let read_fd = vfs_open("/net/dns/lookup", O_RDONLY | O_NONBLOCK)
+        .map_err(|_| "cannot open /net/dns/lookup")?;
     let deadline = stem::time::now() + stem::time::Duration::from_millis(3_000);
     loop {
-        let fd =
-            vfs_open("/net/dns/lookup", O_RDONLY).map_err(|_| "cannot open /net/dns/lookup")?;
+        if !wait_readable(read_fd, deadline)? {
+            let _ = vfs_close(read_fd);
+            return Err("DNS timeout");
+        }
+
         let mut buf = [0u8; 64];
-        let read_result = vfs_read(fd, &mut buf);
-        let _ = vfs_close(fd);
+        let read_result = vfs_read(read_fd, &mut buf);
 
         if let Ok(n) = read_result {
             if n > 0 {
+                let _ = vfs_close(read_fd);
                 let text = String::from(String::from_utf8_lossy(&buf[..n]).trim());
                 if text == "error" {
                     return Err("DNS failed");
@@ -113,12 +132,12 @@ fn resolve(name: &str) -> Result<Ipv4Address, &'static str> {
                 }
                 return Err("invalid DNS response");
             }
+        } else if read_result == Err(Errno::EAGAIN) {
+            continue;
+        } else {
+            let _ = vfs_close(read_fd);
+            return Err("DNS read failed");
         }
-
-        if stem::time::now() >= deadline {
-            return Err("DNS timeout");
-        }
-        wait_until(stem::time::now() + stem::time::Duration::from_millis(50));
     }
 }
 
@@ -158,11 +177,9 @@ fn send_echo(data_path: &str, dest_ip: Ipv4Address, packet: &[u8]) -> Result<(),
     result.map_err(|_| "cannot send echo request")
 }
 
-fn recv_echo(data_path: &str) -> Result<Option<(Ipv4Address, Vec<u8>)>, &'static str> {
-    let fd = vfs_open(data_path, O_RDONLY).map_err(|_| "cannot open icmp data")?;
+fn recv_echo(data_fd: u32) -> Result<Option<(Ipv4Address, Vec<u8>)>, &'static str> {
     let mut buf = alloc::vec![0u8; 2048];
-    let read_result = vfs_read(fd, &mut buf);
-    let _ = vfs_close(fd);
+    let read_result = vfs_read(data_fd, &mut buf);
 
     match read_result {
         Ok(n) => {
@@ -177,7 +194,8 @@ fn recv_echo(data_path: &str) -> Result<Option<(Ipv4Address, Vec<u8>)>, &'static
             buf.truncate(8 + payload_len);
             Ok(Some((src_ip, buf[8..].to_vec())))
         }
-        Err(_) => Ok(None),
+        Err(Errno::EAGAIN) => Ok(None),
+        Err(_) => Err("cannot read icmp response"),
     }
 }
 
@@ -206,6 +224,7 @@ fn close_icmp_socket(ctl_path: &str) {
 }
 
 fn ping_once(
+    data_fd: u32,
     data_path: &str,
     dest_ip: Ipv4Address,
     ident: u16,
@@ -218,16 +237,14 @@ fn ping_once(
 
     let deadline = started + stem::time::Duration::from_millis(DEFAULT_TIMEOUT_MS);
     loop {
-        if let Some((src_ip, reply)) = recv_echo(data_path)? {
+        if !wait_readable(data_fd, deadline)? {
+            return Err("timeout");
+        }
+        if let Some((src_ip, reply)) = recv_echo(data_fd)? {
             if src_ip == dest_ip && is_matching_echo_reply(&reply, ident, seq_no) {
                 return Ok((stem::time::now() - started).as_millis() as u64);
             }
         }
-
-        if stem::time::now() >= deadline {
-            return Err("timeout");
-        }
-        wait_until(stem::time::now() + stem::time::Duration::from_millis(20));
     }
 }
 
@@ -276,6 +293,14 @@ fn main(_arg: usize) -> ! {
         }
     };
     let data_path = alloc::format!("/net/icmp/{}/data", socket_id);
+    let data_read_fd = match vfs_open(&data_path, O_RDONLY | O_NONBLOCK) {
+        Ok(fd) => fd,
+        Err(_) => {
+            close_icmp_socket(&ctl_path);
+            print(2, "ping: cannot open icmp read socket\n");
+            stem::syscall::exit(1);
+        }
+    };
 
     let header = alloc::format!("PING {} ({}) {} bytes of data\n", host, ip, DEFAULT_PAYLOAD_LEN);
     print(1, &header);
@@ -293,7 +318,7 @@ fn main(_arg: usize) -> ! {
             + stem::time::Duration::from_millis(DEFAULT_INTERVAL_MS.saturating_mul((seq - 1) as u64));
         wait_until(send_deadline);
 
-        match ping_once(&data_path, ip, ident, seq as u16, DEFAULT_PAYLOAD_LEN) {
+        match ping_once(data_read_fd, &data_path, ip, ident, seq as u16, DEFAULT_PAYLOAD_LEN) {
             Ok(ms) => {
                 received += 1;
                 total_ms += ms;
@@ -321,6 +346,7 @@ fn main(_arg: usize) -> ! {
         transmitted += 1;
     }
 
+    let _ = vfs_close(data_read_fd);
     close_icmp_socket(&ctl_path);
 
     let loss = if transmitted > 0 { 100 * (transmitted - received) / transmitted } else { 100 };
