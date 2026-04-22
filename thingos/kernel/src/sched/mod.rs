@@ -1438,7 +1438,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         let start = window_start.load(Ordering::Relaxed);
         if start == 0 || now.saturating_sub(start) > window_ticks {
             window_start.store(now, Ordering::Relaxed);
-            window_count.store(u64::from(is_actionable_miss), Ordering::Relaxed);
+            window_count.store(if is_actionable_miss { 1 } else { 0 }, Ordering::Relaxed);
             match trigger {
                 DispatchTrigger::TimerTick => {
                     window_timer_count.store(1, Ordering::Relaxed);
@@ -1449,8 +1449,8 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                     window_ipi_count.store(1, Ordering::Relaxed);
                 }
             }
-            window_idle_timer_count.store(idle_timer_miss as u64, Ordering::Relaxed);
-            window_pending_count.store(pending_resched as u64, Ordering::Relaxed);
+            window_idle_timer_count.store(if idle_timer_miss { 1 } else { 0 }, Ordering::Relaxed);
+            window_pending_count.store(if pending_resched { 1 } else { 0 }, Ordering::Relaxed);
         } else {
             match trigger {
                 DispatchTrigger::TimerTick => {
