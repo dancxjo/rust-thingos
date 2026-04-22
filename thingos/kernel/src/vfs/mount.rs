@@ -88,9 +88,7 @@ pub fn mount_for_namespace(ns_id: u64, mount_point: &str, driver: Arc<dyn VfsDri
     let id = NEXT_MOUNT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let mut tables = MOUNT_TABLES.write();
     ensure_namespace_table_exists_locked(&mut tables, ns_id);
-    let table = tables
-        .get_mut(&ns_id)
-        .unwrap_or_else(|| unreachable!("namespace table should exist after ensure"));
+    let table = tables.get_mut(&ns_id).expect("namespace table should exist after ensure");
 
     let layer = MountLayer { driver, id, flags };
 
@@ -122,9 +120,7 @@ pub fn umount_for_namespace(ns_id: u64, mount_point: &str) -> SysResult<()> {
     let prefix = normalise(mount_point);
     let mut tables = MOUNT_TABLES.write();
     ensure_namespace_table_exists_locked(&mut tables, ns_id);
-    let table = tables
-        .get_mut(&ns_id)
-        .unwrap_or_else(|| unreachable!("namespace table should exist after ensure"));
+    let table = tables.get_mut(&ns_id).expect("namespace table should exist after ensure");
     let before = table.len();
     table.retain(|e| e.prefix != prefix);
     if table.len() == before { Err(Errno::ENOENT) } else { Ok(()) }
