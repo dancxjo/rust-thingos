@@ -82,6 +82,108 @@ required_features = [
 ]
 
 # -----------------------------------------------------------------------------
+# Unresolved feature-family roadmap (dependency ordered)
+# -----------------------------------------------------------------------------
+
+[[feature_families]]
+id = "family.exec_surface"
+title = "Exec surface and close-on-exec"
+owner = "mixed"
+tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
+depends_on = []
+features = ["proc.exec_wrappers", "proc.close_on_exec"]
+implementation_order = [
+    "Finish fcntl control for FD_CLOEXEC and propagation rules.",
+    "Add libc exec* wrappers (execv/execve/execvp/fexecve) over task_exec(fd, ...).",
+]
+conformance_tests = [
+    "BDD: parent marks one fd CLOEXEC, child execs test binary, verify inherited fd set.",
+    "userspace/libc tests: execv/execvp argument/envp forwarding and errno mapping.",
+]
+
+[[feature_families]]
+id = "family.job_control_and_signals"
+title = "Process groups, sessions, and basic signal model"
+owner = "kernel"
+tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
+depends_on = ["family.exec_surface"]
+features = ["proc.process_groups", "signals.basic", "signals.eintr"]
+implementation_order = [
+    "Implement setpgid/setsid process/session bookkeeping.",
+    "Add minimal signal routing and delivery between tasks/process groups.",
+    "Integrate EINTR handling for blocking syscalls and restart policy.",
+]
+conformance_tests = [
+    "BDD: shell-like job-control scenario validating setsid/setpgid visibility.",
+    "kernel/userspace tests: blocking read/poll interrupted by signal returns EINTR.",
+]
+
+[[feature_families]]
+id = "family.termios"
+title = "Terminal termios baseline"
+owner = "mixed"
+tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
+depends_on = ["family.job_control_and_signals"]
+features = ["terminal.termios_basic"]
+implementation_order = [
+    "Expose tcgetattr/tcsetattr(TCSANOW) and canonical/raw flag bits.",
+    "Expose TIOCGWINSZ for terminal geometry and wire to console/TTY nodes.",
+]
+conformance_tests = [
+    "BDD: toggle raw/canonical mode and verify line buffering behavior.",
+    "userspace tests: ioctl(TIOCGWINSZ) and tcsetattr flag round-trip.",
+]
+
+[[feature_families]]
+id = "family.runtime_bootstrap"
+title = "Runtime bootstrap data (auxv + random)"
+owner = "mixed"
+tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
+depends_on = ["family.exec_surface"]
+features = ["runtime.auxv_basic", "misc.random"]
+implementation_order = [
+    "Add kernel random source and userspace getrandom-style surface.",
+    "Plumb auxv entries at process startup (including AT_RANDOM pointer source).",
+]
+conformance_tests = [
+    "userspace startup tests: verify auxv keys/values are present and stable.",
+    "kernel/userspace tests: random source availability and non-zero entropy contract.",
+]
+
+[[feature_families]]
+id = "family.dynamic_loading"
+title = "Dynamic loader and dlopen ecosystem support"
+owner = "userspace"
+tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
+depends_on = ["family.runtime_bootstrap", "family.exec_surface"]
+features = ["dynamic.loader", "dynamic.dlopen"]
+implementation_order = [
+    "Land minimal dynamic ELF interpreter (ld.so-style relocation + startup).",
+    "Expose dlopen/dlsym/dlclose userspace ABI and libc wrappers.",
+]
+conformance_tests = [
+    "userspace loader tests: load shared object with relocations and run symbols.",
+    "BDD: dynamic binary startup path plus runtime library load/unload smoke test.",
+]
+
+[[milestone_plans]]
+id = "plan.posix_runtime_gap_closure"
+title = "POSIX runtime gap closure sequencing"
+tracking_issue = "https://github.com/dancxjo/thingos/issues/414"
+ordered_families = [
+    "family.exec_surface",
+    "family.job_control_and_signals",
+    "family.termios",
+    "family.runtime_bootstrap",
+    "family.dynamic_loading",
+]
+test_strategy = [
+    "Fail-first: add/extend BDD scenarios for each family before implementation.",
+    "For each family, gate completion on both syscall-level tests and user-visible libc/runtime tests.",
+    "Run targeted BDD tags per family during development; run full `just behave` before milestone sign-off.",
+]
+
+# -----------------------------------------------------------------------------
 # Features
 # -----------------------------------------------------------------------------
 
