@@ -9,7 +9,7 @@ use crate::syscall::validate::{copyin, copyout, validate_user_range};
 ///
 /// Works for all fds including 0 (stdin), 1 (stdout), 2 (stderr) which are
 /// now backed by `VfsNode` entries in the per-process `HandleTable`.
-pub fn sys_read(thing: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+pub fn sys_read(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
     validate_user_range(buf_ptr, buf_len, true)?;
     if buf_len == 0 {
         return Ok(0);
@@ -20,7 +20,7 @@ pub fn sys_read(thing: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize
     let (node, offset_cell, status_flags) = {
         let pinfo_arc = sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.handle_table.get(thing as u32)?;
+        let file = lock.handle_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_readable() {
             return Err(Errno::EBADF);
@@ -47,7 +47,7 @@ pub fn sys_read(thing: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize
 /// Write to an open file descriptor.
 ///
 /// Works for all fds including 0 (stdin), 1 (stdout), 2 (stderr).
-pub fn sys_write(thing: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+pub fn sys_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
     validate_user_range(buf_ptr, buf_len, false)?;
     if buf_len == 0 {
         return Ok(0);
@@ -59,7 +59,7 @@ pub fn sys_write(thing: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usiz
     let (node, offset_cell, status_flags) = {
         let pinfo_arc = sched::process_info_current().ok_or(Errno::ENOENT)?;
         let lock = pinfo_arc.lock();
-        let file = lock.handle_table.get(thing as u32)?;
+        let file = lock.handle_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_writable() {
             return Err(Errno::EBADF);

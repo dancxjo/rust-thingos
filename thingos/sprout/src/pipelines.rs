@@ -645,7 +645,7 @@ pub fn setup_graphics_stack(
 }
 
 pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    debug!("SPROUT: Setting up serial shell on /dev/console...");
+    info!("SPROUT: Setting up serial shell on /dev/console...");
     let shell_path = select_serial_shell();
 
     let open_console = || stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR);
@@ -688,7 +688,7 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         &[],
     ) {
         Ok(resp) => {
-            debug!("SPROUT: Spawned serial shell '{}' (PID={})", shell_path, resp.child_tid);
+            info!("SPROUT: Spawned serial shell '{}' (PID={})", shell_path, resp.child_tid);
             let _ = vfs_close(stdin_fd);
             let _ = vfs_close(stdout_fd);
             let _ = vfs_close(stderr_fd);

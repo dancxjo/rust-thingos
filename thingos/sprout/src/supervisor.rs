@@ -99,9 +99,9 @@ impl Supervisor {
         stem::debug!("SPROUT: Supervisor session started (MINIMAL MODE)");
 
         // Stage 1: Launch Serial Shell
-        stem::debug!("SPROUT: Launching serial shell...");
+        stem::info!("SPROUT: Launching serial shell...");
         setup_serial_shell(self.tasks.clone());
-        stem::debug!(
+        stem::info!(
             "SPROUT: Serial shell launched; yielding {}ms so the prompt can take the foreground",
             SERIAL_SHELL_HEADSTART_MS
         );

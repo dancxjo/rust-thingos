@@ -79,7 +79,7 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
 
     let tid = unsafe { crate::sched::current_tid_current() };
-    crate::kdebug!("VFS: sys_fs_open path='{}' tid={}", path, tid);
+    crate::ktrace!("VFS: sys_fs_open path='{}' tid={}", path, tid);
 
     if path == "/dev/fb0" {
         crate::kdebug!("sys_fs_open: path='{}' len={} flags=0x{:x}", path, path_len, flags);
@@ -251,10 +251,6 @@ pub fn sys_fs_fcntl(fd: usize, cmd: usize, arg: usize) -> SysResult<usize> {
 // ── read ────────────────────────────────────────────────────────────────────
 
 pub fn sys_fs_read(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
-    let tid = unsafe { crate::sched::current_tid_current() };
-    if tid == 7 || tid == 8 {
-        crate::kdebug!("sys_fs_read: tid={} fd={} len={}", tid, fd, buf_len);
-    }
     validate_user_range(buf_ptr, buf_len, true)?;
     if buf_len == 0 {
         return Ok(0);
@@ -322,10 +318,6 @@ pub fn sys_fs_isatty(fd: usize) -> SysResult<usize> {
 }
 
 pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
-    let tid = unsafe { crate::sched::current_tid_current() };
-    if tid == 7 || tid == 8 {
-        crate::kdebug!("sys_fs_readdir: tid={} fd={} len={}", tid, fd, buf_len);
-    }
     validate_user_range(buf_ptr, buf_len, true)?;
     if buf_len == 0 {
         return Ok(0);
@@ -386,9 +378,6 @@ pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<us
 
 pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
     let tid = unsafe { crate::sched::current_tid_current() };
-    if tid == 7 || tid == 8 {
-        crate::kdebug!("sys_fs_write: tid={} fd={} len={}", tid, fd, buf_len);
-    }
     crate::ktrace!("sys_fs_write: tid={} fd={} len={}", tid, fd, buf_len);
     validate_user_range(buf_ptr, buf_len, false)?;
     if buf_len == 0 {

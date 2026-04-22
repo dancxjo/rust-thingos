@@ -430,7 +430,7 @@ fn report_new_nic_registrations(known_units: &mut [bool; MAX_VIRTIO_UNITS as usi
 
 fn nic_unit_ready(unit: u32) -> bool {
     let rx_path = alloc::format!("{}{}{}", VIRTIO_PATH_PREFIX, unit, "/rx");
-    debug!("NETD: checking nic unit {} at {}", unit, rx_path);
+    stem::trace!("NETD: checking nic unit {} at {}", unit, rx_path);
     match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
         Ok(fd) => {
             let _ = vfs_close(fd);
