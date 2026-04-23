@@ -130,9 +130,15 @@ fn append_readdir_entry(
     buf: &mut [u8],
     written: &mut usize,
 ) -> bool {
-    let entry_len = (name.len() + 1) as u64;
+    let entry_len = u64::try_from(name.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     if *virtual_pos + entry_len > offset {
-        let start_in_entry = if offset > *virtual_pos { (offset - *virtual_pos) as usize } else { 0 };
+        let start_in_entry = if offset > *virtual_pos {
+            usize::try_from(offset - *virtual_pos).unwrap_or(usize::MAX)
+        } else {
+            0
+        };
         if start_in_entry < name.len() {
             let part = &name.as_bytes()[start_in_entry..];
             let copy_n = part.len().min(buf.len() - *written);

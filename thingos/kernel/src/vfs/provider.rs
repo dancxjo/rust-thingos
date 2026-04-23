@@ -288,9 +288,15 @@ fn append_readdir_stream_entry(
     buf: &mut [u8],
     written: &mut usize,
 ) -> bool {
-    let entry_stream_len = (name.len() + 1) as u64;
+    let entry_stream_len = u64::try_from(name.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     if *virtual_pos + entry_stream_len > offset {
-        let start_in_entry = if offset > *virtual_pos { (offset - *virtual_pos) as usize } else { 0 };
+        let start_in_entry = if offset > *virtual_pos {
+            usize::try_from(offset - *virtual_pos).unwrap_or(usize::MAX)
+        } else {
+            0
+        };
         if start_in_entry < name.len() {
             let chunk = &name[start_in_entry..];
             let copy_n = chunk.len().min(buf.len() - *written);
@@ -359,8 +365,11 @@ impl VfsNode for ProviderNode {
         let mut written = 0usize;
         // Keep each provider call large enough to avoid excessive tiny round-trips,
         // but still capped to the RPC protocol's maximum payload size.
-        let request_len =
-            core::cmp::min(core::cmp::max(buf.len(), 512), abi::vfs_rpc::VFS_RPC_MAX_DATA) as u32;
+        let request_len = u32::try_from(core::cmp::min(
+            core::cmp::max(buf.len(), 512),
+            abi::vfs_rpc::VFS_RPC_MAX_DATA,
+        ))
+        .unwrap_or(u32::MAX);
 
         loop {
             let mut payload = [0u8; 20];
