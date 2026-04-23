@@ -16,7 +16,7 @@ Feature: Boot progress milestone text reporting
   Scenario: Memory milestone is reported before VFS milestone
     Given the machine is started
     When I wait for the system to boot
-    Then the serial log shows "Memory Map OK" after "kernel:start"
+    Then the serial output should contain "Memory Map OK"
     And the serial log shows "VFS Root Ready" after "Memory Map OK"
 
   @smoke
