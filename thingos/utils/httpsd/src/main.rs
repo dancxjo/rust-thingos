@@ -1146,12 +1146,13 @@ mod tests {
 
     #[test]
     fn url_to_vfs_path_builds_under_https_mount() {
+        let p = new_provider();
         assert_eq!(
-            url_to_vfs_path("https://example.com/index.html"),
+            p.url_to_vfs_path("https://example.com/index.html"),
             "/https/example.com/index.html"
         );
-        assert_eq!(url_to_vfs_path("https://example.com"), "/https/example.com");
-        assert_eq!(url_to_vfs_path("http://example.com/legacy"), "/https/example.com/legacy");
+        assert_eq!(p.url_to_vfs_path("https://example.com"), "/https/example.com");
+        assert_eq!(p.url_to_vfs_path("http://example.com/legacy"), "/https/example.com/legacy");
     }
 
     #[test]
@@ -1196,6 +1197,17 @@ mod tests {
         assert_eq!(state.node.host, "example.com");
         assert_eq!(state.node.path, "index.html");
         assert_eq!(state.node.url(), "https://example.com/index.html");
+    }
+
+    #[test]
+    fn discovery_mount_resolves_host_qualified_index_path() {
+        let mut p = new_provider();
+        let handle =
+            p.resolve_path("/www.example.com/@index").expect("host-qualified @index resolves");
+        let state = p.handles.get(&handle).expect("resolved handle exists");
+        assert_eq!(state.node.host, "www.example.com");
+        assert_eq!(state.node.path, "");
+        assert_eq!(state.node.url(), "https://www.example.com");
     }
 
     #[test]

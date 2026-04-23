@@ -8,16 +8,16 @@ Feature: httpsd header/response cache
     When I wait for the shell prompt
     And I type "ping -c 1 example.com" on the serial console
     And I wait for the serial output to contain "1 packets transmitted, 1 received"
-    And I type "mount -t https example.com /https/ex" on the serial console
+    And I type "mount -t https none /https" on the serial console
     And I wait for the serial output to contain "mounted type=https"
-    And I type "cat /https/ex/@index" on the serial console
+    And I type "cat /https/example.com/@index" on the serial console
     And I wait for the serial output to contain "Example Domain"
     And I wait for the shell prompt
-    And I type "attr_list /https/ex/@index" on the serial console
+    And I type "attr_list /https/example.com/@index" on the serial console
     Then the command output should contain "user.http.status_code"
     And the command output should contain "user.http.content_type"
     And the command output should contain "user.http.url"
-    When I type "attr_get /https/ex/@index user.http.content_type" on the serial console
+    When I type "attr_get /https/example.com/@index user.http.content_type" on the serial console
     And I wait for the shell prompt
     Then the command output should contain "text/html"
 
@@ -26,9 +26,9 @@ Feature: httpsd header/response cache
     When I wait for the shell prompt
     And I type "ping -c 1 example.com" on the serial console
     And I wait for the serial output to contain "1 packets transmitted, 1 received"
-    And I type "mount -t https example.com /https/ex" on the serial console
+    And I type "mount -t https none /https" on the serial console
     And I wait for the serial output to contain "mounted type=https"
-    And I type "cat /https/ex/@index" on the serial console
+    And I type "cat /https/example.com/@index" on the serial console
     And I wait for the serial output to contain "Example Domain"
     And I wait for the shell prompt
     And I type "cat /run/httpsd/cache/index" on the serial console
@@ -44,11 +44,11 @@ Feature: httpsd header/response cache
     When I wait for the shell prompt
     And I type "ping -c 1 iana.org" on the serial console
     And I wait for the serial output to contain "1 packets transmitted, 1 received"
-    And I type "mount -t https iana.org /https/iana" on the serial console
+    And I type "mount -t https none /https" on the serial console
     And I wait for the serial output to contain "mounted type=https"
-    And I type "attr_get /https/iana/@index user.http.location" on the serial console
+    And I type "attr_get /https/iana.org/@index user.http.location" on the serial console
     Then the command output should contain "www.iana.org"
-    When I type "cat /https/iana/@index" on the serial console
+    When I type "cat /https/iana.org/@index" on the serial console
     And I wait for the serial output to contain "Internet Assigned Numbers Authority"
     And I wait for the shell prompt
     Then the command output should contain "IANA"

@@ -49,7 +49,8 @@ Boot the image and fetch a page directly from the shell:
 ```sh
 just run
 # in the ThingOS shell:
-cat /https/example.com
+mount -t https none /https
+cat /https/example.com/@index
 ```
 
 How this works at runtime:

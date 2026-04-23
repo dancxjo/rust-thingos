@@ -179,17 +179,6 @@ fn main(arg: usize) -> ! {
         }
     }
 
-    let mount_point = cfg.mount_point.clone();
-    let mut net_provider = loop {
-        match NetVfsProvider::new(&mount_point, mac, mtu, initial_link_up) {
-            Some(provider) => break provider,
-            None => {
-                warn!("NETD: Failed to mount {}, retrying...", mount_point);
-                stem::time::sleep_ms(200);
-            }
-        }
-    };
-
     debug!("NETD: Running DHCP...");
     let dhcp_config = match dhcp::run_dhcp(&mut iface, &mut device) {
         Ok(cfg) => {
@@ -200,6 +189,20 @@ fn main(arg: usize) -> ! {
             warn!("NETD: DHCP failed: {:?}", e);
             loop {
                 stem::time::sleep_ms(1000);
+            }
+        }
+    };
+
+    // Do not expose /net until the service can actively process RPCs.
+    // Mounting before DHCP can let early clients issue lookups while this
+    // thread is still blocked in DHCP, which triggers provider timeout taint.
+    let mount_point = cfg.mount_point.clone();
+    let mut net_provider = loop {
+        match NetVfsProvider::new(&mount_point, mac, mtu, initial_link_up) {
+            Some(provider) => break provider,
+            None => {
+                warn!("NETD: Failed to mount {}, retrying...", mount_point);
+                stem::time::sleep_ms(200);
             }
         }
     };
@@ -228,7 +231,7 @@ fn main(arg: usize) -> ! {
     debug!("NETD: getting link state...");
     let mut last_link_state = device.link_up();
     debug!("NETD: scanning NIC units...");
-    let mut known_nic_units = scan_registered_nic_units();
+    let _known_nic_units = scan_registered_nic_units();
     debug!("NETD: NIC units scanned.");
 
     debug!("NETD: bridging request port to fd...");
@@ -359,16 +362,20 @@ fn main(arg: usize) -> ! {
             let delay_ms =
                 iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(10);
             let timeout_ms = delay_ms.min(100).max(1) as u64;
-            
+
             let mut pollfds = [
                 PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
                 PollHandle { handle: events_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-                PollHandle { handle: nic_watch_fd.unwrap_or(0) as i32, events: poll_flags::POLLIN, revents: 0 },
+                PollHandle {
+                    handle: nic_watch_fd.unwrap_or(0) as i32,
+                    events: poll_flags::POLLIN,
+                    revents: 0,
+                },
             ];
-            
+
             let n_fds = if nic_watch_fd.is_some() { 3 } else { 2 };
-            let _ = stem::syscall::vfs::vfs_poll(&mut pollfds[..n_fds], timeout_ms);
-            
+            let _ = vfs_poll(&mut pollfds[..n_fds], timeout_ms);
+
             if let Some(fd) = nic_watch_fd {
                 if pollfds[2].revents & poll_flags::POLLIN != 0 {
                     drain_watch_fd(fd);
@@ -630,6 +637,4 @@ mod tests {
         let mac = parse_mac("52:54: 00:12:34:56").unwrap();
         assert_eq!(mac, [0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
     }
-
-
 }
