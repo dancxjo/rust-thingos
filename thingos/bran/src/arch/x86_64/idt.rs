@@ -207,28 +207,29 @@ core::arch::global_asm!(
         swapgs
     1:
         // PF pushes error code, so stack has: ERR, RIP, CS, RFLAGS, RSP, SS
-        push %r11
-        push %r10
-        push %r9
-        push %r8
-        push %rdi
-        push %rsi
-        push %rdx
-        push %rcx
         push %rax
+        push %rcx
+        push %rdx
+        push %rsi
+        push %rdi
+        push %r8
+        push %r9
+        push %r10
+        push %r11
 
-        lea 72(%rsp), %rdi // Pointer to InterruptStackFrame (skipping 9 registers)
+        mov %rsp, %rsi // Pointer to IrqRegisterSnapshot (9 registers)
+        lea 72(%rsp), %rdi // Pointer to InterruptStackFrame
         call rust_pf_handler
 
-        pop %rax
-        pop %rcx
-        pop %rdx
-        pop %rsi
-        pop %rdi
-        pop %r8
-        pop %r9
-        pop %r10
         pop %r11
+        pop %r10
+        pop %r9
+        pop %r8
+        pop %rdi
+        pop %rsi
+        pop %rdx
+        pop %rcx
+        pop %rax
 
         testb $3, 16(%rsp) // CS of frame
         jz 2f
@@ -695,6 +696,8 @@ pub struct IrqRegisterSnapshot {
     pub rip: u64,
     pub cs: u64,
     pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
 }
 
 const PS2_STATUS_PORT: u16 = 0x64;
@@ -1313,38 +1316,31 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rust_pf_handler(frame: &InterruptStackFrame) {
+pub extern "C" fn rust_pf_handler(
+    frame: &InterruptStackFrame,
+    snapshot: &IrqRegisterSnapshot,
+) {
     let cr2: u64;
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
     }
 
-    // Any non-zero CPL is less-privileged than the kernel and should be
-    // handled via the userspace exception path.
-    if frame.cs & 3 != 0 {
+    let is_user = frame.cs & 3 != 0;
+
+    if is_user {
         unsafe {
             unsafe extern "C" {
                 fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64);
             }
             kernel_handle_page_fault(frame.rip, cr2, frame.error_code);
         }
-        // If we handled it (e.g. stack growth), return to user mode
         return;
     }
 
-    let mut stack_dump = alloc::string::String::new();
-    unsafe {
-        let rsp_ptr = frame.rsp as *const u64;
-        for i in 0..16 {
-            use core::fmt::Write;
-            let val = *rsp_ptr.add(i);
-            let _ = write!(&mut stack_dump, "\n  [rsp+{:#04x}]: {:#018x}", i * 8, val);
-        }
-    }
-
+    // Kernel mode fault - safe to panic, but avoid kerror! which can deadlock
     panic!(
-        "PAGE FAULT at 0x{:x} RIP=0x{:x} CS=0x{:x} ERR=0x{:x} RSP=0x{:x}{}",
-        cr2, frame.rip, frame.cs, frame.error_code, frame.rsp, stack_dump
+        "KERNEL PAGE FAULT at 0x{:x} RIP=0x{:x} CS=0x{:x} ERR=0x{:x} RSP=0x{:x}",
+        cr2, frame.rip, frame.cs, frame.error_code, frame.rsp
     );
 }
 

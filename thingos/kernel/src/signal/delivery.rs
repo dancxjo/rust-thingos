@@ -372,13 +372,9 @@ pub mod x86_64 {
     pub unsafe fn sys_sigreturn_inner(frame: *mut SyscallFrame) -> SysResult<usize> {
         let f = unsafe { &mut *frame };
 
-        // The user RSP at sigreturn entry points to the slot just above the
-        // trampoline return address (which the `syscall` instruction advanced
-        // past).  We stored `SignalFrame` at `new_rsp`, so:
-        //   new_rsp       = frame start (trampoline)
-        //   ret_addr_slot = new_rsp - 8  ← that's where f.rsp landed
-        // So the frame is at f.rsp + 8.
-        let sf_ptr = (f.rsp.wrapping_add(8)) as *const SignalFrame;
+        // The user RSP at sigreturn entry points exactly to the start of the
+        // SignalFrame (because the trampoline advanced past the return address).
+        let sf_ptr = f.rsp as *const SignalFrame;
 
         // Validate the frame is readable.
         validate_user_range(sf_ptr as usize, core::mem::size_of::<SignalFrame>(), false)?;
