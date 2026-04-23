@@ -1240,14 +1240,19 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     let modules = runtime.modules();
     boot_trace(runtime, b"[kernel:start] runtime.modules enumerate ok\r\n");
     kdebug!("Kernel: Enumerating {} boot modules...", modules.len());
-    for (i, m) in modules.iter().enumerate() {
-        crate::ktrace!(
-            "  Module[{}]: name='{}' cmdline='{}' size={} bytes",
-            i,
-            m.name,
-            m.cmdline,
-            m.bytes.len()
-        );
+    // Only iterate and format individual module entries when trace logging is
+    // actually enabled; skipping this loop at debug level avoids ~108 function
+    // calls and atomic reads that add measurable overhead during boot.
+    if crate::logging::get_log_level() >= 5 {
+        for (i, m) in modules.iter().enumerate() {
+            crate::ktrace!(
+                "  Module[{}]: name='{}' cmdline='{}' size={} bytes",
+                i,
+                m.name,
+                m.cmdline,
+                m.bytes.len()
+            );
+        }
     }
     boot_trace(runtime, b"[kernel:start] modules enumerate loop ok\r\n");
     crate::boot_progress::push(crate::boot_progress::BootPhase::Modules, "Modules Scanned");
