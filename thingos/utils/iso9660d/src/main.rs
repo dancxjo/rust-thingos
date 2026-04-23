@@ -117,6 +117,13 @@ impl PortBlockDevice {
         let (resp_w, resp_r) = port_create(256 * 1024).ok()?;
         Some(Self { port, resp_w, resp_r })
     }
+
+    /// Returns the underlying storage-driver request port so that worker
+    /// threads can create their own independent `PortBlockDevice` instances
+    /// (each with their own response port pair) pointing at the same driver.
+    fn storage_port(&self) -> PortHandle {
+        self.port
+    }
 }
 
 impl BlockDevice for PortBlockDevice {
@@ -339,6 +346,44 @@ fn handle_stat(fs: &IsoFs, dev: &PortBlockDevice, payload: &[u8]) -> ProviderRes
 const DISCOVERY_RETRY_MS: u64 = 500;
 const DISCOVERY_LOG_EVERY_ATTEMPTS: u32 = 20;
 
+/// Send a provider response directly to the kernel without going through a
+/// `ProviderLoop`.  Used by worker threads that own the request metadata but
+/// not the loop itself.
+fn send_response_direct(resp_port: PortHandle, req_id: u16, response: ProviderResponse) {
+    use abi::vfs_rpc::VFS_RPC_MAX_RESP;
+
+    let total = 3 + response.payload.len();
+    let mut buf = alloc::vec![0u8; total.min(VFS_RPC_MAX_RESP)];
+    buf[0..2].copy_from_slice(&req_id.to_le_bytes());
+    buf[2] = response.status;
+    let payload_len = response.payload.len().min(buf.len() - 3);
+    buf[3..3 + payload_len].copy_from_slice(&response.payload[..payload_len]);
+    let _ = stem::syscall::port_send_all(resp_port, &buf[..3 + payload_len]);
+}
+
+/// Read file bytes from a block device using pre-decoded handle fields.
+///
+/// This mirrors [`handle_read`] but takes `(lba, size, offset, len)` directly
+/// so the function can be called from a worker thread that received these
+/// values as `Copy` captures rather than a borrowed payload slice.
+fn handle_read_direct(
+    dev: &PortBlockDevice,
+    lba: u32,
+    size: u32,
+    offset: u64,
+    len: usize,
+) -> ProviderResponse {
+    if offset >= size as u64 {
+        return ProviderResponse::ok_read(&[]);
+    }
+    let iso_file = iso9660::IsoFile { extent_lba: lba, size };
+    let clamped_len = len.min((size as u64 - offset) as usize);
+    match iso_file.read_range(dev, offset, clamped_len) {
+        Ok(data) => ProviderResponse::ok_read(&data),
+        Err(_) => ProviderResponse::err(Errno::EIO),
+    }
+}
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let mount_point = mount_point_from_args();
@@ -361,12 +406,54 @@ fn main(_arg: usize) -> ! {
     // 5. Service loop using ProviderLoop — far less boilerplate than raw
     //    port_recv + manual header parsing.
     info!("iso9660d: entering VFS RPC service loop");
+    let storage_port = dev.storage_port();
     let mut lp = ProviderLoop::new(req_read);
     loop {
         let req = match lp.next_request() {
             Ok(r) => r,
             Err(_) => break, // port closed — exit cleanly
         };
+
+        // Dispatch Read requests to a background thread so multiple
+        // concurrent block-device reads can proceed in parallel without
+        // stalling Lookup / Stat / Readdir on the main thread.
+        if req.op == VfsRpcOp::Read {
+            if req.payload.len() >= 20 {
+                let handle = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
+                let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
+                let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
+                let (lba, size) = decode_handle(handle);
+                let resp_port = req.resp_port;
+                let req_id = req.req_id;
+                let port = storage_port;
+
+                let spawn_result = stem::thread::spawn_task_detached(move || {
+                    let dev = match PortBlockDevice::new(port) {
+                        Some(d) => d,
+                        None => {
+                            send_response_direct(
+                                resp_port,
+                                req_id,
+                                ProviderResponse::err(Errno::EIO),
+                            );
+                            return;
+                        }
+                    };
+                    let resp = handle_read_direct(&dev, lba, size, offset, len);
+                    send_response_direct(resp_port, req_id, resp);
+                });
+
+                if spawn_result.is_err() {
+                    // Thread spawn failed — fall back to synchronous dispatch.
+                    let resp = handle_read(&dev, &req.payload);
+                    lp.send_response(&req, resp).ok();
+                }
+            } else {
+                lp.send_response(&req, ProviderResponse::err(Errno::EINVAL)).ok();
+            }
+            continue;
+        }
+
         let resp = dispatch_request(&fs, &dev, &req);
         lp.send_response(&req, resp).ok();
     }

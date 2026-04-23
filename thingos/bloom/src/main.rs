@@ -10,6 +10,10 @@ mod protocol;
 mod render;
 mod scene;
 
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use damage::DamageTracker;
 use display::DisplayBackend;
@@ -20,14 +24,28 @@ use protocol::{
 };
 use render::CompositorVisuals;
 use scene::{Scene, SurfaceBuffer};
+use spin::Mutex;
+use stem::syscall::port::port_try_recv;
 use stem::syscall::vfs::{
-    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_fd, vfs_watch_path,
+    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_path,
     vfs_write,
 };
 use stem::syscall::{port_create, port_send_all};
 use stem::{error, info, warn};
 
 const SERVICE_PATH: &str = "/services/bloom";
+
+/// Events decoded by the I/O thread and forwarded to the render thread.
+enum IoEvent {
+    /// Raw bytes from a client service-port message.
+    Service(Vec<u8>),
+    /// Raw bytes from the bristle (HID) event port.
+    Bristle(Vec<u8>),
+    /// The wallpaper-watch file reported a modification.
+    WallpaperChange,
+}
+
+type IoQueue = Arc<Mutex<VecDeque<IoEvent>>>;
 
 #[stem::main]
 fn main(arg: usize) -> ! {
@@ -77,8 +95,8 @@ fn main(arg: usize) -> ! {
     let wp_path = "/session/desktop/wallpaper";
 
     let mut visuals = CompositorVisuals::new();
+    // Synchronous load at startup — no render loop running yet so blocking is fine.
     visuals.prepare_background(&display, wp_path);
-    // If first attempt failed (e.g. no wallpaper file), try fallback
     if visuals.fallback_buffer_id().is_none() {
         visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
     }
@@ -99,17 +117,150 @@ fn main(arg: usize) -> ! {
     let bristle_fd =
         if bristle_evt_read != 0 { vfs_handle_from_port(bristle_evt_read).ok() } else { None };
 
-    let mut ws = stem::wait_set::WaitSet::new();
-    let service_token = service_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
-    let bristle_token = bristle_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
-
     let wp_watch_fd = vfs_watch_path(wp_path, abi::vfs_watch::mask::ALL_EVENTS, 0).ok();
-    let wp_watch_token = wp_watch_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
+
+    // ── Notification channel ─────────────────────────────────────────────────
+    // The I/O thread sends a single byte here whenever it pushes at least one
+    // event.  The render thread waits on this fd (with a 16 ms timeout) so it
+    // is woken promptly when I/O arrives.
+    let (notify_write, notify_read) = match port_create(4096) {
+        Ok(pair) => pair,
+        Err(e) => {
+            error!("bloom: failed to create notification port: {:?}", e);
+            loop {
+                stem::sleep_ms(1000);
+            }
+        }
+    };
+    let notify_read_fd = vfs_handle_from_port(notify_read).ok();
+
+    // ── Shared event queue ───────────────────────────────────────────────────
+    let io_queue: IoQueue = Arc::new(Mutex::new(VecDeque::new()));
+
+    // ── I/O thread ──────────────────────────────────────────────────────────
+    // Owns the WaitSet and all input file descriptors.  Reads events and pushes
+    // them into `io_queue`, then pings the render thread via `notify_write`.
+    {
+        let queue = io_queue.clone();
+
+        let mut ws = stem::wait_set::WaitSet::new();
+        let service_token = service_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
+        let bristle_token = bristle_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
+        let wp_watch_token = wp_watch_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
+
+        if ws.is_empty() {
+            warn!("bloom: I/O thread has no event sources to watch");
+        }
+
+        let _ = stem::thread::spawn_task_detached(move || {
+            if ws.is_empty() {
+                return;
+            }
+            let mut io_buf = [0u8; 512];
+            loop {
+                let events = match ws.wait(None::<stem::time::Duration>) {
+                    Ok(evs) => evs,
+                    Err(_) => {
+                        stem::sleep_ms(10);
+                        continue;
+                    }
+                };
+
+                let mut pushed = false;
+                for ev in events {
+                    if !ev.is_readable() {
+                        continue;
+                    }
+
+                    if Some(ev.token()) == service_token {
+                        if let Some(fd) = service_fd {
+                            if let Ok(n) = vfs_read(fd, &mut io_buf) {
+                                if n > 0 {
+                                    queue
+                                        .lock()
+                                        .push_back(IoEvent::Service(io_buf[..n].to_vec()));
+                                    pushed = true;
+                                }
+                            }
+                        }
+                    } else if Some(ev.token()) == bristle_token {
+                        if let Some(fd) = bristle_fd {
+                            if let Ok(n) = vfs_read(fd, &mut io_buf) {
+                                if n > 0 {
+                                    queue
+                                        .lock()
+                                        .push_back(IoEvent::Bristle(io_buf[..n].to_vec()));
+                                    pushed = true;
+                                }
+                            }
+                        }
+                    } else if Some(ev.token()) == wp_watch_token {
+                        // Drain the watch event data.
+                        if let Some(fd) = wp_watch_fd {
+                            let mut dump = [0u8; 1024];
+                            let _ = vfs_read(fd, &mut dump);
+                        }
+                        queue.lock().push_back(IoEvent::WallpaperChange);
+                        pushed = true;
+                    }
+                }
+
+                if pushed {
+                    // Wake the render thread.
+                    let _ = port_send_all(notify_write, &[1u8]);
+                }
+            }
+        });
+    }
+
+    // ── Render loop ──────────────────────────────────────────────────────────
+    // Drains the shared I/O queue, reacts to events, presents frames, and
+    // waits on the notification fd (with a 16 ms cap for vsync pacing).
+    let mut render_ws = stem::wait_set::WaitSet::new();
+    if let Some(fd) = notify_read_fd {
+        let _ = render_ws.add_fd_readable(fd);
+    }
+    let use_render_ws = !render_ws.is_empty();
 
     let mut needs_redraw = true;
-    let mut io_buf = [0u8; 512];
 
     loop {
+        // 1. Drain queued I/O events.
+        let events: Vec<IoEvent> = {
+            let mut q = io_queue.lock();
+            q.drain(..).collect()
+        };
+        for ev in events {
+            match ev {
+                IoEvent::Service(data) => {
+                    if process_client_message(
+                        &data,
+                        &display,
+                        &mut scene,
+                        &mut damage,
+                        &mut needs_redraw,
+                    ) {
+                        needs_redraw = true;
+                    }
+                }
+                IoEvent::Bristle(data) => {
+                    input.handle_bristle_event(&data, &mut scene, &mut damage);
+                    needs_redraw = true;
+                }
+                IoEvent::WallpaperChange => {
+                    info!("bloom: reacting to wallpaper change (async)");
+                    visuals.start_background_load(&display, wp_path);
+                }
+            }
+        }
+
+        // 2. Pick up any wallpaper the background worker has finished.
+        if visuals.poll_ready_background(&display) {
+            damage.mark_full(primary.width, primary.height);
+            needs_redraw = true;
+        }
+
+        // 3. Present if there is something to show.
         if needs_redraw && damage.is_dirty() {
             let composition = scene.collect_composition();
             let pending_damage = damage.take();
@@ -137,61 +288,21 @@ fn main(arg: usize) -> ! {
             }
         }
 
-        let events = match ws.wait(None::<stem::time::Duration>) {
-            Ok(evs) => evs,
-            Err(_) => {
-                stem::sleep_ms(10);
-                continue;
+        // 4. Wait for the next event or vsync pacing deadline (~60 fps).
+        if use_render_ws {
+            let _ = render_ws
+                .wait(Some(core::time::Duration::from_millis(16)));
+            // Drain pending notification bytes so the next wait doesn't
+            // return immediately when the queue is already empty.
+            let mut drain_buf = [0u8; 256];
+            loop {
+                match port_try_recv(notify_read, &mut drain_buf) {
+                    Ok(n) if n > 0 => {}
+                    _ => break,
+                }
             }
-        };
-
-        for ev in events {
-            if !ev.is_readable() {
-                continue;
-            }
-
-            if Some(ev.token()) == service_token {
-                if let Some(fd) = service_fd {
-                    if let Ok(n) = vfs_read(fd, &mut io_buf) {
-                        if n > 0 {
-                            if process_client_message(
-                                &io_buf[..n],
-                                &display,
-                                &mut scene,
-                                &mut damage,
-                                &mut needs_redraw,
-                            ) {
-                                needs_redraw = true;
-                            }
-                        }
-                    }
-                }
-            } else if Some(ev.token()) == bristle_token {
-                if let Some(fd) = bristle_fd {
-                    if let Ok(n) = vfs_read(fd, &mut io_buf) {
-                        if n > 0 {
-                            input.handle_bristle_event(&io_buf[..n], &mut scene, &mut damage);
-                            needs_redraw = true;
-                        }
-                    }
-                }
-            } else if Some(ev.token()) == wp_watch_token {
-                // Drain watch events
-                if let Some(fd) = wp_watch_fd {
-                    let mut dump = [0u8; 1024];
-                    let _ = vfs_read(fd, &mut dump);
-                }
-
-                info!("bloom: reacting to wallpaper change");
-
-                visuals.prepare_background(&display, wp_path);
-                if visuals.fallback_buffer_id().is_none() {
-                    visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
-                }
-
-                damage.mark_full(primary.width, primary.height);
-                needs_redraw = true;
-            }
+        } else {
+            stem::sleep_ms(16);
         }
     }
 }

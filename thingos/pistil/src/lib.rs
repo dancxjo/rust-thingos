@@ -87,6 +87,15 @@ impl Drop for Texture {
     }
 }
 
+// SAFETY: `Texture` owns a private memory-mapped region backed by a memfd.
+// The raw `ptr` field is valid for the lifetime of the Texture and points to
+// process-owned memory.  Sending a Texture across thread boundaries is safe as
+// long as only one thread accesses the mapped region at a time; callers that
+// hand a Texture off to a worker thread must ensure no aliased access occurs
+// during the transfer (which the `WallpaperLoader` in bloom guarantees via the
+// `loading` atomic flag).
+unsafe impl Send for Texture {}
+
 pub struct Canvas<'a> {
     pub buffer: &'a mut [u32],
     pub width: u32,

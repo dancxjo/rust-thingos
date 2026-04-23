@@ -7,3 +7,11 @@ Feature: ISO9660 boot filesystem mount
     When I wait for the shell prompt
     And I type "cat /mnt/iso/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
+
+  Scenario: iso9660d serves multiple sequential reads correctly via parallel dispatch
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "cat /mnt/iso/etc/hostname" on the serial console
+    Then the latest command output should contain "thingos"
+    When I type "cat /mnt/iso/etc/hostname" on the serial console
+    Then the latest command output should contain "thingos"
