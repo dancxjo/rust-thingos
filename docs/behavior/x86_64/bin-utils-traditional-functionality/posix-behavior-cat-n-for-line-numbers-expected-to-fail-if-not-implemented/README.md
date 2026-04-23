@@ -1,12 +1,12 @@
-# ❌ Scenario: Memory milestone is reported before VFS milestone
+# ❌ Scenario: POSIX behavior - cat -n for line numbers (expected to fail if not implemented)
 
-> Last run: 2026-04-22 19:54:35
+> Last run: 2026-04-22 19:53:46
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is started | ❌ | 1001ms | - - - |
+| 1 | Given the machine is booted | ❌ | 1001ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

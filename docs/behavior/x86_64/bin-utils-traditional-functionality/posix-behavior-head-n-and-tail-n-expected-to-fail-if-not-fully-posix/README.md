@@ -1,12 +1,12 @@
-# ❌ Scenario: Memory milestone is reported before VFS milestone
+# ❌ Scenario: POSIX behavior - head -n and tail -n (expected to fail if not fully POSIX)
 
-> Last run: 2026-04-22 19:54:35
+> Last run: 2026-04-22 19:53:46
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is started | ❌ | 1001ms | - - - |
+| 1 | Given the machine is booted | ❌ | 1001ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
