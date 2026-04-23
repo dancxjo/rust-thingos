@@ -176,9 +176,9 @@ members = [
   "thingos/utils/yes",
   "thingos/utils/which",
   "thingos/utils/xargs",
-  "vendor/broot",
+  # "vendor/broot",
   "vendor/runa",
-  "vendor/lsv",
+  # "vendor/lsv",
   # tidy-alphabetical-end
 ]
 
@@ -242,6 +242,7 @@ crossterm = { path = "vendor/crossterm" }
 getrandom = { path = "vendor/getrandom" }
 libz-sys = { path = "vendor/libz-sys" }
 filedescriptor = { path = "vendor/filedescriptor" }
+signal-hook = { path = "vendor/signal-hook" }
 
 # Utility Dependencies
 which = { path = "vendor/which" }
