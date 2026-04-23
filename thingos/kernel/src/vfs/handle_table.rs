@@ -240,6 +240,12 @@ impl HandleTable {
     }
 }
 
+impl Drop for HandleTable {
+    fn drop(&mut self) {
+        self.close_all();
+    }
+}
+
 impl Default for HandleTable {
     fn default() -> Self {
         Self::new()

@@ -92,7 +92,20 @@ fn grep_data(
 
     let mut matches = 0usize;
     let mut lineno = 0usize;
-    for line_bytes in data.split(|&b| b == b'\n') {
+
+    // Use a splitting strategy that respects trailing newlines as terminators,
+    // not separators for an empty final line.
+    if data.is_empty() {
+        return 0;
+    }
+
+    let mut it = data.split(|&b| b == b'\n').peekable();
+    while let Some(line_bytes) = it.next() {
+        if line_bytes.is_empty() && it.peek().is_none() {
+            // This is the empty fragment following a trailing newline; ignore it.
+            break;
+        }
+
         lineno += 1;
         let line = core::str::from_utf8(line_bytes).unwrap_or("");
         let haystack: String = if ignore_case { line.to_lowercase() } else { String::from(line) };
