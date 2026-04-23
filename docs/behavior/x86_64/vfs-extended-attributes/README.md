@@ -1,9 +1,9 @@
 # Feature: VFS Extended Attributes
 
-> Last run: 2026-04-23 14:40:47
+> Last run: 2026-04-23 14:53:37
 
 ## Scenarios
 
 | Scenario | Steps | Status | Link |
 |----------|-------|--------|------|
-| Round trip with mutable attributes | 13/14 | ❌ | [View Details](round-trip-with-mutable-attributes/README.md) |
+| Round trip with mutable attributes | 21/21 | ✅ | [View Details](round-trip-with-mutable-attributes/README.md) |
