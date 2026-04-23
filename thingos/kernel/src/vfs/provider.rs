@@ -281,6 +281,35 @@ pub struct ProviderNode {
     wait_queue: Arc<WaitQueue>,
 }
 
+fn append_readdir_stream_entry(
+    name: &[u8],
+    offset: u64,
+    virtual_pos: &mut u64,
+    buf: &mut [u8],
+    written: &mut usize,
+) -> bool {
+    let entry_stream_len = (name.len() + 1) as u64;
+    if *virtual_pos + entry_stream_len > offset {
+        let start_in_entry = if offset > *virtual_pos { (offset - *virtual_pos) as usize } else { 0 };
+        if start_in_entry < name.len() {
+            let chunk = &name[start_in_entry..];
+            let copy_n = chunk.len().min(buf.len() - *written);
+            buf[*written..*written + copy_n].copy_from_slice(&chunk[..copy_n]);
+            *written += copy_n;
+            if copy_n == chunk.len() && *written < buf.len() {
+                buf[*written] = 0;
+                *written += 1;
+            }
+        } else if start_in_entry == name.len() && *written < buf.len() {
+            buf[*written] = 0;
+            *written += 1;
+        }
+    }
+
+    *virtual_pos = virtual_pos.saturating_add(entry_stream_len);
+    *written == buf.len()
+}
+
 unsafe impl Send for ProviderNode {}
 unsafe impl Sync for ProviderNode {}
 
@@ -328,6 +357,8 @@ impl VfsNode for ProviderNode {
         let mut provider_index = 0u64;
         let mut virtual_pos = 0u64;
         let mut written = 0usize;
+        // Keep each provider call large enough to avoid excessive tiny round-trips,
+        // but still capped to the RPC protocol's maximum payload size.
         let request_len =
             core::cmp::min(core::cmp::max(buf.len(), 512), abi::vfs_rpc::VFS_RPC_MAX_DATA) as u32;
 
@@ -367,32 +398,9 @@ impl VfsNode for ProviderNode {
                 }
 
                 let name = &data[read_ptr + 10 .. read_ptr + entry_len];
-                let entry_stream_len = (name_len + 1) as u64;
-                if virtual_pos + entry_stream_len > offset {
-                    let start_in_entry =
-                        if offset > virtual_pos { (offset - virtual_pos) as usize } else { 0 };
-
-                    if start_in_entry < name_len {
-                        let chunk = &name[start_in_entry..];
-                        let copy_n = chunk.len().min(buf.len() - written);
-                        buf[written..written + copy_n].copy_from_slice(&chunk[..copy_n]);
-                        written += copy_n;
-
-                        if copy_n == chunk.len() && written < buf.len() {
-                            buf[written] = 0;
-                            written += 1;
-                        }
-                    } else if start_in_entry == name_len && written < buf.len() {
-                        buf[written] = 0;
-                        written += 1;
-                    }
-
-                    if written == buf.len() {
-                        return Ok(written);
-                    }
+                if append_readdir_stream_entry(name, offset, &mut virtual_pos, buf, &mut written) {
+                    return Ok(written);
                 }
-
-                virtual_pos = virtual_pos.saturating_add(entry_stream_len);
                 parsed_entries += 1;
                 read_ptr += entry_len;
             }

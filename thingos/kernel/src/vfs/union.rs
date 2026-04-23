@@ -123,6 +123,34 @@ pub struct UnionDirNode {
     layers: Vec<Arc<dyn VfsNode>>,
 }
 
+fn append_readdir_entry(
+    name: &str,
+    offset: u64,
+    virtual_pos: &mut u64,
+    buf: &mut [u8],
+    written: &mut usize,
+) -> bool {
+    let entry_len = (name.len() + 1) as u64;
+    if *virtual_pos + entry_len > offset {
+        let start_in_entry = if offset > *virtual_pos { (offset - *virtual_pos) as usize } else { 0 };
+        if start_in_entry < name.len() {
+            let part = &name.as_bytes()[start_in_entry..];
+            let copy_n = part.len().min(buf.len() - *written);
+            buf[*written..*written + copy_n].copy_from_slice(&part[..copy_n]);
+            *written += copy_n;
+            if copy_n == part.len() && *written < buf.len() {
+                buf[*written] = 0;
+                *written += 1;
+            }
+        } else if start_in_entry == name.len() && *written < buf.len() {
+            buf[*written] = 0;
+            *written += 1;
+        }
+    }
+    *virtual_pos = virtual_pos.saturating_add(entry_len);
+    *written == buf.len()
+}
+
 impl super::VfsNode for UnionDirNode {
     fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
         Err(Errno::EISDIR)
@@ -143,6 +171,8 @@ impl super::VfsNode for UnionDirNode {
         }
 
         let mut seen = BTreeSet::new();
+        // Keep this reasonably small so a provider-backed layer can yield early,
+        // while still large enough to amortize IPC/syscall overhead.
         let mut scratch = alloc::vec![0u8; 2048];
         let mut virtual_pos = 0u64;
         let mut written = 0usize;
@@ -160,31 +190,15 @@ impl super::VfsNode for UnionDirNode {
                     if !pending_name.is_empty() {
                         let name = core::mem::take(&mut pending_name);
                         if seen.insert(name.clone()) {
-                            let entry_len = (name.len() + 1) as u64;
-                            if virtual_pos + entry_len > offset {
-                                let start_in_entry = if offset > virtual_pos {
-                                    (offset - virtual_pos) as usize
-                                } else {
-                                    0
-                                };
-                                if start_in_entry < name.len() {
-                                    let part = &name.as_bytes()[start_in_entry..];
-                                    let copy_n = part.len().min(buf.len() - written);
-                                    buf[written..written + copy_n].copy_from_slice(&part[..copy_n]);
-                                    written += copy_n;
-                                    if copy_n == part.len() && written < buf.len() {
-                                        buf[written] = 0;
-                                        written += 1;
-                                    }
-                                } else if start_in_entry == name.len() && written < buf.len() {
-                                    buf[written] = 0;
-                                    written += 1;
-                                }
-                                if written == buf.len() {
-                                    return Ok(written);
-                                }
+                            if append_readdir_entry(
+                                &name,
+                                offset,
+                                &mut virtual_pos,
+                                buf,
+                                &mut written,
+                            ) {
+                                return Ok(written);
                             }
-                            virtual_pos = virtual_pos.saturating_add(entry_len);
                         }
                     }
                     break;
@@ -204,31 +218,15 @@ impl super::VfsNode for UnionDirNode {
                     if !pending_name.is_empty() {
                         let name = core::mem::take(&mut pending_name);
                         if seen.insert(name.clone()) {
-                            let entry_len = (name.len() + 1) as u64;
-                            if virtual_pos + entry_len > offset {
-                                let start_in_entry = if offset > virtual_pos {
-                                    (offset - virtual_pos) as usize
-                                } else {
-                                    0
-                                };
-                                if start_in_entry < name.len() {
-                                    let part = &name.as_bytes()[start_in_entry..];
-                                    let copy_n = part.len().min(buf.len() - written);
-                                    buf[written..written + copy_n].copy_from_slice(&part[..copy_n]);
-                                    written += copy_n;
-                                    if copy_n == part.len() && written < buf.len() {
-                                        buf[written] = 0;
-                                        written += 1;
-                                    }
-                                } else if start_in_entry == name.len() && written < buf.len() {
-                                    buf[written] = 0;
-                                    written += 1;
-                                }
-                                if written == buf.len() {
-                                    return Ok(written);
-                                }
+                            if append_readdir_entry(
+                                &name,
+                                offset,
+                                &mut virtual_pos,
+                                buf,
+                                &mut written,
+                            ) {
+                                return Ok(written);
                             }
-                            virtual_pos = virtual_pos.saturating_add(entry_len);
                         }
                     }
 
