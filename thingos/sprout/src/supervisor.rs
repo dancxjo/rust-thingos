@@ -19,7 +19,7 @@ use stem::syscall::PortHandle;
 use stem::{info, warn};
 
 use crate::ledger::DeviceLedger;
-use crate::pipelines::setup_serial_shell;
+use crate::pipelines::{mount_hosts_cache, setup_serial_shell};
 use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
@@ -113,7 +113,11 @@ impl Supervisor {
         stem::debug!("SPROUT: Spawning iso9660d...");
         self.spawn_iso9660d();
 
-        // Stage 4: Start netd only after the network driver publishes its VFS tree.
+        // Stage 4: Mount local hostname cache before netd. Mesocarp can serve
+        // self entries from VFS state and attach its UDP socket later.
+        mount_hosts_cache();
+
+        // Stage 5: Start netd only after the network driver publishes its VFS tree.
         stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
         self.spawn_netd_when_ready();
 

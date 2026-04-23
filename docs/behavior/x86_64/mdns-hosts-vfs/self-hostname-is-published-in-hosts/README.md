@@ -1,12 +1,12 @@
 # ❌ Scenario: Self hostname is published in /hosts
 
-> Last run: 2026-04-22 20:20:49
+> Last run: 2026-04-22 20:27:55
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ❌ | 31022ms | - [📜](./01/serial.log) - |
+| 1 | Given the machine is booted | ❌ | 1001ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

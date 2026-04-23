@@ -468,8 +468,30 @@ fn apply_fstab_mounts() {
     }
 }
 
+pub(crate) fn mount_hosts_cache() {
+    info!("SPROUT: Mounting /hosts early...");
+    let argv: [&[u8]; 5] = [b"/bin/mount", b"-t", b"mdns", b"none", b"/hosts"];
+    match stem::syscall::spawn_process_ex(
+        "/bin/mount",
+        &argv,
+        &alloc::collections::BTreeMap::new(),
+        abi::types::stdio_mode::INHERIT,
+        abi::types::stdio_mode::INHERIT,
+        abi::types::stdio_mode::INHERIT,
+        0,
+        &[],
+    ) {
+        Ok(resp) => info!("SPROUT: Spawned early /hosts mount (PID={})", resp.child_tid),
+        Err(e) => {
+            warn!("SPROUT: Failed to spawn early /hosts mount: {:?}", e);
+        }
+    }
+}
+
 pub fn setup_network_stack(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     let _ = stem::thread::spawn_task(move || {
+        stem::sleep_ms(100);
+        mount_hosts_cache();
         stem::sleep_ms(500);
         info!("SPROUT: Waiting for /dev/net/virtio0/rx before applying /etc/fstab mounts...");
         loop {
@@ -648,7 +670,8 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     info!("SPROUT: Setting up serial shell on /dev/console...");
     let shell_path = select_serial_shell();
 
-    let open_console = || stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR);
+    let open_console =
+        || stem::syscall::vfs::vfs_open("/dev/console", abi::syscall::vfs_flags::O_RDWR);
 
     // Use separate handles for stdin/stdout/stderr so spawn handoff does not
     // invalidate shell output streams when one handle is consumed.
@@ -681,7 +704,7 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         &shell_path,
         &[shell_path.as_bytes()],
         &alloc::collections::BTreeMap::new(),
-        abi::types::stdio_mode::handle(stdin_fd), // stdin
+        abi::types::stdio_mode::handle(stdin_fd),  // stdin
         abi::types::stdio_mode::handle(stdout_fd), // stdout
         abi::types::stdio_mode::handle(stderr_fd), // stderr
         0,

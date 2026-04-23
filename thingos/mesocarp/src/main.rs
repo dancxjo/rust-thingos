@@ -146,8 +146,20 @@ fn mount_point_from_args() -> String {
         return DEFAULT_MOUNT_POINT.to_string();
     }
     let args = stem::utils::parse_argv(&buf);
-    if args.len() >= 2 {
-        if let Ok(path) = core::str::from_utf8(args[1]) {
+    // mount(8) launches providers as:
+    //   /bin/mesocarp <device> <target>
+    // while direct/debug invocations may only pass <target>. Prefer the
+    // target argument when it is present so fstab's "none /hosts mdns" mounts
+    // at /hosts, not at a literal "none" path.
+    let mount_arg = if args.len() >= 3 {
+        Some(args[2])
+    } else if args.len() >= 2 {
+        Some(args[1])
+    } else {
+        None
+    };
+    if let Some(arg) = mount_arg {
+        if let Ok(path) = core::str::from_utf8(arg) {
             let trimmed = path.trim();
             if !trimmed.is_empty() {
                 return trimmed.to_string();
@@ -324,20 +336,6 @@ fn write_ctl(path: &str, cmd: &str) -> Result<(), Errno> {
     let res = vfs_write(fd, cmd.as_bytes()).map(|_| ());
     let _ = vfs_close(fd);
     res
-}
-
-/// Wait until netd's `/net/udp/new` is reachable. Mesocarp is typically
-/// started before netd has finished DHCP, so we spin for a bounded number
-/// of attempts before giving up (and running without a socket).
-fn wait_for_netd() -> bool {
-    for _ in 0..50 {
-        if let Ok(fd) = vfs_open("/net/udp/new", O_RDONLY | O_NONBLOCK) {
-            let _ = vfs_close(fd);
-            return true;
-        }
-        stem::time::sleep_ms(200);
-    }
-    false
 }
 
 /// One-shot setup + main event loop.
