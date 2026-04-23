@@ -59,7 +59,7 @@
 //!         VfsRpcOp::Close => ProviderResponse::ok_empty(),
 //!         _ => ProviderResponse::err(Errno::ENOSYS),
 //!     };
-//!     lp.send_response(req.resp_port, resp).unwrap();
+//!     lp.send_response(&req, resp).unwrap();
 //! }
 //! ```
 

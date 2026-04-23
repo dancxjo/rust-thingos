@@ -764,7 +764,7 @@ fn spawn_cache_mount(shared: Arc<SharedState>) -> Result<(), Errno> {
                 }
             };
             let resp = dispatch_cache(&mut provider, req.op, &req.payload);
-            send_response(&lp, req.resp_port, resp);
+            send_response(&lp, &req, resp);
         }
     })?;
     Ok(())
@@ -802,16 +802,16 @@ fn run_https_mount(fixed_host: Option<String>, mount_point: &str, shared: Arc<Sh
             }
         };
         let resp = dispatch(&mut provider, req.op, &req.payload);
-        send_response(&lp, req.resp_port, resp);
+        send_response(&lp, &req, resp);
     }
 
     info!("httpsd: main RPC loop ended - exiting");
     stem::syscall::exit(0);
 }
 
-fn send_response(lp: &ProviderLoop, resp_port: u32, resp: ProviderResponse) {
+fn send_response(lp: &ProviderLoop, req: &ipc_helpers::provider::ProviderRequest, resp: ProviderResponse) {
     loop {
-        match lp.send_response(resp_port, resp.clone()) {
+        match lp.send_response(req, resp.clone()) {
             Ok(_) => return,
             Err(Errno::EAGAIN) => {
                 stem::syscall::yield_now();

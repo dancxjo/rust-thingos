@@ -9,6 +9,7 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
+use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
 use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
@@ -22,9 +23,14 @@ use crate::syscall::validate::{copyin, copyout};
 
 /// Serialization state for VFS RPCs.
 ///
-/// Since the VFS RPC protocol lacks request IDs, only one thread may have an
-/// in-flight RPC at a time. This struct implements a sleep-lock to serialize
-/// access to the provider ports without spinning.
+/// This struct manages inflight RPCs using 16-bit request IDs for multiplexing,
+/// allowing multiple threads to wait for responses concurrently.
+struct RpcState {
+    tainted: bool,
+    waiters: BTreeMap<u16, Arc<WaitQueue>>,
+    responses: BTreeMap<u16, Vec<u8>>,
+}
+
 struct ProviderRpc {
     /// The provider's request port (kernel → provider).
     req: crate::ipc::Sender,
@@ -34,12 +40,8 @@ struct ProviderRpc {
     /// request header.
     resp_write_handle: u32,
 
-    /// Sleep-lock state: true if an RPC is in progress.
-    busy: core::sync::atomic::AtomicBool,
-    /// If true, a timeout occurred and the response stream is out-of-sync.
-    tainted: core::sync::atomic::AtomicBool,
-    /// Waiters for the sleep-lock.
-    rpc_wait: WaitQueue,
+    next_req_id: core::sync::atomic::AtomicU16,
+    state: Mutex<RpcState>,
 }
 
 impl ProviderRpc {
@@ -52,73 +54,35 @@ impl ProviderRpc {
             req: crate::ipc::Sender::new(req_port),
             resp: crate::ipc::Receiver::new(resp_port),
             resp_write_handle,
-            busy: core::sync::atomic::AtomicBool::new(false),
-            tainted: core::sync::atomic::AtomicBool::new(false),
-            rpc_wait: WaitQueue::new(),
+            next_req_id: core::sync::atomic::AtomicU16::new(1),
+            state: Mutex::new(RpcState {
+                tainted: false,
+                waiters: BTreeMap::new(),
+                responses: BTreeMap::new(),
+            }),
         }
     }
 
-    /// Perform a serialized, blocking round-trip RPC with the provider.
+    /// Perform a multiplexed, asynchronous round-trip RPC with the provider.
     fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
         let tid = unsafe { crate::sched::current_tid_current() };
-        crate::ktrace!("VFS RPC: tid={} op={:?} begin", tid, op);
+        let req_id = self.next_req_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        crate::ktrace!("VFS RPC: tid={} req_id={} op={:?} begin", tid, req_id, op);
 
-        if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
-            crate::ktrace!("VFS RPC: tid={} op={:?} rejected (provider is already tainted/stalled)", tid, op);
-            return Err(Errno::EIO);
-        }
-
-        // 1. Acquire sleep-lock
-        while self.busy.swap(true, core::sync::atomic::Ordering::Acquire) {
-            // Re-check tainted while waiting
-            if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
+        {
+            let state = self.state.lock();
+            if state.tainted {
+                crate::ktrace!(
+                    "VFS RPC: tid={} req_id={} op={:?} rejected (tainted)",
+                    tid,
+                    req_id,
+                    op
+                );
                 return Err(Errno::EIO);
             }
-
-            crate::ktrace!("VFS RPC: tid={} op={:?} waiting for lock", tid, op);
-            self.rpc_wait.push_back(tid);
-            unsafe {
-                crate::sched::block_current_erased();
-            }
-            self.rpc_wait.remove(tid);
-
-            if crate::sched::take_pending_interrupt_current() {
-                crate::ktrace!("VFS RPC: tid={} op={:?} interrupted while waiting", tid, op);
-                return Err(Errno::EINTR);
-            }
         }
 
-        // 2. Perform the actual I/O, unless we were tainted while waiting
-        if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
-            self.busy.store(false, core::sync::atomic::Ordering::Release);
-            self.rpc_wait.wake_all(); // Wake everyone so they can see we're dead
-            return Err(Errno::EIO);
-        }
-
-        let res = self.do_rpc(op, payload);
-        if let Ok(ref resp) = res {
-            if resp.len() > 0 && resp[0] != 0 {
-                crate::ktrace!("VFS RPC: op={:?} returned error {}", op, resp[0]);
-            }
-        }
-
-        // 3. Release sleep-lock
-        self.busy.store(false, core::sync::atomic::Ordering::Release);
-        
-        // If we just timed out, we might have tainted the provider. 
-        // In that case, wake everyone so they can fail fast.
-        if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
-            self.rpc_wait.wake_all();
-        } else {
-            self.rpc_wait.wake_one();
-        }
-
-        crate::ktrace!("VFS RPC: tid={} op={:?} end result={:?}", tid, op, res.as_ref().map(|v| v.len()));
-        res
-    }
-
-    fn do_rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
-        let hdr = VfsRpcReqHeader { resp_port: self.resp_write_handle, op: op as u8, _pad: [0, 0] };
+        let hdr = VfsRpcReqHeader { resp_port: self.resp_write_handle, op: op as u8, req_id };
         let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
         let mut msg = vec![0u8; hdr_size + payload.len()];
         unsafe {
@@ -132,82 +96,179 @@ impl ProviderRpc {
 
         crate::ipc::diag::VFS_RPC_REQUESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
+        let wait_queue = Arc::new(WaitQueue::new());
+        {
+            let mut state = self.state.lock();
+            if state.tainted {
+                return Err(Errno::EIO);
+            }
+            state.waiters.insert(req_id, wait_queue.clone());
+        }
+
         let written = self.req.send(&msg);
         if written < msg.len() {
             crate::ipc::diag::record_dead_provider_error();
+            let mut state = self.state.lock();
+            state.tainted = true;
+            state.waiters.remove(&req_id);
+            for wq in state.waiters.values() {
+                wq.wake_all();
+            }
             return Err(Errno::EIO);
         }
 
-        let mut resp_buf = vec![0u8; VFS_RPC_MAX_RESP];
-        let n = self.recv_response(op, &mut resp_buf)?;
-        resp_buf.truncate(n);
-        Ok(resp_buf)
-    }
-
-    fn recv_response(&self, op: VfsRpcOp, buf: &mut [u8]) -> SysResult<usize> {
-        let tid = unsafe { crate::sched::current_tid_current() };
         let start_ns = crate::time::monotonic_now_ns();
         let timeout_ns = 5 * crate::time::NANOS_PER_SEC;
         let deadline_ns = start_ns + timeout_ns;
-
-        // Calculate deadline in ticks for the scheduler (100Hz = 10ms per tick)
         let current_tick = crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
         let deadline_tick = current_tick + 500; // 5s timeout
 
+        let mut buf = vec![0u8; VFS_RPC_MAX_RESP];
+
         loop {
-            // 1. Try non-blocking receive
-            let n = self.resp.try_recv(buf);
-            if n > 0 {
-                crate::sched::unregister_timeout_wake_current(tid);
-                return Ok(n);
+            // Check if our response is already buffered
+            {
+                let mut state = self.state.lock();
+                if state.tainted {
+                    return Err(Errno::EIO);
+                }
+                if let Some(resp) = state.responses.remove(&req_id) {
+                    state.waiters.remove(&req_id);
+                    if resp.len() < 3 {
+                        return Err(Errno::EIO);
+                    }
+                    let status = resp[2];
+                    if status != 0 {
+                        crate::ktrace!(
+                            "VFS RPC: tid={} req_id={} op={:?} error {}",
+                            tid,
+                            req_id,
+                            op,
+                            status
+                        );
+                        return Err(errno_from_u8(status));
+                    }
+                    return Ok(resp[3..].to_vec());
+                }
             }
 
-            // 2. Check for port closure
+            // Try to receive from port (non-blocking)
+            let n = self.resp.try_recv(&mut buf);
+            if n > 0 {
+                if n >= 3 {
+                    let resp_req_id = u16::from_le_bytes([buf[0], buf[1]]);
+                    let mut state = self.state.lock();
+                    if resp_req_id == req_id {
+                        state.waiters.remove(&req_id);
+                        let status = buf[2];
+                        if status != 0 {
+                            crate::ktrace!(
+                                "VFS RPC: tid={} req_id={} op={:?} error {}",
+                                tid,
+                                req_id,
+                                op,
+                                status
+                            );
+                            return Err(errno_from_u8(status));
+                        }
+                        return Ok(buf[3..n].to_vec());
+                    } else {
+                        // Someone else's response
+                        state.responses.insert(resp_req_id, buf[..n].to_vec());
+                        if let Some(wq) = state.waiters.get(&resp_req_id) {
+                            wq.wake_one();
+                        }
+                    }
+                } else {
+                    crate::kwarn!("VFS RPC: Invalid response length {}", n);
+                }
+                // We did work, loop again immediately
+                continue;
+            }
+
+            // Check port closure
             if !self.resp.has_writers() {
-                crate::sched::unregister_timeout_wake_current(tid);
                 crate::ipc::diag::record_dead_provider_error();
+                let mut state = self.state.lock();
+                state.tainted = true;
+                state.waiters.remove(&req_id);
+                for wq in state.waiters.values() {
+                    wq.wake_all();
+                }
                 return Err(Errno::EPIPE);
             }
 
-            // 3. Check for timeout (high precision)
+            // Check timeout
             let now_ns = crate::time::monotonic_now_ns();
             if now_ns >= deadline_ns {
-                crate::sched::unregister_timeout_wake_current(tid);
-                crate::kerror!(
-                    "VFS RPC: tid={} op={:?} resp_port={} TIMEOUT (5s) - tainting provider",
-                    tid,
-                    op,
-                    self.resp_write_handle
-                );
-                self.tainted.store(true, core::sync::atomic::Ordering::Release);
+                crate::kerror!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
+                let mut state = self.state.lock();
+                state.tainted = true;
+                state.waiters.remove(&req_id);
+                for wq in state.waiters.values() {
+                    wq.wake_all();
+                }
                 return Err(Errno::ETIMEDOUT);
             }
 
-            // 4. Register for wake-up on both data and timeout
+            // Sleep
             self.resp.add_waiter(tid);
+            wait_queue.push_back(tid);
             crate::sched::register_timeout_wake_current(tid, deadline_tick);
 
-            // Double check after adding waiter to avoid race condition
-            let n = self.resp.try_recv(buf);
-            if n > 0 {
+            // Double check before sleeping to avoid race condition
+            let n = self.resp.try_recv(&mut buf);
+            let has_buffered = {
+                let state = self.state.lock();
+                state.responses.contains_key(&req_id) || state.tainted
+            };
+
+            if n > 0 || has_buffered {
                 self.resp.remove_waiter(tid);
+                wait_queue.remove(tid);
                 crate::sched::unregister_timeout_wake_current(tid);
-                return Ok(n);
+
+                if n > 0 {
+                    if n >= 3 {
+                        let resp_req_id = u16::from_le_bytes([buf[0], buf[1]]);
+                        let mut state = self.state.lock();
+                        if resp_req_id == req_id {
+                            state.waiters.remove(&req_id);
+                            let status = buf[2];
+                            if status != 0 {
+                                crate::ktrace!(
+                                    "VFS RPC: tid={} req_id={} op={:?} error {}",
+                                    tid,
+                                    req_id,
+                                    op,
+                                    status
+                                );
+                                return Err(errno_from_u8(status));
+                            }
+                            return Ok(buf[3..n].to_vec());
+                        } else {
+                            state.responses.insert(resp_req_id, buf[..n].to_vec());
+                            if let Some(wq) = state.waiters.get(&resp_req_id) {
+                                wq.wake_one();
+                            }
+                        }
+                    }
+                }
+                continue;
             }
 
-            // 5. Block until woken by either data OR timeout OR interrupt
-            crate::ktrace!("VFS RPC: tid={} waiting for response (deadline_tick={})...", tid, deadline_tick);
             unsafe {
                 crate::sched::block_current_erased();
             }
-            
-            // 6. Post-block cleanup
+
             self.resp.remove_waiter(tid);
-            // unregister_timeout_wake_current is idempotent and will be called again if we loop
-            // or exit. We don't call it here to keep the loop tight.
+            wait_queue.remove(tid);
 
             if crate::sched::take_pending_interrupt_current() {
                 crate::sched::unregister_timeout_wake_current(tid);
+                // On interrupt, we are no longer waiting.
+                let mut state = self.state.lock();
+                state.waiters.remove(&req_id);
                 return Err(Errno::EINTR);
             }
         }
@@ -282,13 +343,7 @@ impl VfsDriver for ProviderFs {
         payload[off..off + 4].copy_from_slice(&(new_bytes.len() as u32).to_le_bytes());
         payload[off + 4..].copy_from_slice(new_bytes);
 
-        let resp = self.rpc.rpc(VfsRpcOp::Rename, &payload)?;
-        if resp.is_empty() {
-            return Err(Errno::EIO);
-        }
-        if resp[0] != 0 {
-            return Err(errno_from_u8(resp[0]));
-        }
+        let _resp = self.rpc.rpc(VfsRpcOp::Rename, &payload)?;
         Ok(())
     }
 }
@@ -302,16 +357,10 @@ impl Drop for ProviderFs {
 }
 
 fn parse_response_handle(resp: &[u8]) -> SysResult<u64> {
-    if resp.is_empty() {
+    if resp.len() < 8 {
         return Err(Errno::EIO);
     }
-    if resp[0] != 0 {
-        return Err(errno_from_u8(resp[0]));
-    }
-    if resp.len() < 9 {
-        return Err(Errno::EIO);
-    }
-    Ok(u64::from_le_bytes([resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7], resp[8]]))
+    Ok(u64::from_le_bytes([resp[0], resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7]]))
 }
 
 // ── ProviderNode ─────────────────────────────────────────────────────────────
@@ -329,9 +378,7 @@ fn append_readdir_stream_entry(
     buf: &mut [u8],
     written: &mut usize,
 ) -> bool {
-    let entry_stream_len = u64::try_from(name.len())
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
+    let entry_stream_len = u64::try_from(name.len()).unwrap_or(u64::MAX).saturating_add(1);
     if *virtual_pos + entry_stream_len > offset {
         let start_in_entry = if offset > *virtual_pos {
             usize::try_from(offset - *virtual_pos).unwrap_or(usize::MAX)
@@ -419,26 +466,20 @@ impl VfsNode for ProviderNode {
             payload[16..20].copy_from_slice(&request_len.to_le_bytes());
 
             let resp = self.rpc.rpc(VfsRpcOp::Readdir, &payload)?;
-            if resp.is_empty() {
-                return Err(Errno::EIO);
-            }
-            if resp[0] != 0 {
-                return Err(errno_from_u8(resp[0]));
-            }
-            if resp.len() < 5 {
+            if resp.len() < 4 {
                 return Err(Errno::EIO);
             }
 
-            let payload_len = u32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]) as usize;
-            if resp.len() < 5 + payload_len {
+            let payload_len = u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]) as usize;
+            if resp.len() < 4 + payload_len {
                 crate::kwarn!(
                     "VFS provider readdir: truncated response payload len={} actual={}",
                     payload_len,
-                    resp.len().saturating_sub(5)
+                    resp.len().saturating_sub(4)
                 );
                 return Err(Errno::EIO);
             }
-            let data = &resp[5..5 + payload_len];
+            let data = &resp[4..4 + payload_len];
             if data.is_empty() {
                 return Ok(written);
             }
@@ -452,7 +493,7 @@ impl VfsNode for ProviderNode {
                     return Err(Errno::EIO);
                 }
 
-                let name = &data[read_ptr + 10 .. read_ptr + entry_len];
+                let name = &data[read_ptr + 10..read_ptr + entry_len];
                 if append_readdir_stream_entry(name, offset, &mut virtual_pos, buf, &mut written) {
                     return Ok(written);
                 }
@@ -478,14 +519,8 @@ impl VfsNode for ProviderNode {
         if resp.is_empty() {
             return Err(Errno::EIO);
         }
-        if resp[0] != 0 {
-            return Err(errno_from_u8(resp[0]));
-        }
-        if resp.len() < 2 {
-            return Err(Errno::EIO);
-        }
-        let val_type = resp[1];
-        Ok((val_type, resp[2..].to_vec()))
+        let val_type = resp[0];
+        Ok((val_type, resp[1..].to_vec()))
     }
 
     fn attr_set(&self, name: &str, value: &[u8], value_type: u8, flags: u8) -> SysResult<()> {
@@ -509,13 +544,7 @@ impl VfsNode for ProviderNode {
         payload[16..16 + name_bytes.len()].copy_from_slice(name_bytes);
         payload[16 + name_bytes.len()..].copy_from_slice(value);
 
-        let resp = self.rpc.rpc(VfsRpcOp::AttrSet, &payload)?;
-        if resp.is_empty() {
-            return Err(Errno::EIO);
-        }
-        if resp[0] != 0 {
-            return Err(errno_from_u8(resp[0]));
-        }
+        let _resp = self.rpc.rpc(VfsRpcOp::AttrSet, &payload)?;
         Ok(())
     }
 
@@ -526,26 +555,14 @@ impl VfsNode for ProviderNode {
         payload[8..10].copy_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         payload[10..].copy_from_slice(name_bytes);
 
-        let resp = self.rpc.rpc(VfsRpcOp::AttrRemove, &payload)?;
-        if resp.is_empty() {
-            return Err(Errno::EIO);
-        }
-        if resp[0] != 0 {
-            return Err(errno_from_u8(resp[0]));
-        }
+        let _resp = self.rpc.rpc(VfsRpcOp::AttrRemove, &payload)?;
         Ok(())
     }
 
     fn attr_list(&self, buf: &mut [u8]) -> SysResult<usize> {
         let payload = self.handle.to_le_bytes();
         let resp = self.rpc.rpc(VfsRpcOp::AttrList, &payload)?;
-        if resp.is_empty() {
-            return Err(Errno::EIO);
-        }
-        if resp[0] != 0 {
-            return Err(errno_from_u8(resp[0]));
-        }
-        let data = &resp[1..];
+        let data = &resp[..];
         let n = data.len().min(buf.len());
         buf[..n].copy_from_slice(&data[..n]);
         Ok(n)
@@ -575,21 +592,15 @@ impl VfsNode for ProviderNode {
             }
         }
         let resp = self.rpc.rpc(VfsRpcOp::DeviceCall, &payload)?;
-        if resp.is_empty() {
+        if resp.len() < 8 {
             return Err(Errno::EIO);
         }
-        if resp[0] != 0 {
-            return Err(errno_from_u8(resp[0]));
-        }
-        if resp.len() < 9 {
-            return Err(Errno::EIO);
-        }
-        let ret_val = u32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]);
-        let actual_out_len = u32::from_le_bytes([resp[5], resp[6], resp[7], resp[8]]) as usize;
+        let ret_val = u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]);
+        let actual_out_len = u32::from_le_bytes([resp[4], resp[5], resp[6], resp[7]]) as usize;
         if actual_out_len > 0 && out_len > 0 {
-            let copy_n = actual_out_len.min(out_len).min(resp.len() - 9);
+            let copy_n = actual_out_len.min(out_len).min(resp.len() - 8);
             unsafe {
-                copyout(call.out_ptr as usize, &resp[9..9 + copy_n])?;
+                copyout(call.out_ptr as usize, &resp[8..8 + copy_n])?;
             }
         }
         Ok(ret_val as usize)
@@ -633,51 +644,33 @@ pub fn notify_by_port(port_id: u32, handle: u64, revents: u16) -> SysResult<()> 
 }
 
 fn parse_response_read(resp: &[u8], buf: &mut [u8]) -> SysResult<usize> {
-    if resp.is_empty() {
+    if resp.len() < 4 {
         return Err(Errno::EIO);
     }
-    if resp[0] != 0 {
-        return Err(errno_from_u8(resp[0]));
-    }
-    if resp.len() < 5 {
-        return Err(Errno::EIO);
-    }
-    let n = u32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]) as usize;
-    let data = &resp[5..];
+    let n = u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]) as usize;
+    let data = &resp[4..];
     let copy_n = n.min(data.len()).min(buf.len());
     buf[..copy_n].copy_from_slice(&data[..copy_n]);
     Ok(copy_n)
 }
 
 fn parse_response_u32(resp: &[u8]) -> SysResult<u32> {
-    if resp.is_empty() {
+    if resp.len() < 4 {
         return Err(Errno::EIO);
     }
-    if resp[0] != 0 {
-        return Err(errno_from_u8(resp[0]));
-    }
-    if resp.len() < 5 {
-        return Err(Errno::EIO);
-    }
-    Ok(u32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]))
+    Ok(u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]))
 }
 
 fn parse_response_stat(resp: &[u8]) -> SysResult<VfsStat> {
-    if resp.is_empty() {
+    if resp.len() < 20 {
         return Err(Errno::EIO);
     }
-    if resp[0] != 0 {
-        return Err(errno_from_u8(resp[0]));
-    }
-    if resp.len() < 21 {
-        return Err(Errno::EIO);
-    }
-    let mode = u32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]);
+    let mode = u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]);
     let size = u64::from_le_bytes([
-        resp[5], resp[6], resp[7], resp[8], resp[9], resp[10], resp[11], resp[12],
+        resp[4], resp[5], resp[6], resp[7], resp[8], resp[9], resp[10], resp[11],
     ]);
     let ino = u64::from_le_bytes([
-        resp[13], resp[14], resp[15], resp[16], resp[17], resp[18], resp[19], resp[20],
+        resp[12], resp[13], resp[14], resp[15], resp[16], resp[17], resp[18], resp[19],
     ]);
     Ok(VfsStat { mode, size, ino, ..Default::default() })
 }
@@ -687,13 +680,7 @@ fn parse_response_stat(resp: &[u8]) -> SysResult<VfsStat> {
 /// Wire layout on success: `[status=0][target_bytes...]`.  The target is
 /// returned as a UTF-8 string — non-UTF-8 targets produce `EIO`.
 fn parse_response_readlink(resp: &[u8]) -> SysResult<alloc::string::String> {
-    if resp.is_empty() {
-        return Err(Errno::EIO);
-    }
-    if resp[0] != 0 {
-        return Err(errno_from_u8(resp[0]));
-    }
-    match alloc::string::String::from_utf8(resp[1..].to_vec()) {
+    match alloc::string::String::from_utf8(resp.to_vec()) {
         Ok(s) => Ok(s),
         Err(_) => Err(Errno::EIO),
     }
@@ -782,21 +769,13 @@ mod tests {
 
     #[test]
     fn parse_response_handle_ok() {
-        let mut resp = vec![0u8; 9];
-        resp[0] = 0; // status OK
-        resp[1..9].copy_from_slice(&42u64.to_le_bytes());
+        let mut resp = vec![0u8; 8];
+        resp[0..8].copy_from_slice(&42u64.to_le_bytes());
         assert_eq!(parse_response_handle(&resp).unwrap(), 42u64);
     }
 
     #[test]
-    fn parse_response_handle_error_enoent() {
-        let resp = vec![2u8]; // ENOENT
-        assert!(matches!(parse_response_handle(&resp), Err(Errno::ENOENT)));
-    }
-
-    #[test]
     fn parse_response_handle_too_short() {
-        // Status is OK (0) but only 2 payload bytes — need 8
         let resp = vec![0u8, 0u8, 1u8];
         assert!(matches!(parse_response_handle(&resp), Err(Errno::EIO)));
     }
@@ -810,16 +789,9 @@ mod tests {
 
     #[test]
     fn parse_response_u32_ok() {
-        let mut resp = vec![0u8; 5];
-        resp[0] = 0;
-        resp[1..5].copy_from_slice(&1024u32.to_le_bytes());
+        let mut resp = vec![0u8; 4];
+        resp[0..4].copy_from_slice(&1024u32.to_le_bytes());
         assert_eq!(parse_response_u32(&resp).unwrap(), 1024u32);
-    }
-
-    #[test]
-    fn parse_response_u32_error_eagain() {
-        let resp = vec![11u8]; // EAGAIN
-        assert!(matches!(parse_response_u32(&resp), Err(Errno::EAGAIN)));
     }
 
     #[test]
@@ -829,7 +801,7 @@ mod tests {
 
     #[test]
     fn parse_response_u32_too_short() {
-        let resp = vec![0u8, 1u8]; // status OK, only 1 byte payload
+        let resp = vec![1u8]; // only 1 byte payload
         assert!(matches!(parse_response_u32(&resp), Err(Errno::EIO)));
     }
 
@@ -837,11 +809,10 @@ mod tests {
 
     #[test]
     fn parse_response_stat_ok() {
-        let mut resp = vec![0u8; 21]; // 1 (status) + 4 (mode) + 8 (size) + 8 (ino)
-        resp[0] = 0;
-        resp[1..5].copy_from_slice(&0o100644u32.to_le_bytes());
-        resp[5..13].copy_from_slice(&4096u64.to_le_bytes());
-        resp[13..21].copy_from_slice(&7u64.to_le_bytes());
+        let mut resp = vec![0u8; 20]; // 4 (mode) + 8 (size) + 8 (ino)
+        resp[0..4].copy_from_slice(&0o100644u32.to_le_bytes());
+        resp[4..12].copy_from_slice(&4096u64.to_le_bytes());
+        resp[12..20].copy_from_slice(&7u64.to_le_bytes());
         let stat = parse_response_stat(&resp).unwrap();
         assert_eq!(stat.mode, 0o100644);
         assert_eq!(stat.size, 4096);
@@ -849,14 +820,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_response_stat_error_eacces() {
-        let resp = vec![13u8]; // EACCES
-        assert!(matches!(parse_response_stat(&resp), Err(Errno::EACCES)));
-    }
-
-    #[test]
     fn parse_response_stat_too_short() {
-        let resp = vec![0u8; 10]; // status OK but only 9 payload bytes (need 20)
+        let resp = vec![0u8; 9]; // only 9 payload bytes (need 20)
         assert!(matches!(parse_response_stat(&resp), Err(Errno::EIO)));
     }
 
@@ -865,10 +830,9 @@ mod tests {
     #[test]
     fn parse_response_read_ok() {
         let data = b"hello";
-        let mut resp = vec![0u8; 1 + 4 + data.len()];
-        resp[0] = 0;
-        resp[1..5].copy_from_slice(&(data.len() as u32).to_le_bytes());
-        resp[5..].copy_from_slice(data);
+        let mut resp = vec![0u8; 4 + data.len()];
+        resp[0..4].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        resp[4..].copy_from_slice(data);
         let mut buf = [0u8; 16];
         let n = parse_response_read(&resp, &mut buf).unwrap();
         assert_eq!(n, 5);
@@ -879,21 +843,13 @@ mod tests {
     fn parse_response_read_buf_smaller_than_data() {
         // Provider reports 10 bytes, but caller only has a 4-byte buf
         let data = b"0123456789";
-        let mut resp = vec![0u8; 1 + 4 + data.len()];
-        resp[0] = 0;
-        resp[1..5].copy_from_slice(&(data.len() as u32).to_le_bytes());
-        resp[5..].copy_from_slice(data);
+        let mut resp = vec![0u8; 4 + data.len()];
+        resp[0..4].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        resp[4..].copy_from_slice(data);
         let mut buf = [0u8; 4];
         let n = parse_response_read(&resp, &mut buf).unwrap();
         assert_eq!(n, 4);
         assert_eq!(&buf, b"0123");
-    }
-
-    #[test]
-    fn parse_response_read_error_eio() {
-        let resp = vec![5u8]; // EIO
-        let mut buf = [0u8; 8];
-        assert!(matches!(parse_response_read(&resp, &mut buf), Err(Errno::EIO)));
     }
 
     // ── parse_response_readlink ──────────────────────────────────────────────
@@ -901,36 +857,23 @@ mod tests {
     #[test]
     fn parse_response_readlink_ok() {
         let target = "/https/b.example/new";
-        let mut resp = vec![0u8; 1 + target.len()];
-        resp[0] = 0;
-        resp[1..].copy_from_slice(target.as_bytes());
+        let mut resp = vec![0u8; target.len()];
+        resp[0..].copy_from_slice(target.as_bytes());
         let got = parse_response_readlink(&resp).expect("readlink");
         assert_eq!(got, target);
     }
 
     #[test]
-    fn parse_response_readlink_propagates_errno() {
-        // EINVAL — a non-symlink node.
-        let resp = vec![22u8];
-        assert!(matches!(parse_response_readlink(&resp), Err(Errno::EINVAL)));
-    }
-
-    #[test]
     fn parse_response_readlink_empty_payload_is_ok_empty_string() {
         // A provider may serve an empty target (unusual, but valid).
-        let resp = vec![0u8];
+        let resp = vec![];
         assert_eq!(parse_response_readlink(&resp).unwrap(), "");
     }
 
     #[test]
     fn parse_response_readlink_non_utf8_maps_to_eio() {
-        let resp = vec![0u8, 0xFF, 0xFE, 0xFD];
+        let resp = vec![0xFF, 0xFE, 0xFD];
         assert!(matches!(parse_response_readlink(&resp), Err(Errno::EIO)));
-    }
-
-    #[test]
-    fn parse_response_readlink_empty_buf_is_eio() {
-        assert!(matches!(parse_response_readlink(&[]), Err(Errno::EIO)));
     }
 
     // ── Dead provider: request ring full → EIO ───────────────────────────────
@@ -1108,7 +1051,8 @@ mod tests {
         let msg_n = req_port.try_recv(&mut req_msg);
         assert!(msg_n >= core::mem::size_of::<VfsRpcReqHeader>() + 20);
         let payload_off = core::mem::size_of::<VfsRpcReqHeader>();
-        let sent_index = u64::from_le_bytes(req_msg[payload_off + 8..payload_off + 16].try_into().unwrap());
+        let sent_index =
+            u64::from_le_bytes(req_msg[payload_off + 8..payload_off + 16].try_into().unwrap());
         assert_eq!(sent_index, 0);
     }
 
@@ -1137,8 +1081,10 @@ mod tests {
         assert!(n1 >= core::mem::size_of::<VfsRpcReqHeader>() + 20);
         assert!(n2 >= core::mem::size_of::<VfsRpcReqHeader>() + 20);
         let payload_off = core::mem::size_of::<VfsRpcReqHeader>();
-        let first_index = u64::from_le_bytes(first[payload_off + 8..payload_off + 16].try_into().unwrap());
-        let second_index = u64::from_le_bytes(second[payload_off + 8..payload_off + 16].try_into().unwrap());
+        let first_index =
+            u64::from_le_bytes(first[payload_off + 8..payload_off + 16].try_into().unwrap());
+        let second_index =
+            u64::from_le_bytes(second[payload_off + 8..payload_off + 16].try_into().unwrap());
         assert_eq!(first_index, 0);
         assert_eq!(second_index, 2);
     }

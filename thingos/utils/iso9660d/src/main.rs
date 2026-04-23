@@ -368,7 +368,7 @@ fn main(_arg: usize) -> ! {
             Err(_) => break, // port closed — exit cleanly
         };
         let resp = dispatch_request(&fs, &dev, &req);
-        lp.send_response(req.resp_port, resp).ok();
+        lp.send_response(&req, resp).ok();
     }
 
     info!("iso9660d: provider port closed — exiting");

@@ -466,7 +466,7 @@ fn start_provider_thread(
                             resp_port
                         );
                     }
-                    if let Err(e) = provider_loop.send_response(resp_port, resp) {
+                    if let Err(e) = provider_loop.send_response(&req, resp) {
                         warn!("VIRTIO_NETD: send_response failed: {:?}", e);
                     } else {
                         if op != abi::vfs_rpc::VfsRpcOp::Poll {

@@ -356,7 +356,7 @@ fn main(boot_fd: usize) -> ! {
             Err(_) => break,
         };
         let resp = dispatch_vfs_rpc(&mut driver, &req);
-        lp.send_response(req.resp_port, resp).ok();
+        lp.send_response(&req, resp).ok();
     }
 
     info!("display_bootfb: VFS provider port closed — exiting");

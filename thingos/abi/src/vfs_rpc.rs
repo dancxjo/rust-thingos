@@ -7,15 +7,15 @@
 //!
 //! ## Wire layout
 //!
-//! Every **request** starts with a 5-byte header:
+//! Every **request** starts with a 7-byte header:
 //! ```text
-//! [resp_port: u32 LE] [op: u8]
+//! [resp_port: u32 LE] [op: u8] [req_id: u16 LE]
 //! ```
 //! followed by op-specific payload.
 //!
-//! Every **response** starts with a 1-byte status:
+//! Every **response** starts with a 3-byte header:
 //! ```text
-//! [status: u8]   0 = OK, non-zero = errno value
+//! [req_id: u16 LE] [status: u8]   0 = OK, non-zero = errno value
 //! ```
 //! followed by op-specific payload (only when status == 0).
 //!
@@ -127,7 +127,7 @@ impl VfsRpcOp {
 ///
 /// Layout (7 bytes):
 /// ```text
-/// [resp_port: u32 LE][op: u8][_pad: u8][_pad: u8]
+/// [resp_port: u32 LE][op: u8][req_id: u16 LE]
 /// ```
 /// The `resp_port` is the write thing of the kernel's private response port.
 /// After processing the request, the provider **must** send its response to
@@ -139,7 +139,8 @@ pub struct VfsRpcReqHeader {
     pub resp_port: u32,
     /// Operation code (one of [`VfsRpcOp`]).
     pub op: u8,
-    pub _pad: [u8; 2],
+    /// Request ID for multiplexing.
+    pub req_id: u16,
 }
 
 /// Packed directory entry as returned by the provider in a `Readdir` response.

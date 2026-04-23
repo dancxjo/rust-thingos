@@ -1016,7 +1016,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                     progress = true;
                     let prev_free = card.ring.free_space();
                     let (resp, ring_changed) = dispatch_rpc(req.op, &req.payload, &mut card);
-                    let _ = provider_loop.send_response(req.resp_port, resp);
+                    let _ = provider_loop.send_response(&req, resp);
 
                     if card.out0_subscribed && (ring_changed || card.ring.free_space() > prev_free)
                     {

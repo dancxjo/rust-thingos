@@ -381,7 +381,7 @@ fn run(mount_point: &str) -> ! {
             match prov_loop.try_next_request() {
                 Ok(Some(req)) => {
                     let resp = dispatch(&mut provider, req.op, &req.payload);
-                    if let Err(e) = prov_loop.send_response(req.resp_port, resp) {
+                    if let Err(e) = prov_loop.send_response(&req, resp) {
                         debug!("mesocarp: send_response failed: {:?}", e);
                     }
                 }

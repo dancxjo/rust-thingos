@@ -19,7 +19,7 @@
 //!             Err(_) => break,  // port closed — exit cleanly
 //!         };
 //!         let resp = dispatch(&req);
-//!         lp.send_response(req.resp_port, resp).ok();
+//!         lp.send_response(&req, resp).ok();
 //!     }
 //! }
 //!
@@ -44,9 +44,10 @@ use stem::syscall::port::{port_recv, port_send_all, port_try_recv};
 
 /// A decoded VFS RPC request from the kernel.
 pub struct ProviderRequest {
-    /// The response port the kernel is waiting on.  Pass this to
-    /// [`ProviderLoop::send_response`].
+    /// The response port the kernel is waiting on.
     pub resp_port: u32,
+    /// The request ID to include in the response.
+    pub req_id: u16,
     /// The operation code.
     pub op: VfsRpcOp,
     /// The op-specific payload bytes (after the 7-byte header).
@@ -274,7 +275,7 @@ impl ProviderLoop {
         let payload = self.pending[hdr_size..frame_len].to_vec();
         self.pending.drain(..frame_len);
 
-        Ok(Some(ProviderRequest { resp_port: hdr.resp_port, op, payload }))
+        Ok(Some(ProviderRequest { resp_port: hdr.resp_port, req_id: hdr.req_id, op, payload }))
     }
 
     /// Try to receive the next request without blocking.
@@ -356,13 +357,14 @@ impl ProviderLoop {
         }
     }
 
-    /// Send `response` back to the kernel on the given `resp_port`.
-    pub fn send_response(&self, resp_port: u32, response: ProviderResponse) -> Result<(), Errno> {
-        let total = 1 + response.payload.len();
+    /// Send `response` back to the kernel for the given `req`.
+    pub fn send_response(&self, req: &ProviderRequest, response: ProviderResponse) -> Result<(), Errno> {
+        let total = 3 + response.payload.len();
         let mut buf = alloc::vec![0u8; total.min(VFS_RPC_MAX_RESP)];
-        buf[0] = response.status;
-        let payload_len = response.payload.len().min(buf.len() - 1);
-        buf[1..1 + payload_len].copy_from_slice(&response.payload[..payload_len]);
-        port_send_all(resp_port, &buf[..1 + payload_len]).map(|_| ())
+        buf[0..2].copy_from_slice(&req.req_id.to_le_bytes());
+        buf[2] = response.status;
+        let payload_len = response.payload.len().min(buf.len() - 3);
+        buf[3..3 + payload_len].copy_from_slice(&response.payload[..payload_len]);
+        port_send_all(req.resp_port, &buf[..3 + payload_len]).map(|_| ())
     }
 }

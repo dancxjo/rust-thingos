@@ -115,7 +115,7 @@ fn main(_arg: usize) -> ! {
         info!("ipc_provider_demo: request #{} op={:?}", state.request_count, req.op);
 
         let resp = dispatch(&mut state, &req.op, &req.payload);
-        if let Err(e) = lp.send_response(req.resp_port, resp) {
+        if let Err(e) = lp.send_response(&req, resp) {
             warn!("ipc_provider_demo: send_response failed: {:?}", e);
         }
     }

@@ -119,21 +119,47 @@ fn get_args() -> Vec<String> {
 fn parse_config() -> NetdConfig {
     let mut cfg =
         NetdConfig { mount_point: DEFAULT_MOUNT_POINT.to_string(), ..NetdConfig::default() };
-    for arg in get_args() {
-        match arg.as_str() {
+    parse_config_from_args(&get_args(), &mut cfg);
+    cfg
+}
+
+fn parse_config_from_args(args: &[String], cfg: &mut NetdConfig) {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        match arg {
             "--oneshot" | "--once" => cfg.oneshot = true,
             "-h" | "--help" => cfg.help = true,
+            "--mount" => {
+                if i + 1 < args.len() {
+                    let candidate = args[i + 1].as_str();
+                    if candidate.starts_with('/') {
+                        cfg.mount_point = args[i + 1].clone();
+                    } else {
+                        warn!(
+                            "NETD: ignoring non-absolute --mount argument '{}' ; using {}",
+                            candidate, cfg.mount_point
+                        );
+                    }
+                    i += 1;
+                }
+            }
             _ if arg.starts_with('-') => {}
-            _ => cfg.mount_point = arg,
+            // mount(8) commonly passes "<device> <target>"; only treat
+            // absolute path args as mount targets.
+            _ if arg.starts_with('/') => cfg.mount_point = args[i].clone(),
+            _ => {
+                debug!("NETD: ignoring positional arg '{}'", arg);
+            }
         }
+        i += 1;
     }
-    cfg
 }
 
 fn print_usage() {
     let _ = stem::syscall::write(
         1,
-        b"usage: netd [--oneshot|--once] [--help]\n\
+        b"usage: netd [--oneshot|--once] [--mount /path] [--help] [mount-point]\n\
 --oneshot  probe the NIC, run DHCP once, print the result, and exit\n",
     );
 }
@@ -193,29 +219,6 @@ fn main(arg: usize) -> ! {
         }
     };
 
-    // Do not expose /net until the service can actively process RPCs.
-    // Mounting before DHCP can let early clients issue lookups while this
-    // thread is still blocked in DHCP, which triggers provider timeout taint.
-    let mount_point = cfg.mount_point.clone();
-    let mut net_provider = loop {
-        match NetVfsProvider::new(&mount_point, mac, mtu, initial_link_up) {
-            Some(provider) => break provider,
-            None => {
-                warn!("NETD: Failed to mount {}, retrying...", mount_point);
-                stem::time::sleep_ms(200);
-            }
-        }
-    };
-
-    net_provider.set_ip_config(
-        dhcp_config.ip,
-        dhcp_config.prefix_len,
-        dhcp_config.gateway,
-        dhcp_config.dns,
-    );
-    info!("NETD: Network ready");
-    debug!("NETD: entering VFS service loop");
-
     debug!("NETD: creating SocketApi...");
     let mut socket_api = SocketApi::new();
     debug!("NETD: allocating sockets_storage...");
@@ -234,6 +237,28 @@ fn main(arg: usize) -> ! {
     let _known_nic_units = scan_registered_nic_units();
     debug!("NETD: NIC units scanned.");
 
+    // Do not expose /net until the service can actively process RPCs.
+    // Mounting before startup init finishes can let early clients issue
+    // lookups while this thread is still preparing state, which may trigger
+    // provider timeout taint.
+    let mount_point = cfg.mount_point.clone();
+    let mut net_provider = loop {
+        match NetVfsProvider::new(&mount_point, mac, mtu, initial_link_up) {
+            Some(provider) => break provider,
+            None => {
+                warn!("NETD: Failed to mount {}, retrying...", mount_point);
+                stem::time::sleep_ms(200);
+            }
+        }
+    };
+
+    net_provider.set_ip_config(
+        dhcp_config.ip,
+        dhcp_config.prefix_len,
+        dhcp_config.gateway,
+        dhcp_config.dns,
+    );
+
     debug!("NETD: bridging request port to fd...");
     let req_fd =
         stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()).unwrap_or(0);
@@ -248,6 +273,9 @@ fn main(arg: usize) -> ! {
             }
         };
     debug!("NETD: watch fd={:?}", nic_watch_fd);
+
+    info!("NETD: Network ready");
+    debug!("NETD: entering VFS service loop");
 
     // ── Async DNS state ──────────────────────────────────────────────────
     // At most one DNS query is active at a time.  The query object lives
@@ -591,6 +619,8 @@ fn read_file_bytes(path: &str, buf: &mut [u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
+
     use super::*;
 
     #[test]
@@ -636,5 +666,32 @@ mod tests {
         // Trimming whitespace around each octet should work
         let mac = parse_mac("52:54: 00:12:34:56").unwrap();
         assert_eq!(mac, [0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn test_parse_config_ignores_supervisor_control_arg() {
+        let mut cfg =
+            NetdConfig { mount_point: DEFAULT_MOUNT_POINT.to_string(), ..NetdConfig::default() };
+        let args = alloc::vec!["0".to_string()];
+        parse_config_from_args(&args, &mut cfg);
+        assert_eq!(cfg.mount_point, DEFAULT_MOUNT_POINT);
+    }
+
+    #[test]
+    fn test_parse_config_prefers_absolute_mount_path() {
+        let mut cfg =
+            NetdConfig { mount_point: DEFAULT_MOUNT_POINT.to_string(), ..NetdConfig::default() };
+        let args = alloc::vec!["none".to_string(), "/net-alt".to_string()];
+        parse_config_from_args(&args, &mut cfg);
+        assert_eq!(cfg.mount_point, "/net-alt");
+    }
+
+    #[test]
+    fn test_parse_config_mount_flag_requires_absolute_path() {
+        let mut cfg =
+            NetdConfig { mount_point: DEFAULT_MOUNT_POINT.to_string(), ..NetdConfig::default() };
+        let args = alloc::vec!["--mount".to_string(), "net-alt".to_string()];
+        parse_config_from_args(&args, &mut cfg);
+        assert_eq!(cfg.mount_point, DEFAULT_MOUNT_POINT);
     }
 }
