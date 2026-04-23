@@ -15,6 +15,11 @@
 mod common;
 
 cfg_select! {
+    target_os = "thingos" => {
+        #[path = "../pal/thingos/args.rs"]
+        mod thingos;
+        pub use thingos::*;
+    }
     any(
         all(target_family = "unix", not(any(target_os = "espidf", target_os = "vita"))),
         target_os = "hermit",
@@ -49,11 +54,6 @@ cfg_select! {
     target_os = "xous" => {
         mod xous;
         pub use xous::*;
-    }
-    target_os = "thingos" => {
-        #[path = "../pal/thingos/args.rs"]
-        mod thingos;
-        pub use thingos::*;
     }
     target_os = "zkvm" => {
         mod zkvm;

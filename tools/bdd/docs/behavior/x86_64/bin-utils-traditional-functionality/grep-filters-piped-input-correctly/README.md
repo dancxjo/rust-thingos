@@ -1,6 +1,6 @@
 # ❌ Scenario: grep filters piped input correctly
 
-> Last run: 2026-04-22 23:37:17
+> Last run: 2026-04-22 22:38:22
 
 ## Steps
 

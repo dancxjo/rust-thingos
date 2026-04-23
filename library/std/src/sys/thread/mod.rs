@@ -1,4 +1,12 @@
 cfg_select! {
+    target_os = "thingos" => {
+        #[path = "../pal/thingos/thread.rs"]
+        pub(crate) mod thingos;
+        pub use thingos::{
+            Thread, DEFAULT_MIN_STACK_SIZE, available_parallelism, current_os_id,
+            sleep, yield_now, set_name,
+        };
+    }
     target_os = "hermit" => {
         mod hermit;
         pub use hermit::{Thread, available_parallelism, sleep, yield_now, DEFAULT_MIN_STACK_SIZE};
@@ -115,14 +123,6 @@ cfg_select! {
         #[expect(dead_code)]
         mod unsupported;
         pub use unsupported::{current_os_id, set_name};
-    }
-    target_os = "thingos" => {
-        #[path = "../pal/thingos/thread.rs"]
-        pub(crate) mod thingos;
-        pub use thingos::{
-            Thread, DEFAULT_MIN_STACK_SIZE, available_parallelism, current_os_id,
-            sleep, yield_now, set_name,
-        };
     }
     _ => {
         mod unsupported;

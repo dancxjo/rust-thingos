@@ -1,6 +1,11 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 cfg_select! {
+    target_os = "thingos" => {
+        #[path = "../pal/thingos/stdio.rs"]
+        mod thingos;
+        pub use thingos::*;
+    }
     any(target_family = "unix", target_os = "hermit", target_os = "wasi") => {
         mod unix;
         pub use unix::*;
@@ -44,11 +49,6 @@ cfg_select! {
     target_os = "zkvm" => {
         mod zkvm;
         pub use zkvm::*;
-    }
-    target_os = "thingos" => {
-        #[path = "../pal/thingos/stdio.rs"]
-        mod thingos;
-        pub use thingos::*;
     }
     _ => {
         mod unsupported;

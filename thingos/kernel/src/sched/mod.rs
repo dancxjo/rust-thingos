@@ -4271,9 +4271,12 @@ pub fn remove_task_completely<R: BootRuntime>(tid: TaskId) {
     }
 
     // 2. Remove from global registry (requires REGISTRY lock)
-    crate::task::registry::get_registry::<R>().remove(tid);
+    let removed = crate::task::registry::get_registry::<R>().remove(tid);
 
     rt.irq_restore(_irq);
+
+    // 3. Drop the removed task outside any locks
+    drop(removed);
 }
 
 fn format_optional_cpu(cpu: Option<usize>) -> alloc::string::String {

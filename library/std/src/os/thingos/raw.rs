@@ -2,7 +2,24 @@
 
 #![stable(feature = "os_thingos", since = "1.0.0")]
 
-use crate::ffi::{c_int, c_ulong};
+use crate::ffi::{c_int, c_long, c_longlong, c_ulong};
+
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type off_t = i64;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type dev_t = u64;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type ino_t = u64;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type mode_t = u32;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type nlink_t = u32;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type blksize_t = i64;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type blkcnt_t = i64;
+#[stable(feature = "os_thingos", since = "1.0.0")]
+pub type time_t = i64;
 
 #[stable(feature = "os_thingos", since = "1.0.0")]
 pub type uid_t = u32;

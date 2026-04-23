@@ -82,6 +82,7 @@ fn count_fd(in_fd: u32) -> Counts {
                     }
                 }
             }
+            Err(e) if e == stem::abi::errors::Errno::EINTR => continue,
             Err(_) => break,
         }
     }

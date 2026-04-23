@@ -6,6 +6,7 @@ Feature: Bin Utils Traditional Functionality
     And I type "echo hello world | wc -w" on the serial console
     Then the command output should strictly be "2"
 
+  @debug-grep
   Scenario: grep filters piped input correctly
     Given the machine is booted
     When I wait for the shell prompt

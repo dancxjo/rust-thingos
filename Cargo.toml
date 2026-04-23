@@ -176,7 +176,9 @@ members = [
   "thingos/utils/yes",
   "thingos/utils/which",
   "thingos/utils/xargs",
-  "tools/kindc",
+  "vendor/broot",
+  "vendor/runa",
+  "vendor/lsv",
   # tidy-alphabetical-end
 ]
 
@@ -232,7 +234,19 @@ codegen-units = 1
 # If you want to use a crate with local modifications, you can set a path or git dependency here.
 # For git dependencies, also add your source to ALLOWED_SOURCES in src/tools/tidy/src/extdeps.rs.
 [patch.crates-io]
-dirs = { path = "vendor/dirs" }
-dirs-sys = { path = "vendor/dirs-sys" }
+# ThingOS Platform Patches
+libc = { path = "vendor/libc" }
 errno = { path = "vendor/errno" }
 mio = { path = "vendor/mio" }
+crossterm = { path = "vendor/crossterm" }
+getrandom = { path = "vendor/getrandom" }
+libz-sys = { path = "vendor/libz-sys" }
+filedescriptor = { path = "vendor/filedescriptor" }
+
+# Utility Dependencies
+which = { path = "vendor/which" }
+directories = { path = "vendor/directories" }
+dirs-sys = { path = "vendor/dirs-sys" }
+dirs = { path = "vendor/dirs" }
+uzers = { path = "vendor/uzers" }
+trash = { path = "vendor/trash" }

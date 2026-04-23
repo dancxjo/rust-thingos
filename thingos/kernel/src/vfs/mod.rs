@@ -249,10 +249,14 @@ pub trait VfsNode: Send + Sync {
     /// Returns the number of bytes written.
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize>;
 
-    /// Return metadata for this node.
+    /// Called when metadata for this node is requested.
     fn stat(&self) -> SysResult<VfsStat>;
 
-    /// Called when the last reference to an open file is dropped.
+    /// Called when a new handle (reference) to this node is created.
+    /// Default: no-op.
+    fn open(&self) {}
+
+    /// Called when an open handle to this node is closed.
     /// Default: no-op.
     fn close(&self) {}
 

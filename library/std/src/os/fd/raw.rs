@@ -6,6 +6,8 @@
 use hermit_abi as libc;
 #[cfg(target_os = "motor")]
 use moto_rt::libc;
+#[cfg(target_os = "thingos")]
+use crate::os::thingos::raw as libc;
 
 #[cfg(target_os = "motor")]
 use super::owned::OwnedFd;

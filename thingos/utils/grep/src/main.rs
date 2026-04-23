@@ -56,6 +56,7 @@ fn read_all(fd: u32) -> Vec<u8> {
         match vfs_read(fd, &mut buf) {
             Ok(0) => break,
             Ok(n) => data.extend_from_slice(&buf[..n]),
+            Err(e) if e == stem::abi::errors::Errno::EINTR => continue,
             Err(_) => break,
         }
     }
