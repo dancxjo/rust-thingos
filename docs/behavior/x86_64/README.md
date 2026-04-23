@@ -1,12 +1,12 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-22 21:33:14
+> Last run: 2026-04-22 21:44:56
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [Bin Utils Traditional Functionality](bin-utils-traditional-functionality/README.md) | 3/5 | ❌ |
+| [Bin Utils Traditional Functionality](bin-utils-traditional-functionality/README.md) | 1/5 | ❌ |
 | [Boot progress milestone text reporting](boot-progress-milestone-text-reporting/README.md) | 3/4 | ❌ |
 | [Scheduler entry latency instrumentation](scheduler-entry-latency-instrumentation/README.md) | 1/1 | ✅ |
 | [HTTPS Fetch](https-fetch/README.md) | 0/1 | ❌ |
