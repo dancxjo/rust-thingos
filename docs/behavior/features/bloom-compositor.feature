@@ -20,3 +20,18 @@ Feature: Bloom compositor threading and responsiveness
     When I wait for the shell prompt
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
     Then the log should match pattern "bloom: reacting to wallpaper change"
+
+  Scenario: bloom I/O thread starts independently of the render loop
+    Given the machine is booted
+    Then the log should match pattern "bloom: I/O thread started"
+
+  Scenario: bloom input ingestion continues under render pressure
+    # Verifies that the I/O thread queues events independently of the render
+    # loop: two rapid wallpaper-change writes are both ingested and reacted to
+    # even if the render thread is busy presenting a frame.
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    Then the log should match pattern "bloom: I/O thread started"
+    And "bloom: reacting to wallpaper change" should appear at least 2 times

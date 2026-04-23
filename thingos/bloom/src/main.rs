@@ -153,6 +153,7 @@ fn main(arg: usize) -> ! {
         }
 
         let _ = stem::thread::spawn_task_detached(move || {
+            info!("bloom: I/O thread started");
             if ws.is_empty() {
                 return;
             }
