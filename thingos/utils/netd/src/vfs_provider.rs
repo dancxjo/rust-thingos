@@ -53,10 +53,11 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use abi::errors::Errno;
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp, VfsRpcReqHeader};
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
-use stem::syscall::port::{PortHandle, port_create, port_send, port_try_recv};
+use stem::syscall::port::{PortHandle, port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
 use stem::{info, warn};
 
@@ -172,6 +173,9 @@ pub struct NetVfsProvider {
     pub tx_packets: u64,
     /// RPC request staging buffer.
     req_buf: Vec<u8>,
+    /// Pending undecoded RPC bytes. Provider ports are byte streams and may
+    /// split or coalesce requests across recv calls.
+    pending: Vec<u8>,
     /// Pending DNS hostname to resolve (written by op_write to HANDLE_DNS_LOOKUP).
     dns_pending: Option<alloc::string::String>,
     /// Resolved DNS result (dotted-decimal IPv4 or error text).
@@ -218,6 +222,7 @@ impl NetVfsProvider {
             rx_packets: 0,
             tx_packets: 0,
             req_buf: alloc::vec![0u8; VFS_RPC_MAX_REQ],
+            pending: Vec::new(),
             dns_pending: None,
             dns_result: None,
             deferred_connects: Vec::new(),
@@ -238,6 +243,99 @@ impl NetVfsProvider {
         dns_server: Ipv4Address,
     ) {
         self.ip_config = Some(IpConfig { ip, prefix_len, gateway, dns_server });
+    }
+
+    fn try_parse_one(&mut self) -> Result<Option<(PortHandle, VfsRpcOp, u16, Vec<u8>)>, Errno> {
+        let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
+        if self.pending.len() < hdr_size {
+            return Ok(None);
+        }
+
+        let hdr: VfsRpcReqHeader =
+            unsafe { core::ptr::read_unaligned(self.pending.as_ptr() as *const VfsRpcReqHeader) };
+        let Some(op) = VfsRpcOp::from_u8(hdr.op) else {
+            return Err(Errno::EINVAL);
+        };
+
+        let payload_len = match op {
+            VfsRpcOp::Lookup => {
+                if self.pending.len() < hdr_size + 4 {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                let path_len = u32::from_le_bytes([p[0], p[1], p[2], p[3]]) as usize;
+                4 + path_len
+            }
+            VfsRpcOp::Read | VfsRpcOp::Readdir => 20,
+            VfsRpcOp::Write => {
+                if self.pending.len() < hdr_size + 20 {
+                    return Ok(None);
+                }
+                let p = &self.pending[hdr_size..];
+                let data_len = u32::from_le_bytes([p[16], p[17], p[18], p[19]]) as usize;
+                20 + data_len
+            }
+            VfsRpcOp::Stat | VfsRpcOp::Close | VfsRpcOp::UnsubscribeReady => 8,
+            VfsRpcOp::Poll | VfsRpcOp::SubscribeReady => 12,
+            VfsRpcOp::DeviceCall => return Err(Errno::ENOTSUP),
+            VfsRpcOp::Rename => return Err(Errno::ENOTSUP),
+            VfsRpcOp::AttrGet
+            | VfsRpcOp::AttrSet
+            | VfsRpcOp::AttrRemove
+            | VfsRpcOp::AttrList
+            | VfsRpcOp::Readlink => return Err(Errno::ENOTSUP),
+        };
+
+        if payload_len > (VFS_RPC_MAX_REQ - hdr_size) {
+            return Err(Errno::EINVAL);
+        }
+
+        let frame_len = hdr_size + payload_len;
+        if self.pending.len() < frame_len {
+            return Ok(None);
+        }
+
+        let payload = self.pending[hdr_size..frame_len].to_vec();
+        self.pending.drain(..frame_len);
+        Ok(Some((hdr.resp_port as PortHandle, op, hdr.req_id, payload)))
+    }
+
+    fn try_next_request(&mut self) -> Result<Option<(PortHandle, VfsRpcOp, u16, Vec<u8>)>, Errno> {
+        loop {
+            match self.try_parse_one() {
+                Ok(Some(req)) => return Ok(Some(req)),
+                Ok(None) => break,
+                Err(Errno::EINVAL) => {
+                    if self.pending.is_empty() {
+                        break;
+                    }
+                    self.pending.drain(..1);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        match port_try_recv(self.req_read, &mut self.req_buf) {
+            Ok(0) => Ok(None),
+            Ok(n) => {
+                self.pending.extend_from_slice(&self.req_buf[..n]);
+                loop {
+                    match self.try_parse_one() {
+                        Ok(Some(req)) => return Ok(Some(req)),
+                        Ok(None) => return Ok(None),
+                        Err(Errno::EINVAL) => {
+                            if self.pending.is_empty() {
+                                return Ok(None);
+                            }
+                            self.pending.drain(..1);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+            Err(Errno::EAGAIN) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Process all pending VFS RPC messages (non-blocking drain).
@@ -262,19 +360,21 @@ impl NetVfsProvider {
                 did_work = true; // Ensure we loop again immediately but give main loop a chance
                 break;
             }
-            match port_try_recv(self.req_read, &mut self.req_buf) {
-                Ok(n) if n > 0 => {
-                    let buf: &[u8] = unsafe {
-                        // Extend lifetime: we're about to pass it to handle_one which
-                        // completes before the next iteration touches req_buf.
-                        core::slice::from_raw_parts(self.req_buf.as_ptr(), n)
-                    };
-                    trace!("NETD: handling RPC n={}", n);
-                    self.handle_one(iface, device, socket_set, socket_api, buf);
+            match self.try_next_request() {
+                Ok(Some((resp_port, op, req_id, payload))) => {
+                    trace!("NETD: handling RPC op={:?} payload_len={}", op, payload.len());
+                    self.handle_decoded(
+                        iface, device, socket_set, socket_api, resp_port, op, req_id, &payload,
+                    );
                     did_work = true;
                     count += 1;
                 }
-                _ => break,
+                Ok(None) => break,
+                Err(Errno::ENOTSUP) => {
+                    did_work = true;
+                    count += 1;
+                }
+                Err(_) => break,
             }
         }
 
@@ -350,26 +450,17 @@ impl NetVfsProvider {
 
     // ── RPC dispatch ─────────────────────────────────────────────────────────
 
-    fn handle_one<D: smoltcp::phy::Device>(
+    fn handle_decoded<D: smoltcp::phy::Device>(
         &mut self,
         iface: &mut Interface,
         device: &mut D,
         socket_set: &mut SocketSet,
         socket_api: &mut SocketApi,
-        buf: &[u8],
+        resp_port: PortHandle,
+        op: VfsRpcOp,
+        req_id: u16,
+        payload: &[u8],
     ) {
-        let Some((resp_port, op_byte, req_id, payload)) = parse_rpc_header(buf) else {
-            return;
-        };
-
-        let op = match VfsRpcOp::from_u8(op_byte) {
-            Some(o) => o,
-            None => {
-                send_err(resp_port, req_id, E_NOTSUP);
-                return;
-            }
-        };
-
         match op {
             VfsRpcOp::Lookup => self.op_lookup(resp_port, req_id, payload),
             VfsRpcOp::Read => self.op_read(resp_port, req_id, payload, socket_set, socket_api),
@@ -498,8 +589,8 @@ impl NetVfsProvider {
         }
         let data = &payload[20..20 + data_len];
 
-        let result =
-            self.write_handle(handle, data, resp_port, req_id, iface, device, socket_set, socket_api);
+        let result = self
+            .write_handle(handle, data, resp_port, req_id, iface, device, socket_set, socket_api);
         match result {
             WriteResult::Ok(n) => send_write_ok(resp_port, req_id, n as u32),
             WriteResult::Error => send_err(resp_port, req_id, E_IO),
@@ -516,7 +607,13 @@ impl NetVfsProvider {
 
     // ── Readdir ───────────────────────────────────────────────────────────────
 
-    fn op_readdir(&self, resp_port: PortHandle, req_id: u16, payload: &[u8], socket_api: &SocketApi) {
+    fn op_readdir(
+        &self,
+        resp_port: PortHandle,
+        req_id: u16,
+        payload: &[u8],
+        socket_api: &SocketApi,
+    ) {
         if payload.len() < 20 {
             send_err(resp_port, req_id, E_INVAL);
             return;
@@ -1057,19 +1154,24 @@ impl NetVfsProvider {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - TCP_DYN_BASE) >> 8) as u32;
                 self.write_tcp(
-                    api_handle, sf, data, text, resp_port, req_id, iface, device, socket_set, socket_api,
+                    api_handle, sf, data, text, resp_port, req_id, iface, device, socket_set,
+                    socket_api,
                 )
             }
             // Dynamic UDP
             h if h >= UDP_DYN_BASE && h < ICMP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - UDP_DYN_BASE) >> 8) as u32;
-                self.write_udp(api_handle, sf, data, text, resp_port, req_id, socket_set, socket_api)
+                self.write_udp(
+                    api_handle, sf, data, text, resp_port, req_id, socket_set, socket_api,
+                )
             }
             h if h >= ICMP_DYN_BASE => {
                 let sf = (h & 0xFF) as u8;
                 let api_handle = ((h - ICMP_DYN_BASE) >> 8) as u32;
-                self.write_icmp(api_handle, sf, data, text, resp_port, req_id, socket_set, socket_api)
+                self.write_icmp(
+                    api_handle, sf, data, text, resp_port, req_id, socket_set, socket_api,
+                )
             }
             _ => WriteResult::NotSupported,
         }
@@ -1780,14 +1882,17 @@ mod tests {
 
     #[test]
     fn parse_rpc_header_returns_port_op_and_payload() {
-        let mut req = vec![0u8; core::mem::size_of::<VfsRpcReqHeader>() + 3];
+        let mut req = alloc::vec![0u8; core::mem::size_of::<VfsRpcReqHeader>() + 3];
         req[0..4].copy_from_slice(&7u32.to_le_bytes());
         req[4] = 3;
+        req[5..7].copy_from_slice(&0x1234u16.to_le_bytes());
         req[core::mem::size_of::<VfsRpcReqHeader>()..].copy_from_slice(&[0xAA, 0xBB, 0xCC]);
 
-        let (resp_port, op, payload) = parse_rpc_header(&req).expect("expected valid header");
+        let (resp_port, op, req_id, payload) =
+            parse_rpc_header(&req).expect("expected valid header");
         assert_eq!(resp_port, 7);
         assert_eq!(op, 3);
+        assert_eq!(req_id, 0x1234);
         assert_eq!(payload, &[0xAA, 0xBB, 0xCC]);
     }
 }
@@ -1808,14 +1913,14 @@ fn send_resp(port: PortHandle, req_id: u16, data: &[u8]) {
     let mut resp = Vec::with_capacity(2 + data.len());
     resp.extend_from_slice(&req_id.to_le_bytes());
     resp.extend_from_slice(data);
-    let _ = port_send(port, &resp);
+    let _ = port_send_all(port, &resp);
 }
 
 fn send_err(port: PortHandle, req_id: u16, errno: u8) {
     let mut resp = [0u8; 3];
     resp[0..2].copy_from_slice(&req_id.to_le_bytes());
     resp[2] = errno;
-    let _ = port_send(port, &resp);
+    let _ = port_send_all(port, &resp);
 }
 
 fn send_handle(port: PortHandle, req_id: u16, handle: u64) {
@@ -1823,7 +1928,7 @@ fn send_handle(port: PortHandle, req_id: u16, handle: u64) {
     resp[0..2].copy_from_slice(&req_id.to_le_bytes());
     resp[2] = E_OK;
     resp[3..11].copy_from_slice(&handle.to_le_bytes());
-    let _ = port_send(port, &resp);
+    let _ = port_send_all(port, &resp);
 }
 
 fn send_data(port: PortHandle, req_id: u16, data: &[u8]) {
@@ -1832,7 +1937,7 @@ fn send_data(port: PortHandle, req_id: u16, data: &[u8]) {
     resp.push(E_OK);
     resp.extend_from_slice(&(data.len() as u32).to_le_bytes());
     resp.extend_from_slice(data);
-    let _ = port_send(port, &resp);
+    let _ = port_send_all(port, &resp);
 }
 
 fn send_write_ok(port: PortHandle, req_id: u16, bytes_written: u32) {
@@ -1840,7 +1945,7 @@ fn send_write_ok(port: PortHandle, req_id: u16, bytes_written: u32) {
     resp[0..2].copy_from_slice(&req_id.to_le_bytes());
     resp[2] = E_OK;
     resp[3..7].copy_from_slice(&bytes_written.to_le_bytes());
-    let _ = port_send(port, &resp);
+    let _ = port_send_all(port, &resp);
 }
 
 // ── IPv4 parse helper ─────────────────────────────────────────────────────────
@@ -1869,6 +1974,6 @@ fn parse_rpc_header(buf: &[u8]) -> Option<(PortHandle, u8, u16, &[u8])> {
 
     let resp_port = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as PortHandle;
     let op = buf[4];
-    let req_id = u16::from_le_bytes([buf[6], buf[7]]);
+    let req_id = u16::from_le_bytes([buf[5], buf[6]]);
     Some((resp_port, op, req_id, &buf[hdr_sz..]))
 }

@@ -63,13 +63,12 @@ const MDNS_IFACE: &str = "eth0";
 const ANNOUNCE_INTERVAL_MS: u64 = 30_000;
 /// How often (ms) to retry opening the optional mDNS UDP socket.
 const NETD_PROBE_INTERVAL_MS: u64 = 1_000;
-/// Do not touch /net immediately at startup. Let netd finish bring-up before
-/// mesocarp starts probing UDP/IP files.
-const NETD_ATTACH_DELAY_MS: u64 = 30_000;
 /// How often (ms) to refresh our own IPv4 from /net once probing is enabled.
 const SELF_IP_REFRESH_MS: u64 = 5_000;
 /// How often (ms) we sweep the host cache for expired entries.
 const EXPIRE_SWEEP_MS: u64 = 1_000;
+/// netd publishes this file once `/net` is mounted and ready for RPCs.
+const NETD_READY_PATH: &str = "/run/netd.ready";
 /// Port buffer capacity for this provider.
 const PORT_CAPACITY_BYTES: usize = 32_768;
 /// Seed identity.
@@ -77,8 +76,14 @@ const SEED_NAME: &[u8] = b"mesocarp";
 const HOOK_MOUNT_V1: &[u8] = b"_start";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
 
-fn net_probe_enabled(now_ms: u64, start_ms: u64) -> bool {
-    now_ms.saturating_sub(start_ms) >= NETD_ATTACH_DELAY_MS
+fn net_probe_enabled() -> bool {
+    match vfs_open(NETD_READY_PATH, O_RDONLY) {
+        Ok(fd) => {
+            let _ = vfs_close(fd);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 #[no_mangle]
@@ -377,7 +382,6 @@ fn run(mount_point: &str) -> ! {
     info!("mesocarp: serving cache immediately; mDNS socket will attach when netd is ready");
 
     let mut udp: Option<UdpSocket> = None;
-    let start_ms = stem::time::monotonic_ns() / 1_000_000;
     let mut last_netd_probe_ms: u64 = 0;
     let mut last_self_refresh_ms: u64 = 0;
     let mut last_announce_ms: u64 = 0;
@@ -410,7 +414,11 @@ fn run(mount_point: &str) -> ! {
 
         // 2. Refresh self-entry periodically once we are past early boot.
         //    Avoid hitting /net aggressively while netd is still stabilizing.
-        let can_probe_net = net_probe_enabled(now, start_ms);
+        let can_probe_net = net_probe_enabled();
+        if !can_probe_net && udp.is_some() {
+            debug!("mesocarp: netd not ready, dropping mDNS socket");
+            udp = None;
+        }
         if can_probe_net
             && (last_self_refresh_ms == 0
                 || now.saturating_sub(last_self_refresh_ms) >= SELF_IP_REFRESH_MS)
@@ -669,9 +677,6 @@ mod tests {
 
     #[test]
     fn net_probe_gate_enables_after_delay() {
-        assert!(!net_probe_enabled(10_000, 0));
-        assert!(!net_probe_enabled(NETD_ATTACH_DELAY_MS - 1, 0));
-        assert!(net_probe_enabled(NETD_ATTACH_DELAY_MS, 0));
-        assert!(net_probe_enabled(NETD_ATTACH_DELAY_MS + 1, 0));
+        assert_eq!(NETD_READY_PATH, "/run/netd.ready");
     }
 }

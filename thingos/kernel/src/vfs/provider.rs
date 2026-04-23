@@ -27,9 +27,12 @@ use crate::syscall::validate::{copyin, copyout};
 /// allowing multiple threads to wait for responses concurrently.
 struct RpcState {
     tainted: bool,
+    tainted_until_ns: u64,
     waiters: BTreeMap<u16, Arc<WaitQueue>>,
     responses: BTreeMap<u16, Vec<u8>>,
 }
+
+const PROVIDER_TAINT_COOLDOWN_NS: u64 = 2 * crate::time::NANOS_PER_SEC;
 
 struct ProviderRpc {
     /// The provider's request port (kernel → provider).
@@ -57,10 +60,26 @@ impl ProviderRpc {
             next_req_id: core::sync::atomic::AtomicU16::new(1),
             state: Mutex::new(RpcState {
                 tainted: false,
+                tainted_until_ns: 0,
                 waiters: BTreeMap::new(),
                 responses: BTreeMap::new(),
             }),
         }
+    }
+
+    fn is_tainted(state: &mut RpcState) -> bool {
+        if state.tainted && crate::time::monotonic_now_ns() >= state.tainted_until_ns {
+            state.tainted = false;
+            state.tainted_until_ns = 0;
+            state.responses.clear();
+            crate::kwarn!("VFS RPC: provider taint cooldown elapsed; untainting provider");
+        }
+        state.tainted
+    }
+
+    fn taint_with_cooldown(state: &mut RpcState) {
+        state.tainted = true;
+        state.tainted_until_ns = crate::time::monotonic_now_ns() + PROVIDER_TAINT_COOLDOWN_NS;
     }
 
     /// Perform a multiplexed, asynchronous round-trip RPC with the provider.
@@ -70,8 +89,8 @@ impl ProviderRpc {
         crate::ktrace!("VFS RPC: tid={} req_id={} op={:?} begin", tid, req_id, op);
 
         {
-            let state = self.state.lock();
-            if state.tainted {
+            let mut state = self.state.lock();
+            if Self::is_tainted(&mut state) {
                 crate::ktrace!(
                     "VFS RPC: tid={} req_id={} op={:?} rejected (tainted)",
                     tid,
@@ -99,7 +118,7 @@ impl ProviderRpc {
         let wait_queue = Arc::new(WaitQueue::new());
         {
             let mut state = self.state.lock();
-            if state.tainted {
+            if Self::is_tainted(&mut state) {
                 return Err(Errno::EIO);
             }
             state.waiters.insert(req_id, wait_queue.clone());
@@ -109,7 +128,7 @@ impl ProviderRpc {
         if written < msg.len() {
             crate::ipc::diag::record_dead_provider_error();
             let mut state = self.state.lock();
-            state.tainted = true;
+            Self::taint_with_cooldown(&mut state);
             state.waiters.remove(&req_id);
             for wq in state.waiters.values() {
                 wq.wake_all();
@@ -129,7 +148,7 @@ impl ProviderRpc {
             // Check if our response is already buffered
             {
                 let mut state = self.state.lock();
-                if state.tainted {
+                if Self::is_tainted(&mut state) {
                     return Err(Errno::EIO);
                 }
                 if let Some(resp) = state.responses.remove(&req_id) {
@@ -190,7 +209,7 @@ impl ProviderRpc {
             if !self.resp.has_writers() {
                 crate::ipc::diag::record_dead_provider_error();
                 let mut state = self.state.lock();
-                state.tainted = true;
+                Self::taint_with_cooldown(&mut state);
                 state.waiters.remove(&req_id);
                 for wq in state.waiters.values() {
                     wq.wake_all();
@@ -203,7 +222,7 @@ impl ProviderRpc {
             if now_ns >= deadline_ns {
                 crate::kerror!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
                 let mut state = self.state.lock();
-                state.tainted = true;
+                Self::taint_with_cooldown(&mut state);
                 state.waiters.remove(&req_id);
                 for wq in state.waiters.values() {
                     wq.wake_all();
@@ -219,8 +238,8 @@ impl ProviderRpc {
             // Double check before sleeping to avoid race condition
             let n = self.resp.try_recv(&mut buf);
             let has_buffered = {
-                let state = self.state.lock();
-                state.responses.contains_key(&req_id) || state.tainted
+                let mut state = self.state.lock();
+                state.responses.contains_key(&req_id) || Self::is_tainted(&mut state)
             };
 
             if n > 0 || has_buffered {

@@ -469,23 +469,7 @@ fn apply_fstab_mounts() {
 }
 
 pub(crate) fn mount_hosts_cache() {
-    info!("SPROUT: Mounting /hosts early...");
-    let argv: [&[u8]; 5] = [b"/bin/mount", b"-t", b"mdns", b"none", b"/hosts"];
-    match stem::syscall::spawn_process_ex(
-        "/bin/mount",
-        &argv,
-        &alloc::collections::BTreeMap::new(),
-        abi::types::stdio_mode::INHERIT,
-        abi::types::stdio_mode::INHERIT,
-        abi::types::stdio_mode::INHERIT,
-        0,
-        &[],
-    ) {
-        Ok(resp) => info!("SPROUT: Spawned early /hosts mount (PID={})", resp.child_tid),
-        Err(e) => {
-            warn!("SPROUT: Failed to spawn early /hosts mount: {:?}", e);
-        }
-    }
+    info!("SPROUT: Skipping early /hosts mount; mesocarp is disabled in init");
 }
 
 pub fn setup_network_stack(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {

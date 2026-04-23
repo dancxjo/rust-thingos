@@ -24,13 +24,15 @@ use abi::seed::{
     HOST_PROGRAM, HOST_VFS_PROVIDER, INTERFACE_PROGRAM_V1, INTERFACE_VFS_PROVIDER_MOUNT_V1,
     INTERFACE_VFS_PROVIDER_UNMOUNT_V1, SEED_ABI_VERSION, Seed, SeedInterface,
 };
-use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_WRONLY};
+use abi::syscall::vfs_flags::{O_CREAT, O_NONBLOCK, O_RDONLY, O_TRUNC, O_WRONLY};
 use abi::syscall::{PollHandle, poll_flags};
 use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_umount, vfs_watch_path};
+use stem::syscall::vfs::{
+    vfs_close, vfs_open, vfs_poll, vfs_read, vfs_umount, vfs_unlink, vfs_watch_path, vfs_write,
+};
 use stem::syscall::{argv_get, exit};
 use stem::{debug, info, warn};
 use vfs_device::VfsNicDevice;
@@ -41,6 +43,7 @@ const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
 /// Maximum virtioN unit index to probe during startup.
 const MAX_VIRTIO_UNITS: u32 = 16;
 const DEFAULT_MOUNT_POINT: &str = "/net";
+const READY_PATH: &str = "/run/netd.ready";
 const SEED_NAME: &[u8] = b"netd";
 const HOOK_MOUNT_V1: &[u8] = b"_start";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
@@ -164,11 +167,23 @@ fn print_usage() {
     );
 }
 
+fn clear_ready_flag() {
+    let _ = vfs_unlink(READY_PATH);
+}
+
+fn publish_ready_flag(mount_point: &str) {
+    if let Ok(fd) = vfs_open(READY_PATH, O_WRONLY | O_CREAT | O_TRUNC) {
+        let _ = vfs_write(fd, mount_point.as_bytes());
+        let _ = vfs_close(fd);
+    }
+}
+
 #[stem::main]
 fn main(arg: usize) -> ! {
     info!("NETD: Starting network service...");
     debug!("NETD: binary v2 (with heap storage) starting...");
     debug!("NETD: main entry point, arg={}", arg);
+    clear_ready_flag();
     let cfg = parse_config();
     if cfg.help {
         print_usage();
@@ -274,6 +289,7 @@ fn main(arg: usize) -> ! {
         };
     debug!("NETD: watch fd={:?}", nic_watch_fd);
 
+    publish_ready_flag(&mount_point);
     info!("NETD: Network ready");
     debug!("NETD: entering VFS service loop");
 
@@ -429,6 +445,7 @@ pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     let mount_point = parse_config().mount_point;
+    clear_ready_flag();
     match vfs_umount(&mount_point) {
         Ok(()) => 0,
         Err(_) => 1,
