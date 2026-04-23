@@ -1501,9 +1501,9 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             // First idle period: perform the deferred bootfb paint instrumentation
             // if we haven't done it yet. This provides a landmark for BDD latency tests.
             if !PAINTED.swap(true, core::sync::atomic::Ordering::SeqCst) {
-                if let Some(fb) = runtime.framebuffer() {
+                let elapsed = if let Some(_fb) = runtime.framebuffer() {
                     let start_ticks = runtime.mono_ticks();
-                    
+
                     // Simple gradient to verify framebuffer access
                     // DISABLED
                     /*for y in 0..fb.height as usize {
@@ -1518,10 +1518,12 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                             }
                         }
                     }*/
-                    
-                    let elapsed = runtime.mono_ticks().wrapping_sub(start_ticks);
-                    kinfo!("deferred_bootfb_gradient elapsed_ticks={}", elapsed);
-                }
+
+                    runtime.mono_ticks().wrapping_sub(start_ticks)
+                } else {
+                    0
+                };
+                kinfo!("deferred_bootfb_gradient elapsed_ticks={}", elapsed);
             }
 
             // No runnable work on this CPU — halt until the next interrupt
