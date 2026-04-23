@@ -14,12 +14,12 @@ Feature: httpsd header/response cache
     And I wait for the serial output to contain "Example Domain"
     And I wait for the shell prompt
     And I type "attr_list /https/ex/@index" on the serial console
-    Then the serial output should contain "user.http.status_code" within 30s
-    And the serial output should contain "user.http.content_type"
-    And the serial output should contain "user.http.url"
+    Then the command output should contain "user.http.status_code"
+    And the command output should contain "user.http.content_type"
+    And the command output should contain "user.http.url"
     When I type "attr_get /https/ex/@index user.http.content_type" on the serial console
     And I wait for the shell prompt
-    Then the serial output should contain "text/html"
+    Then the command output should contain "text/html"
 
   Scenario: Cache mount exposes the raw response head and index
     Given the machine is booted
@@ -32,12 +32,12 @@ Feature: httpsd header/response cache
     And I wait for the serial output to contain "Example Domain"
     And I wait for the shell prompt
     And I type "cat /run/httpsd/cache/index" on the serial console
-    Then the serial output should contain "example.com"
+    Then the command output should contain "example.com"
     When I type "cat /run/httpsd/cache/example.com/headers" on the serial console
-    Then the serial output should contain "HTTP/"
-    And the serial output should contain "Content-Type:"
+    Then the command output should contain "HTTP/"
+    And the command output should contain "Content-Type:"
     When I type "cat /run/httpsd/cache/example.com/status" on the serial console
-    Then the serial output should contain "200"
+    Then the command output should contain "200"
 
   Scenario: 3xx redirects surface as symlinks after first fetch
     Given the machine is booted
@@ -47,8 +47,8 @@ Feature: httpsd header/response cache
     And I type "mount -t https iana.org /https/iana" on the serial console
     And I wait for the serial output to contain "mounted type=https"
     And I type "attr_get /https/iana/@index user.http.location" on the serial console
-    Then the serial output should contain "www.iana.org" within 30s
+    Then the command output should contain "www.iana.org"
     When I type "cat /https/iana/@index" on the serial console
     And I wait for the serial output to contain "Internet Assigned Numbers Authority"
     And I wait for the shell prompt
-    Then the serial output should contain "IANA"
+    Then the command output should contain "IANA"

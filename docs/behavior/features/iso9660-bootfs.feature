@@ -6,4 +6,4 @@ Feature: ISO9660 boot filesystem mount
     And I should see "iso9660d: mounted at /mnt/iso" after "iso9660d: found ISO9660 on device"
     When I wait for the shell prompt
     And I type "cat /mnt/iso/etc/hostname" on the serial console
-    Then the latest serial output should contain "thingos"
+    Then the latest command output should contain "thingos"

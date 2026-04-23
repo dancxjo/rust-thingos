@@ -10,6 +10,6 @@ Feature: HTTPS Fetch
     And I wait for the serial output to contain "HTTPSD_READY"
     And I wait for the serial output to contain "mounted type=https"
     And I type "cat /https/ex/@index" on the serial console
-    Then the serial output should contain "Example Domain"
-    And the serial output should contain "documentation examples"
-    And the serial output should contain "permission"
+    Then the command output should contain "Example Domain"
+    And the command output should contain "documentation examples"
+    And the command output should contain "permission"

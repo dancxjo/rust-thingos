@@ -13,14 +13,14 @@ Feature: mDNS /hosts VFS
     Given the machine is booted
     When I wait for the shell prompt
     And I type "cat /etc/hostname" on the serial console
-    Then the serial output should contain "thingos"
+    Then the command output should contain "thingos"
     When I type "ls /hosts" on the serial console
     And I wait for 2 seconds
-    Then the serial output should contain "thingos.local"
+    Then the command output should contain "thingos.local"
     When I type "attr_list /hosts/thingos.local" on the serial console
     And I wait for 1 seconds
-    Then the serial output should contain "net.ip.ipv4"
-    And the serial output should contain "net.hostname"
+    Then the command output should contain "net.ip.ipv4"
+    And the command output should contain "net.hostname"
     When I type "attr_get /hosts/thingos.local net.hostname" on the serial console
     And I wait for 1 seconds
-    Then the serial output should contain "thingos.local"
+    Then the command output should contain "thingos.local"
