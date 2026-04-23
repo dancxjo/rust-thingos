@@ -61,6 +61,8 @@ const MDNS_PORT: u16 = 5353;
 const MDNS_IFACE: &str = "eth0";
 /// How often (ms) to send an unsolicited announcement of our own hostname.
 const ANNOUNCE_INTERVAL_MS: u64 = 30_000;
+/// How often (ms) to retry opening the optional mDNS UDP socket.
+const NETD_PROBE_INTERVAL_MS: u64 = 1_000;
 /// How often (ms) we sweep the host cache for expired entries.
 const EXPIRE_SWEEP_MS: u64 = 1_000;
 /// Port buffer capacity for this provider.
@@ -363,24 +365,12 @@ fn run(mount_point: &str) -> ! {
     let hostname_label = read_hostname();
     let self_name = alloc::format!("{}.local", hostname_label);
     info!("mesocarp: advertising hostname {}", self_name);
+    provider.upsert(HostEntry { name: self_name.clone(), ipv4: [0, 0, 0, 0], expires_at_ms: None });
 
-    let netd_ready = wait_for_netd();
-    if !netd_ready {
-        warn!("mesocarp: netd not ready; running in serve-cache-only mode");
-    }
+    info!("mesocarp: serving cache immediately; mDNS socket will attach when netd is ready");
 
-    let mut udp: Option<UdpSocket> = if netd_ready {
-        match UdpSocket::open_mdns() {
-            Ok(s) => Some(s),
-            Err(e) => {
-                warn!("mesocarp: failed to open mDNS socket: {:?}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
+    let mut udp: Option<UdpSocket> = None;
+    let mut last_netd_probe_ms: u64 = 0;
     let mut last_announce_ms: u64 = 0;
     let mut last_expire_ms: u64 = 0;
 
@@ -419,7 +409,25 @@ fn run(mount_point: &str) -> ! {
             });
         }
 
-        // 3. Drain inbound mDNS datagrams.
+        // 3. Attach to netd once it is ready. This must not block VFS serving:
+        // `/hosts` should answer local cache requests even while networking
+        // is still starting.
+        if udp.is_none()
+            && (last_netd_probe_ms == 0
+                || now.saturating_sub(last_netd_probe_ms) >= NETD_PROBE_INTERVAL_MS)
+        {
+            last_netd_probe_ms = now;
+            match UdpSocket::open_mdns() {
+                Ok(s) => {
+                    info!("mesocarp: mDNS socket ready");
+                    udp = Some(s);
+                }
+                Err(Errno::ENOENT) | Err(Errno::ENODEV) | Err(Errno::EAGAIN) => {}
+                Err(e) => debug!("mesocarp: mDNS socket not ready: {:?}", e),
+            }
+        }
+
+        // 4. Drain inbound mDNS datagrams.
         if let Some(sock) = udp.as_mut() {
             loop {
                 match sock.try_recv() {
@@ -438,7 +446,7 @@ fn run(mount_point: &str) -> ! {
             }
         }
 
-        // 4. Periodic unsolicited announcement of our own hostname.
+        // 5. Periodic unsolicited announcement of our own hostname.
         if let Some(sock) = udp.as_ref() {
             if now.saturating_sub(last_announce_ms) >= ANNOUNCE_INTERVAL_MS || last_announce_ms == 0
             {
@@ -457,7 +465,7 @@ fn run(mount_point: &str) -> ! {
             }
         }
 
-        // 5. Expire stale peers.
+        // 6. Expire stale peers.
         if now.saturating_sub(last_expire_ms) >= EXPIRE_SWEEP_MS {
             provider.expire(now);
             last_expire_ms = now;

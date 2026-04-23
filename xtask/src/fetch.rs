@@ -4,8 +4,6 @@ use std::{env, fs};
 
 use anyhow::{Context, Result, ensure};
 
-
-
 pub fn fetch() -> Result<()> {
     let root = project_root();
     let assets = root.join("assets");
@@ -362,7 +360,14 @@ fn fetch_chicago95_icons(assets: &Path) -> Result<()> {
     download_file(CHICAGO95_URL, &archive)?;
 
     println!("       Extracting Chicago95 icon set...");
-    run_cmd(Command::new("tar").arg("-xf").arg(&archive).arg("--no-same-owner").arg("-C").arg(&temp_dir))?;
+    run_cmd(
+        Command::new("tar")
+            .arg("-xf")
+            .arg(&archive)
+            .arg("--no-same-owner")
+            .arg("-C")
+            .arg(&temp_dir),
+    )?;
 
     let extracted_root = fs::read_dir(&temp_dir)?
         .filter_map(|entry| entry.ok())
@@ -590,12 +595,15 @@ fn fetch_lucide_icons(assets: &Path) -> Result<()> {
         let svg_path = icons_dir.join(format!("{}.svg", name));
         if !svg_path.exists() {
             println!("    Downloading {}.svg...", name);
-            let url = format!("https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/{}.svg", name);
+            let url = format!(
+                "https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/{}.svg",
+                name
+            );
             download_file(&url, &svg_path)?;
         }
 
         let svg_data = fs::read_to_string(&svg_path)?;
-        
+
         let opt = usvg::Options::default();
         let tree = usvg::Tree::from_str(&svg_data, &opt).unwrap();
 
@@ -629,7 +637,8 @@ fn fetch_lucide_icons(assets: &Path) -> Result<()> {
 
         generated_rs.push_str(&format!("pub const {}: [[u128; 2]; 80] = [\n", const_name));
         for i in 0..80 {
-            generated_rs.push_str(&format!("    [0x{:032x}, 0x{:032x}],\n", bitmap_hi[i], bitmap_lo[i]));
+            generated_rs
+                .push_str(&format!("    [0x{:032x}, 0x{:032x}],\n", bitmap_hi[i], bitmap_lo[i]));
         }
         generated_rs.push_str("];\n\n");
     }

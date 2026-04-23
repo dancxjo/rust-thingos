@@ -1,9 +1,9 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-22 19:55:19
+> Last run: 2026-04-22 20:20:49
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [VFS Extended Attributes](vfs-extended-attributes/README.md) | 0/1 | ❌ |
+| [mDNS /hosts VFS](mdns-hosts-vfs/README.md) | 0/1 | ❌ |

@@ -782,7 +782,10 @@ async fn check_ordering(
     if first_pos.is_none() {
         return Err(StepError(format!("Could not find '{}' in serial log", first)));
     } else {
-        return Err(StepError(format!("Did not find '{}' after '{}' in serial log", second, first)));
+        return Err(StepError(format!(
+            "Did not find '{}' after '{}' in serial log",
+            second, first
+        )));
     }
 }
 
@@ -1408,8 +1411,10 @@ async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), Step
     if !found {
         return Err(StepError("Timed out waiting for shell prompt".to_string()));
     }
-    // Extra delay to ensure the shell is ready to receive input
-    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    // The prompt is printed after the shell has returned to its read loop. A
+    // short drain is enough for trailing escape sequences without adding a
+    // fixed multi-second tax to every scenario.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     Ok(())
 }
 
@@ -1427,11 +1432,26 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
             .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
 
-    // Small delay to let the guest process the input
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    // Wait for command completion when the shell returns to a prompt. This is
+    // faster than a fixed sleep for short commands and avoids racing the next
+    // assertion when the guest is momentarily busy.
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(10);
+    loop {
+        let log = world.get_serial_log().await;
+        let start_offset = world.serial_checkpoint.min(log.len());
+        let recent = strip_ansi(&log[start_offset..]);
+        if recent.contains("] ") && recent.contains(" > ") {
+            break;
+        }
+        if start.elapsed() >= timeout {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     Ok(())
 }
 

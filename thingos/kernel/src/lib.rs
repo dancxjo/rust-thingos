@@ -1485,7 +1485,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     crate::boot_progress::push(crate::boot_progress::BootPhase::Scheduler, "Entering Scheduler");
     crate::boot_progress::finish();
     let scheduler_entry_total = runtime.mono_ticks().wrapping_sub(scheduler_entry_window_start);
-    crate::kdebug!(
+    crate::kinfo!(
         "[kernel:start] scheduler-entry total elapsed_ticks={} elapsed_us={}",
         scheduler_entry_total,
         boot_timing_us(scheduler_entry_total)

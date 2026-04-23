@@ -89,9 +89,6 @@ impl Supervisor {
             }
         }
 
-        stem::debug!("SPROUT: FORCING display=bootfb for diagnostic test!");
-        force_bootfb = true;
-
         Config { force_bootfb }
     }
 
