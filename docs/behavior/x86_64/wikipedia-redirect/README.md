@@ -1,6 +1,6 @@
 # Feature: Wikipedia Redirect
 
-> Last run: 2026-04-22 22:03:32
+> Last run: 2026-04-22 22:12:03
 
 ## Scenarios
 

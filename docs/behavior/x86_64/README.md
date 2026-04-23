@@ -1,6 +1,6 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-22 22:03:32
+> Last run: 2026-04-22 22:12:03
 
 ## Features
 
@@ -8,7 +8,7 @@
 |---------|-----------|--------|
 | [Bin Utils Traditional Functionality](bin-utils-traditional-functionality/README.md) | 2/5 | ❌ |
 | [Boot progress milestone text reporting](boot-progress-milestone-text-reporting/README.md) | 4/4 | ✅ |
-| [Scheduler entry latency instrumentation](scheduler-entry-latency-instrumentation/README.md) | 1/1 | ✅ |
+| [Scheduler entry latency instrumentation](scheduler-entry-latency-instrumentation/README.md) | 0/1 | ❌ |
 | [HTTPS Fetch](https-fetch/README.md) | 0/1 | ❌ |
 | [httpsd header/response cache](httpsd-header-response-cache/README.md) | 0/3 | ❌ |
 | [ISO9660 boot filesystem mount](iso9660-boot-filesystem-mount/README.md) | 0/1 | ❌ |
