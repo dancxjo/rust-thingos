@@ -159,6 +159,7 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
 // ── close ───────────────────────────────────────────────────────────────────
 
 pub fn sys_fs_close(fd: usize) -> SysResult<usize> {
+    crate::ktrace!("sys_fs_close: fd={}", fd);
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
 
     // Before closing, check if this fd has an advisory lock and release it.
@@ -180,14 +181,15 @@ pub fn sys_fs_close(fd: usize) -> SysResult<usize> {
 
     if let Some(node) = maybe_node {
         if crate::vfs::flock::process_has_locks(pid) {
+            crate::ktrace!("sys_fs_close: fd={} checking flock", fd);
             if let Ok(s) = node.stat() {
                 crate::vfs::flock::release(s.ino, pid);
             }
         }
     }
 
-    pinfo_arc.lock().handle_table.close(fd as u32)?;
-
+    let entry = pinfo_arc.lock().handle_table.take(fd as u32)?;
+    entry.node.close();
     Ok(0)
 }
 
@@ -318,6 +320,7 @@ pub fn sys_fs_isatty(fd: usize) -> SysResult<usize> {
 }
 
 pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
+    crate::ktrace!("sys_fs_readdir: fd={} len={}", fd, buf_len);
     validate_user_range(buf_ptr, buf_len, true)?;
     if buf_len == 0 {
         return Ok(0);
@@ -337,6 +340,7 @@ pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<us
 
     // 1. Natural entries phase
     if !is_mounts_phase {
+        crate::ktrace!("sys_fs_readdir: natural phase begin offset={}", offset);
         n = node.readdir(offset, &mut kbuf)?;
         if n > 0 {
             *offset_cell.lock() = offset.saturating_add(n as u64);

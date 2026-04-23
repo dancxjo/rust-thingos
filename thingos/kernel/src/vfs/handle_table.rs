@@ -203,13 +203,19 @@ impl HandleTable {
         Ok(())
     }
 
-    /// Close handle `fd`.  Returns `EBADF` if not open.
-    pub fn close(&mut self, thing: u32) -> SysResult<()> {
+    /// Remove the entry for handle `fd` from the table and return it.
+    /// Returns `EBADF` if not open.
+    pub fn take(&mut self, thing: u32) -> SysResult<OpenHandle> {
         let idx = thing as usize;
         if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
-        let entry = self.entries[idx].take().ok_or(Errno::EBADF)?;
+        self.entries[idx].take().ok_or(Errno::EBADF)
+    }
+
+    /// Close handle `fd`.  Returns `EBADF` if not open.
+    pub fn close(&mut self, thing: u32) -> SysResult<()> {
+        let entry = self.take(thing)?;
         entry.node.close();
         Ok(())
     }

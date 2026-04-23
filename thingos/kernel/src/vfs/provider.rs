@@ -36,6 +36,8 @@ struct ProviderRpc {
 
     /// Sleep-lock state: true if an RPC is in progress.
     busy: core::sync::atomic::AtomicBool,
+    /// If true, a timeout occurred and the response stream is out-of-sync.
+    tainted: core::sync::atomic::AtomicBool,
     /// Waiters for the sleep-lock.
     rpc_wait: WaitQueue,
 }
@@ -51,6 +53,7 @@ impl ProviderRpc {
             resp: crate::ipc::Receiver::new(resp_port),
             resp_write_handle,
             busy: core::sync::atomic::AtomicBool::new(false),
+            tainted: core::sync::atomic::AtomicBool::new(false),
             rpc_wait: WaitQueue::new(),
         }
     }
@@ -58,9 +61,16 @@ impl ProviderRpc {
     /// Perform a serialized, blocking round-trip RPC with the provider.
     fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
         let tid = unsafe { crate::sched::current_tid_current() };
+        crate::ktrace!("VFS RPC: tid={} op={:?} begin", tid, op);
+
+        if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
+            crate::kwarn!("VFS RPC: tid={} op={:?} rejected (provider is tainted/stalled)", tid, op);
+            return Err(Errno::EIO);
+        }
 
         // 1. Acquire sleep-lock
         while self.busy.swap(true, core::sync::atomic::Ordering::Acquire) {
+            crate::ktrace!("VFS RPC: tid={} op={:?} waiting for lock", tid, op);
             self.rpc_wait.push_back(tid);
             unsafe {
                 crate::sched::block_current_erased();
@@ -68,6 +78,7 @@ impl ProviderRpc {
             self.rpc_wait.remove(tid);
 
             if crate::sched::take_pending_interrupt_current() {
+                crate::ktrace!("VFS RPC: tid={} op={:?} interrupted while waiting", tid, op);
                 return Err(Errno::EINTR);
             }
         }
@@ -84,6 +95,7 @@ impl ProviderRpc {
         self.busy.store(false, core::sync::atomic::Ordering::Release);
         self.rpc_wait.wake_one();
 
+        crate::ktrace!("VFS RPC: tid={} op={:?} end result={:?}", tid, op, res.as_ref().map(|v| v.len()));
         res
     }
 
@@ -116,6 +128,9 @@ impl ProviderRpc {
 
     fn recv_response(&self, buf: &mut [u8]) -> SysResult<usize> {
         let tid = unsafe { crate::sched::current_tid_current() };
+        let start = crate::time::monotonic_now_ns();
+        let timeout = 5 * crate::time::NANOS_PER_SEC;
+
         loop {
             let n = self.resp.try_recv(buf);
             if n > 0 {
@@ -125,6 +140,15 @@ impl ProviderRpc {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
+
+            // Check for timeout
+            let now = crate::time::monotonic_now_ns();
+            if now.saturating_sub(start) > timeout {
+                crate::kwarn!("VFS RPC: tid={} provider response timeout (5s exceeded)", tid);
+                self.tainted.store(true, core::sync::atomic::Ordering::Release);
+                return Err(Errno::ETIMEDOUT);
+            }
+
             self.resp.add_waiter(tid);
             let n = self.resp.try_recv(buf);
             if n > 0 {
@@ -136,6 +160,7 @@ impl ProviderRpc {
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
+            crate::ktrace!("VFS RPC: tid={} waiting for response...", tid);
             unsafe {
                 crate::sched::block_current_erased();
             }
@@ -299,10 +324,42 @@ impl VfsNode for ProviderNode {
         let len = buf.len().min(abi::vfs_rpc::VFS_RPC_MAX_DATA) as u32;
         let mut payload = [0u8; 20];
         payload[..8].copy_from_slice(&self.handle.to_le_bytes());
-        payload[8..16].copy_from_slice(&offset.to_le_bytes());
+        // Translate byte offset to entry index for the provider.
+        // This is a heuristic: we assume each entry is ~32 bytes on average.
+        // A better fix would be for the provider to support byte offsets.
+        let index = offset / 32;
+        payload[8..16].copy_from_slice(&index.to_le_bytes());
         payload[16..20].copy_from_slice(&len.to_le_bytes());
+
         let resp = self.rpc.rpc(VfsRpcOp::Readdir, &payload)?;
-        parse_response_read(&resp, buf)
+        if resp.is_empty() || resp[0] != 0 {
+            return Err(errno_from_u8(resp.get(0).cloned().unwrap_or(5)));
+        }
+
+        let data = &resp[5..];
+        let mut written = 0;
+        let mut read_ptr = 0;
+
+        while read_ptr + 10 <= data.len() && written < buf.len() {
+            let name_len = data[read_ptr + 9] as usize;
+            if read_ptr + 10 + name_len > data.len() {
+                break;
+            }
+            let name = &data[read_ptr + 10 .. read_ptr + 10 + name_len];
+            
+            // Copy name + NUL
+            let copy_n = name.len().min(buf.len() - written);
+            buf[written..written + copy_n].copy_from_slice(&name[..copy_n]);
+            written += copy_n;
+            if written < buf.len() {
+                buf[written] = 0;
+                written += 1;
+            }
+
+            read_ptr += 10 + name_len;
+        }
+
+        Ok(written)
     }
 
     fn attr_get(&self, name: &str) -> SysResult<(u8, alloc::vec::Vec<u8>)> {
