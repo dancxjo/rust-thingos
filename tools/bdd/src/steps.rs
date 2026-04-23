@@ -1970,6 +1970,7 @@ async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> 
             return Ok(());
         }
 
+        
         if start_time.elapsed() > timeout {
             capture_failure_diagnostics(world, &expected).await;
             return Err(StepError(format!("Command output did not contain '{}' within timeout", expected)));
@@ -2004,6 +2005,38 @@ async fn latest_command_output_contains(world: &mut ThingOsWorld, expected: Stri
         if start_time.elapsed() > timeout {
             capture_failure_diagnostics(world, &expected).await;
             return Err(StepError(format!("Latest command output did not contain '{}' within timeout", expected)));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+#[then(regex = r#"^the command output should strictly be "(.+)"$"#)]
+async fn command_output_strictly_be(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world));
+    
+    loop {
+        let log = world.get_serial_log().await;
+        let start = world.serial_checkpoint.min(log.len());
+        let recent = &log[start..];
+        let clean_log = strip_ansi(recent);
+        let mut found = false;
+        
+        for line in clean_log.lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with('[') && !trimmed.contains(">") && trimmed == expected.trim() {
+                found = true;
+                break;
+            }
+        }
+        
+        if found {
+            return Ok(());
+        }
+        
+        if start_time.elapsed() > timeout {
+            capture_failure_diagnostics(world, &expected).await;
+            return Err(StepError(format!("Command output was not strictly '{}' within timeout", expected)));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
