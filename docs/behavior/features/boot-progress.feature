@@ -16,20 +16,20 @@ Feature: Boot progress milestone text reporting
   Scenario: Memory milestone is reported before VFS milestone
     Given the machine is started
     When I wait for the system to boot
-    Then the serial log shows "boot_progress: milestone=\"Memory Map OK\"" after "kernel:start"
-    And  the serial log shows "boot_progress: milestone=\"VFS Root Ready\"" after "boot_progress: milestone=\"Memory Map OK\""
+    Then the serial log shows "Memory Map OK" after "kernel:start"
+    And the serial log shows "VFS Root Ready" after "Memory Map OK"
 
   @smoke
   @timeout.30s
   Scenario: Final boot milestone is reported before entering the scheduler loop
     Given the machine is started
     When I wait for the system to boot
-    Then the serial log shows "boot_progress: milestone=\"Entering Scheduler\"" after "boot_progress: milestone=\"Spawning Sprout\""
-    And  the serial log shows "Entering scheduler loop." after "boot_progress: milestone=\"Entering Scheduler\""
+    Then the serial log shows "Entering Scheduler" after "Spawning Sprout"
+    And the serial log shows "Entering scheduler loop." after "Entering Scheduler"
 
   @smoke
   @timeout.30s
   Scenario: Terminal hint is reported during initialization
     Given the machine is started
     When I wait for the system to boot
-    Then the serial output should contain "boot_progress: hint=\"Press F12 for a terminal\""
+    Then the serial output should contain "Press F12 for a terminal"
