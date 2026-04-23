@@ -27,12 +27,7 @@ use crate::os::wasi::io::OwnedFd;
 #[cfg(not(target_os = "trusty"))]
 use crate::sys::{AsInner, FromInner, IntoInner};
 
-/// Raw file descriptors.
 #[stable(feature = "rust1", since = "1.0.0")]
-#[cfg(all(not(target_os = "hermit"), not(target_os = "motor")))]
-pub type RawFd = raw::c_int;
-#[stable(feature = "rust1", since = "1.0.0")]
-#[cfg(any(target_os = "hermit", target_os = "motor"))]
 pub type RawFd = i32;
 
 /// A trait to extract the raw file descriptor from an underlying object.

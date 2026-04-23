@@ -13,6 +13,7 @@ mod guest_proxy;
 mod image;
 mod kill;
 mod limine;
+mod patches;
 mod run;
 mod rustc_thingos;
 mod scan;
@@ -31,6 +32,7 @@ use crate::image::{
     IsoConfig, ProgramConfig, build_hdd, build_iso, build_iso_with_config, default_programs,
 };
 use crate::limine::limine;
+use crate::patches::apply_vendor_patches;
 use crate::run::{run, run_bios, run_hdd};
 
 /// ThingOS build automation tool
@@ -179,6 +181,8 @@ enum Commands {
     Kill,
     /// Fetch vendor assets (Limine, OVMF, Fonts, Icons, Cursors)
     Fetch,
+    /// Apply tracked vendor patch files to the working tree if needed
+    ApplyPatches,
     /// Build stage-1 rustc cross-compiled to run on x86_64-unknown-thingos
     RustcThingos,
     /// Run HTTP proxy for guest internet access (Guest -> Host -> Internet)
@@ -201,8 +205,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     sh.change_dir(&root);
 
     match cli.command {
-        Commands::Build { env, profile } => build(&sh, &env, &profile)?,
+        Commands::Build { env, profile } => {
+            apply_vendor_patches(&sh)?;
+            build(&sh, &env, &profile)?
+        }
         Commands::Iso { env, profile, init, resolution, output, loglevel } => {
+            apply_vendor_patches(&sh)?;
             limine(&sh)?;
             build(&sh, &env, &profile)?;
             rustc_thingos::build_rustc_thingos(&sh, &env)?;
@@ -223,6 +231,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}ISO generated at: {}{}", COLOR_GREEN, path.display(), COLOR_RESET);
         }
         Commands::Hdd { env, profile, init } => {
+            apply_vendor_patches(&sh)?;
             limine(&sh)?;
             build(&sh, &env, &profile)?;
             rustc_thingos::build_rustc_thingos(&sh, &env)?;
@@ -232,6 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}HDD generated at: {}{}", COLOR_GREEN, path.display(), COLOR_RESET);
         }
         Commands::Run { env, profile, init, qemu_flags, interactive, monitor, loglevel } => {
+            apply_vendor_patches(&sh)?;
             fetch()?;
             limine(&sh)?;
             build(&sh, &env, &profile)?;
@@ -243,6 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run(&sh, &env, &qemu_flags, &iso_path, interactive, monitor)?;
         }
         Commands::RunBios { qemu_flags, interactive, monitor } => {
+            apply_vendor_patches(&sh)?;
             limine(&sh)?;
             build(&sh, "x86_64", "dev")?;
             let programs = default_programs();
@@ -250,6 +261,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_bios(&sh, &qemu_flags, &iso, interactive, monitor)?;
         }
         Commands::RunHdd { env, profile, init, qemu_flags, interactive, monitor, loglevel } => {
+            apply_vendor_patches(&sh)?;
             fetch()?;
             limine(&sh)?;
             build(&sh, &env, &profile)?;
@@ -264,10 +276,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::OvmfAll => fetch()?,
         Commands::Clean => clean(&sh)?,
         Commands::Distclean => distclean(&sh)?,
-        Commands::Bdd { feature, tags, arch, loglevel } => bdd(&sh, feature, tags, arch, loglevel)?,
+        Commands::Bdd { feature, tags, arch, loglevel } => {
+            apply_vendor_patches(&sh)?;
+            bdd(&sh, feature, tags, arch, loglevel)?
+        }
         Commands::Kill => kill::run()?,
         Commands::Fetch => fetch()?,
+        Commands::ApplyPatches => apply_vendor_patches(&sh)?,
         Commands::RustcThingos => {
+            apply_vendor_patches(&sh)?;
             rustc_thingos::build_rustc_thingos(&sh, "x86_64")?;
         }
         Commands::GuestProxy { port } => guest_proxy::run(port)?,

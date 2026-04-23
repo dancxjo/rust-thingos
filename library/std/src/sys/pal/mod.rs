@@ -5,7 +5,7 @@
 
 cfg_select! {
     target_os = "thingos" => {
-        mod thingos;
+        pub(crate) mod thingos;
         pub use self::thingos::*;
     }
     unix => {

@@ -10,6 +10,12 @@ cfg_select! {
         #[path = "../pal/thingos/fs.rs"]
         mod thingos;
         use thingos as imp;
+        pub use thingos::{chown, fchown, lchown, chroot, mkfifo};
+        pub(crate) use thingos::debug_assert_fd_is_open;
+        #[inline]
+        pub fn with_native_path<T>(path: &Path, f: &dyn Fn(&Path) -> io::Result<T>) -> io::Result<T> {
+            f(path)
+        }
     }
     any(target_family = "unix", target_os = "wasi") => {
         mod unix;
@@ -67,6 +73,9 @@ pub use imp::{
     Dir, DirBuilder, DirEntry, File, FileAttr, FilePermissions, FileTimes, FileType, OpenOptions,
     ReadDir,
 };
+
+#[cfg(target_os = "thingos")]
+pub use imp::FileDesc;
 
 pub fn read_dir(path: &Path) -> io::Result<ReadDir> {
     // FIXME: use with_native_path on all platforms

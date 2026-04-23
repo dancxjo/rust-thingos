@@ -3,7 +3,11 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 cfg_select! {
-    any(target_family = "unix", target_os = "wasi") => {
+    target_os = "thingos" => {
+        // FileDesc is re-exported from sys::fs for ThingOS.
+        pub use crate::sys::fs::FileDesc;
+    }
+    any(all(target_family = "unix", not(target_os = "thingos")), target_os = "wasi") => {
         mod unix;
         pub use unix::*;
     }

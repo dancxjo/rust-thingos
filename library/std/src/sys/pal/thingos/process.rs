@@ -1,3 +1,4 @@
+#![unstable(feature = "thingos_pal", issue = "none")]
 //! ThingOS process implementation for `std::process`.
 //!
 //! # Spawn contract
@@ -33,16 +34,19 @@
 use super::env::{CommandEnv, CommandEnvs};
 pub use crate::ffi::OsString as EnvKey;
 use crate::ffi::{OsStr, OsString};
+use crate::sys::fs::{FileDesc, File};
 use crate::num::NonZero;
 use crate::path::Path;
 use crate::process::StdioPipes;
 use crate::sys::abi::{FdRemap, SpawnProcessExReq, SpawnProcessExResp};
-use crate::sys::fs::File;
 use crate::sys::pal::raw_syscall6;
 use crate::sys::thingos_syscall_numbers::{
-    SYS_FS_FCNTL, SYS_FS_POLL, SYS_SPAWN_PROCESS_EX, SYS_TASK_KILL, SYS_WAITPID, fcntl_cmd,
-    poll_flags, vfs_flags,
+    SYS_FS_CLOSE, SYS_FS_FCNTL, SYS_FS_POLL, SYS_SPAWN_PROCESS_EX, SYS_TASK_KILL, SYS_TASK_WAIT, SYS_WAITPID,
+    fcntl_cmd, poll_flags, vfs_flags,
 };
+use crate::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use crate::sys::{AsInner, FromInner, IntoInner};
+use crate::sys::pipe::Pipe;
 use crate::{fmt, io};
 
 /// waitpid WNOHANG: return immediately if no child has exited yet.
@@ -111,26 +115,102 @@ pub enum Stdio {
     Inherit,
     Null,
     MakePipe,
+    InheritPipe(ChildPipe),
+    InheritFile(File),
+    Fd(FileDesc),
     ParentStdout,
     ParentStderr,
-    InheritFile(File),
-    InheritPipe(ChildPipe),
 }
 
 impl Stdio {
     fn mode(&self) -> u32 {
         match self {
-            Stdio::Inherit
-            | Stdio::ParentStdout
-            | Stdio::ParentStderr
-            | Stdio::InheritFile(_)
-            | Stdio::InheritPipe(_) => stdio_mode::INHERIT,
+            Stdio::Inherit => stdio_mode::INHERIT,
             Stdio::Null => stdio_mode::NULL,
             Stdio::MakePipe => stdio_mode::PIPE,
+            Stdio::InheritFile(_) | Stdio::InheritPipe(_) | Stdio::Fd(_) | Stdio::ParentStdout | Stdio::ParentStderr => stdio_mode::INHERIT,
         }
     }
 }
 
+#[derive(Debug)]
+pub struct ChildPipe(Pipe);
+impl ChildPipe {
+    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+    pub fn read_buf(&self, buf: io::BorrowedCursor<'_>) -> io::Result<()> {
+        self.0.read_buf(buf)
+    }
+    pub fn read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize> {
+        self.0.read_vectored(bufs)
+    }
+    pub fn is_read_vectored(&self) -> bool {
+        self.0.is_read_vectored()
+    }
+    pub fn read_to_end(&self, buf: &mut crate::vec::Vec<u8>) -> io::Result<usize> {
+        self.0.read_to_end(buf)
+    }
+    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+    pub fn write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        self.0.write_vectored(bufs)
+    }
+    pub fn is_write_vectored(&self) -> bool {
+        self.0.is_write_vectored()
+    }
+}
+
+impl AsRawFd for ChildPipe {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0.as_raw_fd()
+    }
+}
+
+impl FromRawFd for ChildPipe {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        ChildPipe(unsafe { Pipe::from_raw_fd(fd) })
+    }
+}
+
+impl IntoRawFd for ChildPipe {
+    fn into_raw_fd(self) -> RawFd {
+        self.0.into_raw_fd()
+    }
+}
+
+impl AsFd for ChildPipe {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+
+impl FromInner<Pipe> for ChildPipe {
+    fn from_inner(pipe: Pipe) -> Self {
+        ChildPipe(pipe)
+    }
+}
+
+
+
+impl FromInner<OwnedFd> for ChildPipe {
+    fn from_inner(owned_fd: OwnedFd) -> Self {
+        ChildPipe(Pipe::from_inner(owned_fd))
+    }
+}
+
+impl FromInner<u32> for ChildPipe {
+    fn from_inner(fd: u32) -> Self {
+        ChildPipe(Pipe::from_inner(fd))
+    }
+}
+
+impl crate::sys::IntoInner<crate::os::fd::OwnedFd> for ChildPipe {
+    fn into_inner(self) -> crate::os::fd::OwnedFd {
+        self.0.into_inner()
+    }
+}
 impl From<ChildPipe> for Stdio {
     fn from(pipe: ChildPipe) -> Stdio {
         Stdio::InheritPipe(pipe)
@@ -202,6 +282,73 @@ impl Command {
         self.stderr = Some(stderr);
     }
 
+    // ── Unix-specific extension stubs ─────────────────────────────────────────
+
+    pub fn uid(&mut self, _id: u32) {
+        // Ignored on ThingOS
+    }
+
+    pub fn gid(&mut self, _id: u32) {
+        // Ignored on ThingOS
+    }
+
+    pub fn groups(&mut self, _groups: &[u32]) {
+        // Ignored on ThingOS
+    }
+
+    pub fn pre_exec(&mut self, _f: Box<dyn FnMut() -> crate::io::Result<()> + Send + Sync + 'static>) {
+        // Ignored on ThingOS
+    }
+
+    pub fn exec(&mut self, _default: Stdio) -> crate::io::Error {
+        crate::io::const_error!(crate::io::ErrorKind::Unsupported, "exec not supported on ThingOS")
+    }
+
+    pub fn set_arg_0<S>(&mut self, _arg: S)
+    where
+        S: AsRef<OsStr>,
+    {
+        // Ignored
+    }
+
+    pub fn chroot<P: AsRef<Path>>(&mut self, _dir: P) {
+        // Ignored
+    }
+
+    pub fn setsid(&mut self, _setsid: bool) {
+        // Ignored
+    }
+
+    pub fn process_group(&mut self, _pgroup: i32) {
+        // Ignored on ThingOS
+    }
+
+    pub fn pgroup(&mut self, _pgroup: i32) {
+        // Ignored on ThingOS
+    }
+
+
+    pub fn get_envs(&self) -> CommandEnvs<'_> {
+        self.env.iter()
+    }
+
+    pub fn get_cwd(&self) -> Option<&OsStr> {
+        self.cwd.as_deref()
+    }
+
+    pub fn get_uid(&self) -> Option<u32> {
+        None
+    }
+
+    pub fn get_gid(&self) -> Option<u32> {
+        None
+    }
+
+    pub fn get_groups(&self) -> Option<&[u32]> {
+        None
+    }
+
+
     pub fn get_program(&self) -> &OsStr {
         &self.program
     }
@@ -212,9 +359,6 @@ impl Command {
         CommandArgs { iter }
     }
 
-    pub fn get_envs(&self) -> CommandEnvs<'_> {
-        self.env.iter()
-    }
     pub fn get_env_clear(&self) -> bool {
         self.env.does_clear()
     }
@@ -234,11 +378,23 @@ impl Command {
             let s = stdio.unwrap_or(&default);
             match s {
                 Stdio::InheritPipe(p) => {
-                    fd_remaps.push(FdRemap { src_fd: p.as_raw_fd() as u64, dst_fd: dst_fd as u64 });
+                    fd_remaps.push(FdRemap { src_fd: p.as_raw_fd() as u32 as u64, dst_fd: dst_fd as u64 });
                     stdio_mode::INHERIT
                 }
                 Stdio::InheritFile(f) => {
-                    fd_remaps.push(FdRemap { src_fd: f.as_raw_fd() as u64, dst_fd: dst_fd as u64 });
+                    fd_remaps.push(FdRemap { src_fd: f.as_raw_fd() as u32 as u64, dst_fd: dst_fd as u64 });
+                    stdio_mode::INHERIT
+                }
+                Stdio::Fd(f) => {
+                    fd_remaps.push(FdRemap { src_fd: f.as_raw_fd() as u32 as u64, dst_fd: dst_fd as u64 });
+                    stdio_mode::INHERIT
+                }
+                Stdio::ParentStdout => {
+                    fd_remaps.push(FdRemap { src_fd: 1, dst_fd: dst_fd as u64 });
+                    stdio_mode::INHERIT
+                }
+                Stdio::ParentStderr => {
+                    fd_remaps.push(FdRemap { src_fd: 2, dst_fd: dst_fd as u64 });
                     stdio_mode::INHERIT
                 }
                 _ => s.mode(),
@@ -291,23 +447,27 @@ impl Command {
 
         // SAFETY: kernel guarantees these fds are valid pipe ends.
         let stdin_pipe = if stdin_mode == stdio_mode::PIPE && resp.stdin_pipe != 0 {
-            Some(unsafe { crate::sys::pipe::Pipe::from_raw_fd(resp.stdin_pipe as u32) })
+            Some(ChildPipe::from_inner(resp.stdin_pipe as u32))
         } else {
             None
         };
         let stdout_pipe = if stdout_mode == stdio_mode::PIPE && resp.stdout_pipe != 0 {
-            Some(unsafe { crate::sys::pipe::Pipe::from_raw_fd(resp.stdout_pipe as u32) })
+            Some(ChildPipe::from_inner(resp.stdout_pipe as u32))
         } else {
             None
         };
         let stderr_pipe = if stderr_mode == stdio_mode::PIPE && resp.stderr_pipe != 0 {
-            Some(unsafe { crate::sys::pipe::Pipe::from_raw_fd(resp.stderr_pipe as u32) })
+            Some(ChildPipe::from_inner(resp.stderr_pipe as u32))
         } else {
             None
         };
 
         let process = Process { pid: resp.child_pid, tid: resp.child_tid, status: None };
-        let pipes = StdioPipes { stdin: stdin_pipe, stdout: stdout_pipe, stderr: stderr_pipe };
+        let pipes = StdioPipes {
+            stdin: stdin_pipe,
+            stdout: stdout_pipe,
+            stderr: stderr_pipe,
+        };
         Ok((process, pipes))
     }
 }
@@ -373,6 +533,12 @@ impl ExitStatus {
     pub fn code(&self) -> Option<i32> {
         Some(self.0)
     }
+
+    pub fn signal(&self) -> Option<i32> { None }
+    pub fn core_dumped(&self) -> bool { false }
+    pub fn stopped_signal(&self) -> Option<i32> { None }
+    pub fn continued(&self) -> bool { false }
+    pub fn into_raw(&self) -> i32 { self.0 }
 }
 
 impl Default for ExitStatus {
@@ -401,6 +567,10 @@ impl Into<ExitStatus> for ExitStatusError {
 impl ExitStatusError {
     pub fn code(self) -> Option<NonZero<i32>> {
         Some(self.0)
+    }
+
+    pub fn into_raw(self) -> i32 {
+        self.0.get()
     }
 }
 
@@ -435,13 +605,28 @@ pub struct Process {
 
 impl Process {
     pub fn id(&self) -> u32 {
-        self.pid
+        self.tid as u32
+    }
+
+    pub fn into_id(self) -> u32 {
+        self.tid as u32
     }
 
     /// Request termination of the child process via SYS_TASK_KILL (uses TID).
     pub fn kill(&mut self) -> crate::io::Result<()> {
         let ret = unsafe { raw_syscall6(SYS_TASK_KILL, self.tid as usize, 0, 0, 0, 0, 0) };
         cvt(ret).map(|_| ())
+    }
+
+    pub fn send_signal(&self, _signal: i32) -> crate::io::Result<()> {
+        // Ignored on ThingOS
+        Ok(())
+    }
+
+    pub fn join(self) {
+        unsafe {
+            raw_syscall6(SYS_TASK_WAIT, self.tid as usize, 0, 0, 0, 0, 0);
+        }
     }
 
     /// Block until child exits; returns cached status on second call.
@@ -490,7 +675,6 @@ impl Process {
 // ── ChildPipe + read_output + output ─────────────────────────────────────────
 
 /// A pipe end held by the parent for child stdio I/O.
-pub type ChildPipe = crate::sys::pipe::Pipe;
 
 /// Drain stdout and stderr concurrently (multiplexed drain).
 ///
@@ -602,4 +786,17 @@ pub fn output(
     }
     let status = process.wait()?;
     Ok((status, stdout, stderr))
+}
+
+impl From<Pipe> for Stdio {
+    fn from(pipe: Pipe) -> Stdio {
+        Stdio::InheritPipe(ChildPipe(pipe))
+    }
+}
+
+
+impl From<i32> for ExitStatus {
+    fn from(code: i32) -> ExitStatus {
+        ExitStatus(code)
+    }
 }

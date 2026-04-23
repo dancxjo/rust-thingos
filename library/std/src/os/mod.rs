@@ -183,6 +183,7 @@ pub mod vita;
 pub mod vxworks;
 #[cfg(target_os = "xous")]
 pub mod xous;
+#[cfg(any(target_os = "thingos", doc))]
 pub mod thingos;
 
 #[cfg(any(

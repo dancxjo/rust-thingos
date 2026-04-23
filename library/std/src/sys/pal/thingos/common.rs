@@ -57,6 +57,50 @@ pub unsafe fn init(_argc: isize, _argv: *const *const u8, _sigpipe: u8) {}
 // NOTE: this is not guaranteed to run, for example when the program aborts.
 pub unsafe fn cleanup() {}
 
+// ── cvt / IsMinusOne ────────────────────────────────────────────────────────
+// Required by os/unix/* code compiled for all unix-family targets.
+
+#[doc(hidden)]
+pub trait IsMinusOne {
+    fn is_minus_one(&self) -> bool;
+}
+
+macro_rules! impl_is_minus_one {
+    ($($t:ident)*) => ($(impl IsMinusOne for $t {
+        fn is_minus_one(&self) -> bool {
+            *self == -1
+        }
+    })*)
+}
+
+impl_is_minus_one! { i8 i16 i32 i64 isize }
+
+pub fn cvt<T: IsMinusOne>(t: T) -> std_io::Result<T> {
+    if t.is_minus_one() { Err(std_io::Error::last_os_error()) } else { Ok(t) }
+}
+
+pub fn cvt_r<T, F>(mut f: F) -> std_io::Result<T>
+where
+    T: IsMinusOne,
+    F: FnMut() -> T,
+{
+    loop {
+        match cvt(f()) {
+            Err(ref e) if e.is_interrupted() => {}
+            other => return other,
+        }
+    }
+}
+
+pub fn cvt_nz(error: c_int) -> std_io::Result<()> {
+    if error == 0 { Ok(()) } else { Err(std_io::Error::from_raw_os_error(error)) }
+}
+
+/// Stub — ThingOS doesn't use POSIX signals via libc, but os/unix code
+/// references `crate::sys::signal`.
+#[allow(dead_code)]
+pub unsafe fn signal(_sig: c_int, _handler: usize) -> usize { 0 }
+
 #[allow(dead_code)]
 pub fn unsupported<T>() -> std_io::Result<T> {
     Err(unsupported_err())
@@ -218,7 +262,7 @@ fn neg_errno_to_c_int(ret: isize) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn isatty(fd: c_int) -> c_int {
-    let ret = unsafe { raw_syscall6(SYS_FS_ISATTY, fd as usize, 0, 0, 0, 0, 0) };
+    let ret = unsafe { raw_syscall6(SYS_FS_ISATTY, fd as u32 as usize, 0, 0, 0, 0, 0) };
     if ret == 1 {
         1
     } else if ret < 0 {

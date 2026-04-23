@@ -1,3 +1,4 @@
+#![unstable(feature = "thingos_pal", issue = "none")]
 //! ThingOS time implementation.
 //!
 //! `Instant`    — backed by `SYS_TIME_MONOTONIC` (0x1202), returns nanoseconds as usize.

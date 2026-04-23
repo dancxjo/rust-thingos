@@ -176,6 +176,14 @@ unsafe impl Send for Thread {}
 unsafe impl Sync for Thread {}
 
 impl Thread {
+    pub fn id(&self) -> u64 {
+        self.tid
+    }
+
+    pub fn into_id(self) -> u64 {
+        self.tid
+    }
+
     /// Spawn a new thread.
     ///
     /// # Safety

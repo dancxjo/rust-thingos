@@ -7,6 +7,7 @@ use super::raw_syscall6;
 use crate::sys::thingos_syscall_numbers::{
     SYS_EXIT, SYS_FS_CHDIR, SYS_FS_GETCWD, SYS_FS_READLINK, SYS_GETPID,
 };
+use crate::sys::thingos_syscall_numbers::SYS_GETPPID;
 use crate::ffi::{OsStr, OsString};
 use crate::path::{self, PathBuf};
 use crate::{fmt, io};
@@ -128,6 +129,11 @@ pub fn exit(code: i32) -> ! {
 
 pub fn getpid() -> u32 {
     let ret = unsafe { raw_syscall6(SYS_GETPID, 0, 0, 0, 0, 0, 0) };
+    if ret < 0 { 0 } else { ret as u32 }
+}
+
+pub fn getppid() -> u32 {
+    let ret = unsafe { raw_syscall6(SYS_GETPPID, 0, 0, 0, 0, 0, 0) };
     if ret < 0 { 0 } else { ret as u32 }
 }
 

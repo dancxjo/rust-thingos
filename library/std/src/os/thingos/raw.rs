@@ -29,6 +29,10 @@ pub type gid_t = u32;
 pub type pid_t = i32;
 
 #[stable(feature = "os_thingos", since = "1.0.0")]
+#[allow(non_camel_case_types)]
+pub type pthread_t = usize;
+
+#[stable(feature = "os_thingos", since = "1.0.0")]
 pub const STDIN_FILENO: c_int = 0;
 #[stable(feature = "os_thingos", since = "1.0.0")]
 pub const STDOUT_FILENO: c_int = 1;

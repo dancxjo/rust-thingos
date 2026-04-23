@@ -13,8 +13,10 @@
 
 use crate::fmt;
 use crate::io::{BorrowedCursor, IoSlice, IoSliceMut};
+use crate::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use crate::sys::pal::raw_syscall6;
 use crate::sys::thingos_syscall_numbers::{SYS_FS_CLOSE, SYS_FS_DUP, SYS_PIPE, SYS_READ, SYS_WRITE};
+use crate::sys::{AsInner, FromInner, IntoInner};
 
 #[inline]
 fn cvt(ret: isize) -> crate::io::Result<usize> {
@@ -24,12 +26,12 @@ fn cvt(ret: isize) -> crate::io::Result<usize> {
 /// An anonymous pipe end (either read or write).
 ///
 /// The fd is closed automatically when this value is dropped.
-pub struct Pipe(u32);
+pub struct Pipe(i32);
 
 impl Drop for Pipe {
     fn drop(&mut self) {
         // SAFETY: we own this fd; closing is always valid.
-        unsafe { raw_syscall6(SYS_FS_CLOSE, self.0 as usize, 0, 0, 0, 0, 0) };
+        unsafe { raw_syscall6(SYS_FS_CLOSE, self.0 as u32 as usize, 0, 0, 0, 0, 0) };
     }
 }
 
@@ -43,40 +45,18 @@ pub fn pipe() -> crate::io::Result<(Pipe, Pipe)> {
         raw_syscall6(SYS_PIPE, fds.as_mut_ptr() as usize, 0, 0, 0, 0, 0)
     };
     cvt(ret)?;
-    Ok((Pipe(fds[0]), Pipe(fds[1])))
+    Ok((Pipe(fds[0] as i32), Pipe(fds[1] as i32)))
 }
 
 impl Pipe {
-    /// Construct a `Pipe` from a raw fd, taking ownership of the fd.
-    ///
-    /// # Safety
-    /// The caller must ensure `fd` is a valid, open file descriptor that is
-    /// exclusively owned by this `Pipe`.
-    pub(crate) unsafe fn from_raw_fd(fd: u32) -> Self {
-        Pipe(fd)
-    }
-
-    /// Return the raw file descriptor.
-    pub fn as_raw_fd(&self) -> u32 {
-        self.0
-    }
-
-    /// Return the raw fd without closing it.
-    #[allow(dead_code)]
-    pub(crate) fn into_raw_fd(self) -> u32 {
-        let fd = self.0;
-        crate::mem::forget(self);
-        fd
-    }
-
     pub fn try_clone(&self) -> crate::io::Result<Self> {
-        let ret = unsafe { raw_syscall6(SYS_FS_DUP, self.0 as usize, 0, 0, 0, 0, 0) };
-        Ok(Pipe(cvt(ret)? as u32))
+        let ret = unsafe { raw_syscall6(SYS_FS_DUP, self.0 as u32 as usize, 0, 0, 0, 0, 0) };
+        Ok(Pipe(cvt(ret)? as u32 as i32))
     }
 
     pub fn read(&self, buf: &mut [u8]) -> crate::io::Result<usize> {
         let ret = unsafe {
-            raw_syscall6(SYS_READ, self.0 as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0)
+            raw_syscall6(SYS_READ, self.0 as u32 as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0)
         };
         cvt(ret)
     }
@@ -85,7 +65,7 @@ impl Pipe {
         // SAFETY: the syscall initialises the bytes it writes.
         let buf = unsafe { cursor.as_mut() };
         let ret = unsafe {
-            raw_syscall6(SYS_READ, self.0 as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0)
+            raw_syscall6(SYS_READ, self.0 as u32 as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0)
         };
         let n = cvt(ret)?;
         unsafe { cursor.advance_unchecked(n) };
@@ -121,7 +101,7 @@ impl Pipe {
 
     pub fn write(&self, buf: &[u8]) -> crate::io::Result<usize> {
         let ret = unsafe {
-            raw_syscall6(SYS_WRITE, self.0 as usize, buf.as_ptr() as usize, buf.len(), 0, 0, 0)
+            raw_syscall6(SYS_WRITE, self.0 as u32 as usize, buf.as_ptr() as usize, buf.len(), 0, 0, 0)
         };
         cvt(ret)
     }
@@ -149,5 +129,77 @@ impl Pipe {
 impl fmt::Debug for Pipe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Pipe(fd={})", self.0)
+    }
+}
+
+// ── Raw fd traits ────────────────────────────────────────────────────────────
+
+impl AsRawFd for Pipe {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0
+    }
+}
+
+impl FromRawFd for Pipe {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        Pipe(fd)
+    }
+}
+
+impl IntoRawFd for Pipe {
+    fn into_raw_fd(self) -> RawFd {
+        let fd = self.0;
+        crate::mem::forget(self);
+        fd
+    }
+}
+
+impl AsFd for Pipe {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        unsafe { BorrowedFd::borrow_raw(self.as_raw_fd()) }
+    }
+}
+
+// ── Inner conversion traits ──────────────────────────────────────────────────
+
+impl AsInner<i32> for Pipe {
+    fn as_inner(&self) -> &i32 {
+        &self.0
+    }
+}
+
+impl IntoInner<RawFd> for Pipe {
+    fn into_inner(self) -> RawFd {
+        self.into_raw_fd()
+    }
+}
+
+impl FromInner<RawFd> for Pipe {
+    fn from_inner(fd: RawFd) -> Self {
+        Pipe(fd)
+    }
+}
+
+impl FromInner<u32> for Pipe {
+    fn from_inner(fd: u32) -> Self {
+        Pipe(fd as i32)
+    }
+}
+
+impl IntoInner<u32> for Pipe {
+    fn into_inner(self) -> u32 {
+        self.into_raw_fd() as u32
+    }
+}
+
+impl FromInner<OwnedFd> for Pipe {
+    fn from_inner(owned_fd: OwnedFd) -> Self {
+        Pipe(owned_fd.into_raw_fd())
+    }
+}
+
+impl IntoInner<OwnedFd> for Pipe {
+    fn into_inner(self) -> OwnedFd {
+        unsafe { <OwnedFd as crate::os::fd::FromRawFd>::from_raw_fd(self.into_raw_fd()) }
     }
 }

@@ -1,0 +1,401 @@
+diff --git a/src/event/source.rs b/src/event/source.rs
+--- a/src/event/source.rs
++++ b/src/event/source.rs
+@@ -4,7 +4,10 @@
+ use super::sys::Waker;
+ use super::InternalEvent;
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_os = "thingos")))]
++pub(crate) mod unix;
++#[cfg(target_os = "thingos")]
++#[path = "source/thingos.rs"]
+ pub(crate) mod unix;
+ #[cfg(windows)]
+ pub(crate) mod windows;
+diff --git a/src/event/source/thingos.rs b/src/event/source/thingos.rs
+new file mode 100644
+--- /dev/null
++++ b/src/event/source/thingos.rs
+@@ -0,0 +1,84 @@
++use std::{collections::VecDeque, io, io::Read, time::Duration};
++
++#[cfg(feature = "event-stream")]
++use crate::event::sys::Waker;
++use crate::event::sys::unix::parse::parse_event;
++use crate::event::{source::EventSource, InternalEvent};
++
++const TTY_BUFFER_SIZE: usize = 1024;
++
++#[derive(Debug)]
++struct Parser {
++    buffer: Vec<u8>,
++    internal_events: VecDeque<InternalEvent>,
++}
++
++impl Default for Parser {
++    fn default() -> Self {
++        Self {
++            buffer: Vec::with_capacity(256),
++            internal_events: VecDeque::with_capacity(128),
++        }
++    }
++}
++
++impl Parser {
++    fn advance(&mut self, buffer: &[u8], more: bool) {
++        for (idx, byte) in buffer.iter().enumerate() {
++            let has_more = idx + 1 < buffer.len() || more;
++            self.buffer.push(*byte);
++
++            match parse_event(&self.buffer, has_more) {
++                Ok(Some(event)) => {
++                    self.internal_events.push_back(event);
++                    self.buffer.clear();
++                }
++                Ok(None) => {}
++                Err(_) => {
++                    self.buffer.clear();
++                }
++            }
++        }
++    }
++}
++
++impl Iterator for Parser {
++    type Item = InternalEvent;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        self.internal_events.pop_front()
++    }
++}
++
++pub(crate) struct UnixInternalEventSource {
++    parser: Parser,
++    tty_buffer: [u8; TTY_BUFFER_SIZE],
++}
++
++impl UnixInternalEventSource {
++    pub fn new() -> io::Result<Self> {
++        Ok(Self {
++            parser: Parser::default(),
++            tty_buffer: [0u8; TTY_BUFFER_SIZE],
++        })
++    }
++}
++
++impl EventSource for UnixInternalEventSource {
++    fn try_read(&mut self, timeout: Option<Duration>) -> io::Result<Option<InternalEvent>> {
++        if let Some(event) = self.parser.next() {
++            return Ok(Some(event));
++        }
++
++        if timeout.is_some_and(|d| d.is_zero()) {
++            return Ok(None);
++        }
++
++        let read_count = io::stdin().read(&mut self.tty_buffer)?;
++        if read_count == 0 {
++            return Ok(None);
++        }
++
++        self.parser
++            .advance(&self.tty_buffer[..read_count], read_count == TTY_BUFFER_SIZE);
++        Ok(self.parser.next())
++    }
++
++    #[cfg(feature = "event-stream")]
++    fn waker(&self) -> Waker {
++        panic!("event-stream waker is not supported on thingos")
++    }
++}
+diff --git a/src/event/sys/unix/waker.rs b/src/event/sys/unix/waker.rs
+--- a/src/event/sys/unix/waker.rs
++++ b/src/event/sys/unix/waker.rs
+@@ -1,11 +1,17 @@
+-#[cfg(feature = "use-dev-tty")]
++#[cfg(all(feature = "use-dev-tty", not(target_os = "thingos")))]
+ pub(crate) mod tty;
+ 
+-#[cfg(not(feature = "use-dev-tty"))]
++#[cfg(target_os = "thingos")]
++pub(crate) mod thingos;
++
++#[cfg(not(any(feature = "use-dev-tty", target_os = "thingos")))]
+ pub(crate) mod mio;
+ 
+-#[cfg(feature = "use-dev-tty")]
++#[cfg(all(feature = "use-dev-tty", not(target_os = "thingos")))]
+ pub(crate) use self::tty::Waker;
+ 
+-#[cfg(not(feature = "use-dev-tty"))]
++#[cfg(target_os = "thingos")]
++pub(crate) use self::thingos::Waker;
++
++#[cfg(not(any(feature = "use-dev-tty", target_os = "thingos")))]
+ pub(crate) use self::mio::Waker;
+diff --git a/src/event/sys/unix/waker/thingos.rs b/src/event/sys/unix/waker/thingos.rs
+new file mode 100644
+--- /dev/null
++++ b/src/event/sys/unix/waker/thingos.rs
+@@ -0,0 +1,18 @@
++#[derive(Clone, Debug)]
++pub(crate) struct Waker;
++
++impl Waker {
++    pub(crate) fn new() -> std::io::Result<Self> {
++        Ok(Self)
++    }
++
++    pub(crate) fn wake(&self) -> std::io::Result<()> {
++        Ok(())
++    }
++
++    pub(crate) fn reset(&self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
+diff --git a/src/terminal/sys.rs b/src/terminal/sys.rs
+--- a/src/terminal/sys.rs
++++ b/src/terminal/sys.rs
+@@ -1,11 +1,17 @@
+ //! This module provides platform related functions.
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_os = "thingos")))]
+ #[cfg(feature = "events")]
+ pub use self::unix::supports_keyboard_enhancement;
+-#[cfg(unix)]
++#[cfg(target_os = "thingos")]
++#[cfg(feature = "events")]
++pub use self::unix::supports_keyboard_enhancement;
++#[cfg(all(unix, not(target_os = "thingos")))]
+ pub(crate) use self::unix::{
+     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, window_size,
+ };
++#[cfg(target_os = "thingos")]
++pub(crate) use self::unix::{
++    disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, window_size,
++};
+ #[cfg(windows)]
+ #[cfg(feature = "events")]
+ pub use self::windows::supports_keyboard_enhancement;
+@@ -21,7 +27,10 @@
+ #[cfg(windows)]
+ mod windows;
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_os = "thingos")))]
+ pub mod file_descriptor;
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_os = "thingos")))]
++mod unix;
++#[cfg(target_os = "thingos")]
++#[path = "sys/thingos.rs"]
+ mod unix;
+diff --git a/src/terminal/sys/thingos.rs b/src/terminal/sys/thingos.rs
+new file mode 100644
+--- /dev/null
++++ b/src/terminal/sys/thingos.rs
+@@ -0,0 +1,145 @@
++//! ThingOS terminal backend backed by libc termios/ioctl shims.
++
++use std::{io, mem};
++
++use parking_lot::Mutex;
++
++use crate::terminal::WindowSize;
++
++const TCSANOW: i32 = 0;
++const TIOCGWINSZ: u64 = 0x5413;
++
++const BRKINT: u32 = 0x0002;
++const ICRNL: u32 = 0x0100;
++const INPCK: u32 = 0x0010;
++const ISTRIP: u32 = 0x0020;
++const IXON: u32 = 0x0400;
++
++const OPOST: u32 = 0x0001;
++
++const CSIZE: u32 = 0x0030;
++const CS8: u32 = 0x0030;
++
++const ECHO: u32 = 0x0008;
++const ICANON: u32 = 0x0002;
++const IEXTEN: u32 = 0x8000;
++const ISIG: u32 = 0x0001;
++
++const VTIME: usize = 5;
++const VMIN: usize = 6;
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++struct Termios {
++    c_iflag: u32,
++    c_oflag: u32,
++    c_cflag: u32,
++    c_lflag: u32,
++    c_line: u8,
++    _pad: [u8; 3],
++    c_cc: [u8; 32],
++}
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++struct WinSize {
++    ws_row: u16,
++    ws_col: u16,
++    ws_xpixel: u16,
++    ws_ypixel: u16,
++}
++
++unsafe extern "C" {
++    fn tcgetattr(fd: i32, termios_p: *mut Termios) -> i32;
++    fn tcsetattr(fd: i32, optional_actions: i32, termios_p: *const Termios) -> i32;
++    fn ioctl(fd: i32, request: u64, argp: *mut core::ffi::c_void) -> i32;
++}
++
++// Some(Termios) means raw mode is active and stores the prior mode.
++static TERMINAL_MODE_PRIOR_RAW_MODE: Mutex<Option<Termios>> = parking_lot::const_mutex(None);
++
++impl From<WinSize> for WindowSize {
++    fn from(size: WinSize) -> WindowSize {
++        WindowSize {
++            columns: size.ws_col,
++            rows: size.ws_row,
++            width: size.ws_xpixel,
++            height: size.ws_ypixel,
++        }
++    }
++}
++
++pub(crate) fn is_raw_mode_enabled() -> bool {
++    TERMINAL_MODE_PRIOR_RAW_MODE.lock().is_some()
++}
++
++pub(crate) fn enable_raw_mode() -> io::Result<()> {
++    let mut original_mode = TERMINAL_MODE_PRIOR_RAW_MODE.lock();
++    if original_mode.is_some() {
++        return Ok(());
++    }
++
++    let fd = 0;
++    let mut ios = get_terminal_attr(fd)?;
++    let original_mode_ios = ios;
++    raw_terminal_attr(&mut ios);
++    set_terminal_attr(fd, &ios)?;
++    *original_mode = Some(original_mode_ios);
++    Ok(())
++}
++
++pub(crate) fn disable_raw_mode() -> io::Result<()> {
++    let mut original_mode = TERMINAL_MODE_PRIOR_RAW_MODE.lock();
++    if let Some(original_mode_ios) = original_mode.as_ref() {
++        let fd = 0;
++        set_terminal_attr(fd, original_mode_ios)?;
++        *original_mode = None;
++    }
++    Ok(())
++}
++
++#[allow(clippy::useless_conversion)]
++pub(crate) fn window_size() -> io::Result<WindowSize> {
++    let mut size = WinSize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
++
++    let fd = 1;
++
++    if wrap_with_result(unsafe { ioctl(fd, TIOCGWINSZ, (&mut size as *mut WinSize).cast()) })
++        .is_ok()
++    {
++        return Ok(size.into());
++    }
++
++    Err(io::Error::last_os_error())
++}
++
++pub(crate) fn size() -> io::Result<(u16, u16)> {
++    let ws = window_size()?;
++    Ok((ws.columns, ws.rows))
++}
++
++fn raw_terminal_attr(termios: &mut Termios) {
++    termios.c_iflag &= !(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
++    termios.c_oflag &= !OPOST;
++    termios.c_cflag &= !CSIZE;
++    termios.c_cflag |= CS8;
++    termios.c_lflag &= !(ECHO | ICANON | IEXTEN | ISIG);
++    termios.c_cc[VMIN] = 1;
++    termios.c_cc[VTIME] = 0;
++}
++
++fn get_terminal_attr(fd: i32) -> io::Result<Termios> {
++    unsafe {
++        let mut termios = mem::zeroed();
++        wrap_with_result(tcgetattr(fd, &mut termios))?;
++        Ok(termios)
++    }
++}
++
++fn set_terminal_attr(fd: i32, termios: &Termios) -> io::Result<()> {
++    wrap_with_result(unsafe { tcsetattr(fd, TCSANOW, termios) })
++}
++
++fn wrap_with_result(result: i32) -> io::Result<()> {
++    if result == -1 { Err(io::Error::last_os_error()) } else { Ok(()) }
++}
++
++#[cfg(feature = "events")]
++pub fn supports_keyboard_enhancement() -> io::Result<bool> {
++    Ok(false)
++}
+diff --git a/src/tty.rs b/src/tty.rs
+--- a/src/tty.rs
++++ b/src/tty.rs
+@@ -2,7 +2,9 @@
+ //! something is a terminal teletype or not.
+ //! This module defines the IsTty trait and the is_tty method to
+ //! return true if the item represents a terminal.
+ 
+-#[cfg(unix)]
++#[cfg(unix)]
++use std::os::fd::AsRawFd;
++#[cfg(all(unix, not(feature = "libc"), not(target_os = "thingos")))]
++use std::os::fd::BorrowedFd;
+ #[cfg(windows)]
+ use std::os::windows::io::AsRawHandle;
+@@ -25,14 +27,28 @@ pub trait IsTty {
+ 
+ /// On UNIX, the `isatty()` function returns true if a file
+ /// descriptor is a terminal.
+-#[cfg(all(unix, feature = "libc"))]
++#[cfg(all(unix, not(target_os = "thingos"), feature = "libc"))]
+ impl<S: AsRawFd> IsTty for S {
+     fn is_tty(&self) -> bool {
+         let fd = self.as_raw_fd();
+         unsafe { libc::isatty(fd) == 1 }
+     }
+ }
+ 
+-#[cfg(all(unix, not(feature = "libc")))]
++#[cfg(all(target_os = "thingos", feature = "libc"))]
++impl<S> IsTty for S {
++    fn is_tty(&self) -> bool {
++        true
++    }
++}
++
++#[cfg(all(unix, not(target_os = "thingos"), not(feature = "libc")))]
+ impl<S: AsRawFd> IsTty for S {
+     fn is_tty(&self) -> bool {
+         let fd = self.as_raw_fd();
+-        rustix::termios::isatty(unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) })
++        rustix::termios::isatty(unsafe { BorrowedFd::borrow_raw(fd) })
++    }
++}
++
++#[cfg(all(target_os = "thingos", not(feature = "libc")))]
++impl<S> IsTty for S {
++    fn is_tty(&self) -> bool {
++        true
+     }
+ }

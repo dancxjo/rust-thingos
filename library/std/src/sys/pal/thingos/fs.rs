@@ -1,3 +1,4 @@
+#![unstable(feature = "thingos_pal", issue = "none")]
 //! ThingOS PAL — filesystem support.
 //!
 //! This module provides the platform-specific filesystem implementation for
@@ -22,7 +23,7 @@
 //! `SYS_FS_FUTIMES` (fd-based).  Pass `u64::MAX` for `atime_sec` or `mtime_sec`
 //! in the request struct to leave that timestamp unchanged.
 
-use crate::ffi::OsString;
+use crate::ffi::{OsStr, OsString};
 use crate::fs::TryLockError;
 use crate::hash::{Hash, Hasher};
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
@@ -109,16 +110,36 @@ mod tests {
 
 // ── FileDesc: thin close-on-drop fd wrapper ───────────────────────────────────
 
-struct FileDesc(u32);
+#[derive(Debug)]
+pub struct FileDesc(u32);
+
+impl crate::sys::FromInner<crate::os::fd::OwnedFd> for FileDesc {
+    fn from_inner(owned_fd: crate::os::fd::OwnedFd) -> FileDesc {
+        unsafe { FileDesc::from_raw_fd(crate::os::fd::IntoRawFd::into_raw_fd(owned_fd)) }
+    }
+}
+
+
+impl crate::sys::IntoInner<crate::os::fd::OwnedFd> for FileDesc {
+    fn into_inner(self) -> crate::os::fd::OwnedFd {
+        unsafe { <crate::os::fd::OwnedFd as crate::os::fd::FromRawFd>::from_raw_fd(self.0 as i32) }
+    }
+}
+
 
 impl FileDesc {
-    fn from_raw(fd: u32) -> Self {
+    pub fn from_raw(fd: u32) -> Self {
         Self(fd)
     }
 
-    fn raw(&self) -> u32 {
+    pub fn raw(&self) -> u32 {
         self.0
     }
+    pub fn as_raw_fd(&self) -> i32 { self.0 as i32 }
+
+    pub fn from_raw_fd(fd: i32) -> Self { Self(fd as u32) }
+
+    pub fn into_raw_fd(self) -> i32 { self.0 as i32 }
 }
 
 impl Drop for FileDesc {
@@ -195,11 +216,82 @@ impl AbiUtimesRequest {
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
-pub struct File(FileDesc);
+pub struct File(pub FileDesc);
+
+impl crate::os::fd::AsRawFd for File {
+    fn as_raw_fd(&self) -> crate::os::fd::RawFd {
+        self.0.as_raw_fd()
+    }
+}
+impl crate::os::fd::IntoRawFd for File {
+    fn into_raw_fd(self) -> crate::os::fd::RawFd {
+        self.0.into_raw_fd()
+    }
+}
+impl crate::os::fd::FromRawFd for File {
+    unsafe fn from_raw_fd(fd: crate::os::fd::RawFd) -> File {
+        File(FileDesc::from_raw_fd(fd))
+    }
+}
+impl crate::os::fd::AsFd for File {
+    fn as_fd(&self) -> crate::os::fd::BorrowedFd<'_> {
+        unsafe { crate::os::fd::BorrowedFd::borrow_raw(self.as_raw_fd()) }
+    }
+}
+impl From<File> for crate::os::fd::OwnedFd {
+    fn from(file: File) -> crate::os::fd::OwnedFd {
+        unsafe { <crate::os::fd::OwnedFd as crate::os::fd::FromRawFd>::from_raw_fd(crate::os::fd::IntoRawFd::into_raw_fd(file)) }
+    }
+}
+
+impl crate::sys::AsInner<FileDesc> for File {
+    #[inline]
+    fn as_inner(&self) -> &FileDesc {
+        &self.0
+    }
+}
+
+impl crate::sys::AsInnerMut<FileDesc> for File {
+    #[inline]
+    fn as_inner_mut(&mut self) -> &mut FileDesc {
+        &mut self.0
+    }
+}
+
+impl crate::sys::IntoInner<FileDesc> for File {
+    fn into_inner(self) -> FileDesc {
+        self.0
+    }
+}
+
+impl crate::sys::FromInner<FileDesc> for File {
+    fn from_inner(fd: FileDesc) -> File {
+        File(fd)
+    }
+}
 
 #[derive(Clone)]
 pub struct FileAttr {
     stat: AbiFileStat,
+}
+
+impl FileAttr {
+    pub fn st_dev(&self) -> u64 { 0 }
+    pub fn st_ino(&self) -> u64 { self.stat.ino }
+    pub fn st_mode(&self) -> u32 { self.stat.mode }
+    pub fn st_nlink(&self) -> u64 { self.stat.nlink as u64 }
+    pub fn st_uid(&self) -> u32 { self.stat.uid }
+    pub fn st_gid(&self) -> u32 { self.stat.gid }
+    pub fn st_rdev(&self) -> u64 { self.stat.rdev }
+    pub fn st_size(&self) -> u64 { self.stat.size }
+    pub fn st_atime(&self) -> i64 { self.stat.atime.sec as i64 }
+    pub fn st_atime_nsec(&self) -> i64 { self.stat.atime.nsec as i64 }
+    pub fn st_mtime(&self) -> i64 { self.stat.mtime.sec as i64 }
+    pub fn st_mtime_nsec(&self) -> i64 { self.stat.mtime.nsec as i64 }
+    pub fn st_ctime(&self) -> i64 { self.stat.ctime.sec as i64 }
+    pub fn st_ctime_nsec(&self) -> i64 { self.stat.ctime.nsec as i64 }
+    pub fn st_blksize(&self) -> u64 { self.stat.blksize as u64 }
+    pub fn st_blocks(&self) -> u64 { self.stat.blocks }
 }
 
 struct InnerReadDir {
@@ -294,6 +386,29 @@ impl FilePermissions {
             self.mode |= 0o200;
         }
     }
+
+    pub fn mode(&self) -> u32 {
+        self.mode
+    }
+
+    pub fn set_mode(&mut self, mode: u32) {
+        self.mode = mode;
+    }
+
+    pub fn from_mode(mode: u32) -> FilePermissions {
+        FilePermissions { mode }
+    }
+}
+
+impl crate::sys::FromInner<u32> for FilePermissions {
+    fn from_inner(mode: u32) -> FilePermissions {
+        FilePermissions { mode }
+    }
+}
+impl crate::sys::IntoInner<u32> for FilePermissions {
+    fn into_inner(self) -> u32 {
+        self.mode
+    }
 }
 
 // ── FileTimes ─────────────────────────────────────────────────────────────────
@@ -321,6 +436,10 @@ impl FileType {
     pub fn is_symlink(&self) -> bool {
         self.mode == S_IFLNK
     }
+
+    pub fn is(&self, mode: u32) -> bool {
+        self.mode == mode
+    }
 }
 
 // ── OpenOptions ───────────────────────────────────────────────────────────────
@@ -335,6 +454,14 @@ impl OpenOptions {
             create: false,
             create_new: false,
         }
+    }
+
+    pub fn mode(&mut self, _mode: u32) {
+        // Ignored
+    }
+
+    pub fn custom_flags(&mut self, _flags: i32) {
+        // Ignored
     }
 
     pub fn read(&mut self, read: bool) {
@@ -408,8 +535,11 @@ impl OpenOptions {
 // ── File ──────────────────────────────────────────────────────────────────────
 
 impl File {
-    pub fn as_raw_fd(&self) -> u32 {
-        self.0.raw()
+    pub fn as_raw_fd(&self) -> i32 {
+        self.0.raw() as i32
+    }
+    pub fn into_raw_fd(self) -> i32 {
+        self.0.into_raw_fd()
     }
 
     pub fn open(path: &Path, opts: &OpenOptions) -> crate::io::Result<File> {
@@ -616,6 +746,28 @@ impl File {
         Ok(())
     }
 
+    pub fn read_at(&self, _buf: &mut [u8], _offset: u64) -> crate::io::Result<usize> {
+        Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "read_at not supported on ThingOS"))
+    }
+    pub fn read_buf_at(&self, _cursor: crate::io::BorrowedCursor<'_>, _offset: u64) -> crate::io::Result<()> {
+        Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "read_buf_at not supported on ThingOS"))
+    }
+    pub fn read_exact_at(&self, _buf: &mut [u8], _offset: u64) -> crate::io::Result<()> {
+        Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "read_exact_at not supported on ThingOS"))
+    }
+    pub fn write_at(&self, _buf: &[u8], _offset: u64) -> crate::io::Result<usize> {
+        Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "write_at not supported on ThingOS"))
+    }
+    pub fn write_all_at(&self, _buf: &[u8], _offset: u64) -> crate::io::Result<()> {
+        Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "write_all_at not supported on ThingOS"))
+    }
+    pub fn read_vectored_at(&self, _bufs: &mut [crate::io::IoSliceMut<'_>], _offset: u64) -> crate::io::Result<usize> {
+        Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "read_vectored_at not supported on ThingOS"))
+    }
+    pub fn write_vectored_at(&self, _bufs: &[crate::io::IoSlice<'_>], _offset: u64) -> crate::io::Result<usize> {
+        Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "write_vectored_at not supported on ThingOS"))
+    }
+
     pub fn seek(&self, pos: SeekFrom) -> crate::io::Result<u64> {
         let (whence, offset) = match pos {
             SeekFrom::Start(off) => (SEEK_SET, off as i64),
@@ -742,6 +894,14 @@ impl DirEntry {
         self.name.clone()
     }
 
+    pub fn file_name_os_str(&self) -> &OsStr {
+        &self.name
+    }
+
+    pub fn ino(&self) -> u64 {
+        0
+    }
+
     pub fn metadata(&self) -> crate::io::Result<FileAttr> {
         stat(&self.path())
     }
@@ -760,6 +920,10 @@ impl DirBuilder {
 
     pub fn mkdir(&self, path: &Path) -> crate::io::Result<()> {
         mkdir(path)
+    }
+
+    pub fn set_mode(&mut self, _mode: u32) {
+        // Ignored
     }
 }
 
@@ -1000,3 +1164,29 @@ pub fn set_times_nofollow(path: &Path, times: FileTimes) -> crate::io::Result<()
     };
     cvt(ret).map(|_| ())
 }
+
+
+// ── Stubs required by os/unix code ───────────────────────────────────────────
+
+pub fn chown(_path: &crate::path::Path, _uid: u32, _gid: u32) -> crate::io::Result<()> {
+    Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "chown not supported on ThingOS"))
+}
+
+pub fn fchown(_fd: crate::os::unix::io::RawFd, _uid: u32, _gid: u32) -> crate::io::Result<()> {
+    Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "fchown not supported on ThingOS"))
+}
+
+pub fn lchown(_path: &crate::path::Path, _uid: u32, _gid: u32) -> crate::io::Result<()> {
+    Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "lchown not supported on ThingOS"))
+}
+
+pub fn chroot(_path: &crate::path::Path) -> crate::io::Result<()> {
+    Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "chroot not supported on ThingOS"))
+}
+
+pub fn mkfifo(_path: &crate::path::Path, _mode: u32) -> crate::io::Result<()> {
+    Err(crate::io::const_error!(crate::io::ErrorKind::Unsupported, "mkfifo not supported on ThingOS"))
+}
+
+#[allow(dead_code)]
+pub(crate) fn debug_assert_fd_is_open(_fd: crate::os::unix::io::RawFd) {}

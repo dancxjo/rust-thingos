@@ -1,0 +1,51 @@
+diff --git a/src/unix.rs b/src/unix.rs
+index 6623df7..b0940c2 100644
+--- a/src/unix.rs
++++ b/src/unix.rs
+@@ -18,6 +18,23 @@ pub type RawFileDescriptor = RawFd;
+ /// underlying platform socket descriptor type.  It is primarily useful
+ /// for avoiding using `cfg` blocks in platform independent code.
+ pub type SocketDescriptor = RawFd;
++
++#[cfg(target_os = "thingos")]
++const STDIN_FILENO: libc::c_int = 0;
++#[cfg(target_os = "thingos")]
++const STDOUT_FILENO: libc::c_int = 1;
++#[cfg(target_os = "thingos")]
++const STDERR_FILENO: libc::c_int = 2;
++#[cfg(target_os = "thingos")]
++const SOCK_STREAM: libc::c_int = 1;
++
++#[cfg(not(target_os = "thingos"))]
++const STDIN_FILENO: libc::c_int = libc::STDIN_FILENO;
++#[cfg(not(target_os = "thingos"))]
++const STDOUT_FILENO: libc::c_int = libc::STDOUT_FILENO;
++#[cfg(not(target_os = "thingos"))]
++const STDERR_FILENO: libc::c_int = libc::STDERR_FILENO;
++#[cfg(not(target_os = "thingos"))]
++const SOCK_STREAM: libc::c_int = libc::SOCK_STREAM;
+ 
+ impl<T: AsRawFd> AsRawFileDescriptor for T {
+     fn as_raw_file_descriptor(&self) -> RawFileDescriptor {
+@@ -317,9 +334,9 @@ impl FileDescriptor {
+         stdio: StdioDescriptor,
+     ) -> Result<Self> {
+         let std_descriptor = match stdio {
+-            StdioDescriptor::Stdin => libc::STDIN_FILENO,
+-            StdioDescriptor::Stdout => libc::STDOUT_FILENO,
+-            StdioDescriptor::Stderr => libc::STDERR_FILENO,
++            StdioDescriptor::Stdin => STDIN_FILENO,
++            StdioDescriptor::Stdout => STDOUT_FILENO,
++            StdioDescriptor::Stderr => STDERR_FILENO,
+         };
+ 
+         let std_original = FileDescriptor::dup(&std_descriptor)?;
+@@ -419,7 +436,7 @@ pub fn socketpair_impl() -> Result<(FileDescriptor, FileDescriptor)> {
+ #[doc(hidden)]
+ pub fn socketpair_impl() -> Result<(FileDescriptor, FileDescriptor)> {
+     let mut fds = [-1i32; 2];
+-    let res = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
++    let res = unsafe { libc::socketpair(libc::AF_UNIX, SOCK_STREAM, 0, fds.as_mut_ptr()) };
+     if res == -1 {
+         Err(Error::Socketpair(std::io::Error::last_os_error()))
+     } else {
