@@ -8,6 +8,7 @@ Feature: Shell Command Repetition
     And I type "cat /https/ex/@index" on the serial console
     And I type "cat /https/ex/@index" on the serial console
     And I type "cat /https/ex/@index" on the serial console
+    Then the command output should contain "<html"
 
   Scenario: Repeat ls five times
     Given the machine is booted
@@ -17,3 +18,4 @@ Feature: Shell Command Repetition
     And I type "ls" on the serial console
     And I type "ls" on the serial console
     And I type "ls" on the serial console
+    Then the command output should contain "bin"

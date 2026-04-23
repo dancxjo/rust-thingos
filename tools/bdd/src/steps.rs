@@ -1941,3 +1941,59 @@ async fn see_network_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 }
+I reviewed the run artifacts under /home/runner/work/thingos/thingos/docs/behavior and found these false passes:
+
+Confirmed false pass
+
+Scenario: ls, grep, and wc pipe line counting
+File: /home/runner/work/thingos/thingos/docs/behavior/x86_64/bin-utils-traditional-functionality/ls-grep-and-wc-pipe-line-counting/README.md
+Test expects output containing "2" (step marked ✅), but log shows pipeline output 0 (line 81).
+Confirmed false pass
+
+Scenario: POSIX behavior - head -n and tail -n (expected to fail if not fully POSIX)
+File: /home/runner/work/thingos/thingos/docs/behavior/x86_64/bin-utils-traditional-functionality/posix-behavior-head-n-and-tail-n-expected-to-fail-if-not-fully-posix/README.md
+Step expects "2" and is marked ✅, but log does not show result 2; only command text/timestamps include 2 (likely accidental match).
+Confirmed false pass
+
+Scenario: Repeat cd into https and cat example content three times
+File: /home/runner/work/thingos/thingos/docs/behavior/x86_64/shell-command-repetition/repeat-cd-into-https-and-cat-example-content-three-times/README.md
+Scenario passes with no content assertion, while log shows cat: error reading /https/ex/@index (e.g. lines 782, 963).
+Likely false pass / broken evidence
+
+Scenario: echo, pipe, and wc work together
+File: /home/runner/work/thingos/thingos/docs/behavior/x86_64/bin-utils-traditional-functionality/echo-pipe-and-wc-work-together/README.md
+Step expects "2" and passes, but stored full log is truncated/corrupted before showing command result.
+Also checked:
+
+/home/runner/work/thingos/thingos/docs/behavior/x86_64/serial-shell-boot/... looks valid (shell-ready is present).
+/home/runner/work/thingos/thingos/docs/behavior/x86_64/process-reaping-smoke-test/... looks valid (shows PID header and /bin/sh, /bin/ps rows).
+#[then(regex = r#"^the command output should contain "(.+)"$"#)]
+async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world));
+    
+    loop {
+        let log = world.get_serial_log().await;
+        let clean_log = strip_ansi(&log);
+        let mut found = false;
+        
+        for line in clean_log.lines() {
+            // Check lines that do NOT look like a kernel/service log prefix (e.g. `[12345] [ INFO ]`)
+            // and do NOT look like the echoed command (e.g. they don't contain the prompt `>`)
+            if !line.starts_with('[') && !line.contains(">") && line.contains(&expected) {
+                found = true;
+                break;
+            }
+        }
+        
+        if found {
+            return Ok(());
+        }
+        
+        if start.elapsed() > timeout {
+            capture_failure_diagnostics(world, &expected).await;
+            return Err(StepError(format!("Command output did not contain '{}' within timeout", expected)));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}

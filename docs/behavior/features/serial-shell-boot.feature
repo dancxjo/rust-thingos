@@ -5,4 +5,4 @@ Feature: Serial Shell Boot
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo shell-ready" on the serial console
-    Then the serial output should contain "shell-ready"
+    Then the command output should contain "shell-ready"
