@@ -1943,28 +1943,34 @@ async fn see_network_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
 }
 #[then(regex = r#"^the command output should contain "(.+)"$"#)]
 async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
-    let start = std::time::Instant::now();
+    let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world));
-    
+
     loop {
         let log = world.get_serial_log().await;
-        let clean_log = strip_ansi(&log);
+        // Only search output produced since the last command was typed (same as
+        // `latest_command_output_contains`).  Searching the full log causes false
+        // positives because boot-time text (e.g. "2026-04-16" or "shoots") can
+        // contain the expected strings before the command under test even runs.
+        let start = world.serial_checkpoint.min(log.len());
+        let recent = &log[start..];
+        let clean_log = strip_ansi(recent);
         let mut found = false;
-        
+
         for line in clean_log.lines() {
-            // Check lines that do NOT look like a kernel/service log prefix (e.g. `[12345] [ INFO ]`)
-            // and do NOT look like the echoed command (e.g. they don't contain the prompt `>`)
+            // Exclude structured kernel/service log lines (start with '[') and
+            // shell prompt lines (contain '>').
             if !line.starts_with('[') && !line.contains(">") && line.contains(&expected) {
                 found = true;
                 break;
             }
         }
-        
+
         if found {
             return Ok(());
         }
-        
-        if start.elapsed() > timeout {
+
+        if start_time.elapsed() > timeout {
             capture_failure_diagnostics(world, &expected).await;
             return Err(StepError(format!("Command output did not contain '{}' within timeout", expected)));
         }
