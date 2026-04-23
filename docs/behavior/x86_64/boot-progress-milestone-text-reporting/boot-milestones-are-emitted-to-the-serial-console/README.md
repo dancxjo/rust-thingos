@@ -1,14 +1,12 @@
 # ✅ Scenario: Boot milestones are emitted to the serial console
 
-> Last run: 2026-04-22 22:12:03
+> Last run: 2026-04-23 05:15:06
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is started | ✅ | 0ms | - - - |
-| 2 | When I wait for the system to boot | ✅ | 8711ms | - [📜](./02/serial.log) - |
-| 3 | Then the serial output should contain "boot_progress: milestone=" | ✅ | 0ms | - [📜](./03/serial.log) - |
+| 1 | Given the machine is started | ❌ | 1000ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

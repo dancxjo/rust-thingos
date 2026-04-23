@@ -179,10 +179,10 @@ impl ThingOsReporter {
                 self.finish_step(StepResult::Skipped).await;
             }
             event::Step::Failed(_, _, _, err) => {
-                eprintln!(">>> REPORTER CAUGHT FAILED STEP: {:?} <<<", err);
+                eprintln!(">>> REPORTER CAUGHT FAILED STEP: {} <<<", err);
                 self.scenario_failed = true;
                 eprintln!("│  │  │  └─ ❌ FAILED");
-                eprintln!("│  │  │      {:?}", err);
+                eprintln!("│  │  │      {}", err);
                 self.finish_step(StepResult::Failed).await;
             }
         }

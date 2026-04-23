@@ -1,15 +1,12 @@
 # ✅ Scenario: Final boot milestone is reported before entering the scheduler loop
 
-> Last run: 2026-04-22 22:12:03
+> Last run: 2026-04-23 05:15:06
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is started | ✅ | 0ms | - - - |
-| 2 | When I wait for the system to boot | ✅ | 8908ms | - - - |
-| 3 | Then the serial log shows "Entering Scheduler" after "Spawning Sprout" | ✅ | 501ms | - [📜](./03/serial.log) - |
-| 4 | And the serial log shows "Entering scheduler loop." after "Entering Scheduler" | ✅ | 501ms | - [📜](./04/serial.log) - |
+| 1 | Given the machine is started | ❌ | 1002ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

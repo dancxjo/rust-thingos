@@ -1,6 +1,6 @@
 # ✅ Scenario: Terminal hint is reported during initialization
 
-> Last run: 2026-04-22 22:12:03
+> Last run: 2026-04-23 05:15:06
 
 ## Steps
 
@@ -23,7 +23,8 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
 [27832007742] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
 [27836402286] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
 [27880165962] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
-[27902529171] [[32mINFO [[28329746478] 0m] [kernel] [[32mINFO [0m] [kernel::boot_pro[CPU0gress] [CPU0] boot_progress: milestone] In="SMitialiP Brinzig-up"ng
+[27902529171] [[32mINFO [[28329746478] 0m] [kernel] [[32mINFO [0m] [kernel::boot_pro[CPU0gress] [CPU0] boot_progress: milestone] In="SMitialiP Brinzig-up"
+ng
  tasking...
 [27959152782] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
 [27960291480] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
