@@ -64,7 +64,7 @@ impl ProviderRpc {
         crate::ktrace!("VFS RPC: tid={} op={:?} begin", tid, op);
 
         if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
-            crate::kwarn!("VFS RPC: tid={} op={:?} rejected (provider is already tainted/stalled)", tid, op);
+            crate::ktrace!("VFS RPC: tid={} op={:?} rejected (provider is already tainted/stalled)", tid, op);
             return Err(Errno::EIO);
         }
 

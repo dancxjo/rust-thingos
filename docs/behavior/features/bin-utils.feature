@@ -16,18 +16,18 @@ Feature: Bin Utils Traditional Functionality
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo -e 'a\nb\nc' | grep -v b" on the serial console
-    Then the serial output should contain "a"
-    And the serial output should contain "c"
+    Then the serial output should contain "a" within 5s
+    And the serial output should contain "c" within 5s
     And the latest serial output should not contain "b"
 
   Scenario: POSIX behavior - cat -n for line numbers (expected to fail if not implemented)
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo hello | cat -n" on the serial console
-    Then the serial output should contain "1  hello"
+    Then the serial output should contain "1  hello" within 5s
 
   Scenario: POSIX behavior - head -n and tail -n (expected to fail if not fully POSIX)
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo -e '1\n2\n3' | head -n 2 | tail -n 1" on the serial console
-    Then the serial output should contain "2"
+    Then the serial output should contain "2" within 5s
