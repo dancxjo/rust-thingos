@@ -63,6 +63,11 @@ const MDNS_IFACE: &str = "eth0";
 const ANNOUNCE_INTERVAL_MS: u64 = 30_000;
 /// How often (ms) to retry opening the optional mDNS UDP socket.
 const NETD_PROBE_INTERVAL_MS: u64 = 1_000;
+/// Do not touch /net immediately at startup. Let netd finish bring-up before
+/// mesocarp starts probing UDP/IP files.
+const NETD_ATTACH_DELAY_MS: u64 = 30_000;
+/// How often (ms) to refresh our own IPv4 from /net once probing is enabled.
+const SELF_IP_REFRESH_MS: u64 = 5_000;
 /// How often (ms) we sweep the host cache for expired entries.
 const EXPIRE_SWEEP_MS: u64 = 1_000;
 /// Port buffer capacity for this provider.
@@ -71,6 +76,10 @@ const PORT_CAPACITY_BYTES: usize = 32_768;
 const SEED_NAME: &[u8] = b"mesocarp";
 const HOOK_MOUNT_V1: &[u8] = b"_start";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";
+
+fn net_probe_enabled(now_ms: u64, start_ms: u64) -> bool {
+    now_ms.saturating_sub(start_ms) >= NETD_ATTACH_DELAY_MS
+}
 
 #[no_mangle]
 #[used]
@@ -368,7 +377,9 @@ fn run(mount_point: &str) -> ! {
     info!("mesocarp: serving cache immediately; mDNS socket will attach when netd is ready");
 
     let mut udp: Option<UdpSocket> = None;
+    let start_ms = stem::time::monotonic_ns() / 1_000_000;
     let mut last_netd_probe_ms: u64 = 0;
+    let mut last_self_refresh_ms: u64 = 0;
     let mut last_announce_ms: u64 = 0;
     let mut last_expire_ms: u64 = 0;
 
@@ -397,20 +408,28 @@ fn run(mount_point: &str) -> ! {
             }
         }
 
-        // 2. Refresh self-entry so the cached name→ip mapping tracks IP
-        //    changes (e.g. DHCP renewals).
-        if let Some(ip) = read_own_ipv4() {
-            provider.upsert(HostEntry {
-                name: self_name.clone(),
-                ipv4: ip,
-                expires_at_ms: None, // pinned; we own this
-            });
+        // 2. Refresh self-entry periodically once we are past early boot.
+        //    Avoid hitting /net aggressively while netd is still stabilizing.
+        let can_probe_net = net_probe_enabled(now, start_ms);
+        if can_probe_net
+            && (last_self_refresh_ms == 0
+                || now.saturating_sub(last_self_refresh_ms) >= SELF_IP_REFRESH_MS)
+        {
+            last_self_refresh_ms = now;
+            if let Some(ip) = read_own_ipv4() {
+                provider.upsert(HostEntry {
+                    name: self_name.clone(),
+                    ipv4: ip,
+                    expires_at_ms: None, // pinned; we own this
+                });
+            }
         }
 
         // 3. Attach to netd once it is ready. This must not block VFS serving:
         // `/hosts` should answer local cache requests even while networking
         // is still starting.
-        if udp.is_none()
+        if can_probe_net
+            && udp.is_none()
             && (last_netd_probe_ms == 0
                 || now.saturating_sub(last_netd_probe_ms) >= NETD_PROBE_INTERVAL_MS)
         {
@@ -646,5 +665,13 @@ mod tests {
         assert_eq!(parse_ipv4_line(" 10.0.0.1 "), Some([10, 0, 0, 1]));
         assert_eq!(parse_ipv4_line("bogus"), None);
         assert_eq!(parse_ipv4_line("1.2.3.4.5"), None);
+    }
+
+    #[test]
+    fn net_probe_gate_enables_after_delay() {
+        assert!(!net_probe_enabled(10_000, 0));
+        assert!(!net_probe_enabled(NETD_ATTACH_DELAY_MS - 1, 0));
+        assert!(net_probe_enabled(NETD_ATTACH_DELAY_MS, 0));
+        assert!(net_probe_enabled(NETD_ATTACH_DELAY_MS + 1, 0));
     }
 }
