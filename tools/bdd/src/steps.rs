@@ -1943,7 +1943,7 @@ async fn see_network_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
 }
 #[then(regex = r#"^the command output should contain "(.+)"$"#)]
 async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
-    let start = std::time::Instant::now();
+    let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world));
     
     loop {
@@ -1966,7 +1966,7 @@ async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> 
             return Ok(());
         }
         
-        if start.elapsed() > timeout {
+        if start_time.elapsed() > timeout {
             capture_failure_diagnostics(world, &expected).await;
             return Err(StepError(format!("Command output did not contain '{}' within timeout", expected)));
         }
