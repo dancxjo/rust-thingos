@@ -29,7 +29,7 @@
 //! [`OsString`]: crate::ffi::OsString
 
 #![stable(feature = "rust1", since = "1.0.0")]
-#![doc(cfg(any(unix, target_os = "thingos")))]
+#![doc(cfg(unix))]
 
 // Use linux as the default platform when documenting on other platforms like Windows
 #[cfg(doc)]
@@ -85,8 +85,6 @@ mod platform {
     pub use crate::os::vita::*;
     #[cfg(target_os = "vxworks")]
     pub use crate::os::vxworks::*;
-    #[cfg(target_os = "thingos")]
-    pub use crate::os::thingos::*;
 }
 
 pub mod ffi;

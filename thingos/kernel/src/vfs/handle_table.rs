@@ -28,6 +28,7 @@ pub const HANDLE_CLOEXEC: u32 = abi::syscall::handle_flags::HANDLE_CLOEXEC;
 /// The `offset` is wrapped in `Arc<Mutex<u64>>` so that handles
 /// created by `dup` or `dup2` share the same file position, matching POSIX
 /// open-handle-description semantics.
+#[derive(Clone)]
 pub struct OpenHandle {
     pub node: Arc<dyn VfsNode>,
     pub status_flags: Arc<Mutex<OpenFlags>>,
@@ -39,40 +40,9 @@ pub struct OpenHandle {
 }
 
 /// Per-process handle table.
+#[derive(Clone)]
 pub struct HandleTable {
     entries: alloc::vec::Vec<Option<OpenHandle>>,
-}
-
-impl Clone for OpenHandle {
-    fn clone(&self) -> Self {
-        self.node.open();
-        Self {
-            node: self.node.clone(),
-            status_flags: self.status_flags.clone(),
-            handle_flags: self.handle_flags,
-            path: self.path.clone(),
-            offset: self.offset.clone(),
-        }
-    }
-}
-
-impl Clone for HandleTable {
-    fn clone(&self) -> Self {
-        let mut entries = alloc::vec::Vec::with_capacity(MAX_HANDLES);
-        for (i, entry) in self.entries.iter().enumerate() {
-            if let Some(h) = entry {
-                if (h.handle_flags & HANDLE_CLOEXEC) == 0 {
-                    crate::kinfo!("HandleTable::clone: cloning fd={}", i);
-                    entries.push(Some(h.clone()));
-                    continue;
-                } else {
-                    crate::kinfo!("HandleTable::clone: skipping fd={} due to CLOEXEC", i);
-                }
-            }
-            entries.push(None);
-        }
-        Self { entries }
-    }
 }
 
 impl HandleTable {
@@ -97,7 +67,6 @@ impl HandleTable {
     ) -> SysResult<u32> {
         for i in 0..MAX_HANDLES {
             if self.entries[i].is_none() {
-                node.open();
                 self.entries[i] = Some(OpenHandle {
                     node,
                     status_flags: Arc::new(Mutex::new(flags)),
@@ -129,10 +98,6 @@ impl HandleTable {
         if self.entries[idx].is_some() {
             return Err(Errno::EBADF);
         }
-        if let Some(old_entry) = self.entries[idx].take() {
-            old_entry.node.close();
-        }
-        node.open();
         self.entries[idx] = Some(OpenHandle {
             node,
             status_flags: Arc::new(Mutex::new(flags)),
@@ -154,16 +119,22 @@ impl HandleTable {
             return Err(Errno::EBADF);
         }
         let entry = self.entries[idx].as_ref().ok_or(Errno::EBADF)?;
-        let mut new_entry = entry.clone();
-        new_entry.handle_flags = 0;
+        let new_node = entry.node.clone();
+        let new_status_flags = entry.status_flags.clone();
+        let new_path = entry.path.clone();
+        let shared_offset = entry.offset.clone(); // share offset with original
         for i in 0..MAX_HANDLES {
             if self.entries[i].is_none() {
-                self.entries[i] = Some(new_entry);
+                self.entries[i] = Some(OpenHandle {
+                    node: new_node,
+                    status_flags: new_status_flags,
+                    handle_flags: 0,
+                    path: new_path,
+                    offset: shared_offset,
+                });
                 return Ok(i as u32);
             }
         }
-        // If we failed to find a slot, we must undo the open() called by clone().
-        new_entry.node.close();
         Err(Errno::EMFILE)
     }
 
@@ -185,13 +156,21 @@ impl HandleTable {
             return Ok(new_handle);
         }
         let entry = self.entries[old_idx].as_ref().ok_or(Errno::EBADF)?;
-        let mut new_entry = entry.clone();
-        new_entry.handle_flags = 0;
+        let new_node = entry.node.clone();
+        let new_status_flags = entry.status_flags.clone();
+        let new_path = entry.path.clone();
+        let shared_offset = entry.offset.clone(); // share offset with original
         // Close new_handle if open.
         if let Some(old_entry) = self.entries[new_idx].take() {
             old_entry.node.close();
         }
-        self.entries[new_idx] = Some(new_entry);
+        self.entries[new_idx] = Some(OpenHandle {
+            node: new_node,
+            status_flags: new_status_flags,
+            handle_flags: 0,
+            path: new_path,
+            offset: shared_offset,
+        });
         Ok(new_handle)
     }
 
@@ -220,7 +199,6 @@ impl HandleTable {
 
     /// Replace the thing flags (`FD_*`) for `fd`.
     pub fn set_handle_flags(&mut self, thing: u32, flags: u32) -> SysResult<()> {
-        crate::kinfo!("HandleTable::set_handle_flags: fd={} flags={:x}", thing, flags);
         self.get_mut(thing)?.handle_flags = flags & HANDLE_CLOEXEC;
         Ok(())
     }
@@ -265,13 +243,6 @@ impl HandleTable {
                 }
             }
         }
-    }
-}
-
-impl Drop for HandleTable {
-    fn drop(&mut self) {
-        crate::kinfo!("HANDLE_TABLE_DROP: entries={}", self.entries.len());
-        self.close_all();
     }
 }
 

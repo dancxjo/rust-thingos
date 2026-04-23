@@ -1411,7 +1411,6 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     fd_remap: Vec<abi::types::HandleRemap>,
     entry_sym_override: Option<alloc::string::String>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
-    crate::kinfo!("spawn_process_from_path: path='{}'", path);
     // Step 1: Open the executable from the VFS.
     let node = crate::vfs::mount::lookup(path).map_err(|_| abi::errors::Errno::ENOENT)?;
 
@@ -1692,6 +1691,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         task.user_fs_base = aux_info.tls_tp;
     }
 
+    // `inherited_handles` is reserved for future fd-inheritance; not yet wired.
+    let _ = inherited_handles;
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.

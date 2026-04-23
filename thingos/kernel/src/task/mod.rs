@@ -819,12 +819,6 @@ pub struct Thread<R: BootRuntime> {
     pub signals: crate::signal::ThreadSignals,
 }
 
-impl<R: crate::task::BootRuntime> Drop for Thread<R> {
-    fn drop(&mut self) {
-        crate::kinfo!("THREAD_DROP: id={}", self.id);
-    }
-}
-
 /// Backward-compatible alias — prefer `Thread<R>` in new code.
 pub type Task<R> = Thread<R>;
 

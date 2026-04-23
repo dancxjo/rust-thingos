@@ -156,7 +156,7 @@ pub fn create(capacity: u32, flags: u32) -> u64 {
     let nonblock = (flags & abi::syscall::pipe_flags::NONBLOCK) != 0;
 
     let pair = Arc::new(PipePair {
-        inner: Mutex::new(PipeData { buf: RingBuf::new(cap), readers: 0, writers: 0, nonblock }),
+        inner: Mutex::new(PipeData { buf: RingBuf::new(cap), readers: 1, writers: 1, nonblock }),
         read_waitq: WaitQueue::new(),
         write_waitq: WaitQueue::new(),
     });
@@ -420,23 +420,16 @@ impl crate::vfs::VfsNode for PipeReadNode {
         })
     }
 
-    fn open(&self) {
-        let mut data = self.inner.inner.lock();
-        data.readers += 1;
-        crate::kinfo!("PIPE_READ_OPEN: id={} readers={}", self.pipe_id, data.readers);
-    }
-
     fn close(&self) {
         let pair = &self.inner;
-        let (was_last_reader, readers, writers, should_remove) = {
+        let (was_last_reader, should_remove) = {
             let mut data = pair.inner.lock();
             if data.readers > 0 {
                 data.readers -= 1;
             }
             let last = data.readers == 0;
-            (last, data.readers, data.writers, last && data.writers == 0)
+            (last, last && data.writers == 0)
         }; // data lock released
-        crate::kinfo!("PIPE_READ_CLOSE: id={} readers={} writers={}", self.pipe_id, readers, writers);
         if was_last_reader {
             pair.write_waitq.wake_all(); // outside data lock ✓
         }
@@ -529,23 +522,16 @@ impl crate::vfs::VfsNode for PipeWriteNode {
         })
     }
 
-    fn open(&self) {
-        let mut data = self.inner.inner.lock();
-        data.writers += 1;
-        crate::kinfo!("PIPE_WRITE_OPEN: id={} writers={}", self.pipe_id, data.writers);
-    }
-
     fn close(&self) {
         let pair = &self.inner;
-        let (was_last_writer, readers, writers, should_remove) = {
+        let (was_last_writer, should_remove) = {
             let mut data = pair.inner.lock();
             if data.writers > 0 {
                 data.writers -= 1;
             }
             let last = data.writers == 0;
-            (last, data.readers, data.writers, data.readers == 0 && last)
+            (last, data.readers == 0 && last)
         }; // data lock released
-        crate::kinfo!("PIPE_WRITE_CLOSE: id={} readers={} writers={}", self.pipe_id, readers, writers);
         if was_last_writer {
             pair.read_waitq.wake_all(); // outside data lock ✓
         }
@@ -607,7 +593,7 @@ pub fn create_fd_pair_with_id(
 ) -> (u64, alloc::sync::Arc<dyn crate::vfs::VfsNode>, alloc::sync::Arc<dyn crate::vfs::VfsNode>) {
     let cap = if capacity == 0 { DEFAULT_PIPE_CAPACITY } else { capacity as usize };
     let pair = Arc::new(PipePair {
-        inner: Mutex::new(PipeData { buf: RingBuf::new(cap), readers: 0, writers: 0, nonblock }),
+        inner: Mutex::new(PipeData { buf: RingBuf::new(cap), readers: 1, writers: 1, nonblock }),
         read_waitq: WaitQueue::new(),
         write_waitq: WaitQueue::new(),
     });
