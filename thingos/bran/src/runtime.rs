@@ -342,26 +342,25 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
         // Drain pending RX before writing so bursty boot logs do not starve
         // input polling.
         self.poll_console_input();
-        // Write to serial (arch-specific)
-        self.arch.putchar(c);
+        // Write to serial deferred ring buffer
+        crate::console::serial_put_char(c);
         crate::console::put_char(c);
     }
     fn putbuf(&self, buf: &[u8]) {
         self.poll_console_input();
-        for &c in buf {
-            self.arch.putchar(c);
-        }
+        crate::console::serial_put_buf(buf);
         crate::console::put_buf(buf);
     }
     fn serial_putchar(&self, c: u8) {
         self.poll_console_input();
-        self.arch.putchar(c);
+        crate::console::serial_put_char(c);
     }
     fn serial_putbuf(&self, buf: &[u8]) {
         self.poll_console_input();
-        for &c in buf {
-            self.arch.putchar(c);
-        }
+        crate::console::serial_put_buf(buf);
+    }
+    fn serial_putchar_sync(&self, c: u8) {
+        self.arch.putchar(c);
     }
     fn fb_putchar(&self, c: u8) {
         crate::console::put_char(c);
@@ -505,6 +504,7 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
 
     fn idle_flush_console(&self) {
         crate::console::flush_deferred_idle();
+        crate::console::serial_flush_deferred_idle();
     }
 }
 

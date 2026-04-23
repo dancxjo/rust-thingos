@@ -202,6 +202,17 @@ impl fmt::Write for Logger {
     }
 }
 
+pub struct SyncLogger {
+    runtime: &'static dyn BootRuntimeBase,
+}
+
+impl fmt::Write for SyncLogger {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        write_crlf_translated(s.as_bytes(), |chunk| self.runtime.serial_putbuf_sync(chunk));
+        Ok(())
+    }
+}
+
 pub unsafe fn init(runtime: &'static dyn BootRuntimeBase) {
     let irq = runtime.irq_disable();
     *GLOBAL_LOGGER.lock() = Some(Logger::new(runtime));
@@ -394,6 +405,20 @@ pub fn _log_raw(args: fmt::Arguments) {
     }
 }
 
+/// Log a raw string synchronously (bypassing deferred buffers).
+/// USE EXTREMELY SPARINGLY. Intended for fatal panic paths or low-level bring-up
+/// debugging where deferred logging is unreliable or likely to deadlock.
+#[doc(hidden)]
+pub fn _log_raw_sync(args: fmt::Arguments) {
+    if !MUTE_SERIAL.load(Ordering::Relaxed) {
+        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
+        if let Some(r) = rt {
+            let mut writer = SyncLogger { runtime: r };
+            let _ = writer.write_fmt(args);
+        }
+    }
+}
+
 /// Write a raw byte buffer to the serial console under the `GLOBAL_LOGGER`
 /// lock.  Used by the TTY write path so that userspace console output does
 /// not interleave character-by-character with kernel log messages.
@@ -573,6 +598,15 @@ macro_rules! ktrace {
 macro_rules! kprint {
     ($($arg:tt)*) => {
         $crate::logging::_log_raw(format_args!($($arg)*))
+    };
+}
+
+/// Synchronous print macro that bypasses deferred ring buffers.
+/// USE EXTREMELY SPARINGLY. Intended for fatal panic paths or low-level bring-up debugging.
+#[macro_export]
+macro_rules! kprint_sync {
+    ($($arg:tt)*) => {
+        $crate::logging::_log_raw_sync(format_args!($($arg)*))
     };
 }
 

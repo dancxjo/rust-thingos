@@ -514,6 +514,16 @@ pub trait BootRuntimeBase: 'static {
             self.putchar(b);
         }
     }
+    /// Write one byte to the serial port synchronously, bypassing any deferred buffers.
+    fn serial_putchar_sync(&self, c: u8) {
+        self.serial_putchar(c); // Default fallback
+    }
+    /// Write multiple bytes to the serial port synchronously.
+    fn serial_putbuf_sync(&self, buf: &[u8]) {
+        for &b in buf {
+            self.serial_putchar_sync(b);
+        }
+    }
     /// Write one byte to the serial port only (not the framebuffer console).
     fn serial_putchar(&self, c: u8) {
         self.putchar(c);

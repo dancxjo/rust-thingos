@@ -134,6 +134,8 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     kernel::kerror!("{}", info);
+    crate::console::flush_sync();
+    crate::console::serial_flush_sync();
 
     // Semihosting FAULT marker
     #[cfg(target_arch = "aarch64")]

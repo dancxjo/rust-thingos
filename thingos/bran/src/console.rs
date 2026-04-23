@@ -79,6 +79,7 @@ impl DeferredRing {
 }
 
 static DEFERRED: Mutex<DeferredRing> = Mutex::new(DeferredRing::new());
+static SERIAL_DEFERRED: Mutex<DeferredRing> = Mutex::new(DeferredRing::new());
 
 const GLYPH_TABLE_LEN: usize = 256;
 
@@ -704,12 +705,26 @@ pub fn put_char(c: u8) {
     DEFERRED.lock().push(c);
 }
 
+pub fn serial_put_char(c: u8) {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    SERIAL_DEFERRED.lock().push(c);
+}
+
 /// Enqueue a byte slice for deferred framebuffer rendering.
 pub fn put_buf(buf: &[u8]) {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
     DEFERRED.lock().push_slice(buf);
+}
+
+pub fn serial_put_buf(buf: &[u8]) {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    SERIAL_DEFERRED.lock().push_slice(buf);
 }
 
 /// Called from the timer IRQ to blink the cursor.
@@ -840,9 +855,78 @@ pub fn flush_sync() {
     }
 }
 
+pub fn serial_flush_deferred() {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let mut local = [0u8; FLUSH_BATCH];
+
+    let n = {
+        let mut ring = match SERIAL_DEFERRED.try_lock() {
+            Some(r) => r,
+            None => return,
+        };
+        if ring.is_empty() {
+            return;
+        }
+        ring.drain(&mut local)
+    };
+
+    if n == 0 {
+        return;
+    }
+
+    // Drain directly to serial hardware
+    for &b in &local[..n] {
+        crate::RUNTIME.serial_putchar_sync(b);
+    }
+}
+
+pub fn serial_flush_deferred_idle() {
+    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let mut local = [0u8; FLUSH_BATCH_IDLE];
+
+    let n = {
+        let mut ring = match SERIAL_DEFERRED.try_lock() {
+            Some(r) => r,
+            None => return,
+        };
+        if ring.is_empty() {
+            return;
+        }
+        ring.drain(&mut local)
+    };
+
+    if n == 0 {
+        return;
+    }
+
+    for &b in &local[..n] {
+        crate::RUNTIME.serial_putchar_sync(b);
+    }
+}
+
+pub fn serial_flush_sync() {
+    let mut local = [0u8; FLUSH_BATCH];
+    loop {
+        let n = SERIAL_DEFERRED.lock().drain(&mut local);
+        if n == 0 {
+            break;
+        }
+        for &b in &local[..n] {
+            crate::RUNTIME.serial_putchar_sync(b);
+        }
+    }
+}
+
 pub unsafe fn force_unlock() {
     unsafe {
         CONSOLE.force_unlock();
         DEFERRED.force_unlock();
+        SERIAL_DEFERRED.force_unlock();
     }
 }
