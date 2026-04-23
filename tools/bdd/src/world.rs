@@ -46,6 +46,10 @@ pub struct ThingOsWorld {
     /// Byte offset in serial_log captured before the last command was sent.
     #[world(skip)]
     pub serial_checkpoint: usize,
+    /// The last command text typed via the serial console (used to filter echoed
+    /// input from command-output assertions).
+    #[world(skip)]
+    pub last_typed_command: Option<String>,
     /// Scenario-wide default timeout derived from feature/scenario tags.
     #[world(skip)]
     pub scenario_timeout_secs: Option<f64>,
