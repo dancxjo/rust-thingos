@@ -77,7 +77,7 @@ const DOT_SIZE: usize = 8;
 const MSG_H: usize = 16;
 const HINT_H: usize = 16;
 const HINT_FG: u32 = 0x888888;
-const HINT_TEXT: \u0026str = "Press F12 for a terminal";
+const HINT_TEXT: &str = "Press F12 for a terminal";
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -159,7 +159,6 @@ pub fn init(fb: FramebufferInfo) {
         pushed_phases: [BootPhase::Framebuffer; TOTAL_TASKS],
     };
     state.draw_initial_panel();
-    crate::kinfo!("boot_progress: hint=\"{}\"", HINT_TEXT);
     *BOOT_PROGRESS.lock() = Some(state);
 }
 
@@ -169,6 +168,8 @@ pub fn set_unifont_data(data: &'static [u8]) {
         state.unifont_data = Some(data);
         // Font is now available; redraw the hint so it appears as soon as possible.
         state.draw_hint();
+        // LOG TO SERIAL NOW that logger is initialized.
+        crate::kinfo!("boot_progress: hint=\"{}\"", HINT_TEXT);
     }
 }
 
@@ -389,7 +390,7 @@ impl BootProgressState {
     }
 
     /// Draw the "Press F12 for a terminal" hint at the bottom of the panel.
-    fn draw_hint(\u0026mut self) {
+    fn draw_hint(&mut self) {
         if self.unifont_data.is_some() {
             let char_w = 8;
             let text_w = HINT_TEXT.len() * char_w;
@@ -454,8 +455,8 @@ impl BootProgressState {
 
     fn draw_char(&mut self, x: usize, y: usize, c: char, color: u32) {
         let Some(data) = self.unifont_data else { return };
-        if let Some(glyph) = lookup_unifont_glyph(data, c) {
-            let width = if glyph.len() == 16 { 8 } else { 16 };
+        if let Some((glyph, is_wide)) = lookup_unifont_glyph(data, c) {
+            let width = if is_wide { 16 } else { 8 };
             for row in 0..16 {
                 let row_data = glyph[row];
                 for col in 0..width {
@@ -470,8 +471,14 @@ impl BootProgressState {
     fn draw_string(&mut self, x: usize, y: usize, s: &str, color: u32) {
         let mut cur_x = x;
         for c in s.chars() {
+            // Find char width to advance cur_x correctly
+            let width = if let Some((_, is_wide)) = self.unifont_data.and_then(|d| lookup_unifont_glyph(d, c)) {
+                if is_wide { 16 } else { 8 }
+            } else {
+                8
+            };
             self.draw_char(cur_x, y, c, color);
-            cur_x += 8;
+            cur_x += width;
         }
     }
 
@@ -498,7 +505,7 @@ impl BootProgressState {
     }
 }
 
-fn lookup_unifont_glyph(data: &[u8], c: char) -> Option<[u16; 32]> {
+fn lookup_unifont_glyph(data: &[u8], c: char) -> Option<([u16; 32], bool)> {
     let target_code = c as u32;
     let mut offset = 0;
     while offset < data.len() {
@@ -528,7 +535,7 @@ fn lookup_unifont_glyph(data: &[u8], c: char) -> Option<[u16; 32]> {
                 let start = i * step;
                 glyph[i] = parse_hex(&bitmap_hex[start..start + step])? as u16;
             }
-            return Some(glyph);
+            return Some((glyph, is_wide));
         }
 
         if code > target_code { break; }
