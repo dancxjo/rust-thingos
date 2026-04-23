@@ -533,7 +533,7 @@ impl HttpsProvider {
         let entry = cache.peek(&key).ok_or(Errno::EINVAL)?;
         let target = entry.redirect_target.as_ref().ok_or(Errno::EINVAL)?;
         // Translate the absolute `https://host/path` target into a VFS path
-        // under our `/https` mount so the kernel can follow the link in-tree.
+        // under the active mount so the kernel can follow the link in-tree.
         Ok(self.url_to_vfs_path(target))
     }
 }
@@ -564,10 +564,12 @@ impl HttpsProvider {
         }
 
         // Fallback for cross-domain redirects or discovery-mode paths.
+        // Use the active mount point instead of hardcoding `/https` so custom
+        // mount targets (for example `/web`) produce in-tree redirect targets.
         if path.is_empty() {
-            alloc::format!("{}/{}", MOUNT_POINT, host)
+            alloc::format!("{}/{}", self.mount_point, host)
         } else {
-            alloc::format!("{}/{}/{}", MOUNT_POINT, host, path)
+            alloc::format!("{}/{}/{}", self.mount_point, host, path)
         }
     }
 }
@@ -809,7 +811,11 @@ fn run_https_mount(fixed_host: Option<String>, mount_point: &str, shared: Arc<Sh
     stem::syscall::exit(0);
 }
 
-fn send_response(lp: &ProviderLoop, req: &ipc_helpers::provider::ProviderRequest, resp: ProviderResponse) {
+fn send_response(
+    lp: &ProviderLoop,
+    req: &ipc_helpers::provider::ProviderRequest,
+    resp: ProviderResponse,
+) {
     loop {
         match lp.send_response(req, resp.clone()) {
             Ok(_) => return,
@@ -1215,7 +1221,15 @@ mod tests {
         let shared = Arc::new(SharedState::new());
         let p = HttpsProvider::new(shared, Some("example.com".into()), "/https/ex".into());
         assert_eq!(p.url_to_vfs_path("https://example.com/foo"), "/https/ex/foo");
-        assert_eq!(p.url_to_vfs_path("https://other.com/bar"), "/https/other.com/bar");
+        assert_eq!(p.url_to_vfs_path("https://other.com/bar"), "/https/ex/other.com/bar");
+    }
+
+    #[test]
+    fn discovery_mode_url_translation_uses_mount_point() {
+        let shared = Arc::new(SharedState::new());
+        let p = HttpsProvider::new(shared, None, "/web".into());
+        assert_eq!(p.url_to_vfs_path("https://example.com/foo"), "/web/example.com/foo");
+        assert_eq!(p.url_to_vfs_path("https://example.com"), "/web/example.com");
     }
 
     #[test]

@@ -24,6 +24,10 @@ use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
 const NETD_PROVIDER_PATH: &str = "/dev/net/virtio0/rx";
+const NETD_READY_PATH: &str = "/run/netd.ready";
+const NETD_LIVENESS_PATH: &str = "/net/icmp/new";
+const NETD_PROBE_INTERVAL_NS: u64 = 1_000_000_000;
+const NETD_MAX_PROBE_FAILURES: u32 = 3;
 const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
 
 pub struct Config {
@@ -36,6 +40,10 @@ pub struct Supervisor {
     pub registry_ptr: usize,
     pub config: Config,
     netd_spawned: bool,
+    netd_active_pid: Option<u64>,
+    netd_verified: bool,
+    netd_probe_failures: u32,
+    netd_last_probe_ns: u64,
 }
 
 impl Supervisor {
@@ -47,6 +55,10 @@ impl Supervisor {
             registry_ptr,
             config,
             netd_spawned: false,
+            netd_active_pid: None,
+            netd_verified: false,
+            netd_probe_failures: 0,
+            netd_last_probe_ns: 0,
         }
     }
 
@@ -131,6 +143,8 @@ impl Supervisor {
             self.process_registrations();
             stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
             self.spawn_netd_if_ready();
+            stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
+            self.verify_netd_liveness();
             stem::trace!("SPROUT: Loop iteration: run_health_vine");
             run_health_vine(&self.tasks);
             stem::trace!("SPROUT: Loop iteration: sleeping 100ms");
@@ -203,6 +217,75 @@ impl Supervisor {
 
     fn spawn_iso9660d(&mut self) {
         spawn_iso9660d_task(self.tasks.clone());
+    }
+
+    fn verify_netd_liveness(&mut self) {
+        let current_pid = {
+            let tasks = self.tasks.lock();
+            tasks.iter().find(|t| t.name == "netd").and_then(|t| t.pid)
+        };
+
+        if current_pid != self.netd_active_pid {
+            self.netd_active_pid = current_pid;
+            self.netd_verified = false;
+            self.netd_probe_failures = 0;
+            self.netd_last_probe_ns = 0;
+            if let Some(pid) = current_pid {
+                info!("SPROUT: Tracking netd activation (PID={})", pid);
+            }
+        }
+
+        let Some(netd_pid) = self.netd_active_pid else {
+            return;
+        };
+
+        if self.netd_verified {
+            return;
+        }
+
+        if !path_exists(NETD_READY_PATH) {
+            return;
+        }
+
+        let now_ns = stem::monotonic_ns();
+        if now_ns.saturating_sub(self.netd_last_probe_ns) < NETD_PROBE_INTERVAL_NS {
+            return;
+        }
+        self.netd_last_probe_ns = now_ns;
+
+        match stem::syscall::vfs::vfs_open(
+            NETD_LIVENESS_PATH,
+            abi::syscall::vfs_flags::O_RDONLY | abi::syscall::vfs_flags::O_NONBLOCK,
+        ) {
+            Ok(fd) => {
+                let _ = stem::syscall::vfs::vfs_close(fd);
+                self.netd_verified = true;
+                info!(
+                    "SPROUT: netd activation probe succeeded for PID {} ({} is responsive)",
+                    netd_pid,
+                    NETD_LIVENESS_PATH
+                );
+            }
+            Err(e) => {
+                self.netd_probe_failures = self.netd_probe_failures.saturating_add(1);
+                warn!(
+                    "SPROUT: netd activation probe failed for PID {} (attempt {}/{}): {:?}",
+                    netd_pid,
+                    self.netd_probe_failures,
+                    NETD_MAX_PROBE_FAILURES,
+                    e
+                );
+                if self.netd_probe_failures >= NETD_MAX_PROBE_FAILURES {
+                    warn!(
+                        "SPROUT: netd PID {} is still unresponsive after readiness; restarting",
+                        netd_pid
+                    );
+                    let _ = stem::syscall::signal::kill(netd_pid as i32, abi::signal::SIGTERM);
+                    self.netd_probe_failures = 0;
+                    self.netd_last_probe_ns = 0;
+                }
+            }
+        }
     }
 
     #[allow(dead_code)]
