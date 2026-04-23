@@ -768,8 +768,8 @@ async fn check_ordering(
 
     let log = world.get_serial_log().await;
     let clean_log = strip_ansi(&log).to_lowercase();
-    let clean_first = strip_ansi(&first).to_lowercase();
-    let clean_second = strip_ansi(&second).to_lowercase();
+    let clean_first = strip_ansi(&unescape_step_text(&first)).to_lowercase();
+    let clean_second = strip_ansi(&unescape_step_text(&second)).to_lowercase();
 
     let first_pos = clean_log.find(&clean_first);
     if let Some(f_pos) = first_pos {
@@ -783,6 +783,60 @@ async fn check_ordering(
         return Err(StepError(format!("Could not find '{}' in serial log", first)));
     } else {
         return Err(StepError(format!("Did not find '{}' after '{}' in serial log", second, first)));
+    }
+}
+
+fn unescape_step_text(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                match next {
+                    '\\' => out.push('\\'),
+                    '"' => out.push('"'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+            } else {
+                out.push('\\');
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unescape_step_text;
+
+    #[test]
+    fn unescape_quotes_and_backslashes() {
+        assert_eq!(
+            unescape_step_text(r#"boot_progress: milestone=\"Memory Map OK\""#),
+            r#"boot_progress: milestone="Memory Map OK""#
+        );
+        assert_eq!(unescape_step_text(r#"path\\to\\file"#), r#"path\to\file"#);
+    }
+
+    #[test]
+    fn unescape_control_sequences() {
+        assert_eq!(unescape_step_text(r#"a\nb\rc\td"#), "a\nb\rc\td");
+    }
+
+    #[test]
+    fn preserves_unknown_and_trailing_escape_sequences() {
+        assert_eq!(unescape_step_text(r#"x\q"#), r#"x\q"#);
+        assert_eq!(unescape_step_text(r#"x\"#), r#"x\"#);
     }
 }
 
