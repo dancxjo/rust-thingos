@@ -1,6 +1,6 @@
 # ❌ Scenario: Memory milestone is reported before VFS milestone
 
-> Last run: 2026-04-23 04:52:05
+> Last run: 2026-04-23 05:15:06
 
 ## Steps
 
