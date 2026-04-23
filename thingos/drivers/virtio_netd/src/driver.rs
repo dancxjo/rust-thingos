@@ -2,7 +2,6 @@ extern crate alloc;
 
 use abi::errors::Errno;
 use stem::syscall::{device_alloc_dma, device_dma_phys};
-use stem::warn;
 use virtio::VirtioDevice;
 
 /// VirtIO network device header (prepended to each frame)
@@ -62,6 +61,8 @@ pub struct VirtioNetDriver {
     tx_buffer_phys: u64,
     /// Last received frame
     last_rx: Option<(u64, usize)>, // (buffer virt, len)
+    /// Whether the single TX descriptor is still in-flight on queue 1.
+    tx_in_flight: bool,
 }
 
 impl VirtioNetDriver {
@@ -193,6 +194,7 @@ impl VirtioNetDriver {
             tx_buffer_virt,
             tx_buffer_phys,
             last_rx: None,
+            tx_in_flight: false,
         };
 
         // Fill RX queue with buffers BEFORE setting DRIVER_OK
@@ -244,6 +246,8 @@ impl VirtioNetDriver {
 
     /// Poll device config and report link-state changes.
     pub fn poll_link_change(&mut self) -> Option<bool> {
+        let _ = self.poll_tx_complete();
+
         let next = if self.device.has_feature(16) {
             let status =
                 self.device.read_device_config(6).unwrap_or(if self.link_up { 1 } else { 0 })
@@ -269,6 +273,8 @@ impl VirtioNetDriver {
 
     /// Poll for received frames
     pub fn poll_rx(&mut self) -> Option<&[u8]> {
+        let _ = self.poll_tx_complete();
+
         let rxq = self.device.queue_mut(0)?;
 
         if let Some((desc_id, len)) = rxq.poll_used() {
@@ -304,6 +310,11 @@ impl VirtioNetDriver {
             return Err("Frame too large");
         }
 
+        let _ = self.poll_tx_complete();
+        if self.tx_in_flight {
+            return Err("TX busy");
+        }
+
         stem::trace!("VirtIO-NET: TX {} bytes", data.len());
 
         // Write header
@@ -332,27 +343,25 @@ impl VirtioNetDriver {
         self.device.notify_queue(1);
         stem::trace!("VirtIO-NET: TX notify end");
 
-        // Wait for completion with yield-based backoff
-        // Spin briefly (10 iterations), then yield to scheduler
-        for i in 0..1000 {
-            if let Some(txq) = self.device.queue_mut(1) {
-                if txq.poll_used().is_some() {
-                    stem::debug!("VirtIO-NET: TX complete after {} iterations", i);
-                    return Ok(());
-                }
-            }
-            if i < 10 {
-                core::hint::spin_loop();
-            } else {
-                if i == 10 || i == 100 || i == 500 {
-                    stem::trace!("VirtIO-NET: TX waiting iteration={}", i);
-                }
-                stem::syscall::yield_now();
+        // Completion is harvested opportunistically by subsequent polls and
+        // transmits so provider RPC handling stays non-blocking.
+        self.tx_in_flight = true;
+        Ok(())
+    }
+
+    fn poll_tx_complete(&mut self) -> bool {
+        if !self.tx_in_flight {
+            return false;
+        }
+
+        if let Some(txq) = self.device.queue_mut(1) {
+            if txq.poll_used().is_some() {
+                self.tx_in_flight = false;
+                return true;
             }
         }
 
-        warn!("VirtIO-NET: TX timeout!");
-        Err("TX timeout")
+        false
     }
 }
 

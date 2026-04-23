@@ -552,6 +552,7 @@ fn handle_write(
             let frame = &data[4..4 + frame_len];
             match driver.tx(frame) {
                 Ok(()) => ProviderResponse::ok_written(data_len as u32),
+                Err("TX busy") | Err("TX queue full") => ProviderResponse::err(Errno::EAGAIN),
                 Err(_) => ProviderResponse::err(Errno::EIO),
             }
         }
