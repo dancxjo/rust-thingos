@@ -12,7 +12,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 /// Default timeout for step helpers that poll for asynchronous behavior.
-pub const DEFAULT_STEP_TIMEOUT_SECS: f64 = 300.0;
+pub const DEFAULT_STEP_TIMEOUT_SECS: f64 = 5.0;
 
 /// The test world shared across all steps in a scenario.
 #[derive(Debug, Default, World)]
