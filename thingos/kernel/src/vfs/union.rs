@@ -211,8 +211,10 @@ impl super::VfsNode for UnionDirNode {
                         continue;
                     }
 
-                    let part =
-                        core::str::from_utf8(&scratch[start..i]).map_err(|_| Errno::EIO)?;
+                    let part = core::str::from_utf8(&scratch[start..i]).map_err(|_| {
+                        crate::kwarn!("UnionDirNode::readdir: invalid UTF-8 in layer stream");
+                        Errno::EIO
+                    })?;
                     pending_name.push_str(part);
 
                     if !pending_name.is_empty() {
@@ -234,8 +236,10 @@ impl super::VfsNode for UnionDirNode {
                 }
 
                 if start < n {
-                    let part =
-                        core::str::from_utf8(&scratch[start..n]).map_err(|_| Errno::EIO)?;
+                    let part = core::str::from_utf8(&scratch[start..n]).map_err(|_| {
+                        crate::kwarn!("UnionDirNode::readdir: invalid UTF-8 in trailing layer bytes");
+                        Errno::EIO
+                    })?;
                     pending_name.push_str(part);
                 }
             }

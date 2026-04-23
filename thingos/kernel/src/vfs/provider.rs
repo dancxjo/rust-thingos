@@ -381,6 +381,11 @@ impl VfsNode for ProviderNode {
 
             let payload_len = u32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]) as usize;
             if resp.len() < 5 + payload_len {
+                crate::kwarn!(
+                    "VFS provider readdir: truncated response payload len={} actual={}",
+                    payload_len,
+                    resp.len().saturating_sub(5)
+                );
                 return Err(Errno::EIO);
             }
             let data = &resp[5..5 + payload_len];
