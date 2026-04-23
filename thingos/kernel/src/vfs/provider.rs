@@ -64,12 +64,17 @@ impl ProviderRpc {
         crate::ktrace!("VFS RPC: tid={} op={:?} begin", tid, op);
 
         if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
-            crate::kwarn!("VFS RPC: tid={} op={:?} rejected (provider is tainted/stalled)", tid, op);
+            crate::kwarn!("VFS RPC: tid={} op={:?} rejected (provider is already tainted/stalled)", tid, op);
             return Err(Errno::EIO);
         }
 
         // 1. Acquire sleep-lock
         while self.busy.swap(true, core::sync::atomic::Ordering::Acquire) {
+            // Re-check tainted while waiting
+            if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
+                return Err(Errno::EIO);
+            }
+
             crate::ktrace!("VFS RPC: tid={} op={:?} waiting for lock", tid, op);
             self.rpc_wait.push_back(tid);
             unsafe {
@@ -83,7 +88,13 @@ impl ProviderRpc {
             }
         }
 
-        // 2. Perform the actual I/O
+        // 2. Perform the actual I/O, unless we were tainted while waiting
+        if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
+            self.busy.store(false, core::sync::atomic::Ordering::Release);
+            self.rpc_wait.wake_all(); // Wake everyone so they can see we're dead
+            return Err(Errno::EIO);
+        }
+
         let res = self.do_rpc(op, payload);
         if let Ok(ref resp) = res {
             if resp.len() > 0 && resp[0] != 0 {
@@ -93,7 +104,14 @@ impl ProviderRpc {
 
         // 3. Release sleep-lock
         self.busy.store(false, core::sync::atomic::Ordering::Release);
-        self.rpc_wait.wake_one();
+        
+        // If we just timed out, we might have tainted the provider. 
+        // In that case, wake everyone so they can fail fast.
+        if self.tainted.load(core::sync::atomic::Ordering::Acquire) {
+            self.rpc_wait.wake_all();
+        } else {
+            self.rpc_wait.wake_one();
+        }
 
         crate::ktrace!("VFS RPC: tid={} op={:?} end result={:?}", tid, op, res.as_ref().map(|v| v.len()));
         res
@@ -144,8 +162,8 @@ impl ProviderRpc {
             // Check for timeout
             let now = crate::time::monotonic_now_ns();
             if now.saturating_sub(start) > timeout {
-                crate::kwarn!("VFS RPC: tid={} provider response timeout (5s exceeded)", tid);
-                self.tainted.store(true, core::sync::atomic::Ordering::Release);
+                crate::kerror!("VFS RPC: tid={} op={} TIMEOUT (5s) - tainting provider", tid, self.resp_write_handle);
+                self.tainted.store(true, Ordering::Release);
                 return Err(Errno::ETIMEDOUT);
             }
 
