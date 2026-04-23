@@ -1423,6 +1423,7 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
     eprintln!("│  │  │      ⌨️ Typing on serial: {}", text);
 
     world.serial_checkpoint = world.get_serial_log().await.len();
+    world.last_typed_command = Some(text.clone());
 
     let mut data = text.into_bytes();
     data.push(b'\n');
@@ -2052,10 +2053,25 @@ async fn command_output_not_contains(world: &mut ThingOsWorld, unexpected: Strin
     let recent = &log[start..];
     let clean_log = strip_ansi(recent);
 
+    // The command echo appears in the serial window since the checkpoint is set
+    // before the command bytes are sent.  Normalize the last typed command once
+    // so we can skip lines that are merely the echoed input.
+    let last_cmd_trimmed: Option<String> =
+        world.last_typed_command.as_deref().map(|c| c.trim().to_string());
+
     for line in clean_log.lines() {
         let trimmed = line.trim();
-        // Same filtering as command_output_contains: skip kernel/service log lines and prompt lines
-        if !trimmed.starts_with('[') && !trimmed.contains(">") && trimmed.contains(&unexpected) {
+        // Skip kernel/service log lines and prompt lines
+        if trimmed.starts_with('[') || trimmed.contains(">") {
+            continue;
+        }
+        // Skip the echoed command line itself so that patterns that appear in
+        // the command text (e.g. the pattern fed to grep -v) do not cause a
+        // spurious failure.
+        if last_cmd_trimmed.as_deref() == Some(trimmed) {
+            continue;
+        }
+        if trimmed.contains(&unexpected) {
             eprintln!("\n=== Unexpected pattern found in command output ===");
             eprintln!("Pattern: {}", unexpected);
             eprintln!("Matching line: {}", trimmed);
