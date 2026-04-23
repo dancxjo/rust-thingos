@@ -276,7 +276,7 @@ fn generate_limine_config(
         kernel_cmdline: String,
     }
 
-    let default_loglevel = loglevel.unwrap_or("warn");
+    let default_loglevel = loglevel.unwrap_or("info");
     let mut entries = vec![
         LimineEntry {
             title: "ThingOS".to_string(),

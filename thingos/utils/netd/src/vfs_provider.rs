@@ -185,10 +185,10 @@ pub struct NetVfsProvider {
 }
 
 impl NetVfsProvider {
-    /// Create and mount the `/net/` provider.
+    /// Create the `/net/` provider (does NOT mount yet).
     ///
-    /// Returns `None` if the port creation or mount fails.
-    pub fn new(mount_point: &str, mac: [u8; 6], mtu: usize, link_up: bool) -> Option<Self> {
+    /// Returns `None` if port creation fails.
+    pub fn new(mac: [u8; 6], mtu: usize, link_up: bool) -> Option<Self> {
         let (req_write, req_read) = match port_create(VFS_RPC_MAX_REQ * 8) {
             Ok(p) => p,
             Err(e) => {
@@ -197,18 +197,7 @@ impl NetVfsProvider {
             }
         };
 
-        match vfs_mount(req_write, mount_point) {
-            Ok(()) => {
-                debug!(
-                    "NetVfsProvider: mounted at {} (port w={} r={})",
-                    mount_point, req_write, req_read
-                );
-            }
-            Err(e) => {
-                warn!("NetVfsProvider: vfs_mount failed: {:?}", e);
-                return None;
-            }
-        }
+        debug!("NetVfsProvider: created ports (write={} read={})", req_write, req_read);
 
         Some(Self {
             req_read,
@@ -227,6 +216,25 @@ impl NetVfsProvider {
             dns_result: None,
             deferred_connects: Vec::new(),
         })
+    }
+
+    /// Mount the provider at the given path.
+    /// Call this after creating the provider but before entering the RPC loop.
+    /// Returns true on success, false on failure.
+    pub fn mount(&self, mount_point: &str) -> bool {
+        match vfs_mount(self.req_write, mount_point) {
+            Ok(()) => {
+                debug!(
+                    "NetVfsProvider: mounted at {} (port w={} r={})",
+                    mount_point, self.req_write, self.req_read
+                );
+                true
+            }
+            Err(e) => {
+                warn!("NetVfsProvider: vfs_mount failed: {:?}", e);
+                false
+            }
+        }
     }
 
     /// The port handle the RPC loop reads from (pass to `port_wait` / `port_len`).

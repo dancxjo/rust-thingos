@@ -178,6 +178,23 @@ fn publish_ready_flag(mount_point: &str) {
     }
 }
 
+fn probe_socket_allocator_ready(socket_api: &mut SocketApi, socket_set: &mut SocketSet) -> bool {
+    let Some(buf_idx) = socket_api.alloc_buffer() else {
+        return false;
+    };
+
+    match socket_api.alloc_icmp_socket_raw(socket_set, buf_idx) {
+        Some(handle) => {
+            let _ = socket_api.handle_close(socket_set, handle);
+            true
+        }
+        None => {
+            socket_api.free_buffer(buf_idx);
+            false
+        }
+    }
+}
+
 #[stem::main]
 fn main(arg: usize) -> ! {
     info!("NETD: Starting network service...");
@@ -252,16 +269,16 @@ fn main(arg: usize) -> ! {
     let _known_nic_units = scan_registered_nic_units();
     debug!("NETD: NIC units scanned.");
 
-    // Do not expose /net until the service can actively process RPCs.
+    // Do not mount /net until the service can actively process RPCs.
     // Mounting before startup init finishes can let early clients issue
     // lookups while this thread is still preparing state, which may trigger
     // provider timeout taint.
     let mount_point = cfg.mount_point.clone();
     let mut net_provider = loop {
-        match NetVfsProvider::new(&mount_point, mac, mtu, initial_link_up) {
+        match NetVfsProvider::new(mac, mtu, initial_link_up) {
             Some(provider) => break provider,
             None => {
-                warn!("NETD: Failed to mount {}, retrying...", mount_point);
+                warn!("NETD: Failed to create provider, retrying...");
                 stem::time::sleep_ms(200);
             }
         }
@@ -275,8 +292,15 @@ fn main(arg: usize) -> ! {
     );
 
     debug!("NETD: bridging request port to fd...");
-    let req_fd =
-        stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()).unwrap_or(0);
+    let req_fd = loop {
+        match stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()) {
+            Ok(fd) => break fd,
+            Err(e) => {
+                warn!("NETD: failed to bridge request port to fd: {:?}; retrying", e);
+                stem::time::sleep_ms(50);
+            }
+        }
+    };
     debug!("NETD: request fd={}", req_fd);
     debug!("NETD: setting up /dev/net watch...");
     let nic_watch_fd =
@@ -289,8 +313,18 @@ fn main(arg: usize) -> ! {
         };
     debug!("NETD: watch fd={:?}", nic_watch_fd);
 
-    publish_ready_flag(&mount_point);
-    info!("NETD: Network ready");
+    // Now mount the provider just before entering the service loop
+    loop {
+        if net_provider.mount(&mount_point) {
+            debug!("NETD: Successfully mounted at {}", mount_point);
+            break;
+        } else {
+            warn!("NETD: Failed to mount {}, retrying...", mount_point);
+            stem::time::sleep_ms(200);
+        }
+    }
+
+    let mut ready_announced = false;
     debug!("NETD: entering VFS service loop");
 
     // ── Async DNS state ──────────────────────────────────────────────────
@@ -397,6 +431,14 @@ fn main(arg: usize) -> ! {
         }
 
         socket_api.gc_closed_sockets(&mut socket_set);
+
+        if !ready_announced && net_provider.ip_config.is_some() {
+            if probe_socket_allocator_ready(&mut socket_api, &mut socket_set) {
+                publish_ready_flag(&mount_point);
+                info!("NETD: Network ready");
+                ready_announced = true;
+            }
+        }
 
         if did_work {
             trace!("NETD: did_work=true, pushing notifications");

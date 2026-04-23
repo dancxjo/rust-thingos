@@ -24,7 +24,6 @@ use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
 const NETD_PROVIDER_PATH: &str = "/dev/net/virtio0/rx";
-const NETD_WAIT_POLL_MS: u64 = 100;
 const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
 
 pub struct Config {
@@ -36,6 +35,7 @@ pub struct Supervisor {
     pub ledger: Arc<Mutex<DeviceLedger>>,
     pub registry_ptr: usize,
     pub config: Config,
+    netd_spawned: bool,
 }
 
 impl Supervisor {
@@ -46,6 +46,7 @@ impl Supervisor {
             ledger: Arc::new(Mutex::new(DeviceLedger::new())),
             registry_ptr,
             config,
+            netd_spawned: false,
         }
     }
 
@@ -119,15 +120,20 @@ impl Supervisor {
 
         // Stage 5: Start netd only after the network driver publishes its VFS tree.
         stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
-        self.spawn_netd_when_ready();
+        info!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
 
         stem::debug!("SPROUT: Running registration + health supervision loop");
 
         // Main loop: keep health monitoring active without spawning a helper
         // thread, which can wedge this boot path before driver bring-up.
         loop {
+            stem::trace!("SPROUT: Loop iteration: process_registrations starting");
             self.process_registrations();
+            stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
+            self.spawn_netd_if_ready();
+            stem::trace!("SPROUT: Loop iteration: run_health_vine");
             run_health_vine(&self.tasks);
+            stem::trace!("SPROUT: Loop iteration: sleeping 100ms");
             stem::sleep_ms(100);
         }
     }
@@ -183,19 +189,16 @@ impl Supervisor {
         spawn_cambium_task(self.tasks.clone());
     }
 
-    fn spawn_netd_when_ready(&self) {
-        let tasks = self.tasks.clone();
-        let _ = stem::thread::spawn_task(move || {
-            info!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
-            loop {
-                if path_exists(NETD_PROVIDER_PATH) {
-                    info!("SPROUT: {} is ready; spawning netd.", NETD_PROVIDER_PATH);
-                    spawn_netd_task(tasks.clone());
-                    break;
-                }
-                stem::sleep_ms(NETD_WAIT_POLL_MS);
-            }
-        });
+    fn spawn_netd_if_ready(&mut self) {
+        if self.netd_spawned {
+            return;
+        }
+
+        if path_exists(NETD_PROVIDER_PATH) {
+            info!("SPROUT: {} is ready; spawning netd.", NETD_PROVIDER_PATH);
+            spawn_netd_task(self.tasks.clone());
+            self.netd_spawned = true;
+        }
     }
 
     fn spawn_iso9660d(&mut self) {
@@ -318,7 +321,7 @@ impl Supervisor {
         bundled_fd: u32,
     ) {
         use abi::supervisor_protocol::{self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, classes};
-        use stem::syscall::{PortHandle, port_send_all, vfs_close, vfs_mount};
+        use stem::syscall::{port_send_all, vfs_close, vfs_mount};
 
         // Helper: send MSG_BIND_FAILED back to the driver.
         let send_failed = |req_write: u32, id: u64, code: u32, msg: &[u8]| {
@@ -496,14 +499,27 @@ fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 }
 
 fn spawn_netd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    match stem::syscall::spawn_process("/bin/netd", 0) {
-        Ok(pid) => {
+    // Spawn netd via VFS-loaded spawn_process_ex (not the legacy boot-modules
+    // path) so the initial spawn uses the same code path the supervisor uses
+    // when restarting netd.  Using two different paths produced two different
+    // ProcessInfo / handle-table layouts and the boot-modules variant left
+    // netd's request port unable to wake the main poll loop, so the first
+    // ping after "Network ready" timed out.
+    let path = "/bin/netd";
+    let argv: &[&[u8]] = &[path.as_bytes()];
+    let env = alloc::collections::BTreeMap::new();
+    let inherit = stem::abi::types::stdio_mode::INHERIT;
+    let spawn_res =
+        stem::syscall::spawn_process_ex(path, argv, &env, inherit, inherit, inherit, 0, &[]);
+    match spawn_res {
+        Ok(resp) => {
+            let pid = resp.child_tid;
             stem::debug!("SPROUT: Spawned netd (PID={})", pid);
             let mut tasks = tasks.lock();
             tasks.push(ManagedTask {
                 name: "netd".to_string(),
                 kind: TaskKind::Service("svc.netd".to_string()),
-                module_path: "/bin/netd".to_string(),
+                module_path: path.to_string(),
                 pid: Some(pid),
                 ..Default::default()
             });
@@ -629,7 +645,10 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
                 alloc::vec![]
             };
 
-            let arg_str = alloc::format!("{}", task.spawn_arg);
+            // The spawn_arg integer is already passed through the syscall's
+            // dedicated `boot_arg` field below; do not duplicate it as an
+            // extra argv entry (that's what produced spurious "/bin/netd 0"
+            // entries in `ps`).
             let spawn_path = if task.module_path.is_empty() {
                 task.name.as_str()
             } else {
@@ -653,7 +672,7 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
 
             let spawn_res = stem::syscall::spawn_process_ex(
                 spawn_path,
-                &[spawn_path.as_bytes(), arg_str.as_bytes()],
+                &[spawn_path.as_bytes()],
                 &alloc::collections::BTreeMap::new(),
                 stdin_mode,
                 stdout_mode,

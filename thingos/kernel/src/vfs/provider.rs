@@ -217,16 +217,20 @@ impl ProviderRpc {
                 return Err(Errno::EPIPE);
             }
 
-            // Check timeout
+            // Check timeout.  A single slow request is not, by itself, evidence
+            // that the provider is dead — the dead-provider signals (port full
+            // on send, response port has no writers) are checked separately and
+            // already taint the provider.  A timeout simply means *this* request
+            // didn't get a reply in time; surface ETIMEDOUT to the caller so it
+            // can retry.  Tainting on every timeout would punish all subsequent
+            // callers for one slow first request (e.g. a provider still
+            // warming up DHCP or socket allocation), which is exactly the race
+            // that caused first-ping failures after netd's "Network ready" log.
             let now_ns = crate::time::monotonic_now_ns();
             if now_ns >= deadline_ns {
                 crate::kerror!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
                 let mut state = self.state.lock();
-                Self::taint_with_cooldown(&mut state);
                 state.waiters.remove(&req_id);
-                for wq in state.waiters.values() {
-                    wq.wake_all();
-                }
                 return Err(Errno::ETIMEDOUT);
             }
 
