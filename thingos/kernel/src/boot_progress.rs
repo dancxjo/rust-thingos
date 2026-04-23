@@ -75,6 +75,9 @@ const DOT_ACTIVE_COLOR: u32 = 0x00AADD;
 const BAR_H: usize = 6;
 const DOT_SIZE: usize = 8;
 const MSG_H: usize = 16;
+const HINT_H: usize = 16;
+const HINT_FG: u32 = 0x888888;
+const HINT_TEXT: \u0026str = "Press F12 for a terminal";
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -93,6 +96,8 @@ struct Layout {
     dot_y: usize,
     /// Y position of the short dot-phase labels (drawn when font available).
     dot_label_y: usize,
+    /// Y position of the "Press F12 for a terminal" hint.
+    hint_y: usize,
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -142,8 +147,9 @@ pub fn init(fb: FramebufferInfo) {
     let bar_y = msg_y + MSG_H + 4;
     let dot_y = bar_y + BAR_H + 4;
     let dot_label_y = dot_y + DOT_SIZE + 3;
+    let hint_y = dot_label_y + 16 + 8;
 
-    let layout = Layout { panel_x, panel_y, panel_side, icon_px, gap_px, msg_y, bar_y, dot_y, dot_label_y };
+    let layout = Layout { panel_x, panel_y, panel_side, icon_px, gap_px, msg_y, bar_y, dot_y, dot_label_y, hint_y };
 
     let mut state = BootProgressState {
         fb,
@@ -153,6 +159,7 @@ pub fn init(fb: FramebufferInfo) {
         pushed_phases: [BootPhase::Framebuffer; TOTAL_TASKS],
     };
     state.draw_initial_panel();
+    crate::kinfo!("boot_progress: hint=\"{}\"", HINT_TEXT);
     *BOOT_PROGRESS.lock() = Some(state);
 }
 
@@ -160,6 +167,8 @@ pub fn set_unifont_data(data: &'static [u8]) {
     let mut guard = BOOT_PROGRESS.lock();
     if let Some(state) = guard.as_mut() {
         state.unifont_data = Some(data);
+        // Font is now available; redraw the hint so it appears as soon as possible.
+        state.draw_hint();
     }
 }
 
@@ -258,6 +267,7 @@ impl BootProgressState {
         self.draw_progress_bar(0);
         self.draw_phase_dots(0);
         self.update_message("BOOTING...");
+        self.draw_hint();
     }
 
     /// Pixel coordinate of the top-left corner of cell `idx`.
@@ -375,6 +385,20 @@ impl BootProgressState {
                 self.layout.panel_x
             };
             self.draw_string(text_x, self.layout.msg_y, msg, TEXT_FG);
+        }
+    }
+
+    /// Draw the "Press F12 for a terminal" hint at the bottom of the panel.
+    fn draw_hint(\u0026mut self) {
+        if self.unifont_data.is_some() {
+            let char_w = 8;
+            let text_w = HINT_TEXT.len() * char_w;
+            let text_x = if text_w < self.layout.panel_side {
+                self.layout.panel_x + (self.layout.panel_side - text_w) / 2
+            } else {
+                self.layout.panel_x
+            };
+            self.draw_string(text_x, self.layout.hint_y, HINT_TEXT, HINT_FG);
         }
     }
 

@@ -26,3 +26,10 @@ Feature: Boot progress milestone text reporting
     When I wait for the system to boot
     Then the serial log shows "boot_progress: milestone=\"Entering Scheduler\"" after "boot_progress: milestone=\"Spawning Sprout\""
     And  the serial log shows "Entering scheduler loop." after "boot_progress: milestone=\"Entering Scheduler\""
+
+  @smoke
+  @timeout.30s
+  Scenario: Terminal hint is reported during initialization
+    Given the machine is started
+    When I wait for the system to boot
+    Then the serial output should contain "boot_progress: hint=\"Press F12 for a terminal\""
