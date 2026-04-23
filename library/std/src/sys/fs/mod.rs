@@ -6,11 +6,6 @@ use crate::path::{Path, PathBuf};
 pub mod common;
 
 cfg_select! {
-    target_os = "thingos" => {
-        #[path = "../pal/thingos/fs.rs"]
-        mod thingos;
-        use thingos as imp;
-    }
     any(target_family = "unix", target_os = "wasi") => {
         mod unix;
         use unix as imp;
@@ -49,6 +44,11 @@ cfg_select! {
     target_os = "vexos" => {
         mod vexos;
         use vexos as imp;
+    }
+    target_os = "thingos" => {
+        #[path = "../pal/thingos/fs.rs"]
+        mod thingos;
+        use thingos as imp;
     }
     _ => {
         mod unsupported;

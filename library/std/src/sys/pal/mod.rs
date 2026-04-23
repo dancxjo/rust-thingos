@@ -4,10 +4,6 @@
 #![allow(missing_debug_implementations)]
 
 cfg_select! {
-    target_os = "thingos" => {
-        mod thingos;
-        pub use self::thingos::*;
-    }
     unix => {
         mod unix;
         pub use self::unix::*;
@@ -63,6 +59,10 @@ cfg_select! {
     target_os = "zkvm" => {
         mod zkvm;
         pub use self::zkvm::*;
+    }
+    target_os = "thingos" => {
+        mod thingos;
+        pub use self::thingos::*;
     }
     _ => {
         mod unsupported;

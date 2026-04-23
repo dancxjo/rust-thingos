@@ -1,11 +1,6 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 cfg_select! {
-    target_os = "thingos" => {
-        #[path = "../pal/thingos/pipe.rs"]
-        mod thingos;
-        pub use thingos::{Pipe, pipe};
-    }
     unix => {
         mod unix;
         pub use unix::{Pipe, pipe};
@@ -17,6 +12,11 @@ cfg_select! {
     target_os = "motor" => {
         mod motor;
         pub use motor::{Pipe, pipe};
+    }
+    target_os = "thingos" => {
+        #[path = "../pal/thingos/pipe.rs"]
+        mod thingos;
+        pub use thingos::{Pipe, pipe};
     }
     _ => {
         mod unsupported;

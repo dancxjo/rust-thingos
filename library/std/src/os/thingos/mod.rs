@@ -4,7 +4,6 @@
 #![doc(cfg(target_os = "thingos"))]
 
 pub mod fd;
-pub mod ffi;
 pub mod fs;
 pub mod net;
 pub mod process;

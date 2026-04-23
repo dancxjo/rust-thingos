@@ -81,7 +81,7 @@ pub mod darwin;
         all(target_vendor = "fortanix", target_env = "sgx")
     )
 )))]
-#[cfg(all(not(target_os = "hermit"), any(unix, target_os = "thingos", doc)))]
+#[cfg(all(not(target_os = "hermit"), any(unix, doc)))]
 pub mod unix;
 
 // linux
@@ -183,7 +183,6 @@ pub mod vita;
 pub mod vxworks;
 #[cfg(target_os = "xous")]
 pub mod xous;
-pub mod thingos;
 
 #[cfg(any(
     unix,
@@ -191,7 +190,6 @@ pub mod thingos;
     target_os = "trusty",
     target_os = "wasi",
     target_os = "motor",
-    target_os = "thingos",
     doc
 ))]
 pub mod fd;

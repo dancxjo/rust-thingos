@@ -1,9 +1,4 @@
 cfg_select! {
-    target_os = "thingos" => {
-        #[path = "../pal/thingos/process.rs"]
-        mod thingos;
-        use thingos as imp;
-    }
     target_family = "unix" => {
         mod unix;
         use unix as imp;
@@ -19,6 +14,11 @@ cfg_select! {
     target_os = "motor" => {
         mod motor;
         use motor as imp;
+    }
+    target_os = "thingos" => {
+        #[path = "../pal/thingos/process.rs"]
+        mod thingos;
+        use thingos as imp;
     }
     _ => {
         mod unsupported;

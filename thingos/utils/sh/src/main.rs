@@ -1064,43 +1064,11 @@ fn spawn_job(
     for _ in 0..cmds.len().saturating_sub(1) {
         let mut pair = [0u32; 2];
         syscall::pipe(&mut pair)?;
-        // Set CLOEXEC on both ends so children don't inherit all pipe handles
-        // except the ones we explicitly pass via spawn_process_ex stdio.
-        let _ = syscall::vfs_fcntl(
-            pair[0],
-            abi::syscall::fcntl_cmd::F_SETFD,
-            abi::syscall::handle_flags::HANDLE_CLOEXEC,
-        );
-        let _ = syscall::vfs_fcntl(
-            pair[1],
-            abi::syscall::fcntl_cmd::F_SETFD,
-            abi::syscall::handle_flags::HANDLE_CLOEXEC,
-        );
         pipes.push(pair);
     }
 
-    let bg_in = if background {
-        let fd = open_read("/dev/null")?;
-        let _ = syscall::vfs_fcntl(
-            fd,
-            abi::syscall::fcntl_cmd::F_SETFD,
-            abi::syscall::handle_flags::HANDLE_CLOEXEC,
-        );
-        Some(fd)
-    } else {
-        None
-    };
-    let bg_out = if background {
-        let fd = open_write("/dev/null", false)?;
-        let _ = syscall::vfs_fcntl(
-            fd,
-            abi::syscall::fcntl_cmd::F_SETFD,
-            abi::syscall::handle_flags::HANDLE_CLOEXEC,
-        );
-        Some(fd)
-    } else {
-        None
-    };
+    let bg_in = if background { Some(open_read("/dev/null")?) } else { None };
+    let bg_out = if background { Some(open_write("/dev/null", false)?) } else { None };
 
     let path_env = env_map.get("PATH").map(|s| s.as_str()).unwrap_or("/bin:/drivers");
     let path_prefixes: Vec<&str> = path_env.split(':').collect();

@@ -234,7 +234,7 @@ sprout arch=karch:
     fi
     export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
     echo "Building sprout for $TARGET_ARCH using $TARGET_JSON..."
-    __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library" RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p sprout
+    RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p sprout
 
 # Build rtc_cmos user app.
 rtc_cmos arch=karch:
@@ -248,7 +248,7 @@ rtc_cmos arch=karch:
     fi
     export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
     echo "Building rtc_cmos for $TARGET_ARCH using $TARGET_JSON..."
-    __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library" RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p rtc_cmos
+    RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p rtc_cmos
 
 # Build clock user app.
 clock arch=karch:
@@ -262,7 +262,7 @@ clock arch=karch:
     fi
     export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
     echo "Building clock for $TARGET_ARCH using $TARGET_JSON..."
-    __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library" RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p clock
+    RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p clock
 
 # Build bristle user app.
 bristle arch=karch:
@@ -276,7 +276,7 @@ bristle arch=karch:
     fi
     export __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library"
     echo "Building bristle for $TARGET_ARCH using $TARGET_JSON..."
-    __CARGO_TESTS_ONLY_SRC_ROOT="$(pwd)/library" RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p bristle
+    RUSTFLAGS="-Awarnings" cargo -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec build --target "$TARGET_JSON" -p bristle
 
 # Build and cache the current stage-1 Rust bootstrap output.
 # Today this is expected to produce a Linux-hosted cross-compiler plus a cached

@@ -1,9 +1,4 @@
 cfg_select! {
-    target_os = "thingos" => {
-        #[path = "../pal/thingos/random.rs"]
-        mod thingos;
-        pub use thingos::fill_bytes;
-    }
     // Tier 1
     any(target_os = "linux", target_os = "android") => {
         mod linux;
@@ -86,6 +81,11 @@ cfg_select! {
     target_os = "trusty" => {
         mod trusty;
         pub use trusty::fill_bytes;
+    }
+    target_os = "thingos" => {
+        #[path = "../pal/thingos/random.rs"]
+        mod thingos;
+        pub use thingos::fill_bytes;
     }
     target_os = "uefi" => {
         mod uefi;
