@@ -50,25 +50,49 @@ fn print_error(msg: &str) {
     let _ = vfs_write(1, out.as_bytes());
 }
 
-/// Stream bytes from in_fd to out_fd until EOF.
-fn stream(in_fd: u32, out_fd: u32, buf: &mut [u8]) -> Result<(), ()> {
+/// Stream bytes from in_fd to out_fd.
+/// If `number_lines` is true, prefixes each line with its 1-indexed line number.
+fn stream(
+    in_fd: u32,
+    out_fd: u32,
+    buf: &mut [u8],
+    number_lines: bool,
+    lineno: &mut usize,
+    at_line_start: &mut bool,
+) -> Result<(), ()> {
     loop {
         match vfs_read(in_fd, buf) {
             Ok(0) => break,
             Ok(n) => {
-                let mut written = 0;
-                while written < n {
-                    match vfs_write(out_fd, &buf[written..n]) {
-                        Ok(0) => {
-                            // If we can't write any bytes and it's not an error,
-                            // might be a full pipe or similar. Try again?
-                            // For simplicity, treat as error if it persists.
-                            return Err(());
+                if !number_lines {
+                    let mut written = 0;
+                    while written < n {
+                        match vfs_write(out_fd, &buf[written..n]) {
+                            Ok(0) => return Err(()),
+                            Ok(nw) => written += nw,
+                            Err(_) => return Err(()),
                         }
-                        Ok(nw) => {
-                            written += nw;
+                    }
+                } else {
+                    // Line numbering mode: process byte by byte or find newlines
+                    let chunk = &buf[..n];
+                    let mut start = 0;
+                    for i in 0..chunk.len() {
+                        if *at_line_start {
+                            *lineno += 1;
+                            let prefix = alloc::format!("{:6}  ", *lineno);
+                            let _ = vfs_write(out_fd, prefix.as_bytes());
+                            *at_line_start = false;
                         }
-                        Err(_) => return Err(()),
+
+                        if chunk[i] == b'\n' {
+                            let _ = vfs_write(out_fd, &chunk[start..=i]);
+                            start = i + 1;
+                            *at_line_start = true;
+                        }
+                    }
+                    if start < chunk.len() {
+                        let _ = vfs_write(out_fd, &chunk[start..]);
                     }
                 }
             }
@@ -83,16 +107,48 @@ fn main(_arg: usize) -> ! {
     let args = get_args();
     let mut buf = alloc::vec![0u8; 32768]; // 32KB buffer
 
-    if args.len() < 2 {
+    let mut number_lines = false;
+    let mut file_args = Vec::new();
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg.starts_with('-') && arg.len() > 1 && arg != "--" {
+            for ch in arg.chars().skip(1) {
+                match ch {
+                    'n' => number_lines = true,
+                    _ => {
+                        print_error(&alloc::format!("invalid option -- '{}'", ch));
+                        stem::syscall::exit(1);
+                    }
+                }
+            }
+        } else if arg == "--" {
+            i += 1;
+            while i < args.len() {
+                file_args.push(&args[i]);
+                i += 1;
+            }
+            break;
+        } else {
+            file_args.push(arg);
+        }
+        i += 1;
+    }
+
+    let mut lineno = 0;
+    let mut at_line_start = true;
+
+    if file_args.is_empty() {
         // No files specified, read from stdin (fd 0)
-        if stream(0, 1, &mut buf).is_err() {
+        if stream(0, 1, &mut buf, number_lines, &mut lineno, &mut at_line_start).is_err() {
             print_error("error reading from stdin");
         }
     } else {
-        for path in args.iter().skip(1) {
+        for path in file_args {
             if path == "-" {
                 // Special case: read from stdin
-                if stream(0, 1, &mut buf).is_err() {
+                if stream(0, 1, &mut buf, number_lines, &mut lineno, &mut at_line_start).is_err() {
                     print_error("error reading from stdin");
                 }
                 continue;
@@ -102,7 +158,8 @@ fn main(_arg: usize) -> ! {
             match vfs_open(path, vfs_flags::O_RDONLY) {
                 Ok(fd) => {
                     stem::info!("cat: opened '{}' fd={}", path, fd);
-                    if stream(fd, 1, &mut buf).is_err() {
+                    if stream(fd, 1, &mut buf, number_lines, &mut lineno, &mut at_line_start).is_err()
+                    {
                         print_error(&alloc::format!("error reading {}", path));
                     }
                     let _ = vfs_close(fd);

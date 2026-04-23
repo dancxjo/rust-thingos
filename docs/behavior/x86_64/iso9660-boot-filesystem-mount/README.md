@@ -1,6 +1,6 @@
 # Feature: ISO9660 boot filesystem mount
 
-> Last run: 2026-04-23 11:14:17
+> Last run: 2026-04-23 14:40:47
 
 ## Scenarios
 
