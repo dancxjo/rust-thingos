@@ -71,7 +71,7 @@ fn init_onscreen_terminal() {
     let Some(fb) = response.framebuffers().into_iter().next() else {
         return;
     };
-    crate::console::init(Framebuffer::new(fb));
+    crate::console::init(Framebuffer::new(&fb));
 }
 
 #[unsafe(no_mangle)]
