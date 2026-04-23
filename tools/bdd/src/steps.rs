@@ -763,35 +763,6 @@ async fn check_ordering(
     second: String,
     first: String,
 ) -> Result<(), StepError> {
-    fn unescape_step_text(input: &str) -> String {
-        let mut out = String::with_capacity(input.len());
-        let mut chars = input.chars();
-
-        while let Some(ch) = chars.next() {
-            if ch == '\\' {
-                if let Some(next) = chars.next() {
-                    match next {
-                        '\\' => out.push('\\'),
-                        '"' => out.push('"'),
-                        'n' => out.push('\n'),
-                        'r' => out.push('\r'),
-                        't' => out.push('\t'),
-                        other => {
-                            out.push('\\');
-                            out.push(other);
-                        }
-                    }
-                } else {
-                    out.push('\\');
-                }
-            } else {
-                out.push(ch);
-            }
-        }
-
-        out
-    }
-
     // Wait a bit to ensure we have enough log data
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -812,6 +783,60 @@ async fn check_ordering(
         return Err(StepError(format!("Could not find '{}' in serial log", first)));
     } else {
         return Err(StepError(format!("Did not find '{}' after '{}' in serial log", second, first)));
+    }
+}
+
+fn unescape_step_text(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                match next {
+                    '\\' => out.push('\\'),
+                    '"' => out.push('"'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+            } else {
+                out.push('\\');
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unescape_step_text;
+
+    #[test]
+    fn unescape_quotes_and_backslashes() {
+        assert_eq!(
+            unescape_step_text(r#"boot_progress: milestone=\"Memory Map OK\""#),
+            r#"boot_progress: milestone="Memory Map OK""#
+        );
+        assert_eq!(unescape_step_text(r#"path\\to\\file"#), r#"path\to\file"#);
+    }
+
+    #[test]
+    fn unescape_control_sequences() {
+        assert_eq!(unescape_step_text(r#"a\nb\rc\td"#), "a\nb\rc\td");
+    }
+
+    #[test]
+    fn preserves_unknown_and_trailing_escape_sequences() {
+        assert_eq!(unescape_step_text(r#"x\q"#), r#"x\q"#);
+        assert_eq!(unescape_step_text(r#"x\"#), r#"x\"#);
     }
 }
 
