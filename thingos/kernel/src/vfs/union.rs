@@ -138,51 +138,112 @@ impl super::VfsNode for UnionDirNode {
     }
 
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        // Gather all unique names from all layers.
-        // We do this by reading each layer from start to finish.
-        let mut names = BTreeSet::new();
-        let mut scratch = alloc::vec![0u8; 8192];
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut scratch = alloc::vec![0u8; 2048];
+        let mut virtual_pos = 0u64;
+        let mut written = 0usize;
 
         for layer in &self.layers {
-            let mut off = 0;
+            let mut layer_offset = 0u64;
             let mut pending_name = String::new();
 
             loop {
-                match layer.readdir(off, &mut scratch) {
-                    Ok(0) => {
-                        // If we had a pending name without a NUL terminator, it's probably EOF
-                        if !pending_name.is_empty() {
-                            names.insert(pending_name);
-                        }
-                        break;
-                    }
-                    Ok(n) => {
-                        let mut start = 0;
-                        for i in 0..n {
-                            if scratch[i] == 0 {
-                                let part = core::str::from_utf8(&scratch[start..i]).unwrap_or("");
-                                if !pending_name.is_empty() {
-                                    pending_name.push_str(part);
-                                    names.insert(core::mem::take(&mut pending_name));
-                                } else if !part.is_empty() {
-                                    names.insert(String::from(part));
-                                }
-                                start = i + 1;
-                            }
-                        }
-                        if start < n {
-                            // Part of a name is left over
-                            let part = core::str::from_utf8(&scratch[start..n]).unwrap_or("");
-                            pending_name.push_str(part);
-                        }
-                        off += n as u64;
-                    }
+                let n = match layer.readdir(layer_offset, &mut scratch) {
+                    Ok(n) => n,
                     Err(_) => break,
+                };
+                if n == 0 {
+                    if !pending_name.is_empty() {
+                        let name = core::mem::take(&mut pending_name);
+                        if seen.insert(name.clone()) {
+                            let entry_len = (name.len() + 1) as u64;
+                            if virtual_pos + entry_len > offset {
+                                let start_in_entry = if offset > virtual_pos {
+                                    (offset - virtual_pos) as usize
+                                } else {
+                                    0
+                                };
+                                if start_in_entry < name.len() {
+                                    let part = &name.as_bytes()[start_in_entry..];
+                                    let copy_n = part.len().min(buf.len() - written);
+                                    buf[written..written + copy_n].copy_from_slice(&part[..copy_n]);
+                                    written += copy_n;
+                                    if copy_n == part.len() && written < buf.len() {
+                                        buf[written] = 0;
+                                        written += 1;
+                                    }
+                                } else if start_in_entry == name.len() && written < buf.len() {
+                                    buf[written] = 0;
+                                    written += 1;
+                                }
+                                if written == buf.len() {
+                                    return Ok(written);
+                                }
+                            }
+                            virtual_pos = virtual_pos.saturating_add(entry_len);
+                        }
+                    }
+                    break;
+                }
+
+                layer_offset = layer_offset.saturating_add(n as u64);
+                let mut start = 0usize;
+                for i in 0..n {
+                    if scratch[i] != 0 {
+                        continue;
+                    }
+
+                    let part =
+                        core::str::from_utf8(&scratch[start..i]).map_err(|_| Errno::EIO)?;
+                    pending_name.push_str(part);
+
+                    if !pending_name.is_empty() {
+                        let name = core::mem::take(&mut pending_name);
+                        if seen.insert(name.clone()) {
+                            let entry_len = (name.len() + 1) as u64;
+                            if virtual_pos + entry_len > offset {
+                                let start_in_entry = if offset > virtual_pos {
+                                    (offset - virtual_pos) as usize
+                                } else {
+                                    0
+                                };
+                                if start_in_entry < name.len() {
+                                    let part = &name.as_bytes()[start_in_entry..];
+                                    let copy_n = part.len().min(buf.len() - written);
+                                    buf[written..written + copy_n].copy_from_slice(&part[..copy_n]);
+                                    written += copy_n;
+                                    if copy_n == part.len() && written < buf.len() {
+                                        buf[written] = 0;
+                                        written += 1;
+                                    }
+                                } else if start_in_entry == name.len() && written < buf.len() {
+                                    buf[written] = 0;
+                                    written += 1;
+                                }
+                                if written == buf.len() {
+                                    return Ok(written);
+                                }
+                            }
+                            virtual_pos = virtual_pos.saturating_add(entry_len);
+                        }
+                    }
+
+                    start = i + 1;
+                }
+
+                if start < n {
+                    let part =
+                        core::str::from_utf8(&scratch[start..n]).map_err(|_| Errno::EIO)?;
+                    pending_name.push_str(part);
                 }
             }
         }
 
-        super::write_readdir_entries(names.iter().map(|s| s.as_str()), offset, buf)
+        Ok(written)
     }
 }
 
@@ -190,6 +251,11 @@ impl super::VfsNode for UnionDirNode {
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    use alloc::sync::Arc;
+    use alloc::vec::Vec;
+
     use abi::errors::Errno;
 
     use super::*;
@@ -245,6 +311,51 @@ mod tests {
                 ino: self.ino,
                 ..Default::default()
             })
+        }
+    }
+
+    struct StaticDirNode {
+        names: Vec<&'static str>,
+        calls: Arc<AtomicUsize>,
+        ino: u64,
+    }
+
+    impl VfsNode for StaticDirNode {
+        fn read(&self, _: u64, _: &mut [u8]) -> SysResult<usize> {
+            Err(Errno::EISDIR)
+        }
+
+        fn write(&self, _: u64, _: &[u8]) -> SysResult<usize> {
+            Err(Errno::EISDIR)
+        }
+
+        fn stat(&self) -> SysResult<VfsStat> {
+            Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: self.ino, ..Default::default() })
+        }
+
+        fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            super::super::write_readdir_entries(self.names.iter().copied(), offset, buf)
+        }
+    }
+
+    struct StaticDirFs {
+        names: Vec<&'static str>,
+        calls: Arc<AtomicUsize>,
+        ino: u64,
+    }
+
+    impl VfsDriver for StaticDirFs {
+        fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
+            if path == "dir" {
+                Ok(Arc::new(StaticDirNode {
+                    names: self.names.clone(),
+                    calls: self.calls.clone(),
+                    ino: self.ino,
+                }))
+            } else {
+                Err(Errno::ENOENT)
+            }
         }
     }
 
@@ -328,5 +439,74 @@ mod tests {
         assert_eq!(union.layer_count(), 1);
         union.push(SingleFileFs::new("b", b"b", 2));
         assert_eq!(union.layer_count(), 2);
+    }
+
+    #[test]
+    fn test_union_readdir_merges_and_deduplicates() {
+        let upper_calls = Arc::new(AtomicUsize::new(0));
+        let lower_calls = Arc::new(AtomicUsize::new(0));
+        let mut union = UnionFs::new_fallthrough();
+        union.push(Arc::new(StaticDirFs {
+            names: vec!["a", "b"],
+            calls: lower_calls.clone(),
+            ino: 1,
+        }));
+        union.push(Arc::new(StaticDirFs {
+            names: vec!["b", "c"],
+            calls: upper_calls.clone(),
+            ino: 2,
+        }));
+
+        let node = union.lookup("dir").unwrap();
+        let mut buf = [0u8; 64];
+        let n = node.readdir(0, &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"b\0c\0a\0");
+        assert!(upper_calls.load(Ordering::Relaxed) > 0);
+        assert!(lower_calls.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn test_union_readdir_can_return_without_touching_lower_layers() {
+        let upper_calls = Arc::new(AtomicUsize::new(0));
+        let lower_calls = Arc::new(AtomicUsize::new(0));
+        let mut union = UnionFs::new_fallthrough();
+        union.push(Arc::new(StaticDirFs {
+            names: vec!["lower-entry"],
+            calls: lower_calls.clone(),
+            ino: 11,
+        }));
+        union.push(Arc::new(StaticDirFs {
+            names: vec!["abcd", "efgh", "ijkl"],
+            calls: upper_calls.clone(),
+            ino: 12,
+        }));
+
+        let node = union.lookup("dir").unwrap();
+        let mut buf = [0u8; 5];
+        let n = node.readdir(0, &mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"abcd\0");
+        assert!(upper_calls.load(Ordering::Relaxed) > 0);
+        assert_eq!(lower_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_union_readdir_offset_inside_stream() {
+        let mut union = UnionFs::new_fallthrough();
+        union.push(Arc::new(StaticDirFs {
+            names: vec!["a", "b"],
+            calls: Arc::new(AtomicUsize::new(0)),
+            ino: 21,
+        }));
+        union.push(Arc::new(StaticDirFs {
+            names: vec!["b", "c"],
+            calls: Arc::new(AtomicUsize::new(0)),
+            ino: 22,
+        }));
+
+        let node = union.lookup("dir").unwrap();
+        let mut buf = [0u8; 64];
+        let n = node.readdir(2, &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"c\0a\0");
     }
 }

@@ -321,45 +321,87 @@ impl VfsNode for ProviderNode {
     }
 
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let len = buf.len().min(abi::vfs_rpc::VFS_RPC_MAX_DATA) as u32;
-        let mut payload = [0u8; 20];
-        payload[..8].copy_from_slice(&self.handle.to_le_bytes());
-        // Translate byte offset to entry index for the provider.
-        // This is a heuristic: we assume each entry is ~32 bytes on average.
-        // A better fix would be for the provider to support byte offsets.
-        let index = offset / 32;
-        payload[8..16].copy_from_slice(&index.to_le_bytes());
-        payload[16..20].copy_from_slice(&len.to_le_bytes());
-
-        let resp = self.rpc.rpc(VfsRpcOp::Readdir, &payload)?;
-        if resp.is_empty() || resp[0] != 0 {
-            return Err(errno_from_u8(resp.get(0).cloned().unwrap_or(5)));
+        if buf.is_empty() {
+            return Ok(0);
         }
 
-        let data = &resp[5..];
-        let mut written = 0;
-        let mut read_ptr = 0;
+        let mut provider_index = 0u64;
+        let mut virtual_pos = 0u64;
+        let mut written = 0usize;
+        let request_len =
+            core::cmp::min(core::cmp::max(buf.len(), 512), abi::vfs_rpc::VFS_RPC_MAX_DATA) as u32;
 
-        while read_ptr + 10 <= data.len() && written < buf.len() {
-            let name_len = data[read_ptr + 9] as usize;
-            if read_ptr + 10 + name_len > data.len() {
-                break;
+        loop {
+            let mut payload = [0u8; 20];
+            payload[..8].copy_from_slice(&self.handle.to_le_bytes());
+            payload[8..16].copy_from_slice(&provider_index.to_le_bytes());
+            payload[16..20].copy_from_slice(&request_len.to_le_bytes());
+
+            let resp = self.rpc.rpc(VfsRpcOp::Readdir, &payload)?;
+            if resp.is_empty() {
+                return Err(Errno::EIO);
             }
-            let name = &data[read_ptr + 10 .. read_ptr + 10 + name_len];
-            
-            // Copy name + NUL
-            let copy_n = name.len().min(buf.len() - written);
-            buf[written..written + copy_n].copy_from_slice(&name[..copy_n]);
-            written += copy_n;
-            if written < buf.len() {
-                buf[written] = 0;
-                written += 1;
+            if resp[0] != 0 {
+                return Err(errno_from_u8(resp[0]));
+            }
+            if resp.len() < 5 {
+                return Err(Errno::EIO);
             }
 
-            read_ptr += 10 + name_len;
+            let payload_len = u32::from_le_bytes([resp[1], resp[2], resp[3], resp[4]]) as usize;
+            if resp.len() < 5 + payload_len {
+                return Err(Errno::EIO);
+            }
+            let data = &resp[5..5 + payload_len];
+            if data.is_empty() {
+                return Ok(written);
+            }
+
+            let mut read_ptr = 0usize;
+            let mut parsed_entries = 0u64;
+            while read_ptr + 10 <= data.len() {
+                let name_len = data[read_ptr + 9] as usize;
+                let entry_len = 10 + name_len;
+                if read_ptr + entry_len > data.len() {
+                    return Err(Errno::EIO);
+                }
+
+                let name = &data[read_ptr + 10 .. read_ptr + entry_len];
+                let entry_stream_len = (name_len + 1) as u64;
+                if virtual_pos + entry_stream_len > offset {
+                    let start_in_entry =
+                        if offset > virtual_pos { (offset - virtual_pos) as usize } else { 0 };
+
+                    if start_in_entry < name_len {
+                        let chunk = &name[start_in_entry..];
+                        let copy_n = chunk.len().min(buf.len() - written);
+                        buf[written..written + copy_n].copy_from_slice(&chunk[..copy_n]);
+                        written += copy_n;
+
+                        if copy_n == chunk.len() && written < buf.len() {
+                            buf[written] = 0;
+                            written += 1;
+                        }
+                    } else if start_in_entry == name_len && written < buf.len() {
+                        buf[written] = 0;
+                        written += 1;
+                    }
+
+                    if written == buf.len() {
+                        return Ok(written);
+                    }
+                }
+
+                virtual_pos = virtual_pos.saturating_add(entry_stream_len);
+                parsed_entries += 1;
+                read_ptr += entry_len;
+            }
+
+            if parsed_entries == 0 {
+                return Ok(written);
+            }
+            provider_index = provider_index.saturating_add(parsed_entries);
         }
-
-        Ok(written)
     }
 
     fn attr_get(&self, name: &str) -> SysResult<(u8, alloc::vec::Vec<u8>)> {
@@ -625,6 +667,25 @@ mod tests {
 
     fn make_port(cap: usize) -> Arc<crate::ipc::Port> {
         Arc::new(crate::ipc::Port::new(cap))
+    }
+
+    fn encode_dirent_entry(ino: u64, file_type: u8, name: &str, out: &mut vec::Vec<u8>) {
+        out.extend_from_slice(&ino.to_le_bytes());
+        out.push(file_type);
+        out.push(name.len().min(255) as u8);
+        out.extend_from_slice(&name.as_bytes()[..name.len().min(255)]);
+    }
+
+    fn ok_readdir_payload(entries: &[(u64, u8, &str)]) -> vec::Vec<u8> {
+        let mut data = vec::Vec::new();
+        for (ino, ftype, name) in entries {
+            encode_dirent_entry(*ino, *ftype, name, &mut data);
+        }
+        let mut resp = vec::Vec::with_capacity(5 + data.len());
+        resp.push(0);
+        resp.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        resp.extend_from_slice(&data);
+        resp
     }
 
     // ── errno_from_u8 ────────────────────────────────────────────────────────
@@ -961,5 +1022,61 @@ mod tests {
 
         let mut buf = [0u8; 64];
         assert_eq!(req_port.try_recv(&mut buf), 0);
+    }
+
+    #[test]
+    fn provider_readdir_translates_from_exact_stream_offset() {
+        let req_port = make_port(4096);
+        let resp_port = make_port(4096);
+        resp_port.send(&ok_readdir_payload(&[(1, 8, "a"), (2, 8, "b")]));
+
+        let node = ProviderNode {
+            handle: 7,
+            rpc: Arc::new(ProviderRpc::new(req_port.clone(), resp_port, 0)),
+            wait_queue: Arc::new(WaitQueue::new()),
+        };
+
+        let mut out = [0u8; 2];
+        let n = node.readdir(2, &mut out).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(&out, b"b\0");
+
+        let mut req_msg = [0u8; 64];
+        let msg_n = req_port.try_recv(&mut req_msg);
+        assert!(msg_n >= core::mem::size_of::<VfsRpcReqHeader>() + 20);
+        let payload_off = core::mem::size_of::<VfsRpcReqHeader>();
+        let sent_index = u64::from_le_bytes(req_msg[payload_off + 8..payload_off + 16].try_into().unwrap());
+        assert_eq!(sent_index, 0);
+    }
+
+    #[test]
+    fn provider_readdir_paginates_by_provider_entry_index() {
+        let req_port = make_port(4096);
+        let resp_port = make_port(4096);
+        resp_port.send(&ok_readdir_payload(&[(1, 8, "a"), (2, 8, "b")]));
+        resp_port.send(&ok_readdir_payload(&[(3, 8, "c")]));
+
+        let node = ProviderNode {
+            handle: 7,
+            rpc: Arc::new(ProviderRpc::new(req_port.clone(), resp_port, 0)),
+            wait_queue: Arc::new(WaitQueue::new()),
+        };
+
+        let mut out = [0u8; 2];
+        let n = node.readdir(4, &mut out).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(&out, b"c\0");
+
+        let mut first = [0u8; 64];
+        let mut second = [0u8; 64];
+        let n1 = req_port.try_recv(&mut first);
+        let n2 = req_port.try_recv(&mut second);
+        assert!(n1 >= core::mem::size_of::<VfsRpcReqHeader>() + 20);
+        assert!(n2 >= core::mem::size_of::<VfsRpcReqHeader>() + 20);
+        let payload_off = core::mem::size_of::<VfsRpcReqHeader>();
+        let first_index = u64::from_le_bytes(first[payload_off + 8..payload_off + 16].try_into().unwrap());
+        let second_index = u64::from_le_bytes(second[payload_off + 8..payload_off + 16].try_into().unwrap());
+        assert_eq!(first_index, 0);
+        assert_eq!(second_index, 2);
     }
 }
