@@ -1,6 +1,6 @@
 # Feature: Process Reaping Smoke Test
 
-> Last run: 2026-04-22 19:29:20
+> Last run: 2026-04-22 21:21:38
 
 ## Scenarios
 
