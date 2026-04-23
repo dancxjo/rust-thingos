@@ -46,9 +46,9 @@ impl BootFs {
             let clean = name.strip_prefix('/').unwrap_or(name);
             clean_names.push(clean);
             if !clean.is_empty() {
-                // Last writer wins for duplicate names; in practice module names
-                // are unique, so this is equivalent to the old linear first-match.
-                index.insert(clean, i);
+                // Preserve first-match semantics: if two modules share a name the
+                // first one wins, matching the behaviour of the old linear scan.
+                index.entry(clean).or_insert(i);
             }
         }
         Self { modules, index, clean_names: Arc::new(clean_names) }
