@@ -139,12 +139,12 @@ impl ProviderRpc {
         }
 
         let mut resp_buf = vec![0u8; VFS_RPC_MAX_RESP];
-        let n = self.recv_response(&mut resp_buf)?;
+        let n = self.recv_response(op, &mut resp_buf)?;
         resp_buf.truncate(n);
         Ok(resp_buf)
     }
 
-    fn recv_response(&self, buf: &mut [u8]) -> SysResult<usize> {
+    fn recv_response(&self, op: VfsRpcOp, buf: &mut [u8]) -> SysResult<usize> {
         let tid = unsafe { crate::sched::current_tid_current() };
         let start_ns = crate::time::monotonic_now_ns();
         let timeout_ns = 5 * crate::time::NANOS_PER_SEC;
@@ -173,7 +173,12 @@ impl ProviderRpc {
             let now_ns = crate::time::monotonic_now_ns();
             if now_ns >= deadline_ns {
                 crate::sched::unregister_timeout_wake_current(tid);
-                crate::kerror!("VFS RPC: tid={} op={} TIMEOUT (5s) - tainting provider", tid, self.resp_write_handle);
+                crate::kerror!(
+                    "VFS RPC: tid={} op={:?} resp_port={} TIMEOUT (5s) - tainting provider",
+                    tid,
+                    op,
+                    self.resp_write_handle
+                );
                 self.tainted.store(true, core::sync::atomic::Ordering::Release);
                 return Err(Errno::ETIMEDOUT);
             }

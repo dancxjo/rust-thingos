@@ -1432,7 +1432,7 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
             .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
 
     // Wait for command completion when the shell returns to a prompt. This is
