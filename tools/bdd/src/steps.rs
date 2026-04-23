@@ -763,13 +763,42 @@ async fn check_ordering(
     second: String,
     first: String,
 ) -> Result<(), StepError> {
+    fn unescape_step_text(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut chars = input.chars();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                if let Some(next) = chars.next() {
+                    match next {
+                        '\\' => out.push('\\'),
+                        '"' => out.push('"'),
+                        'n' => out.push('\n'),
+                        'r' => out.push('\r'),
+                        't' => out.push('\t'),
+                        other => {
+                            out.push('\\');
+                            out.push(other);
+                        }
+                    }
+                } else {
+                    out.push('\\');
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+
+        out
+    }
+
     // Wait a bit to ensure we have enough log data
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let log = world.get_serial_log().await;
     let clean_log = strip_ansi(&log).to_lowercase();
-    let clean_first = strip_ansi(&first).to_lowercase();
-    let clean_second = strip_ansi(&second).to_lowercase();
+    let clean_first = strip_ansi(&unescape_step_text(&first)).to_lowercase();
+    let clean_second = strip_ansi(&unescape_step_text(&second)).to_lowercase();
 
     let first_pos = clean_log.find(&clean_first);
     if let Some(f_pos) = first_pos {
