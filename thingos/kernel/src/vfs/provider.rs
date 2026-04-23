@@ -163,7 +163,7 @@ impl ProviderRpc {
             let now = crate::time::monotonic_now_ns();
             if now.saturating_sub(start) > timeout {
                 crate::kerror!("VFS RPC: tid={} op={} TIMEOUT (5s) - tainting provider", tid, self.resp_write_handle);
-                self.tainted.store(true, Ordering::Release);
+                self.tainted.store(true, core::sync::atomic::Ordering::Release);
                 return Err(Errno::ETIMEDOUT);
             }
 
