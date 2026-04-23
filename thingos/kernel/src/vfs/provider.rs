@@ -146,45 +146,63 @@ impl ProviderRpc {
 
     fn recv_response(&self, buf: &mut [u8]) -> SysResult<usize> {
         let tid = unsafe { crate::sched::current_tid_current() };
-        let start = crate::time::monotonic_now_ns();
-        let timeout = 5 * crate::time::NANOS_PER_SEC;
+        let start_ns = crate::time::monotonic_now_ns();
+        let timeout_ns = 5 * crate::time::NANOS_PER_SEC;
+        let deadline_ns = start_ns + timeout_ns;
+
+        // Calculate deadline in ticks for the scheduler (100Hz = 10ms per tick)
+        let current_tick = crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        let deadline_tick = current_tick + 500; // 5s timeout
 
         loop {
+            // 1. Try non-blocking receive
             let n = self.resp.try_recv(buf);
             if n > 0 {
+                crate::sched::unregister_timeout_wake_current(tid);
                 return Ok(n);
             }
+
+            // 2. Check for port closure
             if !self.resp.has_writers() {
+                crate::sched::unregister_timeout_wake_current(tid);
                 crate::ipc::diag::record_dead_provider_error();
                 return Err(Errno::EPIPE);
             }
 
-            // Check for timeout
-            let now = crate::time::monotonic_now_ns();
-            if now.saturating_sub(start) > timeout {
+            // 3. Check for timeout (high precision)
+            let now_ns = crate::time::monotonic_now_ns();
+            if now_ns >= deadline_ns {
+                crate::sched::unregister_timeout_wake_current(tid);
                 crate::kerror!("VFS RPC: tid={} op={} TIMEOUT (5s) - tainting provider", tid, self.resp_write_handle);
                 self.tainted.store(true, core::sync::atomic::Ordering::Release);
                 return Err(Errno::ETIMEDOUT);
             }
 
+            // 4. Register for wake-up on both data and timeout
             self.resp.add_waiter(tid);
+            crate::sched::register_timeout_wake_current(tid, deadline_tick);
+
+            // Double check after adding waiter to avoid race condition
             let n = self.resp.try_recv(buf);
             if n > 0 {
                 self.resp.remove_waiter(tid);
+                crate::sched::unregister_timeout_wake_current(tid);
                 return Ok(n);
             }
-            if !self.resp.has_writers() {
-                self.resp.remove_waiter(tid);
-                crate::ipc::diag::record_dead_provider_error();
-                return Err(Errno::EPIPE);
-            }
-            crate::ktrace!("VFS RPC: tid={} waiting for response...", tid);
+
+            // 5. Block until woken by either data OR timeout OR interrupt
+            crate::ktrace!("VFS RPC: tid={} waiting for response (deadline_tick={})...", tid, deadline_tick);
             unsafe {
                 crate::sched::block_current_erased();
             }
+            
+            // 6. Post-block cleanup
             self.resp.remove_waiter(tid);
+            // unregister_timeout_wake_current is idempotent and will be called again if we loop
+            // or exit. We don't call it here to keep the loop tight.
 
             if crate::sched::take_pending_interrupt_current() {
+                crate::sched::unregister_timeout_wake_current(tid);
                 return Err(Errno::EINTR);
             }
         }
