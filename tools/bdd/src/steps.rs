@@ -2041,3 +2041,39 @@ async fn command_output_strictly_be(world: &mut ThingOsWorld, expected: String) 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
+
+#[then(regex = r#"^the command output should not contain "(.+)"$"#)]
+async fn command_output_not_contains(world: &mut ThingOsWorld, unexpected: String) -> Result<(), StepError> {
+    // Wait a short time for output to settle
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    let log = world.get_serial_log().await;
+    let start = world.serial_checkpoint.min(log.len());
+    let recent = &log[start..];
+    let clean_log = strip_ansi(recent);
+
+    for line in clean_log.lines() {
+        let trimmed = line.trim();
+        // Same filtering as command_output_contains: skip kernel/service log lines and prompt lines
+        if !trimmed.starts_with('[') && !trimmed.contains(">") && trimmed.contains(&unexpected) {
+            eprintln!("\n=== Unexpected pattern found in command output ===");
+            eprintln!("Pattern: {}", unexpected);
+            eprintln!("Matching line: {}", trimmed);
+            eprintln!("\n=== Recent Command Output ===");
+            for l in clean_log.lines() {
+                let lt = l.trim();
+                if !lt.starts_with('[') && !lt.contains(">") && !lt.is_empty() {
+                    eprintln!(">>> {}", lt);
+                }
+            }
+            eprintln!("=== End Command Output ===\n");
+            return Err(StepError(format!(
+                "Expected command output to not contain '{}', but found it in: {}",
+                unexpected, trimmed
+            )));
+        }
+    }
+
+    Ok(())
+}
+
