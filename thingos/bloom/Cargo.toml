@@ -8,6 +8,7 @@ stem = { path = "../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../abi" }
 libdl = { path = "../utils/libdl" }
 pistil = { path = "../pistil" }
+spin = "0.9"
 
 [[bin]]
 name = "bloom"
