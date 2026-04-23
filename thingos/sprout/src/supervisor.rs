@@ -25,7 +25,7 @@ use crate::task::{ManagedTask, TaskKind};
 const RUN_POLL_MUX_SELF_TEST: bool = false;
 const NETD_PROVIDER_PATH: &str = "/dev/net/virtio0/rx";
 const NETD_WAIT_POLL_MS: u64 = 100;
-const SERIAL_SHELL_HEADSTART_MS: u64 = 250;
+const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
 
 pub struct Config {
     pub force_bootfb: bool,
@@ -124,7 +124,7 @@ impl Supervisor {
         loop {
             self.process_registrations();
             run_health_vine(&self.tasks);
-            stem::sleep_ms(200);
+            stem::sleep_ms(100);
         }
     }
 

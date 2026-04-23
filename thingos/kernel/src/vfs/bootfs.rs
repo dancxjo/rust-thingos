@@ -5,9 +5,10 @@
 //!
 //! The boot filesystem is mounted at `/boot` by [`crate::vfs::init`].
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
 
@@ -22,13 +23,35 @@ const MOTD_DATA: &[u8] = b"\x1B[1;32m\n        .-.\n       /   \\        \x1B[1;
 // ── BootFs driver ─────────────────────────────────────────────────────────────
 
 /// The boot filesystem driver.  Mounted at `/boot` by `vfs::init`.
+///
+/// An index mapping clean module names (no leading slash, no null padding) to
+/// their module-slice index is built once in [`BootFs::new`].  This makes
+/// every [`VfsDriver::lookup`] call O(log n) instead of O(n), which matters
+/// when 100+ modules are loaded and every `open()` syscall hits this path.
 pub struct BootFs {
     modules: &'static [BootModuleDesc],
+    /// O(log n) name → index lookup, built once at construction time.
+    index: BTreeMap<&'static str, usize>,
+    /// Pre-cleaned module names (leading slash stripped, null/whitespace trimmed),
+    /// shared with `BootDirNode` so `readdir` avoids per-call string normalisation.
+    clean_names: Arc<Vec<&'static str>>,
 }
 
 impl BootFs {
     pub fn new(modules: &'static [BootModuleDesc]) -> Self {
-        Self { modules }
+        let mut index = BTreeMap::new();
+        let mut clean_names = Vec::with_capacity(modules.len());
+        for (i, m) in modules.iter().enumerate() {
+            let name = m.name.trim_matches('\0').trim();
+            let clean = name.strip_prefix('/').unwrap_or(name);
+            clean_names.push(clean);
+            if !clean.is_empty() {
+                // Last writer wins for duplicate names; in practice module names
+                // are unique, so this is equivalent to the old linear first-match.
+                index.insert(clean, i);
+            }
+        }
+        Self { modules, index, clean_names: Arc::new(clean_names) }
     }
 }
 
@@ -36,7 +59,10 @@ impl VfsDriver for BootFs {
     fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
         let path = path.strip_prefix('/').unwrap_or(path);
         if path.is_empty() {
-            return Ok(Arc::new(BootDirNode { prefix: String::new(), modules: self.modules }));
+            return Ok(Arc::new(BootDirNode {
+                prefix: String::new(),
+                clean_names: Arc::clone(&self.clean_names),
+            }));
         }
 
         if path == "version" {
@@ -46,31 +72,22 @@ impl VfsDriver for BootFs {
             return Ok(Arc::new(StaticFileNode::new(MOTD_DATA, 11)));
         }
 
-        // Search for exact match in modules
-        for (i, m) in self.modules.iter().enumerate() {
-            let name = m.name.trim_matches('\0').trim();
-            let clean_name = name.strip_prefix('/').unwrap_or(name);
-
-            if clean_name == path {
-                return Ok(Arc::new(StaticFileNode::new(m.bytes, 100 + i as u64)));
-            }
+        // O(log n) exact match via pre-built index.
+        if let Some(&i) = self.index.get(path) {
+            return Ok(Arc::new(StaticFileNode::new(self.modules[i].bytes, 100 + i as u64)));
         }
 
-        // Check if `path` is a directory prefix
+        // Check if `path` is a directory prefix (less frequent; linear over
+        // pre-cleaned names avoids repeated trim/strip_prefix per entry).
         let dir_prefix =
             if path.ends_with('/') { path.to_string() } else { alloc::format!("{}/", path) };
-        let mut found_subdir = false;
-        for m in self.modules {
-            let name = m.name.trim_matches('\0').trim();
-            let clean_name = name.strip_prefix('/').unwrap_or(name);
-            if clean_name.starts_with(&dir_prefix) {
-                found_subdir = true;
-                break;
-            }
-        }
+        let found_subdir = self.clean_names.iter().any(|cn| cn.starts_with(dir_prefix.as_str()));
 
         if found_subdir {
-            return Ok(Arc::new(BootDirNode { prefix: path.to_string(), modules: self.modules }));
+            return Ok(Arc::new(BootDirNode {
+                prefix: path.to_string(),
+                clean_names: Arc::clone(&self.clean_names),
+            }));
         }
 
         Err(Errno::ENOENT)
@@ -81,7 +98,8 @@ impl VfsDriver for BootFs {
 
 struct BootDirNode {
     prefix: String,
-    modules: &'static [BootModuleDesc],
+    /// Shared reference to pre-cleaned module names from [`BootFs`].
+    clean_names: Arc<Vec<&'static str>>,
 }
 
 impl VfsNode for BootDirNode {
@@ -111,20 +129,16 @@ impl VfsNode for BootDirNode {
             alloc::format!("{}/", self.prefix)
         };
 
-        for m in self.modules {
-            let name = m.name.trim_matches('\0').trim();
-            let clean_name = name.strip_prefix('/').unwrap_or(name);
-
+        // Use the pre-cleaned names — no per-entry trim/strip_prefix overhead.
+        for &clean_name in self.clean_names.iter() {
             if clean_name.starts_with(&prefix_with_slash) {
                 let rest = &clean_name[prefix_with_slash.len()..];
                 if let Some(slash_idx) = rest.find('/') {
-                    // It's a directory component
+                    // Directory component
                     components.insert(rest[..slash_idx].to_string());
-                } else {
-                    // It's a file component
-                    if !rest.is_empty() {
-                        components.insert(rest.to_string());
-                    }
+                } else if !rest.is_empty() {
+                    // File component
+                    components.insert(rest.to_string());
                 }
             }
         }
