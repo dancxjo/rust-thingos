@@ -646,6 +646,12 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
         };
     }
 
+    crate::kinfo!(
+        "SYSCALL SPAWN_PROCESS_EX: name='{}' TID={} PID={}",
+        name,
+        result.child_tid,
+        result.child_pid
+    );
     crate::ktrace!(
         "SYSCALL SPAWN_PROCESS_EX: name='{}' TID={} PID={}",
         name,

@@ -1138,6 +1138,7 @@ fn spawn_job(
         let stderr_mode =
             if background { stdio_mode::handle(bg_out.unwrap()) } else { stdio_mode::INHERIT };
 
+        stem::info!("sh: spawning '{}' with argv={:?}", path, argv);
         match syscall::spawn_process_ex(
             &path,
             &argv_slices,

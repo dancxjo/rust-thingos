@@ -438,6 +438,11 @@ impl crate::vfs::VfsNode for PipeReadNode {
         }
     }
 
+    fn on_dup(&self) {
+        let mut data = self.inner.inner.lock();
+        data.readers += 1;
+    }
+
     fn poll(&self) -> u16 {
         use abi::syscall::poll_flags::{POLLHUP, POLLIN};
         let data = self.inner.inner.lock();
@@ -538,6 +543,11 @@ impl crate::vfs::VfsNode for PipeWriteNode {
         if should_remove {
             PIPES.lock().remove(&self.pipe_id);
         }
+    }
+
+    fn on_dup(&self) {
+        let mut data = self.inner.inner.lock();
+        data.writers += 1;
     }
 
     fn poll(&self) -> u16 {

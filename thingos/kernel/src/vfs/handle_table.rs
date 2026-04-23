@@ -28,7 +28,6 @@ pub const HANDLE_CLOEXEC: u32 = abi::syscall::handle_flags::HANDLE_CLOEXEC;
 /// The `offset` is wrapped in `Arc<Mutex<u64>>` so that handles
 /// created by `dup` or `dup2` share the same file position, matching POSIX
 /// open-handle-description semantics.
-#[derive(Clone)]
 pub struct OpenHandle {
     pub node: Arc<dyn VfsNode>,
     pub status_flags: Arc<Mutex<OpenFlags>>,
@@ -37,6 +36,19 @@ pub struct OpenHandle {
     pub path: Arc<String>,
     /// Shared read/write position — cloned (not copied) on dup/dup2.
     pub offset: Arc<Mutex<u64>>,
+}
+
+impl Clone for OpenHandle {
+    fn clone(&self) -> Self {
+        self.node.on_dup();
+        Self {
+            node: self.node.clone(),
+            status_flags: self.status_flags.clone(),
+            handle_flags: self.handle_flags,
+            path: self.path.clone(),
+            offset: self.offset.clone(),
+        }
+    }
 }
 
 /// Per-process handle table.
@@ -118,20 +130,11 @@ impl HandleTable {
         if idx >= MAX_HANDLES {
             return Err(Errno::EBADF);
         }
-        let entry = self.entries[idx].as_ref().ok_or(Errno::EBADF)?;
-        let new_node = entry.node.clone();
-        let new_status_flags = entry.status_flags.clone();
-        let new_path = entry.path.clone();
-        let shared_offset = entry.offset.clone(); // share offset with original
+        let mut entry = self.entries[idx].clone().ok_or(Errno::EBADF)?;
+        entry.handle_flags &= !HANDLE_CLOEXEC;
         for i in 0..MAX_HANDLES {
             if self.entries[i].is_none() {
-                self.entries[i] = Some(OpenHandle {
-                    node: new_node,
-                    status_flags: new_status_flags,
-                    handle_flags: 0,
-                    path: new_path,
-                    offset: shared_offset,
-                });
+                self.entries[i] = Some(entry);
                 return Ok(i as u32);
             }
         }
@@ -155,22 +158,13 @@ impl HandleTable {
             self.entries[old_idx].as_ref().ok_or(Errno::EBADF)?;
             return Ok(new_handle);
         }
-        let entry = self.entries[old_idx].as_ref().ok_or(Errno::EBADF)?;
-        let new_node = entry.node.clone();
-        let new_status_flags = entry.status_flags.clone();
-        let new_path = entry.path.clone();
-        let shared_offset = entry.offset.clone(); // share offset with original
+        let mut entry = self.entries[old_idx].clone().ok_or(Errno::EBADF)?;
+        entry.handle_flags &= !HANDLE_CLOEXEC;
         // Close new_handle if open.
         if let Some(old_entry) = self.entries[new_idx].take() {
             old_entry.node.close();
         }
-        self.entries[new_idx] = Some(OpenHandle {
-            node: new_node,
-            status_flags: new_status_flags,
-            handle_flags: 0,
-            path: new_path,
-            offset: shared_offset,
-        });
+        self.entries[new_idx] = Some(entry);
         Ok(new_handle)
     }
 

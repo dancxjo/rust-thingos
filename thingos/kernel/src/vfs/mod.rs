@@ -256,6 +256,11 @@ pub trait VfsNode: Send + Sync {
     /// Default: no-op.
     fn close(&self) {}
 
+    /// Called when a handle to this node is duplicated (e.g. via dup, fork, or spawn).
+    /// Used by nodes that need to track the number of active handles (like pipes).
+    /// Default: no-op.
+    fn on_dup(&self) {}
+
     /// Truncate the file to `new_size` bytes.
     ///
     /// If `new_size` is less than the current size, the extra data is discarded.

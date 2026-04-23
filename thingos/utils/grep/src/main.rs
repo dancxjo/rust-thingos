@@ -54,9 +54,18 @@ fn read_all(fd: u32) -> Vec<u8> {
     let mut buf = alloc::vec![0u8; 4096];
     loop {
         match vfs_read(fd, &mut buf) {
-            Ok(0) => break,
-            Ok(n) => data.extend_from_slice(&buf[..n]),
-            Err(_) => break,
+            Ok(0) => {
+                stem::info!("grep: read_all(fd={}) reached EOF, total bytes={}", fd, data.len());
+                break;
+            }
+            Ok(n) => {
+                // stem::info!("grep: read_all(fd={}) read {} bytes", fd, n);
+                data.extend_from_slice(&buf[..n]);
+            }
+            Err(e) => {
+                stem::info!("grep: read_all(fd={}) error: {:?}", fd, e);
+                break;
+            }
         }
     }
     data
@@ -117,12 +126,14 @@ fn grep_fd(
     show_filename: bool,
     filename: &str,
 ) -> usize {
+    stem::info!("grep_fd: fd={} pattern='{}' invert={}", fd, pattern, invert);
     let data = read_all(fd);
     grep_data(&data, pattern, invert, ignore_case, line_number, show_filename, filename)
 }
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    stem::info!("grep: main started");
     let args = get_args();
 
     let mut invert = false;

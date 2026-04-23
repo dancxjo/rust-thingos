@@ -352,6 +352,7 @@ pub fn sys_recvmsg(
     {
         let mut pinfo = pinfo_arc.lock();
         for (i, cap) in fds.into_iter().take(install_count).enumerate() {
+            cap.on_dup();
             let new_handle = pinfo.handle_table.open(
                 cap,
                 crate::vfs::OpenFlags::read_write(),

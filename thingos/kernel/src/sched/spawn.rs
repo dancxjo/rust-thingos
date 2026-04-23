@@ -923,7 +923,10 @@ fn setup_stdio_fds<R: BootRuntime>(
             .and_then(|task| task.process_info.clone())
             .and_then(|pi| {
                 let lock = pi.lock();
-                lock.handle_table.get(fd).ok().map(|f| (f.node.clone(), *f.status_flags.lock()))
+                lock.handle_table.get(fd).ok().map(|f| {
+                    f.node.on_dup();
+                    (f.node.clone(), *f.status_flags.lock())
+                })
             })
     };
 
