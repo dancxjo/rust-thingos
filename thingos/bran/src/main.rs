@@ -64,6 +64,16 @@ fn early_serial_write(msg: &[u8]) {
 #[cfg(not(target_arch = "x86_64"))]
 fn early_serial_write(_msg: &[u8]) {}
 
+fn init_onscreen_terminal() {
+    let Some(response) = FRAMEBUFFER_REQUEST.get_response() else {
+        return;
+    };
+    let Some(fb) = response.framebuffers().into_iter().next() else {
+        return;
+    };
+    crate::console::init(Framebuffer::new(fb));
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
     early_serial_write(b"[bran] kmain enter\r\n");
@@ -97,6 +107,7 @@ unsafe extern "C" fn kmain() -> ! {
     early_serial_write(b"[bran] runtime init...\r\n");
     RUNTIME.init(hhdm_offset);
     early_serial_write(b"[bran] runtime init ok\r\n");
+    init_onscreen_terminal();
 
     early_serial_write(b"[bran] logging init begin\r\n");
     unsafe {
