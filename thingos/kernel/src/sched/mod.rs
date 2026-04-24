@@ -3807,7 +3807,11 @@ pub fn exit<R: BootRuntime>(code: i32) {
     };
 
     if termination.auto_reap {
-        crate::task::registry::get_registry::<R>().remove(current_tid);
+        // Same drop-order fix as in `remove_task_completely`: bind to a `let`
+        // so the RegistryGuard (REGISTRY lock) is released at the semicolon
+        // before the Box<Thread> is dropped at end of block.
+        let _removed = crate::task::registry::get_registry::<R>().remove(current_tid);
+        // REGISTRY lock released here.  _removed dropped at end of block.
     }
 
     send_deferred_prepare_schedule_ipis::<R>(deferred_prepare_ipis);
@@ -4270,8 +4274,20 @@ pub fn remove_task_completely<R: BootRuntime>(tid: TaskId) {
         }
     }
 
-    // 2. Remove from global registry (requires REGISTRY lock)
-    crate::task::registry::get_registry::<R>().remove(tid);
+    // 2. Remove from global registry (requires REGISTRY lock).
+    //
+    // IMPORTANT: Bind the returned `Box<Thread>` to a local variable so that
+    // the `RegistryGuard` temporary (which holds the REGISTRY lock) is dropped
+    // at the end of this statement — before `_removed_task` is dropped at end
+    // of scope.  If we used the expression-statement form
+    // `get_registry().remove(tid);` the unnamed return value would be dropped
+    // *before* the guard (reverse creation order), meaning `close_all()` →
+    // `wake_task_erased()` → `wake_task()` → `get_task_mut()` would try to
+    // re-acquire the REGISTRY spin-lock from the same CPU → spin-deadlock.
+    let _removed_task = crate::task::registry::get_registry::<R>().remove(tid);
+    // REGISTRY lock released here (RegistryGuard dropped at semicolon).
+    // `_removed_task` (Option<Box<Thread>>) is dropped at end of scope,
+    // after the lock has been released.
 
     rt.irq_restore(_irq);
 }

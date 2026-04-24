@@ -1096,7 +1096,8 @@ fn spawn_job(
                     candidate.push('/');
                 }
                 candidate.push_str(cmd.program);
-                if vfs::vfs_open(&candidate, abi::syscall::vfs_flags::O_RDONLY).is_ok() {
+                if let Ok(probe_fd) = vfs::vfs_open(&candidate, abi::syscall::vfs_flags::O_RDONLY) {
+                    let _ = syscall::vfs_close(probe_fd);
                     resolved = candidate;
                     break;
                 }
