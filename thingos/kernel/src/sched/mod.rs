@@ -626,7 +626,7 @@ fn init_any_wake_policy_from_env_once() {
 }
 
 fn runq_depth_for_cpu(state: &crate::sched::state::SchedState, cpu: usize) -> usize {
-    state.per_cpu.get(cpu).map(|pc| pc.runq.iter().map(|q| q.len()).sum::<usize>()).unwrap_or(0)
+    state.per_cpu.get(cpu).map(|pc| pc.runq.total_len()).unwrap_or(0)
 }
 
 fn least_loaded_online_cpu(state: &crate::sched::state::SchedState) -> Option<(usize, usize)> {
@@ -977,7 +977,7 @@ fn reset_remote_wake_mailboxes_for_tests() {
 pub(crate) fn sample_runq_len<R: BootRuntime>(sched: &mut types::Scheduler<R>, cpu: usize) {
     let mut sample_seq = 0u64;
     if let Some(pc) = sched.state.per_cpu.get_mut(cpu) {
-        let len64 = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
+        let len64 = pc.runq.total_len() as u64;
         sample_seq = PROF_RUNQ_SAMPLE_COUNT[cpu].fetch_add(1, Ordering::Relaxed) + 1;
         PROF_RUNQ_SAMPLE_TOTAL[cpu].fetch_add(len64, Ordering::Relaxed);
         pc.stats.runq_sample_count = pc.stats.runq_sample_count.saturating_add(1);
@@ -999,7 +999,7 @@ pub(crate) fn sample_runq_len<R: BootRuntime>(sched: &mut types::Scheduler<R>, c
         let mut any_loaded_cpu = false;
         for &idx in online {
             if let Some(pc) = sched.state.per_cpu.get(idx) {
-                let depth = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
+                let depth = pc.runq.total_len() as u64;
                 sum = sum.saturating_add(depth);
                 count = count.saturating_add(1);
                 if pc.current == pc.idle_task {
@@ -1015,7 +1015,7 @@ pub(crate) fn sample_runq_len<R: BootRuntime>(sched: &mut types::Scheduler<R>, c
             let mut variance_sum = 0u64;
             for &idx in online {
                 if let Some(pc) = sched.state.per_cpu.get(idx) {
-                    let len = pc.runq.iter().map(|q| q.len()).sum::<usize>() as u64;
+                    let len = pc.runq.total_len() as u64;
                     let diff = len.abs_diff(mean);
                     variance_sum = variance_sum.saturating_add(diff.saturating_mul(diff));
                 }
@@ -1225,7 +1225,7 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         for &i in &sched.state.online_cpus {
             if num_stats >= stats_buf.len() { break; }
             let pc = &sched.state.per_cpu[i];
-            let runq: usize = pc.runq.iter().map(|q| q.len()).sum();
+            let runq: usize = pc.runq.total_len();
             let runq_avg = if pc.stats.runq_sample_count == 0 {
                 0
             } else {
@@ -1367,7 +1367,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                 .state
                 .per_cpu
                 .get(cpu_idx)
-                .map(|pc| pc.runq.iter().map(|q| q.len()).sum::<usize>())
+                .map(|pc| pc.runq.total_len())
                 .unwrap_or(0);
             // Capture the current task's priority from the hot-field cache to
             // avoid a nested REGISTRY lock.
@@ -1454,10 +1454,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                             .state
                             .per_cpu
                             .get(cpu_idx)
-                            .map(|pc| {
-                                let start = (current_prio + 1).min(pc.runq.len());
-                                pc.runq[start..].iter().any(|q| !q.is_empty())
-                            })
+                            .map(|pc| pc.runq.has_higher_priority_work(current_prio))
                             .unwrap_or(false);
                         if has_strictly_higher {
                             crate::kdebug!(
