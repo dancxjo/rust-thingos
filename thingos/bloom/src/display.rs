@@ -6,6 +6,7 @@ use abi::display::{
     DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayInfo, PlaneCommit, PlaneId,
 };
 use abi::display_protocol::Rect;
+use abi::errors::SysResult;
 use abi::pixel::PixelFormat;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open};
 
@@ -80,15 +81,15 @@ impl DisplayBackend {
         format: PixelFormat,
         offset: u64,
     ) -> Option<u32> {
-        let bh = BufferHandle { handle: thing, width, height, stride, format, offset };
+        let bh = BufferHandle { handle: thing, width, height, stride, format, offset, modifier: 0 };
         let mut id = 0u32;
         match device_call(self.fd, DISPLAY_OP_IMPORT_BUFFER, &bh, Some(&mut id)) {
-            Ok(_) => {
+            Some(_) => {
                 stem::info!("bloom: imported buffer {}x{} as ID={}", width, height, id);
                 Some(id)
             }
-            Err(e) => {
-                stem::error!("bloom: failed to import buffer: {:?}", e);
+            None => {
+                stem::error!("bloom: failed to import buffer");
                 None
             }
         }
