@@ -59,7 +59,9 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             core::hint::spin_loop();
         }
 
-        rt.tasking().activate_address_space(switch.to_aspace);
+        if switch.to_aspace != switch.from_aspace {
+            rt.tasking().activate_address_space(switch.to_aspace);
+        }
 
         unsafe {
             rt.tasking().switch_with_tls(
@@ -200,7 +202,9 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             core::hint::spin_loop();
         }
 
-        rt.tasking().activate_address_space(switch.to_aspace);
+        if switch.to_aspace != switch.from_aspace {
+            rt.tasking().activate_address_space(switch.to_aspace);
+        }
 
         unsafe {
             rt.tasking().switch_with_tls(

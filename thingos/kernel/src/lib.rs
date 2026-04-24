@@ -418,7 +418,7 @@ pub trait FrameAllocatorHook {
 pub trait BootTasking {
     type Runtime: BootRuntime<Tasking = Self>;
     type Context: Copy + Default;
-    type AddressSpace: Copy + Default;
+    type AddressSpace: Copy + Default + PartialEq;
 
     fn init(&self, hhdm_offset: u64);
     fn init_kernel_context(

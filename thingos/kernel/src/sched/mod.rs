@@ -1580,7 +1580,9 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                     core::hint::spin_loop();
                 }
 
-                rt.tasking().activate_address_space(switch.to_aspace);
+                if switch.to_aspace != switch.from_aspace {
+                    rt.tasking().activate_address_space(switch.to_aspace);
+                }
 
                 unsafe {
                     rt.tasking().switch_with_tls(
@@ -4409,7 +4411,7 @@ pub fn exit<R: BootRuntime>(code: i32) {
         core::hint::spin_loop();
     }
 
-    unsafe {
+    if switch.to_aspace != switch.from_aspace {
         rt.tasking().activate_address_space(switch.to_aspace);
     }
 
@@ -5131,7 +5133,7 @@ mod tests {
     // Mock types for testing - copy from spawn.rs tests
     #[derive(Default, Copy, Clone)]
     pub(crate) struct MockContext(pub(crate) usize);
-    #[derive(Clone, Copy, Default)]
+    #[derive(Clone, Copy, Default, PartialEq, Eq)]
     pub(crate) struct MockAddressSpace(pub(crate) u64);
 
     pub(crate) static MOCK_RUNTIME: MockRuntime = MockRuntime;

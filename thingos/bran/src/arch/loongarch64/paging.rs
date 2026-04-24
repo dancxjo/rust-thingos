@@ -1,6 +1,6 @@
 use kernel::{FrameAllocatorHook, MapKind, MapPerms};
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct LoongArch64AddressSpace {
     pub pgdl: u64,
     pub pgdh: u64,
@@ -110,5 +110,29 @@ pub fn translate(_aspace: LoongArch64AddressSpace, _virt: u64) -> Option<u64> {
 pub fn tlb_flush_page(virt: u64) {
     unsafe {
         core::arch::asm!("invtlb 0x7, $zero, {}", in(reg) virt);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LoongArch64AddressSpace;
+
+    #[test]
+    fn address_space_equality_requires_both_fields() {
+        let a = LoongArch64AddressSpace { pgdl: 0x1000, pgdh: 0x2000 };
+        let b = LoongArch64AddressSpace { pgdl: 0x1000, pgdh: 0x2000 };
+        let c = LoongArch64AddressSpace { pgdl: 0x1000, pgdh: 0x3000 };
+        let d = LoongArch64AddressSpace { pgdl: 0x9000, pgdh: 0x2000 };
+
+        assert_eq!(a, b, "identical address spaces should be equal");
+        assert_ne!(a, c, "different pgdh should not be equal");
+        assert_ne!(a, d, "different pgdl should not be equal");
+    }
+
+    #[test]
+    fn address_space_default_equals_itself() {
+        let a = LoongArch64AddressSpace::default();
+        let b = LoongArch64AddressSpace::default();
+        assert_eq!(a, b, "two default (zero) address spaces should be equal");
     }
 }
