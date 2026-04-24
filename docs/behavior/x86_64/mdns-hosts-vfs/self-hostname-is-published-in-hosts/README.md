@@ -1,16 +1,16 @@
 # ❌ Scenario: Self hostname is published in /hosts
 
-> Last run: 2026-04-23 19:34:44
+> Last run: 2026-04-23 19:52:41
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 26024ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ✅ | 253ms | - [📜](./02/serial.log) - |
-| 3 | And I type "cat /etc/hostname" on the serial console | ✅ | 342ms | - [📜](./03/serial.log) - |
+| 1 | Given the machine is booted | ✅ | 8414ms | - [📜](./01/serial.log) - |
+| 2 | When I wait for the shell prompt | ✅ | 252ms | - [📜](./02/serial.log) - |
+| 3 | And I type "cat /etc/hostname" on the serial console | ✅ | 345ms | - [📜](./03/serial.log) - |
 | 4 | Then the command output should contain "thingos" | ✅ | 0ms | - [📜](./04/serial.log) - |
-| 5 | When I type "ls /hosts" on the serial console | ✅ | 210ms | - [📜](./05/serial.log) - |
+| 5 | When I type "ls /hosts" on the serial console | ✅ | 213ms | - [📜](./05/serial.log) - |
 | 6 | And I wait for 2 seconds | ✅ | 2001ms | - [📜](./06/serial.log) - |
 | 7 | Then the command output should contain "thingos.local" | ❌ | 6083ms | - [📜](./07/serial.log) - |
 
@@ -20,42 +20,42 @@
 ```
 [2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;056;240t0[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;042;160t0[2J[01;01HBdsDxe: loading Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
 BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
-[2J[01;01H[01;01H[2J[01;01H[01;01H[84244548531] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Memory Map OK"
-[84271823724] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
-[84302451948] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Global Allocator"
-[84336070731] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Display Registry"
-[84357176904] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[84359733348] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
-[84396071661] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
-[84417619275] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[84467855637] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[84469336512] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
-[84559244187] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="VFS Root Ready"
-[84632578008] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="PCI Bus Scanned"
-[84655519179] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Legacy Devices"
-[84729711759] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="BSP Timer OK"
-[84836192100] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SMP Bring-up"
-[84865179069] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Boot Info OK"
-[84890471061] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Modules Scanned"
-[84990941475] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: hint="Press F12 for a terminal"
-[85043870670] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Spawning Sprout"
-[85177121832] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Entering Scheduler"
-[85426825341] [[32mINFO [0m] [kernel] [CPU0] [kernel:start] scheduler-entry total elapsed_ticks=933768396 elapsed_us=466884
-[85427597343] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[85507023855] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
-[85575919902] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Launching serial shell...
-[85576821000] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Setting up serial shell on /dev/console...
-[85665417189] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/sh' TID=6 PID=6
-[85670739000] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned serial shell '/bin/sh' (PID=6)
-[85674613266] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Serial shell launched; yielding 50ms so the prompt can take the foreground
-[85683549534] [[32mINFO [0m] [kernel] [CPU0] deferred_bootfb_gradient elapsed_ticks=20163
+[2J[01;01H[01;01H[2J[01;01H[01;01H[26249707704] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Memory Map OK"
+[26277245445] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[26309870169] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Global Allocator"
+[26345238975] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Display Registry"
+[26366783553] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[26369509617] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[26406967719] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[26428997694] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[26480254251] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[26481634641] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
+[26574106284] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="VFS Root Ready"
+[26646418887] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="PCI Bus Scanned"
+[26670567066] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Legacy Devices"
+[26754171444] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="BSP Timer OK"
+[26865876873] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SMP Bring-up"
+[26894679603] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Boot Info OK"
+[26919799104] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Modules Scanned"
+[27022339311] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: hint="Press F12 for a terminal"
+[27075364569] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Spawning Sprout"
+[27211296387] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Entering Scheduler"
+[27462781731] [[32mINFO [0m] [kernel] [CPU0] [kernel:start] scheduler-entry total elapsed_ticks=958798203 elapsed_us=479399
+[27463627125] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[27541107231] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[27609425943] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Launching serial shell...
+[27610432641] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Setting up serial shell on /dev/console...
+[27696479877] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/sh' TID=6 PID=6
+[27700997610] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned serial shell '/bin/sh' (PID=6)
+[27705221544] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Serial shell launched; yielding 50ms so the prompt can take the foreground
+[27714680895] [[32mINFO [0m] [kernel] [CPU0] deferred_bootfb_gradient elapsed_ticks=20229
 [1;32m
         .-.
        /   \        [1;36mTHING-OS[1;32m
       |     |       [0;36m"People, places, things."[1;32m
        \   /        
         `-'        
-       /   \        v0.1  •  
+       /   \        v0.1  ��  
       |     |       2026-04-16
        \   /
         `-'
@@ -69,36 +69,37 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
-[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[85887948894] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Skipping early /hosts mount; mesocarp is disabled in init
-[85889144253] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Waiting for /dev/net/virtio0/rx before spawning netd...
-[85931847540] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: no ISO9660 filesystem found yet — retrying
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[27954644817] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Skipping early /hosts mount; mesocarp is disabled in init
+[27957140805] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Waiting for /dev/net/virtio0/rx before spawning netd...
+[27986670360] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: no ISO9660 filesystem found yet ��� retrying
 cat /etc/hostname
-[87317184735] [[32mINFO [0m] [sh] [CPU3] sh: spawning job cmd='cat'
-[87323399724] [[32mINFO [0m] [sh] [CPU3] sh: spawning '/bin/cat' with argv=[[47, 98, 105, 110, 47, 99, 97, 116], [47, 101, 116, 99, 47, 104, 111, 115, 116, 110, 97, 109, 101]]
-[87358059459] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU3] SYSCALL SPAWN_PROCESS_EX: name='/bin/cat' TID=9 PID=9
-[87398156340] [[32mINFO [0m] [cat] [CPU3] cat: opening '/etc/hostname'
-[87402469209] [[32mINFO [0m] [cat] [CPU3] cat: opened '/etc/hostname' fd=7
+[29334154443] [[32mINFO [0m] [sh] [CPU3] sh: spawning job cmd='cat'
+[29339660361] [[32mINFO [0m] [sh] [CPU3] sh: spawning '/bin/cat' with argv=[[47, 98, 105, 110, 47, 99, 97, 116], [47, 101, 116, 99, 47, 104, 111, 115, 116, 110, 97, 109, 101]]
+[29375078040] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU3] SYSCALL SPAWN_PROCESS_EX: name='/bin/cat' TID=9 PID=9
+[29419465944] [[32mINFO [0m] [cat] [CPU3] cat: opening '/etc/hostname'
+[29423056674] [[32mINFO [0m] [cat] [CPU3] cat: opened '/etc/hostname' fd=7
 thingos
 [?25l[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25hls /hosts
-[88008570837] [[32mINFO [0m] [sh] [CPU3] sh: spawning job cmd='ls'
-[88011343167] [[32mINFO [0m] [sh] [CPU3] sh: spawning '/bin/ls' with argv=[[47, 98, 105, 110, 47, 108, 115], [47, 104, 111, 115, 116, 115]]
-[88040959281] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU3] SYSCALL SPAWN_PROCESS_EX: name='/bin/ls' TID=10 PID=10
-[?25l[88137848073] [[33mWARN [0m] [ls] [CPU1] ls: failed to open '/hosts': ENOENT
+[30033797805] [[32mINFO [0m] [sh] [CPU3] sh: spawning job cmd='ls'
+[30037003722] [[32mINFO [0m] [sh] [CPU3] sh: spawning '/bin/ls' with argv=[[47, 98, 105, 110, 47, 108, 115], [47, 104, 111, 115, 116, 115]]
+[30065792724] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU3] SYSCALL SPAWN_PROCESS_EX: name='/bin/ls' TID=10 PID=10
+[?25l[30160241232] [[33mWARN [0m] [ls] [CPU1] ls: failed to open '/hosts': ENOENT
 ls: cannot access '/hosts': No such file or directory
-[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[88408139193] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/virtio_netd' TID=11 PID=11
-[88446905415] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/ahci_disk' TID=12 PID=12
-[88496716275] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/ata_disk' TID=13 PID=13
-[88536056499] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Starting ATA disk driver v1 (with ATAPI support)
-[88537004028] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Probing primary port (0x1F0)...
-[88569760224] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Probing secondary port (0x170)...
-[88597169661] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Found 0 ATA disk(s), 0 ATAPI device(s)
-[88597915758] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Entering RPC service loop
-[88598763660] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: No active devices to service
-[89210047509] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: /dev/net/virtio0/rx is ready; spawning netd.
-[91830651825] [[32mINFO [0m] [netd] [CPU3] NETD: Starting network service...
-[91858503396] [[32mINFO [0m] [netd] [CPU3] NETD: Waiting for virtio_netd VFS provider at /dev/net/virtio*...
-[92041458894] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/netd' TID=15 PID=15
-[92045956365] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Tracking netd activation (PID=15)
-[109237599504] [
+[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[30529386129] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/virtio_netd' TID=11 PID=11
+[30572158584] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/ahci_disk' TID=12 PID=12
+[30625614063] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/ata_disk' TID=13 PID=13
+[30632528619] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Starting ATA disk driver v1 (with ATAPI support)
+[30633670782] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Probing primary port (0x1F0)...
+[30662738139] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Probing secondary port (0x170)...
+[30695862846] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Found 0 ATA disk(s), 0 ATAPI device(s)
+[30696674448] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: Entering RPC service loop
+[30699214623] [[32mINFO [0m] [ata_disk] [CPU1] ATA_DISK: No active devices to service
+[32037260673] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: /dev/net/virtio0/rx is ready; spawning netd.
+[34788025932] [[32mINFO [0m] [netd] [CPU3] NETD: Starting network service...
+[34821476844] [[32mINFO [0m] [netd] [CPU3] NETD: Waiting for virtio_netd VFS provider at /dev/net/virtio*...
+[35006085081] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/netd' TID=15 PID=15
+[35013523875] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Tracking netd activation (PID=15)
+[35453099253] [[32mINFO [0m] [netd] [CPU3] NETD: Network ready
+[54984582510] [[31;
 ```
 </details>
