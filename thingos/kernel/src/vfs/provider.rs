@@ -231,6 +231,7 @@ impl ProviderRpc {
                 crate::kerror!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
+                self.resp.remove_waiter(tid);
                 return Err(Errno::ETIMEDOUT);
             }
 

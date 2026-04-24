@@ -1338,10 +1338,42 @@ pub extern "C" fn rust_pf_handler(
     }
 
     // Kernel mode fault - safe to panic, but avoid kerror! which can deadlock
-    panic!(
+    kernel::kerror!(
         "KERNEL PAGE FAULT at 0x{:x} RIP=0x{:x} CS=0x{:x} ERR=0x{:x} RSP=0x{:x}",
-        cr2, frame.rip, frame.cs, frame.error_code, frame.rsp
+        cr2,
+        frame.rip,
+        frame.cs,
+        frame.error_code,
+        frame.rsp
     );
+
+    // Dump first few words of stack
+    unsafe {
+        let stack_ptr = frame.rsp as *const u64;
+        if !stack_ptr.is_null() && (frame.rsp >= 0xffffffff80000000) {
+            kernel::kerror!("Stack Dump:");
+            for i in 0..8 {
+                let val = *stack_ptr.add(i);
+                kernel::kerror!("  [+{:02x}] 0x{:016x}", i * 8, val);
+            }
+        }
+    }
+
+    // Dump bytes at RIP if possible
+    unsafe {
+        let rip_ptr = frame.rip as *const u8;
+        if !rip_ptr.is_null() && (frame.rip >= 0xffffffff80000000) {
+            kernel::kerror!("Code at RIP:");
+            let mut line = alloc::string::String::new();
+            for i in 0..16 {
+                use core::fmt::Write;
+                let _ = write!(line, "{:02x} ", *rip_ptr.add(i));
+            }
+            kernel::kerror!("  {}", line);
+        }
+    }
+
+    panic!("KERNEL PAGE FAULT");
 }
 
 #[unsafe(no_mangle)]
