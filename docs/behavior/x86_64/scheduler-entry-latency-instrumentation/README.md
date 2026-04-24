@@ -1,6 +1,6 @@
 # Feature: Scheduler entry latency instrumentation
 
-> Last run: 2026-04-23 15:53:33
+> Last run: 2026-04-23 17:31:42
 
 ## Scenarios
 
