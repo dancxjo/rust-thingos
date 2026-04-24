@@ -80,6 +80,16 @@ const RUNQ_STALE_PURGE_BUDGET: usize = 32;
 const RUNQ_COMPACT_TRIGGER_MIN_LEN: usize = RUNQ_STALE_PURGE_BUDGET * 4;
 const SLEEP_WHEEL_SLOTS: usize = 256;
 
+/// Number of scheduling priority levels (Idle=0 … Realtime=4).
+const PRIORITY_LEVELS: usize = 5;
+
+/// Per-CPU priority-indexed run queue.
+///
+/// Index `p` holds runnable [`ThreadId`]s at priority level `p` (where
+/// 0 = Idle and 4 = Realtime). This is a thin wrapper over an array of
+/// [`VecDeque`]s. A deeper redesign is deferred to issue #596.
+pub type RunQueue = [VecDeque<ThreadId>; PRIORITY_LEVELS];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnqueueCause {
     Unknown,
@@ -216,8 +226,26 @@ pub struct SleepMembership {
     pub bucket_index: usize,
 }
 
-pub struct PerCpu {
-    pub runq: [VecDeque<ThreadId>; 5],
+/// Per-CPU scheduler state.
+///
+/// # Ownership invariant
+///
+/// Each logical CPU **owns** its `CpuScheduler` exclusively:
+/// - `current` — the task currently executing on this CPU.
+/// - `idle_task` — the CPU-local idle task.
+/// - `runq` — the priority-indexed local run queue (see [`RunQueue`]).
+/// - `need_resched` — the reschedule-pending flag.
+/// - `stats` — per-CPU scheduling counters.
+///
+/// Other CPUs **must not** directly mutate another CPU's `CpuScheduler`.
+/// Cross-CPU scheduling effects must go through explicit delivery mechanisms
+/// (remote-wake mailboxes, IPIs).  The global [`SchedState`] coordinates
+/// cross-CPU policy (task placement, load balancing, diagnostics) without
+/// owning CPU-local execution state directly.
+pub struct CpuScheduler {
+    /// Logical index of the CPU that owns this scheduler state.
+    pub cpu_id: usize,
+    pub runq: RunQueue,
     /// Bitset of non-empty runnable queues for priorities 1..=4.
     /// Bit `p` is set when `runq[p]` currently has at least one entry.
     pub nonempty_runnable_mask: u8,
@@ -232,9 +260,27 @@ pub struct PerCpu {
     pub stats: PerCpuSchedStats,
 }
 
-impl PerCpu {
+/// Backward-compatible alias — prefer [`CpuScheduler`] in new code.
+pub type PerCpu = CpuScheduler;
+
+/// Backward-compatible stats alias — prefer using [`PerCpuSchedStats`] or
+/// this alias (`CpuSchedStats`) when constructing new per-CPU stat objects.
+pub type CpuSchedStats = PerCpuSchedStats;
+
+impl CpuScheduler {
+    /// Create a new scheduler for CPU 0.
+    ///
+    /// Prefer [`new_for_cpu`][Self::new_for_cpu] when the CPU index is known.
     pub fn new() -> Self {
-        PerCpu {
+        Self::new_for_cpu(0)
+    }
+
+    /// Create a new, empty per-CPU scheduler state for the given CPU.
+    ///
+    /// All run queues start empty and `current`/`idle_task` are `None`.
+    pub fn new_for_cpu(cpu_id: usize) -> Self {
+        CpuScheduler {
+            cpu_id,
             runq: [
                 VecDeque::with_capacity(128),
                 VecDeque::with_capacity(128),
@@ -253,6 +299,30 @@ impl PerCpu {
             idle_enter_mono_ticks: None,
             stats: PerCpuSchedStats::default(),
         }
+    }
+
+    /// Emit a debug log line describing the current per-CPU scheduler state.
+    ///
+    /// Identifies the owning CPU plus the currently running task, the idle
+    /// task, the number of runnable tasks across all non-idle priority levels,
+    /// and whether a reschedule is pending.  Call this from scheduling decision
+    /// points to correlate log output with the CPU-local scheduler involved.
+    pub fn log_state(&self) {
+        let runnable: usize = self
+            .runq
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i > 0) // skip idle queue (priority 0)
+            .map(|(_, q)| q.len())
+            .sum();
+        crate::kdebug!(
+            "SCHED[cpu{}]: current={:?} idle={:?} runnable={} need_resched={}",
+            self.cpu_id,
+            self.current,
+            self.idle_task,
+            runnable,
+            self.need_resched,
+        );
     }
 
     #[inline]
@@ -1128,5 +1198,60 @@ mod tests {
             state.per_cpu[0].nonempty_runnable_mask, 0,
             "idle queue should not be marked as non-idle runnable work"
         );
+    }
+
+    // ── CpuScheduler-specific tests ──────────────────────────────────────────
+
+    #[test]
+    fn cpu_scheduler_new_for_cpu_stores_cpu_id() {
+        let cs = CpuScheduler::new_for_cpu(3);
+        assert_eq!(cs.cpu_id, 3, "cpu_id should match the argument passed to new_for_cpu");
+    }
+
+    #[test]
+    fn cpu_scheduler_new_defaults_to_cpu_zero() {
+        let cs = CpuScheduler::new();
+        assert_eq!(cs.cpu_id, 0, "new() should default cpu_id to 0");
+    }
+
+    #[test]
+    fn per_cpu_alias_resolves_to_cpu_scheduler() {
+        // PerCpu is a type alias for CpuScheduler; constructing via the alias
+        // should produce the same type and the cpu_id should default to 0.
+        let pc = PerCpu::new();
+        assert_eq!(pc.cpu_id, 0);
+    }
+
+    #[test]
+    fn cpu_scheduler_starts_empty() {
+        let cs = CpuScheduler::new_for_cpu(1);
+        assert!(cs.current.is_none(), "new CpuScheduler should have no current task");
+        assert!(cs.idle_task.is_none(), "new CpuScheduler should have no idle task");
+        assert!(!cs.need_resched, "new CpuScheduler should not need rescheduling");
+        assert_eq!(cs.nonempty_runnable_mask, 0, "new CpuScheduler should have empty run queues");
+        let total_runnable: usize = cs.runq.iter().map(|q| q.len()).sum();
+        assert_eq!(total_runnable, 0, "all priority run queues should start empty");
+    }
+
+    #[test]
+    fn cpu_scheduler_run_queue_is_per_cpu_type() {
+        // Confirm that `runq` has the expected type (RunQueue = [VecDeque; 5]).
+        // Accessing by index like a plain array should work.
+        let mut cs = CpuScheduler::new_for_cpu(0);
+        cs.runq[TaskPriority::Normal as usize].push_back(99);
+        assert_eq!(cs.runq[TaskPriority::Normal as usize].len(), 1);
+    }
+
+    #[test]
+    fn scoped_cpu_schedulers_have_independent_queues() {
+        // Two CpuSchedulers should have fully independent run queues —
+        // enqueuing to one must not affect the other.
+        let mut cs0 = CpuScheduler::new_for_cpu(0);
+        let mut cs1 = CpuScheduler::new_for_cpu(1);
+        cs0.runq[TaskPriority::Normal as usize].push_back(1);
+        assert_eq!(cs1.runq[TaskPriority::Normal as usize].len(), 0,
+            "cpu1 run queue must not be affected by enqueue on cpu0");
+        assert_eq!(cs0.cpu_id, 0);
+        assert_eq!(cs1.cpu_id, 1);
     }
 }
