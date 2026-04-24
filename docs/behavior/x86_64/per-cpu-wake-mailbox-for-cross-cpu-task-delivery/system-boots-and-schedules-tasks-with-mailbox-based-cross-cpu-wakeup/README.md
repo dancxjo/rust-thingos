@@ -1,4 +1,4 @@
-# ❌ Scenario: Round trip with mutable attributes
+# ❌ Scenario: System boots and schedules tasks with mailbox-based cross-CPU wakeup
 
 > Last run: 2026-04-24 16:20:53
 
@@ -6,7 +6,8 @@
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ❌ | 31090ms | - - - |
+| 1 | Given the machine is started | ✅ | 0ms | - - - |
+| 2 | When I wait for the system to boot | ❌ | 31082ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
