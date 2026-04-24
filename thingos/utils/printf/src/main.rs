@@ -1,46 +1,5 @@
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
-use alloc::string::String;
-use alloc::vec::Vec;
-use stem::syscall::{argv_get, vfs_write};
-
-fn get_args() -> Vec<String> {
-    let mut len = 0;
-    if let Ok(l) = argv_get(&mut []) {
-        len = l;
-    }
-    if len == 0 {
-        return Vec::new();
-    }
-    let mut buf = alloc::vec![0u8; len];
-    if argv_get(&mut buf).is_err() {
-        return Vec::new();
-    }
-
-    let mut args = Vec::new();
-    if buf.len() >= 4 {
-        let count = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
-        let mut offset = 4;
-        for _ in 0..count {
-            if offset + 4 > buf.len() {
-                break;
-            }
-            let str_len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            if offset + str_len > buf.len() {
-                break;
-            }
-            if let Ok(s) = core::str::from_utf8(&buf[offset..offset + str_len]) {
-                args.push(String::from(s));
-            }
-            offset += str_len;
-        }
-    }
-    args
-}
+use std::env;
+use std::io::{self, Write};
 
 fn expand_escapes(text: &str) -> String {
     let mut out = String::new();
@@ -60,7 +19,6 @@ fn expand_escapes(text: &str) -> String {
             Some('\'') => out.push('\''),
             Some('\"') => out.push('\"'),
             Some('0') => {
-                // Handle \0ooo (octal) - simplified: just \0 for now or up to 3 digits
                 let mut octal = 0u8;
                 let mut count = 0;
                 while count < 3 {
@@ -88,22 +46,16 @@ fn expand_escapes(text: &str) -> String {
     out
 }
 
-#[stem::main]
-fn main(_arg: usize) -> ! {
-    let args = get_args();
+fn main() {
+    let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        stem::syscall::exit(0);
+        return;
     }
 
     let format_str = &args[1];
-    let out = expand_escapes(format_str);
+    let expanded = expand_escapes(format_str);
     
-    // Very basic printf: if there are more args, we should ideally format them.
-    // For the BDD tests like `printf 'a\nb\nc\n'`, there are no extra args.
-    // If we wanted to support %s, we'd need more logic.
-    // For now, let's just support the basic case used in tests.
-
-    let _ = vfs_write(1, out.as_bytes());
-
-    stem::syscall::exit(0)
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    let _ = handle.write_all(expanded.as_bytes());
 }

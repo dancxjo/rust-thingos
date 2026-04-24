@@ -5230,10 +5230,6 @@ dependencies = [
 [[package]]
 name = "printf"
 version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
 
 [[package]]
 name = "proc-macro-error-attr2"

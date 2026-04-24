@@ -5,5 +5,4 @@ edition = "2024"
 publish = false
 
 [dependencies]
-stem = { path = "../../stem", features = ["rt", "global-alloc"] }
-abi = { path = "../../abi" }
+# printf uses std for simplicity
