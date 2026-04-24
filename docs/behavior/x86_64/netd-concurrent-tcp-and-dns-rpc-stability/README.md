@@ -1,6 +1,6 @@
 # Feature: netd concurrent TCP and DNS/RPC stability
 
-> Last run: 2026-04-24 11:14:27
+> Last run: 2026-04-24 16:20:53
 
 ## Scenarios
 
