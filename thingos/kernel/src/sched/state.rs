@@ -1,6 +1,7 @@
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec::Vec;
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::{Mutex, Once};
 
 /// Unique identifier for a kernel thread (scheduler task).
@@ -381,6 +382,96 @@ pub struct SleepMembership {
     pub bucket_index: usize,
 }
 
+/// Entry pushed into a [`WakeMailbox`] by a remote CPU.
+///
+/// Carries all scheduling metadata needed to enqueue the woken task on the
+/// destination CPU without additional registry lookups.
+#[derive(Clone, Copy, Debug)]
+pub struct WakeMailboxEntry {
+    /// Thread being woken.
+    pub tid: ThreadId,
+    /// Scheduling priority level (index into the run-queue priority array).
+    pub priority: usize,
+    /// Scheduler tick at which this wakeup was enqueued; used for aging.
+    pub enqueued_at_tick: u64,
+    /// Monotonic timestamp of the wakeup; used for age-histogram telemetry.
+    pub wake_mono: u64,
+}
+
+/// Per-CPU cross-CPU wakeup mailbox.
+///
+/// Other CPUs must not directly enqueue tasks into a CPU's local run queue.
+/// Instead they call [`WakeMailbox::push`] to deposit a [`WakeMailboxEntry`];
+/// the owning CPU drains the mailbox at safe scheduling points
+/// (start of `schedule()`, timer tick, exit from idle) and inserts the tasks
+/// into its own run queue.
+///
+/// # Synchronization
+///
+/// `WakeMailbox` uses a [`spin::Mutex`] around the internal [`VecDeque`] to
+/// protect concurrent push operations from multiple remote CPUs.  The
+/// `pending` flag is an [`AtomicBool`] that allows the drain fast-path to skip
+/// the lock entirely when no entries are present.
+///
+/// # Usage
+///
+/// ```text
+/// // remote CPU:
+/// cpu_n.wake_mailbox.push(WakeMailboxEntry { tid, priority, ... });
+///
+/// // owning CPU, at a safe scheduling point:
+/// for entry in cpu_n.wake_mailbox.drain() {
+///     cpu_n.runq.enqueue(entry.priority, entry.tid);
+/// }
+/// ```
+pub struct WakeMailbox {
+    inner: Mutex<VecDeque<WakeMailboxEntry>>,
+    pending: AtomicBool,
+}
+
+impl WakeMailbox {
+    /// Create a new, empty mailbox.
+    ///
+    /// This is a `const fn` so it can be used in static initializers.
+    pub const fn new() -> Self {
+        WakeMailbox {
+            inner: Mutex::new(VecDeque::new()),
+            pending: AtomicBool::new(false),
+        }
+    }
+
+    /// Push a [`WakeMailboxEntry`] from a remote CPU.
+    ///
+    /// Safe to call from any CPU without holding the scheduler lock.  The
+    /// internal [`spin::Mutex`] protects concurrent pushes from multiple
+    /// remote CPUs.
+    pub fn push(&self, entry: WakeMailboxEntry) {
+        self.inner.lock().push_back(entry);
+        self.pending.store(true, Ordering::Release);
+    }
+
+    /// Drain all pending entries, returning them as a [`VecDeque`].
+    ///
+    /// Returns an empty collection immediately when no entries are present
+    /// (the `pending` fast-path avoids the lock).  Intended to be called
+    /// **only** by the CPU that owns this mailbox at a safe scheduling point.
+    pub fn drain(&self) -> VecDeque<WakeMailboxEntry> {
+        if !self.pending.swap(false, Ordering::AcqRel) {
+            return VecDeque::new();
+        }
+        core::mem::take(&mut *self.inner.lock())
+    }
+
+    /// Return `true` if there is at least one undelivered entry.
+    ///
+    /// This is a non-consuming hint; the owning CPU can use it to quickly
+    /// check for pending cross-CPU wakeups before committing to a full drain.
+    #[inline]
+    pub fn is_pending(&self) -> bool {
+        self.pending.load(Ordering::Acquire)
+    }
+}
+
 /// Per-CPU scheduler state.
 ///
 /// # Ownership invariant
@@ -414,6 +505,13 @@ pub struct CpuScheduler {
     pub need_resched: bool,
     pub idle_enter_mono_ticks: Option<u64>,
     pub stats: PerCpuSchedStats,
+    /// Per-CPU cross-CPU wakeup mailbox.
+    ///
+    /// Remote CPUs deliver tasks here instead of directly mutating this CPU's
+    /// `runq`.  The owning CPU drains this mailbox at safe scheduling points
+    /// (start of `schedule_point`, timer tick, idle exit) and locally enqueues
+    /// any delivered tasks.  See [`WakeMailbox`] for the push/drain contract.
+    pub wake_mailbox: WakeMailbox,
 }
 
 /// Backward-compatible alias — prefer [`CpuScheduler`] in new code.
@@ -447,6 +545,7 @@ impl CpuScheduler {
             need_resched: false,
             idle_enter_mono_ticks: None,
             stats: PerCpuSchedStats::default(),
+            wake_mailbox: WakeMailbox::new(),
         }
     }
 
@@ -492,6 +591,12 @@ pub struct PerCpuSchedStats {
     pub idle_episodes: u64,
     pub idle_longest_us: u64,
     pub idle_episode_hist: [u64; IDLE_EPISODE_HIST_BUCKETS],
+    /// Number of entries pushed into this CPU's wake mailbox by remote CPUs.
+    pub mailbox_pushes: u64,
+    /// Number of drain operations performed on this CPU's wake mailbox.
+    pub mailbox_drains: u64,
+    /// Total number of tasks delivered from the wake mailbox into the local run queue.
+    pub mailbox_tasks_drained: u64,
 }
 
 pub struct SchedState {
@@ -1512,5 +1617,90 @@ mod tests {
         rq.retain_at(TaskPriority::Normal as usize, |_| false);
         assert_eq!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
             "mask should be cleared when retain removes all entries");
+    }
+
+    // ── WakeMailbox tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn wake_mailbox_starts_empty_and_not_pending() {
+        let mb = WakeMailbox::new();
+        assert!(!mb.is_pending(), "new mailbox should report no pending entries");
+        assert!(mb.drain().is_empty(), "drain on empty mailbox should return empty");
+    }
+
+    #[test]
+    fn wake_mailbox_push_sets_pending_flag() {
+        let mb = WakeMailbox::new();
+        mb.push(WakeMailboxEntry { tid: 1, priority: 2, enqueued_at_tick: 10, wake_mono: 100 });
+        assert!(mb.is_pending(), "pending flag should be set after push");
+    }
+
+    #[test]
+    fn wake_mailbox_drain_returns_pushed_entries_in_order() {
+        let mb = WakeMailbox::new();
+        mb.push(WakeMailboxEntry { tid: 10, priority: 1, enqueued_at_tick: 1, wake_mono: 1 });
+        mb.push(WakeMailboxEntry { tid: 20, priority: 2, enqueued_at_tick: 2, wake_mono: 2 });
+        mb.push(WakeMailboxEntry { tid: 30, priority: 3, enqueued_at_tick: 3, wake_mono: 3 });
+        let drained = mb.drain();
+        assert_eq!(drained.len(), 3, "drain should return all three entries");
+        assert_eq!(drained[0].tid, 10, "first entry should be tid 10");
+        assert_eq!(drained[1].tid, 20, "second entry should be tid 20");
+        assert_eq!(drained[2].tid, 30, "third entry should be tid 30");
+    }
+
+    #[test]
+    fn wake_mailbox_drain_clears_pending_and_leaves_empty() {
+        let mb = WakeMailbox::new();
+        mb.push(WakeMailboxEntry { tid: 5, priority: 2, enqueued_at_tick: 0, wake_mono: 0 });
+        let _ = mb.drain();
+        assert!(!mb.is_pending(), "pending flag should be cleared after drain");
+        assert!(mb.drain().is_empty(), "second drain should return empty");
+    }
+
+    #[test]
+    fn wake_mailbox_drain_without_pending_does_not_lock() {
+        // When no push has been made, drain should return immediately without
+        // touching the inner mutex.  A second drain should also be empty.
+        let mb = WakeMailbox::new();
+        let first = mb.drain();
+        let second = mb.drain();
+        assert!(first.is_empty());
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn cpu_scheduler_has_wake_mailbox_field() {
+        // Confirm that CpuScheduler exposes a wake_mailbox field that starts empty.
+        let cs = CpuScheduler::new_for_cpu(2);
+        assert!(!cs.wake_mailbox.is_pending(),
+            "new CpuScheduler's wake_mailbox should start with no pending entries");
+        assert!(cs.wake_mailbox.drain().is_empty(),
+            "draining a fresh mailbox should yield no entries");
+    }
+
+    #[test]
+    fn cpu_scheduler_wake_mailbox_push_and_drain() {
+        let cs = CpuScheduler::new_for_cpu(4);
+        cs.wake_mailbox.push(WakeMailboxEntry {
+            tid: 99,
+            priority: 2,
+            enqueued_at_tick: 50,
+            wake_mono: 1000,
+        });
+        assert!(cs.wake_mailbox.is_pending(), "mailbox should be pending after push");
+        let entries = cs.wake_mailbox.drain();
+        assert_eq!(entries.len(), 1, "drain should yield the pushed entry");
+        assert_eq!(entries[0].tid, 99);
+        assert_eq!(entries[0].priority, 2);
+        assert!(!cs.wake_mailbox.is_pending(), "mailbox should be clear after drain");
+    }
+
+    #[test]
+    fn per_cpu_sched_stats_has_mailbox_counters() {
+        // Verify the three mailbox debug counters exist and default to zero.
+        let stats = PerCpuSchedStats::default();
+        assert_eq!(stats.mailbox_pushes, 0);
+        assert_eq!(stats.mailbox_drains, 0);
+        assert_eq!(stats.mailbox_tasks_drained, 0);
     }
 }

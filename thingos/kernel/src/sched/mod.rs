@@ -78,7 +78,7 @@ pub use spawn::{
 };
 use spin::Mutex;
 pub use stack::{alloc_user_stack, handle_stack_fault, map_user_page, map_user_page_perms};
-pub use state::{CpuSchedStats, CpuScheduler, RunQueue};
+pub use state::{CpuSchedStats, CpuScheduler, RunQueue, WakeMailbox, WakeMailboxEntry};
 pub use types::{
     DEFAULT_TIMESLICE, ScheduleReason, Scheduler, StackFaultResult, SwitchDecision, SwitchParams,
 };
@@ -261,6 +261,18 @@ pub static PROF_RUNQ_DEPTH_VARIANCE_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_EPISODES: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_LONGEST_US: AtomicU64 = AtomicU64::new(0);
+
+/// Per-CPU count of entries pushed into the wake mailbox by remote CPUs.
+///
+/// Incremented by [`enqueue_remote_wake_mailbox`] without holding the
+/// scheduler lock.  Complements `PerCpuSchedStats::mailbox_pushes` which is
+/// updated from the drain path (under the scheduler lock) for precise
+/// per-drain accounting.
+pub static PROF_MAILBOX_PUSHES_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
 static LAST_RESCHED_IPI_SENT_AT_TICK: [AtomicU64; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const ATOMIC_INIT: AtomicU64 = AtomicU64::new(RESCHED_IPI_NEVER_SENT);
@@ -531,14 +543,20 @@ static GLOBAL_NEED_RESCHED: [AtomicBool; types::MAX_CPUS] = {
     [ATOMIC_FALSE; types::MAX_CPUS]
 };
 
-static REMOTE_WAKE_MAILBOXES: [Mutex<alloc::collections::VecDeque<types::RemoteWakeMailboxEntry>>;
-    types::MAX_CPUS] = [const { Mutex::new(alloc::collections::VecDeque::new()) }; types::MAX_CPUS];
+/// Per-CPU cross-CPU wakeup mailboxes.
+///
+/// Each slot is a [`state::WakeMailbox`] that remote CPUs push tasks into when
+/// they need to wake a thread whose target CPU is not their own.  The receiving
+/// CPU drains its slot at the start of `schedule_point` and inside the timer
+/// tick handler.
+///
+/// Stored as a module-level static so that remote CPUs can push to the target
+/// slot **without** holding the global `SCHEDULER` lock (the mailbox uses its
+/// own internal [`spin::Mutex`] for mutual exclusion).
+#[allow(clippy::declare_interior_mutable_const)]
+static REMOTE_WAKE_MAILBOXES: [state::WakeMailbox; types::MAX_CPUS] =
+    [const { state::WakeMailbox::new() }; types::MAX_CPUS];
 
-static REMOTE_WAKE_MAILBOX_PENDING: [AtomicBool; types::MAX_CPUS] = {
-    #[allow(clippy::declare_interior_mutable_const)]
-    const ATOMIC_FALSE: AtomicBool = AtomicBool::new(false);
-    [ATOMIC_FALSE; types::MAX_CPUS]
-};
 static REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH: [AtomicU64; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const ATOMIC_ZERO: AtomicU64 = AtomicU64::new(0);
@@ -911,10 +929,9 @@ pub(crate) fn enqueue_remote_wake_mailbox(
     entry: types::RemoteWakeMailboxEntry,
 ) -> usize {
     let safe_cpu = target_cpu.min(types::MAX_CPUS.saturating_sub(1));
-    let mut mailbox = REMOTE_WAKE_MAILBOXES[safe_cpu].lock();
-    mailbox.push_back(entry);
+    REMOTE_WAKE_MAILBOXES[safe_cpu].push(entry);
     REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH[safe_cpu].fetch_add(1, Ordering::Release);
-    REMOTE_WAKE_MAILBOX_PENDING[safe_cpu].store(true, Ordering::Release);
+    PROF_MAILBOX_PUSHES_PER_CPU[safe_cpu].fetch_add(1, Ordering::Relaxed);
     safe_cpu
 }
 
@@ -949,20 +966,16 @@ fn take_remote_wake_mailbox(
     if cpu >= types::MAX_CPUS {
         return alloc::collections::VecDeque::new();
     }
-    if !REMOTE_WAKE_MAILBOX_PENDING[cpu].swap(false, Ordering::AcqRel) {
-        return alloc::collections::VecDeque::new();
-    }
-    let mut mailbox = REMOTE_WAKE_MAILBOXES[cpu].lock();
-    core::mem::take(&mut *mailbox)
+    REMOTE_WAKE_MAILBOXES[cpu].drain()
 }
 
 #[cfg(test)]
 fn reset_remote_wake_mailboxes_for_tests() {
     for cpu in 0..types::MAX_CPUS {
-        REMOTE_WAKE_MAILBOX_PENDING[cpu].store(false, Ordering::Relaxed);
+        // Drain any leftover entries without consuming the pending flag
+        let _ = REMOTE_WAKE_MAILBOXES[cpu].drain();
         REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH[cpu].store(0, Ordering::Relaxed);
         REMOTE_WAKE_MAILBOX_LAST_IPI_EPOCH[cpu].store(0, Ordering::Relaxed);
-        REMOTE_WAKE_MAILBOXES[cpu].lock().clear();
     }
     DIAG_REMOTE_WAKE_MAILBOX_NO_IPI.store(0, Ordering::Relaxed);
     for bucket in &PROF_REMOTE_WAKE_MAILBOX_AGE_HIST {
@@ -2268,7 +2281,22 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if pending.is_empty() {
             return;
         }
+        let task_count = pending.len() as u64;
         let now_mono = crate::runtime::<R>().mono_ticks();
+
+        // Snapshot the global push counter into the per-CPU stats and update
+        // drain counters under the scheduler lock.
+        if let Some(pc) = self.state.per_cpu.get_mut(cpu_idx) {
+            let global_pushes = if cpu_idx < types::MAX_CPUS {
+                PROF_MAILBOX_PUSHES_PER_CPU[cpu_idx].load(Ordering::Relaxed)
+            } else {
+                0
+            };
+            pc.stats.mailbox_pushes = global_pushes;
+            pc.stats.mailbox_drains = pc.stats.mailbox_drains.saturating_add(1);
+            pc.stats.mailbox_tasks_drained =
+                pc.stats.mailbox_tasks_drained.saturating_add(task_count);
+        }
 
         for wake in pending {
             let tid = wake.tid;
