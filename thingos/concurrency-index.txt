@@ -239,9 +239,19 @@ abi/src/vfs_rpc.rs
 
 libs/ipc_helpers/src/provider.rs
   [V] ProviderLoop::new(read_port_fd)
+  [V]   port_handle() → u32 — exposes the port handle for WaitSet registration
   [V]   next_request() → Result<ProviderRequest, Errno>
+  [V]   try_next_request() → Result<Option<ProviderRequest>, Errno>
   [V]   send_response(req, resp)
   [V] ProviderResponse — ok_empty / ok_bytes / ok_u64 / ok_stat / err(Errno)
+
+libs/ipc_helpers/src/service_provider.rs
+  [V] ServiceProviderLoop — inbox-aware wrapper combining ServiceLoop + ProviderLoop
+  [V]   new(provider: ProviderLoop, max_payload: usize) → Result<Self, Errno>
+  [V]   next_event(timeout) → ServiceProviderEvent
+  [V]   send_response(req, resp) — delegates to ProviderLoop
+  [V]   add_fd_readable / add_irq / add_task_exit — extra readiness sources
+  [V] ServiceProviderEvent — ProviderRequest / Message / InboxClosed / Ready / Timeout
 
 libs/ipc_helpers/src/rpc.rs
   [V] RpcServer — typed request/reply over port framing
@@ -255,7 +265,8 @@ drivers/virtio_netd/src/vfs_provider.rs
   [V] NetProvider — ProviderLoop serving /dev/net/virtio0/{rx,tx}
 
 utils/ipc_provider_demo/src/main.rs
-  [V] Reference demo: port_create → vfs_mount → ProviderLoop dispatch
+  [V] Reference demo: port_create → vfs_mount → ServiceProviderLoop dispatch
+  [V]   inbox control messages (shutdown, lifecycle) handled concurrently with RPC
 
 drivers/display_bootfb/src/driver.rs, drivers/display_virtio_gpu/src/main.rs
   [V] VFS RPC dispatch inside GPU / bootfb main loops (inline, not ProviderLoop)

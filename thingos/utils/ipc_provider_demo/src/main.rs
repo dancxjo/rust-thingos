@@ -1,15 +1,20 @@
-//! ipc_provider_demo — IPC Cookbook Recipe 4: minimal VFS provider.
+//! ipc_provider_demo — inbox-aware VFS provider using `ServiceProviderLoop`.
 //!
 //! This program demonstrates how to expose a virtual filesystem tree under a
-//! mount point using the Thing-OS VFS provider protocol.
+//! mount point using the Thing-OS VFS provider protocol **with inbox-backed
+//! actor semantics**.  A provider running under `ServiceProviderLoop` can
+//! receive typed control messages through its inbox (lifecycle, config reload,
+//! graceful shutdown) while simultaneously serving VFS RPC requests from the
+//! kernel.
 //!
 //! # What this shows
 //!
 //! 1. **Port creation** — create the provider port pair.
 //! 2. **Mount** — register the port write-end with the kernel via
 //!    `vfs_mount(provider_write_handle, path)`.
-//! 3. **Provider loop** — use [`ProviderLoop`] to read typed kernel requests
-//!    and dispatch them with [`ProviderResponse`] values.
+//! 3. **`ServiceProviderLoop`** — unified event loop that handles both:
+//!    - Inbox control messages (control-plane priority).
+//!    - VFS RPC requests from the kernel (data-plane).
 //!
 //! # Virtual filesystem exposed
 //!
@@ -29,11 +34,34 @@
 //! Hello from the VFS provider!
 //! ```
 //!
+//! # App developer's view
+//!
+//! Using `ServiceProviderLoop` the event loop looks like:
+//!
+//! ```ignore
+//! loop {
+//!     match svc.next_event(None).unwrap() {
+//!         ServiceProviderEvent::ProviderRequest(req) => {
+//!             // Handle VFS RPC (Lookup, Read, Stat, …) exactly as before.
+//!             let resp = dispatch(&mut state, &req.op, &req.payload);
+//!             svc.send_response(&req, resp).unwrap();
+//!         }
+//!         ServiceProviderEvent::Message { kind, payload } => {
+//!             // Handle inbox control message (shutdown, reload, …).
+//!             handle_control_message(kind, payload, &mut state);
+//!         }
+//!         ServiceProviderEvent::InboxClosed => break,   // clean shutdown
+//!         ServiceProviderEvent::Timeout => {}           // periodic work here
+//!         ServiceProviderEvent::Ready { .. } => {}      // extra FDs / IRQs
+//!     }
+//! }
+//! ```
+//!
 //! # See Also
 //!
 //! `docs/concepts/ipc_cookbook.md` Recipe 4 — VFS provider implementation.
 //! `libs/ipc_helpers/src/provider.rs` — ProviderLoop helper.
-//! `userspace/iso9660d/` — full reference implementation.
+//! `libs/ipc_helpers/src/service_provider.rs` — ServiceProviderLoop.
 #![no_std]
 #![no_main]
 use alloc::collections::BTreeMap;
@@ -45,7 +73,9 @@ extern crate alloc;
 use abi::attrs::{AttrListEntryHeader, AttrSetHeader, AttrType};
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
+use abi::wire::KindId;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
+use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use stem::syscall::{port_create, vfs_mount};
 use stem::{info, warn};
 
@@ -70,15 +100,21 @@ struct AttrValue {
 struct ProviderState {
     request_count: u64,
     attrs: BTreeMap<String, AttrValue>,
+    /// Set to `true` when a `shutdown` control message is received.
+    shutdown_requested: bool,
 }
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
     info!("ipc_provider_demo: starting up");
 
-    let mut state = ProviderState { request_count: 0, attrs: BTreeMap::new() };
+    let mut state = ProviderState {
+        request_count: 0,
+        attrs: BTreeMap::new(),
+        shutdown_requested: false,
+    };
 
-    // ── 1. Create the provider port pair ──────────────────────────────
+    // ── 1. Create the provider port pair ──────────────────────────────────
     let (write_h, read_h) = match port_create(65536) {
         Ok(pair) => pair,
         Err(e) => {
@@ -96,32 +132,94 @@ fn main(_arg: usize) -> ! {
         }
     }
 
-    // ── 3. Provider loop ──────────────────────────────────────────────────
-    let mut lp = ProviderLoop::new(read_h);
+    // ── 3. Inbox-aware provider loop ──────────────────────────────────────
+    //
+    // `ServiceProviderLoop` combines:
+    //   • the VFS RPC port (provider side)  → ServiceProviderEvent::ProviderRequest
+    //   • the task inbox (control plane)    → ServiceProviderEvent::Message
+    //
+    // Inbox messages are dispatched *before* VFS RPC when both are ready at
+    // the same wake, preserving the inbox-first control-priority contract.
+    let mut svc = match ServiceProviderLoop::new(ProviderLoop::new(read_h), 4096) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("ipc_provider_demo: ServiceProviderLoop::new failed: {:?}", e);
+            stem::syscall::exit(1);
+        }
+    };
 
     loop {
-        let req = match lp.next_request() {
-            Ok(r) => r,
-            Err(e) => {
+        match svc.next_event(None) {
+            Ok(ServiceProviderEvent::ProviderRequest(req)) => {
+                state.request_count += 1;
+                info!("ipc_provider_demo: request #{} op={:?}", state.request_count, req.op);
+
+                let resp = dispatch(&mut state, &req.op, &req.payload);
+                if let Err(e) = svc.send_response(&req, resp) {
+                    warn!("ipc_provider_demo: send_response failed: {:?}", e);
+                }
+
+                if state.shutdown_requested {
+                    info!("ipc_provider_demo: shutdown after pending request — exiting");
+                    break;
+                }
+            }
+
+            Ok(ServiceProviderEvent::Message { kind, payload }) => {
+                // Inbox control message — handle lifecycle, config reload, etc.
+                handle_control_message(kind, payload, &mut state);
+                if state.shutdown_requested {
+                    info!("ipc_provider_demo: shutdown requested via inbox — exiting");
+                    break;
+                }
+            }
+
+            Ok(ServiceProviderEvent::InboxClosed) => {
                 info!(
-                    "ipc_provider_demo: port closed ({:?}) after {} requests — exiting",
-                    e, state.request_count
+                    "ipc_provider_demo: inbox closed after {} requests — exiting",
+                    state.request_count
                 );
                 break;
             }
-        };
 
-        state.request_count += 1;
-        info!("ipc_provider_demo: request #{} op={:?}", state.request_count, req.op);
+            Ok(ServiceProviderEvent::Timeout) => {
+                // No work — could do periodic housekeeping here.
+            }
 
-        let resp = dispatch(&mut state, &req.op, &req.payload);
-        if let Err(e) = lp.send_response(&req, resp) {
-            warn!("ipc_provider_demo: send_response failed: {:?}", e);
+            Ok(ServiceProviderEvent::Ready { token, .. }) => {
+                // A secondary FD or IRQ fired.  This demo registers no extra
+                // sources so this arm is unreachable in practice.
+                info!("ipc_provider_demo: unexpected secondary event token={:?}", token);
+            }
+
+            Err(e) => {
+                warn!("ipc_provider_demo: next_event error: {:?}", e);
+                break;
+            }
         }
     }
 
     info!("ipc_provider_demo: clean shutdown");
     stem::syscall::exit(0);
+}
+
+/// Handle a typed inbox control message.
+///
+/// This is the control-plane entry point.  In a real driver you would match
+/// on `kind` to distinguish message types (shutdown, reload-config, …).
+fn handle_control_message(kind: KindId, payload: &[u8], state: &mut ProviderState) {
+    info!(
+        "ipc_provider_demo: inbox message kind={:?} payload_len={}",
+        kind.0,
+        payload.len()
+    );
+
+    // As a simple demo, treat any inbox message whose first byte is b'q' as a
+    // "please shut down gracefully" signal.
+    if payload.first() == Some(&b'q') {
+        info!("ipc_provider_demo: graceful shutdown requested via inbox");
+        state.shutdown_requested = true;
+    }
 }
 
 /// Dispatch a single VFS RPC operation and return the appropriate response.
