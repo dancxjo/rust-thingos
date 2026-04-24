@@ -15,7 +15,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use spin::Mutex;
+use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::PortHandle;
+use stem::time::Duration;
 use stem::{info, warn};
 
 use crate::ledger::DeviceLedger;
@@ -29,6 +31,14 @@ const NETD_LIVENESS_PATH: &str = "/net/icmp/new";
 const NETD_PROBE_INTERVAL_NS: u64 = 1_000_000_000;
 const NETD_MAX_PROBE_FAILURES: u32 = 3;
 const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
+/// Periodic supervisor cadence — preserves the previous 100 ms `sleep_ms`
+/// rhythm that drove `process_registrations`, netd liveness probing, and the
+/// health-vine restart loop.
+const SUPERVISOR_TICK_MS: u64 = 100;
+/// Inbox payload size for the Sprout supervisor `ServiceLoop`.  Sized to
+/// match Cambium and to comfortably hold a `THINGOS_JOB_EXIT` notification
+/// (10 bytes) plus future control messages.
+const INBOX_MAX_PAYLOAD: usize = 256;
 
 pub struct Config {
     pub force_bootfb: bool,
@@ -136,20 +146,99 @@ impl Supervisor {
 
         stem::debug!("SPROUT: Running registration + health supervision loop");
 
-        // Main loop: keep health monitoring active without spawning a helper
-        // thread, which can wedge this boot path before driver bring-up.
-        loop {
-            stem::trace!("SPROUT: Loop iteration: process_registrations starting");
-            self.process_registrations();
-            stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
-            self.spawn_netd_if_ready();
-            stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
-            self.verify_netd_liveness();
-            stem::trace!("SPROUT: Loop iteration: run_health_vine");
-            run_health_vine(&self.tasks);
-            stem::trace!("SPROUT: Loop iteration: sleeping 100ms");
-            stem::sleep_ms(100);
+        // Drive supervision through the canonical Layer 3 `ServiceLoop`
+        // (inbox-backed actor) instead of a hand-rolled `sleep_ms(100)` loop.
+        // The 100ms `Timeout` event preserves the previous periodic cadence;
+        // future device-watch / typed control messages can be added as
+        // secondary readiness sources without growing another local poll
+        // loop.
+        //
+        // If the inbox cannot be opened (e.g. procfs unavailable during very
+        // early boot bring-up), fall back to the legacy `sleep_ms(100)` loop
+        // so existing behavior is preserved end-to-end.
+        match ServiceLoop::new(INBOX_MAX_PAYLOAD) {
+            Ok(svc) => self.run_service_loop(svc),
+            Err(err) => {
+                warn!(
+                    "SPROUT: failed to construct ServiceLoop ({:?}); falling back to legacy supervisor loop",
+                    err
+                );
+                self.run_legacy_supervisor_loop();
+            }
         }
+    }
+
+    /// Inbox-backed Layer 3 service loop.  Wakes on:
+    ///
+    /// - the periodic 100ms `Timeout` (drives `tick_supervisor`);
+    /// - typed inbox `Message`s (currently logged and ignored — Sprout has
+    ///   no Layer 3 control-plane messages defined yet);
+    /// - secondary `Ready` events (none registered yet — placeholder for
+    ///   the upcoming devices-watch / `KindId::DRIVER_READY` migration);
+    /// - `InboxClosed`, which falls back to the legacy `sleep_ms` loop so
+    ///   supervision continues even if the inbox is revoked.
+    fn run_service_loop(&mut self, mut svc: ServiceLoop) -> ! {
+        let timeout = Some(Duration::from_millis(SUPERVISOR_TICK_MS));
+        loop {
+            match svc.next_event(timeout) {
+                Ok(ServiceEvent::Message { kind, payload }) => {
+                    // No Sprout-level inbox protocol is defined yet.  Log
+                    // and drop unknown messages rather than failing the loop.
+                    stem::debug!(
+                        "SPROUT: ServiceLoop inbox message kind={:?} ({} bytes) — ignored",
+                        kind,
+                        payload.len()
+                    );
+                    self.tick_supervisor();
+                }
+                Ok(ServiceEvent::Ready { token, event }) => {
+                    // No secondary readiness sources are registered yet, but
+                    // surface unexpected events at debug level so future
+                    // additions are observable, then run a normal tick.
+                    stem::debug!(
+                        "SPROUT: ServiceLoop unexpected secondary ready (token={:?}, flags=0x{:x})",
+                        token,
+                        event.flags()
+                    );
+                    self.tick_supervisor();
+                }
+                Ok(ServiceEvent::Timeout) => {
+                    self.tick_supervisor();
+                }
+                Ok(ServiceEvent::InboxClosed) => {
+                    warn!("SPROUT: inbox closed; falling back to legacy supervisor loop");
+                    self.run_legacy_supervisor_loop();
+                }
+                Err(err) => {
+                    warn!("SPROUT: ServiceLoop next_event error: {:?}; running tick", err);
+                    self.tick_supervisor();
+                }
+            }
+        }
+    }
+
+    /// Legacy `sleep_ms(100)`-driven supervisor loop, retained as a
+    /// degraded fallback for the (essentially impossible) case where
+    /// `ServiceLoop::new` fails or the inbox is closed mid-flight.
+    fn run_legacy_supervisor_loop(&mut self) -> ! {
+        loop {
+            self.tick_supervisor();
+            stem::sleep_ms(SUPERVISOR_TICK_MS);
+        }
+    }
+
+    /// One iteration of the periodic supervisor work that previously ran
+    /// inside the hand-rolled `loop { ...; sleep_ms(100); }` body.
+    fn tick_supervisor(&mut self) {
+        stem::trace!("SPROUT: Loop iteration: process_registrations starting");
+        self.process_registrations();
+        stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
+        self.spawn_netd_if_ready();
+        stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
+        self.verify_netd_liveness();
+        stem::trace!("SPROUT: Loop iteration: run_health_vine");
+        run_health_vine(&self.tasks);
+        stem::trace!("SPROUT: Loop iteration: tick complete");
     }
 
     #[allow(dead_code)]
