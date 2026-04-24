@@ -1,6 +1,6 @@
 use kernel::{FrameAllocatorHook, MapKind, MapPerms};
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct RISCV64AddressSpace(pub u64);
 
 static mut HHDM_OFFSET: u64 = 0;

@@ -913,7 +913,9 @@ pub fn preempt_enable<R: BootRuntime>() {
         };
         let _cr3_before = rt.debug_active_aspace_root();
 
-        rt.tasking().activate_address_space(switch.to_aspace);
+        if switch.to_aspace != switch.from_aspace {
+            rt.tasking().activate_address_space(switch.to_aspace);
+        }
 
         let _cr3_after = rt.debug_active_aspace_root();
 
@@ -975,7 +977,9 @@ pub fn resched_if_needed<R: BootRuntime>() {
         };
         let _cr3_before = rt.debug_active_aspace_root();
 
-        rt.tasking().activate_address_space(switch.to_aspace);
+        if switch.to_aspace != switch.from_aspace {
+            rt.tasking().activate_address_space(switch.to_aspace);
+        }
 
         let _cr3_after = rt.debug_active_aspace_root();
 

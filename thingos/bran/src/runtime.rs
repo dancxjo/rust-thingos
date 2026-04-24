@@ -9,7 +9,7 @@ static TASKING_INIT_ONCE: AtomicBool = AtomicBool::new(false);
 
 pub trait ArchRuntime {
     type Context: Copy + Default;
-    type AddressSpace: Copy + Default;
+    type AddressSpace: Copy + Default + PartialEq;
 
     fn init(&self, hhdm_offset: u64);
     fn putchar(&self, c: u8);
