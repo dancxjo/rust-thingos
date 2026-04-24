@@ -703,7 +703,9 @@ impl WakeBatchLoadSnapshot {
 /// A CPU is considered idle when both its `current` and `idle_task` slots are
 /// initialized *and* they refer to the same task ID.  Uninitialized CPUs
 /// (either field is `None`) are treated as non-idle to avoid spurious routing
-/// during early boot.
+/// during early boot — the `unwrap_or(false)` ensures that a CPU with no
+/// per-CPU entry (e.g. an out-of-range index) is likewise treated as non-idle
+/// rather than panicking.
 fn is_cpu_idle(state: &crate::sched::state::SchedState, cpu: usize) -> bool {
     state
         .per_cpu
@@ -717,6 +719,12 @@ fn is_cpu_idle(state: &crate::sched::state::SchedState, cpu: usize) -> bool {
 /// Returns the index of the first online CPU whose `current` task is its
 /// `idle_task`, or `None` if no online CPU is currently idle.  The scan
 /// order follows `state.online_cpus` (sorted ascending by CPU index).
+///
+/// The `cpu < state.per_cpu.len()` bounds check guards against transient
+/// states where `online_cpus` contains an index that was registered before
+/// the corresponding `per_cpu` slot was pushed (e.g. during early SMP
+/// bring-up).  In steady state the two collections are always in sync, so
+/// the check is purely defensive and never eliminates a valid candidate.
 fn find_idle_online_cpu(state: &crate::sched::state::SchedState) -> Option<usize> {
     state
         .online_cpus
@@ -731,12 +739,12 @@ fn find_idle_online_cpu(state: &crate::sched::state::SchedState) -> Option<usize
 /// applies in order:
 ///
 /// 1. **Locality** — prefer `last_cpu` unless the local CPU is meaningfully
-///    less loaded (see [`select_preferred_any_affinity_wake_cpu`]).
+///    less loaded (see `select_preferred_any_affinity_wake_cpu`).
 /// 2. **Idle CPU** — if the preferred CPU has at least `overload_gap` tasks
 ///    queued *and* an idle online CPU is available, route to the idle CPU
 ///    rather than adding to an already-busy queue.
 /// 3. **Least-loaded** — fall back to the overload-aware redirect in
-///    [`select_any_affinity_wake_cpu`], which steers to the least-loaded
+///    `select_any_affinity_wake_cpu`, which steers to the least-loaded
 ///    online CPU when the preferred one is overloaded.
 pub(crate) fn choose_wake_cpu<R: BootRuntime>(
     sched: &types::Scheduler<R>,
@@ -763,6 +771,12 @@ pub(crate) fn choose_wake_cpu<R: BootRuntime>(
 /// instead of reading live per-CPU state on every call.  Idle CPU detection
 /// still reads live per-CPU state because idle status is not captured in the
 /// snapshot (it changes infrequently relative to queue depths).
+///
+/// **Consistency note**: because idle detection bypasses the snapshot, a
+/// CPU that transitions from idle to running between the snapshot capture
+/// and the idle check may still be selected as the idle target.  This is
+/// benign — the woken task will simply find a now-running CPU and compete
+/// normally, which is no worse than any other Any-affinity placement.
 fn choose_wake_cpu_from_snapshot<R: BootRuntime>(
     sched: &types::Scheduler<R>,
     last_cpu: Option<usize>,
