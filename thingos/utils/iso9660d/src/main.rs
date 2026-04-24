@@ -384,6 +384,41 @@ fn handle_read_direct(
     }
 }
 
+/// List directory entries using pre-decoded handle fields.
+///
+/// This mirrors [`handle_readdir`] but takes decoded parameters directly so
+/// the function can be called from a worker thread.  A fresh [`IsoFs`] is
+/// constructed from the provided PVD clone, giving each worker thread its own
+/// independent directory cache without any shared-state contention.
+fn handle_readdir_direct(
+    dev: &PortBlockDevice,
+    pvd: iso9660::PrimaryVolumeDescriptor,
+    lba: u32,
+    size: u32,
+    offset: u64,
+    max_bytes: usize,
+) -> ProviderResponse {
+    let fs = IsoFs::with_pvd(pvd);
+    let entries = fs.list_dir(dev, lba, size);
+    let start_idx = offset as usize;
+    let mut out: Vec<u8> = Vec::new();
+    for entry in entries.iter().skip(start_idx) {
+        let name_bytes = entry.name.as_bytes();
+        let name_len = name_bytes.len().min(255) as u8;
+        let file_type: u8 = if entry.is_directory { 4 } else { 8 };
+        let ino = encode_handle(entry.extent_lba, entry.size);
+        let entry_size = 10 + name_len as usize;
+        if out.len() + entry_size > max_bytes {
+            break;
+        }
+        out.extend_from_slice(&ino.to_le_bytes());
+        out.push(file_type);
+        out.push(name_len);
+        out.extend_from_slice(&name_bytes[..name_len as usize]);
+    }
+    ProviderResponse::ok_read(&out)
+}
+
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let mount_point = mount_point_from_args();
@@ -416,7 +451,7 @@ fn main(_arg: usize) -> ! {
 
         // Dispatch Read requests to a background thread so multiple
         // concurrent block-device reads can proceed in parallel without
-        // stalling Lookup / Stat / Readdir on the main thread.
+        // stalling Lookup / Stat on the main thread.
         if req.op == VfsRpcOp::Read {
             if req.payload.len() >= 20 {
                 let handle = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
@@ -446,6 +481,47 @@ fn main(_arg: usize) -> ! {
                 if spawn_result.is_err() {
                     // Thread spawn failed — fall back to synchronous dispatch.
                     let resp = handle_read(&dev, &req.payload);
+                    lp.send_response(&req, resp).ok();
+                }
+            } else {
+                lp.send_response(&req, ProviderResponse::err(Errno::EINVAL)).ok();
+            }
+            continue;
+        }
+
+        // Dispatch Readdir requests to a background thread so concurrent
+        // directory listings don't block each other or file reads.
+        if req.op == VfsRpcOp::Readdir {
+            if req.payload.len() >= 20 {
+                let handle = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
+                let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
+                let max_bytes =
+                    u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
+                let (lba, size) = decode_handle(handle);
+                let resp_port = req.resp_port;
+                let req_id = req.req_id;
+                let port = storage_port;
+                let pvd = fs.pvd.clone();
+
+                let spawn_result = stem::thread::spawn_task_detached(move || {
+                    let dev = match PortBlockDevice::new(port) {
+                        Some(d) => d,
+                        None => {
+                            send_response_direct(
+                                resp_port,
+                                req_id,
+                                ProviderResponse::err(Errno::EIO),
+                            );
+                            return;
+                        }
+                    };
+                    let resp = handle_readdir_direct(&dev, pvd, lba, size, offset, max_bytes);
+                    send_response_direct(resp_port, req_id, resp);
+                });
+
+                if spawn_result.is_err() {
+                    // Thread spawn failed — fall back to synchronous dispatch.
+                    let resp = handle_readdir(&fs, &dev, &req.payload);
                     lp.send_response(&req, resp).ok();
                 }
             } else {

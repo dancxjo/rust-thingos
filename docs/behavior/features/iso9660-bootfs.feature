@@ -15,3 +15,11 @@ Feature: ISO9660 boot filesystem mount
     Then the latest command output should contain "thingos"
     When I type "cat /mnt/iso/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
+
+  Scenario: iso9660d handles concurrent reads and readdir without response mis-correlation
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "ls /mnt/iso && cat /mnt/iso/etc/hostname" on the serial console
+    Then the latest command output should contain "thingos"
+    And I type "ls /mnt/iso/etc && cat /mnt/iso/etc/hostname" on the serial console
+    Then the latest command output should contain "thingos"

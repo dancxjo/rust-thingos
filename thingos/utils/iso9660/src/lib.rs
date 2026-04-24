@@ -54,7 +54,7 @@ const VD_TYPE_PRIMARY: u8 = 1;
 const VD_TYPE_TERMINATOR: u8 = 255;
 
 /// Parsed Primary Volume Descriptor.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PrimaryVolumeDescriptor {
     pub system_id: [u8; 32],
     pub volume_id: [u8; 32],
@@ -172,6 +172,20 @@ impl IsoFs {
             #[cfg(feature = "perf")]
             perf: RefCell::new(PerfCounters::default()),
         })
+    }
+
+    /// Create an `IsoFs` from an already-parsed [`PrimaryVolumeDescriptor`].
+    ///
+    /// Use this when the PVD has already been read by another instance and you
+    /// need a fresh, independent `IsoFs` (e.g. in a worker thread) without
+    /// re-reading the PVD sector from disk.
+    pub fn with_pvd(pvd: PrimaryVolumeDescriptor) -> Self {
+        Self {
+            pvd,
+            dir_cache: RefCell::new(BTreeMap::new()),
+            #[cfg(feature = "perf")]
+            perf: RefCell::new(PerfCounters::default()),
+        }
     }
 
     /// ASCII case-insensitive string comparison without allocation.
