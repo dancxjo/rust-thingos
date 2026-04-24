@@ -260,11 +260,17 @@ struct NetworkPollState {
 }
 
 // SAFETY: `NetworkPollState` is always accessed behind `spin::Mutex`, ensuring
-// exclusive access at any time.  The `CONN_RX`/`CONN_TX` static-mut buffers in
-// `socket_api.rs` are only touched while the mutex is held; there is at most
-// one live mutable reference at any point in time.  The smoltcp `Interface` and
-// `SocketSet` types contain no interior mutability or raw thread-local state,
-// making them safe to transfer across thread boundaries under the mutex.
+// exclusive access at any time.
+//
+// `socket_api.rs` declares `pub static mut CONN_RX` and `CONN_TX` arrays used
+// as TCP/UDP socket ring-buffers.  Every access to those buffers goes through
+// `SocketApi` methods (e.g. `alloc_tcp_socket_raw`, `alloc_udp_socket_raw`),
+// which are all invoked through `NetworkPollState` methods while the mutex is
+// held.  Therefore at most one mutable reference to those buffers is live at
+// any point in time, which satisfies the `&mut` aliasing rules.
+//
+// The smoltcp `Interface` and `SocketSet` types contain no thread-local state
+// and no `UnsafeCell`/interior-mutability outside what the mutex already guards.
 unsafe impl Send for NetworkPollState {}
 
 impl NetworkPollState {
@@ -536,10 +542,11 @@ fn run_rpc_thread(
 
         // ── Periodically sync link state from the device ─────────────────────
         {
-            let current_link = net_state.lock().device.link_up();
-            let last_link = net_state.lock().last_link_state;
-            if current_link != last_link {
-                net_state.lock().last_link_state = current_link;
+            let mut state = net_state.lock();
+            let current_link = state.device.link_up();
+            if current_link != state.last_link_state {
+                state.last_link_state = current_link;
+                drop(state);
                 net_provider.link_up = current_link;
                 debug!(
                     "NETD RPC: link state → {}",
@@ -709,7 +716,7 @@ fn main(arg: usize) -> ! {
         socket_set,
         socket_api,
         last_link_state,
-        ip_configured: true, // DHCP already ran
+        ip_configured: net_provider.ip_config.is_some(),
         ready_announced,
         req_write: net_provider.req_write,
         mount_point: mount_point.clone(),

@@ -7,11 +7,10 @@
 //! exclusively through these queues — the poll thread never blocks on RPC
 //! work and the RPC thread never starves the TCP retransmit engine.
 //!
-//! Lock ordering (must always be respected to avoid deadlocks):
-//! 1. `CmdQueue` lock — always acquired and released before `EventQueue`.
-//! 2. `EventQueue` lock — acquired after any `CmdQueue` operation is complete.
-//! Neither queue lock may be held when acquiring the `NetworkPollState`
-//! mutex that guards smoltcp state.
+//! Synchronisation rule: **the `CmdQueue` lock and the `EventQueue` lock
+//! must never be held at the same time**, and neither may be held while
+//! the `NetworkPollState` mutex is also held.  Always acquire, use, and
+//! release each lock independently.
 extern crate alloc;
 
 use alloc::collections::VecDeque;
