@@ -175,7 +175,10 @@ fn main(arg: usize) -> ! {
     // Create a VFS provider port pair and mount it so this driver participates
     // in the inbox-backed actor model (ServiceProviderLoop control plane).
     let (vfs_write, vfs_read) = port_create(65536).expect("display_fake: port_create");
-    let _ = vfs_mount(vfs_write, "/run/display_fake");
+    match vfs_mount(vfs_write, "/run/display_fake") {
+        Ok(()) => info!("display_fake: VFS provider mounted at /run/display_fake"),
+        Err(e) => warn!("display_fake: vfs_mount(/run/display_fake) failed: {:?}", e),
+    }
 
     let mut svc = ServiceProviderLoop::new(ProviderLoop::new(vfs_read), 4096)
         .expect("display_fake: ServiceProviderLoop::new");

@@ -729,7 +729,10 @@ fn main(boot_fd: usize) -> ! {
             }
         }
     };
-    let _ = vfs_mount(vfs_write, "/dev/ahci_ctl");
+    match vfs_mount(vfs_write, "/dev/ahci_ctl") {
+        Ok(()) => debug!("AHCI: VFS provider mounted at /dev/ahci_ctl"),
+        Err(e) => error!("AHCI: vfs_mount(/dev/ahci_ctl) failed: {:?}", e),
+    }
 
     let mut svc = match ServiceProviderLoop::new(ProviderLoop::new(vfs_read), 4096) {
         Ok(s) => s,

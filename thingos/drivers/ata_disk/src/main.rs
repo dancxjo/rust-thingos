@@ -653,7 +653,10 @@ fn main(_arg: usize) -> ! {
             }
         }
     };
-    let _ = vfs_mount(vfs_write, "/dev/ata_ctl");
+    match vfs_mount(vfs_write, "/dev/ata_ctl") {
+        Ok(()) => info!("ATA_DISK: VFS provider mounted at /dev/ata_ctl"),
+        Err(e) => error!("ATA_DISK: vfs_mount(/dev/ata_ctl) failed: {:?}", e),
+    }
 
     let mut svc = match ServiceProviderLoop::new(ProviderLoop::new(vfs_read), 4096) {
         Ok(s) => s,
