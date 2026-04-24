@@ -35,3 +35,23 @@ Feature: Bloom compositor threading and responsiveness
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
     Then the log should match pattern "bloom: I/O thread started"
     And "bloom: reacting to wallpaper change" should appear at least 2 times
+
+  Scenario: wallpaper reload does not block the render loop
+    # Verifies the non-blocking design: a wallpaper-change event triggers an
+    # async worker (start_background_load) rather than a synchronous decode.
+    # The render thread immediately returns to its frame loop; the decoded
+    # texture is swapped in later via poll_ready_background.
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    Then the log should match pattern "bloom: reacting to wallpaper change \(async\)"
+
+  Scenario: failed wallpaper decode leaves previous wallpaper active
+    # Verifies that a decode error does not clobber the current background:
+    # the worker logs an error and exits without writing to the ready slot so
+    # poll_ready_background finds nothing and the previous background stays.
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
+    Then the log should match pattern "bloom: wallpaper worker: decode failed"
