@@ -388,7 +388,10 @@ pub struct SleepMembership {
 /// destination CPU without additional registry lookups.
 #[derive(Clone, Copy, Debug)]
 pub struct WakeMailboxEntry {
-    /// Thread being woken.
+    /// Identifier of the task (thread) being woken.
+    ///
+    /// `ThreadId` and `TaskId` are the same underlying type (`u64`); this
+    /// field uses `ThreadId` to match the scheduler-layer naming convention.
     pub tid: ThreadId,
     /// Scheduling priority level (index into the run-queue priority array).
     pub priority: usize,

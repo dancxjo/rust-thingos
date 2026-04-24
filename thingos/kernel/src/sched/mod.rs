@@ -972,7 +972,7 @@ fn take_remote_wake_mailbox(
 #[cfg(test)]
 fn reset_remote_wake_mailboxes_for_tests() {
     for cpu in 0..types::MAX_CPUS {
-        // Drain any leftover entries without consuming the pending flag
+        // Drain and clear any leftover entries (also resets the pending flag).
         let _ = REMOTE_WAKE_MAILBOXES[cpu].drain();
         REMOTE_WAKE_MAILBOX_ENQUEUE_EPOCH[cpu].store(0, Ordering::Relaxed);
         REMOTE_WAKE_MAILBOX_LAST_IPI_EPOCH[cpu].store(0, Ordering::Relaxed);
