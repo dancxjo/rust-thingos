@@ -248,8 +248,8 @@ static LAST_RESCHED_IPI_SENT_AT_TICK: [AtomicU64; types::MAX_CPUS] = {
 
 pub static CPU_CURRENT_TASK: [core::sync::atomic::AtomicU64; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
-    const ZERO: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    [ZERO; types::MAX_CPUS]
+    const NONE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(u64::MAX);
+    [NONE; types::MAX_CPUS]
 };
 
 #[inline]
