@@ -263,7 +263,11 @@ impl HttpsProvider {
                 Ok(channel)
             }
             Err(e) => {
-                warn!("httpsd: failed to spawn worker for handle={}: {:?}", handle, e);
+                warn!(
+                    "httpsd: failed to spawn worker for handle={}: {:?} \
+                     (check system thread/task limits; this handle will not stream concurrently)",
+                    handle, e
+                );
                 // The handle has been moved into the closure and cannot be recovered.
                 // Return EIO so the caller can propagate an error to the client.
                 Err(Errno::EIO)
@@ -393,11 +397,13 @@ impl HttpsProvider {
         }
         // If the handle has been promoted to a worker, the main loop can no
         // longer call ensure_upstream (the worker owns the Response).  The
-        // shared cache will be populated after the worker processes its first
-        // Read.  Return EIO and let the client retry.
+        // shared cache will be populated after the worker completes its first
+        // Read chunk — callers should retry the AttrList/AttrGet after
+        // issuing at least one Read on this handle.
         if self.workers.contains_key(&handle) {
             error!(
-                "httpsd: ensure_cached_entry handle={} worker not yet cached — retry after first Read",
+                "httpsd: ensure_cached_entry handle={} worker not yet cached \
+                 (retry after first Read completes)",
                 handle
             );
             return Err(Errno::EIO);
@@ -859,9 +865,15 @@ fn send_worker_response(resp_port: u32, req_id: u16, resp: ProviderResponse) {
 /// processes `Read` messages by calling `perform_read`, and exits cleanly on
 /// `Close`.
 ///
-/// The worker spins with `yield_now` while its channel is empty.  This is
-/// acceptable because (a) the worker spends most of its time blocked on
-/// network I/O, and (b) the idle window between successive reads is short.
+/// **Idle spin-wait**: the worker calls `yield_now` while its channel is empty.
+/// This is acceptable because:
+///  (a) workers spend most of their time blocked on network I/O, so the
+///      idle window between consecutive reads from the same client is brief;
+///  (b) Thing-OS does not yet expose condition-variable or semaphore
+///      primitives that would allow a true sleep.
+/// If many paused clients accumulate workers, CPU usage could rise.  A future
+/// improvement would replace the spin loop with a blocking port-receive on a
+/// per-worker notification port.
 fn run_handle_worker(
     handle_id: u64,
     mut state: HttpsHandle,
@@ -1148,7 +1160,11 @@ fn dispatch_read(
             None
         }
         Err(e) => {
-            warn!("httpsd: failed to promote handle={} to worker: {:?} — falling back to sync", handle, e);
+            warn!(
+                "httpsd: failed to promote handle={} to worker: {:?} \
+                 — falling back to synchronous read (concurrent streaming unavailable for this handle)",
+                handle, e
+            );
             // Fallback: synchronous read (handle stays in the unstarted map).
             let data = match provider.read_node(handle, offset, max_len) {
                 Ok(d) => d,
@@ -1564,7 +1580,7 @@ mod tests {
     }
 
     #[test]
-    fn stat_node_returns_ebadf_for_unknown_handle() {
+    fn stat_node_rejects_unknown_handle() {
         let provider = new_provider();
         assert_eq!(provider.stat_node(9999), Err(Errno::EBADF));
     }
