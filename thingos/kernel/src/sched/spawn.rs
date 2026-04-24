@@ -192,8 +192,11 @@ impl<R: BootRuntime> Scheduler<R> {
                 // placement overhead, same as Any.
                 if self.bringup_in_progress {
                     let boot_cpu = super::current_cpu_index::<R>();
-                    // Fall back to boot CPU even if it is not in the allowed
-                    // set — placement is corrected once bringup completes.
+                    // The task may not be in the allowed set; the normal
+                    // scheduler picker will detect the misroute via
+                    // `prepare_schedule` and call `defer_or_repair_misroute`
+                    // to move it to an allowed CPU once steady-state scheduling
+                    // begins.
                     return boot_cpu;
                 }
                 let cpu_count = self.state.per_cpu.len().max(1);

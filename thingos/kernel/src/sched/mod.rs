@@ -3050,9 +3050,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         }
                         if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
                             if !aff.allows(cpu_idx, per_cpu_len) {
+                                // Fall back to the queued CPU (clamped) when no
+                                // allowed CPU is currently online, rather than
+                                // hard-coding CPU 0 which may itself be offline.
                                 let target = aff
                                     .pick_cpu(per_cpu_len)
-                                    .unwrap_or(0);
+                                    .unwrap_or_else(|| sf.last_cpu
+                                        .filter(|&c| c < per_cpu_len)
+                                        .unwrap_or_else(|| self.state.pick_online_cpu_excluding_bsp(0)));
                                 crate::kdebug!(
                                     "SCHED[affinity]: tid={} misrouted to cpu{}, re-routing to cpu{} \
                                      (allowed={:#x})",
@@ -3099,9 +3104,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             }
                             if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
                                 if !aff.allows(cpu_idx, per_cpu_len) {
+                                    // Same safe fallback as the normal picker path.
                                     let target = aff
                                         .pick_cpu(per_cpu_len)
-                                        .unwrap_or(0);
+                                        .unwrap_or_else(|| sf.last_cpu
+                                            .filter(|&c| c < per_cpu_len)
+                                            .unwrap_or_else(|| self.state.pick_online_cpu_excluding_bsp(0)));
                                     crate::kdebug!(
                                         "SCHED[affinity]: tid={} (idle-q) misrouted to cpu{}, \
                                          re-routing to cpu{} (allowed={:#x})",
