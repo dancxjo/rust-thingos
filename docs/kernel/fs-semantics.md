@@ -7,6 +7,11 @@ call each area "done".
 > **Related**: `docs/kernel/posix-checklist.toml` is the machine-readable tracker for
 > individual POSIX features.  This document provides the narrative rationale and
 > per-operation detail.
+>
+> **Provider concurrency**: the kernel VFS RPC path already supports concurrent
+> callers via per-request IDs and wait queues.  See
+> [`docs/kernel/provider-concurrency.md`](provider-concurrency.md) for the full
+> rationale and guidance on implementing parallel dispatch in userland providers.
 
 ---
 

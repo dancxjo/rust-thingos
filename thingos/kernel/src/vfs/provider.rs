@@ -5,6 +5,39 @@
 //! on every VFS operation whose path falls under the mount point is serialised
 //! into a [`VfsRpcOp`] message and forwarded to the provider process via the
 //! IPC port it supplied.
+//!
+//! # Concurrency model
+//!
+//! ## Kernel side — already fully concurrent
+//!
+//! The kernel RPC path is **already designed for concurrent callers**.  Each
+//! call to [`ProviderRpc::rpc`] atomically claims a unique 16-bit `req_id`,
+//! registers a per-request [`WaitQueue`], and blocks independently.  Responses
+//! arriving on the shared response port are matched by `req_id` and routed to
+//! the correct waiter; responses for other in-flight requests are buffered in
+//! [`RpcState::responses`] and their waiters are woken.  Up to 65 535
+//! concurrent kernel-side callers can be in flight simultaneously without any
+//! serialisation beyond the brief lock windows around the response map.
+//!
+//! **No kernel change is required to support higher provider concurrency.**
+//!
+//! ## Userland side — current bottleneck
+//!
+//! Observed parallelism is currently limited by **userland providers that
+//! process requests serially** (e.g. `httpsd`, `iso9660d`).  A single-threaded
+//! provider reads one request, does its work, writes one response, and then
+//! reads the next request.  While it is busy, other kernel callers wait even
+//! though the kernel is perfectly capable of dispatching them in parallel.
+//!
+//! To unlock the full benefit of kernel-side multiplexing, userland providers
+//! should adopt a parallel-dispatch model, for example:
+//!
+//! - Spawn a worker thread (or async task) per incoming request.
+//! - Use a fixed-size thread pool and queue incoming request messages.
+//! - Leverage async I/O to pipeline multiple responses.
+//!
+//! See `docs/kernel/provider-concurrency.md` for the full architecture
+//! rationale and guidance for contributors.
 
 use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
@@ -21,14 +54,23 @@ use crate::syscall::validate::{copyin, copyout};
 
 // ── ProviderRpc ─────────────────────────────────────────────────────────────
 
-/// Serialization state for VFS RPCs.
+/// Shared mutable state for concurrent VFS RPCs.
 ///
-/// This struct manages inflight RPCs using 16-bit request IDs for multiplexing,
-/// allowing multiple threads to wait for responses concurrently.
+/// Multiple kernel threads can be in-flight simultaneously: each holds a
+/// unique `req_id` and a slot in `waiters`.  The first thread to receive a
+/// response message routes it to the correct waiter via `req_id`; responses
+/// that belong to *other* waiters are parked in `responses` and their
+/// [`WaitQueue`] is woken so they can collect their own reply on the next
+/// iteration.
+///
+/// The `tainted` flag short-circuits all new RPCs after a provider error and
+/// self-clears after [`PROVIDER_TAINT_COOLDOWN_NS`].
 struct RpcState {
     tainted: bool,
     tainted_until_ns: u64,
+    /// Per-request wait queues, keyed by `req_id`.
     waiters: BTreeMap<u16, Arc<WaitQueue>>,
+    /// Responses received for other waiters and not yet collected.
     responses: BTreeMap<u16, Vec<u8>>,
 }
 
@@ -82,7 +124,29 @@ impl ProviderRpc {
         state.tainted_until_ns = crate::time::monotonic_now_ns() + PROVIDER_TAINT_COOLDOWN_NS;
     }
 
-    /// Perform a multiplexed, asynchronous round-trip RPC with the provider.
+    /// Perform a multiplexed, concurrent round-trip RPC with the provider.
+    ///
+    /// # Concurrency
+    ///
+    /// This method is safe to call from multiple kernel threads simultaneously.
+    /// Each call:
+    ///
+    /// 1. Atomically claims a unique 16-bit `req_id`.
+    /// 2. Registers a per-request [`WaitQueue`] in [`RpcState::waiters`].
+    /// 3. Sends the serialised request to the provider.
+    /// 4. Blocks on its own wait queue until a response with a matching
+    ///    `req_id` arrives, or until timeout/interrupt.
+    ///
+    /// When a response arrives on the shared port, the thread that wakes first
+    /// checks the `req_id` in the response header.  If it matches, the thread
+    /// returns immediately.  If the response belongs to another waiter, the
+    /// payload is stored in [`RpcState::responses`] and that waiter is woken.
+    ///
+    /// The observed throughput limit is therefore **not** in this kernel path
+    /// but in userland providers that handle requests serially.  Parallel
+    /// provider dispatch (thread-per-request, thread pool, or async) will
+    /// allow all concurrent kernel waiters to make progress simultaneously.
+    /// See `docs/kernel/provider-concurrency.md` for details.
     fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
         let tid = unsafe { crate::sched::current_tid_current() };
         let req_id = self.next_req_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
