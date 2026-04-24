@@ -864,15 +864,9 @@ pub fn activate_terminal_and_spawn_shell() {
         return;
     }
 
-    if let Some(tid) = try_spawn_shell("/bin/smallsh") {
-        unlock_hotkey_shell_spawn(Some(tid));
-        kdebug!("F12 hotkey: spawned {} as tid {}", "/bin/smallsh", tid);
-        return;
-    }
-
     unlock_hotkey_shell_spawn(None);
 
-    kdebug!("F12 hotkey: failed to spawn /bin/sh and /bin/smallsh");
+    kdebug!("F12 hotkey: failed to spawn /bin/sh");
 }
 
 fn capture_control_state() -> (u64, u64, u64, u64) {

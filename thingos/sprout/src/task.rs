@@ -28,6 +28,8 @@ pub struct ManagedTask {
     /// task's PID.  Services that do not send `DRIVER_READY` remain `false`
     /// but are still supervised normally.
     pub ready: bool,
+    /// Handle to the write end of the driver's request port (Supervisor -> Driver).
+    pub req_write_port: Option<u32>,
 }
 
 impl ManagedTask {

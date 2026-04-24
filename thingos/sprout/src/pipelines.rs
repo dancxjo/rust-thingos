@@ -50,7 +50,7 @@ pub fn select_serial_shell() -> alloc::string::String {
         }
     }
 
-    for candidate in ["/bin/sh", "/bin/smallsh"] {
+    for candidate in ["/bin/sh"] {
         if file_exists(candidate) {
             return candidate.to_string();
         }
@@ -78,6 +78,7 @@ pub struct DisplayHandles {
     pub height: u32,
     pub stride: u32,
     pub format: u32,
+    pub req_write_port: u32,
 }
 
 fn find_sys_device(class_prefix: &str) -> Option<alloc::string::String> {
@@ -277,7 +278,7 @@ pub fn setup_display_pipeline(
     };
 
     // Supervisor -> driver requests (kept for the display driver bootstrap protocol).
-    let (_req_write, req_read) = match port_create(4096) {
+    let (req_write, req_read) = match port_create(4096) {
         Ok(p) => p,
         Err(e) => {
             warn!("SPROUT: Failed to create display request port: {:?}", e);
@@ -348,6 +349,7 @@ pub fn setup_display_pipeline(
             restarts: 0,
             spawn_arg: boot_fd as usize,
             bind_instance_id,
+            req_write_port: Some(req_write),
             ..Default::default()
         });
     }
@@ -359,6 +361,7 @@ pub fn setup_display_pipeline(
         height,
         stride,
         format,
+        req_write_port: req_write,
     })
 }
 

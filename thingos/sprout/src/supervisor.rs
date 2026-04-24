@@ -21,8 +21,11 @@ use stem::time::Duration;
 use stem::{info, warn};
 
 use crate::ledger::DeviceLedger;
-use crate::pipelines::{mount_hosts_cache, setup_input_broker, setup_serial_shell};
+use crate::pipelines::{mount_hosts_cache, setup_display_pipeline, setup_input_broker, setup_serial_shell};
 use crate::task::{ManagedTask, TaskKind};
+
+use abi::display_driver_protocol;
+use abi::supervisor_protocol::{self, classes};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
 const NETD_PROVIDER_PATH: &str = "/dev/net/virtio0/rx";
@@ -57,11 +60,20 @@ pub struct Supervisor {
     bristle_spawned: bool,
     /// Whether bloom has been spawned (guarded so we only launch once).
     bloom_spawned: bool,
+    /// Whether the display driver has been spawned.
+    display_spawned: bool,
+    /// Read end of the supervisor port for sovereign registration.
+    supervisor_port_read: Option<u32>,
+    /// Write end of the supervisor port for sovereign registration.
+    supervisor_port_write: Option<u32>,
+    /// Wait token for the supervisor port.
+    supervisor_token: Option<stem::wait_set::WaitToken>,
 }
 
 impl Supervisor {
     pub fn new(registry_ptr: usize) -> Self {
         let config = Self::parse_cmdline();
+        let (write, read) = stem::syscall::port_create(4096).unwrap_or((0, 0));
         Self {
             tasks: Arc::new(Mutex::new(Vec::new())),
             ledger: Arc::new(Mutex::new(DeviceLedger::new())),
@@ -74,6 +86,10 @@ impl Supervisor {
             netd_last_probe_ns: 0,
             bristle_spawned: false,
             bloom_spawned: false,
+            display_spawned: false,
+            supervisor_port_read: if read != 0 { Some(read) } else { None },
+            supervisor_port_write: if write != 0 { Some(write) } else { None },
+            supervisor_token: None,
         }
     }
 
@@ -122,6 +138,9 @@ impl Supervisor {
 
     pub fn run_forever(&mut self) -> ! {
         stem::debug!("SPROUT: Supervisor session started (MINIMAL MODE)");
+
+        // Ensure canonical device directories exist.
+        let _ = stem::syscall::vfs::vfs_mkdir("/dev/display");
 
         // Stage 1: Launch Serial Shell
         stem::info!("SPROUT: Launching serial shell...");
@@ -182,6 +201,15 @@ impl Supervisor {
     /// - `InboxClosed`, which falls back to the legacy `sleep_ms` loop so
     ///   supervision continues even if the inbox is revoked.
     fn run_service_loop(&mut self, mut svc: ServiceLoop) -> ! {
+        if let Some(read_handle) = self.supervisor_port_read {
+            if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(read_handle) {
+                match svc.add_fd_readable(fd) {
+                    Ok(tok) => self.supervisor_token = Some(tok),
+                    Err(e) => warn!("SPROUT: failed to register supervisor port in ServiceLoop: {:?}", e),
+                }
+            }
+        }
+
         let timeout = Some(Duration::from_millis(SUPERVISOR_TICK_MS));
         loop {
             match svc.next_event(timeout) {
@@ -201,14 +229,18 @@ impl Supervisor {
                     }
                 }
                 Ok(ServiceEvent::Ready { token, event }) => {
-                    // No secondary readiness sources are registered yet, but
-                    // surface unexpected events at debug level so future
-                    // additions are observable, then run a normal tick.
-                    stem::debug!(
-                        "SPROUT: ServiceLoop unexpected secondary ready (token={:?}, flags=0x{:x})",
-                        token,
-                        event.flags()
-                    );
+                    if Some(token) == self.supervisor_token {
+                        self.handle_supervisor_port_event();
+                    } else {
+                        // No secondary readiness sources are registered yet, but
+                        // surface unexpected events at debug level so future
+                        // additions are observable, then run a normal tick.
+                        stem::debug!(
+                            "SPROUT: ServiceLoop unexpected secondary ready (token={:?}, flags=0x{:x})",
+                            token,
+                            event.flags()
+                        );
+                    }
                     self.tick_supervisor();
                 }
                 Ok(ServiceEvent::Timeout) => {
@@ -261,6 +293,104 @@ impl Supervisor {
         }
     }
 
+    fn handle_supervisor_port_event(&mut self) {
+        let read_handle = match self.supervisor_port_read {
+            Some(h) => h,
+            None => return,
+        };
+
+        let fd = match stem::syscall::vfs::vfs_handle_from_port(read_handle) {
+            Ok(fd) => fd,
+            Err(_) => return,
+        };
+
+        let mut data_buf = [0u8; 1024];
+        let mut fds_buf = [0u32; 8];
+        match stem::syscall::socket::recvmsg(fd, &mut data_buf, &mut fds_buf) {
+            Ok((n, num_fds)) => {
+                if let Some((header, payload)) = display_driver_protocol::parse_message(&data_buf[..n]) {
+                    match header.msg_type {
+                        supervisor_protocol::MSG_BIND_READY => {
+                            if let Some(bind_payload) =
+                                supervisor_protocol::decode_bind_ready_le(payload)
+                            {
+                                let attached_handle = if num_fds > 0 { Some(fds_buf[0]) } else { None };
+                                self.handle_bind_ready(bind_payload, attached_handle);
+                            }
+                        }
+                        _ => {
+                            stem::debug!("SPROUT: supervisor port unknown msg_type=0x{:x}", header.msg_type);
+                        }
+                    }
+                }
+            }
+            Err(e) if e == abi::errors::Errno::EAGAIN => {}
+            Err(e) => {
+                warn!("SPROUT: supervisor port recvmsg error: {:?}", e);
+            }
+        }
+    }
+
+    fn handle_bind_ready(
+        &mut self,
+        payload: supervisor_protocol::BindReadyPayload,
+        attached_handle: Option<u32>,
+    ) {
+        info!("SPROUT: BIND_READY from instance_id=0x{:x}", payload.bind_instance_id);
+
+        if (payload.class_mask & classes::DISPLAY_CARD) != 0 {
+            if let Some(handle) = attached_handle {
+                info!(
+                    "SPROUT: Registering DISPLAY_CARD at /dev/display/card0 (handle={})",
+                    handle
+                );
+                match stem::syscall::vfs::vfs_mount(handle, "/dev/display/card0") {
+                    Ok(_) => info!("SPROUT: Mounted /dev/display/card0 successfully"),
+                    Err(e) => warn!("SPROUT: Failed to mount /dev/display/card0: {:?}", e),
+                }
+
+                let mut tasks = self.tasks.lock();
+                if let Some(task) =
+                    tasks.iter_mut().find(|t| t.bind_instance_id == payload.bind_instance_id)
+                {
+                    task.ready = true;
+                    info!("SPROUT: Handshake complete — task '{}' marked ready", task.name);
+
+                    // Send MSG_BIND_ASSIGNED back to the driver.
+                    if let Some(req_port) = task.req_write_port {
+                        let assigned = supervisor_protocol::BindAssignedPayload {
+                            bind_instance_id: payload.bind_instance_id,
+                            status: 0,
+                            unit_number: 0,
+                            primary_path: {
+                                let mut p = [0u8; 64];
+                                let path = "/dev/display/card0".as_bytes();
+                                p[..path.len()].copy_from_slice(path);
+                                p
+                            },
+                        };
+                        let mut assigned_bytes = [0u8; supervisor_protocol::BIND_ASSIGNED_PAYLOAD_SIZE];
+                        if let Some(len) = supervisor_protocol::encode_bind_assigned_le(
+                            &assigned,
+                            &mut assigned_bytes,
+                        ) {
+                            let mut msg_buf = [0u8; 256];
+                            if let Some(total_len) = display_driver_protocol::encode_message(
+                                &mut msg_buf,
+                                supervisor_protocol::MSG_BIND_ASSIGNED,
+                                &assigned_bytes[..len],
+                            ) {
+                                let _ = stem::syscall::port_send(req_port, &msg_buf[..total_len]);
+                            }
+                        }
+                    }
+                }
+            } else {
+                warn!("SPROUT: BIND_READY for DISPLAY_CARD missing attached VFS handle");
+            }
+        }
+    }
+
     /// Legacy `sleep_ms(100)`-driven supervisor loop, retained as a
     /// degraded fallback for the (essentially impossible) case where
     /// `ServiceLoop::new` fails or the inbox is closed mid-flight.
@@ -278,6 +408,8 @@ impl Supervisor {
         self.spawn_netd_if_ready();
         stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
         self.verify_netd_liveness();
+        stem::trace!("SPROUT: Loop iteration: spawn_display_if_needed");
+        self.spawn_display_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bristle_if_needed");
         self.spawn_bristle_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
@@ -285,6 +417,32 @@ impl Supervisor {
         stem::trace!("SPROUT: Loop iteration: run_health_vine");
         run_health_vine(&self.tasks);
         stem::trace!("SPROUT: Loop iteration: tick complete");
+    }
+
+    fn spawn_display_if_needed(&mut self) {
+        if self.display_spawned {
+            return;
+        }
+
+        let supervisor_port_write = match self.supervisor_port_write {
+            Some(w) => w,
+            None => return,
+        };
+
+        let bind_instance_id = 0x1337_0001;
+
+        if let Some(handles) = setup_display_pipeline(
+            self.tasks.clone(),
+            supervisor_port_write,
+            bind_instance_id,
+            self.config.force_bootfb,
+        ) {
+            info!(
+                "SPROUT: Display pipeline initialized (backend={})",
+                handles.backend_name
+            );
+            self.display_spawned = true;
+        }
     }
 
     #[allow(dead_code)]

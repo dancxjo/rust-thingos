@@ -231,14 +231,14 @@ fn main(boot_fd: usize) -> ! {
         }
     };
 
-    // Bridge the response-port handle to a VFS FD once so we can use
+    // Bridge the supervisor port handle to a VFS FD once so we can use
     // sendmsg (FD-based) for capability transfer.
-    let drv_resp_write_fd = match vfs_handle_from_port(drv_resp_write) {
+    let supervisor_port_fd = match vfs_handle_from_port(supervisor_port) {
         Ok(fd) => fd,
         Err(e) => {
             warn!(
-                "display_bootfb: invalid bootstrap resp handle {} (vfs_handle_from_port failed: {:?})",
-                drv_resp_write, e
+                "display_bootfb: invalid supervisor port handle {} (vfs_handle_from_port failed: {:?})",
+                supervisor_port, e
             );
             stem::syscall::exit(1);
         }
@@ -262,12 +262,12 @@ fn main(boot_fd: usize) -> ! {
             &ready_bytes[..len],
         ) {
             info!(
-                "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x})...",
+                "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x}) to supervisor port...",
                 ready.class_mask
             );
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
             let res =
-                stem::syscall::socket::sendmsg(drv_resp_write_fd, &buf[..total_len], &[vfs_write]);
+                stem::syscall::socket::sendmsg(supervisor_port_fd, &buf[..total_len], &[vfs_write]);
             info!(
                 "display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...",
                 res
@@ -340,7 +340,7 @@ fn main(boot_fd: usize) -> ! {
                 &payload_bytes[..p_len],
             ) {
                 let _ =
-                    stem::syscall::socket::sendmsg(drv_resp_write_fd, &svc_buf[..total_len], &[]);
+                    stem::syscall::socket::sendmsg(supervisor_port_fd, &svc_buf[..total_len], &[]);
                 debug!("display_bootfb: Sent MSG_SERVICE_READY.");
             }
         }

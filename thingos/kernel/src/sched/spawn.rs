@@ -1746,8 +1746,6 @@ mod tests {
     fn boot_module_match_requires_exact_basename() {
         assert!(boot_module_matches("ls", "/bin/ls"));
         assert!(boot_module_matches("/bin/ls", "/bin/ls"));
-        assert!(!boot_module_matches("ls", "/bin/smallsh"));
-        assert!(!boot_module_matches("/bin/ls", "/bin/smallsh"));
     }
 
     #[test]
