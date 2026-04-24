@@ -2567,6 +2567,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         wake_batch_loads.note_enqueue(target);
                         target
                     }
+                    crate::task::Affinity::Restricted(ref aff) => {
+                        let cpu_count = self.state.per_cpu.len().max(1);
+                        let target = aff
+                            .pick_cpu(cpu_count)
+                            .unwrap_or_else(|| choose_wake_cpu_from_snapshot::<R>(
+                                self,
+                                sf.last_cpu,
+                                &wake_batch_loads,
+                            ));
+                        wake_batch_loads.note_enqueue(target);
+                        target
+                    }
                 };
                 to_wake.push((tid, priority, target_cpu));
             }
@@ -2821,6 +2833,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 let fallback = queued_target_cpu.min(per_cpu_len - 1);
                 Some((prio, sf.last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(fallback)))
             }
+            crate::task::Affinity::Restricted(ref aff) => {
+                let target = aff
+                    .pick_cpu(per_cpu_len)
+                    .unwrap_or_else(|| queued_target_cpu.min(per_cpu_len - 1));
+                Some((prio, target))
+            }
         }
     }
 
@@ -3030,6 +3048,20 @@ impl<R: BootRuntime> types::Scheduler<R> {
                                 continue;
                             }
                         }
+                        if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
+                            if !aff.allows(cpu_idx, per_cpu_len) {
+                                let target = aff
+                                    .pick_cpu(per_cpu_len)
+                                    .unwrap_or(0);
+                                crate::kdebug!(
+                                    "SCHED[affinity]: tid={} misrouted to cpu{}, re-routing to cpu{} \
+                                     (allowed={:#x})",
+                                    id, cpu_idx, target, aff.allowed.0
+                                );
+                                self.defer_or_repair_misroute(sf.priority as usize, target, id);
+                                continue;
+                            }
+                        }
                         next_id = Some(id);
                         break;
                     }
@@ -3061,6 +3093,20 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         Some(sf) => {
                             if let crate::task::Affinity::Pinned(target) = sf.affinity {
                                 if target != cpu_idx && target < per_cpu_len {
+                                    self.defer_or_repair_misroute(sf.priority as usize, target, id);
+                                    continue;
+                                }
+                            }
+                            if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
+                                if !aff.allows(cpu_idx, per_cpu_len) {
+                                    let target = aff
+                                        .pick_cpu(per_cpu_len)
+                                        .unwrap_or(0);
+                                    crate::kdebug!(
+                                        "SCHED[affinity]: tid={} (idle-q) misrouted to cpu{}, \
+                                         re-routing to cpu{} (allowed={:#x})",
+                                        id, cpu_idx, target, aff.allowed.0
+                                    );
                                     self.defer_or_repair_misroute(sf.priority as usize, target, id);
                                     continue;
                                 }
@@ -3296,7 +3342,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         Some(SwitchDecision { cpu_idx, from_tid: current_id, to_tid: next_id })
     }
 
-    /// Try to steal exactly one `Affinity::Any` task from `victim_cpu` into
+    /// Try to steal exactly one migratable task from `victim_cpu` into
     /// `local_cpu`.
     ///
     /// The victim must have at least `min_depth` runnable tasks so that we do
@@ -3305,8 +3351,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
     ///
     /// Scans priority queues from highest to lowest, peeking at most
     /// `STEAL_SCAN_DEPTH_PER_PRIORITY` entries per level to keep the path
-    /// bounded.  Only `Affinity::Any` tasks are eligible; pinned tasks are
-    /// skipped.
+    /// bounded.  `Affinity::Any` tasks are always eligible; `Affinity::Restricted`
+    /// tasks are eligible if `local_cpu` is in their allowed CPU set; pinned
+    /// tasks are skipped.
     ///
     /// Returns the stolen `TaskId` (removed from the victim's run queue and
     /// ready to be dispatched on `local_cpu`), or `None` if no suitable task
@@ -3344,7 +3391,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             && sf.state != TaskState::Running
                             // Validate canonical placement before steal.
                             && sf.runq_location == Some((victim_cpu, p))
-                            && matches!(sf.affinity, crate::task::Affinity::Any)
+                            // Only steal tasks that are allowed to run on the local CPU.
+                            && match sf.affinity {
+                                crate::task::Affinity::Any => true,
+                                crate::task::Affinity::Pinned(_) => false,
+                                crate::task::Affinity::Restricted(ref aff) => {
+                                    aff.allows(local_cpu, self.state.per_cpu.len())
+                                }
+                            }
                             // Only steal tasks whose migration state allows it.
                             && sf.migration_state.is_migratable()
                     }
@@ -3476,8 +3530,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// the busiest online CPU has at least
     /// [`types::PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF`] more runnable tasks
     /// than the least-loaded CPU, it migrates up to
-    /// [`types::PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN`] `Affinity::Any` tasks
-    /// from the busiest CPU into the least-loaded CPU's run queue.
+    /// [`types::PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN`] migratable tasks
+    /// (`Affinity::Any` or `Affinity::Restricted` tasks whose allowed set includes
+    /// the target CPU) from the busiest CPU into the least-loaded CPU's run queue.
     ///
     /// # Design notes
     ///
@@ -3803,6 +3858,7 @@ fn effective_parallelism_from_state(online_cpu_count: usize, affinity: Affinity)
     match affinity {
         Affinity::Pinned(_) => 1,
         Affinity::Any => online,
+        Affinity::Restricted(ref aff) => aff.effective_parallelism(online),
     }
 }
 
@@ -4895,6 +4951,9 @@ pub fn dump_stats<R: BootRuntime>() {
         let aff_str: alloc::string::String = match task.affinity {
             crate::task::Affinity::Any => alloc::string::String::from("Any"),
             crate::task::Affinity::Pinned(c) => alloc::format!("Pin({})", c),
+            crate::task::Affinity::Restricted(ref aff) => {
+                alloc::format!("Rst({:#x})", aff.allowed.0)
+            }
         };
         let name_str = if task.name_len > 0 {
             core::str::from_utf8(&task.name[..task.name_len as usize]).unwrap_or("?")
@@ -5231,6 +5290,26 @@ mod tests {
     #[test]
     fn effective_parallelism_never_returns_zero() {
         assert_eq!(effective_parallelism_from_state(0, Affinity::Any), 1);
+    }
+
+    #[test]
+    fn effective_parallelism_restricted_counts_allowed_online_cpus() {
+        use crate::sched::state::{CpuAffinity, CpuSet};
+        // Allowed CPUs 1 and 2 only; 4 CPUs online.
+        let aff = CpuAffinity {
+            allowed: CpuSet(0b0110),
+            preferred: None,
+            last_cpu: None,
+        };
+        assert_eq!(effective_parallelism_from_state(4, Affinity::Restricted(aff)), 2);
+    }
+
+    #[test]
+    fn effective_parallelism_restricted_caps_at_online_count() {
+        use crate::sched::state::{CpuAffinity, CpuSet};
+        // Allowed CPUs 0-7 but only 2 online.
+        let aff = CpuAffinity { allowed: CpuSet(0xFF), preferred: None, last_cpu: None };
+        assert_eq!(effective_parallelism_from_state(2, Affinity::Restricted(aff)), 2);
     }
 
     /// Serialises sched tests that mutate shared globals (REGISTRY, SCHEDULER,

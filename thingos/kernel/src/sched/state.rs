@@ -53,10 +53,177 @@ impl ThreadPriority {
     }
 }
 
+/// Bitmask of CPU indices representing the set of CPUs a task is allowed to use.
+///
+/// Internally stores up to 64 CPU indices as a bitmask (`u64`).  Bit `n` set
+/// means CPU index `n` is in the set.  CPU indices ≥ 64 are never in any set.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CpuSet(pub u64);
+
+impl CpuSet {
+    /// A set that contains **all** CPU indices (bits 0..63 set).
+    pub const fn all() -> Self {
+        CpuSet(u64::MAX)
+    }
+
+    /// A set containing **only** `cpu`.  Returns an empty set if `cpu >= 64`.
+    pub const fn only(cpu: CpuId) -> Self {
+        if cpu < 64 {
+            CpuSet(1u64 << cpu)
+        } else {
+            CpuSet(0)
+        }
+    }
+
+    /// Returns `true` if `cpu` is in this set.
+    #[inline]
+    pub fn contains(self, cpu: CpuId) -> bool {
+        cpu < 64 && (self.0 >> cpu) & 1 != 0
+    }
+
+    /// Returns the lowest-indexed CPU in the set, or `None` if empty.
+    #[inline]
+    pub fn first(self) -> Option<CpuId> {
+        if self.0 == 0 { None } else { Some(self.0.trailing_zeros() as CpuId) }
+    }
+
+    /// Returns `true` if the set contains at least one CPU.
+    #[inline]
+    pub fn any(self) -> bool {
+        self.0 != 0
+    }
+
+    /// Number of CPUs in the set.
+    #[inline]
+    pub fn count(self) -> u32 {
+        self.0.count_ones()
+    }
+
+    /// Pick the best CPU from the set, bounded by `cpu_count`.
+    ///
+    /// Priority order:
+    /// 1. `preferred` — if it is in the set and `< cpu_count`.
+    /// 2. `last_cpu` — if it is in the set and `< cpu_count`.
+    /// 3. Lowest-indexed CPU in the set that is `< cpu_count`.
+    ///
+    /// Returns `None` if no allowed CPU is within `cpu_count`.
+    pub fn pick(self, preferred: Option<CpuId>, last_cpu: Option<CpuId>, cpu_count: usize) -> Option<CpuId> {
+        if let Some(p) = preferred {
+            if p < cpu_count && self.contains(p) {
+                return Some(p);
+            }
+        }
+        if let Some(l) = last_cpu {
+            if l < cpu_count && self.contains(l) {
+                return Some(l);
+            }
+        }
+        let mut mask = self.0;
+        while mask != 0 {
+            let bit = mask.trailing_zeros() as CpuId;
+            if bit < cpu_count {
+                return Some(bit);
+            }
+            mask &= !(1u64 << bit);
+        }
+        None
+    }
+}
+
+impl core::fmt::Debug for CpuSet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "CpuSet({:#018x})", self.0)
+    }
+}
+
+/// Rich CPU affinity model for a kernel thread.
+///
+/// Unlike the simple [`Affinity`] enum, `CpuAffinity` supports:
+/// - A **bitmask** of allowed CPUs via [`CpuSet`], enabling flexible multi-CPU
+///   constraints (not just "any CPU" or "one pinned CPU").
+/// - An optional **preferred** CPU hint for guiding placement without hard pinning.
+/// - An optional **last_cpu** recording the last CPU this thread was placed on
+///   within the allowed set, for cache-warm placement decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuAffinity {
+    /// Bitmask of CPUs on which this thread is allowed to run.
+    pub allowed: CpuSet,
+    /// Preferred CPU hint: the scheduler tries this CPU first when placing the task.
+    /// `None` means no preference among the allowed CPUs.
+    pub preferred: Option<CpuId>,
+    /// The last CPU (within the allowed set) on which this thread was placed.
+    /// Updated by the scheduler on each placement decision.
+    pub last_cpu: Option<CpuId>,
+}
+
+impl CpuAffinity {
+    /// Affinity that allows any CPU (equivalent to `Affinity::Any`).
+    pub const fn any() -> Self {
+        CpuAffinity { allowed: CpuSet::all(), preferred: None, last_cpu: None }
+    }
+
+    /// Affinity pinned to a single CPU (equivalent to `Affinity::Pinned(cpu)`).
+    pub const fn pinned(cpu: CpuId) -> Self {
+        CpuAffinity { allowed: CpuSet::only(cpu), preferred: Some(cpu), last_cpu: None }
+    }
+
+    /// Returns `true` if this task is allowed to run on `cpu` (within `cpu_count` online CPUs).
+    #[inline]
+    pub fn allows(&self, cpu: CpuId, cpu_count: usize) -> bool {
+        cpu < cpu_count && self.allowed.contains(cpu)
+    }
+
+    /// Pick the best target CPU given the current online CPU count.
+    /// Returns `None` if no allowed CPU is within `[0, cpu_count)`.
+    #[inline]
+    pub fn pick_cpu(&self, cpu_count: usize) -> Option<CpuId> {
+        self.allowed.pick(self.preferred, self.last_cpu, cpu_count)
+    }
+
+    /// Effective degree of parallelism for a task with this affinity,
+    /// capped at `cpu_count` online CPUs.  Always at least 1.
+    pub fn effective_parallelism(&self, cpu_count: usize) -> usize {
+        if cpu_count == 0 {
+            return 1;
+        }
+        let mut count = 0usize;
+        let mut mask = self.allowed.0;
+        while mask != 0 {
+            let bit = mask.trailing_zeros() as usize;
+            if bit < cpu_count {
+                count += 1;
+            }
+            mask &= !(1u64 << bit);
+        }
+        count.max(1)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Affinity {
+    /// Task may run on any online CPU.
     Any,
+    /// Task is pinned to a single CPU index.
     Pinned(usize),
+    /// Task is governed by a rich [`CpuAffinity`] policy.
+    ///
+    /// Use this variant when a task must be restricted to a subset of CPUs,
+    /// or when a placement preference or last-run hint should guide the
+    /// scheduler's pick without hard-pinning to a single CPU.
+    Restricted(CpuAffinity),
+}
+
+impl Affinity {
+    /// Returns `true` if the task is allowed to run on the given `cpu`
+    /// (bounded by `cpu_count` online CPUs).
+    #[inline]
+    pub fn allows_cpu(&self, cpu: CpuId, cpu_count: usize) -> bool {
+        match self {
+            Affinity::Any => cpu < cpu_count,
+            Affinity::Pinned(p) => *p == cpu && cpu < cpu_count,
+            Affinity::Restricted(a) => a.allows(cpu, cpu_count),
+        }
+    }
 }
 
 /// Lifecycle state of a kernel thread.
@@ -1885,5 +2052,174 @@ mod tests {
     fn thread_sched_fields_includes_migration_state() {
         let fields = sched_fields(1, TaskState::Runnable, TaskPriority::Normal);
         assert_eq!(fields.migration_state, MigrationState::Local);
+    }
+
+    // ── CpuSet tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn cpu_set_all_contains_every_valid_cpu() {
+        let set = CpuSet::all();
+        assert!(set.contains(0));
+        assert!(set.contains(1));
+        assert!(set.contains(63));
+        assert!(!set.contains(64), "index 64 is out of the 64-bit range");
+    }
+
+    #[test]
+    fn cpu_set_only_contains_exactly_one_cpu() {
+        let set = CpuSet::only(3);
+        assert!(set.contains(3));
+        assert!(!set.contains(0));
+        assert!(!set.contains(2));
+        assert!(!set.contains(4));
+    }
+
+    #[test]
+    fn cpu_set_only_out_of_range_is_empty() {
+        let set = CpuSet::only(64);
+        assert!(!set.any(), "CpuSet::only(64) should produce an empty set");
+    }
+
+    #[test]
+    fn cpu_set_first_returns_lowest_set_bit() {
+        let set = CpuSet(0b1100); // bits 2 and 3 set
+        assert_eq!(set.first(), Some(2));
+    }
+
+    #[test]
+    fn cpu_set_first_on_empty_returns_none() {
+        assert_eq!(CpuSet(0).first(), None);
+    }
+
+    #[test]
+    fn cpu_set_count_matches_popcount() {
+        assert_eq!(CpuSet(0b1011).count(), 3);
+        assert_eq!(CpuSet(0).count(), 0);
+        assert_eq!(CpuSet::only(7).count(), 1);
+    }
+
+    #[test]
+    fn cpu_set_pick_prefers_preferred_when_allowed() {
+        let set = CpuSet(0b1111); // CPUs 0..3 allowed
+        assert_eq!(set.pick(Some(2), Some(1), 4), Some(2), "should pick preferred CPU 2");
+    }
+
+    #[test]
+    fn cpu_set_pick_falls_back_to_last_cpu_when_preferred_absent() {
+        let set = CpuSet(0b1111);
+        assert_eq!(set.pick(None, Some(3), 4), Some(3), "should fall back to last_cpu");
+    }
+
+    #[test]
+    fn cpu_set_pick_falls_back_to_first_allowed_cpu() {
+        let set = CpuSet(0b1100); // CPUs 2 and 3
+        assert_eq!(set.pick(None, None, 4), Some(2), "should return lowest allowed CPU");
+    }
+
+    #[test]
+    fn cpu_set_pick_respects_cpu_count_bound() {
+        let set = CpuSet::all();
+        // Only 2 CPUs online, preferred=3 is out of range, last_cpu=5 is out of range
+        assert_eq!(set.pick(Some(3), Some(5), 2), Some(0));
+    }
+
+    #[test]
+    fn cpu_set_pick_returns_none_when_no_allowed_cpu_online() {
+        let set = CpuSet::only(5); // CPU 5 allowed, but only 4 online
+        assert_eq!(set.pick(None, None, 4), None);
+    }
+
+    // ── CpuAffinity tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn cpu_affinity_any_allows_all_cpus() {
+        let aff = CpuAffinity::any();
+        assert!(aff.allows(0, 4));
+        assert!(aff.allows(3, 4));
+        assert!(!aff.allows(4, 4), "out-of-bound CPU should not be allowed");
+    }
+
+    #[test]
+    fn cpu_affinity_pinned_allows_only_specified_cpu() {
+        let aff = CpuAffinity::pinned(2);
+        assert!(!aff.allows(0, 4));
+        assert!(!aff.allows(1, 4));
+        assert!(aff.allows(2, 4));
+        assert!(!aff.allows(3, 4));
+    }
+
+    #[test]
+    fn cpu_affinity_pick_cpu_pinned_returns_pinned_cpu() {
+        let aff = CpuAffinity::pinned(1);
+        assert_eq!(aff.pick_cpu(4), Some(1));
+    }
+
+    #[test]
+    fn cpu_affinity_pick_cpu_out_of_range_returns_none() {
+        let aff = CpuAffinity::pinned(5); // only 4 CPUs online
+        assert_eq!(aff.pick_cpu(4), None);
+    }
+
+    #[test]
+    fn cpu_affinity_pick_cpu_prefers_preferred_hint() {
+        let aff = CpuAffinity {
+            allowed: CpuSet(0b1111), // CPUs 0-3
+            preferred: Some(3),
+            last_cpu: Some(0),
+        };
+        assert_eq!(aff.pick_cpu(4), Some(3), "preferred hint should win over last_cpu");
+    }
+
+    #[test]
+    fn cpu_affinity_effective_parallelism_any_equals_cpu_count() {
+        let aff = CpuAffinity::any();
+        assert_eq!(aff.effective_parallelism(4), 4);
+    }
+
+    #[test]
+    fn cpu_affinity_effective_parallelism_pinned_equals_one() {
+        let aff = CpuAffinity::pinned(2);
+        assert_eq!(aff.effective_parallelism(4), 1);
+    }
+
+    #[test]
+    fn cpu_affinity_effective_parallelism_subset() {
+        let aff = CpuAffinity {
+            allowed: CpuSet(0b0110), // CPUs 1 and 2
+            preferred: None,
+            last_cpu: None,
+        };
+        assert_eq!(aff.effective_parallelism(4), 2);
+    }
+
+    #[test]
+    fn cpu_affinity_effective_parallelism_zero_online_returns_one() {
+        let aff = CpuAffinity::any();
+        assert_eq!(aff.effective_parallelism(0), 1, "must return at least 1 even with 0 online CPUs");
+    }
+
+    // ── Affinity::allows_cpu tests ────────────────────────────────────────────
+
+    #[test]
+    fn affinity_any_allows_all_in_bounds_cpus() {
+        assert!(Affinity::Any.allows_cpu(0, 4));
+        assert!(Affinity::Any.allows_cpu(3, 4));
+        assert!(!Affinity::Any.allows_cpu(4, 4));
+    }
+
+    #[test]
+    fn affinity_pinned_allows_only_target_cpu() {
+        assert!(Affinity::Pinned(2).allows_cpu(2, 4));
+        assert!(!Affinity::Pinned(2).allows_cpu(1, 4));
+        assert!(!Affinity::Pinned(2).allows_cpu(3, 4));
+    }
+
+    #[test]
+    fn affinity_restricted_respects_allowed_set() {
+        let aff = CpuAffinity { allowed: CpuSet(0b0110), preferred: None, last_cpu: None };
+        assert!(!Affinity::Restricted(aff).allows_cpu(0, 4));
+        assert!(Affinity::Restricted(aff).allows_cpu(1, 4));
+        assert!(Affinity::Restricted(aff).allows_cpu(2, 4));
+        assert!(!Affinity::Restricted(aff).allows_cpu(3, 4));
     }
 }
