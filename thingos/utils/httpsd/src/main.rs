@@ -6,7 +6,7 @@ mod cache;
 mod cache_mount;
 mod xattr;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -152,9 +152,49 @@ impl SharedState {
     }
 }
 
+// ── Per-handle worker thread infrastructure ────────────────────────────────
+
+/// Message forwarded to a per-handle worker thread via [`WorkerChannel`].
+enum WorkerMsg {
+    Read { resp_port: u32, req_id: u16, offset: usize, max_len: usize },
+    Close,
+}
+
+/// Lock-based FIFO channel for routing RPC messages to a handle's worker thread.
+struct WorkerChannel {
+    queue: spin::Mutex<VecDeque<WorkerMsg>>,
+}
+
+impl WorkerChannel {
+    fn new() -> Self {
+        Self { queue: spin::Mutex::new(VecDeque::new()) }
+    }
+
+    fn push(&self, msg: WorkerMsg) {
+        self.queue.lock().push_back(msg);
+    }
+
+    fn pop(&self) -> Option<WorkerMsg> {
+        self.queue.lock().pop_front()
+    }
+}
+
+/// Lightweight per-handle state kept by the main loop after the handle has
+/// been promoted to a worker thread.  The full `HttpsHandle` is owned by
+/// the worker; the main loop only retains what it needs for `Stat`,
+/// `AttrList`, `AttrGet`, and `Readlink`.
+struct WorkerHandle {
+    /// Preserved for cache-key lookups by non-streaming RPC ops.
+    node: HttpsNode,
+    channel: Arc<WorkerChannel>,
+}
+
 struct HttpsProvider {
     next_handle: u64,
+    /// Handles waiting for their first `Read`; owned exclusively by the main loop.
     handles: BTreeMap<u64, HttpsHandle>,
+    /// Handles with active worker threads; main loop retains node metadata + channel.
+    workers: BTreeMap<u64, WorkerHandle>,
     shared: Arc<SharedState>,
     fixed_host: Option<String>,
     mount_point: String,
@@ -165,6 +205,7 @@ impl HttpsProvider {
         Self {
             next_handle: ROOT_HANDLE + 1,
             handles: BTreeMap::new(),
+            workers: BTreeMap::new(),
             shared,
             fixed_host,
             mount_point,
@@ -183,7 +224,50 @@ impl HttpsProvider {
 
     fn close_node(&mut self, handle: u64) {
         if handle != ROOT_HANDLE {
-            self.handles.remove(&handle);
+            if let Some(wh) = self.workers.remove(&handle) {
+                // Signal the worker thread to shut down.
+                wh.channel.push(WorkerMsg::Close);
+            } else {
+                self.handles.remove(&handle);
+            }
+        }
+    }
+
+    /// Promote an unstarted handle to a dedicated worker thread.
+    ///
+    /// The `HttpsHandle` is moved into the new thread; the main loop retains
+    /// only a [`WorkerHandle`] (node metadata + channel).  Returns the
+    /// channel so the caller can immediately enqueue the first message.
+    fn promote_to_worker(&mut self, handle: u64) -> Result<Arc<WorkerChannel>, Errno> {
+        if let Some(wh) = self.workers.get(&handle) {
+            return Ok(wh.channel.clone());
+        }
+
+        let h = match self.handles.remove(&handle) {
+            Some(h) => h,
+            None => return Err(Errno::EBADF),
+        };
+
+        let node = h.node.clone();
+        let channel = Arc::new(WorkerChannel::new());
+        let shared = self.shared.clone();
+        let ch_clone = channel.clone();
+        let mount_point = self.mount_point.clone();
+
+        match stem::thread::spawn_task_detached(move || {
+            run_handle_worker(handle, h, ch_clone, shared, mount_point);
+        }) {
+            Ok(_) => {
+                self.workers
+                    .insert(handle, WorkerHandle { node, channel: channel.clone() });
+                Ok(channel)
+            }
+            Err(e) => {
+                warn!("httpsd: failed to spawn worker for handle={}: {:?}", handle, e);
+                // The handle has been moved into the closure and cannot be recovered.
+                // Return EIO so the caller can propagate an error to the client.
+                Err(Errno::EIO)
+            }
         }
     }
 
@@ -244,105 +328,7 @@ impl HttpsProvider {
     /// network traffic.
     fn ensure_upstream(&mut self, handle: u64) -> Result<(), Errno> {
         let state = self.handles.get_mut(&handle).ok_or(Errno::EBADF)?;
-        if state.response.is_some() || state.eof || state.headers_cached {
-            return Ok(());
-        }
-
-        // Check shared cache first to avoid redundant network I/O for xattr/stat calls.
-        let key = state.node.cache_key();
-        if let Some(entry) = self.shared.cache.lock().peek(&key) {
-            info!("httpsd: ensure_upstream handle={} FOUND {} in cache", handle, state.node.url());
-            state.is_redirect = entry.is_redirect();
-            state.headers_cached = true;
-            if state.is_redirect {
-                state.eof = true;
-            }
-            return Ok(());
-        }
-
-        let url = state.node.url();
-        info!("httpsd: ensure_upstream handle={} MISS {} - opening network stream", handle, url);
-        let response = HttpClient::get(&url).map_err(|err| {
-            error!("httpsd: upstream open failed for handle={} {}: {}", handle, url, err);
-            Errno::EIO
-        })?;
-        state.response = Some(response);
-        self.populate_cache_headers(handle);
-        Ok(())
-    }
-
-    /// Snapshot the response head of a newly-opened upstream response into
-    /// the shared cache.  Idempotent per handle.
-    fn populate_cache_headers(&mut self, handle: u64) {
-        let state = match self.handles.get_mut(&handle) {
-            Some(s) => s,
-            None => return,
-        };
-        if state.headers_cached {
-            return;
-        }
-        let Some(response) = state.response.as_ref() else {
-            return;
-        };
-        if response.status() == 0 {
-            // Malformed upstream response: don't cache junk.
-            return;
-        }
-        let head = response.head().clone();
-        let directives = CacheDirectives::from_head(&head);
-        let fetched_at_ns = stem::syscall::monotonic_ns();
-        let expires_at_ns =
-            directives.max_age.map(|s| fetched_at_ns.saturating_add(s * 1_000_000_000));
-        let is_redirect = head.is_redirect();
-        let redirect_target = if is_redirect {
-            head.header("Location")
-                .map(|loc| resolve_redirect(&state.node.host, &state.node.path, loc))
-        } else {
-            None
-        };
-        state.is_redirect = is_redirect;
-        state.headers_cached = true;
-
-        let entry = CacheEntry {
-            url: state.node.url(),
-            host: state.node.host.clone(),
-            path: state.node.path.clone(),
-            head,
-            directives,
-            redirect_target,
-            fetched_at_ns,
-            expires_at_ns,
-            body: Vec::new(),
-            body_truncated: false,
-            hits: 0,
-        };
-        self.shared.cache.lock().insert(entry);
-    }
-
-    /// After `read_chunk` appends new body bytes, mirror them into the
-    /// shared cache (capped at `SHARED_BODY_CAP_PER_ENTRY`).
-    fn update_cache_body(&self, key: &CacheKey, appended: &[u8]) {
-        if appended.is_empty() {
-            return;
-        }
-        let mut cache = self.shared.cache.lock();
-        // We use peek (not get) here so the byte accounting we perform below
-        // can read the existing bytes, and then reinsert.  The full public
-        // API only exposes `insert` for mutation, so we need a clone-replace
-        // cycle.
-        let Some(existing) = cache.peek(key).cloned() else {
-            return;
-        };
-        let mut new_body = existing.body;
-        new_body.extend_from_slice(appended);
-        let mut body_truncated = existing.body_truncated;
-        if new_body.len() > SHARED_BODY_CAP_PER_ENTRY {
-            let drop = new_body.len() - SHARED_BODY_CAP_PER_ENTRY;
-            new_body.drain(..drop);
-            body_truncated = true;
-        }
-        let updated = CacheEntry { body: new_body, body_truncated, ..existing };
-        cache.insert(updated);
+        ensure_upstream_on(handle, state, &self.shared)
     }
 
     fn read_node(&mut self, handle: u64, offset: usize, max_len: usize) -> Result<Vec<u8>, Errno> {
@@ -352,137 +338,31 @@ impl HttpsProvider {
         if max_len == 0 {
             return Ok(Vec::new());
         }
-
-        // Snapshot key for cache body updates before the &mut borrows below.
-        let key = {
-            let state = self.handles.get(&handle).ok_or(Errno::EBADF)?;
-            state.node.cache_key()
-        };
-
-        // Opening the upstream stream is a `&mut self` op, so do it before we
-        // take the per-handle borrow for the streaming read loop.  The call
-        // is idempotent: it's a cheap check when the stream is already open.
-        self.ensure_upstream(handle)?;
-
-        let Some(state) = self.handles.get_mut(&handle) else {
-            return Err(Errno::EBADF);
-        };
-
-        info!(
-            "httpsd: read handle={} url={} offset={} len={} cached={} start={} eof={}",
-            handle,
-            state.node.url(),
-            offset,
-            max_len,
-            state.body.len(),
-            state.body_start_offset,
-            state.eof
-        );
-
-        // Redirects are zero-length files on /https (the kernel follows the
-        // symlink via Readlink); we still allow reads to produce EOF so
-        // tools that `cat` a raw redirect node just see nothing.
-        if state.is_redirect {
-            return Ok(Vec::new());
-        }
-
-        let needed_end = offset.saturating_add(max_len);
-        let mut body_end =
-            state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
-
-        // Offset reads are constrained to the retained body window.
-        if offset < state.body_start_offset {
-            debug!(
-                "httpsd: read handle={} offset={} before retained window start={} (cap={})",
-                handle, offset, state.body_start_offset, BODY_WINDOW_CAP
-            );
-            return Err(Errno::EINVAL);
-        }
-
-        // Streaming reads only fetch until there is data at `offset` (or EOF).
-        let mut chunks_to_mirror: Vec<Vec<u8>> = Vec::new();
-        while body_end <= offset && !state.eof {
-            let Some(response) = state.response.as_mut() else {
-                state.eof = true;
-                break;
-            };
-
-            trace!(
-                "httpsd: read_node handle={} calling read_chunk (offset={} end={} eof={})",
-                handle, offset, body_end, state.eof
-            );
-            let chunk = response.read_chunk().map_err(|err| {
-                warn!(
-                    "httpsd: upstream read failed for handle={} {}: {}",
-                    handle,
-                    state.node.url(),
-                    err
-                );
-                Errno::EIO
-            })?;
-            trace!("httpsd: read_chunk handle={} returned {} bytes", handle, chunk.len());
-            if chunk.is_empty() {
-                info!("httpsd: upstream EOF for handle={} cached={}", handle, state.body.len());
-                state.response = None;
-                state.eof = true;
-                break;
-            }
-            debug!("httpsd: upstream chunk handle={} bytes={}", handle, chunk.len());
-            chunks_to_mirror.push(chunk.clone());
-            state.push_chunk(&chunk)?;
-            body_end =
-                state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
-        }
-
-        // Re-check after fetch because the retained window may have advanced while reading chunks.
-        if offset < state.body_start_offset {
-            debug!(
-                "httpsd: read handle={} offset={} evicted while streaming (start={})",
-                handle, offset, state.body_start_offset
-            );
-            return Err(Errno::EINVAL);
-        }
-
-        if offset >= body_end {
-            // Mirror any chunks we just read into the shared cache before returning.
-            for c in &chunks_to_mirror {
-                self.update_cache_body(&key, c);
-            }
-            debug!("httpsd: read handle={} -> EOF at offset {}", handle, offset);
-            return Ok(Vec::new());
-        }
-        let start = offset - state.body_start_offset;
-        let end_limit = needed_end.checked_sub(state.body_start_offset).ok_or(Errno::EINVAL)?;
-        let end = state.body.len().min(end_limit);
-        let out = state.body[start..end].to_vec();
-        debug!(
-            "httpsd: read handle={} -> returned {} bytes (cached={} start={} eof={})",
-            handle,
-            out.len(),
-            state.body.len(),
-            state.body_start_offset,
-            state.eof
-        );
-        for c in &chunks_to_mirror {
-            self.update_cache_body(&key, c);
-        }
-        Ok(out)
+        let state = self.handles.get_mut(&handle).ok_or(Errno::EBADF)?;
+        perform_read(handle, state, &self.shared, offset, max_len)
     }
 
     fn stat_node(&self, handle: u64) -> Result<(u32, u64, u64), Errno> {
         if handle == ROOT_HANDLE {
             return Ok((0o040_555, 0, ROOT_HANDLE));
         }
-        let state = self.handles.get(&handle).ok_or(Errno::EBADF)?;
+        // Resolve (is_redirect hint, cache key) from whichever map holds this handle.
+        let (is_redirect_local, cache_key) = if let Some(state) = self.handles.get(&handle) {
+            (state.is_redirect, state.node.cache_key())
+        } else if let Some(wh) = self.workers.get(&handle) {
+            (false, wh.node.cache_key())
+        } else {
+            return Err(Errno::EBADF);
+        };
         // Consult the shared cache: once we've observed a redirect response
         // for this (host, path), subsequent stats report a symlink so the
         // kernel can follow the `Readlink` chain transparently.
-        let is_redirect = state.is_redirect
+        let is_redirect = is_redirect_local
             || self
                 .shared
                 .cache
                 .lock()
-                .peek(&state.node.cache_key())
+                .peek(&cache_key)
                 .map(|e| e.is_redirect())
                 .unwrap_or(false);
         if is_redirect {
@@ -500,13 +380,27 @@ impl HttpsProvider {
         if handle == ROOT_HANDLE {
             return Err(Errno::EISDIR);
         }
-        let key = {
-            let state = self.handles.get(&handle).ok_or(Errno::EBADF)?;
+        let key = if let Some(state) = self.handles.get(&handle) {
             state.node.cache_key()
+        } else if let Some(wh) = self.workers.get(&handle) {
+            wh.node.cache_key()
+        } else {
+            return Err(Errno::EBADF);
         };
         info!("httpsd: ensure_cached_entry handle={} key={:?}", handle, key);
         if let Some(e) = self.shared.cache.lock().peek(&key) {
             return Ok(e.clone());
+        }
+        // If the handle has been promoted to a worker, the main loop can no
+        // longer call ensure_upstream (the worker owns the Response).  The
+        // shared cache will be populated after the worker processes its first
+        // Read.  Return EIO and let the client retry.
+        if self.workers.contains_key(&handle) {
+            error!(
+                "httpsd: ensure_cached_entry handle={} worker not yet cached — retry after first Read",
+                handle
+            );
+            return Err(Errno::EIO);
         }
         self.ensure_upstream(handle)?;
         let entry = self.shared.cache.lock().peek(&key).cloned().ok_or_else(|| {
@@ -523,14 +417,19 @@ impl HttpsProvider {
         if handle == ROOT_HANDLE {
             return Err(Errno::EINVAL);
         }
-        let state = self.handles.get(&handle).ok_or(Errno::EBADF)?;
-        let key = state.node.cache_key();
+        let cache_key = if let Some(state) = self.handles.get(&handle) {
+            state.node.cache_key()
+        } else if let Some(wh) = self.workers.get(&handle) {
+            wh.node.cache_key()
+        } else {
+            return Err(Errno::EBADF);
+        };
         let cache = self.shared.cache.lock();
         // Readlink never triggers an upstream fetch — that would turn every
         // path-component resolution into a network round-trip.  It only
         // reports a target if we've already observed a 3xx response for
         // this URL.
-        let entry = cache.peek(&key).ok_or(Errno::EINVAL)?;
+        let entry = cache.peek(&cache_key).ok_or(Errno::EINVAL)?;
         let target = entry.redirect_target.as_ref().ok_or(Errno::EINVAL)?;
         // Translate the absolute `https://host/path` target into a VFS path
         // under the active mount so the kernel can follow the link in-tree.
@@ -703,6 +602,298 @@ impl CacheFsProvider {
     }
 }
 
+// ── Standalone streaming helpers used by both the main loop and worker threads ──
+
+/// Open (or verify) the upstream HTTP/S connection for `state`.
+///
+/// Idempotent: returns immediately if the stream is already open, the handle
+/// has already reached EOF, or the headers have already been cached from a
+/// previous fetch.
+fn ensure_upstream_on(handle_id: u64, state: &mut HttpsHandle, shared: &SharedState) -> Result<(), Errno> {
+    if state.response.is_some() || state.eof || state.headers_cached {
+        return Ok(());
+    }
+
+    // Check shared cache first to avoid redundant network I/O for xattr/stat calls.
+    let key = state.node.cache_key();
+    if let Some(entry) = shared.cache.lock().peek(&key) {
+        info!("httpsd: ensure_upstream handle={} FOUND {} in cache", handle_id, state.node.url());
+        state.is_redirect = entry.is_redirect();
+        state.headers_cached = true;
+        if state.is_redirect {
+            state.eof = true;
+        }
+        return Ok(());
+    }
+
+    let url = state.node.url();
+    info!("httpsd: ensure_upstream handle={} MISS {} - opening network stream", handle_id, url);
+    let response = HttpClient::get(&url).map_err(|err| {
+        error!("httpsd: upstream open failed for handle={} {}: {}", handle_id, url, err);
+        Errno::EIO
+    })?;
+    state.response = Some(response);
+    populate_cache_headers_on(state, shared);
+    Ok(())
+}
+
+/// Snapshot the response head of a newly-opened upstream response into the
+/// shared cache.  Idempotent.
+fn populate_cache_headers_on(state: &mut HttpsHandle, shared: &SharedState) {
+    if state.headers_cached {
+        return;
+    }
+    let Some(response) = state.response.as_ref() else {
+        return;
+    };
+    if response.status() == 0 {
+        // Malformed upstream response: don't cache junk.
+        return;
+    }
+    let head = response.head().clone();
+    let directives = CacheDirectives::from_head(&head);
+    let fetched_at_ns = stem::syscall::monotonic_ns();
+    let expires_at_ns =
+        directives.max_age.map(|s| fetched_at_ns.saturating_add(s * 1_000_000_000));
+    let is_redirect = head.is_redirect();
+    let redirect_target = if is_redirect {
+        head.header("Location")
+            .map(|loc| resolve_redirect(&state.node.host, &state.node.path, loc))
+    } else {
+        None
+    };
+    state.is_redirect = is_redirect;
+    state.headers_cached = true;
+
+    let entry = CacheEntry {
+        url: state.node.url(),
+        host: state.node.host.clone(),
+        path: state.node.path.clone(),
+        head,
+        directives,
+        redirect_target,
+        fetched_at_ns,
+        expires_at_ns,
+        body: Vec::new(),
+        body_truncated: false,
+        hits: 0,
+    };
+    shared.cache.lock().insert(entry);
+}
+
+/// Mirror newly-read body bytes into the shared cache (capped at
+/// `SHARED_BODY_CAP_PER_ENTRY`).
+fn update_cache_body_on(key: &CacheKey, appended: &[u8], shared: &SharedState) {
+    if appended.is_empty() {
+        return;
+    }
+    let mut cache = shared.cache.lock();
+    // We use peek (not get) here so the byte accounting we perform below
+    // can read the existing bytes, and then reinsert.  The full public
+    // API only exposes `insert` for mutation, so we need a clone-replace
+    // cycle.
+    let Some(existing) = cache.peek(key).cloned() else {
+        return;
+    };
+    let mut new_body = existing.body;
+    new_body.extend_from_slice(appended);
+    let mut body_truncated = existing.body_truncated;
+    if new_body.len() > SHARED_BODY_CAP_PER_ENTRY {
+        let drop = new_body.len() - SHARED_BODY_CAP_PER_ENTRY;
+        new_body.drain(..drop);
+        body_truncated = true;
+    }
+    let updated = CacheEntry { body: new_body, body_truncated, ..existing };
+    cache.insert(updated);
+}
+
+/// Core streaming read: opens the upstream connection if necessary, reads
+/// chunks until data at `offset` is available (or EOF), and returns the
+/// requested slice.
+///
+/// Used by both the main-loop synchronous path (`read_node`) and by worker
+/// threads (`run_handle_worker`).
+fn perform_read(
+    handle_id: u64,
+    state: &mut HttpsHandle,
+    shared: &SharedState,
+    offset: usize,
+    max_len: usize,
+) -> Result<Vec<u8>, Errno> {
+    if max_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    ensure_upstream_on(handle_id, state, shared)?;
+
+    let key = state.node.cache_key();
+
+    info!(
+        "httpsd: read handle={} url={} offset={} len={} cached={} start={} eof={}",
+        handle_id,
+        state.node.url(),
+        offset,
+        max_len,
+        state.body.len(),
+        state.body_start_offset,
+        state.eof
+    );
+
+    // Redirects are zero-length files on /https (the kernel follows the
+    // symlink via Readlink); we still allow reads to produce EOF so
+    // tools that `cat` a raw redirect node just see nothing.
+    if state.is_redirect {
+        return Ok(Vec::new());
+    }
+
+    let needed_end = offset.saturating_add(max_len);
+    let mut body_end =
+        state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
+
+    // Offset reads are constrained to the retained body window.
+    if offset < state.body_start_offset {
+        debug!(
+            "httpsd: read handle={} offset={} before retained window start={} (cap={})",
+            handle_id, offset, state.body_start_offset, BODY_WINDOW_CAP
+        );
+        return Err(Errno::EINVAL);
+    }
+
+    // Streaming reads only fetch until there is data at `offset` (or EOF).
+    let mut chunks_to_mirror: Vec<Vec<u8>> = Vec::new();
+    while body_end <= offset && !state.eof {
+        let Some(response) = state.response.as_mut() else {
+            state.eof = true;
+            break;
+        };
+
+        trace!(
+            "httpsd: read handle={} calling read_chunk (offset={} end={} eof={})",
+            handle_id, offset, body_end, state.eof
+        );
+        let chunk = response.read_chunk().map_err(|err| {
+            warn!(
+                "httpsd: upstream read failed for handle={} {}: {}",
+                handle_id,
+                state.node.url(),
+                err
+            );
+            Errno::EIO
+        })?;
+        trace!("httpsd: read_chunk handle={} returned {} bytes", handle_id, chunk.len());
+        if chunk.is_empty() {
+            info!("httpsd: upstream EOF for handle={} cached={}", handle_id, state.body.len());
+            state.response = None;
+            state.eof = true;
+            break;
+        }
+        debug!("httpsd: upstream chunk handle={} bytes={}", handle_id, chunk.len());
+        chunks_to_mirror.push(chunk.clone());
+        state.push_chunk(&chunk)?;
+        body_end =
+            state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
+    }
+
+    // Re-check after fetch because the retained window may have advanced while reading chunks.
+    if offset < state.body_start_offset {
+        debug!(
+            "httpsd: read handle={} offset={} evicted while streaming (start={})",
+            handle_id, offset, state.body_start_offset
+        );
+        return Err(Errno::EINVAL);
+    }
+
+    // Mirror chunks to shared cache.
+    for c in &chunks_to_mirror {
+        update_cache_body_on(&key, c, shared);
+    }
+
+    if offset >= body_end {
+        debug!("httpsd: read handle={} -> EOF at offset {}", handle_id, offset);
+        return Ok(Vec::new());
+    }
+    let start = offset - state.body_start_offset;
+    let end_limit = needed_end.checked_sub(state.body_start_offset).ok_or(Errno::EINVAL)?;
+    let end = state.body.len().min(end_limit);
+    let out = state.body[start..end].to_vec();
+    debug!(
+        "httpsd: read handle={} -> returned {} bytes (cached={} start={} eof={})",
+        handle_id,
+        out.len(),
+        state.body.len(),
+        state.body_start_offset,
+        state.eof
+    );
+    Ok(out)
+}
+
+// ── Worker thread ───────────────────────────────────────────────────────────
+
+/// Send a formatted VFS RPC response directly to the kernel's per-request
+/// response port.  Used by worker threads that need to reply independently
+/// of the main RPC loop.
+fn send_worker_response(resp_port: u32, req_id: u16, resp: ProviderResponse) {
+    use abi::vfs_rpc::VFS_RPC_MAX_RESP;
+    let total = 3 + resp.payload.len();
+    let mut buf = alloc::vec![0u8; total.min(VFS_RPC_MAX_RESP)];
+    buf[0..2].copy_from_slice(&req_id.to_le_bytes());
+    buf[2] = resp.status;
+    let payload_len = resp.payload.len().min(buf.len() - 3);
+    buf[3..3 + payload_len].copy_from_slice(&resp.payload[..payload_len]);
+    loop {
+        match stem::syscall::port::port_send_all(resp_port, &buf[..3 + payload_len]) {
+            Ok(_) => return,
+            Err(Errno::EAGAIN) => {
+                stem::syscall::yield_now();
+                continue;
+            }
+            Err(e) => {
+                warn!("httpsd: worker failed to send response: {:?}", e);
+                return;
+            }
+        }
+    }
+}
+
+/// Worker thread entry point.  Owns `state` (the `HttpsHandle`) exclusively,
+/// processes `Read` messages by calling `perform_read`, and exits cleanly on
+/// `Close`.
+///
+/// The worker spins with `yield_now` while its channel is empty.  This is
+/// acceptable because (a) the worker spends most of its time blocked on
+/// network I/O, and (b) the idle window between successive reads is short.
+fn run_handle_worker(
+    handle_id: u64,
+    mut state: HttpsHandle,
+    channel: Arc<WorkerChannel>,
+    shared: Arc<SharedState>,
+    _mount_point: String,
+) {
+    info!("httpsd: worker started for handle={} url={}", handle_id, state.node.url());
+    loop {
+        let msg = loop {
+            if let Some(m) = channel.pop() {
+                break m;
+            }
+            stem::syscall::yield_now();
+        };
+
+        match msg {
+            WorkerMsg::Read { resp_port, req_id, offset, max_len } => {
+                let resp = match perform_read(handle_id, &mut state, &shared, offset, max_len) {
+                    Ok(data) => ProviderResponse::ok_read(&data),
+                    Err(e) => ProviderResponse::err(e),
+                };
+                send_worker_response(resp_port, req_id, resp);
+            }
+            WorkerMsg::Close => {
+                info!("httpsd: worker exiting for handle={}", handle_id);
+                break;
+            }
+        }
+    }
+}
+
 // ── Entry points ───────────────────────────────────────────────────────────
 
 #[stem::main]
@@ -803,8 +994,12 @@ fn run_https_mount(fixed_host: Option<String>, mount_point: &str, shared: Arc<Sh
                 break;
             }
         };
-        let resp = dispatch(&mut provider, req.op, &req.payload);
-        send_response(&lp, &req, resp);
+        // `dispatch` returns `None` when the Read has been forwarded to a
+        // worker thread; the worker will send the response asynchronously.
+        if let Some(resp) = dispatch(&mut provider, req.op, &req.payload, req.resp_port, req.req_id)
+        {
+            send_response(&lp, &req, resp);
+        }
     }
 
     info!("httpsd: main RPC loop ended - exiting");
@@ -864,21 +1059,37 @@ fn parse_args() -> (Option<String>, String) {
 
 // ── RPC dispatch — /https mount ────────────────────────────────────────────
 
-fn dispatch(provider: &mut HttpsProvider, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
+/// Dispatch an incoming VFS RPC.
+///
+/// Returns `Some(response)` for ops that can be answered immediately by the
+/// main loop, and `None` for `Read` ops that have been forwarded to a
+/// per-handle worker thread (the worker will send the response asynchronously
+/// via `send_worker_response`).
+fn dispatch(
+    provider: &mut HttpsProvider,
+    op: VfsRpcOp,
+    payload: &[u8],
+    resp_port: u32,
+    req_id: u16,
+) -> Option<ProviderResponse> {
     info!("httpsd: RPC op={:?} payload_len={}", op, payload.len());
     match op {
-        VfsRpcOp::Lookup => dispatch_lookup(provider, payload),
-        VfsRpcOp::Read => dispatch_read(provider, payload),
-        VfsRpcOp::Stat => dispatch_stat(provider, payload),
-        VfsRpcOp::Readdir => dispatch_readdir(payload),
-        VfsRpcOp::Close => dispatch_close(provider, payload),
-        VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
-        VfsRpcOp::Poll => ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN as u32),
-        VfsRpcOp::AttrList => dispatch_attr_list(provider, payload),
-        VfsRpcOp::AttrGet => dispatch_attr_get(provider, payload),
-        VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove => ProviderResponse::err(Errno::EROFS),
-        VfsRpcOp::Readlink => dispatch_readlink(provider, payload),
-        _ => ProviderResponse::err(Errno::ENOSYS),
+        VfsRpcOp::Lookup => Some(dispatch_lookup(provider, payload)),
+        VfsRpcOp::Read => dispatch_read(provider, payload, resp_port, req_id),
+        VfsRpcOp::Stat => Some(dispatch_stat(provider, payload)),
+        VfsRpcOp::Readdir => Some(dispatch_readdir(payload)),
+        VfsRpcOp::Close => Some(dispatch_close(provider, payload)),
+        VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
+            Some(ProviderResponse::ok_empty())
+        }
+        VfsRpcOp::Poll => {
+            Some(ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN as u32))
+        }
+        VfsRpcOp::AttrList => Some(dispatch_attr_list(provider, payload)),
+        VfsRpcOp::AttrGet => Some(dispatch_attr_get(provider, payload)),
+        VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove => Some(ProviderResponse::err(Errno::EROFS)),
+        VfsRpcOp::Readlink => Some(dispatch_readlink(provider, payload)),
+        _ => Some(ProviderResponse::err(Errno::ENOSYS)),
     }
 }
 
@@ -900,19 +1111,52 @@ fn dispatch_lookup(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderResp
     }
 }
 
-fn dispatch_read(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderResponse {
+/// Dispatch a `Read` RPC.
+///
+/// For non-root handles, the handle is promoted to a worker thread on the
+/// first `Read`.  Subsequent reads on the same handle are forwarded to the
+/// worker's channel and this function returns `None` — the worker will send
+/// the response directly to the kernel.
+fn dispatch_read(
+    provider: &mut HttpsProvider,
+    payload: &[u8],
+    resp_port: u32,
+    req_id: u16,
+) -> Option<ProviderResponse> {
     if payload.len() < 20 {
-        return ProviderResponse::err(Errno::EINVAL);
+        return Some(ProviderResponse::err(Errno::EINVAL));
     }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
     let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
     let max_len = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
 
-    let data = match provider.read_node(handle, offset, max_len) {
-        Ok(d) => d,
-        Err(e) => return ProviderResponse::err(e),
-    };
-    ProviderResponse::ok_read(&data)
+    // Root handle: fast path — not a real streaming file.
+    if handle == ROOT_HANDLE {
+        return Some(ProviderResponse::err(Errno::EISDIR));
+    }
+
+    // If this handle already has a worker, forward the Read to it.
+    if let Some(wh) = provider.workers.get(&handle) {
+        wh.channel.push(WorkerMsg::Read { resp_port, req_id, offset, max_len });
+        return None;
+    }
+
+    // First Read on this handle: promote it to a worker thread and forward.
+    match provider.promote_to_worker(handle) {
+        Ok(channel) => {
+            channel.push(WorkerMsg::Read { resp_port, req_id, offset, max_len });
+            None
+        }
+        Err(e) => {
+            warn!("httpsd: failed to promote handle={} to worker: {:?} — falling back to sync", handle, e);
+            // Fallback: synchronous read (handle stays in the unstarted map).
+            let data = match provider.read_node(handle, offset, max_len) {
+                Ok(d) => d,
+                Err(err) => return Some(ProviderResponse::err(err)),
+            };
+            Some(ProviderResponse::ok_read(&data))
+        }
+    }
 }
 
 fn dispatch_stat(provider: &HttpsProvider, payload: &[u8]) -> ProviderResponse {
@@ -1292,5 +1536,82 @@ mod tests {
         let (ty, value) = p.attr_get(h, "user.http.etag").unwrap();
         assert_eq!(ty, abi::attrs::AttrType::Utf8 as u8);
         assert_eq!(value, b"\"z\"");
+    }
+
+    // ── Worker infrastructure tests ─────────────────────────────────────────
+
+    #[test]
+    fn worker_channel_push_pop_ordering() {
+        let ch = WorkerChannel::new();
+        assert!(ch.pop().is_none());
+        ch.push(WorkerMsg::Read { resp_port: 1, req_id: 10, offset: 0, max_len: 512 });
+        ch.push(WorkerMsg::Close);
+        let msg = ch.pop().unwrap();
+        assert!(matches!(msg, WorkerMsg::Read { req_id: 10, .. }));
+        let msg2 = ch.pop().unwrap();
+        assert!(matches!(msg2, WorkerMsg::Close));
+        assert!(ch.pop().is_none());
+    }
+
+    #[test]
+    fn close_node_for_unstarted_handle_removes_from_handles() {
+        let mut provider = new_provider();
+        let handle = provider.allocate_node("example.com", "page", None);
+        assert!(provider.handles.contains_key(&handle));
+        provider.close_node(handle);
+        assert!(!provider.handles.contains_key(&handle));
+        assert!(!provider.workers.contains_key(&handle));
+    }
+
+    #[test]
+    fn stat_node_returns_ebadf_for_unknown_handle() {
+        let provider = new_provider();
+        assert_eq!(provider.stat_node(9999), Err(Errno::EBADF));
+    }
+
+    #[test]
+    fn stat_node_returns_dir_mode_for_root() {
+        let provider = new_provider();
+        let (mode, _, ino) = provider.stat_node(ROOT_HANDLE).unwrap();
+        assert_eq!(mode & 0o170_000, 0o040_000, "expected S_IFDIR");
+        assert_eq!(ino, ROOT_HANDLE);
+    }
+
+    #[test]
+    fn read_node_rejects_root_handle() {
+        let mut provider = new_provider();
+        assert_eq!(provider.read_node(ROOT_HANDLE, 0, 64), Err(Errno::EISDIR));
+    }
+
+    #[test]
+    fn perform_read_rejects_offset_before_window() {
+        let shared = Arc::new(SharedState::new());
+        let node = HttpsNode::new("example.com", "");
+        let mut state = HttpsHandle::new(node, None);
+        state.body.extend_from_slice(b"hello");
+        state.body_start_offset = 3;
+        state.eof = true;
+        // offset=1 is before body_start_offset=3
+        assert_eq!(perform_read(1, &mut state, &shared, 1, 4), Err(Errno::EINVAL));
+    }
+
+    #[test]
+    fn perform_read_maps_window_offsets() {
+        let shared = Arc::new(SharedState::new());
+        let node = HttpsNode::new("example.com", "");
+        let mut state = HttpsHandle::new(node, None);
+        state.body.extend_from_slice(b"abcdef");
+        state.body_start_offset = 3;
+        state.eof = true;
+        // offset=4, len=3 maps to body[1..4] = "bcd"
+        assert_eq!(perform_read(1, &mut state, &shared, 4, 3).unwrap(), b"bcd");
+        // offset=9 is past body_end (3+6=9) → EOF slice
+        assert_eq!(perform_read(1, &mut state, &shared, 9, 8).unwrap(), b"");
+    }
+
+    #[test]
+    fn ensure_cached_entry_returns_ebadf_for_unknown_handle() {
+        let mut provider = new_provider();
+        assert_eq!(provider.ensure_cached_entry(9999), Err(Errno::EBADF));
     }
 }
