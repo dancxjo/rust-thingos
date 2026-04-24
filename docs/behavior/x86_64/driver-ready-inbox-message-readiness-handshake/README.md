@@ -1,6 +1,6 @@
 # Feature: DRIVER_READY inbox message readiness handshake
 
-> Last run: 2026-04-24 08:41:25
+> Last run: 2026-04-24 11:14:27
 
 ## Scenarios
 
