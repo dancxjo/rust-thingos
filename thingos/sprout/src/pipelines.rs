@@ -11,7 +11,7 @@ use abi::syscall::vfs_flags::O_RDONLY;
 use spin::Mutex;
 use stem::abi::driver_ctx::DriverCtx;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::port_create;
+use stem::syscall::{PortHandle, port_create};
 use stem::{debug, info, warn};
 
 use crate::task::{ManagedTask, TaskKind};
@@ -392,10 +392,7 @@ pub fn setup_terminal(
             let slice = unsafe { core::slice::from_raw_parts_mut(ptr as *mut u32, boot_size / 4) };
             slice[0] = 0xB100AA01; // Magic
             slice[4] = display.bs_id;
-            debug!(
-                "SPROUT: Bootstrapping terminal via memfd {}: bs_id={}",
-                boot_fd, slice[4]
-            );
+            debug!("SPROUT: Bootstrapping terminal via memfd {}: bs_id={}", boot_fd, slice[4]);
         }
     }
 
