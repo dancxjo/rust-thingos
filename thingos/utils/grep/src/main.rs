@@ -146,9 +146,8 @@ fn grep_fd(
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    stem::info!("grep: main started");
     let args = get_args();
-
+    stem::info!("grep: main started, args={:?}", args);
     let mut invert = false;
     let mut ignore_case = false;
     let mut line_number = false;

@@ -1,6 +1,6 @@
 # ✅ Scenario: Multiple sequential DNS lookups do not degrade TCP connectivity
 
-> Last run: 2026-04-23 19:11:44
+> Last run: 2026-04-23 21:03:05
 
 ## Steps
 

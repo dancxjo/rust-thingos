@@ -193,7 +193,8 @@ impl HandleTable {
 
     /// Replace the thing flags (`FD_*`) for `fd`.
     pub fn set_handle_flags(&mut self, thing: u32, flags: u32) -> SysResult<()> {
-        self.get_mut(thing)?.handle_flags = flags & HANDLE_CLOEXEC;
+        let entry = self.get_mut(thing)?;
+        entry.handle_flags = flags & HANDLE_CLOEXEC;
         Ok(())
     }
 
@@ -228,7 +229,7 @@ impl HandleTable {
     /// Called during `exec` to implement close-on-exec semantics.  File
     /// descriptors without `HANDLE_CLOEXEC` are preserved across the exec.
     pub fn close_on_exec(&mut self) {
-        for slot in self.entries.iter_mut() {
+        for (_, slot) in self.entries.iter_mut().enumerate() {
             let should_close =
                 slot.as_ref().map(|e| e.handle_flags & HANDLE_CLOEXEC != 0).unwrap_or(false);
             if should_close {

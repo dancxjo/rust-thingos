@@ -98,6 +98,9 @@ drivers/ata_disk/src/main.rs:645
 drivers/display_fake/src/main.rs:173
   [R] WaitSet — waits on command port FD
 
+drivers/virtio_gpu/src/main.rs:142
+  [R] WaitSet — IRQ readiness via add_irq; paces animation loop at ~60 fps
+
 drivers/display_virtio_gpu/src/main.rs:664
   [R] WaitSet — virtio GPU irq FD + VFS RPC port FD
 
@@ -466,10 +469,6 @@ sprout/src/supervisor.rs:339,580,610,627
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 11. ACCIDENTAL / AD-HOC CONCURRENCY  [A]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-drivers/virtio_gpu/src/main.rs:152
-  [A] thread::spawn(irq_thread)  — raw std thread for IRQ inside a driver;
-      should become a WaitSet add_irq source in the driver's main loop
 
 utils/smallsh/src/process_pool/mod.rs
   [A] ProcessPool — ad-hoc child-process reaping without WaitSet;

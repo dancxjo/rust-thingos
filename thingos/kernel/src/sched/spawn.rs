@@ -1587,6 +1587,9 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         }
     }
 
+    // Close any handles marked with CLOEXEC before the child takes ownership.
+    handle_table.close_on_exec();
+
     // Open the parent-side pipe ends in the parent's handle_table.
     let mut parent_stdin_fd: u64 = 0;
     let mut parent_stdout_fd: u64 = 0;

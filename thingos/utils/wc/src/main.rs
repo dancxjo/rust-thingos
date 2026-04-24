@@ -66,6 +66,7 @@ fn count_fd(in_fd: u32) -> Counts {
         match vfs_read(in_fd, &mut buf) {
             Ok(0) => break,
             Ok(count) => {
+                stem::info!("wc: read {} bytes from fd {}", count, in_fd);
                 bytes += count;
                 for &b in &buf[..count] {
                     if b == b'\n' {
@@ -155,6 +156,7 @@ fn main(_arg: usize) -> ! {
     }
 
     if file_args.is_empty() {
+        stem::info!("wc: counting from stdin (no files)");
         let counts = count_fd(0);
         print_counts(&counts, show_lines, show_words, show_bytes, "");
     } else {
@@ -163,6 +165,7 @@ fn main(_arg: usize) -> ! {
 
         for path in &file_args {
             if *path == "-" {
+                stem::info!("wc: counting from stdin");
                 let counts = count_fd(0);
                 if multiple {
                     total.lines += counts.lines;
@@ -171,6 +174,7 @@ fn main(_arg: usize) -> ! {
                 }
                 print_counts(&counts, show_lines, show_words, show_bytes, "-");
             } else {
+                stem::info!("wc: counting file '{}'", path);
                 match vfs_open(path, vfs_flags::O_RDONLY) {
                     Ok(fd) => {
                         let counts = count_fd(fd);

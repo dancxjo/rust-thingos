@@ -5,7 +5,6 @@ use core::default::Default;
 extern crate alloc;
 
 use core::ptr::write_volatile;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use abi::device::PCI_IRQ_MODE_MSIX;
 use abi::driver_interface::{
@@ -14,8 +13,9 @@ use abi::driver_interface::{
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::device::device_enable_msi;
-use stem::syscall::{device_alloc_dma, device_dma_phys, device_irq_subscribe, device_irq_wait};
-use stem::{error, info, thread, warn};
+use stem::syscall::{device_alloc_dma, device_dma_phys, device_irq_subscribe};
+use stem::wait_set::{WaitSet, WaitToken};
+use stem::{error, info, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"virtio_gpu";
 
@@ -51,7 +51,6 @@ unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> St
     main(0)
 }
 
-static IRQ_HANDLE: AtomicUsize = AtomicUsize::new(0);
 const DEMO_RESOURCE_ID: u32 = 1;
 
 #[unsafe(link_section = ".thing_manifest")]
@@ -138,7 +137,10 @@ fn main(boot_fd: usize) -> ! {
         stem::syscall::exit(1);
     }
 
-    // Enable MSI-X if available
+    // Enable MSI-X if available; register the IRQ with a WaitSet for
+    // structured readiness handling instead of a raw thread.
+    let mut ws = WaitSet::new();
+    let mut irq_token: Option<WaitToken> = None;
     match device_enable_msi(gpu.claim_handle(), true) {
         Ok(resp) => {
             info!("VIRTIO_GPU: IRQ mode {} vector=0x{:02x}", resp.irq_mode, resp.vector);
@@ -148,8 +150,13 @@ fn main(boot_fd: usize) -> ! {
             if let Err(e) = device_irq_subscribe(gpu.claim_handle(), 0) {
                 warn!("VIRTIO_GPU: device IRQ subscribe failed: {:?}", e);
             } else {
-                IRQ_HANDLE.store(gpu.claim_handle(), Ordering::Release);
-                let _ = thread::spawn(irq_thread);
+                match ws.add_irq(gpu.claim_handle() as u64) {
+                    Ok(tok) => {
+                        info!("VIRTIO_GPU: IRQ registered with WaitSet");
+                        irq_token = Some(tok);
+                    }
+                    Err(e) => warn!("VIRTIO_GPU: WaitSet add_irq failed: {:?}", e),
+                }
             }
         }
         Err(e) => warn!("VIRTIO_GPU: MSI enable failed: {:?}", e),
@@ -252,7 +259,23 @@ fn main(boot_fd: usize) -> ! {
         }
 
         frame = frame.wrapping_add(1);
-        stem::syscall::sleep_ms(16); // ~60fps
+
+        // Pace the frame rate (~60 fps) and service any pending IRQs via the
+        // WaitSet so we never block on a raw thread.
+        if irq_token.is_some() {
+            match ws.wait(Some(core::time::Duration::from_millis(16))) {
+                Ok(events) => {
+                    for ev in events {
+                        if ev.is_irq() {
+                            info!("VIRTIO_GPU: IRQ fired");
+                        }
+                    }
+                }
+                Err(e) => warn!("VIRTIO_GPU: WaitSet error {:?}", e),
+            }
+        } else {
+            stem::syscall::sleep_ms(16); // ~60fps
+        }
     }
 }
 
@@ -302,17 +325,4 @@ fn configure_msix(gpu: &VirtioGpu) {
     // The GPU struct doesn't expose the raw MMIO regions for security
     // This function is kept as a placeholder for future enhancements
     let _ = gpu;
-}
-
-extern "C" fn irq_thread() -> ! {
-    let claim_handle = IRQ_HANDLE.load(Ordering::Acquire);
-    loop {
-        match device_irq_wait(claim_handle, 0) {
-            Ok(count) => info!("VIRTIO_GPU: IRQ fired ({})", count),
-            Err(e) => {
-                warn!("VIRTIO_GPU: IRQ wait error {:?}", e);
-                stem::yield_now();
-            }
-        }
-    }
 }

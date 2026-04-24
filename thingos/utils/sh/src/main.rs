@@ -13,7 +13,7 @@ use abi::signal::{
     SIG_IGN, SIGCONT, SIGINT, SIGTSTP, SIGTTIN, SIGTTOU, SigAction, SigSet, wexitstatus,
     wifcontinued, wifexited, wifsignaled, wifstopped, wstopsig, wtermsig,
 };
-use abi::syscall::vfs_flags;
+use abi::syscall::{fcntl_cmd, handle_flags, vfs_flags};
 use abi::termios;
 use abi::types::{stdio_mode, waitpid_flags};
 use stem::syscall;
@@ -1064,6 +1064,8 @@ fn spawn_job(
     for _ in 0..cmds.len().saturating_sub(1) {
         let mut pair = [0u32; 2];
         syscall::pipe(&mut pair)?;
+        let _ = syscall::vfs_fcntl(pair[0], fcntl_cmd::F_SETFD, handle_flags::HANDLE_CLOEXEC);
+        let _ = syscall::vfs_fcntl(pair[1], fcntl_cmd::F_SETFD, handle_flags::HANDLE_CLOEXEC);
         pipes.push(pair);
     }
 
@@ -1138,7 +1140,8 @@ fn spawn_job(
         let stderr_mode =
             if background { stdio_mode::handle(bg_out.unwrap()) } else { stdio_mode::INHERIT };
 
-        stem::info!("sh: spawning '{}' with argv={:?}", path, argv);
+        let argv_display: Vec<_> = argv.iter().map(|arg| String::from_utf8_lossy(arg)).collect();
+        stem::info!("sh: spawning '{}' with argv={:?}", path, argv_display);
         match syscall::spawn_process_ex(
             &path,
             &argv_slices,
@@ -1184,7 +1187,9 @@ fn spawn_job(
 }
 
 fn cleanup_fds(pipes: &[[u32; 2]], transient_fds: &[u32], bg_in: Option<u32>, bg_out: Option<u32>) {
-    for pair in pipes {
+    stem::info!("sh: cleaning up {} pipes", pipes.len());
+    for (idx, pair) in pipes.iter().enumerate() {
+        stem::info!("sh: closing pipe {} ends: read={} write={}", idx, pair[0], pair[1]);
         let _ = syscall::vfs_close(pair[0]);
         let _ = syscall::vfs_close(pair[1]);
     }
@@ -1254,6 +1259,7 @@ fn print_motd() {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    stem::info!("SH: starting v0.1.0-debug");
     install_signal_handlers();
     print_motd();
 

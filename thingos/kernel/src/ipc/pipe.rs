@@ -92,6 +92,7 @@ impl RingBuf {
         }
         self.head = (self.head + n) % self.cap;
         self.len -= n;
+        // crate::kinfo!("PIPE_DEQUEUE: head={} len={} n={}", self.head, self.len, n);
         n
     }
 
@@ -110,6 +111,7 @@ impl RingBuf {
         }
         self.tail = (self.tail + n) % self.cap;
         self.len += n;
+        crate::kinfo!("PIPE_ENQUEUE: tail={} len={} n={}", self.tail, self.len, n);
         n
     }
 }
@@ -394,6 +396,7 @@ impl crate::vfs::VfsNode for PipeReadNode {
                     Some(Ok(n))
                 } else if data.writers == 0 {
                     pair.read_waitq.remove(tid as u64);
+                    crate::kinfo!("PIPE_DEQUEUE: EOF reached (writers=0)");
                     Some(Ok(0)) // EOF
                 } else if data.nonblock {
                     pair.read_waitq.remove(tid as u64);
@@ -622,6 +625,7 @@ pub fn create_fd_pair_with_id(
     });
     let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
     PIPES.lock().insert(id, pair.clone());
+    // crate::kinfo!("PIPE_CREATE: id={} cap={}", id, cap);
     let read_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> =
         Arc::new(PipeReadNode { inner: pair.clone(), pipe_id: id });
     let write_node: alloc::sync::Arc<dyn crate::vfs::VfsNode> =

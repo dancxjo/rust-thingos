@@ -24,20 +24,14 @@ pub struct ManagedTask {
     pub spawn_arg: usize,
     /// Unique token for sovereign registration handshake
     pub bind_instance_id: u64,
-    /// Write end of the request port for handshake response (0 if unused)
-    pub drv_req_write: stem::syscall::PortHandle,
-    /// Read end of the response port for driver communication (0 if unused)
-    pub drv_resp_read: stem::syscall::PortHandle,
-    /// Bootstrap handle: Read end of req port (for driver consumption)
-    pub boot_req_read: stem::syscall::PortHandle,
-    /// Bootstrap handle: Write end of resp port (for driver consumption)
-    pub boot_resp_write: stem::syscall::PortHandle,
-    /// Cached VFS FD for the response port (bridged via vfs_handle_from_port)
-    pub resp_fd: Option<u32>,
+    /// Set to `true` once a `DRIVER_READY` inbox message is received for this
+    /// task's PID.  Services that do not send `DRIVER_READY` remain `false`
+    /// but are still supervised normally.
+    pub ready: bool,
 }
 
 impl ManagedTask {
     pub fn new(name: String, kind: TaskKind) -> Self {
-        Self { name, kind, resp_fd: None, ..Default::default() }
+        Self { name, kind, ..Default::default() }
     }
 }
