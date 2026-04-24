@@ -29,7 +29,7 @@
 //!
 //! ```no_run
 //! use core::ops::ControlFlow;
-//! use core::time::Duration;
+//! use stem::Duration;
 //! use stem::service_loop::{ServiceEvent, ServiceLoop};
 //!
 //! let mut svc = ServiceLoop::new(4096).unwrap();
