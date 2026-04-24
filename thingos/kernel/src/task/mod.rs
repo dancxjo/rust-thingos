@@ -1001,6 +1001,7 @@ fn bootstrap_cpu<R: BootRuntime>() {
                 if let Some(idle_id) = pc.idle_task {
                     pc.current = Some(idle_id);
                     rt.set_current_tid(idle_id);
+                    crate::sched::set_cpu_current_task(cpu_idx, idle_id);
                     sched.state.mark_cpu_online(cpu_idx);
                     crate::kdebug!(
                         "SMP: CPU {} bootstrapped with idle thread {} and is now schedulable",

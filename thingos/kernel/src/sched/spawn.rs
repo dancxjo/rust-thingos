@@ -1719,6 +1719,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
 
 pub extern "C" fn user_thread_trampoline<R: BootRuntime>(arg: usize) -> ! {
     let rt = crate::runtime::<R>();
+    crate::sched::set_cpu_current_task(rt.current_cpu_index(), rt.current_tid());
     let entry_ptr = arg as *mut UserEntry;
     let entry = unsafe { *alloc::boxed::Box::from_raw(entry_ptr) };
 

@@ -246,6 +246,29 @@ static LAST_RESCHED_IPI_SENT_AT_TICK: [AtomicU64; types::MAX_CPUS] = {
     [ATOMIC_INIT; types::MAX_CPUS]
 };
 
+pub static CPU_CURRENT_TASK: [core::sync::atomic::AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+
+#[inline]
+pub(crate) fn is_task_on_any_cpu(tid: crate::task::TaskId) -> bool {
+    for cpu in 0..types::MAX_CPUS {
+        if CPU_CURRENT_TASK[cpu].load(core::sync::atomic::Ordering::Acquire) == tid as u64 {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline]
+pub(crate) fn set_cpu_current_task(cpu_idx: usize, tid: crate::task::TaskId) {
+    if cpu_idx < types::MAX_CPUS {
+        CPU_CURRENT_TASK[cpu_idx].store(tid as u64, core::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Number of histogram buckets used for hold/wait time distributions.
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000
 pub const SCHED_HIST_BUCKETS: usize = 5;
@@ -1366,6 +1389,10 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                     return;
                 };
 
+                while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+                    core::hint::spin_loop();
+                }
+
                 rt.tasking().activate_address_space(switch.to_aspace);
 
                 unsafe {
@@ -1377,6 +1404,11 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                         switch.to_user_fs_base,
                     );
                 }
+
+                crate::sched::set_cpu_current_task(
+                    crate::runtime::<R>().current_cpu_index(),
+                    crate::runtime::<R>().current_tid(),
+                );
             } else {
                 if resched_requested {
                     // A resched was explicitly requested but no context switch happened.
@@ -2086,6 +2118,7 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
 
     // Boot task runs on CPU 0
     sched.state.per_cpu[0].current = Some(0);
+    crate::sched::set_cpu_current_task(0, 0);
 
     // Link boot task to CPU 0
 
@@ -3831,8 +3864,16 @@ pub fn exit<R: BootRuntime>(code: i32) {
         )
     });
 
+    while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+        core::hint::spin_loop();
+    }
+
     unsafe {
         rt.tasking().activate_address_space(switch.to_aspace);
+    }
+
+    while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+        core::hint::spin_loop();
     }
 
     unsafe {
@@ -4499,6 +4540,7 @@ pub fn dump_stats<R: BootRuntime>() {
 extern "C" fn idle_task<R: BootRuntime>(_: usize) -> ! {
     let rt = crate::runtime::<R>();
     let cpu_idx = rt.current_cpu_index();
+    crate::sched::set_cpu_current_task(cpu_idx, rt.current_tid());
     loop {
         if global_need_resched_load(cpu_idx, Ordering::Acquire) {
             // Use yield_now to trigger a blocking lock acquisition for the

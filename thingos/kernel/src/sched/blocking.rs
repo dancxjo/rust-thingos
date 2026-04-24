@@ -179,6 +179,10 @@ pub fn block_current<R: BootRuntime>() {
             rt.irq_restore(_irq);
             return;
         };
+        while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+            core::hint::spin_loop();
+        }
+
         rt.tasking().activate_address_space(switch.to_aspace);
 
         unsafe {
@@ -190,6 +194,11 @@ pub fn block_current<R: BootRuntime>() {
                 switch.to_user_fs_base,
             );
         }
+
+        crate::sched::set_cpu_current_task(
+            crate::runtime::<R>().current_cpu_index(),
+            crate::runtime::<R>().current_tid(),
+        );
     } else if let Some(tid) = deferred_tid.filter(|_| !was_wake_pending) {
         crate::kwarn!(
             "SCHED: block_current produced no switch for tid {}; restoring task state",

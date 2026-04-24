@@ -55,6 +55,10 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             rt.irq_restore(_irq);
             return has_work;
         };
+        while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+            core::hint::spin_loop();
+        }
+
         rt.tasking().activate_address_space(switch.to_aspace);
 
         unsafe {
@@ -66,6 +70,11 @@ pub fn yield_now<R: BootRuntime>() -> bool {
                 switch.to_user_fs_base,
             );
         }
+
+        crate::sched::set_cpu_current_task(
+            crate::runtime::<R>().current_cpu_index(),
+            crate::runtime::<R>().current_tid(),
+        );
 
         rt.irq_restore(_irq);
         return true; // switched
@@ -187,6 +196,10 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             rt.irq_restore(_irq);
             return;
         };
+        while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+            core::hint::spin_loop();
+        }
+
         rt.tasking().activate_address_space(switch.to_aspace);
 
         unsafe {
@@ -198,6 +211,11 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
                 switch.to_user_fs_base,
             );
         }
+
+        crate::sched::set_cpu_current_task(
+            crate::runtime::<R>().current_cpu_index(),
+            crate::runtime::<R>().current_tid(),
+        );
         // crate::ktrace!("SCHED: task woke up on CPU");
         rt.irq_restore(_irq);
     } else {
