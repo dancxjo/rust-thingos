@@ -221,6 +221,11 @@ impl BloomLoop {
             }
 
             // ── 4. Repaint phase ──────────────────────────────────────────
+            // `repaint_due()` enforces frame pacing: it returns false until the
+            // minimum frame interval has elapsed since the last commit, even if
+            // a repaint was requested earlier.  `is_dirty()` guards against
+            // issuing a present when no content has changed — presenting an
+            // unchanged scene would waste bus bandwidth without updating pixels.
             if self.frame_clock.repaint_due() && world.damage.is_dirty() {
                 if let Some(composition) = world.try_present() {
                     world.send_frame_callbacks(&composition);

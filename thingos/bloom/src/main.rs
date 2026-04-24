@@ -100,10 +100,21 @@ fn main(_arg: usize) -> ! {
     // ── Bristle event port ────────────────────────────────────────────────────
     // bloom creates a port pair for bristle HID events and registers the write
     // end with bristle; the read end is watched in the service loop.
+    // register_with_bristle is called only after the read end is successfully
+    // bridged to a VFS FD, so the write handle we hand to bristle is always
+    // paired with an FD that bloom will actually watch.
     let bristle_fd = match port_create(4096) {
         Ok((write_handle, read_handle)) => {
-            register_with_bristle(write_handle);
-            vfs_handle_from_port(read_handle).ok()
+            match vfs_handle_from_port(read_handle) {
+                Ok(fd) => {
+                    register_with_bristle(write_handle);
+                    Some(fd)
+                }
+                Err(e) => {
+                    warn!("bloom: failed to bridge bristle port to FD: {:?}", e);
+                    None
+                }
+            }
         }
         Err(e) => {
             warn!("bloom: failed to create bristle event port: {:?}", e);
