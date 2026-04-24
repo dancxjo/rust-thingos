@@ -10,6 +10,7 @@
 //! - [`inbox`]   — typed message send/recv over the process inbox IPC path
 //! - [`provider`] — VFS provider server loop
 //! - [`rpc`] — typed request/reply client and server helpers
+//! - [`service_provider`] — inbox-aware VFS provider loop (ServiceLoop + ProviderLoop)
 //!
 //! # Quick Start
 //!
@@ -70,3 +71,4 @@ pub mod inbox;
 pub mod port;
 pub mod provider;
 pub mod rpc;
+pub mod service_provider;

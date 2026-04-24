@@ -43,6 +43,7 @@ use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader}
 use stem::syscall::port::{port_recv, port_send_all, port_try_recv};
 
 /// A decoded VFS RPC request from the kernel.
+#[derive(Debug)]
 pub struct ProviderRequest {
     /// The response port the kernel is waiting on.
     pub resp_port: u32,
@@ -168,6 +169,17 @@ impl ProviderLoop {
             recv_buf: alloc::vec![0u8; VFS_RPC_MAX_REQ],
             pending: alloc::vec::Vec::new(),
         }
+    }
+
+    /// The raw port read handle this loop was constructed with.
+    ///
+    /// Exposed so higher-level wrappers (e.g. [`ipc_helpers::service_provider`])
+    /// can register the port as a secondary readiness source inside a
+    /// [`stem::service_loop::ServiceLoop`] without losing access to the
+    /// full [`ProviderLoop`] API.
+    #[inline]
+    pub fn port_handle(&self) -> u32 {
+        self.read_handle
     }
 
     fn try_parse_one(&mut self) -> Result<Option<ProviderRequest>, Errno> {
