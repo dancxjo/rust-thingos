@@ -10,6 +10,19 @@
 //!
 //! Each pipe has a ring buffer, reader/writer ref counts, and wait queues.
 //! Blocking uses the scheduler's `block_current_erased()` / `wake_task_erased()`.
+//!
+//! # Thread safety
+//!
+//! [`PipePair`] is safe for concurrent use by multiple reader and writer
+//! threads simultaneously.  The ring-buffer state is protected by
+//! `Mutex<PipeData>` while the wait queues live outside that mutex so that
+//! wakeups can be issued *after* the data lock is released, preventing lock
+//! convoys.  Both the read and write paths follow the *pre-register* pattern
+//! (register the waiter before inspecting the buffer, then re-check under the
+//! data lock) to prevent lost-wakeup races without requiring a nested lock.
+//!
+//! See `docs/kernel/threading-readiness.md` for a full description of the
+//! guarantees and their implications for userspace multithreading.
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;

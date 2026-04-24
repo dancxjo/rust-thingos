@@ -1,6 +1,17 @@
 //! Generic WaitQueue for task synchronization
 //!
 //! Provides FIFO waking to avoid thundering herd issues and ensure fairness.
+//!
+//! # Thread safety
+//!
+//! [`WaitQueue`] is fully thread-safe.  All mutations are protected by an
+//! internal `spin::Mutex` and wakeups (`wake_task_erased`) are issued **after**
+//! that lock is released so a woken thread can re-acquire the lock immediately.
+//! Duplicate registrations via [`WaitQueue::push_back`] are silently
+//! deduplicated; racing callers cannot corrupt the queue.
+//!
+//! See `docs/kernel/threading-readiness.md` for a broader discussion of how
+//! this primitive supports expanded userspace multithreading.
 
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::vec::Vec;

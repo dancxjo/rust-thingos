@@ -2,6 +2,17 @@
 //!
 //! Implements Act I of the watch migration: replacing Root-service watches
 //! with a first-class kernel mechanism integrated into the VFS.
+//!
+//! # Thread safety
+//!
+//! [`EventQueue`] is safe for concurrent use.  The event ring is protected by
+//! an internal `Mutex` and the waiter list is a [`WaitQueue`].  Events are
+//! pushed under the ring mutex, which is released before
+//! [`WaitQueue::wake_all`] is called so that woken readers can immediately
+//! acquire the ring mutex without contending with the producer.
+//!
+//! See `docs/kernel/threading-readiness.md` for how this supports expanded
+//! userspace multithreading.
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
