@@ -11,22 +11,28 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use core::ops::ControlFlow;
+
 use abi::driver_interface::DriverClass;
 use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
-use abi::syscall::{PollHandle, poll_flags};
 use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use binding::{match_binding, mount_hint};
 use catalog::Catalog;
 use spawn::ManagedDriver;
 use stem::kinds::KIND_ID_THINGOS_JOB_EXIT;
-use stem::syscall::message::{KindId, msg_inbox_open_self, msg_recv};
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_watch_path, vfs_write};
+use stem::service_loop::{ServiceEvent, ServiceLoop};
+use stem::syscall::message::KindId;
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_watch_path, vfs_write};
+use stem::time::Duration;
 use stem::{debug, error, warn};
 use sysfs::{SysDevice, scan_devices};
 
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
 const RECONCILE_TIMEOUT_MS: u64 = 30_000;
+/// Maximum inbox payload size for `ServiceLoop` (covers `THINGOS_JOB_EXIT`
+/// notifications with comfortable headroom for future control messages).
+const INBOX_MAX_PAYLOAD: usize = 256;
 /// `THINGOS_JOB_EXIT` notification payload layout:
 /// - bytes 0-3: exited process PID / job_id (u32 LE)
 /// - byte 4: state (2 = exited)
@@ -194,84 +200,97 @@ fn run_daemon_mode() -> ! {
     }
     register_observers_for_running(&mut drivers, &mut observed_pids);
 
-    let inbox_fd = match msg_inbox_open_self() {
-        Ok(fd) => Some(fd),
+    // Construct the canonical Layer 3 service loop (inbox-backed).  When
+    // construction fails (e.g. procfs unavailable), fall back to the
+    // degraded monitor loop so that manual-mode-style behavior is still
+    // preserved.
+    let mut svc = match ServiceLoop::new(INBOX_MAX_PAYLOAD) {
+        Ok(s) => s,
         Err(err) => {
-            warn!("CAMBIUM: failed to open /proc/self/inbox: {:?}", err);
+            warn!(
+                "CAMBIUM: failed to construct ServiceLoop ({:?}); running degraded monitor-only loop",
+                err
+            );
+            run_degraded_monitor_loop(&mut drivers);
+        }
+    };
+
+    let devices_watch_token = match vfs_watch_path(
+        "/sys/devices",
+        watch_mask::ALL_EVENTS,
+        watch_flags::NONBLOCK,
+    ) {
+        Ok(fd) => match svc.add_vfs_watch(fd) {
+            Ok(token) => Some((token, fd)),
+            Err(err) => {
+                warn!(
+                    "CAMBIUM: failed to register /sys/devices watch with ServiceLoop: {:?}",
+                    err
+                );
+                let _ = vfs_close(fd);
+                None
+            }
+        },
+        Err(err) => {
+            warn!("CAMBIUM: failed to watch /sys/devices: {:?}", err);
             None
         }
     };
-    let devices_watch_fd =
-        match vfs_watch_path("/sys/devices", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
-            Ok(fd) => Some(fd),
-            Err(err) => {
-                warn!("CAMBIUM: failed to watch /sys/devices: {:?}", err);
-                None
-            }
-        };
+
+    let timeout = Some(Duration::from_millis(RECONCILE_TIMEOUT_MS));
 
     loop {
-        if inbox_fd.is_none() && devices_watch_fd.is_none() {
-            for managed in drivers.values_mut() {
-                managed.monitor();
-            }
-            stem::time::sleep_ms(100);
-            continue;
-        }
-
-        let mut pollfds: Vec<PollHandle> = Vec::new();
-        if let Some(fd) = devices_watch_fd {
-            pollfds.push(PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 });
-        }
-        if let Some(fd) = inbox_fd {
-            pollfds.push(PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 });
-        }
-
-        let poll_result = vfs_poll(&mut pollfds, RECONCILE_TIMEOUT_MS);
         let mut reconcile_due = false;
+        let mut messages_drained = false;
 
-        match poll_result {
-            Ok(ready) => {
-                if ready == 0 {
-                    // Poll timeout: reconcile with the existing catalog to avoid
-                    // repeatedly rescanning immutable `/drivers` contents.
+        match svc.next_event(timeout) {
+            Ok(ServiceEvent::Message { kind, payload }) => {
+                debug!("CAMBIUM: ServiceLoop wake — inbox message");
+                handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
+                messages_drained = true;
+            }
+            Ok(ServiceEvent::Ready { token, event }) => {
+                if event.is_error() || event.is_hangup() {
+                    warn!(
+                        "CAMBIUM: ServiceLoop secondary source error/hangup (token={:?})",
+                        token
+                    );
                     reconcile_due = true;
                 }
-                for p in &pollfds {
-                    if p.revents
-                        & (poll_flags::POLLERR | poll_flags::POLLHUP | poll_flags::POLLNVAL)
-                        != 0
-                    {
-                        warn!(
-                            "CAMBIUM: poll stream error on fd {} (revents=0x{:x})",
-                            p.handle, p.revents
-                        );
+                if let Some((dev_token, dev_fd)) = devices_watch_token {
+                    if token == dev_token {
+                        debug!("CAMBIUM: ServiceLoop wake — /sys/devices watch readable");
+                        if event.is_readable() {
+                            drain_watch_fd(dev_fd);
+                        }
                         reconcile_due = true;
-                    }
-                }
-                if let Some(fd) = devices_watch_fd {
-                    if pollfds
-                        .iter()
-                        .any(|p| p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0)
-                    {
-                        drain_watch_fd(fd);
-                        reconcile_due = true;
-                    }
-                }
-                if let Some(fd) = inbox_fd {
-                    if pollfds
-                        .iter()
-                        .any(|p| p.handle == fd as i32 && (p.revents & poll_flags::POLLIN) != 0)
-                    {
-                        drain_job_exit_messages(&mut drivers, &mut observed_pids);
-                        register_observers_for_running(&mut drivers, &mut observed_pids);
                     }
                 }
             }
-            Err(err) => {
-                warn!("CAMBIUM: poll error in daemon loop: {:?}", err);
+            Ok(ServiceEvent::Timeout) => {
+                debug!("CAMBIUM: ServiceLoop wake — reconcile tick");
                 reconcile_due = true;
             }
+            Ok(ServiceEvent::InboxClosed) => {
+                warn!(
+                    "CAMBIUM: inbox closed; falling back to degraded monitor-only loop"
+                );
+                run_degraded_monitor_loop(&mut drivers);
+            }
+            Err(err) => {
+                warn!("CAMBIUM: ServiceLoop next_event error: {:?}", err);
+                reconcile_due = true;
+            }
+        }
+
+        // Batch any additional queued inbox messages so the loop matches
+        // the original "drain inbox per wake" semantics.
+        if messages_drained {
+            let _ = svc.drain_inbox(|kind, payload| {
+                handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
+                ControlFlow::Continue(())
+            });
+            register_observers_for_running(&mut drivers, &mut observed_pids);
         }
 
         if reconcile_due {
@@ -283,6 +302,18 @@ fn run_daemon_mode() -> ! {
                 Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
             }
         }
+    }
+}
+
+/// Fallback loop used when no readiness primitive is available (no inbox,
+/// no `/sys/devices` watch, or an unrecoverable inbox closure).  It mirrors
+/// the original degraded path so behavior is preserved end-to-end.
+fn run_degraded_monitor_loop(drivers: &mut BTreeMap<String, ManagedDriver>) -> ! {
+    loop {
+        for managed in drivers.values_mut() {
+            managed.monitor();
+        }
+        stem::time::sleep_ms(100);
     }
 }
 
@@ -330,35 +361,23 @@ fn drain_watch_fd(fd: u32) {
     }
 }
 
-fn drain_job_exit_messages(
+fn handle_job_exit_message(
     drivers: &mut BTreeMap<String, ManagedDriver>,
     observed_pids: &mut BTreeMap<u64, ()>,
+    kind: KindId,
+    payload: &[u8],
 ) {
-    let mut kind = KindId([0u8; 16]);
-    let mut payload = [0u8; 64];
-    loop {
-        match msg_recv(&mut kind, &mut payload) {
-            Ok(actual_len) => {
-                if kind.0 != KIND_ID_THINGOS_JOB_EXIT {
-                    continue;
-                }
-                let len = actual_len.min(payload.len());
-                let Some((pid, code)) = decode_job_exit_notification(&payload[..len]) else {
-                    continue;
-                };
-                observed_pids.remove(&(pid as u64));
-                for managed in drivers.values_mut() {
-                    if managed.pid() == Some(pid as u64) {
-                        managed.handle_exit(code);
-                        break;
-                    }
-                }
-            }
-            Err(Errno::EAGAIN) => break,
-            Err(err) => {
-                warn!("CAMBIUM: inbox receive error: {:?}", err);
-                break;
-            }
+    if kind.0 != KIND_ID_THINGOS_JOB_EXIT {
+        return;
+    }
+    let Some((pid, code)) = decode_job_exit_notification(payload) else {
+        return;
+    };
+    observed_pids.remove(&(pid as u64));
+    for managed in drivers.values_mut() {
+        if managed.pid() == Some(pid as u64) {
+            managed.handle_exit(code);
+            break;
         }
     }
 }
