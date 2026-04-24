@@ -232,3 +232,4 @@ Mitigation: standardize docs and syscall comments around "channel" externally, "
 - Shared queue prototype: `kernel/src/ipc/msgqueue.rs`
 - Inbox VFS node implementation: `kernel/src/vfs/inbox_node.rs`
 - IPC issue tracker: issue #46 (Inbox/Port convergence), issue #107 (docs audit)
+- Userspace consumption rule and `ServiceLoop` primitive: `docs/ipc/service_loop.md`
