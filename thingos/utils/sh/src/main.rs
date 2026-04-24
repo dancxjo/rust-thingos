@@ -1138,7 +1138,8 @@ fn spawn_job(
         let stderr_mode =
             if background { stdio_mode::handle(bg_out.unwrap()) } else { stdio_mode::INHERIT };
 
-        stem::info!("sh: spawning '{}' with argv={:?}", path, argv);
+        let argv_display: Vec<_> = argv.iter().map(|arg| String::from_utf8_lossy(arg)).collect();
+        stem::info!("sh: spawning '{}' with argv={:?}", path, argv_display);
         match syscall::spawn_process_ex(
             &path,
             &argv_slices,
