@@ -9,6 +9,26 @@
 //! - `sleep`: Timing and yield functions
 //! - `events`: Lock-free scheduler event types
 //!
+//! ## Per-CPU Ownership Model
+//!
+//! Each logical CPU has an exclusive [`state::CpuScheduler`] that owns:
+//! - `current` — the task currently executing on this CPU.
+//! - `idle_task` — the CPU-local idle task.
+//! - `runq` — the local priority-indexed run queue (see [`state::RunQueue`]).
+//! - `need_resched` — the reschedule-pending flag for this CPU.
+//! - `stats` — per-CPU scheduling counters.
+//!
+//! **Invariant**: A CPU owns its [`state::CpuScheduler`] state. Other CPUs
+//! **must not** directly mutate another CPU's local run queue. Cross-CPU
+//! scheduling effects go through explicit delivery mechanisms (remote-wake
+//! mailboxes, IPIs). See [`REMOTE_WAKE_MAILBOXES`] and later issues for the
+//! mailbox path.
+//!
+//! Normal scheduling on CPU *N* reads and writes through
+//! `sched.state.per_cpu[N]` (a [`state::CpuScheduler`] value). The global
+//! [`Scheduler`] coordinates cross-CPU policy — task placement, load
+//! balancing, diagnostics — without owning CPU-local execution state directly.
+//!
 //! Lock-order policy:
 //! - `SCHEDULER` must never take `task::registry::REGISTRY` or
 //!   `device_registry::REGISTRY`.
@@ -58,6 +78,7 @@ pub use spawn::{
 };
 use spin::Mutex;
 pub use stack::{alloc_user_stack, handle_stack_fault, map_user_page, map_user_page_perms};
+pub use state::{CpuSchedStats, CpuScheduler, RunQueue};
 pub use types::{
     DEFAULT_TIMESLICE, ScheduleReason, Scheduler, StackFaultResult, SwitchDecision, SwitchParams,
 };
@@ -2050,10 +2071,20 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
     let rt = crate::runtime::<R>();
     let cpu_total = rt.cpu_total_count();
 
-    // Initialize PerCpu state for all CPUs (initially empty/offline)
-    for _ in 0..cpu_total {
-        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+    // Initialize one CpuScheduler per CPU (initially empty/offline).
+    // Each CPU scheduler is given its logical CPU index so debug output and
+    // invariant checks can identify the owning CPU without consulting external
+    // state.
+    for cpu_id in 0..cpu_total {
+        let cpu_sched = crate::sched::state::CpuScheduler::new_for_cpu(cpu_id);
+        crate::kdebug!(
+            "SCHED: allocating CpuScheduler for cpu{} (total={})",
+            cpu_id,
+            cpu_total
+        );
+        sched.state.per_cpu.push(cpu_sched);
     }
+    crate::kinfo!("SCHED: {} per-CPU scheduler(s) allocated", cpu_total);
 
     sched.total_cpu_count = cpu_total;
     sched.state.set_boot_cpu_online();
@@ -2151,6 +2182,11 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
     }
 
     crate::ktrace!("  Boot task initialized");
+
+    // Emit initial per-CPU scheduler state at debug verbosity.
+    for pc in sched.state.per_cpu.iter() {
+        pc.log_state();
+    }
 }
 
 impl<R: BootRuntime> types::Scheduler<R> {
