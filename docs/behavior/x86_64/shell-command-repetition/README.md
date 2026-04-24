@@ -1,10 +1,10 @@
 # Feature: Shell Command Repetition
 
-> Last run: 2026-04-24 08:41:25
+> Last run: 2026-04-24 11:14:27
 
 ## Scenarios
 
 | Scenario | Steps | Status | Link |
 |----------|-------|--------|------|
-| Repeat cd into https and cat example content three times | 7/8 | ❌ | [View Details](repeat-cd-into-https-and-cat-example-content-three-times/README.md) |
+| Repeat cd into https and cat example content three times | 3/4 | ❌ | [View Details](repeat-cd-into-https-and-cat-example-content-three-times/README.md) |
 | Repeat ls five times | 8/8 | ✅ | [View Details](repeat-ls-five-times/README.md) |
