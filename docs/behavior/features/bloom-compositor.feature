@@ -65,3 +65,12 @@ Feature: Bloom compositor service loop and responsiveness
     Then the log should match pattern "display_virtio_gpu: GPU initialized successfully"
     And the log should match pattern "bloom: output0 [0-9]+x[0-9]+"
 
+  Scenario: bloom service loop paints the first frame without client connections
+    # The FrameClock starts with repaint_requested=true so the compositor
+    # produces an initial frame (the fallback wallpaper) immediately on boot,
+    # before any Wayland client has connected.  This verifies the loop reaches
+    # the repaint phase on its very first iteration.
+    Given the machine is booted
+    Then the log should match pattern "bloom: service loop started"
+    And the log should match pattern "bloom: output0 [0-9]+x[0-9]+"
+

@@ -11,8 +11,9 @@
 //!
 //! ```text
 //! loop {
-//!     wait(next_frame_deadline)   ← blocks until FD ready or timeout
+//!     wait(min(frame_deadline, next_timer))   ← blocks until FD ready or timeout
 //!     for each ready FD → dispatch to owning service
+//!     fire elapsed one-shot timers → dispatch Timer(id) to requesting service
 //!     poll wallpaper worker
 //!     if frame_clock.repaint_due() && damage.is_dirty() → present + callbacks
 //! }
@@ -24,12 +25,27 @@
 //! shared state through [`BloomWorld`] and return a [`LoopAction`] telling the
 //! loop what to schedule next.
 //!
+//! ## Timer support
+//!
+//! A service may return [`LoopAction::ArmTimer`] to request a one-shot
+//! callback.  The loop tracks all pending timers and fires the soonest one on
+//! each iteration, dispatching [`LoopEvent::Timer`] back to the service that
+//! requested it.
+//!
+//! ## Wake support
+//!
+//! A service may return [`LoopAction::Wake`] to force an immediate extra
+//! iteration (timeout = 0) without sleeping.  This is useful when a service
+//! has pending work that does not produce FD readiness.
+//!
 //! [`interests()`]: BloomService::interests
 //! [`dispatch()`]: BloomService::dispatch
 
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use stem::time::monotonic_ns;
 use stem::wait_set::{WaitSet, WaitToken};
 
 use crate::frame_clock::FrameClock;
@@ -56,6 +72,10 @@ pub enum LoopEvent {
     /// The frame-clock deadline elapsed.  The service may use this to perform
     /// time-sensitive bookkeeping even if no FD fired.
     FrameDeadline,
+    /// A one-shot timer armed by a previous [`LoopAction::ArmTimer`] has
+    /// fired.  `id` is the opaque value passed to the service when the timer
+    /// was added so it can distinguish multiple concurrent timers.
+    Timer(u64),
 }
 
 // ── LoopAction ───────────────────────────────────────────────────────────────
@@ -64,6 +84,20 @@ pub enum LoopEvent {
 pub enum LoopAction {
     /// No special action needed; keep running.
     None,
+    /// Nudge the loop to start a new iteration immediately without sleeping.
+    ///
+    /// Useful when a service has enqueued work that does not produce FD
+    /// readiness (e.g. an internal command queue) and needs one more pass
+    /// through the loop body before it can block again.
+    Wake,
+    /// Arm a one-shot timer relative to *now*.
+    ///
+    /// When the duration elapses the loop dispatches [`LoopEvent::Timer(id)`]
+    /// back to the requesting service.  `id` is an arbitrary value chosen by
+    /// the service to correlate the callback with the original request.
+    ///
+    /// [`LoopEvent::Timer(id)`]: LoopEvent::Timer
+    ArmTimer { delay: core::time::Duration, id: u64 },
     /// Ask the frame clock to schedule a repaint.
     RequestRepaint,
     /// Shut down the compositor gracefully.
@@ -102,9 +136,20 @@ struct Registration {
     svc_idx: usize,
 }
 
+/// A pending one-shot timer registered by a service via [`LoopAction::ArmTimer`].
+struct PendingTimer {
+    /// Monotonic nanoseconds at which this timer should fire.
+    expiry_ns: u64,
+    /// Index into `BloomLoop::services` of the service that requested this timer.
+    svc_idx: usize,
+    /// Opaque id echoed back to the service in [`LoopEvent::Timer`].
+    id: u64,
+}
+
 /// The compositor event loop.
 ///
-/// Owns the `WaitSet`, the list of registered services, and the `FrameClock`.
+/// Owns the `WaitSet`, the list of registered services, the `FrameClock`, and
+/// any pending one-shot timers.
 /// Call [`add_service`] for each service, then [`run`] to start the loop.
 ///
 /// [`add_service`]: BloomLoop::add_service
@@ -114,6 +159,10 @@ pub struct BloomLoop {
     services: Vec<Box<dyn BloomService>>,
     regs: Vec<Registration>,
     frame_clock: FrameClock,
+    /// Pending one-shot timers, kept in ascending expiry order.
+    ///
+    /// Using `VecDeque` so that draining the front (soonest timer) is O(1).
+    timers: VecDeque<PendingTimer>,
 }
 
 impl BloomLoop {
@@ -124,6 +173,7 @@ impl BloomLoop {
             services: Vec::new(),
             regs: Vec::new(),
             frame_clock,
+            timers: VecDeque::new(),
         }
     }
 
@@ -154,26 +204,126 @@ impl BloomLoop {
         self.services.push(svc);
     }
 
+    /// Arm a one-shot timer for service `svc_idx`.
+    fn arm_timer(&mut self, svc_idx: usize, delay: core::time::Duration, id: u64) {
+        let now = monotonic_ns();
+        // Saturate the delay to u64 to avoid silent truncation (max ≈ 584 years).
+        let delay_ns = delay.as_nanos().min(u64::MAX as u128) as u64;
+        let expiry_ns = now.saturating_add(delay_ns);
+        // Insert sorted by expiry (ascending) so the soonest timer is at front.
+        // Use `<` so ties are inserted before existing same-expiry timers (FIFO
+        // within the same deadline avoids starvation).
+        let pos = self.timers.partition_point(|t| t.expiry_ns < expiry_ns);
+        self.timers.insert(pos, PendingTimer { expiry_ns, svc_idx, id });
+    }
+
+    /// Fire all timers whose expiry has passed and dispatch them.
+    ///
+    /// Returns `(fired, wake)`:
+    /// - `fired` is `true` if any timers fired.
+    /// - `wake` is `true` if any dispatched timer returned [`LoopAction::Wake`].
+    fn fire_due_timers(&mut self, world: &mut BloomWorld) -> (bool, bool) {
+        let now = monotonic_ns();
+        let mut fired = false;
+        let mut wake = false;
+        // Pop from the front while the soonest timer is due (O(1) per pop).
+        while self.timers.front().map_or(false, |t| t.expiry_ns <= now) {
+            let t = self.timers.pop_front().expect("checked above");
+            fired = true;
+            let action = self.services[t.svc_idx]
+                .dispatch(LoopEvent::Timer(t.id), world);
+            wake |= self.apply_action(action, t.svc_idx);
+        }
+        (fired, wake)
+    }
+
+    /// Compute the soonest timeout the loop should wait before the next
+    /// iteration, taking both the frame clock and pending timers into account.
+    ///
+    /// Returns `None` (wait indefinitely) only when no repaint is pending and
+    /// no timers are armed.  Returns `Some(0)` to skip sleeping entirely.
+    fn next_timeout(&self) -> Option<core::time::Duration> {
+        let frame_ms = self.frame_clock.next_deadline_ms();
+        let timer_ns = self.timers.front().map(|t| {
+            let now = monotonic_ns();
+            t.expiry_ns.saturating_sub(now)
+        });
+
+        match (frame_ms, timer_ns) {
+            (None, None) => None,
+            (Some(ms), None) => Some(core::time::Duration::from_millis(ms)),
+            (None, Some(ns)) => Some(core::time::Duration::from_nanos(ns)),
+            (Some(ms), Some(ns)) => {
+                let frame_ns = ms * 1_000_000;
+                Some(core::time::Duration::from_nanos(frame_ns.min(ns)))
+            }
+        }
+    }
+
+    /// Apply a `LoopAction` returned by a service dispatch.
+    ///
+    /// Separate from `run` so it can be called both from the FD-dispatch path
+    /// and from the timer-dispatch path without borrow issues.
+    ///
+    /// Returns `true` when the action was [`LoopAction::Wake`], so callers can
+    /// set their `wake_requested` flag.
+    fn apply_action(&mut self, action: LoopAction, svc_idx: usize) -> bool {
+        match action {
+            LoopAction::RequestRepaint => {
+                self.frame_clock.request_repaint();
+                false
+            }
+            LoopAction::Wake => true,
+            LoopAction::ArmTimer { delay, id } => {
+                self.arm_timer(svc_idx, delay, id);
+                false
+            }
+            LoopAction::Shutdown => {
+                stem::info!("bloom: shutdown requested by service");
+                loop {
+                    stem::sleep_ms(1000);
+                }
+            }
+            LoopAction::None => false,
+        }
+    }
+
     /// Run the compositor loop forever.
     ///
     /// The loop:
-    ///   1. Waits on all registered FDs with a timeout equal to the next frame
-    ///      deadline (or indefinitely when no repaint is pending).
+    ///   1. Waits on all registered FDs with a timeout equal to the earliest
+    ///      of the frame deadline and any pending one-shot timers.
     ///   2. Dispatches each ready FD to the owning service.
-    ///   3. Polls the wallpaper worker for completed loads.
-    ///   4. Presents a frame when the frame clock is due and damage is dirty.
+    ///   3. Fires any one-shot timers whose expiry has elapsed.
+    ///   4. Polls the wallpaper worker for completed loads.
+    ///   5. Presents a frame when the frame clock is due and damage is dirty.
     pub fn run(mut self, world: &mut BloomWorld) -> ! {
         stem::info!("bloom: service loop started");
+        // When any service returns `Wake`, this flag is set and the next wait
+        // uses a zero timeout so the loop iterates immediately.
+        let mut wake_requested = false;
         loop {
-            // ── 1. Wait for the next event or frame deadline ──────────────
-            let timeout = self
-                .frame_clock
-                .next_deadline_ms()
-                .map(core::time::Duration::from_millis);
+            // ── 1. Wait for the next event ────────────────────────────────
+            let timeout = if wake_requested {
+                wake_requested = false;
+                Some(core::time::Duration::ZERO)
+            } else {
+                self.next_timeout()
+            };
 
             let events = if self.wait_set.is_empty() {
                 // No FDs registered yet; pace with the frame interval.
-                stem::sleep_ms(timeout.map(|d| d.as_millis() as u64).unwrap_or(16));
+                // Respect a zero timeout (e.g. from Wake) by skipping the sleep
+                // entirely so the loop can re-run immediately.
+                let sleep_ms = timeout
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(16);
+                if sleep_ms > 0 {
+                    stem::sleep_ms(sleep_ms);
+                }
+                // Still need to fire timers even without FDs.
+                let (_fired, timer_wake) = self.fire_due_timers(world);
+                wake_requested |= timer_wake;
                 continue;
             } else {
                 match self.wait_set.wait(timeout) {
@@ -187,7 +337,7 @@ impl BloomLoop {
 
             // ── 2. Dispatch ready FD events ───────────────────────────────
             if events.is_empty() {
-                // Timeout elapsed: frame deadline fired.
+                // Timeout elapsed: could be frame deadline or a timer expiry.
                 self.frame_clock.request_repaint();
             } else {
                 for ev in events {
@@ -200,27 +350,22 @@ impl BloomLoop {
                     if let Some(idx) = svc_idx {
                         let action = self.services[idx]
                             .dispatch(LoopEvent::FdReady(ev.token()), world);
-                        match action {
-                            LoopAction::RequestRepaint => self.frame_clock.request_repaint(),
-                            LoopAction::Shutdown => {
-                                stem::info!("bloom: shutdown requested by service");
-                                loop {
-                                    stem::sleep_ms(1000);
-                                }
-                            }
-                            LoopAction::None => {}
-                        }
+                        wake_requested |= self.apply_action(action, idx);
                     }
                 }
             }
 
-            // ── 3. Poll the async wallpaper worker ────────────────────────
+            // ── 3. Fire elapsed one-shot timers ───────────────────────────
+            let (_fired, timer_wake) = self.fire_due_timers(world);
+            wake_requested |= timer_wake;
+
+            // ── 4. Poll the async wallpaper worker ────────────────────────
             if world.visuals.poll_ready_background(&world.display) {
                 world.damage.mark_full(world.primary.width, world.primary.height);
                 self.frame_clock.request_repaint();
             }
 
-            // ── 4. Repaint phase ──────────────────────────────────────────
+            // ── 5. Repaint phase ──────────────────────────────────────────
             // `repaint_due()` enforces frame pacing: it returns false until the
             // minimum frame interval has elapsed since the last commit, even if
             // a repaint was requested earlier.  `is_dirty()` guards against
