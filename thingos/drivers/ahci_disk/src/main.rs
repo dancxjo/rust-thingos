@@ -21,10 +21,13 @@ use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
     DriverStartContext, ProbeResult, Status,
 };
+use abi::errors::Errno;
+use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
+use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_open, vfs_read, vfs_readdir};
+use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_mount, vfs_open, vfs_read, vfs_readdir};
 use stem::syscall::{PortHandle, port_create, port_send, port_try_recv};
 use stem::{debug, error, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"ahci_disk";
@@ -715,16 +718,36 @@ fn main(boot_fd: usize) -> ! {
 
     debug!("AHCI: Entering RPC service loop");
 
-    // Build a WaitSet over the FD-bridged read ends of each port's port.
-    // We keep a parallel token→handle mapping so that when an event fires we
-    // know which port handle to drain.
-    let mut ws = stem::wait_set::WaitSet::new();
+    // Create a VFS provider port pair and mount it so this driver participates
+    // in the inbox-backed actor model (ServiceProviderLoop control plane).
+    let (vfs_write, vfs_read) = match port_create(65536) {
+        Ok(pair) => pair,
+        Err(e) => {
+            error!("AHCI: Failed to create VFS provider port: {:?}", e);
+            loop {
+                stem::sleep(Duration::from_secs(60));
+            }
+        }
+    };
+    let _ = vfs_mount(vfs_write, "/dev/ahci_ctl");
+
+    let mut svc = match ServiceProviderLoop::new(ProviderLoop::new(vfs_read), 4096) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("AHCI: ServiceProviderLoop::new failed: {:?}", e);
+            loop {
+                stem::sleep(Duration::from_secs(60));
+            }
+        }
+    };
+
+    // Register each per-SATA-port request handle as a secondary FD-readable source.
     let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, PortHandle)> = Vec::new();
 
     for port in ports.iter() {
         if let Some(h) = port.read_port_handle {
             if let Ok(fd) = vfs_handle_from_port(h) {
-                if let Ok(tok) = ws.add_fd_readable(fd) {
+                if let Ok(tok) = svc.add_fd_readable(fd) {
                     tok_to_handle.push((tok, h));
                 }
             }
@@ -733,51 +756,56 @@ fn main(boot_fd: usize) -> ! {
 
     if tok_to_handle.is_empty() {
         info!("AHCI: No active ports to service");
-        loop {
-            stem::sleep(Duration::from_secs(60));
-        }
     }
 
-    // Main service loop
+    // Main service loop — inbox-first dispatch via ServiceProviderLoop.
     loop {
-        // Block until any registered port becomes readable.
-        let events = match ws.wait(None::<stem::time::Duration>) {
-            Ok(ev) => ev,
-            Err(e) => {
-                error!("AHCI: WaitSet failed: {:?}", e);
-                stem::sleep(Duration::from_millis(100));
-                continue;
+        match svc.next_event(None) {
+            Ok(ServiceProviderEvent::ProviderRequest(req)) => {
+                // This driver does not expose a VFS file hierarchy; return
+                // ENOSYS for any VFS RPC directed at the provider mount.
+                let _ = svc.send_response(&req, ProviderResponse::err(Errno::ENOSYS));
             }
-        };
 
-        for ev in events {
-            if !ev.is_readable() {
-                continue;
-            }
-            let ready_handle = match tok_to_handle.iter().find(|(t, _)| *t == ev.token()) {
-                Some((_, h)) => *h,
-                None => continue,
-            };
+            Ok(ServiceProviderEvent::Ready { token, event }) if event.is_readable() => {
+                let ready_handle = match tok_to_handle.iter().find(|(t, _)| *t == token) {
+                    Some((_, h)) => *h,
+                    None => continue,
+                };
 
-            // Find the port that has data
-            for port in &mut ports {
-                if port.read_port_handle == Some(ready_handle) {
-                    let mut buf = [0u8; 4096];
-
-                    match port_try_recv(ready_handle, &mut buf) {
-                        Ok(len) if len > 0 => {
-                            handle_block_device_request(port, &buf[..len], ready_handle);
+                // Find the port that has data and dispatch the request.
+                for port in &mut ports {
+                    if port.read_port_handle == Some(ready_handle) {
+                        let mut buf = [0u8; 4096];
+                        match port_try_recv(ready_handle, &mut buf) {
+                            Ok(len) if len > 0 => {
+                                handle_block_device_request(port, &buf[..len], ready_handle);
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("AHCI: port_try_recv failed: {:?}", e);
+                            }
                         }
-                        Ok(_) => {} // No data yet
-                        Err(e) => {
-                            error!("AHCI: port_try_recv failed: {:?}", e);
-                        }
+                        break;
                     }
-                    break;
                 }
             }
+
+            Ok(ServiceProviderEvent::InboxClosed) => {
+                info!("AHCI: inbox closed — exiting service loop");
+                break;
+            }
+
+            Ok(_) => {}
+
+            Err(e) => {
+                error!("AHCI: next_event error: {:?}", e);
+                stem::sleep(Duration::from_millis(100));
+            }
         }
     }
+
+    stem::syscall::exit(0);
 }
 
 fn resolve_device_path_from_boot_fd(boot_fd: usize) -> Option<alloc::string::String> {
