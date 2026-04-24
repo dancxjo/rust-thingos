@@ -1,6 +1,6 @@
 # Feature: Bloom compositor threading and responsiveness
 
-> Last run: 2026-04-23 17:31:42
+> Last run: 2026-04-23 17:57:17
 
 ## Scenarios
 
@@ -11,3 +11,5 @@
 | bloom compositor reacts to wallpaper watch path | 3/4 | ❌ | [View Details](bloom-compositor-reacts-to-wallpaper-watch-path/README.md) |
 | bloom I/O thread starts independently of the render loop | 1/2 | ❌ | [View Details](bloom-i-o-thread-starts-independently-of-the-render-loop/README.md) |
 | bloom input ingestion continues under render pressure | 4/5 | ❌ | [View Details](bloom-input-ingestion-continues-under-render-pressure/README.md) |
+| wallpaper reload does not block the render loop | 3/4 | ❌ | [View Details](wallpaper-reload-does-not-block-the-render-loop/README.md) |
+| failed wallpaper decode leaves previous wallpaper active | 4/5 | ❌ | [View Details](failed-wallpaper-decode-leaves-previous-wallpaper-active/README.md) |
