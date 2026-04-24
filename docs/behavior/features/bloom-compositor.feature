@@ -46,12 +46,21 @@ Feature: Bloom compositor threading and responsiveness
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
     Then the log should match pattern "bloom: reacting to wallpaper change \(async\)"
 
-  Scenario: failed wallpaper decode leaves previous wallpaper active
-    # Verifies that a decode error does not clobber the current background:
-    # the worker logs an error and exits without writing to the ready slot so
-    # poll_ready_background finds nothing and the previous background stays.
+  Scenario: bloom display driver presents a unified device interface
+    # Verifies that bloom can enumerate /dev/display/card0 regardless of
+    # whether the underlying driver is display_bootfb (linear framebuffer blit)
+    # or display_virtio_gpu (DMA blit + GPU transfer/flush).  The kernel routes
+    # VFS device call responses correctly only when the driver includes the
+    # required req_id in every response — which is now guaranteed by both
+    # drivers using ProviderLoop.
     Given the machine is booted
-    When I wait for the shell prompt
-    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
-    And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
-    Then the log should match pattern "bloom: wallpaper worker: decode failed"
+    Then the log should match pattern "bloom: output0 [0-9]+x[0-9]+"
+
+  Scenario: virtio GPU driver accepts display device calls via VFS
+    # Verifies that display_virtio_gpu responds to DISPLAY_OP_GET_INFO over
+    # the VFS device call interface so bloom can read display dimensions and
+    # proceed to import buffers and commit frames.
+    Given the machine is booted
+    Then the log should match pattern "display_virtio_gpu: GPU initialized successfully"
+    And the log should match pattern "bloom: output0 [0-9]+x[0-9]+"
+

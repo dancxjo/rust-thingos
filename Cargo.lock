@@ -1982,6 +1982,7 @@ name = "display_virtio_gpu"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ipc_helpers",
  "stem",
  "virtio_gpu",
 ]

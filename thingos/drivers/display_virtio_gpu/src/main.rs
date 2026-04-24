@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 use alloc::string::ToString;
-use alloc::vec::Vec;
 extern crate alloc;
 
 use abi::display::{
@@ -15,9 +14,11 @@ use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
     DriverStartContext, ProbeResult, Status,
 };
-use abi::vfs_rpc::{VfsRpcOp, VfsRpcReqHeader};
+use abi::errors::Errno;
+use abi::vfs_rpc::VfsRpcOp;
+use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::syscall::{PortHandle, port_create, port_send};
+use stem::syscall::{PortHandle, port_create};
 use stem::{info, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
@@ -193,6 +194,320 @@ impl PresentStats {
         *self = Self::new(fp);
     }
 }
+
+// ============================================================================
+// VirtioGpuDriver — unified display driver state
+//
+// Mirrors the BootFbDriver pattern in display_bootfb so that all display
+// drivers share one class of interface: import buffers, commit planes,
+// release buffers — all through the standard VFS device call protocol.
+// ============================================================================
+
+const HANDLE_ROOT: u64 = 0;
+const HANDLE_CARD: u64 = 1;
+const S_IFDIR: u32 = 0o040000;
+const S_IFCHR: u32 = 0o020000;
+
+/// All mutable state for the virtio GPU display driver.
+struct VirtioGpuDriver {
+    gpu: VirtioGpu,
+    disp_width: u32,
+    disp_height: u32,
+    disp_stride: u32,
+    /// Pre-allocated pool of DMA-backed frame buffers created during driver
+    /// initialization.  COMMIT operations round-robin through this pool as
+    /// blit targets before the pixels are transferred to the GPU.
+    frame_pool: alloc::vec::Vec<Buffer>,
+    /// Round-robin index: next frame pool slot for the next COMMIT.
+    next_buffer_idx: usize,
+    /// Monotonically increasing counter incremented on every successful
+    /// present.  Used with `Buffer::last_present_seq` to compute buffer age
+    /// for MSG_ACQUIRE responses so clients can optimize damage regions.
+    present_seq: u64,
+    last_presented_idx: Option<usize>,
+    /// Buffers imported from clients via DISPLAY_OP_IMPORT_BUFFER.  Each
+    /// entry is a client-provided shared-memory region mapped read-only into
+    /// this process.  Entries must be unmapped with `vm_unmap` when the
+    /// client calls DISPLAY_OP_RELEASE_BUFFER to avoid memory leaks.
+    imported_buffers: alloc::collections::BTreeMap<BufferId, ImportedBuffer>,
+    next_import_id: u32,
+    /// Framebuffer FD used by the legacy MSG_BIND/MSG_PRESENT path.
+    /// New clients should use DISPLAY_OP_IMPORT_BUFFER + DISPLAY_OP_COMMIT.
+    current_fd: Option<u32>,
+    /// Current GPU resource ID for the active scanout.
+    current_res_id: u32,
+}
+
+/// Dispatch one VFS RPC request to the appropriate handler.
+///
+/// Follows the same pattern as `display_bootfb::vfs_provider::dispatch_vfs_rpc`
+/// so both display drivers present an identical VFS device interface to bloom.
+fn dispatch_vfs_rpc(driver: &mut VirtioGpuDriver, req: &ProviderRequest) -> ProviderResponse {
+    match req.op {
+        VfsRpcOp::Lookup => vfs_lookup(&req.payload),
+        VfsRpcOp::Stat => vfs_stat(&req.payload),
+        VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
+            ProviderResponse::ok_empty()
+        }
+        VfsRpcOp::DeviceCall => vfs_device_call(driver, &req.payload),
+        _ => ProviderResponse::err(Errno::ENOSYS),
+    }
+}
+
+fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 4 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let path_len = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+    if payload.len() < 4 + path_len {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let path = match core::str::from_utf8(&payload[4..4 + path_len]) {
+        Ok(s) => s,
+        Err(_) => return ProviderResponse::err(Errno::EINVAL),
+    };
+    let handle: u64 = match path.trim_matches('/') {
+        "" => HANDLE_ROOT,
+        "card0" => HANDLE_CARD,
+        _ => return ProviderResponse::err(Errno::ENOENT),
+    };
+    ProviderResponse::ok_u64(handle)
+}
+
+fn vfs_stat(payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 8 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle = u64::from_le_bytes(payload[..8].try_into().unwrap());
+    let (mode, size): (u32, u64) = match handle {
+        HANDLE_ROOT => (S_IFDIR | 0o755, 0),
+        HANDLE_CARD => (S_IFCHR | 0o666, 0),
+        _ => return ProviderResponse::err(Errno::ENOENT),
+    };
+    ProviderResponse::ok_stat(mode, size, handle)
+}
+
+fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResponse {
+    use abi::device::{DeviceCall, DeviceKind};
+
+    let dc_size = core::mem::size_of::<DeviceCall>();
+    if payload.len() < 8 + dc_size {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+
+    let handle = u64::from_le_bytes(payload[..8].try_into().unwrap());
+    if handle != HANDLE_CARD {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+
+    let call: DeviceCall =
+        unsafe { core::ptr::read_unaligned(payload[8..8 + dc_size].as_ptr() as *const _) };
+    let call_payload = &payload[8 + dc_size..];
+
+    if call.kind != DeviceKind::Display {
+        return ProviderResponse::err(Errno::ENOSYS);
+    }
+
+    match call.op {
+        DISPLAY_OP_GET_INFO => {
+            let info = DisplayInfo {
+                card_id: 0,
+                preferred_mode: DisplayMode {
+                    width: driver.disp_width,
+                    height: driver.disp_height,
+                    refresh_mhz: 60000,
+                },
+                plane_count: 1,
+                max_buffers: 32,
+                supported_formats: 1 << 1,
+                caps: DisplayCaps::ATOMIC,
+            };
+            let out_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &info as *const _ as *const u8,
+                    core::mem::size_of::<DisplayInfo>(),
+                )
+            };
+            ProviderResponse::ok_device_call(0, out_bytes)
+        }
+        DISPLAY_OP_IMPORT_BUFFER => {
+            if call_payload.len() < core::mem::size_of::<BufferHandle>() {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let bh: BufferHandle =
+                unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+            let size = (bh.height as usize).saturating_mul(bh.stride as usize);
+            let req = abi::vm::VmMapReq {
+                addr_hint: 0,
+                len: size,
+                prot: abi::vm::VmProt::READ | abi::vm::VmProt::USER,
+                flags: abi::vm::VmMapFlags::PRIVATE,
+                backing: abi::vm::VmBacking::File { thing: bh.handle, offset: bh.offset },
+            };
+            match stem::syscall::vm_map(&req) {
+                Ok(map_resp) => {
+                    let id = BufferId(driver.next_import_id);
+                    driver.next_import_id = driver.next_import_id.saturating_add(1);
+                    driver.imported_buffers.insert(
+                        id,
+                        ImportedBuffer {
+                            ptr: map_resp.addr as *mut u8,
+                            size,
+                            width: bh.width,
+                            height: bh.height,
+                            stride: bh.stride,
+                        },
+                    );
+                    ProviderResponse::ok_device_call(id.0, &[])
+                }
+                Err(_) => ProviderResponse::err(Errno::ENOMEM),
+            }
+        }
+        DISPLAY_OP_RELEASE_BUFFER => {
+            if call_payload.len() < 4 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let id = BufferId(u32::from_le_bytes(call_payload[..4].try_into().unwrap()));
+            if let Some(buf) = driver.imported_buffers.remove(&id) {
+                let _ = stem::syscall::vm_unmap(buf.ptr as usize, buf.size);
+                ProviderResponse::ok_device_call(0, &[])
+            } else {
+                ProviderResponse::err(Errno::ENOENT)
+            }
+        }
+        DISPLAY_OP_COMMIT => {
+            let header_size = core::mem::size_of::<CommitRequest>();
+            if call_payload.len() < header_size {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let req: CommitRequest =
+                unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+
+            let plane_size = core::mem::size_of::<PlaneCommit>();
+            let plane_count = req.commit_count as usize;
+            let needed = header_size.saturating_add(plane_count.saturating_mul(plane_size));
+            if plane_count > 0 && call_payload.len() < needed {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+
+            let mut planes = alloc::vec::Vec::with_capacity(plane_count);
+            if plane_count > 0 {
+                let raw_planes = &call_payload[header_size..needed];
+                for i in 0..plane_count {
+                    let off = i * plane_size;
+                    let plane: PlaneCommit = unsafe {
+                        core::ptr::read_unaligned(
+                            raw_planes[off..off + plane_size].as_ptr() as *const _,
+                        )
+                    };
+                    planes.push(plane);
+                }
+            }
+
+            if !planes.is_empty() {
+                let idx = driver.next_buffer_idx;
+                driver.next_buffer_idx =
+                    (driver.next_buffer_idx + 1) % driver.frame_pool.len();
+
+                let bpp = if driver.disp_width > 0 {
+                    (driver.disp_stride / driver.disp_width).max(1) as usize
+                } else {
+                    4usize
+                };
+
+                let mut damage: Option<Rect> = None;
+
+                // Blit each plane's imported buffer into the DMA frame pool buffer.
+                for plane in &planes {
+                    if plane.plane_id != PlaneId(0) {
+                        continue;
+                    }
+                    let src = match driver.imported_buffers.get(&plane.buffer_id) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+
+                    let src_x = plane.src_rect.x.min(src.width) as usize;
+                    let src_y = plane.src_rect.y.min(src.height) as usize;
+                    let src_w = plane
+                        .src_rect
+                        .w
+                        .min(src.width.saturating_sub(plane.src_rect.x))
+                        as usize;
+                    let src_h = plane
+                        .src_rect
+                        .h
+                        .min(src.height.saturating_sub(plane.src_rect.y))
+                        as usize;
+                    let dst_x = plane.dest_rect.x.min(driver.disp_width) as usize;
+                    let dst_y = plane.dest_rect.y.min(driver.disp_height) as usize;
+                    let dst_w = plane
+                        .dest_rect
+                        .w
+                        .min(driver.disp_width.saturating_sub(plane.dest_rect.x))
+                        as usize;
+                    let dst_h = plane
+                        .dest_rect
+                        .h
+                        .min(driver.disp_height.saturating_sub(plane.dest_rect.y))
+                        as usize;
+                    let copy_w = src_w.min(dst_w);
+                    let copy_h = src_h.min(dst_h);
+                    if copy_w == 0 || copy_h == 0 {
+                        continue;
+                    }
+                    let row_bytes = copy_w.saturating_mul(bpp);
+
+                    let target_ptr = driver.frame_pool[idx].ptr;
+                    for row in 0..copy_h {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                src.ptr.add(
+                                    (src_y + row).saturating_mul(src.stride as usize)
+                                        + src_x.saturating_mul(bpp),
+                                ),
+                                target_ptr.add(
+                                    (dst_y + row).saturating_mul(driver.disp_stride as usize)
+                                        + dst_x.saturating_mul(bpp),
+                                ),
+                                row_bytes,
+                            );
+                        }
+                    }
+
+                    let rect = Rect {
+                        x: dst_x as u32,
+                        y: dst_y as u32,
+                        w: copy_w as u32,
+                        h: copy_h as u32,
+                    };
+                    damage = Some(match damage {
+                        Some(old) => rect_union(old, rect),
+                        None => rect,
+                    });
+                }
+
+                // Transfer blitted pixels to the GPU and flush to the display.
+                if let Some(dmg) = damage {
+                    let res_id = driver.frame_pool[idx].res_id;
+                    let _ = driver.gpu.transfer_to_host(res_id, dmg);
+                    let _ = driver.gpu.flush_resource(res_id, dmg);
+                    let _ =
+                        driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height);
+                    driver.present_seq += 1;
+                    driver.frame_pool[idx].last_present_seq = driver.present_seq;
+                    driver.last_presented_idx = Some(idx);
+                    driver.current_res_id = res_id;
+                    driver.current_fd = Some(driver.frame_pool[idx].fd);
+                }
+            }
+
+            ProviderResponse::ok_device_call(0, &[])
+        }
+        _ => ProviderResponse::err(Errno::ENOSYS),
+    }
+}
+
 
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]
@@ -577,15 +892,6 @@ fn main(boot_arg: usize) -> ! {
     let mut buf = [0u8; 512];
     let mut frames = FrameReader::<4096>::new();
 
-    let mut current_fd: Option<u32> = None;
-    let mut current_res_id: u32 = 1;
-    let mut next_buffer_idx = 0;
-    let mut present_seq: u64 = 0;
-    let mut last_presented_idx: Option<usize> = None;
-    let mut imported_buffers: alloc::collections::BTreeMap<BufferId, ImportedBuffer> =
-        alloc::collections::BTreeMap::new();
-    let mut next_import_id: u32 = 1;
-
     let mut stats = PresentStats::new(true);
     const STATS_LOG_INTERVAL: u32 = 120;
 
@@ -665,6 +971,28 @@ fn main(boot_arg: usize) -> ! {
     let drv_req_read_tok = ws.add_fd_readable(drv_req_fd).unwrap();
     let vfs_read_tok = ws.add_fd_readable(vfs_read_fd).unwrap();
 
+    // Consolidate all mutable driver state into VirtioGpuDriver so that
+    // dispatch_vfs_rpc can access it through a single &mut reference — the
+    // same "one class" pattern used by display_bootfb's BootFbDriver.
+    let mut driver = VirtioGpuDriver {
+        gpu,
+        disp_width,
+        disp_height,
+        disp_stride,
+        frame_pool: frame_pool_buffers,
+        next_buffer_idx: 0,
+        present_seq: 0,
+        last_presented_idx: None,
+        imported_buffers: alloc::collections::BTreeMap::new(),
+        next_import_id: 1,
+        current_fd: None,
+        current_res_id: 1,
+    };
+
+    // ProviderLoop handles VFS RPC framing and correctly prefixes every
+    // response with the req_id the kernel needs to route the reply.
+    let mut vfs_loop = ProviderLoop::new(vfs_read);
+
     loop {
         stem::trace!("display_virtio_gpu: waiting on WaitSet...");
         match ws.wait(Some(core::time::Duration::from_millis(10))) {
@@ -678,340 +1006,12 @@ fn main(boot_arg: usize) -> ! {
                     }
                 }
 
-                // Opportunistically drain VFS RPCs every loop. A short timed wait
-                // plus non-blocking drain avoids deadlocks from missed readiness edges.
-                let mut vfs_buf = [0u8; VFS_RPC_MAX_REQ];
-                while let Ok(n) = stem::syscall::port_try_recv(vfs_read, &mut vfs_buf) {
-                    if n >= 5 {
-                        let resp_port =
-                            u32::from_le_bytes([vfs_buf[0], vfs_buf[1], vfs_buf[2], vfs_buf[3]])
-                                as PortHandle;
-                        let op = VfsRpcOp::from_u8(vfs_buf[4]);
-                        stem::trace!("display_virtio_gpu: VFS RPC recv n={} op={:?}", n, op);
-                        match op {
-                            Some(VfsRpcOp::Lookup) => {
-                                // We are a terminal node for card0
-                                let mut resp = [0u8; 9];
-                                resp[0] = 0; // E_OK
-                                let handle: u64 = 1; // card
-                                resp[1..9].copy_from_slice(&handle.to_le_bytes());
-                                let _ = port_send(resp_port, &resp);
-                            }
-                            Some(VfsRpcOp::Stat) => {
-                                let mut resp = [0u8; 21];
-                                resp[0] = 0; // E_OK
-                                let mode: u32 = 0o020000 | 0o666; // S_IFCHR
-                                let size: u64 = 0;
-                                let handle: u64 = 1;
-                                resp[1..5].copy_from_slice(&mode.to_le_bytes());
-                                resp[5..13].copy_from_slice(&size.to_le_bytes());
-                                resp[13..21].copy_from_slice(&handle.to_le_bytes());
-                                let _ = port_send(resp_port, &resp);
-                            }
-                            Some(VfsRpcOp::DeviceCall) => {
-                                let payload = &vfs_buf[core::mem::size_of::<VfsRpcReqHeader>()..n];
-                                if payload.len()
-                                    >= 8 + core::mem::size_of::<abi::device::DeviceCall>()
-                                {
-                                    let call: abi::device::DeviceCall = unsafe {
-                                        core::ptr::read_unaligned(
-                                            payload[8..8 + core::mem::size_of::<
-                                                abi::device::DeviceCall,
-                                            >(
-                                            )]
-                                                .as_ptr()
-                                                as *const _,
-                                        )
-                                    };
-                                    let call_payload = &payload
-                                        [8 + core::mem::size_of::<abi::device::DeviceCall>()..];
-
-                                    match call.op {
-                                        DISPLAY_OP_GET_INFO => {
-                                            let info = DisplayInfo {
-                                                card_id: 0,
-                                                preferred_mode: DisplayMode {
-                                                    width: disp_width,
-                                                    height: disp_height,
-                                                    refresh_mhz: 60000,
-                                                },
-                                                plane_count: 1,
-                                                max_buffers: 32,
-                                                supported_formats: 1 << 1,
-                                                caps: DisplayCaps::ATOMIC,
-                                            };
-                                            let out_bytes = unsafe {
-                                                core::slice::from_raw_parts(
-                                                    &info as *const _ as *const u8,
-                                                    core::mem::size_of::<DisplayInfo>(),
-                                                )
-                                            };
-                                            let mut resp = Vec::with_capacity(9 + out_bytes.len());
-                                            resp.push(0); // E_OK
-                                            resp.extend_from_slice(&0u32.to_le_bytes()); // ret_val
-                                            resp.extend_from_slice(
-                                                &(out_bytes.len() as u32).to_le_bytes(),
-                                            );
-                                            resp.extend_from_slice(out_bytes);
-                                            let _ = port_send(resp_port, &resp);
-                                        }
-                                        DISPLAY_OP_IMPORT_BUFFER => {
-                                            if call_payload.len()
-                                                < core::mem::size_of::<BufferHandle>()
-                                            {
-                                                let _ = port_send(resp_port, &[22]); // EINVAL
-                                                continue;
-                                            }
-
-                                            let handle: BufferHandle = unsafe {
-                                                core::ptr::read_unaligned(
-                                                    call_payload.as_ptr() as *const _
-                                                )
-                                            };
-                                            let size = (handle.height as usize)
-                                                .saturating_mul(handle.stride as usize);
-                                            let req = abi::vm::VmMapReq {
-                                                addr_hint: 0,
-                                                len: size,
-                                                prot: abi::vm::VmProt::READ | abi::vm::VmProt::USER,
-                                                flags: abi::vm::VmMapFlags::PRIVATE,
-                                                backing: abi::vm::VmBacking::File {
-                                                    thing: handle.handle,
-                                                    offset: handle.offset,
-                                                },
-                                            };
-
-                                            match stem::syscall::vm_map(&req) {
-                                                Ok(map_resp) => {
-                                                    let id = BufferId(next_import_id);
-                                                    next_import_id =
-                                                        next_import_id.saturating_add(1);
-                                                    imported_buffers.insert(
-                                                        id,
-                                                        ImportedBuffer {
-                                                            ptr: map_resp.addr as *mut u8,
-                                                            size,
-                                                            width: handle.width,
-                                                            height: handle.height,
-                                                            stride: handle.stride,
-                                                        },
-                                                    );
-
-                                                    let mut resp = Vec::with_capacity(9);
-                                                    resp.push(0); // E_OK
-                                                    resp.extend_from_slice(&id.0.to_le_bytes()); // ret_val
-                                                    resp.extend_from_slice(&0u32.to_le_bytes()); // out_data_len
-                                                    let _ = port_send(resp_port, &resp);
-                                                }
-                                                Err(_) => {
-                                                    let _ = port_send(resp_port, &[12]); // ENOMEM
-                                                }
-                                            }
-                                        }
-                                        DISPLAY_OP_RELEASE_BUFFER => {
-                                            if call_payload.len() < 4 {
-                                                let _ = port_send(resp_port, &[22]); // EINVAL
-                                                continue;
-                                            }
-
-                                            let id = BufferId(u32::from_le_bytes(
-                                                call_payload[..4].try_into().unwrap(),
-                                            ));
-                                            if let Some(buf) = imported_buffers.remove(&id) {
-                                                let _ = stem::syscall::vm_unmap(
-                                                    buf.ptr as usize,
-                                                    buf.size,
-                                                );
-                                                let mut resp = Vec::with_capacity(9);
-                                                resp.push(0); // E_OK
-                                                resp.extend_from_slice(&0u32.to_le_bytes()); // ret_val
-                                                resp.extend_from_slice(&0u32.to_le_bytes()); // out_data_len
-                                                let _ = port_send(resp_port, &resp);
-                                            } else {
-                                                let _ = port_send(resp_port, &[2]); // ENOENT
-                                            }
-                                        }
-                                        DISPLAY_OP_COMMIT => {
-                                            let header_size = core::mem::size_of::<CommitRequest>();
-                                            if call_payload.len() < header_size {
-                                                let _ = port_send(resp_port, &[22]); // EINVAL
-                                                continue;
-                                            }
-
-                                            let req: CommitRequest = unsafe {
-                                                core::ptr::read_unaligned(
-                                                    call_payload.as_ptr() as *const _
-                                                )
-                                            };
-
-                                            let plane_size = core::mem::size_of::<PlaneCommit>();
-                                            let plane_count = req.commit_count as usize;
-                                            let needed = header_size.saturating_add(
-                                                plane_count.saturating_mul(plane_size),
-                                            );
-                                            if plane_count > 0 && call_payload.len() < needed {
-                                                let _ = port_send(resp_port, &[22]); // EINVAL
-                                                continue;
-                                            }
-
-                                            let mut planes = Vec::with_capacity(plane_count);
-                                            if plane_count > 0 {
-                                                let raw_planes = &call_payload[header_size..needed];
-                                                for i in 0..plane_count {
-                                                    let off = i * plane_size;
-                                                    let plane: PlaneCommit = unsafe {
-                                                        core::ptr::read_unaligned(
-                                                            raw_planes[off..off + plane_size]
-                                                                .as_ptr()
-                                                                as *const _,
-                                                        )
-                                                    };
-                                                    planes.push(plane);
-                                                }
-                                            }
-
-                                            if !planes.is_empty() {
-                                                let idx = next_buffer_idx;
-                                                next_buffer_idx = (next_buffer_idx + 1)
-                                                    % frame_pool_buffers.len();
-
-                                                let target = &mut frame_pool_buffers[idx];
-                                                let mut damage: Option<Rect> = None;
-                                                let bpp = if disp_width > 0 {
-                                                    (disp_stride / disp_width).max(1) as usize
-                                                } else {
-                                                    4usize
-                                                };
-
-                                                for plane in &planes {
-                                                    if plane.plane_id != PlaneId(0) {
-                                                        continue;
-                                                    }
-
-                                                    let src = if let Some(src) =
-                                                        imported_buffers.get(&plane.buffer_id)
-                                                    {
-                                                        src
-                                                    } else {
-                                                        continue;
-                                                    };
-
-                                                    let src_x =
-                                                        plane.src_rect.x.min(src.width) as usize;
-                                                    let src_y =
-                                                        plane.src_rect.y.min(src.height) as usize;
-                                                    let src_w = plane.src_rect.w.min(
-                                                        src.width.saturating_sub(plane.src_rect.x),
-                                                    )
-                                                        as usize;
-                                                    let src_h = plane.src_rect.h.min(
-                                                        src.height.saturating_sub(plane.src_rect.y),
-                                                    )
-                                                        as usize;
-
-                                                    let dst_x =
-                                                        plane.dest_rect.x.min(disp_width) as usize;
-                                                    let dst_y =
-                                                        plane.dest_rect.y.min(disp_height) as usize;
-                                                    let dst_w = plane.dest_rect.w.min(
-                                                        disp_width
-                                                            .saturating_sub(plane.dest_rect.x),
-                                                    )
-                                                        as usize;
-                                                    let dst_h = plane.dest_rect.h.min(
-                                                        disp_height
-                                                            .saturating_sub(plane.dest_rect.y),
-                                                    )
-                                                        as usize;
-
-                                                    let copy_w = src_w.min(dst_w);
-                                                    let copy_h = src_h.min(dst_h);
-                                                    if copy_w == 0 || copy_h == 0 {
-                                                        continue;
-                                                    }
-                                                    let row_bytes = copy_w.saturating_mul(bpp);
-
-                                                    for row in 0..copy_h {
-                                                        unsafe {
-                                                            core::ptr::copy_nonoverlapping(
-                                                                src.ptr.add(
-                                                                    (src_y + row).saturating_mul(
-                                                                        src.stride as usize,
-                                                                    ) + src_x.saturating_mul(bpp),
-                                                                ),
-                                                                target.ptr.add(
-                                                                    (dst_y + row).saturating_mul(
-                                                                        disp_stride as usize,
-                                                                    ) + dst_x.saturating_mul(bpp),
-                                                                ),
-                                                                row_bytes,
-                                                            );
-                                                        }
-                                                    }
-
-                                                    let rect = Rect {
-                                                        x: dst_x as u32,
-                                                        y: dst_y as u32,
-                                                        w: copy_w as u32,
-                                                        h: copy_h as u32,
-                                                    };
-                                                    damage = Some(if let Some(old) = damage {
-                                                        rect_union(old, rect)
-                                                    } else {
-                                                        rect
-                                                    });
-                                                }
-
-                                                if let Some(dmg) = damage {
-                                                    let _ =
-                                                        gpu.transfer_to_host(target.res_id, dmg);
-                                                    let _ = gpu.flush_resource(target.res_id, dmg);
-                                                    let _ = gpu.set_scanout(
-                                                        target.res_id,
-                                                        disp_width,
-                                                        disp_height,
-                                                    );
-
-                                                    present_seq += 1;
-                                                    target.last_present_seq = present_seq;
-                                                    last_presented_idx = Some(idx);
-                                                    current_res_id = target.res_id;
-                                                    current_fd = Some(target.fd);
-                                                }
-                                            }
-
-                                            let mut resp = Vec::with_capacity(9);
-                                            resp.push(0); // E_OK
-                                            resp.extend_from_slice(&0u32.to_le_bytes()); // ret_val
-                                            resp.extend_from_slice(&0u32.to_le_bytes()); // out_data_len
-                                            let _ = port_send(resp_port, &resp);
-                                        }
-                                        _ => {
-                                            let _ = port_send(resp_port, &[38]); // E_NOTSUP
-                                        }
-                                    }
-                                } else {
-                                    let _ = port_send(resp_port, &[22]); // E_INVAL
-                                }
-                            }
-                            Some(VfsRpcOp::SubscribeReady) => {
-                                let _ = port_send(resp_port, &[0]); // E_OK
-                            }
-                            Some(VfsRpcOp::UnsubscribeReady) => {
-                                let _ = port_send(resp_port, &[0]); // E_OK
-                            }
-                            Some(VfsRpcOp::Rename)
-                            | Some(VfsRpcOp::AttrGet)
-                            | Some(VfsRpcOp::AttrSet)
-                            | Some(VfsRpcOp::AttrRemove)
-                            | Some(VfsRpcOp::AttrList) => {
-                                let _ = port_send(resp_port, &[38]); // E_NOTSUP
-                            }
-                            _ => {
-                                let _ = port_send(resp_port, &[38]); // E_NOTSUP
-                            }
-                        }
-                    }
+                // Drain VFS RPCs via ProviderLoop. ProviderLoop correctly prefixes
+                // every response with the req_id so the kernel can route replies.
+                while let Ok(Some(req)) = vfs_loop.try_next_request() {
+                    stem::trace!("display_virtio_gpu: VFS RPC op={:?}", req.op);
+                    let resp = dispatch_vfs_rpc(&mut driver, &req);
+                    vfs_loop.send_response(&req, resp).ok();
                 }
 
                 let mut read_total = 0;
@@ -1076,33 +1076,35 @@ fn main(boot_arg: usize) -> ! {
                 drvproto::MSG_ACQUIRE => {
                     stem::info!("display_virtio_gpu: received MSG_ACQUIRE");
                     let mut buffer_age = 0;
-                    let idx = next_buffer_idx;
+                    let idx = driver.next_buffer_idx;
 
-                    if last_presented_idx.is_some() {
-                        let age =
-                            present_seq.saturating_sub(frame_pool_buffers[idx].last_present_seq);
-                        buffer_age = if frame_pool_buffers[idx].last_present_seq == 0 {
+                    if driver.last_presented_idx.is_some() {
+                        let age = driver
+                            .present_seq
+                            .saturating_sub(driver.frame_pool[idx].last_present_seq);
+                        buffer_age = if driver.frame_pool[idx].last_present_seq == 0 {
                             0 // Never presented
                         } else {
                             age as u32
                         };
                     }
 
-                    next_buffer_idx = (next_buffer_idx + 1) % frame_pool_buffers.len();
+                    driver.next_buffer_idx =
+                        (driver.next_buffer_idx + 1) % driver.frame_pool.len();
 
                     let acquired = drvproto::AcquiredPayload {
-                        handle: frame_pool_buffers[idx].fd,
+                        handle: driver.frame_pool[idx].fd,
                         _pad1: 0,
-                        width: disp_width,
-                        height: disp_height,
-                        stride: disp_stride,
+                        width: driver.disp_width,
+                        height: driver.disp_height,
+                        stride: driver.disp_stride,
                         format: disp_format,
                         buffer_age,
                         _pad2: 0,
                     };
 
-                    current_fd = Some(frame_pool_buffers[idx].fd);
-                    current_res_id = frame_pool_buffers[idx].res_id;
+                    driver.current_fd = Some(driver.frame_pool[idx].fd);
+                    driver.current_res_id = driver.frame_pool[idx].res_id;
 
                     let mut acq_bytes = [0u8; drvproto::ACQUIRED_PAYLOAD_WIRE_SIZE];
                     if let Some(len) =
@@ -1119,7 +1121,7 @@ fn main(boot_arg: usize) -> ! {
                             let _ = stem::syscall::socket::sendmsg(
                                 drv_resp_write_fd,
                                 &framed[..framed_len],
-                                &[frame_pool_buffers[idx].fd],
+                                &[driver.frame_pool[idx].fd],
                             );
                         }
                     }
@@ -1133,14 +1135,14 @@ fn main(boot_arg: usize) -> ! {
                             Ok((_, n_fds)) if n_fds > 0 => fds[0],
                             _ => bind.fb_fd,
                         };
-                        current_fd = Some(fd);
+                        driver.current_fd = Some(fd);
                         // In legacy mode, we just stay on the first buffer's resource
-                        current_res_id = frame_pool_buffers[0].res_id;
+                        driver.current_res_id = driver.frame_pool[0].res_id;
                         send_msg(drv_resp_write, drvproto::MSG_ACK, &[]);
                     }
                 }
                 drvproto::MSG_PRESENT => {
-                    if current_fd.is_none() {
+                    if driver.current_fd.is_none() {
                         stem::error!("display_virtio_gpu: current_fd is NONE during MSG_PRESENT!");
                         let err = drvproto::ErrResp { code: 1 };
                         let mut err_bytes = [0u8; drvproto::ERR_RESP_WIRE_SIZE];
@@ -1157,11 +1159,16 @@ fn main(boot_arg: usize) -> ! {
                         if present.rect_count == 0
                             || (present._pad & drvproto::PRESENT_FLAG_FULLFRAME != 0)
                         {
-                            let full_rect = Rect { x: 0, y: 0, w: disp_width, h: disp_height };
+                            let full_rect = Rect {
+                                x: 0,
+                                y: 0,
+                                w: driver.disp_width,
+                                h: driver.disp_height,
+                            };
                             stem::trace!(
                                 "display_virtio_gpu: calling present_rect for full_rect..."
                             );
-                            let _ = gpu.present_rect(current_res_id, full_rect);
+                            let _ = driver.gpu.present_rect(driver.current_res_id, full_rect);
                             stem::trace!("display_virtio_gpu: returned from present_rect!");
                             stats.frame_count += 1;
                             stats.total_transfers += 1;
@@ -1186,8 +1193,11 @@ fn main(boot_arg: usize) -> ! {
                                     let gpu_rect =
                                         Rect { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
                                     // Clamp to screen bounds and skip empty rects
-                                    let clamped =
-                                        rect_clamp_to_bounds(gpu_rect, disp_width, disp_height);
+                                    let clamped = rect_clamp_to_bounds(
+                                        gpu_rect,
+                                        driver.disp_width,
+                                        driver.disp_height,
+                                    );
                                     if !rect_is_empty(clamped) {
                                         valid_rects.push(clamped);
                                     }
@@ -1199,7 +1209,8 @@ fn main(boot_arg: usize) -> ! {
                             if !valid_rects.is_empty() {
                                 // Phase 2: Transfer all rects (bandwidth follows true damage)
                                 for &rect in &valid_rects {
-                                    let _ = gpu.transfer_to_host(current_res_id, rect);
+                                    let _ =
+                                        driver.gpu.transfer_to_host(driver.current_res_id, rect);
                                 }
                                 stats.total_transfers += valid_rects.len() as u32;
 
@@ -1218,13 +1229,17 @@ fn main(boot_arg: usize) -> ! {
                                 if valid_rects.len() > 1 && union_area > sum_area * 2 {
                                     // Distant rects case: per-rect flush
                                     for &rect in &valid_rects {
-                                        let _ = gpu.flush_resource(current_res_id, rect);
+                                        let _ = driver
+                                            .gpu
+                                            .flush_resource(driver.current_res_id, rect);
                                     }
                                     stats.total_flushes += valid_rects.len() as u32;
                                     stats.per_rect_flush_count += 1;
                                 } else {
                                     // Common case: single union flush
-                                    let _ = gpu.flush_resource(current_res_id, union_rect);
+                                    let _ = driver
+                                        .gpu
+                                        .flush_resource(driver.current_res_id, union_rect);
                                     stats.total_flushes += 1;
                                     stats.union_flush_count += 1;
                                 }
@@ -1237,19 +1252,23 @@ fn main(boot_arg: usize) -> ! {
                         // ============================================================
                         // Now that transfers and flushes for THIS resource are done,
                         // flip the hardware scanout to this resource ID.
-                        let _ = gpu.set_scanout(current_res_id, disp_width, disp_height);
+                        let _ = driver.gpu.set_scanout(
+                            driver.current_res_id,
+                            driver.disp_width,
+                            driver.disp_height,
+                        );
 
                         // Update sequence and age bookkeeping
-                        present_seq += 1;
+                        driver.present_seq += 1;
                         let mut presented_idx = 0;
-                        for (i, buf) in frame_pool_buffers.iter_mut().enumerate() {
-                            if buf.res_id == current_res_id {
-                                buf.last_present_seq = present_seq;
+                        for (i, buf) in driver.frame_pool.iter_mut().enumerate() {
+                            if buf.res_id == driver.current_res_id {
+                                buf.last_present_seq = driver.present_seq;
                                 presented_idx = i;
                                 break;
                             }
                         }
-                        last_presented_idx = Some(presented_idx);
+                        driver.last_presented_idx = Some(presented_idx);
 
                         // Rate-limited stats logging
                         if stats.frame_count >= STATS_LOG_INTERVAL {
@@ -1264,7 +1283,8 @@ fn main(boot_arg: usize) -> ! {
                         let cmd_buf = &payload[drvproto::SUBMIT_3D_HEADER_WIRE_SIZE..];
                         if cmd_buf.len() >= hdr.cmd_len as usize {
                             // Submit the virgl commands to the GPU
-                            match gpu.submit_3d(hdr.ctx_id, &cmd_buf[..hdr.cmd_len as usize]) {
+                            match driver.gpu.submit_3d(hdr.ctx_id, &cmd_buf[..hdr.cmd_len as usize])
+                            {
                                 Ok(()) => {
                                     send_msg(drv_resp_write, drvproto::MSG_ACK, &[]);
                                 }
@@ -1304,7 +1324,7 @@ fn main(boot_arg: usize) -> ! {
                         let tex_format = hdr.format; // Usually 2 for BGRA
                         let tex_bind = 2 | 8; // RENDER_TARGET | SAMPLER_VIEW
 
-                        let result = gpu.create_resource_3d(
+                        let result = driver.gpu.create_resource_3d(
                             resource_id,
                             tex_target,
                             tex_format,
@@ -1317,7 +1337,7 @@ fn main(boot_arg: usize) -> ! {
                         let status = if result.is_ok() {
                             // Attach resource to virgl context
                             let ctx_id = 1; // Main virgl context
-                            if gpu.ctx_attach_resource(ctx_id, resource_id).is_ok() {
+                            if driver.gpu.ctx_attach_resource(ctx_id, resource_id).is_ok() {
                                 texture_registry.insert(
                                     hdr.client_id,
                                     TextureEntry {
@@ -1386,7 +1406,7 @@ fn main(boot_arg: usize) -> ! {
                                             match stem::syscall::shared_memory_phys(fd) {
                                                 Ok(phys_addr) => {
                                                     // Attach backing and transfer
-                                                    if gpu
+                                                    if driver.gpu
                                                         .attach_backing_3d(
                                                             hdr.resource_id,
                                                             phys_addr,
@@ -1394,7 +1414,7 @@ fn main(boot_arg: usize) -> ! {
                                                         )
                                                         .is_ok()
                                                     {
-                                                        if gpu
+                                                        if driver.gpu
                                                             .transfer_to_host_3d(
                                                                 1,
                                                                 hdr.resource_id,
