@@ -1,6 +1,6 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-24 08:20:54
+> Last run: 2026-04-24 08:41:25
 
 ## Features
 
@@ -21,7 +21,7 @@
 | [Process Reaping Smoke Test](process-reaping-smoke-test/README.md) | 1/1 | ✅ |
 | [Serial Shell Boot](serial-shell-boot/README.md) | 1/1 | ✅ |
 | [ServiceLoop — inbox-backed control plane for ThingOS services](serviceloop-inbox-backed-control-plane-for-thingos-services/README.md) | 7/7 | ✅ |
-| [Shell Command Repetition](shell-command-repetition/README.md) | 0/2 | ❌ |
+| [Shell Command Repetition](shell-command-repetition/README.md) | 1/2 | ❌ |
 | [Terminal parser and renderer threading](terminal-parser-and-renderer-threading/README.md) | 0/4 | ❌ |
-| [VFS Extended Attributes](vfs-extended-attributes/README.md) | 1/1 | ✅ |
+| [VFS Extended Attributes](vfs-extended-attributes/README.md) | 0/1 | ❌ |
 | [Wikipedia Redirect](wikipedia-redirect/README.md) | 0/1 | ❌ |
