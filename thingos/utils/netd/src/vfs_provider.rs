@@ -124,9 +124,9 @@ const HANDLE_ICMP_NEW: u64 = 19;
 
 /// Dynamic handle base for TCP socket sub-files.
 /// Handle = TCP_DYN_BASE | ((api_handle as u64) << 8) | subfile_id
-const TCP_DYN_BASE: u64 = 0x0001_0000;
-const UDP_DYN_BASE: u64 = 0x0100_0000;
-const ICMP_DYN_BASE: u64 = 0x0200_0000;
+pub const TCP_DYN_BASE: u64 = 0x0001_0000;
+pub const UDP_DYN_BASE: u64 = 0x0100_0000;
+pub const ICMP_DYN_BASE: u64 = 0x0200_0000;
 
 // subfile IDs
 const SF_DIR: u8 = 0;
@@ -387,6 +387,38 @@ impl NetVfsProvider {
         }
 
         did_work
+    }
+
+    /// Process exactly **one** pending VFS RPC request and return whether
+    /// any work was performed.  Unlike [`drain_rpcs`], this method processes
+    /// at most one request per call so the caller can release any shared
+    /// network-state lock between invocations, giving the network poll
+    /// thread a chance to run `iface.poll` in between RPCs.
+    ///
+    /// Returns `true` if a request was decoded and dispatched.
+    pub fn drain_one_rpc<D: smoltcp::phy::Device>(
+        &mut self,
+        iface: &mut Interface,
+        device: &mut D,
+        socket_set: &mut SocketSet,
+        socket_api: &mut SocketApi,
+    ) -> bool {
+        match self.try_next_request() {
+            Ok(Some((resp_port, op, req_id, payload))) => {
+                trace!("NETD RPC: op={:?} payload_len={}", op, payload.len());
+                self.handle_decoded(
+                    iface, device, socket_set, socket_api, resp_port, op, req_id, &payload,
+                );
+                true
+            }
+            Ok(None) => false,
+            Err(Errno::ENOTSUP) => {
+                // Unsupported op frame consumed; treat as work done so the
+                // caller loops again to drain any remaining requests.
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     // ── Async DNS interface for the main loop ────────────────────────────────

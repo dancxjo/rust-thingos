@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 stem = { path = "../../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../../abi" }
+spin = "0.9"
 smoltcp = { version = "0.11", default-features = false, features = [
     "proto-ipv4",
     "proto-dhcpv4",
