@@ -112,9 +112,11 @@ kernel/src/syscall/dispatch.rs:139
 stem/src/syscall/vfs.rs:263
   [R] pub fn vfs_poll(pollfds, timeout_ms) — userspace wrapper
 
-cambium/src/main.rs:230
-  [R] vfs_poll([inbox_fd, devices_watch_fd], RECONCILE_TIMEOUT_MS)
-      — driver coordinator main loop
+cambium/src/main.rs
+  [S] ServiceLoop — inbox-backed driver coordinator main loop
+      (replaced vfs_poll([inbox_fd, devices_watch_fd], RECONCILE_TIMEOUT_MS))
+      Wakes on: typed inbox messages (THINGOS_JOB_EXIT), /sys/devices VFS
+      watch events, and a 30 s reconcile timeout.
 
 drivers/beeper/src/main.rs:233,385
   [R] vfs_poll — one-shot stdin probe + blocking audio-ring wait
@@ -131,8 +133,11 @@ drivers/virtio_sound/src/main.rs:335,1048
 libs/http/src/lib.rs:62
   [R] vfs_poll — HTTP socket readiness with timeout
 
-sprout/src/supervisor.rs:339
-  [R] vfs_poll([devices_watch_fd], 100ms) — supervisor watch loop
+sprout/src/supervisor.rs
+  [S] ServiceLoop — inbox-backed supervisor main loop
+      (replaced vfs_poll([devices_watch_fd], 100ms))
+      Wakes on: DRIVER_READY inbox messages, sovereign BIND_READY port
+      events (display driver), and a 100 ms supervision timeout tick.
 
 stem/src/pal/net.rs:122
   [R] vfs_poll — network PAL socket readiness
@@ -320,15 +325,28 @@ drivers/ps2_mouse/src/main.rs
   [C] Reads /run/bristle/mouse_in for the write port handle
       (replaced packed usize spawn arg)
 
---- Sprout supervisor handshake ---
+--- Sprout supervisor handshake — MIGRATED ---
 
 sprout/src/task.rs
-  [D] ManagedTask { drv_req_write, drv_resp_read,
-                    boot_req_read, boot_resp_write, resp_fd }
-      — four PortHandles per supervised task for boot handshake
+  [R] ManagedTask { ready: bool, req_write_port: Option<u32> }
+      — readiness-only port fields replaced by DRIVER_READY inbox message.
+      Legacy fields (drv_req_write, drv_resp_read, boot_req_read,
+      boot_resp_write, resp_fd) have been removed.
 
 sprout/src/supervisor.rs
-  [D] watches resp_fd (bridged port) for driver ready signal
+  [R] handle_driver_ready() — marks ManagedTask ready on DRIVER_READY inbox
+      message; replaces resp_fd poll loop.  Dispatched by run_service_loop
+      via ServiceLoop.
+
+cambium/src/spawn.rs
+  [R] send_driver_ready(pid) — sends KIND_ID_THINGOS_DRIVER_READY
+      (DriverReadyV1 payload) to Sprout's process inbox after spawning each
+      driver.  Replaces the four-port boot handshake.
+
+stem/src/kinds/mod.rs
+  [S] KIND_ID_THINGOS_DRIVER_READY — stable typed kind UUID
+  [S] DriverReadyV1 — #[repr(C)] wire payload: version, flags, pid,
+      task_id, status, reserved
 
 utils/ipc_service_demo/src/main.rs
   [D] Reference demo: RpcServer port-based request/reply service
@@ -488,31 +506,28 @@ drivers/driver_wasm_host/src/main.rs
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FIRST MIGRATION TARGET
+COMPLETED MIGRATION: Sprout supervisor readiness handshake
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Recommended: sprout/src/task.rs — ManagedTask boot handshake
+Completed: sprout/src/task.rs — ManagedTask boot handshake
 
-Current state:
-  ManagedTask carries four PortHandles per supervised service
+Previous state:
+  ManagedTask carried four PortHandles per supervised service
   (drv_req_write, drv_resp_read, boot_req_read, boot_resp_write) plus an
-  optional resp_fd (bridged port FD).  The supervisor polls resp_fd with
+  optional resp_fd (bridged port FD).  The supervisor polled resp_fd with
   vfs_poll to detect driver readiness.
 
-Migration path:
-  Replace the four-port handshake with inbox messages:
+Migration applied:
   1. Driver sends a typed "Ready" inbox message (KindId::DRIVER_READY) to
-     sprout's PID when it has finished initialising.
-  2. Sprout waits on its own inbox FD (msg_inbox_open_self) combined with
-     the existing devices_watch_fd in a single vfs_poll / WaitSet call.
-  3. Facet registration (mount paths, service names) travels as additional
-     inbox message fields — no separate port required.
-  4. ManagedTask drops all four PortHandles; resp_fd is replaced by the
-     shared inbox FD already open for the supervisor.
+     Sprout's PID when it has finished initialising.  Cambium calls
+     send_driver_ready(pid) immediately after a successful spawn.
+  2. Sprout receives DRIVER_READY via its ServiceLoop inbox handler
+     (run_service_loop → handle_driver_ready).
+  3. handle_driver_ready matches the PID from DriverReadyV1.pid against
+     the ManagedTask list and sets task.ready = true.
+  4. ManagedTask dropped all four PortHandles and resp_fd; it now carries
+     only ready: bool and req_write_port: Option<u32> (display handshake).
 
-Why this target first:
-  - Self-contained change: only sprout + cambium are affected.
-  - Exercises the "Sprout supervises services as actors" rule from the spec.
-  - No kernel changes needed; all primitives (msg_send, msg_inbox_open_self,
-    vfs_poll) are already in place.
-  - Removes the largest concentration of legacy port-handle wiring in userspace.
+Next migration target:
+  - VFS ProviderLoop callers (ahci_disk, ata_disk, display_fake).
+  - Display driver sovereign registration (supervisor_protocol ports).
