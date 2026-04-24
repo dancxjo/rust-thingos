@@ -155,6 +155,9 @@ impl ServiceProviderLoop {
     /// because there are only two sources at construction time).
     pub fn new(provider: ProviderLoop, max_payload: usize) -> Result<Self, Errno> {
         let mut svc = ServiceLoop::new(max_payload)?;
+        // `add_port_readable` accepts a `u64` to match the wide `WaitSpec::object`
+        // field used internally by the kernel.  The widening cast from the `u32`
+        // port handle is always safe (zero-extends, no data loss).
         #[allow(deprecated)]
         let provider_token = svc.add_port_readable(provider.port_handle() as u64)?;
         Ok(Self { svc, provider, provider_token })
