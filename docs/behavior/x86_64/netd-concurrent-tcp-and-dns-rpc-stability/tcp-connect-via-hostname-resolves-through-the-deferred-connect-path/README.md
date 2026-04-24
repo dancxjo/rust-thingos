@@ -1,16 +1,11 @@
-# ❌ Scenario: TCP connect via hostname resolves through the deferred-connect path
+# ✅ Scenario: TCP connect via hostname resolves through the deferred-connect path
 
-> Last run: 2026-04-23 19:11:44
+> Last run: 2026-04-23 19:34:44
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | When I type "mount -t https none /https" on the serial console | ✅ | 645ms | - [📜](./01/serial.log) - |
-| 2 | And I wait for the serial output to contain "HTTPSD_READY" | ✅ | 0ms | - - - |
-| 3 | And I wait for the serial output to contain "mounted type=https" | ✅ | 0ms | - - - |
-| 4 | And I type "cat /https/example.com/@index" on the serial console | ✅ | 5577ms | - [📜](./04/serial.log) - |
-| 5 | Then the command output should contain "Example Domain" | ❌ | 6086ms | - [📜](./05/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
