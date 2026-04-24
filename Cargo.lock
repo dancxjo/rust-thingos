@@ -95,6 +95,7 @@ name = "ahci_disk"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ipc_helpers",
  "stem",
 ]
 
@@ -415,6 +416,7 @@ name = "ata_disk"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ipc_helpers",
  "stem",
 ]
 
@@ -1906,6 +1908,8 @@ dependencies = [
 [[package]]
 name = "dirs"
 version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
 dependencies = [
  "dirs-sys",
 ]
@@ -1923,6 +1927,8 @@ dependencies = [
 [[package]]
 name = "dirs-sys"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
 dependencies = [
  "libc",
  "option-ext",
@@ -1967,6 +1973,7 @@ name = "display_fake"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ipc_helpers",
  "stem",
 ]
 
@@ -2273,6 +2280,8 @@ dependencies = [
 [[package]]
 name = "errno"
 version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -4305,6 +4314,8 @@ dependencies = [
 [[package]]
 name = "mio"
 version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50b7e5b27aa02a74bac8c3f23f448f8d87ff11f92d3aac1a6ed369ee08cc56c1"
 dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
