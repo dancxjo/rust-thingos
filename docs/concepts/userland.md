@@ -19,3 +19,21 @@
 
 ## Never return
 - `#[stem::main]` and thread entry functions should not return. Prefer a `loop { ... }` body or call `stem::syscall::exit(code)` if you need to terminate early.
+
+## Blocking and synchronisation across threads
+
+The kernel's blocking infrastructure is already thread-safe and requires no
+additional primitives to support a multithreaded userspace runtime:
+
+- **Pipes** (`SYS_PIPE` / `SYS_FS_READ` / `SYS_FS_WRITE`) — multiple threads
+  can share a pipe end simultaneously.  The ring buffer is mutex-protected and
+  wakeups are issued after the lock is released.
+- **VFS watches** — `EventQueue` uses a `WaitQueue` that is safe for concurrent
+  readers.
+- **`SYS_WAIT_MANY` / `SYS_FS_POLL`** — readiness multiplexing works correctly
+  when the same FD is polled by multiple threads.
+- **Futex** (`SYS_FUTEX_WAIT` / `SYS_FUTEX_WAKE`) — recommended for
+  intra-process mutex and condvar building blocks.
+
+See [`docs/kernel/threading-readiness.md`](../kernel/threading-readiness.md)
+for the full thread-safety guarantees and their implications.
