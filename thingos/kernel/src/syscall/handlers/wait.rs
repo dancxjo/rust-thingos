@@ -71,7 +71,7 @@ pub fn sys_wait_many(
                 );
                 super::copyout(results_ptr, src)?;
             }
-            crate::kinfo!("sys_wait_many: returning {} results", ready);
+            crate::kdebug!("sys_wait_many: returning {} results", ready);
             return Ok(ready);
         }
 
@@ -94,9 +94,9 @@ pub fn sys_wait_many(
             return Ok(1);
         }
 
-        crate::kinfo!("sys_wait_many: tid={} specs_ptr={:x} count={} timeout={} ticks", tid, specs_ptr, spec_count, timeout_tick.unwrap_or(0));
+        crate::kdebug!("sys_wait_many: tid={} specs_ptr={:x} count={} timeout={} ticks", tid, specs_ptr, spec_count, timeout_tick.unwrap_or(0));
         for (i, spec) in specs.iter().enumerate() {
-            crate::kinfo!("  spec[{}]: kind={} object={:x} flags={:x} token={:x}", i, spec.kind, spec.object, spec.flags, spec.token);
+            crate::ktrace!("  spec[{}]: kind={} object={:x} flags={:x} token={:x}", i, spec.kind, spec.object, spec.flags, spec.token);
         }
 
         let regs = {
@@ -137,11 +137,11 @@ pub fn sys_wait_many(
             return Ok(count);
         }
 
-        crate::kinfo!("sys_wait_many: blocking...");
+        crate::kdebug!("sys_wait_many: blocking...");
         unsafe {
             crate::sched::block_current_erased();
         }
-        crate::kinfo!("sys_wait_many: unblocked");
+        crate::kdebug!("sys_wait_many: unblocked");
 
         if crate::sched::take_pending_interrupt_current() {
             cleanup_all(&regs, tid, timeout_tick)?;
@@ -171,7 +171,7 @@ fn collect_ready(
         if count >= out.len() {
             break;
         }
-        crate::kinfo!("collect_ready: polling spec[{}] kind={} object={:x} token={:x}", count, spec.kind, spec.object, spec.token);
+        crate::ktrace!("collect_ready: polling spec[{}] kind={} object={:x} token={:x}", count, spec.kind, spec.object, spec.token);
         if let Some(result) = poll_spec(pinfo, spec)? {
             out[count] = result;
             count += 1;
