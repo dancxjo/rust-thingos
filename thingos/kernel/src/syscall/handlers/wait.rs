@@ -93,6 +93,11 @@ pub fn sys_wait_many(
             return Ok(1);
         }
 
+        crate::kinfo!("sys_wait_many: specs_ptr={:x} count={} timeout={} ticks", specs_ptr, spec_count, timeout_tick.unwrap_or(0));
+        for (i, spec) in specs.iter().enumerate() {
+            crate::kinfo!("  spec[{}]: kind={} object={:x} token={:x}", i, spec.kind, spec.object, spec.token);
+        }
+
         let regs = {
             let lock = pinfo_arc.lock();
             register_all(&lock, specs, tid)?
@@ -131,9 +136,11 @@ pub fn sys_wait_many(
             return Ok(count);
         }
 
+        crate::kinfo!("sys_wait_many: blocking...");
         unsafe {
             crate::sched::block_current_erased();
         }
+        crate::kinfo!("sys_wait_many: unblocked");
 
         if crate::sched::take_pending_interrupt_current() {
             cleanup_all(&regs, tid, timeout_tick)?;

@@ -174,22 +174,34 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov %rsp, %rdi
         call rust_nmi_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -210,23 +222,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
-        mov %rsp, %rsi // Pointer to IrqRegisterSnapshot (9 registers)
-        lea 72(%rsp), %rdi // Pointer to InterruptStackFrame
+        mov %rsp, %rsi // Pointer to IrqRegisterSnapshot (15 registers)
+        lea 120(%rsp), %rdi // Pointer to InterruptStackFrame
         call rust_pf_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -256,23 +280,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov $0, %rdi // Vector will be resolved via LAPIC ISR
-        xor %rsi, %rsi
+        mov %rsp, %rsi
         call rust_irq_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -291,23 +327,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov $0x20, %rdi
         mov %rsp, %rsi
         call rust_irq_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -327,22 +375,34 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov %rsp, %rdi
         call rust_pause_dump_ipi_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -362,23 +422,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov $0x21, %rdi
         mov %rsp, %rsi
         call rust_irq_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -398,23 +470,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov $0x30, %rdi
-        xor %rsi, %rsi
+        mov %rsp, %rsi
         call rust_irq_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -433,23 +517,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov $0x41, %rdi
-        xor %rsi, %rsi
+        mov %rsp, %rsi
         call rust_irq_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -469,23 +565,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov $0x2C, %rdi
-        xor %rsi, %rsi
+        mov %rsp, %rsi
         call rust_irq_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -504,23 +612,35 @@ core::arch::global_asm!(
         push %rax
         push %rcx
         push %rdx
+        push %rbx
+        push %rbp
         push %rsi
         push %rdi
         push %r8
         push %r9
         push %r10
         push %r11
+        push %r12
+        push %r13
+        push %r14
+        push %r15
 
         mov $0x24, %rdi
-        xor %rsi, %rsi
+        mov %rsp, %rsi
         call rust_irq_handler
 
+        pop %r15
+        pop %r14
+        pop %r13
+        pop %r12
         pop %r11
         pop %r10
         pop %r9
         pop %r8
         pop %rdi
         pop %rsi
+        pop %rbp
+        pop %rbx
         pop %rdx
         pop %rcx
         pop %rax
@@ -684,20 +804,21 @@ pub struct InterruptStackFrame {
 
 #[repr(C)]
 pub struct IrqRegisterSnapshot {
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
     pub r11: u64,
     pub r10: u64,
     pub r9: u64,
     pub r8: u64,
     pub rdi: u64,
     pub rsi: u64,
+    pub rbp: u64,
+    pub rbx: u64,
     pub rdx: u64,
     pub rcx: u64,
     pub rax: u64,
-    pub rip: u64,
-    pub cs: u64,
-    pub rflags: u64,
-    pub rsp: u64,
-    pub ss: u64,
 }
 
 const PS2_STATUS_PORT: u16 = 0x64;
@@ -912,29 +1033,39 @@ fn print_frame_pointer_walk(mut rbp: u64) {
 
 fn print_register_snapshot(snapshot: &IrqRegisterSnapshot) {
     kernel::kprint!("Interrupted Context:\n");
+    // Frame is immediately after the IrqRegisterSnapshot on the stack
+    unsafe {
+        let frame_ptr = (snapshot as *const _ as *const u64).add(15);
+        let rip = *frame_ptr.add(0);
+        let cs = *frame_ptr.add(1);
+        let rflags = *frame_ptr.add(2);
+        let rsp = *frame_ptr.add(3);
+        let ss = *frame_ptr.add(4);
+
+        kernel::kprint!(
+            "  RIP=0x{:016x}  CS=0x{:016x}  RFLAGS=0x{:016x}\n",
+            rip, cs, rflags
+        );
+        kernel::kprint!(
+            "  RSP=0x{:016x}  SS=0x{:016x}\n",
+            rsp, ss
+        );
+    }
     kernel::kprint!(
-        "  RIP=0x{:016x}  CS=0x{:016x}  RFLAGS=0x{:016x}\n",
-        snapshot.rip,
-        snapshot.cs,
-        snapshot.rflags
+        "  RAX=0x{:016x}  RBX=0x{:016x}  RCX=0x{:016x}  RDX=0x{:016x}\n",
+        snapshot.rax, snapshot.rbx, snapshot.rcx, snapshot.rdx
     );
     kernel::kprint!(
-        "  RAX=0x{:016x}  RCX=0x{:016x}  RDX=0x{:016x}\n",
-        snapshot.rax,
-        snapshot.rcx,
-        snapshot.rdx
+        "  RSI=0x{:016x}  RDI=0x{:016x}  RBP=0x{:016x}\n",
+        snapshot.rsi, snapshot.rdi, snapshot.rbp
     );
     kernel::kprint!(
-        "  RSI=0x{:016x}  RDI=0x{:016x}  R8 =0x{:016x}\n",
-        snapshot.rsi,
-        snapshot.rdi,
-        snapshot.r8
+        "  R8 =0x{:016x}  R9 =0x{:016x}  R10=0x{:016x}  R11=0x{:016x}\n",
+        snapshot.r8, snapshot.r9, snapshot.r10, snapshot.r11
     );
     kernel::kprint!(
-        "  R9 =0x{:016x}  R10=0x{:016x}  R11=0x{:016x}\n",
-        snapshot.r9,
-        snapshot.r10,
-        snapshot.r11
+        "  R12=0x{:016x}  R13=0x{:016x}  R14=0x{:016x}  R15=0x{:016x}\n",
+        snapshot.r12, snapshot.r13, snapshot.r14, snapshot.r15
     );
 }
 
@@ -943,11 +1074,18 @@ fn store_pause_cpu_snapshot(cpu: usize, snapshot: &IrqRegisterSnapshot, rsp: u64
         return;
     }
 
-    PAUSE_CPU_RIP[cpu].store(snapshot.rip, Ordering::SeqCst);
-    PAUSE_CPU_RSP[cpu].store(rsp, Ordering::SeqCst);
-    PAUSE_CPU_RBP[cpu].store(rbp, Ordering::SeqCst);
-    PAUSE_CPU_RFLAGS[cpu].store(snapshot.rflags, Ordering::SeqCst);
-    PAUSE_CPU_CS[cpu].store(snapshot.cs, Ordering::SeqCst);
+    unsafe {
+        let frame_ptr = (snapshot as *const _ as *const u64).add(15);
+        let rip = *frame_ptr.add(0);
+        let cs = *frame_ptr.add(1);
+        let rflags = *frame_ptr.add(2);
+
+        PAUSE_CPU_RIP[cpu].store(rip, Ordering::SeqCst);
+        PAUSE_CPU_RSP[cpu].store(rsp, Ordering::SeqCst);
+        PAUSE_CPU_RBP[cpu].store(rbp, Ordering::SeqCst);
+        PAUSE_CPU_RFLAGS[cpu].store(rflags, Ordering::SeqCst);
+        PAUSE_CPU_CS[cpu].store(cs, Ordering::SeqCst);
+    }
     PAUSE_CPU_VALID[cpu].store(true, Ordering::SeqCst);
 }
 
@@ -1340,6 +1478,13 @@ pub extern "C" fn rust_pf_handler(
         frame.error_code,
         frame.rsp
     );
+    kernel::kerror!("Registers:");
+    kernel::kerror!("  RAX: 0x{:016x} RBX: 0x{:016x} RCX: 0x{:016x} RDX: 0x{:016x}", snapshot.rax, snapshot.rbx, snapshot.rcx, snapshot.rdx);
+    kernel::kerror!("  RSI: 0x{:016x} RDI: 0x{:016x} RBP: 0x{:016x} RSP: 0x{:016x}", snapshot.rsi, snapshot.rdi, snapshot.rbp, frame.rsp);
+    kernel::kerror!("  R8:  0x{:016x} R9:  0x{:016x} R10: 0x{:016x} R11: 0x{:016x}", snapshot.r8, snapshot.r9, snapshot.r10, snapshot.r11);
+    kernel::kerror!("  R12: 0x{:016x} R13: 0x{:016x} R14: 0x{:016x} R15: 0x{:016x}", snapshot.r12, snapshot.r13, snapshot.r14, snapshot.r15);
+    kernel::kerror!("  RIP: 0x{:016x} CS:  0x{:016x} RFLAGS: 0x{:016x}", frame.rip, frame.cs, frame.rflags);
+
     print_stack_trace();
 
     // Dump first few words of stack

@@ -197,6 +197,7 @@ fn wait_bsy_clear(io_base: u16) -> bool {
 fn identify_drive(io_base: u16, ctrl_base: u16, is_slave: bool) -> Option<AtaDisk> {
     // Select drive
     let drive_sel = if is_slave { 0xB0 } else { 0xA0 };
+    info!("ATA_DISK: identify_drive(base={:x}, slave={}) - selecting drive {:x}", io_base, is_slave, drive_sel);
     ata_outb(io_base + ATA_REG_DRIVE, drive_sel);
 
     // Small delay (read alternate status 4 times)
@@ -215,6 +216,7 @@ fn identify_drive(io_base: u16, ctrl_base: u16, is_slave: bool) -> Option<AtaDis
 
     // Check if drive exists
     let status = ata_inb(io_base + ATA_REG_STATUS);
+    info!("ATA_DISK: identify_drive - initial status: {:x}", status);
     if status == 0 || status == 0xFF {
         return None; // No drive
     }
@@ -227,6 +229,7 @@ fn identify_drive(io_base: u16, ctrl_base: u16, is_slave: bool) -> Option<AtaDis
     // Check for ATAPI (different signature in LBA mid/hi)
     let lba_mid = ata_inb(io_base + ATA_REG_LBA_MID);
     let lba_hi = ata_inb(io_base + ATA_REG_LBA_HI);
+    info!("ATA_DISK: identify_drive - signature mid={:x} hi={:x}", lba_mid, lba_hi);
     if lba_mid == ATAPI_SIG_MID && lba_hi == ATAPI_SIG_HI {
         return None; // ATAPI device - handled separately
     }
@@ -694,8 +697,10 @@ fn main(_arg: usize) -> ! {
         info!("ATA_DISK: No active devices to service");
     }
 
+    info!("ATA_DISK: Entering main service loop...");
     // Main service loop — inbox-first dispatch via ServiceProviderLoop.
     loop {
+        info!("ATA_DISK: Calling svc.next_event()...");
         match svc.next_event(None) {
             Ok(ServiceProviderEvent::ProviderRequest(req)) => {
                 // This driver does not expose a VFS file hierarchy; return

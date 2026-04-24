@@ -221,6 +221,7 @@ impl Supervisor {
 
         let timeout = Some(Duration::from_millis(SUPERVISOR_TICK_MS));
         loop {
+            stem::debug!("SPROUT: ServiceLoop waiting for next event...");
             match svc.next_event(timeout) {
                 Ok(ServiceEvent::Message { kind, payload }) => {
                     if kind.0 == KIND_ID_THINGOS_DRIVER_READY {
@@ -414,19 +415,20 @@ impl Supervisor {
     /// One iteration of the periodic supervisor work that previously ran
     /// inside the hand-rolled `loop { ...; sleep_ms(100); }` body.
     fn tick_supervisor(&mut self) {
-        stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
+        stem::info!("SPROUT: Supervisor tick...");
+        stem::info!("SPROUT: Loop iteration: spawn_netd_if_ready");
         self.spawn_netd_if_ready();
-        stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
+        stem::info!("SPROUT: Loop iteration: verify_netd_liveness");
         self.verify_netd_liveness();
-        stem::trace!("SPROUT: Loop iteration: spawn_display_if_needed");
+        stem::info!("SPROUT: Loop iteration: spawn_display_if_needed");
         self.spawn_display_if_needed();
-        stem::trace!("SPROUT: Loop iteration: spawn_bristle_if_needed");
+        stem::info!("SPROUT: Loop iteration: spawn_bristle_if_needed");
         self.spawn_bristle_if_needed();
-        stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
+        stem::info!("SPROUT: Loop iteration: spawn_bloom_if_ready");
         self.spawn_bloom_if_ready();
-        stem::trace!("SPROUT: Loop iteration: run_health_vine");
+        stem::info!("SPROUT: Loop iteration: run_health_vine");
         run_health_vine(&self.tasks);
-        stem::trace!("SPROUT: Loop iteration: tick complete");
+        stem::info!("SPROUT: Loop iteration: tick complete");
     }
 
     fn spawn_display_if_needed(&mut self) {
@@ -636,6 +638,7 @@ impl Supervisor {
         if self.bloom_spawned {
             return;
         }
+        stem::info!("SPROUT: Checking if bloom is ready to spawn (/dev/display/card0)...");
         if !path_exists("/dev/display/card0") {
             return;
         }

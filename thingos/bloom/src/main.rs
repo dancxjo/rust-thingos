@@ -37,6 +37,7 @@ const WP_PATH: &str = "/session/desktop/wallpaper";
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    info!("bloom: ENTERING MAIN");
     info!("bloom: compositor service starting");
 
     // ── Connect to the display ────────────────────────────────────────────────
