@@ -86,9 +86,164 @@ const PRIORITY_LEVELS: usize = 5;
 /// Per-CPU priority-indexed run queue.
 ///
 /// Index `p` holds runnable [`ThreadId`]s at priority level `p` (where
-/// 0 = Idle and 4 = Realtime). This is a thin wrapper over an array of
-/// [`VecDeque`]s. A deeper redesign is deferred to issue #596.
-pub type RunQueue = [VecDeque<ThreadId>; PRIORITY_LEVELS];
+/// 0 = Idle and 4 = Realtime).  Each `RunQueue` belongs to exactly one
+/// [`CpuScheduler`]; only the owning CPU's scheduler should normally
+/// enqueue or dequeue from it.
+///
+/// # Ownership invariant
+///
+/// A CPU-local run queue should normally be mutated only by its owning
+/// CPU scheduler.  Cross-CPU delivery is prepared for in future work
+/// (issue #597).
+///
+/// # Index access
+///
+/// `RunQueue` implements [`Deref`] and [`DerefMut`] targeting the
+/// underlying `[VecDeque<ThreadId>; PRIORITY_LEVELS]` so that existing
+/// read-only or test-only indexed access (`runq[prio]`) continues to
+/// compile.  Production enqueue/dequeue paths should use the typed
+/// methods (`enqueue`, `pop_front_raw`, `remove_at`, `retain_at`) so
+/// that `nonempty_runnable_mask` is kept in sync automatically.
+pub struct RunQueue {
+    queues: [VecDeque<ThreadId>; PRIORITY_LEVELS],
+    /// Bitset of non-empty runnable queues for priorities 1..=4.
+    /// Bit `p` is set when `queues[p]` currently has at least one entry.
+    nonempty_runnable_mask: u8,
+}
+
+impl RunQueue {
+    /// Create a new, empty run queue with pre-allocated capacity.
+    pub fn new() -> Self {
+        RunQueue {
+            queues: [
+                VecDeque::with_capacity(128),
+                VecDeque::with_capacity(128),
+                VecDeque::with_capacity(128),
+                VecDeque::with_capacity(128),
+                VecDeque::with_capacity(128),
+            ],
+            nonempty_runnable_mask: 0,
+        }
+    }
+
+    /// Enqueue `tid` at the given `prio` level.
+    ///
+    /// Updates `nonempty_runnable_mask` when `prio > 0` (non-idle).
+    pub fn enqueue(&mut self, prio: usize, tid: ThreadId) {
+        self.queues[prio].push_back(tid);
+        self.mark_nonempty(prio);
+    }
+
+    /// Pop and return the front entry at `prio`, updating the mask.
+    ///
+    /// This is a raw pop with no lazy-invalidation logic; callers that
+    /// need stale-entry skipping should use the `SchedState` dequeue
+    /// helpers which layer that logic on top.
+    pub fn pop_front_raw(&mut self, prio: usize) -> Option<ThreadId> {
+        let tid = self.queues[prio].pop_front()?;
+        self.sync_mask_if_empty(prio);
+        Some(tid)
+    }
+
+    /// Remove and return the entry at `idx` within `prio`, updating the mask.
+    pub fn remove_at(&mut self, prio: usize, idx: usize) -> Option<ThreadId> {
+        let tid = self.queues[prio].remove(idx)?;
+        self.sync_mask_if_empty(prio);
+        Some(tid)
+    }
+
+    /// Retain entries in `prio` matching `f`, then sync the mask.
+    pub fn retain_at<F>(&mut self, prio: usize, mut f: F)
+    where
+        F: FnMut(&ThreadId) -> bool,
+    {
+        self.queues[prio].retain(|tid| f(tid));
+        self.sync_mask_if_empty(prio);
+    }
+
+    /// Pick the highest-priority non-idle runnable entry and return it,
+    /// removing it from the queue.
+    ///
+    /// Returns `None` if all non-idle queues are empty.  No
+    /// lazy-invalidation is performed here; the caller is responsible for
+    /// discarding stale results if needed.
+    pub fn pick_next(&mut self) -> Option<(usize, ThreadId)> {
+        for prio in (1..PRIORITY_LEVELS).rev() {
+            if let Some(tid) = self.queues[prio].pop_front() {
+                self.sync_mask_if_empty(prio);
+                return Some((prio, tid));
+            }
+        }
+        None
+    }
+
+    /// Total number of runnable threads across **non-idle** priority levels
+    /// (priorities 1..=4).  This is the value that should be reported as
+    /// the per-CPU runnable task count in debug/stats output.
+    pub fn runnable_count(&self) -> usize {
+        self.queues[1..].iter().map(|q| q.len()).sum()
+    }
+
+    /// Total number of entries across **all** priority levels, including
+    /// the idle queue (priority 0).  Used for load-balance depth metrics.
+    pub fn total_len(&self) -> usize {
+        self.queues.iter().map(|q| q.len()).sum()
+    }
+
+    /// Returns `true` when all non-idle queues are empty.
+    pub fn is_empty(&self) -> bool {
+        self.nonempty_runnable_mask == 0
+    }
+
+    /// Returns `true` if any priority level **strictly above** `min_prio`
+    /// contains at least one entry.  Used to detect preemption candidates.
+    pub fn has_higher_priority_work(&self, min_prio: usize) -> bool {
+        let start = (min_prio + 1).min(PRIORITY_LEVELS);
+        self.queues[start..].iter().any(|q| !q.is_empty())
+    }
+
+    /// Bitmask of non-empty runnable queues (priorities 1..=4).
+    #[inline]
+    pub fn nonempty_runnable_mask(&self) -> u8 {
+        self.nonempty_runnable_mask
+    }
+
+    // ── Internal mask helpers ──────────────────────────────────────────────
+
+    #[inline]
+    fn mark_nonempty(&mut self, prio: usize) {
+        if prio > 0 {
+            self.nonempty_runnable_mask |= 1u8 << prio;
+        }
+    }
+
+    #[inline]
+    fn sync_mask_if_empty(&mut self, prio: usize) {
+        if prio > 0 && self.queues[prio].is_empty() {
+            self.nonempty_runnable_mask &= !(1u8 << prio);
+        }
+    }
+}
+
+impl Default for RunQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl core::ops::Deref for RunQueue {
+    type Target = [VecDeque<ThreadId>; PRIORITY_LEVELS];
+
+    fn deref(&self) -> &Self::Target {
+        &self.queues
+    }
+}
+
+impl core::ops::DerefMut for RunQueue {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.queues
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnqueueCause {
@@ -245,10 +400,11 @@ pub struct SleepMembership {
 pub struct CpuScheduler {
     /// Logical index of the CPU that owns this scheduler state.
     pub cpu_id: usize,
+    /// CPU-local priority-indexed run queue.
+    ///
+    /// Owned exclusively by this CPU scheduler.  The `nonempty_runnable_mask`
+    /// is maintained inside `RunQueue`; access it via `runq.nonempty_runnable_mask()`.
     pub runq: RunQueue,
-    /// Bitset of non-empty runnable queues for priorities 1..=4.
-    /// Bit `p` is set when `runq[p]` currently has at least one entry.
-    pub nonempty_runnable_mask: u8,
     pub idle_task: Option<ThreadId>,
     pub current: Option<ThreadId>,
     pub last_switch: u64,
@@ -281,14 +437,7 @@ impl CpuScheduler {
     pub fn new_for_cpu(cpu_id: usize) -> Self {
         CpuScheduler {
             cpu_id,
-            runq: [
-                VecDeque::with_capacity(128),
-                VecDeque::with_capacity(128),
-                VecDeque::with_capacity(128),
-                VecDeque::with_capacity(128),
-                VecDeque::with_capacity(128),
-            ],
-            nonempty_runnable_mask: 0,
+            runq: RunQueue::new(),
             idle_task: None,
             current: None,
             last_switch: 0,
@@ -308,13 +457,7 @@ impl CpuScheduler {
     /// and whether a reschedule is pending.  Call this from scheduling decision
     /// points to correlate log output with the CPU-local scheduler involved.
     pub fn log_state(&self) {
-        let runnable: usize = self
-            .runq
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i > 0) // skip idle queue (priority 0)
-            .map(|(_, q)| q.len())
-            .sum();
+        let runnable = self.runq.runnable_count();
         crate::kdebug!(
             "SCHED[cpu{}]: current={:?} idle={:?} runnable={} need_resched={}",
             self.cpu_id,
@@ -324,21 +467,8 @@ impl CpuScheduler {
             self.need_resched,
         );
     }
-
-    #[inline]
-    fn mark_runnable_nonempty(&mut self, prio: usize) {
-        if prio > 0 {
-            self.nonempty_runnable_mask |= 1u8 << prio;
-        }
-    }
-
-    #[inline]
-    fn clear_runnable_if_empty(&mut self, prio: usize) {
-        if prio > 0 && self.runq[prio].is_empty() {
-            self.nonempty_runnable_mask &= !(1u8 << prio);
-        }
-    }
 }
+
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PerCpuSchedStats {
@@ -560,8 +690,7 @@ impl SchedState {
         }
         let _cpu_lock = lock_per_cpu_runq(cpu);
         if let Some(pc) = self.per_cpu.get_mut(cpu) {
-            pc.runq[prio].push_back(tid);
-            pc.mark_runnable_nonempty(prio);
+            pc.runq.enqueue(prio, tid);
             pc.stats.runnable_enqueues = pc.stats.runnable_enqueues.saturating_add(1);
             pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         }
@@ -579,11 +708,9 @@ impl SchedState {
 
         if let Some(pc) = per_cpu.get_mut(cpu) {
             for _cleanup_attempt in 0..RUNQ_STALE_PURGE_BUDGET {
-                let Some(tid) = pc.runq[prio].pop_front() else {
-                    pc.clear_runnable_if_empty(prio);
+                let Some(tid) = pc.runq.pop_front_raw(prio) else {
                     break;
                 };
-                pc.clear_runnable_if_empty(prio);
                 // Lazy-invalidation model: entries may stay in the VecDeque after
                 // `remove_thread_from_runq` marks them not-enqueued.
                 // Only return the entry if it still matches the task's canonical
@@ -631,11 +758,9 @@ impl SchedState {
             return None;
         }
 
-        let removed = pc.runq[prio].remove(idx);
-        if removed.is_none() {
+        if pc.runq.remove_at(prio, idx).is_none() {
             return None;
         }
-        pc.clear_runnable_if_empty(prio);
         pc.stats.runnable_dequeues = pc.stats.runnable_dequeues.saturating_add(1);
         pc.stats.runq_depth_change_events = pc.stats.runq_depth_change_events.saturating_add(1);
         if let Some(thread) = threads.get_mut(&tid) {
@@ -839,22 +964,20 @@ impl SchedState {
         let Some(pc) = per_cpu.get_mut(cpu) else {
             return;
         };
-        let runq = &mut pc.runq[prio];
-        if runq.len() < RUNQ_COMPACT_TRIGGER_MIN_LEN {
+        if pc.runq[prio].len() < RUNQ_COMPACT_TRIGGER_MIN_LEN {
             return;
         }
 
-        let front_is_stale = runq.iter().take(RUNQ_STALE_PURGE_BUDGET).all(|entry_tid| {
+        let front_is_stale = pc.runq[prio].iter().take(RUNQ_STALE_PURGE_BUDGET).all(|entry_tid| {
             threads.get(entry_tid).and_then(|thread| thread.runq_location) != Some((cpu, prio))
         });
         if !front_is_stale {
             return;
         }
 
-        runq.retain(|entry_tid| {
+        pc.runq.retain_at(prio, |entry_tid| {
             threads.get(entry_tid).and_then(|thread| thread.runq_location) == Some((cpu, prio))
         });
-        pc.clear_runnable_if_empty(prio);
     }
 
     // ── Backward-compatible forwarding methods ────────────────────────────────
@@ -1176,13 +1299,13 @@ mod tests {
 
         state.enqueue_thread(0, TaskPriority::Normal as usize, 51);
         assert_ne!(
-            state.per_cpu[0].nonempty_runnable_mask & (1u8 << TaskPriority::Normal as usize),
+            state.per_cpu[0].runq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize),
             0
         );
 
         assert_eq!(state.dequeue_thread_front(0, TaskPriority::Normal as usize), Some(51));
         assert_eq!(
-            state.per_cpu[0].nonempty_runnable_mask & (1u8 << TaskPriority::Normal as usize),
+            state.per_cpu[0].runq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize),
             0
         );
     }
@@ -1195,7 +1318,7 @@ mod tests {
 
         state.enqueue_thread(0, TaskPriority::Idle as usize, 61);
         assert_eq!(
-            state.per_cpu[0].nonempty_runnable_mask, 0,
+            state.per_cpu[0].runq.nonempty_runnable_mask(), 0,
             "idle queue should not be marked as non-idle runnable work"
         );
     }
@@ -1228,9 +1351,8 @@ mod tests {
         assert!(cs.current.is_none(), "new CpuScheduler should have no current task");
         assert!(cs.idle_task.is_none(), "new CpuScheduler should have no idle task");
         assert!(!cs.need_resched, "new CpuScheduler should not need rescheduling");
-        assert_eq!(cs.nonempty_runnable_mask, 0, "new CpuScheduler should have empty run queues");
-        let total_runnable: usize = cs.runq.iter().map(|q| q.len()).sum();
-        assert_eq!(total_runnable, 0, "all priority run queues should start empty");
+        assert_eq!(cs.runq.nonempty_runnable_mask(), 0, "new CpuScheduler should have empty run queues");
+        assert_eq!(cs.runq.total_len(), 0, "all priority run queues should start empty");
     }
 
     #[test]
@@ -1253,5 +1375,142 @@ mod tests {
             "cpu1 run queue must not be affected by enqueue on cpu0");
         assert_eq!(cs0.cpu_id, 0);
         assert_eq!(cs1.cpu_id, 1);
+    }
+
+    // ── RunQueue struct tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn run_queue_enqueue_updates_nonempty_mask() {
+        let mut rq = RunQueue::new();
+        assert_eq!(rq.nonempty_runnable_mask(), 0);
+        rq.enqueue(TaskPriority::Normal as usize, 1);
+        assert_ne!(
+            rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize),
+            0,
+            "enqueue at Normal priority should set its bit in nonempty_runnable_mask"
+        );
+    }
+
+    #[test]
+    fn run_queue_enqueue_idle_does_not_set_mask() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::Idle as usize, 1);
+        assert_eq!(
+            rq.nonempty_runnable_mask(), 0,
+            "idle-priority enqueue must not affect nonempty_runnable_mask"
+        );
+    }
+
+    #[test]
+    fn run_queue_pop_front_raw_clears_mask_on_drain() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::High as usize, 42);
+        assert_eq!(rq.pop_front_raw(TaskPriority::High as usize), Some(42));
+        assert_eq!(
+            rq.nonempty_runnable_mask() & (1u8 << TaskPriority::High as usize),
+            0,
+            "mask bit should be cleared when queue becomes empty"
+        );
+    }
+
+    #[test]
+    fn run_queue_runnable_count_excludes_idle() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::Idle as usize, 1);
+        rq.enqueue(TaskPriority::Normal as usize, 2);
+        rq.enqueue(TaskPriority::High as usize, 3);
+        assert_eq!(
+            rq.runnable_count(), 2,
+            "runnable_count should count only non-idle (prio >= 1) entries"
+        );
+    }
+
+    #[test]
+    fn run_queue_total_len_includes_idle() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::Idle as usize, 1);
+        rq.enqueue(TaskPriority::Normal as usize, 2);
+        assert_eq!(rq.total_len(), 2);
+    }
+
+    #[test]
+    fn run_queue_is_empty_reflects_non_idle_queues() {
+        let mut rq = RunQueue::new();
+        assert!(rq.is_empty(), "new RunQueue should be empty");
+        rq.enqueue(TaskPriority::Idle as usize, 1);
+        assert!(rq.is_empty(), "idle-only entry should not make is_empty() false");
+        rq.enqueue(TaskPriority::Normal as usize, 2);
+        assert!(!rq.is_empty(), "non-idle entry should make is_empty() false");
+    }
+
+    #[test]
+    fn run_queue_pick_next_returns_highest_priority() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::Low as usize, 10);
+        rq.enqueue(TaskPriority::High as usize, 20);
+        rq.enqueue(TaskPriority::Normal as usize, 30);
+        let result = rq.pick_next();
+        assert_eq!(
+            result,
+            Some((TaskPriority::High as usize, 20)),
+            "pick_next should return the entry from the highest non-idle priority queue"
+        );
+        assert_eq!(rq.runnable_count(), 2, "pick_next should remove the returned entry");
+    }
+
+    #[test]
+    fn run_queue_pick_next_returns_none_when_all_empty() {
+        let mut rq = RunQueue::new();
+        assert_eq!(rq.pick_next(), None, "pick_next on empty RunQueue should return None");
+    }
+
+    #[test]
+    fn run_queue_pick_next_ignores_idle_queue() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::Idle as usize, 99);
+        assert_eq!(
+            rq.pick_next(), None,
+            "pick_next should return None when only the idle queue is non-empty"
+        );
+    }
+
+    #[test]
+    fn run_queue_has_higher_priority_work() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::High as usize, 5);
+        assert!(
+            rq.has_higher_priority_work(TaskPriority::Normal as usize),
+            "should detect High > Normal"
+        );
+        assert!(
+            !rq.has_higher_priority_work(TaskPriority::High as usize),
+            "should not find work strictly above High when only High is enqueued"
+        );
+    }
+
+    #[test]
+    fn run_queue_remove_at_updates_mask() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::Normal as usize, 7);
+        rq.enqueue(TaskPriority::Normal as usize, 8);
+        assert_eq!(rq.remove_at(TaskPriority::Normal as usize, 0), Some(7));
+        assert_ne!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
+            "mask should remain set while queue still has entries");
+        assert_eq!(rq.remove_at(TaskPriority::Normal as usize, 0), Some(8));
+        assert_eq!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
+            "mask should be cleared when queue is fully drained via remove_at");
+    }
+
+    #[test]
+    fn run_queue_retain_at_syncs_mask() {
+        let mut rq = RunQueue::new();
+        rq.enqueue(TaskPriority::Normal as usize, 1);
+        rq.enqueue(TaskPriority::Normal as usize, 2);
+        rq.retain_at(TaskPriority::Normal as usize, |tid| *tid == 2);
+        assert_ne!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
+            "mask should remain set if retain leaves entries");
+        rq.retain_at(TaskPriority::Normal as usize, |_| false);
+        assert_eq!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
+            "mask should be cleared when retain removes all entries");
     }
 }

@@ -305,7 +305,7 @@ impl<R: BootRuntime> Scheduler<R> {
     /// decide whether to halt or keep spinning.
     pub fn has_runnable_work(&self, cpu_idx: usize) -> bool {
         if let Some(pc) = self.state.per_cpu.get(cpu_idx) {
-            pc.nonempty_runnable_mask != 0
+            pc.runq.nonempty_runnable_mask() != 0
         } else {
             false
         }
