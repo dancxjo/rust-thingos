@@ -200,8 +200,12 @@ impl CompositorVisuals {
                 width,
             );
             if res != 0 {
-                stem::info!("bloom: wallpaper worker: using periwinkle fallback");
-                texture.as_slice_mut().fill(0xFFCCCCFF);
+                stem::error!(
+                    "bloom: wallpaper worker: decode failed (code {}); keeping previous wallpaper",
+                    res
+                );
+                loading_flag.store(false, Ordering::Release);
+                return;
             }
 
             *ready_slot.lock() = Some(texture);
