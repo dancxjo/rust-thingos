@@ -1,6 +1,6 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-23 17:57:17
+> Last run: 2026-04-23 18:16:03
 
 ## Features
 
@@ -15,8 +15,10 @@
 | [httpsd concurrent streaming](httpsd-concurrent-streaming/README.md) | 0/2 | ❌ |
 | [ISO9660 boot filesystem mount](iso9660-boot-filesystem-mount/README.md) | 0/3 | ❌ |
 | [mDNS /hosts VFS](mdns-hosts-vfs/README.md) | 0/1 | ❌ |
+| [netd concurrent TCP and DNS/RPC stability](netd-concurrent-tcp-and-dns-rpc-stability/README.md) | 3/3 | ✅ |
 | [Process Reaping Smoke Test](process-reaping-smoke-test/README.md) | 1/1 | ✅ |
 | [Serial Shell Boot](serial-shell-boot/README.md) | 1/1 | ✅ |
 | [Shell Command Repetition](shell-command-repetition/README.md) | 1/2 | ❌ |
+| [Terminal parser and renderer threading](terminal-parser-and-renderer-threading/README.md) | 0/4 | ❌ |
 | [VFS Extended Attributes](vfs-extended-attributes/README.md) | 1/1 | ✅ |
 | [Wikipedia Redirect](wikipedia-redirect/README.md) | 0/1 | ❌ |
