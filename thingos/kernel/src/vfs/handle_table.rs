@@ -193,7 +193,9 @@ impl HandleTable {
 
     /// Replace the thing flags (`FD_*`) for `fd`.
     pub fn set_handle_flags(&mut self, thing: u32, flags: u32) -> SysResult<()> {
-        self.get_mut(thing)?.handle_flags = flags & HANDLE_CLOEXEC;
+        let entry = self.get_mut(thing)?;
+        entry.handle_flags = flags & HANDLE_CLOEXEC;
+        crate::kinfo!("VFS: set_handle_flags fd={} flags={:x}", thing, entry.handle_flags);
         Ok(())
     }
 
@@ -228,11 +230,12 @@ impl HandleTable {
     /// Called during `exec` to implement close-on-exec semantics.  File
     /// descriptors without `HANDLE_CLOEXEC` are preserved across the exec.
     pub fn close_on_exec(&mut self) {
-        for slot in self.entries.iter_mut() {
+        for (fd, slot) in self.entries.iter_mut().enumerate() {
             let should_close =
                 slot.as_ref().map(|e| e.handle_flags & HANDLE_CLOEXEC != 0).unwrap_or(false);
             if should_close {
                 if let Some(entry) = slot.take() {
+                    crate::kinfo!("VFS: close_on_exec closing fd {}", fd);
                     entry.node.close();
                 }
             }
