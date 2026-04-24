@@ -677,7 +677,9 @@ fn main(_arg: usize) -> ! {
     for disk in &disks {
         if let Some(h) = disk.read_port_handle {
             if let Ok(fd) = vfs_handle_from_port(h) {
+                info!("ATA_DISK: Registering port handle {} (FD {})", h, fd);
                 if let Ok(tok) = svc.add_fd_readable(fd) {
+                    info!("ATA_DISK: Added FD {} with token {:?}", fd, tok);
                     tok_to_handle.push((tok, h));
                 }
             }

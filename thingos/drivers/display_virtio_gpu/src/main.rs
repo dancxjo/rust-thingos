@@ -266,6 +266,7 @@ fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
         Ok(s) => s,
         Err(_) => return ProviderResponse::err(Errno::EINVAL),
     };
+    stem::info!("DISP: vfs_lookup path='{}'", path);
     let handle: u64 = match path.trim_matches('/') {
         "" => HANDLE_ROOT,
         "card0" => HANDLE_CARD,
@@ -916,8 +917,13 @@ fn main(boot_arg: usize) -> ! {
 
     // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
     let mut wait_buf = [0u8; 512];
+    let mut loop_count = 0;
     info!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
     let assigned_bind_id = loop {
+        loop_count += 1;
+        if loop_count % 100 == 0 {
+            info!("display_virtio_gpu: Still waiting for BIND_ASSIGNED (loop={})...", loop_count);
+        }
         if let Ok(n) = stem::syscall::port_try_recv(drv_req_read, &mut wait_buf) {
             if let Some((header, payload)) = drvproto::parse_message(&wait_buf[..n]) {
                 if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
@@ -1009,22 +1015,22 @@ fn main(boot_arg: usize) -> ! {
     let mut vfs_loop = ProviderLoop::new(vfs_read);
 
     loop {
-        stem::trace!("display_virtio_gpu: waiting on WaitSet...");
+        stem::info!("display_virtio_gpu: waiting on WaitSet...");
         match ws.wait(Some(core::time::Duration::from_millis(10))) {
             Ok(events) => {
                 for ev in events {
                     if ev.token() == drv_req_read_tok && ev.is_readable() {
-                        stem::trace!("display_virtio_gpu: drv_req readable token fired");
+                        stem::info!("display_virtio_gpu: drv_req readable token fired");
                     }
                     if ev.token() == vfs_read_tok && ev.is_readable() {
-                        stem::trace!("display_virtio_gpu: vfs_read readable token fired");
+                        stem::info!("display_virtio_gpu: vfs_read readable token fired");
                     }
                 }
 
                 // Drain VFS RPCs via ProviderLoop. ProviderLoop correctly prefixes
                 // every response with the req_id so the kernel can route replies.
                 while let Ok(Some(req)) = vfs_loop.try_next_request() {
-                    stem::trace!("display_virtio_gpu: VFS RPC op={:?}", req.op);
+                    stem::info!("display_virtio_gpu: VFS RPC op={:?}", req.op);
                     let resp = dispatch_vfs_rpc(&mut driver, &req);
                     vfs_loop.send_response(&req, resp).ok();
                 }

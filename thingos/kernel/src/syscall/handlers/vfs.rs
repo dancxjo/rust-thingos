@@ -830,7 +830,7 @@ pub fn sys_fs_mount_ex(
 
     // Build and mount the provider filesystem.
     let provider_fs =
-        vfs::provider::ProviderFs::new(req_port, resp_port, resp_write_handle.0, req_port_id.0);
+        vfs::provider::ProviderFs::new(req_port.clone(), resp_port, resp_write_handle.0, req_port_id.0);
 
     let driver: Arc<dyn vfs::VfsDriver> = if (flags & abi::syscall::mount_flags::MCOR) != 0 {
         Arc::new(vfs::overlay::OverlayFs::new(provider_fs as Arc<dyn vfs::VfsDriver>))
@@ -840,7 +840,7 @@ pub fn sys_fs_mount_ex(
 
     vfs::mount::mount(&abs_path, driver, flags);
 
-    crate::kdebug!("vfs: mounted userland provider at {} (flags: {:#x})", abs_path, flags);
+    crate::kdebug!("vfs: mounted userland provider at {} (flags: {:#x}) port={:p}", abs_path, flags, Arc::as_ptr(&req_port));
     Ok(0)
 }
 

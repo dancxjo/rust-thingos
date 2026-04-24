@@ -147,6 +147,7 @@ impl ProviderRpc {
         msg.extend_from_slice(&req_id.to_le_bytes());
         msg.extend_from_slice(payload);
 
+        // crate::kinfo!("VFS_RPC: sending request op={:?} id={} to port={:p}", op, req_id, Arc::as_ptr(self.req.port()));
         let written = self.req.send(&msg);
         if written < msg.len() {
             crate::ipc::diag::VFS_RPC_ERRORS.fetch_add(1, Ordering::Relaxed);

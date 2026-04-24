@@ -53,7 +53,7 @@ static PORTS: Mutex<Vec<Option<Arc<Port>>>> = Mutex::new(Vec::new());
 pub fn create_port(capacity: usize) -> PortId {
     let port = Arc::new(Port::new(capacity));
     let mut ports = PORTS.lock();
-    crate::kdebug!("CREATE_PORT: capacity={} port={:p}", capacity, Arc::as_ptr(&port));
+    crate::kdebug!("CREATE_PORT: capacity={}", capacity);
 
     // Find a free slot or append
     for (i, slot) in ports.iter_mut().enumerate() {

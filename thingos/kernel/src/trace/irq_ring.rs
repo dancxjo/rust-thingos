@@ -13,8 +13,8 @@ impl IrqRing {
         Self { buffer: [TraceEvent::Empty; RING_SIZE], head: 0 }
     }
 
-    pub fn push_internal(&mut self, event: TraceEvent) {
-        self.buffer[self.head] = event;
+    pub fn push_internal(&mut self, event: &TraceEvent) {
+        self.buffer[self.head] = *event;
         self.head = (self.head + 1) % RING_SIZE;
     }
 
@@ -58,6 +58,6 @@ pub static IRQ_RING: Mutex<IrqRing> = Mutex::new(IrqRing::new());
 
 pub fn push(event: TraceEvent) {
     if let Some(mut ring) = IRQ_RING.try_lock() {
-        ring.push_internal(event);
+        ring.push_internal(&event);
     }
 }

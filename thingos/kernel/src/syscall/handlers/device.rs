@@ -442,6 +442,9 @@ pub fn sys_device_ioport(port: usize, val: usize, write: bool, width: usize) -> 
     let authority = crate::authority::bridge::authority_for_current();
     crate::authority::bridge::check_privilege(&authority, "ioport")?;
     if write {
+        if port != 0x3F8 && port != 0x2F8 && port != 0x1F7 {
+            // crate::kinfo!("IOPORT: write port={:x} val={:x} width={}", port, val, width);
+        }
         match width {
             1 => crate::ioport_write_u8(port as u16, val as u8),
             2 => crate::ioport_write_u16(port as u16, val as u16),
@@ -456,6 +459,9 @@ pub fn sys_device_ioport(port: usize, val: usize, write: bool, width: usize) -> 
             4 => crate::ioport_read_u32(port as u16) as usize,
             _ => return Err(Errno::EINVAL),
         };
+        if port != 0x3F8 && port != 0x2F8 && port != 0x1F7 {
+            // crate::kinfo!("IOPORT: read port={:x} width={} ret={:x}", port, width, ret);
+        }
         Ok(ret)
     }
 }

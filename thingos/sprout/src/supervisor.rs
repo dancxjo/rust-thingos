@@ -391,7 +391,8 @@ impl Supervisor {
                                 supervisor_protocol::MSG_BIND_ASSIGNED,
                                 &assigned_bytes[..len],
                             ) {
-                                let _ = stem::syscall::port_send(req_port, &msg_buf[..total_len]);
+                                let res = stem::syscall::port_send(req_port, &msg_buf[..total_len]);
+                                info!("SPROUT: Sent MSG_BIND_ASSIGNED to req_port {} (res={:?})", req_port, res);
                             }
                         }
                     }
@@ -639,7 +640,10 @@ impl Supervisor {
             return;
         }
         stem::info!("SPROUT: Checking if bloom is ready to spawn (/dev/display/card0)...");
-        if !path_exists("/dev/display/card0") {
+        stem::info!("SPROUT: Calling path_exists(/dev/display/card0)...");
+        let exists = path_exists("/dev/display/card0");
+        stem::info!("SPROUT: path_exists returned {}", exists);
+        if !exists {
             return;
         }
         match stem::syscall::spawn_process("/bin/bloom", 0) {

@@ -161,7 +161,8 @@ impl Port {
             }
         }
 
-        self.head.store(head.wrapping_add(to_write), Ordering::Release);
+        let new_head = head.wrapping_add(to_write);
+        self.head.store(new_head, Ordering::Release);
 
         // One queued message should wake one receiver.
         self.waiters_read.wake_one();
@@ -434,6 +435,10 @@ impl Sender {
     pub fn has_readers(&self) -> bool {
         self.inner.has_readers()
     }
+
+    pub fn port(&self) -> &Arc<Port> {
+        &self.inner
+    }
 }
 
 impl Drop for Sender {
@@ -469,6 +474,10 @@ impl Receiver {
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn port(&self) -> &Arc<Port> {
+        &self.inner
     }
 
     pub fn has_writers(&self) -> bool {
