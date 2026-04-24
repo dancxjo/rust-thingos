@@ -1,1 +1,1 @@
-[{"uri":"home/dancxjo/src/thingos/docs/behavior/features/boot-progress.feature","keyword":"","name":"","tags":[],"elements":[{"keyword":"","type":"scenario","id":"failed-to-parsehome/dancxjo/src/thingos/docs/behavior/features/boot-progress.feature","line":0,"name":"","tags":[],"steps":[{"keyword":"","line":0,"name":"scenario","result":{"status":"failed","duration":0,"error_message":"Could not parse feature file: /home/dancxjo/src/thingos/docs/behavior/features/boot-progress.feature"}}]}]}]
+[]
