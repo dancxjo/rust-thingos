@@ -18,8 +18,6 @@
 //!    dispatches normalized events to all registered sinks.
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
 use abi::hid::{
@@ -30,7 +28,7 @@ use abi::hid::{
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::wire::KindId;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
-use stem::syscall::{port_create, getpid};
+use stem::syscall::port_create;
 use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write};
 use stem::wait_set::WaitToken;
 use stem::{debug, info, warn};
@@ -50,24 +48,6 @@ fn update_active_ui(target: &str) {
     }
 }
 
-fn get_active_ui() -> alloc::string::String {
-    use stem::syscall::vfs::vfs_stat;
-    if let Ok(fd) = vfs_open("/session/active_ui", abi::syscall::vfs_flags::O_RDONLY) {
-        if let Ok(stat) = vfs_stat(fd) {
-            let size = stat.size as usize;
-            let mut buf = alloc::vec::Vec::with_capacity(size as usize);
-            buf.resize(size as usize, 0);
-            if let Ok(n) = vfs_read(fd, &mut buf) {
-                buf.truncate(n);
-                let _ = vfs_close(fd);
-                return alloc::string::String::from_utf8_lossy(&buf).trim().to_string();
-            }
-        }
-        let _ = vfs_close(fd);
-    }
-    "terminal".to_string()
-}
-
 /// Publish bristle's PID to `/run/bristle/pid` so consumers can find us.
 fn publish_pid() {
     let _ = vfs_mkdir("/run");
@@ -77,7 +57,7 @@ fn publish_pid() {
         let text = alloc::format!("{}\n", pid);
         let _ = vfs_write(fd, text.as_bytes());
         let _ = vfs_close(fd);
-        debug!("bristle: published pid {} to /run/bristle/pid", pid);
+        info!("bristle: published pid {} to /run/bristle/pid", pid);
     }
 }
 
@@ -120,7 +100,7 @@ fn main(_arg: usize) -> ! {
     let _ = vfs_mkdir("/run/bristle");
     publish_device_handle("/run/bristle/kbd_in", kbd_write);
     publish_device_handle("/run/bristle/mouse_in", mouse_write);
-    debug!(
+    info!(
         "bristle: published device handles kbd_in={} mouse_in={}",
         kbd_write, mouse_write
     );
