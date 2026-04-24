@@ -698,6 +698,106 @@ impl WakeBatchLoadSnapshot {
     }
 }
 
+/// Returns `true` if `cpu` is currently running its idle task.
+///
+/// A CPU is considered idle when both its `current` and `idle_task` slots are
+/// initialized *and* they refer to the same task ID.  Uninitialized CPUs
+/// (either field is `None`) are treated as non-idle to avoid spurious routing
+/// during early boot — the `unwrap_or(false)` ensures that a CPU with no
+/// per-CPU entry (e.g. an out-of-range index) is likewise treated as non-idle
+/// rather than panicking.
+fn is_cpu_idle(state: &crate::sched::state::SchedState, cpu: usize) -> bool {
+    state
+        .per_cpu
+        .get(cpu)
+        .map(|pc| matches!((pc.current, pc.idle_task), (Some(cur), Some(idle)) if cur == idle))
+        .unwrap_or(false)
+}
+
+/// Find any idle online CPU.
+///
+/// Returns the index of the first online CPU whose `current` task is its
+/// `idle_task`, or `None` if no online CPU is currently idle.  The scan
+/// order follows `state.online_cpus` (sorted ascending by CPU index).
+///
+/// The `cpu < state.per_cpu.len()` bounds check guards against transient
+/// states where `online_cpus` contains an index that was registered before
+/// the corresponding `per_cpu` slot was pushed (e.g. during early SMP
+/// bring-up).  In steady state the two collections are always in sync, so
+/// the check is purely defensive and never eliminates a valid candidate.
+fn find_idle_online_cpu(state: &crate::sched::state::SchedState) -> Option<usize> {
+    state
+        .online_cpus
+        .iter()
+        .copied()
+        .find(|&cpu| cpu < state.per_cpu.len() && is_cpu_idle(state, cpu))
+}
+
+/// Select the target CPU for an `Affinity::Any` task wakeup.
+///
+/// This is the canonical entry point for wake CPU selection.  The policy
+/// applies in order:
+///
+/// 1. **Locality** — prefer `last_cpu` unless the local CPU is meaningfully
+///    less loaded (see `select_preferred_any_affinity_wake_cpu`).
+/// 2. **Idle CPU** — if the preferred CPU has at least `overload_gap` tasks
+///    queued *and* an idle online CPU is available, route to the idle CPU
+///    rather than adding to an already-busy queue.
+/// 3. **Least-loaded** — fall back to the overload-aware redirect in
+///    `select_any_affinity_wake_cpu`, which steers to the least-loaded
+///    online CPU when the preferred one is overloaded.
+pub(crate) fn choose_wake_cpu<R: BootRuntime>(
+    sched: &types::Scheduler<R>,
+    last_cpu: Option<usize>,
+) -> usize {
+    let preferred = select_preferred_any_affinity_wake_cpu::<R>(sched, last_cpu);
+
+    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
+    let preferred_depth = runq_depth_for_cpu(&sched.state, preferred);
+    if preferred_depth >= overload_gap {
+        if let Some(idle_cpu) = find_idle_online_cpu(&sched.state) {
+            if idle_cpu != preferred {
+                return idle_cpu;
+            }
+        }
+    }
+
+    select_any_affinity_wake_cpu::<R>(sched, preferred)
+}
+
+/// Snapshot-aware variant of [`choose_wake_cpu`] for batch wakeup paths.
+///
+/// Uses a pre-captured [`WakeBatchLoadSnapshot`] for run-queue depth queries
+/// instead of reading live per-CPU state on every call.  Idle CPU detection
+/// still reads live per-CPU state because idle status is not captured in the
+/// snapshot (it changes infrequently relative to queue depths).
+///
+/// **Consistency note**: because idle detection bypasses the snapshot, a
+/// CPU that transitions from idle to running between the snapshot capture
+/// and the idle check may still be selected as the idle target.  This is
+/// benign — the woken task will simply find a now-running CPU and compete
+/// normally, which is no worse than any other Any-affinity placement.
+fn choose_wake_cpu_from_snapshot<R: BootRuntime>(
+    sched: &types::Scheduler<R>,
+    last_cpu: Option<usize>,
+    load_snapshot: &WakeBatchLoadSnapshot,
+) -> usize {
+    let preferred =
+        select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(sched, last_cpu, load_snapshot);
+
+    let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
+    let preferred_depth = load_snapshot.depth_for_cpu(preferred);
+    if preferred_depth >= overload_gap {
+        if let Some(idle_cpu) = find_idle_online_cpu(&sched.state) {
+            if idle_cpu != preferred {
+                return idle_cpu;
+            }
+        }
+    }
+
+    select_any_affinity_wake_cpu_from_snapshot::<R>(sched, preferred, load_snapshot)
+}
+
 /// Per-CPU start tick for the current try-lock miss warning window.
 static TRYLOCK_MISS_WINDOW_START: [AtomicU64; types::MAX_CPUS] = {
     #[allow(clippy::declare_interior_mutable_const)]
@@ -2391,14 +2491,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         cpu
                     }
                     crate::task::Affinity::Any => {
-                        let preferred = select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(
+                        let target = choose_wake_cpu_from_snapshot::<R>(
                             self,
                             sf.last_cpu,
-                            &wake_batch_loads,
-                        );
-                        let target = select_any_affinity_wake_cpu_from_snapshot::<R>(
-                            self,
-                            preferred,
                             &wake_batch_loads,
                         );
                         wake_batch_loads.note_enqueue(target);
@@ -9048,6 +9143,139 @@ mod tests {
         assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
         assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 0);
         assert_eq!(select_any_affinity_wake_cpu::<MockRuntime>(&sched, 0), 1);
+    }
+
+    // ── choose_wake_cpu tests ─────────────────────────────────────────────
+
+    /// `choose_wake_cpu` should route an Any-affinity wakeup to the idle CPU
+    /// when the preferred CPU (last_cpu) is loaded beyond the overload gap.
+    #[test]
+    fn test_choose_wake_cpu_prefers_idle_cpu_when_preferred_is_loaded() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests("redirect", 2);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        // CPU 0: loaded, current is a non-idle task.
+        // CPU 1: idle  (current == idle_task).
+        // CPU 2: online but not idle.
+        for _ in 0..3 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.mark_cpu_online(2);
+
+        // Make CPU 1 idle: current == idle_task == 80_001.
+        let idle_tid: u64 = 80_001;
+        sched.state.per_cpu[1].idle_task = Some(idle_tid);
+        sched.state.per_cpu[1].current = Some(idle_tid);
+
+        // Load CPU 0 past the overload gap (gap = 2, add 3 tasks).
+        for tid in 80_010..80_013 {
+            sched.state.enqueue_task(0, TaskPriority::Low as usize, tid);
+        }
+
+        // Task that was last on CPU 0.
+        let result = choose_wake_cpu::<MockRuntime>(&sched, Some(0));
+        assert_eq!(
+            result, 1,
+            "choose_wake_cpu should route to idle CPU 1 when CPU 0 is overloaded"
+        );
+    }
+
+    /// `choose_wake_cpu` should stay on the preferred CPU when the preferred CPU
+    /// is itself the idle CPU (i.e. it is lightly loaded).
+    #[test]
+    fn test_choose_wake_cpu_stays_on_preferred_when_preferred_is_idle() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests("redirect", 2);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        // Make CPU 0 idle: current == idle_task == 80_020.
+        let idle_tid: u64 = 80_020;
+        sched.state.per_cpu[0].idle_task = Some(idle_tid);
+        sched.state.per_cpu[0].current = Some(idle_tid);
+
+        // Task with last_cpu = 0 (the idle CPU).
+        let result = choose_wake_cpu::<MockRuntime>(&sched, Some(0));
+        // CPU 0 is the idle CPU and its depth is 0 (below overload_gap of 2),
+        // so no redirection should happen.
+        assert_eq!(
+            result, 0,
+            "choose_wake_cpu should keep preferred CPU when it is already idle"
+        );
+    }
+
+    /// `choose_wake_cpu` should use last_cpu as the target when no idle CPU
+    /// exists and the preferred CPU is not overloaded.
+    #[test]
+    fn test_choose_wake_cpu_uses_last_cpu_when_no_idle_cpu_and_not_overloaded() {
+        let _g = init_test_env();
+        reset_any_wake_policy_for_tests();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..3 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.mark_cpu_online(2);
+        // No idle CPU: current is None on all CPUs.
+
+        // Task with last_cpu = 2.
+        let result = choose_wake_cpu::<MockRuntime>(&sched, Some(2));
+        assert_eq!(
+            result, 2,
+            "choose_wake_cpu should return last_cpu when not overloaded and no idle CPU exists"
+        );
+    }
+
+    /// When multiple Any-affinity tasks wake at once and one idle CPU exists,
+    /// the first wakeup should land on the idle CPU; subsequent wakeups should
+    /// spread to other CPUs rather than all piling on the idle one.
+    #[test]
+    fn test_choose_wake_cpu_distributes_fanout_across_cpus() {
+        let _g = init_test_env();
+        set_any_wake_policy_for_tests("redirect", 1);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..4 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+        sched.state.mark_cpu_online(2);
+        sched.state.mark_cpu_online(3);
+
+        // Load CPUs 0, 2, 3 so they are above overload gap.
+        for cpu in [0usize, 2, 3] {
+            for tid_offset in 0..3u64 {
+                let tid = (cpu as u64) * 100 + 80_100 + tid_offset;
+                sched.state.enqueue_task(cpu, TaskPriority::Low as usize, tid);
+            }
+        }
+        // CPU 1 is idle.
+        let idle_tid: u64 = 80_050;
+        sched.state.per_cpu[1].idle_task = Some(idle_tid);
+        sched.state.per_cpu[1].current = Some(idle_tid);
+
+        // All tasks have last_cpu = 0 (overloaded).
+        let targets: alloc::vec::Vec<usize> = (0..4)
+            .map(|_| choose_wake_cpu::<MockRuntime>(&sched, Some(0)))
+            .collect();
+
+        // At least one call should have routed to an idle or less-loaded CPU.
+        assert!(
+            targets.iter().any(|&cpu| cpu != 0),
+            "fanout should distribute wakeups away from overloaded CPU 0, got {:?}",
+            targets
+        );
     }
 
     #[test]
