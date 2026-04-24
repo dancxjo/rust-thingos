@@ -214,16 +214,25 @@ struct VirtioGpuDriver {
     disp_width: u32,
     disp_height: u32,
     disp_stride: u32,
-    /// DMA-backed frame pool used as the blit target before GPU transfer.
+    /// Pre-allocated pool of DMA-backed frame buffers created during driver
+    /// initialization.  COMMIT operations round-robin through this pool as
+    /// blit targets before the pixels are transferred to the GPU.
     frame_pool: alloc::vec::Vec<Buffer>,
     /// Round-robin index: next frame pool slot for the next COMMIT.
     next_buffer_idx: usize,
+    /// Monotonically increasing counter incremented on every successful
+    /// present.  Used with `Buffer::last_present_seq` to compute buffer age
+    /// for MSG_ACQUIRE responses so clients can optimize damage regions.
     present_seq: u64,
     last_presented_idx: Option<usize>,
-    /// Buffers imported from clients via DISPLAY_OP_IMPORT_BUFFER.
+    /// Buffers imported from clients via DISPLAY_OP_IMPORT_BUFFER.  Each
+    /// entry is a client-provided shared-memory region mapped read-only into
+    /// this process.  Entries must be unmapped with `vm_unmap` when the
+    /// client calls DISPLAY_OP_RELEASE_BUFFER to avoid memory leaks.
     imported_buffers: alloc::collections::BTreeMap<BufferId, ImportedBuffer>,
     next_import_id: u32,
     /// Framebuffer FD used by the legacy MSG_BIND/MSG_PRESENT path.
+    /// New clients should use DISPLAY_OP_IMPORT_BUFFER + DISPLAY_OP_COMMIT.
     current_fd: Option<u32>,
     /// Current GPU resource ID for the active scanout.
     current_res_id: u32,
