@@ -1,12 +1,11 @@
-# ❌ Scenario: bristle no longer accepts a packed port argument
+# ✅ Scenario: bristle no longer accepts a packed port argument
 
-> Last run: 2026-04-24 11:14:27
+> Last run: 2026-04-24 12:47:00
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Then the log should match pattern "bristle: online" | ❌ | 1007ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

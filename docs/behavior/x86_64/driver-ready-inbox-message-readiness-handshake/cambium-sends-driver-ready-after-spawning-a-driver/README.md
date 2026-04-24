@@ -1,12 +1,11 @@
 # ✅ Scenario: Cambium sends DRIVER_READY after spawning a driver
 
-> Last run: 2026-04-24 11:14:27
+> Last run: 2026-04-24 12:47:00
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | When cambium spawns a hardware driver | ⏭️ | 0ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

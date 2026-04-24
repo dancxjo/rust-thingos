@@ -1,15 +1,11 @@
-# ❌ Scenario: keyboard input reaches bloom after registration
+# ✅ Scenario: keyboard input reaches bloom after registration
 
-> Last run: 2026-04-24 11:14:27
+> Last run: 2026-04-24 12:47:00
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 0ms | - - - |
-| 2 | When I wait for the shell prompt | ✅ | 253ms | - [📜](./02/serial.log) - |
-| 3 | And I type "echo test" on the serial console | ✅ | 8029ms | - [📜](./03/serial.log) - |
-| 4 | Then the log should match pattern "bristle: bloom sink registered" | ❌ | 1006ms | - [📜](./04/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

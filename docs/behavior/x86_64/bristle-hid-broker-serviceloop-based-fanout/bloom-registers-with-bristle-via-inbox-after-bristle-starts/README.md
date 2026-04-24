@@ -1,12 +1,11 @@
-# ❌ Scenario: bloom registers with bristle via inbox after bristle starts
+# ✅ Scenario: bloom registers with bristle via inbox after bristle starts
 
-> Last run: 2026-04-24 11:14:27
+> Last run: 2026-04-24 12:47:00
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Then the log should match pattern "bristle: bloom sink registered" | ❌ | 1007ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

@@ -1,12 +1,11 @@
 # ✅ Scenario: Sprout receives DRIVER_READY and logs the state transition
 
-> Last run: 2026-04-24 11:14:27
+> Last run: 2026-04-24 12:47:00
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | When the system finishes bringing up supervised services | ⏭️ | 0ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
