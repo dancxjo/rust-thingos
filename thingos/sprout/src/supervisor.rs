@@ -15,8 +15,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use spin::Mutex;
+use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
 use stem::service_loop::{ServiceEvent, ServiceLoop};
-use stem::syscall::PortHandle;
 use stem::time::Duration;
 use stem::{info, warn};
 
@@ -32,8 +32,7 @@ const NETD_PROBE_INTERVAL_NS: u64 = 1_000_000_000;
 const NETD_MAX_PROBE_FAILURES: u32 = 3;
 const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
 /// Periodic supervisor cadence — preserves the previous 100 ms `sleep_ms`
-/// rhythm that drove `process_registrations`, netd liveness probing, and the
-/// health-vine restart loop.
+/// rhythm that drove netd liveness probing and the health-vine restart loop.
 const SUPERVISOR_TICK_MS: u64 = 100;
 /// Inbox payload size for the Sprout supervisor `ServiceLoop`.  Sized to
 /// match Cambium and to comfortably hold a `THINGOS_JOB_EXIT` notification
@@ -171,10 +170,9 @@ impl Supervisor {
     /// Inbox-backed Layer 3 service loop.  Wakes on:
     ///
     /// - the periodic 100ms `Timeout` (drives `tick_supervisor`);
-    /// - typed inbox `Message`s (currently logged and ignored — Sprout has
-    ///   no Layer 3 control-plane messages defined yet);
-    /// - secondary `Ready` events (none registered yet — placeholder for
-    ///   the upcoming devices-watch / `KindId::DRIVER_READY` migration);
+    /// - typed inbox `Message`s — `DRIVER_READY` marks the corresponding
+    ///   `ManagedTask` as ready; unknown kinds are logged and dropped;
+    /// - secondary `Ready` events (none registered yet);
     /// - `InboxClosed`, which falls back to the legacy `sleep_ms` loop so
     ///   supervision continues even if the inbox is revoked.
     fn run_service_loop(&mut self, mut svc: ServiceLoop) -> ! {
@@ -182,18 +180,19 @@ impl Supervisor {
         loop {
             match svc.next_event(timeout) {
                 Ok(ServiceEvent::Message { kind, payload }) => {
-                    // No Sprout-level inbox protocol is defined yet.  Log
-                    // and drop unknown messages rather than failing the
-                    // loop.  We deliberately do *not* run a tick here so
-                    // that a hypothetical burst of inbox messages cannot
-                    // accelerate the supervision cadence beyond the 100ms
-                    // `Timeout` rhythm — this matches Cambium's
-                    // `messages_drained` / `reconcile_due` separation.
-                    stem::debug!(
-                        "SPROUT: ServiceLoop inbox message kind={:?} ({} bytes) — ignored",
-                        kind,
-                        payload.len()
-                    );
+                    if kind.0 == KIND_ID_THINGOS_DRIVER_READY {
+                        self.handle_driver_ready(payload);
+                    } else {
+                        // Unknown message kind — log and drop.  We deliberately
+                        // do *not* run a tick here so that a burst of inbox
+                        // messages cannot accelerate the supervision cadence
+                        // beyond the 100ms `Timeout` rhythm.
+                        stem::debug!(
+                            "SPROUT: ServiceLoop inbox message kind={:?} ({} bytes) — ignored",
+                            kind,
+                            payload.len()
+                        );
+                    }
                 }
                 Ok(ServiceEvent::Ready { token, event }) => {
                     // No secondary readiness sources are registered yet, but
@@ -221,6 +220,41 @@ impl Supervisor {
         }
     }
 
+    /// Handle a `DRIVER_READY` inbox message by marking the corresponding
+    /// `ManagedTask` as ready.
+    fn handle_driver_ready(&mut self, payload: &[u8]) {
+        let msg = match DriverReadyV1::from_bytes(payload) {
+            Some(m) => m,
+            None => {
+                warn!("SPROUT: DRIVER_READY payload too short or wrong version ({} bytes)", payload.len());
+                return;
+            }
+        };
+
+        if msg.status != 0 {
+            warn!(
+                "SPROUT: DRIVER_READY from PID {} reported error status {}",
+                msg.pid, msg.status
+            );
+        }
+
+        let mut tasks = self.tasks.lock();
+        if let Some(task) = tasks.iter_mut().find(|t| t.pid == Some(msg.pid as u64)) {
+            if !task.ready {
+                task.ready = true;
+                info!(
+                    "SPROUT: DRIVER_READY received — task '{}' (PID {}) marked ready",
+                    task.name, msg.pid
+                );
+            }
+        } else {
+            stem::debug!(
+                "SPROUT: DRIVER_READY from PID {} — no matching ManagedTask (already exited?)",
+                msg.pid
+            );
+        }
+    }
+
     /// Legacy `sleep_ms(100)`-driven supervisor loop, retained as a
     /// degraded fallback for the (essentially impossible) case where
     /// `ServiceLoop::new` fails or the inbox is closed mid-flight.
@@ -234,8 +268,6 @@ impl Supervisor {
     /// One iteration of the periodic supervisor work that previously ran
     /// inside the hand-rolled `loop { ...; sleep_ms(100); }` body.
     fn tick_supervisor(&mut self) {
-        stem::trace!("SPROUT: Loop iteration: process_registrations starting");
-        self.process_registrations();
         stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
         self.spawn_netd_if_ready();
         stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
@@ -253,7 +285,6 @@ impl Supervisor {
         let mut step = 0;
 
         loop {
-            self.process_registrations();
             self.monitor();
 
             if step % 20 == 0 {
@@ -385,255 +416,6 @@ impl Supervisor {
     pub fn monitor(&mut self) {
         run_health_vine(&self.tasks);
     }
-
-    #[allow(dead_code)]
-    fn process_registrations(&mut self) {
-        // Collect tasks that need polling. We only poll tasks that have a response
-        // port and are currently alive.
-        let tasks_to_poll: Vec<(u32, u32, alloc::string::String)> = {
-            let mut tasks = self.tasks.lock();
-            let mut poll_set = Vec::new();
-
-            for t in tasks.iter_mut() {
-                if t.drv_resp_read != 0 && t.pid.is_some() {
-                    // Initialize the cached FD if we haven't already.
-                    if t.resp_fd.is_none() {
-                        if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(t.drv_resp_read) {
-                            t.resp_fd = Some(fd);
-                            stem::debug!(
-                                "SPROUT: Bridged resp_port {} -> FD {} for task '{}'",
-                                t.drv_resp_read,
-                                fd,
-                                t.name
-                            );
-                        }
-                    }
-
-                    if let Some(fd) = t.resp_fd {
-                        poll_set.push((fd, t.drv_req_write, t.name.clone()));
-                    }
-                }
-            }
-            poll_set
-        };
-
-        let mut pollfds = tasks_to_poll
-            .iter()
-            .map(|(resp_fd, _, _)| abi::syscall::PollHandle {
-                handle: *resp_fd as i32,
-                events: abi::syscall::poll_flags::POLLIN
-                    | abi::syscall::poll_flags::POLLHUP
-                    | abi::syscall::poll_flags::POLLERR,
-                revents: 0,
-            })
-            .collect::<Vec<_>>();
-
-        if !pollfds.is_empty() {
-            match stem::syscall::vfs::vfs_poll(&mut pollfds, 100) {
-                Ok(n) => {
-                    if n > 0 {
-                        stem::trace!("SPROUT: poll yielded {} ready events", n);
-                    }
-                }
-                Err(e) => {
-                    warn!("SPROUT: registration poll failed: {:?}", e);
-                    return;
-                }
-            }
-        }
-
-        // DRAIN MESSAGES
-        for ((resp_fd, drv_req_write, task_name), _pollfd) in
-            tasks_to_poll.into_iter().zip(pollfds.iter())
-        {
-            let mut msg_data = [0u8; 1024];
-            let mut msg_fds = [0u32; 1];
-
-            loop {
-                // info!("SPROUT: Calling recvmsg for {}...", task_name);
-                match stem::syscall::socket::recvmsg(resp_fd, &mut msg_data, &mut msg_fds) {
-                    Ok((n, n_fds)) => {
-                        info!(
-                            "SPROUT: Recvmsg SUCCESS from {}: n={}, nfds={}",
-                            task_name, n, n_fds
-                        );
-                        if n == 0 && n_fds == 0 {
-                            break;
-                        }
-
-                        let bundled_fd = if n_fds > 0 { msg_fds[0] } else { 0 };
-                        let parsed = abi::display_driver_protocol::parse_message(&msg_data[..n]);
-                        if let Some((header, payload)) = parsed {
-                            if header.msg_type == abi::supervisor_protocol::MSG_BIND_READY {
-                                info!(
-                                    "SPROUT: BIND_READY from {} (bundle_fd={})",
-                                    task_name, bundled_fd
-                                );
-                                self.handle_bind_ready(
-                                    &task_name,
-                                    drv_req_write,
-                                    payload,
-                                    bundled_fd,
-                                );
-                            }
-                        }
-                    }
-                    Err(abi::errors::Errno::EAGAIN) => break,
-                    Err(e) => {
-                        warn!("SPROUT: recvmsg error from {}: {:?}", task_name, e);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn handle_bind_ready(
-        &mut self,
-        task_name: &str,
-        drv_req_write: PortHandle,
-        payload: &[u8],
-        bundled_fd: u32,
-    ) {
-        use abi::supervisor_protocol::{self, MSG_BIND_ASSIGNED, MSG_BIND_FAILED, classes};
-        use stem::syscall::{port_send_all, vfs_close, vfs_mount};
-
-        // Helper: send MSG_BIND_FAILED back to the driver.
-        let send_failed = |req_write: u32, id: u64, code: u32, msg: &[u8]| {
-            let mut reason = [0u8; 64];
-            let len = msg.len().min(64);
-            reason[..len].copy_from_slice(&msg[..len]);
-            let failed = supervisor_protocol::BindFailedPayload {
-                bind_instance_id: id,
-                error_code: code,
-                _reserved: 0,
-                reason,
-            };
-            let mut payload_bytes = [0u8; supervisor_protocol::BIND_FAILED_PAYLOAD_SIZE];
-            let mut reply_buf = [0u8; 256];
-            if let Some(p_len) =
-                supervisor_protocol::encode_bind_failed_le(&failed, &mut payload_bytes)
-            {
-                if let Some(total_len) = abi::display_driver_protocol::encode_message(
-                    &mut reply_buf,
-                    MSG_BIND_FAILED,
-                    &payload_bytes[..p_len],
-                ) {
-                    let _ = port_send_all(req_write, &reply_buf[..total_len]);
-                }
-            }
-        };
-
-        if let Some(ready) = supervisor_protocol::decode_bind_ready_le(payload) {
-            let provider_port = bundled_fd;
-            if provider_port == 0 {
-                warn!("SPROUT: BIND_READY from {} carried no provider FD — rejecting", task_name);
-                send_failed(
-                    drv_req_write,
-                    ready.bind_instance_id,
-                    supervisor_protocol::errors::ERR_NO_PROVIDER_HANDLE,
-                    b"no provider handle attached",
-                );
-                return;
-            }
-
-            let class_alloc = if ready.class_mask & classes::DISPLAY_CARD != 0 {
-                Some(("display", "/dev/display/card"))
-            } else if ready.class_mask & classes::INPUT_EVENT != 0 {
-                Some(("input", "/dev/input/event"))
-            } else if ready.class_mask & classes::BLOCK_DEVICE != 0 {
-                Some(("block", "/dev/block/sd"))
-            } else if ready.class_mask & classes::NETWORK_INTERFACE != 0 {
-                Some(("net", "/dev/net/virtio"))
-            } else if ready.class_mask & classes::SOUND_CARD != 0 {
-                Some(("sound", "/dev/sound/card"))
-            } else {
-                None
-            };
-
-            let (class_name, root) = match class_alloc {
-                Some(pair) => pair,
-                None => {
-                    warn!(
-                        "SPROUT: BIND_READY from {} has unrecognised class_mask 0x{:x} — rejecting",
-                        task_name, ready.class_mask
-                    );
-                    send_failed(
-                        drv_req_write,
-                        ready.bind_instance_id,
-                        supervisor_protocol::errors::ERR_UNKNOWN_CLASS,
-                        b"class_mask is zero or unrecognised",
-                    );
-                    let _ = vfs_close(provider_port);
-                    return;
-                }
-            };
-
-            let mut ledger = self.ledger.lock();
-            let unit = ledger.get(class_name).cloned().unwrap_or(0);
-            ledger.insert(class_name.to_string(), unit + 1);
-            let path = alloc::format!("{root}{unit}");
-            drop(ledger); // Release ledger lock before mounting
-
-            match vfs_mount(provider_port, &path) {
-                Ok(()) => {
-                    info!("SPROUT: Sovereign mount success: {} -> {}", task_name, path);
-
-                    let mut assigned = supervisor_protocol::BindAssignedPayload {
-                        bind_instance_id: ready.bind_instance_id,
-                        status: 0,
-                        unit_number: unit,
-                        primary_path: [0u8; 64],
-                    };
-                    let path_bytes = path.as_bytes();
-                    let len = path_bytes.len().min(64);
-                    assigned.primary_path[..len].copy_from_slice(&path_bytes[..len]);
-
-                    let mut reply_buf = [0u8; 256];
-                    let mut payload_bytes = [0u8; supervisor_protocol::BIND_ASSIGNED_PAYLOAD_SIZE];
-                    if let Some(p_len) =
-                        supervisor_protocol::encode_bind_assigned_le(&assigned, &mut payload_bytes)
-                    {
-                        if let Some(total_len) = abi::display_driver_protocol::encode_message(
-                            &mut reply_buf,
-                            MSG_BIND_ASSIGNED,
-                            &payload_bytes[..p_len],
-                        ) {
-                            let _ = port_send_all(drv_req_write, &reply_buf[..total_len]);
-                        }
-                    }
-
-                    // `vfs_mount` snapshots the provider port into a mounted
-                    // ProviderFs, but it does not consume the caller's handle.
-                    // Closing the bundled FD here tears down the only live
-                    // writer the provider task still owns and makes the mount
-                    // go stale under clients like bloom.
-                }
-                Err(e) => {
-                    warn!("SPROUT: Sovereign mount FAILED for {}: {:?}", task_name, e);
-                    send_failed(
-                        drv_req_write,
-                        ready.bind_instance_id,
-                        supervisor_protocol::errors::ERR_MOUNT_FAILED,
-                        b"vfs_mount failed",
-                    );
-                    let _ = vfs_close(bundled_fd);
-                }
-            }
-        } else {
-            warn!("SPROUT: Received malformed BIND_READY from {} — rejecting", task_name);
-            send_failed(
-                drv_req_write,
-                0,
-                supervisor_protocol::errors::ERR_INVALID_MESSAGE,
-                b"BIND_READY payload is malformed",
-            );
-            if bundled_fd != 0 {
-                let _ = vfs_close(bundled_fd);
-            }
-        }
-    }
 }
 
 fn path_exists(path: &str) -> bool {
@@ -647,10 +429,6 @@ fn path_exists(path: &str) -> bool {
 }
 
 fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    let (write, read) = match stem::syscall::port_create(4096) {
-        Ok(h) => h,
-        Err(_) => return,
-    };
     match stem::syscall::spawn_process("/bin/cambium", 0) {
         Ok(pid) => {
             stem::debug!("SPROUT: Spawned cambium (PID={})", pid);
@@ -660,14 +438,7 @@ fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 kind: TaskKind::Service("svc.cambium".to_string()),
                 module_path: "/bin/cambium".to_string(),
                 pid: Some(pid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: write,
-                drv_resp_read: read,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
+                ..Default::default()
             });
         }
         Err(e) => warn!("SPROUT: Failed to spawn cambium: {:?}", e),
@@ -763,9 +534,7 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
                         task.name, reaped_pid, exit_code
                     );
                     task.pid = None;
-                    if let Some(fd) = task.resp_fd.take() {
-                        let _ = stem::syscall::vfs::vfs_close(fd);
-                    }
+                    task.ready = false;
                     task.restarts += 1;
                 }
             }
@@ -778,9 +547,7 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
                 let mut task_list = tasks.lock();
                 if let Some(task) = task_list.iter_mut().find(|t| t.pid == Some(child_pid)) {
                     task.pid = None;
-                    if let Some(fd) = task.resp_fd.take() {
-                        let _ = stem::syscall::vfs::vfs_close(fd);
-                    }
+                    task.ready = false;
                     task.restarts += 1;
                 }
             }
@@ -815,11 +582,7 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
                 }
             }
 
-            let handles_owned: Vec<u64> = if task.boot_req_read != 0 && task.boot_resp_write != 0 {
-                alloc::vec![task.boot_req_read as u64, task.boot_resp_write as u64]
-            } else {
-                alloc::vec![]
-            };
+            let handles_owned: &[u64] = &[];
 
             // The spawn_arg integer is already passed through the syscall's
             // dedicated `boot_arg` field below; do not duplicate it as an

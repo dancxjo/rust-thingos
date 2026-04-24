@@ -3,6 +3,8 @@ use alloc::string::{String, ToString};
 
 use abi::driver_interface::DriverEntryCtx;
 use abi::types::TaskStatus;
+use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
+use stem::syscall::message::{KindId, msg_send};
 use stem::syscall::{task_poll, vfs_umount};
 use stem::time::monotonic_ns;
 use stem::{debug, warn};
@@ -139,6 +141,7 @@ impl ManagedDriver {
                     driver, self.slot, boot_fd, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
+                send_driver_ready(resp.child_tid);
             }
             Err(err) => {
                 warn!("CAMBIUM: failed to launch {} for {}: {:?}", driver, self.slot, err);
@@ -186,6 +189,7 @@ impl ManagedDriver {
                     driver_path, self.slot, entry_symbol, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
+                send_driver_ready(resp.child_tid);
             }
             Err(err) => {
                 warn!(
@@ -266,6 +270,40 @@ impl ManagedDriver {
     fn cleanup_mount(&self) {
         if let Some(path) = self.mount_path.as_deref() {
             let _ = vfs_umount(path);
+        }
+    }
+}
+
+/// Send a `DRIVER_READY` inbox message to the Sprout supervisor (our parent
+/// process) so it can mark the corresponding `ManagedTask` as ready.
+///
+/// # Assumption
+///
+/// Cambium is always spawned directly by Sprout (PID 1 / the supervisor) and
+/// is never reparented.  `getppid()` therefore reliably returns Sprout's PID.
+/// If Cambium were ever launched from a different parent, this would send the
+/// notification to the wrong process — a log warning would indicate the
+/// failure.
+fn send_driver_ready(driver_pid: u64) {
+    let sprout_pid = stem::syscall::getppid();
+    if sprout_pid == 0 {
+        warn!("CAMBIUM: send_driver_ready: getppid() returned 0, cannot notify supervisor");
+        return;
+    }
+    let msg = DriverReadyV1::new_ok(driver_pid as u32);
+    let kind = KindId(KIND_ID_THINGOS_DRIVER_READY);
+    match msg_send(sprout_pid, kind, msg.as_bytes()) {
+        Ok(()) => {
+            debug!(
+                "CAMBIUM: sent DRIVER_READY to Sprout (pid={}) for driver pid={}",
+                sprout_pid, driver_pid
+            );
+        }
+        Err(err) => {
+            warn!(
+                "CAMBIUM: failed to send DRIVER_READY to Sprout (pid={}) for driver pid={}: {:?}",
+                sprout_pid, driver_pid, err
+            );
         }
     }
 }

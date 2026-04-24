@@ -11,7 +11,7 @@ use abi::syscall::vfs_flags::O_RDONLY;
 use spin::Mutex;
 use stem::abi::driver_ctx::DriverCtx;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{PortHandle, port_create};
+use stem::syscall::port_create;
 use stem::{debug, info, warn};
 
 use crate::task::{ManagedTask, TaskKind};
@@ -71,8 +71,6 @@ fn ensure_session_roots() {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayHandles {
-    pub drv_req_write: PortHandle,
-    pub drv_resp_read: PortHandle,
     pub bs_id: u32,
     /// Which display backend was selected
     pub backend_name: &'static str,
@@ -278,8 +276,8 @@ pub fn setup_display_pipeline(
         "/drivers/display_virtio_gpu"
     };
 
-    // Supervisor -> driver requests.
-    let (drv_req_write, drv_req_read) = match port_create(4096) {
+    // Supervisor -> driver requests (kept for the display driver bootstrap protocol).
+    let (_req_write, req_read) = match port_create(4096) {
         Ok(p) => p,
         Err(e) => {
             warn!("SPROUT: Failed to create display request port: {:?}", e);
@@ -287,8 +285,8 @@ pub fn setup_display_pipeline(
         }
     };
 
-    // Driver -> supervisor responses.
-    let (drv_resp_write, drv_resp_read) = match port_create(4096) {
+    // Driver -> supervisor responses (kept for the display driver bootstrap protocol).
+    let (resp_write, _resp_read) = match port_create(4096) {
         Ok(p) => p,
         Err(e) => {
             warn!("SPROUT: Failed to create display response port: {:?}", e);
@@ -322,8 +320,8 @@ pub fn setup_display_pipeline(
     };
 
     let words = unsafe { core::slice::from_raw_parts_mut(map.addr as *mut u32, boot_size / 4) };
-    words[0] = drv_req_read;
-    words[1] = drv_resp_write;
+    words[0] = req_read;
+    words[1] = resp_write;
     words[2] = supervisor_port;
     words[3] = (bind_instance_id & 0xffff_ffff) as u32;
     words[4] = ((bind_instance_id >> 32) & 0xffff_ffff) as u32;
@@ -350,17 +348,11 @@ pub fn setup_display_pipeline(
             restarts: 0,
             spawn_arg: boot_fd as usize,
             bind_instance_id,
-            drv_req_write,
-            drv_resp_read,
-            boot_req_read: 0,
-            boot_resp_write: 0,
-            resp_fd: None,
+            ..Default::default()
         });
     }
 
     Some(DisplayHandles {
-        drv_req_write,
-        drv_resp_read,
         bs_id: 0,
         backend_name: if driver_path.ends_with("bootfb") { "bootfb" } else { "virtio_gpu" },
         width,
@@ -399,12 +391,10 @@ pub fn setup_terminal(
             let ptr = resp.addr;
             let slice = unsafe { core::slice::from_raw_parts_mut(ptr as *mut u32, boot_size / 4) };
             slice[0] = 0xB100AA01; // Magic
-            slice[1] = display.drv_req_write as u32;
-            slice[2] = display.drv_resp_read as u32;
             slice[4] = display.bs_id;
             debug!(
-                "SPROUT: Bootstrapping terminal via memfd {}: req_w={}, resp_r={}, bs_id={}",
-                boot_fd, slice[1], slice[2], slice[4]
+                "SPROUT: Bootstrapping terminal via memfd {}: bs_id={}",
+                boot_fd, slice[4]
             );
         }
     }
@@ -423,12 +413,7 @@ pub fn setup_terminal(
                 pid: Some(pid),
                 restarts: 0,
                 spawn_arg: term_arg as usize,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
+                ..Default::default()
             });
         }
         Err(e) => {
@@ -501,14 +486,7 @@ pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 kind: TaskKind::Service("svc.nectar".to_string()),
                 module_path: "/bin/nectar".to_string(),
                 pid: Some(pid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
+                ..Default::default()
             });
         }
         Err(e) => {
@@ -526,14 +504,7 @@ pub fn setup_network_apps(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 kind: TaskKind::App,
                 module_path: "/bin/fetchd".to_string(),
                 pid: Some(pid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
+                ..Default::default()
             });
         }
         Err(e) => {
@@ -581,14 +552,7 @@ fn spawn_ui_service(
                 kind: TaskKind::Service(service.to_string()),
                 module_path: name.to_string(),
                 pid: Some(pid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
+                ..Default::default()
             });
         }
         Err(e) => {
@@ -634,14 +598,7 @@ pub fn setup_graphics_stack(
                 kind: TaskKind::Service("svc.bloom".to_string()),
                 module_path: "/bin/bloom".to_string(),
                 pid: Some(pid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
+                ..Default::default()
             });
         }
         Err(e) => {
@@ -705,14 +662,7 @@ pub fn setup_serial_shell(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
                 kind: TaskKind::App,
                 module_path: shell_path,
                 pid: Some(resp.child_tid),
-                restarts: 0,
-                spawn_arg: 0,
-                bind_instance_id: 0,
-                drv_req_write: 0,
-                drv_resp_read: 0,
-                boot_req_read: 0,
-                boot_resp_write: 0,
-                resp_fd: None,
+                ..Default::default()
             });
         }
         Err(e) => {
