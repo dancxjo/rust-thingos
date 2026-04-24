@@ -641,6 +641,7 @@ dependencies = [
  "abi",
  "libdl",
  "pistil",
+ "spin",
  "stem",
 ]
 
@@ -4395,6 +4396,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "smoltcp",
+ "spin",
  "stem",
 ]
 

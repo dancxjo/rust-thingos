@@ -4,16 +4,48 @@
 //! - Driver access via `/dev/net/virtio0/{rx,tx,mac,mtu}` VFS files (issue #540)
 //! - Application socket API via `/net/` VFS tree (issue #541)
 //! Provides networking capabilities using smoltcp TCP/IP stack.
+//!
+//! ## Thread architecture
+//!
+//! netd runs two kernel tasks to keep TCP retransmit/poll cadence stable
+//! even under heavy RPC or DNS load:
+//!
+//! **Network poll thread** (this thread, `main`):
+//! - Owns all smoltcp state (`iface`, `device`, `socket_set`, `socket_api`)
+//!   behind a `spin::Mutex<NetworkPollState>`.
+//! - Calls `iface.poll` on a tight ≤4 ms schedule.
+//! - Drives async DNS queries (add/poll/cleanup the DNS UDP socket).
+//! - Processes `NetCommand`s from the shared command queue.
+//! - Pushes `NetEvent`s (DNS results) to the shared event queue.
+//!
+//! **RPC/dispatch thread** (spawned by `run_rpc_thread`):
+//! - Owns `NetVfsProvider` (not shared).
+//! - Processes **one** VFS RPC at a time, acquiring the `NetworkPollState`
+//!   mutex only for the duration of that single request.  The lock is
+//!   released between requests so the poll thread can always interleave.
+//! - Forwards DNS/deferred-connect requests as `NetCommand`s to the poll
+//!   thread and consumes `NetEvent` responses to update provider state.
+//! - Monitors link-state changes by briefly inspecting device state under
+//!   the mutex.
+//!
+//! **Lock ordering** (must never be violated):
+//!  1. `CmdQueue` lock — acquire/release independently.
+//!  2. `EventQueue` lock — acquire/release independently.
+//!  3. `NetworkPollState` mutex — acquire/release independently.
+//! No two of these locks are ever held simultaneously.
 #![no_std]
 #![no_main]
 extern crate alloc;
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::default::Default;
 
 #[macro_use]
 extern crate stem;
 
+mod cmd_queue;
 mod dhcp;
 mod dns;
 mod socket_api;
@@ -27,16 +59,20 @@ use abi::seed::{
 use abi::syscall::vfs_flags::{O_CREAT, O_NONBLOCK, O_RDONLY, O_TRUNC, O_WRONLY};
 use abi::syscall::{PollHandle, poll_flags};
 use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
+use cmd_queue::{CmdQueue, EventQueue, NetCommand, NetEvent, new_queues};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
 use socket_api::SocketApi;
+use spin::Mutex;
 use stem::syscall::vfs::{
     vfs_close, vfs_open, vfs_poll, vfs_read, vfs_umount, vfs_unlink, vfs_watch_path, vfs_write,
 };
 use stem::syscall::{argv_get, exit};
 use stem::{debug, info, warn};
 use vfs_device::VfsNicDevice;
-use vfs_provider::NetVfsProvider;
+use vfs_provider::{
+    ICMP_DYN_BASE, TCP_DYN_BASE, UDP_DYN_BASE, NetVfsProvider,
+};
 
 /// Path prefix for the virtio NIC VFS provider (published by virtio_netd).
 const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
@@ -195,6 +231,341 @@ fn probe_socket_allocator_ready(socket_api: &mut SocketApi, socket_set: &mut Soc
     }
 }
 
+// ── NetworkPollState ──────────────────────────────────────────────────────────
+
+/// All smoltcp state shared between the poll thread and the RPC thread.
+///
+/// Wrapped in `Arc<spin::Mutex<NetworkPollState>>` so the RPC/dispatch
+/// thread can acquire the lock to process a single VFS request, then
+/// immediately release it so `iface.poll` can continue without delay.
+///
+/// All methods that need to borrow multiple fields simultaneously are defined
+/// on this struct so that Rust's borrow checker can see they are distinct
+/// field borrows rather than multiple borrows through a single `DerefMut`.
+struct NetworkPollState {
+    iface: Interface,
+    device: VfsNicDevice,
+    socket_set: SocketSet<'static>,
+    socket_api: SocketApi,
+    /// Last observed link state; updated on each poll iteration.
+    last_link_state: bool,
+    /// Set once after DHCP completes to enable the ready-flag probe.
+    ip_configured: bool,
+    /// Set once the socket allocator probe passes.
+    ready_announced: bool,
+    /// Write-end of the VFS provider port — needed to send push notifications.
+    req_write: u32,
+    /// The VFS mount point, used for `publish_ready_flag`.
+    mount_point: String,
+}
+
+// SAFETY: `NetworkPollState` is always accessed behind `spin::Mutex`, ensuring
+// exclusive access at any time.  The `CONN_RX`/`CONN_TX` static-mut buffers in
+// `socket_api.rs` are only touched while the mutex is held; there is at most
+// one live mutable reference at any point in time.  The smoltcp `Interface` and
+// `SocketSet` types contain no interior mutability or raw thread-local state,
+// making them safe to transfer across thread boundaries under the mutex.
+unsafe impl Send for NetworkPollState {}
+
+impl NetworkPollState {
+    /// Run one smoltcp poll iteration.  Returns `true` if any packets were
+    /// processed.
+    fn poll_network(&mut self) -> bool {
+        let now = VfsNicDevice::now();
+        self.iface.poll(now, &mut self.device, &mut self.socket_set)
+    }
+
+    /// Start a new async DNS query.  Returns `Some(query)` on success.
+    fn start_dns(
+        &mut self,
+        hostname: String,
+        dns_server: smoltcp::wire::Ipv4Address,
+    ) -> Option<dns::AsyncDnsQuery> {
+        dns::AsyncDnsQuery::start(&mut self.socket_set, dns_server, hostname)
+    }
+
+    /// Poll an in-progress async DNS query.
+    fn poll_dns(&mut self, query: &mut dns::AsyncDnsQuery) -> dns::DnsProgress {
+        query.poll(&mut self.socket_set)
+    }
+
+    /// Clean up an async DNS query after completion.
+    fn cleanup_dns(&mut self, query: dns::AsyncDnsQuery) {
+        query.cleanup(&mut self.socket_set);
+    }
+
+    /// Compute smoltcp's next-poll delay hint.
+    fn next_poll_delay_ms(&mut self) -> u64 {
+        let now = VfsNicDevice::now();
+        self.iface.poll_delay(now, &self.socket_set).map(|d| d.total_millis()).unwrap_or(10)
+    }
+
+    /// GC closed sockets and push VFS readiness notifications to all
+    /// dynamic socket sub-files.
+    fn gc_and_notify(&mut self) {
+        self.socket_api.gc_closed_sockets(&mut self.socket_set);
+        let rw = self.req_write;
+        self.socket_api.push_notifications(&mut self.socket_set, rw, TCP_DYN_BASE);
+        self.socket_api.push_notifications(&mut self.socket_set, rw, UDP_DYN_BASE);
+        self.socket_api.push_notifications(&mut self.socket_set, rw, ICMP_DYN_BASE);
+    }
+
+    /// Probe whether the socket allocator is warm (ready flag condition).
+    fn probe_ready(&mut self) -> bool {
+        probe_socket_allocator_ready(&mut self.socket_api, &mut self.socket_set)
+    }
+
+    /// Drain exactly one VFS RPC from `provider`, dispatching it through
+    /// the smoltcp stack.  Returns `true` if work was done.
+    fn drain_one_rpc(&mut self, provider: &mut NetVfsProvider) -> bool {
+        provider.drain_one_rpc(
+            &mut self.iface,
+            &mut self.device,
+            &mut self.socket_set,
+            &mut self.socket_api,
+        )
+    }
+
+    /// Complete a deferred TCP connect (called after DNS resolves).
+    fn complete_deferred_connect(
+        &mut self,
+        provider: &mut NetVfsProvider,
+        resolved_ip: Option<smoltcp::wire::Ipv4Address>,
+    ) {
+        provider.complete_deferred_connect(
+            resolved_ip,
+            &mut self.iface,
+            &mut self.socket_set,
+            &mut self.socket_api,
+        )
+    }
+}
+
+// ── Network poll thread ───────────────────────────────────────────────────────
+
+/// Entry point for the network poll thread (runs on `main`).
+///
+/// Runs `iface.poll` on a ≤4 ms schedule, drives async DNS queries, and
+/// pushes socket-readiness notifications.  Commands from the RPC thread
+/// arrive via `cmd_queue`; DNS results are returned via `event_queue`.
+fn run_poll_thread(
+    net_state: Arc<Mutex<NetworkPollState>>,
+    cmd_queue: CmdQueue,
+    event_queue: EventQueue,
+) -> ! {
+    // Async DNS state lives entirely on this thread — no sharing needed.
+    let mut active_dns: Option<dns::AsyncDnsQuery> = None;
+    let mut dns_for_deferred_connect = false;
+
+    loop {
+        // ── 1. Drain incoming commands (cmd_queue lock, no net_state lock) ──
+        let mut pending_start: Option<(String, smoltcp::wire::Ipv4Address, bool)> = None;
+        {
+            let mut q = cmd_queue.lock();
+            while let Some(cmd) = q.pop_front() {
+                if active_dns.is_none() && pending_start.is_none() {
+                    match cmd {
+                        NetCommand::StartDnsLookup { hostname, dns_server } => {
+                            pending_start = Some((hostname, dns_server, false));
+                        }
+                        NetCommand::StartDeferredConnect { hostname, dns_server } => {
+                            pending_start = Some((hostname, dns_server, true));
+                        }
+                    }
+                }
+                // Any additional commands while DNS is in-flight are silently
+                // dropped here; the RPC thread will re-enqueue once it sees the
+                // result and clears its `dns_in_flight` flag.
+            }
+        }
+
+        // ── 2. Start new DNS query if requested ─────────────────────────────
+        if let Some((hostname, dns_server, for_connect)) = pending_start {
+            match net_state.lock().start_dns(hostname, dns_server) {
+                Some(query) => {
+                    active_dns = Some(query);
+                    dns_for_deferred_connect = for_connect;
+                }
+                None => {
+                    if for_connect {
+                        event_queue
+                            .lock()
+                            .push_back(NetEvent::DeferredConnectResult { resolved_ip: None });
+                    } else {
+                        event_queue
+                            .lock()
+                            .push_back(NetEvent::DnsResult { result: "error".into() });
+                    }
+                }
+            }
+        }
+
+        // ── 3. Poll smoltcp network stack ────────────────────────────────────
+        let did_poll = net_state.lock().poll_network();
+
+        // ── 4. Poll active DNS query ─────────────────────────────────────────
+        let dns_outcome = if let Some(query) = &mut active_dns {
+            match net_state.lock().poll_dns(query) {
+                dns::DnsProgress::Pending => None,
+                dns::DnsProgress::Resolved(ip) => Some(Ok(ip)),
+                dns::DnsProgress::Failed(e) => Some(Err(e)),
+            }
+        } else {
+            None
+        };
+
+        // ── 5. Handle DNS completion ─────────────────────────────────────────
+        if let Some(outcome) = dns_outcome {
+            let q = active_dns.take().unwrap();
+            net_state.lock().cleanup_dns(q);
+            match outcome {
+                Ok(ip) if dns_for_deferred_connect => {
+                    event_queue
+                        .lock()
+                        .push_back(NetEvent::DeferredConnectResult { resolved_ip: Some(ip) });
+                }
+                Ok(ip) => {
+                    let b = ip.as_bytes();
+                    let ip_str = alloc::format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
+                    debug!("NETD poll: DNS resolved → {}", ip_str);
+                    event_queue.lock().push_back(NetEvent::DnsResult { result: ip_str });
+                }
+                Err(_) if dns_for_deferred_connect => {
+                    warn!("NETD poll: DNS failed for deferred connect");
+                    event_queue
+                        .lock()
+                        .push_back(NetEvent::DeferredConnectResult { resolved_ip: None });
+                }
+                Err(e) => {
+                    warn!("NETD poll: DNS failed: {:?}", e);
+                    event_queue.lock().push_back(NetEvent::DnsResult { result: "error".into() });
+                }
+            }
+        }
+
+        // ── 6. GC, notifications, link state, and ready flag ─────────────────
+        net_state.lock().gc_and_notify();
+
+        // Publish ready flag once the socket allocator is warm.
+        {
+            let mut state = net_state.lock();
+            let needs_check = !state.ready_announced && state.ip_configured;
+            if needs_check && state.probe_ready() {
+                let mp = state.mount_point.clone();
+                drop(state);
+                publish_ready_flag(&mp);
+                info!("NETD: Network ready");
+                net_state.lock().ready_announced = true;
+                continue; // skip delay — we have fresh work
+            }
+        }
+
+        // ── 7. Sleep or yield ────────────────────────────────────────────────
+        let delay_ms = net_state.lock().next_poll_delay_ms();
+        if did_poll || active_dns.is_some() {
+            stem::syscall::yield_now();
+        } else {
+            let sleep_ms = delay_ms.min(4).max(1) as u64;
+            stem::time::sleep_ms(sleep_ms);
+        }
+    }
+}
+
+// ── RPC/dispatch thread ───────────────────────────────────────────────────────
+
+/// Entry point for the RPC/dispatch thread.
+///
+/// Owns `net_provider` exclusively (not shared).  Processes one VFS RPC
+/// at a time, releasing the `NetworkPollState` mutex between requests.
+/// Forwards DNS/deferred-connect commands to the poll thread via
+/// `cmd_queue` and consumes DNS results from `event_queue`.
+fn run_rpc_thread(
+    mut net_provider: NetVfsProvider,
+    net_state: Arc<Mutex<NetworkPollState>>,
+    cmd_queue: CmdQueue,
+    event_queue: EventQueue,
+    req_fd: u32,
+    nic_watch_fd: Option<u32>,
+) -> ! {
+    // `dns_in_flight`: true while a StartDnsLookup or StartDeferredConnect
+    // command has been sent to the poll thread and no result has come back.
+    // Prevents enqueuing a second DNS command before the first completes.
+    let mut dns_in_flight = false;
+
+    loop {
+        // ── Consume events from the poll thread ──────────────────────────────
+        while let Some(event) = { event_queue.lock().pop_front() } {
+            match event {
+                NetEvent::DnsResult { result } => {
+                    dns_in_flight = false;
+                    net_provider.set_dns_result(result);
+                }
+                NetEvent::DeferredConnectResult { resolved_ip } => {
+                    dns_in_flight = false;
+                    net_state.lock().complete_deferred_connect(&mut net_provider, resolved_ip);
+                }
+            }
+        }
+
+        // ── Process one VFS RPC (acquire / release lock per RPC) ─────────────
+        let did_rpc = {
+            let mut state = net_state.lock();
+            let did = state.drain_one_rpc(&mut net_provider);
+            if did {
+                // Push notifications immediately after each RPC so clients
+                // see socket-state changes without waiting for the poll thread.
+                state.gc_and_notify();
+            }
+            did
+        }; // ← lock released here
+
+        // ── Enqueue DNS / deferred-connect commands if needed ────────────────
+        if !dns_in_flight {
+            if let Some((hostname, dns_ip)) = net_provider.take_deferred_connect_pending() {
+                cmd_queue
+                    .lock()
+                    .push_back(NetCommand::StartDeferredConnect { hostname, dns_server: dns_ip });
+                dns_in_flight = true;
+            } else if let Some((hostname, dns_ip)) = net_provider.take_dns_pending() {
+                cmd_queue
+                    .lock()
+                    .push_back(NetCommand::StartDnsLookup { hostname, dns_server: dns_ip });
+                dns_in_flight = true;
+            }
+        }
+
+        // ── Periodically sync link state from the device ─────────────────────
+        {
+            let current_link = net_state.lock().device.link_up();
+            let last_link = net_state.lock().last_link_state;
+            if current_link != last_link {
+                net_state.lock().last_link_state = current_link;
+                net_provider.link_up = current_link;
+                debug!(
+                    "NETD RPC: link state → {}",
+                    if current_link { "UP" } else { "DOWN" }
+                );
+            }
+        }
+
+        // ── Handle NIC watch events ───────────────────────────────────────────
+        if let Some(fd) = nic_watch_fd {
+            drain_watch_fd(fd);
+        }
+
+        if did_rpc {
+            // Yield to let the poll thread run between RPCs.
+            stem::syscall::yield_now();
+        } else {
+            // No RPC pending — block until the next request arrives (or timeout).
+            let mut pollfds = [
+                PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
+            ];
+            let _ = vfs_poll(&mut pollfds, 5); // 5 ms timeout
+        }
+    }
+}
+
 #[stem::main]
 fn main(arg: usize) -> ! {
     info!("NETD: Starting network service...");
@@ -252,19 +623,7 @@ fn main(arg: usize) -> ! {
     };
 
     debug!("NETD: creating SocketApi...");
-    let mut socket_api = SocketApi::new();
-    debug!("NETD: allocating sockets_storage...");
-    let mut sockets_storage: Vec<SocketStorage> = Vec::with_capacity(256);
-    for i in 0..256 {
-        if i % 64 == 0 {
-            debug!("NETD: pushing socket storage {}...", i);
-        }
-        sockets_storage.push(SocketStorage::EMPTY);
-    }
-    debug!("NETD: creating SocketSet...");
-    let mut socket_set = SocketSet::new(&mut sockets_storage[..]);
-    debug!("NETD: getting link state...");
-    let mut last_link_state = device.link_up();
+    let socket_api = SocketApi::new();
     debug!("NETD: scanning NIC units...");
     let _known_nic_units = scan_registered_nic_units();
     debug!("NETD: NIC units scanned.");
@@ -324,153 +683,55 @@ fn main(arg: usize) -> ! {
         }
     }
 
-    let mut ready_announced = false;
-    debug!("NETD: entering VFS service loop");
+    let ready_announced = false;
+    debug!("NETD: entering two-thread service loop");
 
-    // ── Async DNS state ──────────────────────────────────────────────────
-    // At most one DNS query is active at a time.  The query object lives
-    // across main-loop iterations so it can be polled incrementally.
-    let mut active_dns: Option<dns::AsyncDnsQuery> = None;
-    // Tracks whether the current DNS query is for a deferred TCP connect
-    // (true) or a `/net/dns/lookup` file read (false).
-    let mut dns_for_deferred_connect = false;
-
-    loop {
-        let mut did_work = false;
-        // trace!("NETD: main loop iteration");
-
-        let now = VfsNicDevice::now();
-        if iface.poll(now, &mut device, &mut socket_set) {
-            did_work = true;
-        }
-
-        if net_provider.drain_rpcs(&mut iface, &mut device, &mut socket_set, &mut socket_api) {
-            did_work = true;
-        }
-
-        let now = VfsNicDevice::now();
-        if iface.poll(now, &mut device, &mut socket_set) {
-            did_work = true;
-        }
-
-        // ── Async DNS: start new queries if needed ───────────────────────
-        if active_dns.is_none() {
-            // Priority: deferred TCP connects first, then /net/dns/lookup
-            if let Some((hostname, dns_ip)) = net_provider.take_deferred_connect_pending() {
-                if let Some(query) = dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname) {
-                    active_dns = Some(query);
-                    dns_for_deferred_connect = true;
-                    did_work = true;
-                } else {
-                    // Could not start DNS query — fail the deferred connect
-                    net_provider.complete_deferred_connect(
-                        None,
-                        &mut iface,
-                        &mut socket_set,
-                        &mut socket_api,
-                    );
-                }
-            } else if let Some((hostname, dns_ip)) = net_provider.take_dns_pending() {
-                if let Some(query) = dns::AsyncDnsQuery::start(&mut socket_set, dns_ip, hostname) {
-                    active_dns = Some(query);
-                    dns_for_deferred_connect = false;
-                    did_work = true;
-                } else {
-                    net_provider.set_dns_result("error".into());
-                }
+    // ── Build NetworkPollState ───────────────────────────────────────────────
+    // Leak the socket storage so `SocketSet<'static>` can live in the Arc.
+    // The allocation is intentionally permanent for the lifetime of the process.
+    let socket_storage_slice: &'static mut [SocketStorage<'static>] = {
+        let mut v: Vec<SocketStorage<'static>> = Vec::with_capacity(256);
+        for i in 0..256usize {
+            if i % 64 == 0 {
+                debug!("NETD: pushing socket storage {}...", i);
             }
+            v.push(SocketStorage::EMPTY);
         }
+        Box::leak(v.into_boxed_slice())
+    };
+    debug!("NETD: creating SocketSet (static storage)...");
+    let socket_set: SocketSet<'static> = SocketSet::new(socket_storage_slice);
+    let last_link_state = device.link_up();
+    debug!("NETD: building NetworkPollState...");
+    let net_state = Arc::new(Mutex::new(NetworkPollState {
+        iface,
+        device,
+        socket_set,
+        socket_api,
+        last_link_state,
+        ip_configured: true, // DHCP already ran
+        ready_announced,
+        req_write: net_provider.req_write,
+        mount_point: mount_point.clone(),
+    }));
 
-        // ── Async DNS: poll active query ─────────────────────────────────
-        if let Some(query) = &mut active_dns {
-            did_work = true; // keep the loop alive while DNS is in-flight
-            match query.poll(&mut socket_set) {
-                dns::DnsProgress::Pending => {} // still waiting
-                dns::DnsProgress::Resolved(ip) => {
-                    let b = ip.as_bytes();
-                    let ip_str = alloc::format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
-                    debug!("NETD: async DNS resolved → {}", ip_str);
-                    if dns_for_deferred_connect {
-                        net_provider.complete_deferred_connect(
-                            Some(ip),
-                            &mut iface,
-                            &mut socket_set,
-                            &mut socket_api,
-                        );
-                    } else {
-                        net_provider.set_dns_result(ip_str);
-                    }
-                    // Take ownership to call cleanup
-                    let q = active_dns.take().unwrap();
-                    q.cleanup(&mut socket_set);
-                }
-                dns::DnsProgress::Failed(e) => {
-                    warn!("NETD: async DNS failed: {:?}", e);
-                    if dns_for_deferred_connect {
-                        net_provider.complete_deferred_connect(
-                            None,
-                            &mut iface,
-                            &mut socket_set,
-                            &mut socket_api,
-                        );
-                    } else {
-                        net_provider.set_dns_result("error".into());
-                    }
-                    let q = active_dns.take().unwrap();
-                    q.cleanup(&mut socket_set);
-                }
-            }
-        }
+    // ── Create command / event queues ────────────────────────────────────────
+    let (cmd_queue, event_queue) = new_queues();
 
-        let current_link = device.link_up();
-        if current_link != last_link_state {
-            last_link_state = current_link;
-            net_provider.link_up = current_link;
-            did_work = true;
-            debug!("NETD: Link state changed → {}", if current_link { "UP" } else { "DOWN" });
-        }
-
-        socket_api.gc_closed_sockets(&mut socket_set);
-
-        if !ready_announced && net_provider.ip_config.is_some() {
-            if probe_socket_allocator_ready(&mut socket_api, &mut socket_set) {
-                publish_ready_flag(&mount_point);
-                info!("NETD: Network ready");
-                ready_announced = true;
-            }
-        }
-
-        if did_work {
-            trace!("NETD: did_work=true, pushing notifications");
-            net_provider.push_notifications(&mut socket_set, &mut socket_api);
-            stem::syscall::yield_now();
-        } else {
-            let delay_ms =
-                iface.poll_delay(now, &socket_set).map(|d| d.total_millis()).unwrap_or(10);
-            let timeout_ms = delay_ms.min(100).max(1) as u64;
-
-            let mut pollfds = [
-                PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-                PollHandle { handle: events_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-                PollHandle {
-                    handle: nic_watch_fd.unwrap_or(0) as i32,
-                    events: poll_flags::POLLIN,
-                    revents: 0,
-                },
-            ];
-
-            let n_fds = if nic_watch_fd.is_some() { 3 } else { 2 };
-            let _ = vfs_poll(&mut pollfds[..n_fds], timeout_ms);
-
-            if let Some(fd) = nic_watch_fd {
-                if pollfds[2].revents & poll_flags::POLLIN != 0 {
-                    drain_watch_fd(fd);
-                    // Just drain it, no need to rescan in this simplified version,
-                    // or we could call scan_registered_nic_units() here if needed.
-                }
-            }
-        }
+    // ── Spawn the RPC/dispatch thread ────────────────────────────────────────
+    debug!("NETD: spawning RPC dispatch thread...");
+    {
+        let net_state_rpc = net_state.clone();
+        let cmd_q = cmd_queue.clone();
+        let evt_q = event_queue.clone();
+        let _ = stem::thread::spawn_task_detached(move || {
+            run_rpc_thread(net_provider, net_state_rpc, cmd_q, evt_q, req_fd, nic_watch_fd);
+        });
     }
+
+    // ── Main thread becomes the network poll thread ──────────────────────────
+    debug!("NETD: starting network poll thread");
+    run_poll_thread(net_state, cmd_queue, event_queue)
 }
 
 #[used]
