@@ -1,14 +1,14 @@
 # ✅ Scenario: POSIX behavior - head -n and tail -n (expected to fail if not fully POSIX)
 
-> Last run: 2026-04-23 20:38:49
+> Last run: 2026-04-23 21:03:05
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 9220ms | - - - |
+| 1 | Given the machine is booted | ✅ | 8413ms | - - - |
 | 2 | When I wait for the shell prompt | ✅ | 254ms | - [📜](./02/serial.log) - |
-| 3 | And I type "echo -e '1\n2\n3' | head -n 2 | tail -n 1" on the serial console | ✅ | 837ms | - [📜](./03/serial.log) - |
+| 3 | And I type "echo -e '1\n2\n3' | head -n 2 | tail -n 1" on the serial console | ✅ | 782ms | - [📜](./03/serial.log) - |
 | 4 | Then the command output should strictly be "2" | ✅ | 0ms | - [📜](./04/serial.log) - |
 
 <details>
@@ -17,43 +17,43 @@
 ```
 [2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;056;240t0[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;042;160t0[2J[01;01HBdsDxe: loading Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
 BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
-[2J[01;01H[01;01H[2J[01;01H[01;01H[28522364343] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Memory Map OK"
-[28552225185] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
-[28589740575] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Global Allocator"
-[28626999522] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Display Registry"
-[28650153807] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
-[28652977716] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
-[28694727897] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
-[28718415429] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
-[28772412042] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
-[28774514868] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
-[28869365250] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="VFS Root Ready"
-[28941395736] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="PCI Bus Scanned"
-[28964285460] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Legacy Devices"
-[29039849190] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="BSP Timer OK"
-[29155660644] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SMP Bring-up"
-[29210121105] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Boot Info OK"
-[29236209321] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Modules Scanned"
-[29344917195] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: hint="Press F12 for a terminal"
-[29397751812] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Spawning Sprout"
-[29580044934] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Entering Scheduler"
-[29945240391] [[32mINFO [0m] [kernel] [CPU0] [kernel:start] scheduler-entry total elapsed_ticks=1146389013 elapsed_us=573194
-[29946049452] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
-[30070772589] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
-[30151317504] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Launching serial shell...
-[30152251536] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Setting up serial shell on /dev/console...
-[30251057595] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/sh' TID=6 PID=6
-[30254788080] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned serial shell '/bin/sh' (PID=6)
-[30256891896] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Serial shell launched; yielding 50ms so the prompt can take the foreground
-[30267749292] [[32mINFO [0m] [sh] [CPU3] SH: starting v0.1.0-debug
-[30274889634] [[32mINFO [0m] [kernel] [CPU0] deferred_bootfb_gradient elapsed_ticks=55605
+[2J[01;01H[01;01H[2J[01;01H[01;01H[26336175987] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Memory Map OK"
+[26361859161] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[26394445209] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Global Allocator"
+[26427004527] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Display Registry"
+[26446895145] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[26449361037] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[26485506927] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[26505663690] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[26551275498] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[26552286882] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
+[26634667389] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="VFS Root Ready"
+[26702721804] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="PCI Bus Scanned"
+[26728915488] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Legacy Devices"
+[26800251489] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="BSP Timer OK"
+[26903222709] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SMP Bring-up"
+[26930137674] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Boot Info OK"
+[26953291332] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Modules Scanned"
+[27060219318] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: hint="Press F12 for a terminal"
+[27108163203] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Spawning Sprout"
+[27248891967] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Entering Scheduler"
+[27498130044] [[32mINFO [0m] [kernel] [CPU0] [kernel:start] scheduler-entry total elapsed_ticks=925635381 elapsed_us=462817
+[27499721832] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[27571923555] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[27640994403] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Launching serial shell...
+[27641895072] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Setting up serial shell on /dev/console...
+[27728144862] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/sh' TID=6 PID=6
+[27736087038] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned serial shell '/bin/sh' (PID=6)
+[27741819699] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Serial shell launched; yielding 50ms so the prompt can take the foreground
+[27742967637] [[32mINFO [0m] [sh] [CPU3] SH: starting v0.1.0-debug
+[27754768602] [[32mINFO [0m] [kernel] [CPU0] deferred_bootfb_gradient elapsed_ticks=19866
 [1;32m
         .-.
        /   \        [1;36mTHING-OS[1;32m
       |     |       [0;36m"People, places, things."[1;32m
        \   /        
         `-'        
-       /   \        v0.1  ��  
+       /   \        v0.1  •  
       |     |       2026-04-16
        \   /
         `-'
@@ -67,37 +67,30 @@ BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1
     [36mcat /version[0m  inspect the genome
 
 [2m--------------------------------------------------------------[0m
-[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[30496693293] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Skipping early /hosts mount; mesocarp is disabled in init
-[30499537200] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Waiting for /dev/net/virtio0/rx before spawning netd...
-[30555746001] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: no ISO9660 filesystem found yet — retrying
-echo -e '1\n2\n3' | head -n 2 | tail -n 1
-[33258251730] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: set_handle_flags fd=6 flags=1
-[33259893810] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: set_handle_flags fd=7 flags=1
-[33265305315] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: set_handle_flags fd=8 flags=1
-[33267190803] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: set_handle_flags fd=9 flags=1
-[33271939536] [[32mINFO [0m] [sh] [CPU3] sh: spawning job cmd='echo'
-[33278710476] [[32mINFO [0m] [sh] [CPU3] sh: spawning '/bin/echo' with argv=["/bin/echo", "-e", "1\\n2\\n3"]
-[33308101002] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 6
-[33309366024] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 7
-[33310415325] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 8
-[33311058759] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 9
-[33325505367] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU3] SYSCALL SPAWN_PROCESS_EX: name='/bin/echo' TID=9 PID=9
-[33371831691] [[32mINFO [0m] [kernel::ipc::pipe] [CPU3] PIPE_ENQUEUE: tail=6 len=6 n=6
-[33392704389] [[32mINFO [0m] [sh] [CPU3] sh: spawning job cmd='head'
-[33397172028] [[32mINFO [0m] [sh] [CPU3] sh: spawning '/bin/head' with argv=["/bin/head", "-n", "2"]
-[33423117585] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 6
-[33423803094] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 7
-[33424341027] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 8
-[33424859952] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 9
-[33430486287] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU3] SYSCALL SPAWN_PROCESS_EX: name='/bin/head' TID=10 PID=10
-[33468114834] [[32mINFO [0m] [sh] [CPU3] sh: spawning job cmd='tail'
-[33471225018] [[32mINFO [0m] [sh] [CPU3] sh: spawning '/bin/tail' with argv=["/bin/tail", "-n", "1"]
-[33499636896] [[32mINFO [0m] [kernel::ipc::pipe] [CPU1] PIPE_ENQUEUE: tail=2 len=2 n=2
-[33502174596] [[32mINFO [0m] [kernel::ipc::pipe] [CPU1] PIPE_ENQUEUE: tail=4 len=4 n=2
-[33512501022] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 6
-[33513474159] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 7
-[33514345854] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 8
-[33515232300] [[32mINFO [0m] [kernel::vfs::handle_table] [CPU3] VFS: close_on_exec closing fd 9
-[33523707558] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU3] SYSCALL SPAWN_PROCESS_E
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[27984427119] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Skipping early /hosts mount; mesocarp is disabled in init
+[27985710786] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Waiting for /dev/net/virtio0/rx before spawning netd...
+[28018538724] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: no ISO9660 filesystem found yet — retrying
+echo -e '1\n2\n3' | head -n 2 | tail -n[30451795737] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/virtio_netd' TID=9 PID=9
+[30502181160] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/ahci_disk' TID=10 PID=10
+[30642702585] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/ata_disk' TID=12 PID=12
+[30645612063] [[32mINFO [0m] [ata_disk] [CPU3] ATA_DISK: Starting ATA disk driver v1 (with ATAPI support)
+[30646470294] [[32mINFO [0m] [ata_disk] [CPU3] ATA_DISK: Probing primary port (0x1F0)...
+[30701021505] [[32mINFO [0m] [ata_disk] [CPU3] ATA_DISK: Probing secondary port (0x170)...
+ 1
+[30725740353] [[32mINFO [0m] [ata_disk] [CPU3] ATA_DISK: Found 0 ATA disk(s), 0 ATAPI device(s)
+[30726447543] [[32mINFO [0m] [ata_disk] [CPU3] ATA_DISK: Entering RPC service loop
+[30727177833] [[32mINFO [0m] [ata_disk] [CPU3] ATA_DISK: No active devices to service
+[30728331975] [[32mINFO [0m] [sh] [CPU1] sh: spawning job cmd='echo'
+[30734459580] [[32mINFO [0m] [sh] [CPU1] sh: spawning '/bin/echo' with argv=["/bin/echo", "-e", "1\\n2\\n3"]
+[30761851164] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/bin/echo' TID=13 PID=13
+[30793179285] [[32mINFO [0m] [kernel::ipc::pipe] [CPU1] PIPE_ENQUEUE: tail=6 len=6 n=6
+[30808324140] [[32mINFO [0m] [sh] [CPU1] sh: spawning job cmd='head'
+[30811088055] [[32mINFO [0m] [sh] [CPU1] sh: spawning '/bin/head' with argv=["/bin/head", "-n", "2"]
+[30837786111] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/bin/head' TID=14 PID=14
+[30853831602] [[32mINFO [0m] [sh] [CPU1] sh: spawning job cmd='tail'
+[30856142130] [[32mINFO [0m] [sh] [CPU1] sh: spawning '/bin/tail' with argv=["/bin/tail", "-n", "1"]
+[30874451388] [[32mINFO [0m] [kernel::ipc::pipe] [CPU2] PIPE_ENQUEUE: tail=2 len=2 n=2
+[30875649552] [[32mINFO [0m] [kernel::ipc::pipe] [CPU2] PIPE_ENQUEUE: tail=4 len=4 n=2
+[30880167648] [[32mINFO [0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAW
 ```
 </details>
