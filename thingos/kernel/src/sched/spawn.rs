@@ -1179,7 +1179,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     // scheduler-internal state. REGISTRY insertion is deferred until unlock.
     let (id, deferred_registry_inserts) = {
         let lock = SCHEDULER.lock();
-        super::set_sched_lock_tracking::<R>(current_cpu);
+        let _tracking = super::sched_lock_tracking_guard::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
         let id = sched
@@ -1193,8 +1193,6 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
             )
             .ok_or(abi::errors::Errno::EAGAIN)?;
         let deferred_registry_inserts = sched.drain_pending_registry_inserts();
-        super::clear_sched_lock_tracking::<R>();
-        drop(lock);
         (id, deferred_registry_inserts)
     };
     super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
@@ -1517,7 +1515,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     crate::kdebug!("SPAWN_FROM_PATH: Starting Phase 1 for {}", path);
     let (id, deferred_registry_inserts) = {
         let lock = SCHEDULER.lock();
-        super::set_sched_lock_tracking::<R>(current_cpu);
+        let _tracking = super::sched_lock_tracking_guard::<R>(current_cpu);
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut super::types::Scheduler<R>) };
         let id = sched
@@ -1531,8 +1529,6 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
             )
             .ok_or(abi::errors::Errno::EAGAIN)?;
         let deferred_registry_inserts = sched.drain_pending_registry_inserts();
-        super::clear_sched_lock_tracking::<R>();
-        drop(lock);
         (id, deferred_registry_inserts)
     };
     crate::kdebug!("SPAWN_FROM_PATH: Phase 1 complete, ID={}, applying inserts", id);

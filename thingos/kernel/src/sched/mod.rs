@@ -112,7 +112,10 @@ fn clear_sched_lock_tracking_owner(owner_cpu: isize) {
 #[inline]
 pub fn set_sched_lock_tracking<R: BootRuntime>(cpu_idx: usize) {
     SCHEDULER_LOCK_OWNER.store(cpu_idx as isize, Ordering::Release);
-    SCHEDULER_LOCK_ACQUIRED_AT.store(crate::runtime::<R>().mono_ticks(), Ordering::Release);
+    // Use TICK_COUNT instead of mono_ticks to avoid false-positive deadlocks caused by TSC
+    // desynchronization across CPUs (especially between BSP and APs under KVM).
+    // Store TICK_COUNT + 1 so that a tick count of 0 does not disable the watchdog.
+    SCHEDULER_LOCK_ACQUIRED_AT.store(TICK_COUNT.load(Ordering::Relaxed) + 1, Ordering::Release);
 }
 
 #[inline]
@@ -1456,18 +1459,18 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     if lock.is_none() {
         let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
         let acquired_at = SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire);
-        let now = rt.mono_ticks();
+        // TICK_COUNT increments at 100Hz. 200 ticks = 2 seconds.
+        let now = TICK_COUNT.load(Ordering::Relaxed) + 1;
         let held_duration = if acquired_at > 0 { now.saturating_sub(acquired_at) } else { 0 };
-        let freq = rt.mono_freq_hz().max(1);
 
         // WATCHDOG: Detect if the lock has been held for an implausibly long time.
         // If it's held > 2 seconds, we likely have a deadlock or a lock leak.
-        if owner != -1 && acquired_at != 0 && held_duration > (freq * 2) {
+        if owner != -1 && acquired_at != 0 && held_duration > 200 {
             panic!(
                 "SCHEDULER LOCK WATCHDOG: Lock held by CPU {} for {} ticks ({} ms) - potential DEADLOCK",
                 owner,
                 held_duration,
-                (held_duration * 1000) / freq
+                held_duration * 10
             );
         }
     }
@@ -1626,19 +1629,18 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
 
         // WATCHDOG: Detect if the lock has been held for an implausibly long time.
         // If it's held > 2 seconds, we likely have a deadlock or a lock leak.
-        let now = rt.mono_ticks();
+        let now = TICK_COUNT.load(Ordering::Relaxed) + 1;
         let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
         let acquired_at = SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire);
-        let freq = rt.mono_freq_hz().max(1);
-        let watchdog_limit_ticks = freq * 2;
 
-        if owner != -1 && acquired_at != 0 && now.saturating_sub(acquired_at) > watchdog_limit_ticks
+        // TICK_COUNT increments at 100Hz. 200 ticks = 2 seconds.
+        if owner != -1 && acquired_at != 0 && now.saturating_sub(acquired_at) > 200
         {
             panic!(
                 "SCHEDULER LOCK WATCHDOG: Lock held by CPU {} for {} ticks ({} ms) - potential DEADLOCK",
                 owner,
                 now.saturating_sub(acquired_at),
-                (now.saturating_sub(acquired_at) * 1000) / freq
+                now.saturating_sub(acquired_at) * 10
             );
         }
 
