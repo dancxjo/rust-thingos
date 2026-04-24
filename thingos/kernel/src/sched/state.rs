@@ -263,8 +263,8 @@ pub struct CpuScheduler {
 /// Backward-compatible alias — prefer [`CpuScheduler`] in new code.
 pub type PerCpu = CpuScheduler;
 
-/// Backward-compatible stats alias — prefer using [`PerCpuSchedStats`] or
-/// this alias (`CpuSchedStats`) when constructing new per-CPU stat objects.
+/// Backward-compatible stats alias — prefer `CpuSchedStats` in new code for
+/// consistency with the `CpuScheduler` naming convention.
 pub type CpuSchedStats = PerCpuSchedStats;
 
 impl CpuScheduler {
