@@ -10,12 +10,13 @@ use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
     ProbeResult, Status,
 };
+use abi::errors::Errno;
+use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
+use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::info;
-use stem::syscall::vfs::vfs_handle_from_port;
-use stem::syscall::{PortHandle, port_recv, port_send};
-use stem::thing::ThingId;
-use stem::wait_set::WaitSet;
+use stem::{info, warn};
+use stem::syscall::vfs::{vfs_handle_from_port, vfs_mount};
+use stem::syscall::{PortHandle, port_create, port_recv, port_send};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_fake";
 
 #[unsafe(no_mangle)]
@@ -170,77 +171,110 @@ fn main(arg: usize) -> ! {
     let mut bound_fd: Option<u32> = None;
 
     let drv_req_fd = vfs_handle_from_port(drv_req_read).expect("display_fake: fd_from_handle");
-    let mut ws = WaitSet::new();
-    let _drv_req_tok = ws.add_fd_readable(drv_req_fd).unwrap();
+
+    // Create a VFS provider port pair and mount it so this driver participates
+    // in the inbox-backed actor model (ServiceProviderLoop control plane).
+    let (vfs_write, vfs_read) = port_create(65536).expect("display_fake: port_create");
+    match vfs_mount(vfs_write, "/run/display_fake") {
+        Ok(()) => info!("display_fake: VFS provider mounted at /run/display_fake"),
+        Err(e) => warn!("display_fake: vfs_mount(/run/display_fake) failed: {:?}", e),
+    }
+
+    let mut svc = ServiceProviderLoop::new(ProviderLoop::new(vfs_read), 4096)
+        .expect("display_fake: ServiceProviderLoop::new");
+
+    // Register the display-protocol request port as a secondary readiness source.
+    let drv_tok = svc.add_fd_readable(drv_req_fd).expect("display_fake: add_fd_readable");
 
     loop {
-        // Block until the request port has data available.
-        if ws.wait(None::<stem::time::Duration>).is_err() {
-            stem::yield_now();
-            continue;
-        }
-
-        if let Ok(n) = port_recv(drv_req_read, &mut buf) {
-            if n > 0 {
-                frames.push(&buf[..n]);
+        match svc.next_event(None) {
+            Ok(ServiceProviderEvent::ProviderRequest(req)) => {
+                // This driver does not expose a VFS file hierarchy; return
+                // ENOSYS for any VFS RPC directed at the provider mount.
+                let _ = svc.send_response(&req, ProviderResponse::err(Errno::ENOSYS));
             }
-        }
 
-        while let Some((header, payload)) = frames.next_message() {
-            match header.msg_type {
-                drvproto::MSG_HELLO => {
-                    let want_caps = drvproto::decode_hello_payload_le(payload)
-                        .map(|hello| hello.want_caps)
-                        .unwrap_or(0);
-                    let welcome = drvproto::WelcomePayload {
-                        proto_major: drvproto::PROTO_MAJOR,
-                        proto_minor: drvproto::PROTO_MINOR,
-                        have_caps: config.caps & want_caps,
-                        max_rects: config.max_rects,
-                        reserved: 0,
-                    };
-                    let mut welcome_bytes = [0u8; drvproto::WELCOME_PAYLOAD_WIRE_SIZE];
-                    if let Some(len) =
-                        drvproto::encode_welcome_payload_le(&welcome, &mut welcome_bytes)
-                    {
-                        if config.split_writes {
-                            send_msg_split(
-                                drv_resp_write,
-                                drvproto::MSG_WELCOME,
-                                &welcome_bytes[..len],
-                            );
-                        } else {
-                            send_msg(drv_resp_write, drvproto::MSG_WELCOME, &welcome_bytes[..len]);
-                        }
+            Ok(ServiceProviderEvent::Ready { token, .. }) if token == drv_tok => {
+                // Display-protocol port has data — drain and dispatch.
+                if let Ok(n) = port_recv(drv_req_read, &mut buf) {
+                    if n > 0 {
+                        frames.push(&buf[..n]);
                     }
                 }
-                drvproto::MSG_BIND => {
-                    if let Some(bind) = drvproto::decode_bind_payload_le(payload) {
-                        bound = true;
-                        bound_fd = Some(bind.fb_fd);
-                        send_ack(drv_resp_write, config.burst);
-                    } else {
-                        send_err(drv_resp_write, 2);
-                    }
-                }
-                drvproto::MSG_PRESENT => {
-                    if !bound || bound_fd.is_none() {
-                        send_err(drv_resp_write, 1);
-                        continue;
-                    }
 
-                    let present = drvproto::decode_present_header_le(payload);
-                    if let Some(present) = present {
-                        if (present._pad & drvproto::PRESENT_FLAG_FULLFRAME == 0)
-                            && present.rect_count > config.max_rects as u32
-                        {
-                            send_err(drv_resp_write, 3);
-                            continue;
+                while let Some((header, payload)) = frames.next_message() {
+                    match header.msg_type {
+                        drvproto::MSG_HELLO => {
+                            let want_caps = drvproto::decode_hello_payload_le(payload)
+                                .map(|hello| hello.want_caps)
+                                .unwrap_or(0);
+                            let welcome = drvproto::WelcomePayload {
+                                proto_major: drvproto::PROTO_MAJOR,
+                                proto_minor: drvproto::PROTO_MINOR,
+                                have_caps: config.caps & want_caps,
+                                max_rects: config.max_rects,
+                                reserved: 0,
+                            };
+                            let mut welcome_bytes = [0u8; drvproto::WELCOME_PAYLOAD_WIRE_SIZE];
+                            if let Some(len) =
+                                drvproto::encode_welcome_payload_le(&welcome, &mut welcome_bytes)
+                            {
+                                if config.split_writes {
+                                    send_msg_split(
+                                        drv_resp_write,
+                                        drvproto::MSG_WELCOME,
+                                        &welcome_bytes[..len],
+                                    );
+                                } else {
+                                    send_msg(
+                                        drv_resp_write,
+                                        drvproto::MSG_WELCOME,
+                                        &welcome_bytes[..len],
+                                    );
+                                }
+                            }
                         }
+                        drvproto::MSG_BIND => {
+                            if let Some(bind) = drvproto::decode_bind_payload_le(payload) {
+                                bound = true;
+                                bound_fd = Some(bind.fb_fd);
+                                send_ack(drv_resp_write, config.burst);
+                            } else {
+                                send_err(drv_resp_write, 2);
+                            }
+                        }
+                        drvproto::MSG_PRESENT => {
+                            if !bound || bound_fd.is_none() {
+                                send_err(drv_resp_write, 1);
+                                continue;
+                            }
+
+                            let present = drvproto::decode_present_header_le(payload);
+                            if let Some(present) = present {
+                                if (present._pad & drvproto::PRESENT_FLAG_FULLFRAME == 0)
+                                    && present.rect_count > config.max_rects as u32
+                                {
+                                    send_err(drv_resp_write, 3);
+                                    continue;
+                                }
+                            }
+                            send_ack(drv_resp_write, config.burst);
+                        }
+                        _ => {}
                     }
-                    send_ack(drv_resp_write, config.burst);
                 }
-                _ => {}
+            }
+
+            Ok(ServiceProviderEvent::InboxClosed) => {
+                info!("display_fake: inbox closed — exiting");
+                stem::syscall::exit(0);
+            }
+
+            Ok(_) => {}
+
+            Err(e) => {
+                warn!("display_fake: next_event error: {:?}", e);
+                stem::yield_now();
             }
         }
     }

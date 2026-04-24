@@ -16,9 +16,12 @@ use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
     DriverStartContext, ProbeResult, Status,
 };
+use abi::errors::Errno;
+use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
+use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use stem::abi::block_device_protocol::*;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::syscall::vfs::vfs_handle_from_port;
+use stem::syscall::vfs::{vfs_handle_from_port, vfs_mount};
 use stem::syscall::{PortHandle, ioport_read, ioport_write, port_create, port_send, port_try_recv};
 use stem::{error, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"ata_disk";
@@ -639,16 +642,39 @@ fn main(_arg: usize) -> ! {
 
     info!("ATA_DISK: Entering RPC service loop");
 
-    // Build a WaitSet over the FD-bridged read ends of each device's port.
-    // We keep a parallel token→handle mapping so that when an event fires we
-    // know which port handle to drain.
-    let mut ws = stem::wait_set::WaitSet::new();
+    // Create a VFS provider port pair and mount it so this driver participates
+    // in the inbox-backed actor model (ServiceProviderLoop control plane).
+    let (vfs_write, vfs_read) = match port_create(65536) {
+        Ok(pair) => pair,
+        Err(e) => {
+            error!("ATA_DISK: Failed to create VFS provider port: {:?}", e);
+            loop {
+                stem::syscall::sleep_ms(60_000);
+            }
+        }
+    };
+    match vfs_mount(vfs_write, "/dev/ata_ctl") {
+        Ok(()) => info!("ATA_DISK: VFS provider mounted at /dev/ata_ctl"),
+        Err(e) => error!("ATA_DISK: vfs_mount(/dev/ata_ctl) failed: {:?}", e),
+    }
+
+    let mut svc = match ServiceProviderLoop::new(ProviderLoop::new(vfs_read), 4096) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("ATA_DISK: ServiceProviderLoop::new failed: {:?}", e);
+            loop {
+                stem::syscall::sleep_ms(60_000);
+            }
+        }
+    };
+
+    // Register each per-device request handle as a secondary FD-readable source.
     let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, PortHandle)> = Vec::new();
 
     for disk in &disks {
         if let Some(h) = disk.read_port_handle {
             if let Ok(fd) = vfs_handle_from_port(h) {
-                if let Ok(tok) = ws.add_fd_readable(fd) {
+                if let Ok(tok) = svc.add_fd_readable(fd) {
                     tok_to_handle.push((tok, h));
                 }
             }
@@ -657,7 +683,7 @@ fn main(_arg: usize) -> ! {
     for dev in &atapi_devs {
         if let Some(h) = dev.read_port_handle {
             if let Ok(fd) = vfs_handle_from_port(h) {
-                if let Ok(tok) = ws.add_fd_readable(fd) {
+                if let Ok(tok) = svc.add_fd_readable(fd) {
                     tok_to_handle.push((tok, h));
                 }
             }
@@ -666,70 +692,76 @@ fn main(_arg: usize) -> ! {
 
     if tok_to_handle.is_empty() {
         info!("ATA_DISK: No active devices to service");
-        loop {
-            stem::syscall::sleep_ms(60_000);
-        }
     }
 
-    // Main service loop
+    // Main service loop — inbox-first dispatch via ServiceProviderLoop.
     loop {
-        // Block until any registered port becomes readable.
-        let events = match ws.wait(None::<stem::time::Duration>) {
-            Ok(ev) => ev,
-            Err(e) => {
-                error!("ATA_DISK: WaitSet failed: {:?}", e);
-                stem::sleep(Duration::from_millis(100));
-                continue;
-            }
-        };
-
-        for ev in events {
-            if !ev.is_readable() {
-                continue;
-            }
-            let ready_handle = match tok_to_handle.iter().find(|(t, _)| *t == ev.token()) {
-                Some((_, h)) => *h,
-                None => continue,
-            };
-
-            // Find the device that has data and handle the request.
-            let mut found = false;
-            for disk in &disks {
-                if disk.read_port_handle == Some(ready_handle) {
-                    let mut buf = [0u8; 4096];
-                    match port_try_recv(ready_handle, &mut buf) {
-                        Ok(len) if len > 0 => {
-                            handle_ata_request(disk, &buf[..len], ready_handle);
-                        }
-                        Ok(_) => {} // No data yet
-                        Err(e) => {
-                            error!("ATA_DISK: port_try_recv failed: {:?}", e);
-                        }
-                    }
-                    found = true;
-                    break;
-                }
+        match svc.next_event(None) {
+            Ok(ServiceProviderEvent::ProviderRequest(req)) => {
+                // This driver does not expose a VFS file hierarchy; return
+                // ENOSYS for any VFS RPC directed at the provider mount.
+                let _ = svc.send_response(&req, ProviderResponse::err(Errno::ENOSYS));
             }
 
-            if !found {
-                for dev in &atapi_devs {
-                    if dev.read_port_handle == Some(ready_handle) {
+            Ok(ServiceProviderEvent::Ready { token, event }) if event.is_readable() => {
+                let ready_handle = match tok_to_handle.iter().find(|(t, _)| *t == token) {
+                    Some((_, h)) => *h,
+                    None => continue,
+                };
+
+                // Find the device that has data and dispatch the request.
+                let mut found = false;
+                for disk in &disks {
+                    if disk.read_port_handle == Some(ready_handle) {
                         let mut buf = [0u8; 4096];
                         match port_try_recv(ready_handle, &mut buf) {
                             Ok(len) if len > 0 => {
-                                handle_atapi_request(dev, &buf[..len], ready_handle);
+                                handle_ata_request(disk, &buf[..len], ready_handle);
                             }
-                            Ok(_) => {} // No data yet
+                            Ok(_) => {}
                             Err(e) => {
                                 error!("ATA_DISK: port_try_recv failed: {:?}", e);
                             }
                         }
+                        found = true;
                         break;
                     }
                 }
+
+                if !found {
+                    for dev in &atapi_devs {
+                        if dev.read_port_handle == Some(ready_handle) {
+                            let mut buf = [0u8; 4096];
+                            match port_try_recv(ready_handle, &mut buf) {
+                                Ok(len) if len > 0 => {
+                                    handle_atapi_request(dev, &buf[..len], ready_handle);
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    error!("ATA_DISK: port_try_recv failed: {:?}", e);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            Ok(ServiceProviderEvent::InboxClosed) => {
+                info!("ATA_DISK: inbox closed — exiting service loop");
+                break;
+            }
+
+            Ok(_) => {}
+
+            Err(e) => {
+                error!("ATA_DISK: next_event error: {:?}", e);
+                stem::sleep(Duration::from_millis(100));
             }
         }
     }
+
+    stem::syscall::exit(0);
 }
 
 /// Handle a block device RPC request for ATA disk
