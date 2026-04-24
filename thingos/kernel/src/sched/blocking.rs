@@ -296,6 +296,40 @@ pub fn wake_task_locked<R: BootRuntime>(
             safe_cpu = 0;
         }
         if let Some(sf) = sched.state.get_thread_mut(id) {
+            // Track cross-CPU wake routing using MigrationState.
+            // When the task is woken onto a different CPU than it last ran on,
+            // record a Requested transition so the migration is observable.
+            let last = sf.last_cpu;
+            if last.is_some_and(|c| c != safe_cpu) {
+                match sf.migration_state.try_transition(
+                    crate::sched::state::MigrationState::Requested { target: safe_cpu },
+                ) {
+                    Ok(new_state) => {
+                        crate::kdebug!(
+                            "MIGRATE[tid={}]: {:?} → Requested {{ target: cpu{} }} (wake from cpu{:?})",
+                            id,
+                            sf.migration_state,
+                            safe_cpu,
+                            last,
+                        );
+                        sf.migration_state = new_state;
+                    }
+                    Err(bad_state) => {
+                        // Non-fatal: migration state already reflects a
+                        // pending transition (e.g. already InTransit or
+                        // Requested from a parallel path).  Log so the
+                        // situation is visible for debugging.
+                        crate::kdebug!(
+                            "MIGRATE[tid={}]: wake routing to cpu{} blocked by state {:?} \
+                             (last_cpu={:?}) — transition skipped",
+                            id,
+                            safe_cpu,
+                            bad_state,
+                            last,
+                        );
+                    }
+                }
+            }
             sf.wake_cpu = Some(safe_cpu);
         }
 
