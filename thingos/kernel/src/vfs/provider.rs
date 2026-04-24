@@ -351,9 +351,9 @@ impl ProviderRpc {
 
             self.resp.remove_waiter(tid);
             wait_queue.remove(tid);
+            crate::sched::unregister_timeout_wake_current(tid);
 
             if crate::sched::take_pending_interrupt_current() {
-                crate::sched::unregister_timeout_wake_current(tid);
                 // On interrupt, we are no longer waiting.
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
