@@ -222,15 +222,24 @@ impl ServiceProviderLoop {
         &mut self,
         timeout: Option<Duration>,
     ) -> Result<ServiceProviderEvent<'_>, Errno> {
+        let provider_token = self.provider_token;
         loop {
-            let ev = self.svc.next_event(timeout)?;
+            // We use a raw pointer to bypass the borrow checker's conservative
+            // lifetime pinning in loops (the "streaming iterator" problem).
+            // This is safe because we either return the borrow immediately or
+            // drop it before the next iteration.
+            let ev = unsafe {
+                let svc = &mut self.svc as *mut ServiceLoop;
+                (*svc).next_event(timeout)?
+            };
+
             match ev {
                 ServiceEvent::InboxClosed => return Ok(ServiceProviderEvent::InboxClosed),
                 ServiceEvent::Timeout => return Ok(ServiceProviderEvent::Timeout),
                 ServiceEvent::Message { kind, payload } => {
                     return Ok(ServiceProviderEvent::Message { kind, payload });
                 }
-                ServiceEvent::Ready { token, event } if token == self.provider_token => {
+                ServiceEvent::Ready { token, event } if token == provider_token => {
                     // The provider port has data; try to decode one request.
                     // If EPIPE is returned the kernel closed the request port
                     // — surface that as InboxClosed so callers can break their
@@ -240,8 +249,6 @@ impl ServiceProviderLoop {
                         Ok(None) => {
                             // Spurious wake — port signalled ready but had no
                             // complete frame yet (partial write from kernel).
-                            // Fall through and wait again.
-                            continue;
                         }
                         Err(Errno::EPIPE) => return Ok(ServiceProviderEvent::InboxClosed),
                         Err(e) => return Err(e),

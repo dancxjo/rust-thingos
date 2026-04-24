@@ -59,7 +59,7 @@ use abi::seed::{
 use abi::syscall::vfs_flags::{O_CREAT, O_NONBLOCK, O_RDONLY, O_TRUNC, O_WRONLY};
 use abi::syscall::{PollHandle, poll_flags};
 use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
-use abi::vfs::VfsRpcOp;
+use abi::vfs_rpc::VfsRpcOp;
 use cmd_queue::{CmdQueue, EventQueue, NetCommand, NetEvent, new_queues};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
@@ -522,7 +522,8 @@ fn run_rpc_thread(
                 } else if op == VfsRpcOp::SubscribeReady {
                     vfs_provider::send_resp(resp_port, req_id, &[E_OK]);
                 } else {
-                    let mut state = net_state.lock();
+                    let mut state_guard = net_state.lock();
+                    let state = &mut *state_guard;
                     net_provider.handle_decoded(
                         &mut state.iface,
                         &mut state.device,
@@ -700,7 +701,8 @@ fn main(arg: usize) -> ! {
 
     if cfg.oneshot {
         debug!("NETD: oneshot mode enabled — DHCP probe will exit after completion");
-        let mut state = net_state.lock();
+        let mut state_guard = net_state.lock();
+        let state = &mut *state_guard;
         match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
             Ok(cfg) => {
                 debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
@@ -715,12 +717,13 @@ fn main(arg: usize) -> ! {
 
     debug!("NETD: Running DHCP...");
     let dhcp_config = loop {
-        let mut state = net_state.lock();
+        let mut state_guard = net_state.lock();
+        let state = &mut *state_guard;
         match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
             Ok(cfg) => break cfg,
             Err(e) => {
                 warn!("NETD: DHCP failed: {:?}; retrying in 5s", e);
-                drop(state);
+                drop(state_guard);
                 stem::time::sleep_ms(5000);
             }
         }
