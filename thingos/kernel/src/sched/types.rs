@@ -181,13 +181,12 @@ pub(crate) struct DeferredRegistrySync {
     pub new_last_cpu: Option<usize>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RemoteWakeMailboxEntry {
-    pub tid: TaskId,
-    pub priority: usize,
-    pub enqueued_at_tick: u64,
-    pub wake_mono: u64,
-}
+/// Type alias for the mailbox entry pushed by a remote CPU into a per-CPU
+/// [`crate::sched::state::WakeMailbox`].
+///
+/// The canonical definition lives in [`crate::sched::state::WakeMailboxEntry`];
+/// this alias keeps existing call sites in this module unchanged.
+pub(crate) type RemoteWakeMailboxEntry = crate::sched::state::WakeMailboxEntry;
 
 pub(crate) struct SchedulerMetrics {
     pub yields: u64,
