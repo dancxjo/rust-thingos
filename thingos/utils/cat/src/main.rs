@@ -74,25 +74,42 @@ fn stream(
                         }
                     }
                 } else {
-                    // Line numbering mode: process byte by byte or find newlines
+                    // Line numbering mode: write each numbered line atomically to
+                    // prevent kernel log messages from interleaving between the
+                    // line-number prefix and the line content.
                     let chunk = &buf[..n];
-                    let mut start = 0;
-                    for i in 0..chunk.len() {
-                        if *at_line_start {
-                            *lineno += 1;
-                            let prefix = alloc::format!("{:6}  ", *lineno);
-                            let _ = vfs_write(out_fd, prefix.as_bytes());
-                            *at_line_start = false;
-                        }
+                    let mut pos = 0;
 
-                        if chunk[i] == b'\n' {
-                            let _ = vfs_write(out_fd, &chunk[start..=i]);
-                            start = i + 1;
+                    while pos < chunk.len() {
+                        if let Some(newline_offset) = chunk[pos..].iter().position(|&b| b == b'\n') {
+                            let nl = pos + newline_offset;
+                            if *at_line_start {
+                                // Write prefix + line content as one atomic write.
+                                *lineno += 1;
+                                let mut out =
+                                    alloc::format!("{:6}  ", *lineno).into_bytes();
+                                out.extend_from_slice(&chunk[pos..=nl]);
+                                let _ = vfs_write(out_fd, &out);
+                            } else {
+                                // Continuation of a line started in a previous chunk.
+                                let _ = vfs_write(out_fd, &chunk[pos..=nl]);
+                            }
                             *at_line_start = true;
+                            pos = nl + 1;
+                        } else {
+                            // Remaining bytes form a partial line (no newline yet).
+                            if *at_line_start {
+                                *lineno += 1;
+                                let mut out =
+                                    alloc::format!("{:6}  ", *lineno).into_bytes();
+                                out.extend_from_slice(&chunk[pos..]);
+                                let _ = vfs_write(out_fd, &out);
+                                *at_line_start = false;
+                            } else {
+                                let _ = vfs_write(out_fd, &chunk[pos..]);
+                            }
+                            break;
                         }
-                    }
-                    if start < chunk.len() {
-                        let _ = vfs_write(out_fd, &chunk[start..]);
                     }
                 }
             }
