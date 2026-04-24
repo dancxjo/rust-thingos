@@ -1,0 +1,503 @@
+Thing-OS Concurrency Primitive Index
+=====================================
+Generated: 2026-04-24
+Search scope: thingos/ (all *.rs files, target/ excluded)
+
+Legend
+------
+[K]  kernel wait primitive
+[R]  runtime wait loop (WaitSet / vfs_poll)
+[S]  service event loop
+[V]  VFS provider RPC loop
+[D]  driver control plane
+[B]  bulk data path (memfd / ring / DMA)
+[C]  compatibility shim / legacy port
+[A]  accidental / ad-hoc concurrency
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. KERNEL WAIT PRIMITIVE  [K]
+   WaitKind / WaitSpec / WaitResult / wait_many / SYS_WAIT_MANY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+abi/src/wait.rs
+  [K] pub enum WaitKind { Port(deprecated), RootWatch(deprecated), TaskExit,
+      Irq, Timeout, GraphOp(deprecated), Fd }
+  [K] pub const WAIT_MANY_MAX_ITEMS: usize = 32
+  [K] pub struct WaitSpec  { kind, flags, object, token }
+  [K] pub struct WaitResult { kind, flags, object, token, value, reserved }
+  [K] mod interest { READABLE, WRITABLE }
+  [K] mod ready { READABLE, WRITABLE, HANGUP, EXITED, TIMEOUT, OVERFLOW,
+      ERROR, IRQ, DONE }
+
+abi/src/numbers.rs
+  [K] SYS_WAIT_MANY = 0x2000 (implied by dispatch.rs offset 45)
+
+kernel/src/syscall/dispatch.rs:45
+  [K] SYS_WAIT_MANY dispatch → handlers::sys_wait_many(args[0..4])
+
+kernel/src/syscall/handlers/wait.rs
+  [K] pub fn sys_wait_many(…)          — top-level syscall entry point
+  [K] fn poll_spec(pinfo, spec)         — dispatch on WaitKind
+  [K] fn poll_port(pinfo, spec)         — WaitKind::Port (legacy, still works)
+  [K] fn poll_fd(pinfo, spec)           — WaitKind::Fd   (primary path)
+  [K] fn poll_graph_op(_spec)           — WaitKind::GraphOp → ENOSYS
+  [K] fn poll_task_exit(spec)           — WaitKind::TaskExit
+  [K] fn poll_irq(spec)                 — WaitKind::Irq
+  [K] fn error_result(spec, errno)      — helper
+
+stem/src/syscall/wait.rs
+  [K] pub fn wait_many(specs, results, timeout) → thin syscall wrapper
+
+kernel/src/sched/wait_queue.rs
+  [K] WaitQueue — scheduler-level primitive used by Inbox, pipe, socket
+      to park / wake blocked tasks
+
+kernel/src/sched/blocking.rs
+  [K] block_on_fd(fd, interest) / wake_fd(fd, ready) — fd readiness kernel
+
+kernel/src/sched/sleep.rs
+  [K] sleep_ns(ns) — timer-based blocking
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. RUNTIME WAIT LOOP  [R]
+   WaitSet (stem) / vfs_poll (SYS_FS_POLL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+--- WaitSet (stem/src/wait_set.rs) ---
+
+stem/src/wait_set.rs
+  [R] pub struct WaitSet { specs: Vec<WaitSpec>, next_token }
+  [R]   add_fd_readable(fd)       — preferred API
+  [R]   add_fd_writable(fd)       — preferred API
+  [R]   add_task_exit(tid)
+  [R]   add_irq(irq_handle)
+  [R]   add_port_readable(handle) — #[deprecated] use add_fd_readable
+  [R]   add_port_writable(handle) — #[deprecated] use add_fd_writable
+  [R]   add_vfs_watch(fd)         — #[deprecated] use add_fd_readable
+  [R]   add_graph_op(op)          — #[deprecated] → ENOSYS
+  [R]   wait(timeout) → WaitEvents
+
+--- WaitSet callers ---
+
+bloom/src/main.rs:146
+  [R] WaitSet (compositor input thread) — input FD + session/desktop watch FDs
+
+bloom/src/main.rs:220
+  [R] WaitSet (render thread) — vblank/timer FD
+
+bristle/src/main.rs:83
+  [R] WaitSet — multiplexes kbd + mouse port FDs + bloom evt port
+
+drivers/ahci_disk/src/main.rs:721
+  [R] WaitSet — multiplexes per-port request port FDs (one per SATA port)
+
+drivers/ata_disk/src/main.rs:645
+  [R] WaitSet — multiplexes per-device request port FDs
+
+drivers/display_fake/src/main.rs:173
+  [R] WaitSet — waits on command port FD
+
+drivers/display_virtio_gpu/src/main.rs:664
+  [R] WaitSet — virtio GPU irq FD + VFS RPC port FD
+
+--- vfs_poll / SYS_FS_POLL callers ---
+
+abi/src/numbers.rs:226    SYS_FS_POLL = 0x400B
+kernel/src/syscall/dispatch.rs:139
+  [K] dispatch → handlers::vfs::sys_fs_poll(args[0..2])
+stem/src/syscall/vfs.rs:263
+  [R] pub fn vfs_poll(pollfds, timeout_ms) — userspace wrapper
+
+cambium/src/main.rs:230
+  [R] vfs_poll([inbox_fd, devices_watch_fd], RECONCILE_TIMEOUT_MS)
+      — driver coordinator main loop
+
+drivers/beeper/src/main.rs:233,385
+  [R] vfs_poll — one-shot stdin probe + blocking audio-ring wait
+
+drivers/chime/src/main.rs:303,332,502
+  [R] vfs_poll — stdin probe + blocking audio-ring wait
+
+drivers/display_virtio_gpu/src/main.rs:225
+  [R] vfs_poll — blocking wait for virtio IRQ FD
+
+drivers/virtio_sound/src/main.rs:335,1048
+  [R] vfs_poll — audio period readiness
+
+libs/http/src/lib.rs:62
+  [R] vfs_poll — HTTP socket readiness with timeout
+
+sprout/src/supervisor.rs:339
+  [R] vfs_poll([devices_watch_fd], 100ms) — supervisor watch loop
+
+stem/src/pal/net.rs:122
+  [R] vfs_poll — network PAL socket readiness
+
+utils/input_echo/src/main.rs:93
+  [R] vfs_poll([port_fd], MAX) — input echo blocking loop
+
+utils/netd/src/main.rs:571
+  [R] vfs_poll — 5 ms tick for network daemon
+
+utils/placed/src/main.rs:100
+  [R] vfs_poll — watch loop for placement daemon
+
+utils/poll_mux/src/main.rs:43,55,67,78,102
+  [R] vfs_poll — multiplexing self-test (pipe + port + inbox + VFS file)
+
+utils/terminal/src/main.rs:765
+  [R] vfs_poll — terminal input readiness check
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. SERVICE EVENT LOOP — INBOX / TYPED MESSAGES  [S]
+   Kernel Inbox / SYS_MSG_SEND / SYS_MSG_RECV / msg_inbox_open_self
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+--- Kernel Inbox implementation ---
+
+kernel/src/inbox/mod.rs
+  [S] pub struct Inbox { inner: Mutex<InboxInner>, waiters: WaitQueue }
+  [S]   Inbox::send(envelope)      — enqueue; wakes one waiter
+  [S]   Inbox::try_recv()          — non-blocking dequeue
+  [S]   Inbox::close()             — close and drain
+  [S] pub fn create_inbox(capacity) → InboxId
+  [S] pub fn get_inbox(id)         → Option<Arc<Inbox>>
+  [S] pub fn close_inbox(id)
+  [S] static INBOX_REGISTRY: Mutex<Vec<Option<Arc<Inbox>>>>
+  [S] DEFAULT_INBOX_CAPACITY = 32 (matches prototype process inbox capacity)
+
+kernel/src/vfs/inbox_node.rs
+  [S] InboxNode — VfsNode backed by Inbox; participates in SYS_FS_POLL
+      readiness so inbox FD can be combined with pipes/sockets in vfs_poll
+
+kernel/src/ipc/msgqueue.rs
+  [S] MsgQueue — unified view over Inbox for message delivery routing
+
+kernel/src/message/mod.rs, delivery.rs, bridge.rs
+  [S] Message / MessageEnvelope — canonical typed envelope
+      delivery.rs: route_message(envelope, target)
+
+kernel/src/signal/inbox_bridge.rs
+  [S] signal→inbox bridge: typed signal events delivered as inbox messages
+
+--- Stem syscall wrappers ---
+
+stem/src/syscall/message.rs
+  [S] msg_send(pid, kind, payload)     — SYS_MSG_SEND
+  [S] msg_recv(kind, payload_buf)      — SYS_MSG_RECV (non-blocking)
+  [S] msg_recv_blocking(max_payload)   — spin-yield loop over msg_recv
+  [S] msg_broadcast(pgid, kind, payload) — SYS_MSG_BROADCAST
+  [S] msg_inbox_open_self()            — open /proc/self/inbox as VFS FD
+      (enables combining inbox with other FDs in vfs_poll / WaitSet)
+
+--- ipc_helpers::inbox ---
+
+libs/ipc_helpers/src/inbox.rs
+  [S] InboxReceiver::new(max_payload)
+  [S]   try_recv() → Result<ReceivedMessage, Errno>
+  [S]   recv_blocking() → ReceivedMessage
+  [S] send_typed(pid, kind, payload)
+  [S] send_typed_blocking(pid, kind, payload)
+  [S] broadcast_typed(pgid, kind, payload)
+
+--- Inbox callers ---
+
+cambium/src/main.rs:197,214,226,261,359
+  [S] inbox_fd = msg_inbox_open_self(); combined with devices_watch_fd
+      in vfs_poll loop — driver coordinator event loop (partially migrated)
+
+bloom/src/protocol.rs:142,168-169 / bloom/src/input.rs:234,239
+  [S] ConnectInboxRequest — client can register input_pid to receive
+      typed pointer/keyboard events via inbox instead of port
+
+utils/ipc_inbox_demo/src/main.rs
+  [S] Reference demo: self-send + InboxReceiver::try_recv round-trip
+      + broadcast_typed to process group
+
+utils/poll_mux/src/main.rs:32,84-95
+  [S] inbox_fd in mixed poll — self-test that inbox FD participates in poll
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. VFS PROVIDER RPC LOOP  [V]
+   ProviderLoop / vfs_rpc / SYS_FS_MOUNT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+abi/src/vfs_rpc.rs
+  [V] VfsRpcOp enum — Lookup, Read, Write, Stat, Readdir, Poll, DeviceCall …
+  [V] VfsRpcRequest / VfsRpcResponse wire types
+
+libs/ipc_helpers/src/provider.rs
+  [V] ProviderLoop::new(read_port_fd)
+  [V]   next_request() → Result<ProviderRequest, Errno>
+  [V]   send_response(req, resp)
+  [V] ProviderResponse — ok_empty / ok_bytes / ok_u64 / ok_stat / err(Errno)
+
+libs/ipc_helpers/src/rpc.rs
+  [V] RpcServer — typed request/reply over port framing
+  [V] RpcClient — blocking call-and-wait pattern
+  (Note: built on port; future work: layer over inbox or FD directly)
+
+drivers/display_bootfb/src/vfs_provider.rs
+  [V] BootfbProvider — ProviderLoop serving /dev/fb0 reads (frame data)
+
+drivers/virtio_netd/src/vfs_provider.rs
+  [V] NetProvider — ProviderLoop serving /dev/net/virtio0/{rx,tx}
+
+utils/ipc_provider_demo/src/main.rs
+  [V] Reference demo: port_create → vfs_mount → ProviderLoop dispatch
+
+drivers/display_bootfb/src/driver.rs, drivers/display_virtio_gpu/src/main.rs
+  [V] VFS RPC dispatch inside GPU / bootfb main loops (inline, not ProviderLoop)
+
+kernel/src/vfs/provider.rs
+  [V] Kernel side: ProviderNode — routes VFS calls to userland port
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. DRIVER CONTROL PLANE  [D]
+   Port-based RPC (request / response port pairs)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+--- Kernel port implementation ---
+
+kernel/src/ipc/port.rs
+  [D] PortNode (read + write ends), ring-buffer backed
+  [D] PortNode::send / PortNode::recv
+
+kernel/src/vfs/port_node.rs
+  [D] VfsNode wrapper over PortNode for FD-based access
+
+--- Stem syscall wrappers ---
+
+stem/src/syscall/port.rs
+  [D] port_create()    — SYS_PORT_CREATE → (read_handle, write_handle)
+  [D] port_send(h, d)  — SYS_PORT_SEND
+  [D] port_send_all    — SYS_PORT_SEND_ALL (framed send)
+  [D] port_recv        — SYS_PORT_RECV (blocking)
+  [D] port_try_recv    — SYS_PORT_TRY_RECV (non-blocking)
+  [D] port_close       — SYS_PORT_CLOSE
+  [D] vfs_fd_from_port — SYS_FD_FROM_HANDLE (bridge port → VFS FD for poll)
+  [D] vfs_handle_from_port — inverse bridge
+
+libs/ipc_helpers/src/port.rs
+  [D] send_all_blocking(handle, data) — retry on EAGAIN
+  [D] try_recv_opt(handle, buf)
+  [D] recv_blocking(handle, buf)
+  [D] OwnedPort — RAII wrapper with drop-close
+
+--- Driver callers ---
+
+drivers/ahci_disk/src/main.rs:28,167,722,821,870,921,944
+  [D] PortHandle per SATA port; WaitSet over bridged FDs
+      handle_block_device_request / handle_identify / handle_read /
+      send_read_response / send_error_response  — all via port_send
+
+drivers/ata_disk/src/main.rs:22,157,169,646,736,754,780,812,887,910
+  [D] Same pattern as AHCI: PortHandle per ATA/ATAPI device
+
+drivers/display_fake/src/main.rs:16,71,101,108,129,143
+  [D] send_msg / send_msg_split / send_ack / send_err — all via port_send
+
+bristle/src/main.rs:19,55-65
+  [C] kbd_read / mouse_read / bloom_evt_write / evt_input_echo_write
+      — four port handles packed into a single usize arg (legacy fanout)
+
+--- Sprout supervisor handshake ---
+
+sprout/src/task.rs
+  [D] ManagedTask { drv_req_write, drv_resp_read,
+                    boot_req_read, boot_resp_write, resp_fd }
+      — four PortHandles per supervised task for boot handshake
+
+sprout/src/supervisor.rs
+  [D] watches resp_fd (bridged port) for driver ready signal
+
+utils/ipc_service_demo/src/main.rs
+  [D] Reference demo: RpcServer port-based request/reply service
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. BULK DATA PATH  [B]
+   memfd / shared_memory / DMA ring buffers
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+abi/src/shared_memory.rs
+  [B] SharedMemoryRef { handle: u32, size: u64 } — wire descriptor
+      passed inline in control messages to hand off a buffer handle
+
+abi/src/numbers.rs:372-373
+  [B] SYS_DEVICE_ALLOC_DMA, SYS_DEVICE_DMA_PHYS — DMA allocation
+
+cambium/src/spawn.rs:103-160
+  [B] memfd_create("driver.boot") / memfd_create("driver.ctx")
+      — bootstrap context (DriverEntryCtx) passed to driver via memfd
+
+drivers/beeper/src/main.rs:104
+  [B] memfd_create("audio-ring") — audio PCM ring buffer
+
+drivers/chime/src/main.rs:109
+  [B] memfd_create("audio-ring") — audio PCM ring buffer
+
+drivers/display_bootfb/src/main.rs:110,162
+  [B] vm_map of bootstrap memfd (boot_arg) — framebuffer mapping
+
+drivers/display_virtio_gpu/src/main.rs:366,1364-1386
+  [B] vm_map of bootstrap memfd; memfd_create("tex_upload") for DMA
+      texture uploads; shared_memory_phys for IOVA mapping
+
+drivers/ahci_disk/src/main.rs:158,306,586-596
+  [B] static DMA_BUFFER; SYS_DEVICE_DMA_PHYS — AHCI command/data DMA
+
+utils/ipc_memfd_demo/src/main.rs
+  [B] Reference demo: memfd create → vm_map → share handle via port
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. COMPATIBILITY SHIMS / LEGACY PORTS  [C]
+   Deprecated WaitKind variants, legacy port packing
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+abi/src/wait.rs
+  [C] WaitKind::Port       (#[deprecated] — bridge via SYS_FD_FROM_HANDLE)
+  [C] WaitKind::RootWatch  (#[deprecated] → ENOSYS)
+  [C] WaitKind::GraphOp    (#[deprecated] → ENOSYS)
+
+stem/src/wait_set.rs
+  [C] WaitSet::add_port_readable   (#[deprecated])
+  [C] WaitSet::add_port_writable   (#[deprecated])
+  [C] WaitSet::add_vfs_watch       (#[deprecated] → add_fd_readable)
+  [C] WaitSet::add_graph_op        (#[deprecated] → ENOSYS)
+
+bristle/src/main.rs:62-65
+  [C] Packed four-port-handle usize argument (kbd/mouse/bloom/echo)
+      — legacy encoding; candidate for inbox message + WaitSet migration
+
+sprout/src/task.rs
+  [C] Four PortHandles per ManagedTask for boot handshake
+      — should become inbox messages with declared facets
+
+kernel/src/syscall/handlers/port.rs, kernel/src/ipc/port.rs
+  [C] SYS_PORT_* family still functional; deprecated in favour of
+      inbox (control) + memfd (bulk)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. PIPES  [R/V]
+   Unidirectional byte streams (stdio, shell pipelines, internal scaffolding)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+kernel/src/ipc/pipe.rs
+  [K] create(capacity, flags) → PipeId
+  [K] create_fd_pair(capacity, flags) → (read_node, write_node)
+  [K] read_node_for_id / write_node_for_id
+
+kernel/src/sched/spawn.rs:958,1024,1084,1267-1293,1597-1623
+  [K] stdio pipe setup during SYS_SPAWN_PROCESS[_EX]
+      (stdin_pipe_id, stdout_pipe_id, stderr_pipe_id)
+
+kernel/src/syscall/handlers/vfs.rs:710
+  [K] SYS_FS_PIPE → create_fd_pair_with_id; returns (read_fd, write_fd)
+
+utils/ipc_pipe_demo/src/main.rs
+  [R] Reference demo: pipe create → write → read round-trip
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. UNIX SOCKETS  [C/V]
+   Stream sockets for POSIX compatibility layer
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+kernel/src/ipc/unix_socket.rs
+  [C] UnixSocketNode — bidirectional stream over two pipes + four WaitQueues
+  [C] UnixSocketNode::new() / new_pair()
+      — used by POSIX socketpair() compatibility
+
+kernel/src/syscall/handlers/socket.rs:51,182
+  [C] SYS_SOCKET_CREATE, SYS_SOCKETPAIR — dispatch to UnixSocketNode
+
+stem/src/syscall/socket.rs
+  [C] socket_create(domain, type) / socket_pair(type)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. SPAWN / TASK CREATION  [K]
+    SYS_SPAWN_PROCESS / SYS_SPAWN_PROCESS_EX / SYS_SPAWN_THREAD / SYS_TASK_EXEC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+abi/src/numbers.rs:14    SYS_SPAWN_THREAD
+kernel/src/sched/spawn.rs
+  [K] spawn_user_task_full, boot_spawn_process, spawn_user_thread
+      spawn_user_thread_ex, SpawnExResult, StdioSpec
+kernel/src/task/mod.rs:829
+  [K] task::spawn<R>(entry, arg, priority, affinity)
+stem/src/thread.rs:10
+  [R] pub fn spawn(entry) → Result<ThreadId, Errno>  — SYS_SPAWN_THREAD
+
+cambium/src/spawn.rs:103,153
+  [S] ManagedDriver::spawn_legacy / spawn_catalog — exec via memfd context
+
+sprout/src/pipelines.rs
+  [S] Pipeline spawn helpers: display, terminal, nectar, fetchd, bloom,
+      serial shell, mount, netd, iso9660d
+
+sprout/src/supervisor.rs:339,580,610,627
+  [S] Supervisor::run — spawns cambium, netd, iso9660d
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. ACCIDENTAL / AD-HOC CONCURRENCY  [A]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+drivers/virtio_gpu/src/main.rs:152
+  [A] thread::spawn(irq_thread)  — raw std thread for IRQ inside a driver;
+      should become a WaitSet add_irq source in the driver's main loop
+
+utils/smallsh/src/process_pool/mod.rs
+  [A] ProcessPool — ad-hoc child-process reaping without WaitSet;
+      uses manual SIGCHLD / waitpid (POSIX compat layer)
+
+utils/tests/test_threads/src/main.rs
+  [A] Raw SYS_SPAWN_THREAD test harness — intentional for testing only
+
+utils/tests/test_thread_std/src/main.rs
+  [A] std::thread::spawn test — intentional for std compat testing
+
+utils/tests/test_futex/src/main.rs
+  [A] Futex-based synchronisation test — low-level compat test
+
+drivers/driver_wasm_host/src/main.rs
+  [A] WASM driver host: inline blocking I/O, no structured event loop
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIRST MIGRATION TARGET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Recommended: sprout/src/task.rs — ManagedTask boot handshake
+
+Current state:
+  ManagedTask carries four PortHandles per supervised service
+  (drv_req_write, drv_resp_read, boot_req_read, boot_resp_write) plus an
+  optional resp_fd (bridged port FD).  The supervisor polls resp_fd with
+  vfs_poll to detect driver readiness.
+
+Migration path:
+  Replace the four-port handshake with inbox messages:
+  1. Driver sends a typed "Ready" inbox message (KindId::DRIVER_READY) to
+     sprout's PID when it has finished initialising.
+  2. Sprout waits on its own inbox FD (msg_inbox_open_self) combined with
+     the existing devices_watch_fd in a single vfs_poll / WaitSet call.
+  3. Facet registration (mount paths, service names) travels as additional
+     inbox message fields — no separate port required.
+  4. ManagedTask drops all four PortHandles; resp_fd is replaced by the
+     shared inbox FD already open for the supervisor.
+
+Why this target first:
+  - Self-contained change: only sprout + cambium are affected.
+  - Exercises the "Sprout supervises services as actors" rule from the spec.
+  - No kernel changes needed; all primitives (msg_send, msg_inbox_open_self,
+    vfs_poll) are already in place.
+  - Removes the largest concentration of legacy port-handle wiring in userspace.
