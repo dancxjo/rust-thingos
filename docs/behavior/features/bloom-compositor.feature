@@ -1,9 +1,10 @@
-Feature: Bloom compositor threading and responsiveness
+Feature: Bloom compositor service loop and responsiveness
 
-  The bloom compositor separates I/O event handling from frame rendering
-  using a dedicated I/O thread.  Wallpaper changes are decoded in a
-  background worker thread so the render loop is never blocked by image
-  decoding.
+  The bloom compositor is readiness-driven: a single service loop waits on
+  all I/O sources (Wayland client port, bristle HID events, wallpaper watch)
+  and dispatches to focused service objects.  Wallpaper changes are decoded
+  in a background worker thread so the compositor loop is never blocked by
+  image decoding.
 
   Scenario: bloom compositor service starts and publishes its port
     Given the machine is booted
@@ -21,19 +22,19 @@ Feature: Bloom compositor threading and responsiveness
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
     Then the log should match pattern "bloom: reacting to wallpaper change"
 
-  Scenario: bloom I/O thread starts independently of the render loop
+  Scenario: bloom service loop starts
     Given the machine is booted
-    Then the log should match pattern "bloom: I/O thread started"
+    Then the log should match pattern "bloom: service loop started"
 
-  Scenario: bloom input ingestion continues under render pressure
-    # Verifies that the I/O thread queues events independently of the render
-    # loop: two rapid wallpaper-change writes are both ingested and reacted to
-    # even if the render thread is busy presenting a frame.
+  Scenario: bloom service loop processes multiple wallpaper events
+    # Verifies that the service loop continues to ingest events even when
+    # a previous event triggered an async wallpaper decode: two rapid
+    # wallpaper-change writes are both processed.
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
-    Then the log should match pattern "bloom: I/O thread started"
+    Then the log should match pattern "bloom: service loop started"
     And "bloom: reacting to wallpaper change" should appear at least 2 times
 
   Scenario: wallpaper reload does not block the render loop

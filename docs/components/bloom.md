@@ -84,7 +84,30 @@ Bloom is organized around:
 - `input.rs` — Bristle ingestion and focus routing
 - `render.rs` — compositor visuals and pistil-backed blitting
 - `damage.rs` — per-output dirty tracking
-- `main.rs` — event loop orchestration
+- `frame_clock.rs` — frame-pacing clock (readiness-driven; no sleep-based polling)
+- `world.rs` — `BloomWorld`: single owner of all mutable compositor state
+- `loop_types.rs` — `BloomService` trait, `BloomLoop`, `Interest`, `LoopEvent`, `LoopAction`
+- `services/` — focused service implementations:
+  - `wayland.rs` — `WaylandService`: native Bloom protocol client dispatch
+  - `input_service.rs` — `InputService`: bristle HID event ingestion
+  - `wallpaper.rs` — `WallpaperService`: wallpaper watch-path reactions
+- `main.rs` — startup, `BloomWorld` construction, service registration, `BloomLoop::run`
+
+## Loop contract
+
+Bloom's compositor loop is **readiness-driven, not sleep-driven**:
+
+```text
+loop {
+    wait(next_frame_deadline)   ← blocks until FD ready or timeout
+    for each ready FD → dispatch to owning BloomService
+    poll wallpaper worker (poll_ready_background)
+    if frame_clock.repaint_due() && damage.is_dirty() → present + frame callbacks
+}
+```
+
+Services implement `BloomService` and communicate only through `BloomWorld`
+mutations and `LoopAction` return values — never by calling each other directly.
 
 ## Pistil boundary
 

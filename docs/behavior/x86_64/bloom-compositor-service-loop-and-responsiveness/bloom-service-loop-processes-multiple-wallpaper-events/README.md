@@ -1,4 +1,4 @@
-# ❌ Scenario: bloom input ingestion continues under render pressure
+# ❌ Scenario: bloom service loop processes multiple wallpaper events
 
 > Last run: 2026-04-23 21:19:50
 
@@ -10,7 +10,8 @@
 | 2 | When I wait for the shell prompt | ✅ | 252ms | - [📜](./02/serial.log) - |
 | 3 | And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console | ✅ | 1019ms | - [📜](./03/serial.log) - |
 | 4 | And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console | ✅ | 1019ms | - [📜](./04/serial.log) - |
-| 5 | Then the log should match pattern "bloom: I/O thread started" | ❌ | 1007ms | - [📜](./05/serial.log) - |
+| 5 | Then the log should match pattern "bloom: service loop started" | ❌ | 1007ms | - [📜](./05/serial.log) - |
+
 
 <details>
 <summary>📜 Full Serial Log</summary>
