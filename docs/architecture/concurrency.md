@@ -2,8 +2,8 @@
 
 This document defines the canonical three-layer concurrency model for
 Thing-OS.  All new services, drivers, and runtime crates must follow these
-layers.  The [concurrency-index.txt] in the repository root maps every
-current usage to its layer.
+layers.  The [concurrency-index.txt] in `thingos/` maps every current usage
+to its layer.
 
 ---
 
@@ -236,5 +236,5 @@ changes are needed because all required primitives (`msg_send`,
 - `stem/src/wait_set.rs` — `WaitSet` implementation and API docs
 - `libs/ipc_helpers/src/inbox.rs` — `InboxReceiver` and send helpers
 - `docs/ipc/` — IPC convergence strategy and migration phases
-- `concurrency-index.txt` — complete inventory of every concurrency pattern
-  usage site in the codebase
+- [`concurrency-index.txt`](../../thingos/concurrency-index.txt) — complete
+  inventory of every concurrency pattern usage site in the codebase
