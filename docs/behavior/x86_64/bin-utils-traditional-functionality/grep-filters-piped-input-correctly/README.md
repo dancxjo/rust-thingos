@@ -1,15 +1,12 @@
-# ✅ Scenario: grep filters piped input correctly
+# ❌ Scenario: grep filters piped input correctly
 
-> Last run: 2026-04-24 11:53:19
+> Last run: 2026-04-24 11:58:04
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 16283ms | - - - |
-| 2 | When I wait for the shell prompt | ✅ | 458ms | - [📜](./02/serial.log) - |
-| 3 | And I type "echo hello | grep hello | wc -l" on the serial console | ✅ | 984ms | - [📜](./03/serial.log) - |
-| 4 | Then the command output should strictly be "1" | ✅ | 0ms | - - - |
+| 1 | Given the machine is booted | ❌ | 1001ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

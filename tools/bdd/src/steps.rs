@@ -1959,9 +1959,17 @@ async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> 
         let mut found = false;
 
         for line in clean_log.lines() {
-            // Exclude structured kernel/service log lines (start with '[') and
-            // shell prompt lines (contain '>').
-            if !line.starts_with('[') && !line.contains(">") && line.contains(&expected) {
+            let trimmed = line.trim();
+            let is_log = trimmed.starts_with('[') 
+                || trimmed.contains("[INFO ]") 
+                || trimmed.contains("[WARN ]") 
+                || trimmed.contains("[ERROR]") 
+                || trimmed.contains("[DEBUG]") 
+                || trimmed.contains("[TRACE]")
+                || trimmed.contains("boot_progress:")
+                || trimmed.contains("SPROUT:");
+
+            if !is_log && !trimmed.contains(">") && trimmed.contains(&expected) {
                 found = true;
                 break;
             }
@@ -1993,7 +2001,17 @@ async fn latest_command_output_contains(world: &mut ThingOsWorld, expected: Stri
         let mut found = false;
         
         for line in clean_log.lines() {
-            if !line.starts_with('[') && !line.contains(">") && line.contains(&expected) {
+            let trimmed = line.trim();
+            let is_log = trimmed.starts_with('[') 
+                || trimmed.contains("[INFO ]") 
+                || trimmed.contains("[WARN ]") 
+                || trimmed.contains("[ERROR]") 
+                || trimmed.contains("[DEBUG]") 
+                || trimmed.contains("[TRACE]")
+                || trimmed.contains("boot_progress:")
+                || trimmed.contains("SPROUT:");
+
+            if !is_log && !trimmed.contains(">") && trimmed.contains(&expected) {
                 found = true;
                 break;
             }
@@ -2028,13 +2046,15 @@ async fn command_output_strictly_be(world: &mut ThingOsWorld, expected: String) 
             // A line is a log line if it starts with '[' or contains '] [INFO ' etc.
             // Be broad to avoid false positives in command output.
             let is_log = trimmed.starts_with('[') 
-                || trimmed.contains("] [INFO ]") 
-                || trimmed.contains("] [WARN ]") 
-                || trimmed.contains("] [ERROR]") 
-                || trimmed.contains("] [DEBUG]") 
-                || trimmed.contains("] [TRACE]");
+                || trimmed.contains("[INFO ]") 
+                || trimmed.contains("[WARN ]") 
+                || trimmed.contains("[ERROR]") 
+                || trimmed.contains("[DEBUG]") 
+                || trimmed.contains("[TRACE]")
+                || trimmed.contains("boot_progress:")
+                || trimmed.contains("SPROUT:");
             
-            if !is_log && !trimmed.contains(">") && trimmed == expected.trim() {
+            if !is_log && !trimmed.contains(">") && !trimmed.is_empty() && trimmed == expected.trim() {
                 found = true;
                 break;
             }
@@ -2072,13 +2092,15 @@ async fn command_output_not_contains(world: &mut ThingOsWorld, unexpected: Strin
         let trimmed = line.trim();
         // Skip kernel/service log lines and prompt lines
         let is_log = trimmed.starts_with('[') 
-            || trimmed.contains("] [INFO ]") 
-            || trimmed.contains("] [WARN ]") 
-            || trimmed.contains("] [ERROR]") 
-            || trimmed.contains("] [DEBUG]") 
-            || trimmed.contains("] [TRACE]");
+            || trimmed.contains("[INFO ]") 
+            || trimmed.contains("[WARN ]") 
+            || trimmed.contains("[ERROR]") 
+            || trimmed.contains("[DEBUG]") 
+            || trimmed.contains("[TRACE]")
+            || trimmed.contains("boot_progress:")
+            || trimmed.contains("SPROUT:");
 
-        if is_log || trimmed.contains(">") {
+        if is_log || trimmed.contains(">") || trimmed.is_empty() {
             continue;
         }
         // Skip the echoed command line itself so that patterns that appear in
