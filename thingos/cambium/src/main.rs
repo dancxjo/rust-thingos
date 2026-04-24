@@ -275,7 +275,6 @@ fn run_daemon_mode() -> ! {
                 warn!(
                     "CAMBIUM: inbox closed; falling back to degraded monitor-only loop"
                 );
-                drop(svc);
                 run_degraded_monitor_loop(&mut drivers);
             }
             Err(err) => {
