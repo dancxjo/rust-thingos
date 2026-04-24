@@ -35,6 +35,7 @@ pub mod pci;
 pub mod perf;
 pub mod pthread;
 pub mod rt;
+pub mod service_loop;
 pub mod simd;
 pub mod stack;
 pub mod syscall;

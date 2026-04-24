@@ -162,6 +162,58 @@ capability-based security.
 
 ---
 
+## 5. Inbox-Backed Service Loops
+
+**Rule:** Every long-lived userspace service is an **inbox-backed actor**.
+Its **control plane** is its own inbox. FDs, IRQs, child exits, and provider
+ports are *secondary* readiness sources multiplexed alongside the inbox —
+never substitutes for it.
+
+### What this means in practice
+
+- Each service opens its own inbox FD via `msg_inbox_open_self` (or
+  equivalent procfs path) at startup.
+- Lifecycle (`start`, `stop`, `restart`, `health`, `boot_ready`),
+  configuration changes, and RPC-style requests are delivered as typed
+  `KindId` messages to that inbox.
+- The service multiplexes its inbox with any other readiness sources via
+  `stem::wait_set::WaitSet`, ideally wrapped by
+  `stem::service_loop::ServiceLoop`.
+- When the inbox and a secondary source both fire on the same wake, the
+  inbox event is dispatched first (control-plane priority).
+- Bulk data (frame buffers, packet rings, DMA) stays out-of-band on memfd /
+  rings / DMA. Coordination still happens on the inbox.
+
+### What is NOT allowed
+
+- Long-lived userspace services that have no inbox at all and rely solely
+  on port choreography or hand-rolled `vfs_poll` selects.
+- New `loop { port_recv(...); }` style constructs that bypass the inbox as
+  the control plane.
+- Hiding control messages inside data-plane traffic (e.g., framing
+  `Shutdown` as a sentinel byte on a stream port).
+- Spawning auxiliary helper threads that block on raw syscalls instead of
+  participating in the parent's `ServiceLoop`.
+
+### Allow-listed exceptions
+
+- The narrow VFS-provider RPC port (`SYS_FS_REGISTER_PROVIDER`) — providers
+  keep the provider port for the kernel-RPC path, but their *control* plane
+  must still be the inbox.
+- Short-lived helper utilities and one-shot binaries that exit quickly.
+- Kernel-internal tasks (which are scheduled by guardrail 1, not this one).
+
+### Tests / Validation
+
+- `docs/ipc/service_loop.md` is the canonical reference for the rule and
+  the four-tier model.
+- `docs/behavior/features/service-loop.feature` is the executable spec for
+  `ServiceLoop` dispatch ordering and shutdown behavior.
+- `stem::service_loop::ServiceLoop` is the standard implementation; new
+  services should use it rather than re-rolling a select loop.
+
+---
+
 ## Guardrail Summary
 
 | Principle | Short form | Primary enforcement point |
@@ -170,6 +222,7 @@ capability-based security.
 | Userland drivers | Hardware logic lives outside the kernel | `SYS_DEVICE_*` boundary |
 | VFS-first | All resources reachable via filesystem paths | `SYS_FS_*` syscalls |
 | Spawn + exec | No fork; new processes use spawn + exec | `SYS_SPAWN_*` + `SYS_TASK_EXEC` |
+| Inbox-backed services | Control plane is the inbox | `stem::service_loop::ServiceLoop` |
 
 ---
 
@@ -187,6 +240,9 @@ Use this when reviewing any change that touches `kernel/`, `abi/`, `bran/`,
       address space?
 - [ ] Does the change add boot-time dependencies on `UI_CROWN`, graph
       discovery, or `ThingId` lookups?
+- [ ] Does the change add a long-lived userspace service whose **control
+      plane** is *not* its own inbox? (See §5 — Inbox-Backed Service Loops
+      and `docs/ipc/service_loop.md`.)
 
 If any answer is **yes**, the change needs justification or rework before merge.
 
@@ -195,6 +251,7 @@ If any answer is **yes**, the change needs justification or rework before merge.
 ## See Also
 
 - `docs/platform.md` — stem-as-std and no-`std` platform contract
+- `docs/ipc/service_loop.md` — inbox-backed service loops and the four-tier IPC model
 - `docs/concepts/scheduling.md` — scheduler internals
 - `docs/concepts/userland.md` — userspace threading model
 - `docs/concepts/syscalls.md` — full syscall ABI reference
