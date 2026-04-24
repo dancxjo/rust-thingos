@@ -262,6 +262,9 @@ pub static PROF_IMBALANCE_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_EPISODES: AtomicU64 = AtomicU64::new(0);
 pub static PROF_IMBALANCE_LONGEST_US: AtomicU64 = AtomicU64::new(0);
 
+/// Total tasks migrated by the periodic load balancer (slow-path balancing).
+pub static PROF_PERIODIC_BALANCE_MIGRATIONS: AtomicU64 = AtomicU64::new(0);
+
 /// Per-CPU count of entries pushed into the wake mailbox by remote CPUs.
 ///
 /// Incremented by [`enqueue_remote_wake_mailbox`] without holding the
@@ -2333,6 +2336,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 // Check preemption watchdog
                 self.check_preempt_watchdog();
 
+                // Slow-path periodic load balancer: proactively migrate tasks
+                // from overloaded CPUs to underloaded ones every
+                // PERIODIC_BALANCE_INTERVAL_TICKS ticks.
+                self.periodic_load_balance();
+
                 let mut should_yield = global_requested || self.state.per_cpu[cpu_idx].need_resched;
                 self.state.per_cpu[cpu_idx].need_resched = false;
 
@@ -3349,6 +3357,120 @@ impl<R: BootRuntime> types::Scheduler<R> {
     fn steal_task_for(&mut self, local_cpu: usize) -> Option<TaskId> {
         self.idle_steal(local_cpu)
     }
+
+    /// Slow-path periodic load balancer for severe multi-CPU imbalance.
+    ///
+    /// This is called from the [`ScheduleReason::PreemptTick`] path and runs at
+    /// most once every [`types::PERIODIC_BALANCE_INTERVAL_TICKS`] ticks.  When
+    /// the busiest online CPU has at least
+    /// [`types::PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF`] more runnable tasks
+    /// than the least-loaded CPU, it migrates up to
+    /// [`types::PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN`] `Affinity::Any` tasks
+    /// from the busiest CPU into the least-loaded CPU's run queue.
+    ///
+    /// # Design notes
+    ///
+    /// * **Rate limiting** — the `last_balance_tick` timestamp prevents the
+    ///   balancer from running more than once per interval, avoiding oscillation.
+    /// * **Bounded migrations** — at most `PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN`
+    ///   tasks are moved per pass so the tick path stays bounded.
+    /// * **No oscillation** — the minimum depth-difference threshold means a
+    ///   single-task imbalance (which often self-corrects in one scheduling
+    ///   cycle) is ignored.
+    /// * **Complementary to idle-steal** — `idle_steal` is reactive (runs when a
+    ///   CPU becomes idle); this balancer is proactive (runs periodically even
+    ///   when all CPUs have at least some work) to address sustained severe
+    ///   imbalances that do not trigger idle-steal.
+    fn periodic_load_balance(&mut self) {
+        let now = TICK_COUNT.load(Ordering::Relaxed);
+
+        // Rate limit: skip if we balanced recently.
+        if now.wrapping_sub(self.last_balance_tick) < types::PERIODIC_BALANCE_INTERVAL_TICKS {
+            return;
+        }
+        self.last_balance_tick = now;
+
+        // Require at least two online CPUs for inter-CPU migration.
+        if self.state.online_cpus.len() < 2 {
+            return;
+        }
+
+        // Find the busiest and least-loaded online CPUs in a single pass.
+        let mut busiest_cpu = 0usize;
+        let mut busiest_depth = 0usize;
+        let mut least_cpu = 0usize;
+        let mut least_depth = usize::MAX;
+        let mut found_any = false;
+
+        for &cpu in &self.state.online_cpus {
+            let depth = runq_depth_for_cpu(&self.state, cpu);
+            if !found_any || depth > busiest_depth {
+                busiest_depth = depth;
+                busiest_cpu = cpu;
+            }
+            if !found_any || depth < least_depth {
+                least_depth = depth;
+                least_cpu = cpu;
+            }
+            found_any = true;
+        }
+
+        if !found_any || busiest_cpu == least_cpu {
+            return;
+        }
+
+        // Only rebalance when the imbalance is severe enough to warrant
+        // migration and the victim has enough tasks to donate.
+        let depth_diff = busiest_depth.saturating_sub(least_depth);
+        if depth_diff < types::PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF
+            || busiest_depth < STEAL_MIN_VICTIM_DEPTH
+        {
+            return;
+        }
+
+        // Migrate up to PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN tasks.
+        let mut migrated = 0usize;
+        while migrated < types::PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN {
+            // Re-check imbalance before each individual migration to avoid
+            // over-migrating when the situation improves mid-pass.
+            let cur_busiest = runq_depth_for_cpu(&self.state, busiest_cpu);
+            let cur_least = runq_depth_for_cpu(&self.state, least_cpu);
+            if cur_busiest.saturating_sub(cur_least) < types::PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF
+                || cur_busiest < STEAL_MIN_VICTIM_DEPTH
+            {
+                break;
+            }
+
+            // Steal one task from the busiest CPU.  try_steal_one removes it
+            // from the victim's run queue, sets wake_cpu = least_cpu, and
+            // records the enqueue cause as Steal.
+            let Some(stolen_id) = self.try_steal_one(least_cpu, busiest_cpu, STEAL_MIN_VICTIM_DEPTH)
+            else {
+                break;
+            };
+
+            // Determine the priority to use for enqueueing.
+            let priority = self
+                .state
+                .get_task(stolen_id)
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(1);
+
+            // Place the task into the target CPU's run queue.
+            self.state.enqueue_task(least_cpu, priority, stolen_id);
+
+            migrated += 1;
+            PROF_PERIODIC_BALANCE_MIGRATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+
+        if migrated > 0 {
+            // Nudge the target CPU so it picks up the newly enqueued work
+            // promptly.  The IPI is sent after releasing the SCHEDULER lock
+            // (via the deferred bitmap mechanism) to avoid lock-order issues.
+            self.queue_pending_prepare_schedule_ipi(least_cpu);
+        }
+    }
+
 
     pub fn terminate_current(
         &mut self,
@@ -10281,6 +10403,174 @@ mod tests {
         assert!(
             global_need_resched_load(invalid_cpu, core::sync::atomic::Ordering::Acquire),
             "invalid cpu should conservatively report pending resched"
+        );
+    }
+
+    // ── periodic_load_balance tests ───────────────────────────────────────────
+
+    /// Build a scheduler with `num_cpus` CPUs online, all slots in per_cpu,
+    /// and register + insert `tasks` tasks onto CPU `donor_cpu`.
+    fn make_periodic_balance_sched(
+        num_cpus: usize,
+        tasks: &[(u64, usize)], // (tid, cpu)
+    ) -> types::Scheduler<MockRuntime> {
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..num_cpus {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        for i in 0..num_cpus {
+            sched.state.mark_cpu_online(i);
+        }
+        for &(tid, cpu) in tasks {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(cpu),
+                wake_cpu: Some(cpu),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.enqueue_task(cpu, TaskPriority::Normal as usize, tid);
+        }
+        sched
+    }
+
+    #[test]
+    fn test_periodic_load_balance_rate_limited() {
+        let _g = init_test_env();
+        // Tick = 0, last_balance_tick = 0, so balance runs once (same tick, 0-0=0
+        // < INTERVAL). Set up a severe imbalance: CPU 1 has 4 tasks, CPU 0 zero.
+        let tasks: &[(u64, usize)] =
+            &[(20_000, 1), (20_001, 1), (20_002, 1), (20_003, 1)];
+        let mut sched = make_periodic_balance_sched(2, tasks);
+
+        // Tick 0: first call should respect that last_balance_tick = 0 and now = 0;
+        // wrapping_sub(0, 0) = 0 < INTERVAL → no migration on tick 0.
+        TICK_COUNT.store(0, Ordering::Relaxed);
+        let before = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        sched.periodic_load_balance();
+        let after = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        assert_eq!(
+            after, before,
+            "balance should not run when now == last_balance_tick (cooldown not elapsed)"
+        );
+
+        // Advance by INTERVAL ticks → balance should now trigger.
+        TICK_COUNT.store(types::PERIODIC_BALANCE_INTERVAL_TICKS, Ordering::Relaxed);
+        let before2 = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        sched.periodic_load_balance();
+        let after2 = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        assert!(
+            after2 > before2,
+            "balance should migrate tasks when cooldown has elapsed"
+        );
+
+        // Immediately calling again (same tick) must be suppressed.
+        let before3 = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        sched.periodic_load_balance();
+        let after3 = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        assert_eq!(
+            after3, before3,
+            "second call in the same tick window must be rate-limited"
+        );
+    }
+
+    #[test]
+    fn test_periodic_load_balance_resolves_severe_imbalance() {
+        let _g = init_test_env();
+        // CPU 0 has 0 tasks; CPU 1 has 4 tasks → severe imbalance.
+        let tasks: &[(u64, usize)] =
+            &[(20_100, 1), (20_101, 1), (20_102, 1), (20_103, 1)];
+        let mut sched = make_periodic_balance_sched(2, tasks);
+
+        TICK_COUNT.store(types::PERIODIC_BALANCE_INTERVAL_TICKS, Ordering::Relaxed);
+        let before = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        sched.periodic_load_balance();
+        let after = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        let migrated = after - before;
+
+        assert!(
+            migrated > 0,
+            "periodic_load_balance must migrate at least one task from overloaded CPU"
+        );
+        assert!(
+            migrated <= types::PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN as u64,
+            "must not exceed per-run migration cap (migrated={migrated})"
+        );
+
+        let cpu0_depth =
+            sched.state.per_cpu[0].runq.total_len();
+        let cpu1_depth =
+            sched.state.per_cpu[1].runq.total_len();
+        assert!(
+            cpu0_depth > 0,
+            "target CPU 0 should have received at least one task (depth={cpu0_depth})"
+        );
+        assert!(
+            cpu1_depth < 4,
+            "donor CPU 1 should have fewer tasks after balancing (depth={cpu1_depth})"
+        );
+    }
+
+    #[test]
+    fn test_periodic_load_balance_ignores_mild_imbalance() {
+        let _g = init_test_env();
+        // CPU 0 has 1 task; CPU 1 has 2 tasks → diff=1, below threshold=2, no migration.
+        let tasks: &[(u64, usize)] = &[(20_200, 0), (20_201, 1), (20_202, 1)];
+        let mut sched = make_periodic_balance_sched(2, tasks);
+
+        TICK_COUNT.store(types::PERIODIC_BALANCE_INTERVAL_TICKS, Ordering::Relaxed);
+        let before = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        sched.periodic_load_balance();
+        let after = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        assert_eq!(
+            after, before,
+            "mild imbalance (diff < threshold) must not trigger migration"
+        );
+    }
+
+    #[test]
+    fn test_periodic_load_balance_skips_single_cpu() {
+        let _g = init_test_env();
+        // Only 1 CPU online — nothing to balance.
+        let tasks: &[(u64, usize)] = &[(20_300, 0), (20_301, 0), (20_302, 0)];
+        let mut sched = make_periodic_balance_sched(1, tasks);
+
+        TICK_COUNT.store(types::PERIODIC_BALANCE_INTERVAL_TICKS, Ordering::Relaxed);
+        let before = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        sched.periodic_load_balance();
+        let after = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        assert_eq!(after, before, "single-CPU system must never trigger migration");
+    }
+
+    #[test]
+    fn test_periodic_load_balance_respects_migration_cap() {
+        let _g = init_test_env();
+        // CPU 0 has 0 tasks; CPU 1 has many tasks — ensure cap is honoured.
+        let num_tasks = types::PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN + 3;
+        let tasks: alloc::vec::Vec<(u64, usize)> =
+            (0..num_tasks).map(|i| (20_400 + i as u64, 1)).collect();
+        let mut sched = make_periodic_balance_sched(2, &tasks);
+
+        TICK_COUNT.store(types::PERIODIC_BALANCE_INTERVAL_TICKS, Ordering::Relaxed);
+        let before = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        sched.periodic_load_balance();
+        let after = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
+        let migrated = after - before;
+
+        assert_eq!(
+            migrated,
+            types::PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN as u64,
+            "periodic balancer must stop at PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN (got {migrated})"
         );
     }
 }

@@ -45,6 +45,27 @@ pub const SPIN_YIELD_PENALTY_THRESHOLD: u64 = 8;
 /// Number of priority bands to demote pathological spin-yielders on requeue.
 pub const SPIN_YIELD_PENALTY_BANDS: usize = 1;
 
+/// Minimum scheduler ticks between periodic load-balance passes.
+///
+/// At the default 100 Hz timer, 20 ticks ≈ 200 ms.  The cooldown prevents
+/// the balancer from running too frequently, which would cause oscillation
+/// (tasks bouncing back and forth between CPUs every tick).
+pub const PERIODIC_BALANCE_INTERVAL_TICKS: u64 = 20;
+
+/// Maximum number of task migrations performed in a single load-balance pass.
+///
+/// Limiting the batch size prevents a single balance run from dominating
+/// the tick path and avoids thundering-herd migration of many tasks at once,
+/// which could itself create a new imbalance.
+pub const PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN: usize = 2;
+
+/// Minimum run-queue depth difference required to trigger a periodic balance.
+///
+/// A difference of 2 means we only migrate when the busiest CPU has at least
+/// 2 more runnable tasks than the least-loaded CPU.  This prevents the
+/// balancer from oscillating tasks for a marginal (1-task) imbalance.
+pub const PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF: usize = 2;
+
 // PerCpu is now in state.rs
 
 /// Class-specific scheduling policy.
@@ -236,6 +257,11 @@ pub struct Scheduler<R: BootRuntime> {
     pub(crate) imbalance_episodes: u64,
     /// Longest single imbalance episode (µs).
     pub(crate) imbalance_longest_us: u64,
+    /// Tick at which the last periodic load-balance pass completed.
+    ///
+    /// Used by [`Scheduler::periodic_load_balance`] to enforce
+    /// [`PERIODIC_BALANCE_INTERVAL_TICKS`] rate limiting between passes.
+    pub(crate) last_balance_tick: u64,
     _phantom: core::marker::PhantomData<R>,
 }
 
@@ -264,6 +290,7 @@ impl<R: BootRuntime> Scheduler<R> {
             imbalance_total_us: 0,
             imbalance_episodes: 0,
             imbalance_longest_us: 0,
+            last_balance_tick: 0,
             _phantom: PhantomData,
         }
     }
