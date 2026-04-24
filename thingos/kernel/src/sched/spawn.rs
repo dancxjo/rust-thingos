@@ -187,6 +187,36 @@ impl<R: BootRuntime> Scheduler<R> {
                 let _ = (rt, count); // Suppress unused variable warning
                 self.state.pick_online_cpu_excluding_bsp(idx)
             }
+            Affinity::Restricted(ref aff) => {
+                // During early boot keep tasks local to avoid cross-CPU
+                // placement overhead, same as Any.
+                if self.bringup_in_progress {
+                    let boot_cpu = super::current_cpu_index::<R>();
+                    // The task may not be in the allowed set; the normal
+                    // scheduler picker will detect the misroute via
+                    // `prepare_schedule` and call `defer_or_repair_misroute`
+                    // to move it to an allowed CPU once steady-state scheduling
+                    // begins.
+                    return boot_cpu;
+                }
+                let cpu_count = self.state.per_cpu.len().max(1);
+                let target = aff.pick_cpu(cpu_count).unwrap_or_else(|| {
+                    // Allowed set is empty or all CPUs are offline: fall back to
+                    // round-robin among online CPUs so the task is not lost.
+                    crate::kwarn!(
+                        "SCHED: Affinity::Restricted has no valid CPU in {} online CPUs; \
+                         falling back to round-robin",
+                        cpu_count
+                    );
+                    self.state.pick_online_cpu_excluding_bsp(idx)
+                });
+                crate::kdebug!(
+                    "SCHED[affinity]: Restricted(mask={:#x}) → cpu{}",
+                    aff.allowed.0,
+                    target
+                );
+                target
+            }
         }
     }
     pub fn spawn(
