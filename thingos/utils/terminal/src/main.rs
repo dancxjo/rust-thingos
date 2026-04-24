@@ -69,7 +69,10 @@ impl Font {
     }
 }
 
-// SAFETY: Font is immutable after construction and its contents are plain data.
+// SAFETY: Font contains only plain data (integer code points and Vec<u8> bitmaps)
+// with no interior mutability or raw pointers.  All fields are trivially Send + Sync:
+// BTreeMap<u32, Glyph> is Send + Sync because u32 and Glyph (u32 + Vec<u8>) are
+// Send + Sync.  Font is immutable after construction, so no data-race hazard exists.
 unsafe impl Send for Font {}
 unsafe impl Sync for Font {}
 
@@ -385,9 +388,16 @@ impl TermModel {
 /// Newtype wrapper that makes a raw framebuffer pointer `Send + Sync`.
 ///
 /// # Safety
-/// The pointer is only ever accessed from the dedicated renderer thread, which
-/// holds exclusive logical ownership of the framebuffer memory region.
+/// The following invariants must be maintained:
+/// * The pointer must remain valid (non-dangling, correctly aligned) for
+///   the entire lifetime of any `TermRenderer` that holds this value.
+/// * Only the renderer thread ever accesses the pointed-to memory region.
+///   The main/parser thread relinquishes all access to `fb_ptr` immediately
+///   after constructing `FbPtr` and moving it into the renderer closure.
+/// * No other concurrent access to the framebuffer region occurs from any
+///   other thread — the kernel device mapping is exclusive to this process.
 struct FbPtr(*mut u32);
+// SAFETY: Exclusive ownership is enforced by convention (see above).
 unsafe impl Send for FbPtr {}
 unsafe impl Sync for FbPtr {}
 
@@ -501,7 +511,10 @@ struct SharedState {
     display_req_write: u32,
 }
 
-// SAFETY: All fields are either atomic or protected by Mutex.
+// SAFETY: `model` is protected by `Mutex`, `commit` and `has_focus` are atomic
+// types.  `display_req_write` is a plain `u32` that is written exactly once
+// during `SharedState` construction (before `Arc::new`) and is thereafter
+// read-only, so no data race can occur on it.
 unsafe impl Send for SharedState {}
 unsafe impl Sync for SharedState {}
 
@@ -812,8 +825,10 @@ fn renderer_loop(
 
         // Atomically consume the commit flag before locking the model so that
         // any writes the parser makes *while* we render are not lost.
+        // On success (commit was 1, now set to 0): fall through to render.
+        // On failure (commit is already 0, e.g. spurious futex wakeup): yield
+        // and loop back to futex_wait.
         if shared.commit.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed).is_err() {
-            // No pending commit (or already consumed by a concurrent wake).
             stem::thread::yield_now();
             continue;
         }
