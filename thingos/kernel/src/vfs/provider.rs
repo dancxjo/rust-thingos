@@ -44,13 +44,16 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use core::sync::atomic::{AtomicU16, Ordering};
 use abi::errors::{Errno, SysResult};
-use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
+use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp, VfsRpcReqHeader};
 use spin::Mutex;
 
 use super::{VfsDriver, VfsNode, VfsStat};
 use crate::sched::wait_queue::WaitQueue;
 use crate::syscall::validate::{copyin, copyout};
+
+const VFS_RPC_MAX_RESP: usize = VFS_RPC_MAX_DATA + 64;
 
 // ── ProviderRpc ─────────────────────────────────────────────────────────────
 
@@ -72,6 +75,10 @@ struct RpcState {
     waiters: BTreeMap<u16, Arc<WaitQueue>>,
     /// Responses received for other waiters and not yet collected.
     responses: BTreeMap<u16, Vec<u8>>,
+    /// In-flight operation types for length calculation.
+    ops: BTreeMap<u16, VfsRpcOp>,
+    /// Byte-stream framing buffer for fragmented/coalesced responses.
+    pending: Vec<u8>,
 }
 
 const PROVIDER_TAINT_COOLDOWN_NS: u64 = 2 * crate::time::NANOS_PER_SEC;
@@ -85,8 +92,10 @@ struct ProviderRpc {
     /// request header.
     resp_write_handle: u32,
 
-    next_req_id: core::sync::atomic::AtomicU16,
+    next_req_id: AtomicU16,
     state: Mutex<RpcState>,
+    /// Serialises access to the shared response port and ensures consistent framing.
+    dispatch_lock: Mutex<()>,
 }
 
 impl ProviderRpc {
@@ -99,13 +108,16 @@ impl ProviderRpc {
             req: crate::ipc::Sender::new(req_port),
             resp: crate::ipc::Receiver::new(resp_port),
             resp_write_handle,
-            next_req_id: core::sync::atomic::AtomicU16::new(1),
+            next_req_id: AtomicU16::new(1),
             state: Mutex::new(RpcState {
                 tainted: false,
                 tainted_until_ns: 0,
                 waiters: BTreeMap::new(),
                 responses: BTreeMap::new(),
+                ops: BTreeMap::new(),
+                pending: Vec::new(),
             }),
+            dispatch_lock: Mutex::new(()),
         }
     }
 
@@ -125,238 +137,118 @@ impl ProviderRpc {
     }
 
     /// Perform a multiplexed, concurrent round-trip RPC with the provider.
-    ///
-    /// # Concurrency
-    ///
-    /// This method is safe to call from multiple kernel threads simultaneously.
-    /// Each call:
-    ///
-    /// 1. Atomically claims a unique 16-bit `req_id`.
-    /// 2. Registers a per-request [`WaitQueue`] in [`RpcState::waiters`].
-    /// 3. Sends the serialised request to the provider.
-    /// 4. Blocks on its own wait queue until a response with a matching
-    ///    `req_id` arrives, or until timeout/interrupt.
-    ///
-    /// When a response arrives on the shared port, the thread that wakes first
-    /// checks the `req_id` in the response header.  If it matches, the thread
-    /// returns immediately.  If the response belongs to another waiter, the
-    /// payload is stored in [`RpcState::responses`] and that waiter is woken.
-    ///
-    /// The observed throughput limit is therefore **not** in this kernel path
-    /// but in userland providers that handle requests serially.  Parallel
-    /// provider dispatch (thread-per-request, thread pool, or async) will
-    /// allow all concurrent kernel waiters to make progress simultaneously.
-    /// See `docs/kernel/provider-concurrency.md` for details.
-    fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<alloc::vec::Vec<u8>> {
+    pub fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<Vec<u8>> {
+        let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
         let tid = unsafe { crate::sched::current_tid_current() };
-        let req_id = self.next_req_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        crate::ktrace!("VFS RPC: tid={} req_id={} op={:?} begin", tid, req_id, op);
 
-        {
-            let mut state = self.state.lock();
-            if Self::is_tainted(&mut state) {
-                crate::ktrace!(
-                    "VFS RPC: tid={} req_id={} op={:?} rejected (tainted)",
-                    tid,
-                    req_id,
-                    op
-                );
-                return Err(Errno::EIO);
-            }
-        }
-
-        let hdr = VfsRpcReqHeader { resp_port: self.resp_write_handle, op: op as u8, req_id };
-        let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
-        let mut msg = vec![0u8; hdr_size + payload.len()];
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                &hdr as *const VfsRpcReqHeader as *const u8,
-                msg.as_mut_ptr(),
-                hdr_size,
-            );
-        }
-        msg[hdr_size..].copy_from_slice(payload);
-
-        crate::ipc::diag::VFS_RPC_REQUESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-
-        let wait_queue = Arc::new(WaitQueue::new());
-        {
-            let mut state = self.state.lock();
-            if Self::is_tainted(&mut state) {
-                return Err(Errno::EIO);
-            }
-            state.waiters.insert(req_id, wait_queue.clone());
-        }
+        let mut msg = Vec::with_capacity(7 + payload.len());
+        msg.extend_from_slice(&self.resp_write_handle.to_le_bytes());
+        msg.push(op as u8);
+        msg.extend_from_slice(&req_id.to_le_bytes());
+        msg.extend_from_slice(payload);
 
         let written = self.req.send(&msg);
         if written < msg.len() {
-            crate::ipc::diag::record_dead_provider_error();
-            let mut state = self.state.lock();
-            Self::taint_with_cooldown(&mut state);
-            state.waiters.remove(&req_id);
-            for wq in state.waiters.values() {
-                wq.wake_all();
-            }
+            crate::ipc::diag::VFS_RPC_ERRORS.fetch_add(1, Ordering::Relaxed);
             return Err(Errno::EIO);
         }
 
-        let start_ns = crate::time::monotonic_now_ns();
-        let timeout_ns = 5 * crate::time::NANOS_PER_SEC;
-        let deadline_ns = start_ns + timeout_ns;
-        let current_tick = crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
-        let deadline_tick = current_tick + 500; // 5s timeout
+        {
+            let mut state = self.state.lock();
+            let wq = Arc::new(WaitQueue::new());
+            state.waiters.insert(req_id, wq.clone());
+            state.ops.insert(req_id, op);
+        };
 
-        let mut buf = vec![0u8; VFS_RPC_MAX_RESP];
+        let deadline_ns = crate::time::monotonic_now_ns() + 5_000_000_000;
 
         loop {
-            // Check if our response is already buffered
+            // 1. Check if our response is already buffered
             {
                 let mut state = self.state.lock();
-                if Self::is_tainted(&mut state) {
-                    return Err(Errno::EIO);
-                }
                 if let Some(resp) = state.responses.remove(&req_id) {
                     state.waiters.remove(&req_id);
-                    if resp.len() < 3 {
-                        return Err(Errno::EIO);
-                    }
-                    let status = resp[2];
+                    state.ops.remove(&req_id);
+
+                    let status = resp[0];
                     if status != 0 {
-                        crate::ktrace!(
-                            "VFS RPC: tid={} req_id={} op={:?} error {}",
-                            tid,
-                            req_id,
-                            op,
-                            status
-                        );
                         return Err(errno_from_u8(status));
                     }
-                    return Ok(resp[3..].to_vec());
+                    return Ok(resp[1..].to_vec());
+                }
+
+                if !self.resp.has_writers() && state.pending.is_empty() {
+                    state.waiters.remove(&req_id);
+                    state.ops.remove(&req_id);
+                    return Err(Errno::EPIPE);
                 }
             }
 
-            // Try to receive from port (non-blocking)
-            let n = self.resp.try_recv(&mut buf);
-            if n > 0 {
-                if n >= 3 {
-                    let resp_req_id = u16::from_le_bytes([buf[0], buf[1]]);
+            // 2. Try to receive and parse all pending responses.
+            let mut buf = [0u8; 4096];
+            if let Some(_dispatch_guard) = self.dispatch_lock.try_lock() {
+                let n = self.resp.try_recv(&mut buf);
+                if n > 0 {
                     let mut state = self.state.lock();
-                    if resp_req_id == req_id {
-                        state.waiters.remove(&req_id);
-                        let status = buf[2];
-                        if status != 0 {
-                            crate::ktrace!(
-                                "VFS RPC: tid={} req_id={} op={:?} error {}",
-                                tid,
-                                req_id,
-                                op,
-                                status
-                            );
-                            return Err(errno_from_u8(status));
+                    state.pending.extend_from_slice(&buf[..n]);
+
+                    // Parse all complete messages from pending buffer
+                    while state.pending.len() >= 3 {
+                        let resp_req_id = u16::from_le_bytes([state.pending[0], state.pending[1]]);
+                        let status = state.pending[2];
+
+                        let payload_len = if status == 0 {
+                            if let Some(&req_op) = state.ops.get(&resp_req_id) {
+                                if let Some(len) = get_resp_payload_len(req_op, &state.pending[3..]) {
+                                    len
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                state.pending.len() - 3
+                            }
+                        } else {
+                            0
+                        };
+
+                        let frame_len = 3 + payload_len;
+                        if state.pending.len() < frame_len {
+                            break;
                         }
-                        return Ok(buf[3..n].to_vec());
-                    } else {
-                        // Someone else's response
-                        state.responses.insert(resp_req_id, buf[..n].to_vec());
+
+                        let msg_payload = state.pending[3..frame_len].to_vec();
+                        let mut entry = vec![status];
+                        entry.extend_from_slice(&msg_payload);
+                        state.responses.insert(resp_req_id, entry);
+
                         if let Some(wq) = state.waiters.get(&resp_req_id) {
                             wq.wake_one();
                         }
+                        state.pending.drain(..frame_len);
                     }
-                } else {
-                    crate::kwarn!("VFS RPC: Invalid response length {}", n);
                 }
-                // We did work, loop again immediately
-                continue;
             }
 
-            // Check port closure
-            if !self.resp.has_writers() {
-                crate::ipc::diag::record_dead_provider_error();
-                let mut state = self.state.lock();
-                Self::taint_with_cooldown(&mut state);
-                state.waiters.remove(&req_id);
-                for wq in state.waiters.values() {
-                    wq.wake_all();
-                }
-                return Err(Errno::EPIPE);
-            }
-
-            // Check timeout.  A single slow request is not, by itself, evidence
-            // that the provider is dead — the dead-provider signals (port full
-            // on send, response port has no writers) are checked separately and
-            // already taint the provider.  A timeout simply means *this* request
-            // didn't get a reply in time; surface ETIMEDOUT to the caller so it
-            // can retry.  Tainting on every timeout would punish all subsequent
-            // callers for one slow first request (e.g. a provider still
-            // warming up DHCP or socket allocation), which is exactly the race
-            // that caused first-ping failures after netd's "Network ready" log.
             let now_ns = crate::time::monotonic_now_ns();
             if now_ns >= deadline_ns {
                 crate::kerror!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
-                self.resp.remove_waiter(tid);
+                state.ops.remove(&req_id);
                 return Err(Errno::ETIMEDOUT);
             }
 
-            // Sleep
             self.resp.add_waiter(tid);
-            wait_queue.push_back(tid);
-            crate::sched::register_timeout_wake_current(tid, deadline_tick);
-
-            // Double check before sleeping to avoid race condition
-            let n = self.resp.try_recv(&mut buf);
-            let has_buffered = {
-                let mut state = self.state.lock();
-                state.responses.contains_key(&req_id) || Self::is_tainted(&mut state)
-            };
-
-            if n > 0 || has_buffered {
-                self.resp.remove_waiter(tid);
-                wait_queue.remove(tid);
-                crate::sched::unregister_timeout_wake_current(tid);
-
-                if n > 0 {
-                    if n >= 3 {
-                        let resp_req_id = u16::from_le_bytes([buf[0], buf[1]]);
-                        let mut state = self.state.lock();
-                        if resp_req_id == req_id {
-                            state.waiters.remove(&req_id);
-                            let status = buf[2];
-                            if status != 0 {
-                                crate::ktrace!(
-                                    "VFS RPC: tid={} req_id={} op={:?} error {}",
-                                    tid,
-                                    req_id,
-                                    op,
-                                    status
-                                );
-                                return Err(errno_from_u8(status));
-                            }
-                            return Ok(buf[3..n].to_vec());
-                        } else {
-                            state.responses.insert(resp_req_id, buf[..n].to_vec());
-                            if let Some(wq) = state.waiters.get(&resp_req_id) {
-                                wq.wake_one();
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
+            crate::sched::register_timeout_wake_current(tid, deadline_ns);
             unsafe {
                 crate::sched::block_current_erased();
             }
-
             self.resp.remove_waiter(tid);
-            wait_queue.remove(tid);
-            crate::sched::unregister_timeout_wake_current(tid);
 
             if crate::sched::take_pending_interrupt_current() {
-                // On interrupt, we are no longer waiting.
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
+                state.ops.remove(&req_id);
                 return Err(Errno::EINTR);
             }
         }
@@ -490,6 +382,40 @@ fn append_readdir_stream_entry(
 
     *virtual_pos = virtual_pos.saturating_add(entry_stream_len);
     *written == buf.len()
+}
+
+fn get_resp_payload_len(op: VfsRpcOp, pending: &[u8]) -> Option<usize> {
+    match op {
+        VfsRpcOp::Lookup => Some(8), // handle: u64
+        VfsRpcOp::Read | VfsRpcOp::Readdir => {
+            if pending.len() < 4 {
+                return None;
+            }
+            let n = u32::from_le_bytes([pending[0], pending[1], pending[2], pending[3]]) as usize;
+            Some(4 + n)
+        }
+        VfsRpcOp::Write => Some(4), // bytes_written: u32
+        VfsRpcOp::Stat => Some(20), // mode: u32, size: u64, ino: u64
+        VfsRpcOp::Close
+        | VfsRpcOp::SubscribeReady
+        | VfsRpcOp::UnsubscribeReady
+        | VfsRpcOp::Rename
+        | VfsRpcOp::AttrRemove => Some(0),
+        VfsRpcOp::Poll => Some(4), // revents: u32
+        VfsRpcOp::DeviceCall | VfsRpcOp::AttrGet | VfsRpcOp::AttrList => {
+            if pending.len() < 8 {
+                return None;
+            }
+            let n = u32::from_le_bytes([pending[4], pending[5], pending[6], pending[7]]) as usize;
+            Some(8 + n)
+        }
+        VfsRpcOp::AttrSet => Some(4),
+        VfsRpcOp::Readlink => {
+            // Readlink is raw bytes with no length prefix.
+            // This is a protocol weakness. For now we take everything in pending.
+            Some(pending.len())
+        }
+    }
 }
 
 unsafe impl Send for ProviderNode {}
@@ -1068,12 +994,13 @@ mod tests {
         let resp_port = make_port(4096);
 
         // Pre-load a valid Stat response into the response ring.
-        // Format: [status=0][mode: u32 LE][size: u64 LE][ino: u64 LE]
-        let mut preloaded = vec![0u8; 21];
-        preloaded[0] = 0; // OK
-        preloaded[1..5].copy_from_slice(&0o040755u32.to_le_bytes()); // mode: dir
-        preloaded[5..13].copy_from_slice(&0u64.to_le_bytes()); // size: 0
-        preloaded[13..21].copy_from_slice(&1u64.to_le_bytes()); // ino: 1
+        // Format: [req_id: u16][status=0][mode: u32 LE][size: u64 LE][ino: u64 LE]
+        let mut preloaded = vec![0u8; 23];
+        preloaded[0..2].copy_from_slice(&1u16.to_le_bytes()); // req_id: 1
+        preloaded[2] = 0; // OK
+        preloaded[3..7].copy_from_slice(&0o040755u32.to_le_bytes()); // mode: dir
+        preloaded[7..15].copy_from_slice(&0u64.to_le_bytes()); // size: 0
+        preloaded[15..23].copy_from_slice(&1u64.to_le_bytes()); // ino: 1
         resp_port.send(&preloaded);
 
         let ch = ProviderRpc::new(req_port, resp_port, 0);

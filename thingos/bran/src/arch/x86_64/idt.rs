@@ -1340,6 +1340,7 @@ pub extern "C" fn rust_pf_handler(
         frame.error_code,
         frame.rsp
     );
+    print_stack_trace();
 
     // Dump first few words of stack
     unsafe {
@@ -1383,10 +1384,12 @@ pub extern "C" fn rust_gp_handler(frame: &InterruptStackFrame) -> ! {
             }
         }
     } else {
-        panic!(
+        kernel::kerror!(
             "KERNEL GPF at RIP=0x{:x} CS=0x{:x} ERR=0x{:x} RSP=0x{:x}",
             frame.rip, frame.cs, frame.error_code, frame.rsp
         );
+        print_stack_trace();
+        panic!("KERNEL GPF");
     }
 }
 
@@ -1444,4 +1447,38 @@ pub extern "C" fn rust_double_fault_handler(frame: &InterruptStackFrame) -> ! {
         "DOUBLE FAULT at RIP=0x{:x} CS=0x{:x} ERR=0x{:x} RSP=0x{:x}",
         frame.rip, frame.cs, frame.error_code, frame.rsp
     );
+}
+
+fn print_stack_trace() {
+    let mut rbp: u64;
+    unsafe {
+        core::arch::asm!("mov {}, rbp", out(reg) rbp);
+    }
+    kernel::kerror!("Backtrace (current rbp=0x{:x}):", rbp);
+    let mut depth = 0;
+    // Walk up the stack. Kernel stack is usually in high memory (HHDM or kernel space).
+    while rbp >= 0xffffffff80000000 && depth < 32 {
+        let prev_rbp_ptr = rbp as *const u64;
+        let ret_addr_ptr = (rbp + 8) as *const u64;
+
+        unsafe {
+            // Basic sanity check before dereferencing: must be 8-byte aligned and in kernel memory
+            if (rbp % 8 != 0) || rbp < 0xffffffff80000000 {
+                break;
+            }
+
+            let prev_rbp = *prev_rbp_ptr;
+            let ret_addr = *ret_addr_ptr;
+
+            kernel::kerror!("  [{:02}] 0x{:016x} (frame=0x{:x})", depth, ret_addr, rbp);
+
+            if prev_rbp <= rbp {
+                // Prevent infinite loops or downward walks.
+                // In a proper frame-pointer chain, the previous RBP is always at a higher address.
+                break;
+            }
+            rbp = prev_rbp;
+        }
+        depth += 1;
+    }
 }

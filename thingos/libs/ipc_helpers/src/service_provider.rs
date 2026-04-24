@@ -225,41 +225,38 @@ impl ServiceProviderLoop {
         let provider_token = self.provider_token;
         loop {
             // We use a raw pointer to bypass the borrow checker's conservative
-            // lifetime pinning in loops (the "streaming iterator" problem).
-            // This is safe because we either return the borrow immediately or
-            // drop it before the next iteration.
-            let ev = unsafe {
-                let svc = &mut self.svc as *mut ServiceLoop;
-                (*svc).next_event(timeout)?
-            };
+            // lifetime pinning in loops. This is safe because we either return
+            // the borrow immediately or ensure it is dropped before the next
+            // iteration (by not holding any references to it).
+            let svc = &mut self.svc as *mut ServiceLoop;
+            let svc_ev = unsafe { (*svc).next_event(timeout)? };
 
-            match ev {
+            match svc_ev {
                 ServiceEvent::InboxClosed => return Ok(ServiceProviderEvent::InboxClosed),
                 ServiceEvent::Timeout => return Ok(ServiceProviderEvent::Timeout),
                 ServiceEvent::Message { kind, payload } => {
                     return Ok(ServiceProviderEvent::Message { kind, payload });
                 }
-                ServiceEvent::Ready { token, event } if token == provider_token => {
-                    // The provider port has data; try to decode one request.
-                    // If EPIPE is returned the kernel closed the request port
-                    // — surface that as InboxClosed so callers can break their
-                    // loop uniformly.
-                    match self.provider.try_next_request() {
-                        Ok(Some(req)) => return Ok(ServiceProviderEvent::ProviderRequest(req)),
-                        Ok(None) => {
-                            // Spurious wake — port signalled ready but had no
-                            // complete frame yet (partial write from kernel).
-                        }
-                        Err(Errno::EPIPE) => return Ok(ServiceProviderEvent::InboxClosed),
-                        Err(e) => return Err(e),
-                    }
-                }
                 ServiceEvent::Ready { token, event } => {
-                    return Ok(ServiceProviderEvent::Ready { token, event });
+                    if token == provider_token {
+                        // The provider port has data; try to decode one request.
+                        match self.provider.try_next_request() {
+                            Ok(Some(req)) => return Ok(ServiceProviderEvent::ProviderRequest(req)),
+                            Ok(None) => {
+                                // Spurious wake — continue loop.
+                            }
+                            Err(Errno::EPIPE) => return Ok(ServiceProviderEvent::InboxClosed),
+                            Err(e) => return Err(e),
+                        }
+                    } else {
+                        return Ok(ServiceProviderEvent::Ready { token, event });
+                    }
                 }
             }
         }
     }
+
+
 
     /// Send `response` back to the kernel for the given `req`.
     ///
