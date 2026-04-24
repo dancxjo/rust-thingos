@@ -163,6 +163,7 @@ impl TaskSchedCache {
             // The counter is maintained exclusively in the hot-cache and only
             // incremented by prepare_yield; it is never read back from here.
             voluntary_yields: 0,
+            migration_state: state::MigrationState::Local,
         }
     }
 }

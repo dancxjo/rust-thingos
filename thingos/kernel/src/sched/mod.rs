@@ -95,7 +95,7 @@ pub use spawn::{
 };
 use spin::Mutex;
 pub use stack::{alloc_user_stack, handle_stack_fault, map_user_page, map_user_page_perms};
-pub use state::{CpuSchedStats, CpuScheduler, RunQueue, WakeMailbox, WakeMailboxEntry};
+pub use state::{CpuSchedStats, CpuScheduler, MigrationState, RunQueue, WakeMailbox, WakeMailboxEntry};
 pub use types::{
     DEFAULT_TIMESLICE, ScheduleReason, Scheduler, StackFaultResult, SwitchDecision, SwitchParams,
 };
@@ -3195,6 +3195,39 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     migrated = true;
                 }
             }
+            // Finalise migration: arriving task transitions back to Local.
+            if migrated {
+                match new_sched.migration_state.try_transition(
+                    crate::sched::state::MigrationState::Local,
+                ) {
+                    Ok(new_state) => {
+                        crate::kdebug!(
+                            "MIGRATE[tid={}]: {:?} → Local (arrived on cpu{})",
+                            next_id,
+                            new_sched.migration_state,
+                            cpu_idx,
+                        );
+                        new_sched.migration_state = new_state;
+                    }
+                    Err(bad_state) => {
+                        // An unexpected migration state on arrival is a logic
+                        // error: the task arrived on a new CPU but was not in
+                        // InTransit or Local as expected.  Log at warning level
+                        // so it appears in normal debug builds, then force-reset
+                        // to Local so the task can continue running and be
+                        // migrated again in the future.
+                        crate::kdebug!(
+                            "MIGRATE[tid={}]: BUG: unexpected migration state {:?} on arrival \
+                             at cpu{} — forcing Local to allow forward progress",
+                            next_id,
+                            bad_state,
+                            cpu_idx,
+                        );
+                        // Force-reset to Local so the task can be migrated again.
+                        new_sched.migration_state = crate::sched::state::MigrationState::Local;
+                    }
+                }
+            }
             new_sched.state = TaskState::Running;
             new_sched.last_cpu = Some(cpu_idx);
             new_sched.run_cpu = Some(cpu_idx);
@@ -3307,9 +3340,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         // we do not steal stale lazy-invalidated entries (see
                         // `SchedState::dequeue_thread_front` comment).
                         sf.state != TaskState::Dead
+                            // Never migrate a currently running task.
+                            && sf.state != TaskState::Running
                             // Validate canonical placement before steal.
                             && sf.runq_location == Some((victim_cpu, p))
                             && matches!(sf.affinity, crate::task::Affinity::Any)
+                            // Only steal tasks whose migration state allows it.
+                            && sf.migration_state.is_migratable()
                     }
                     _ => false,
                 };
@@ -3328,6 +3365,30 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     }
                     if let Some(sf) = self.state.get_task_mut(stolen_id) {
                         sf.wake_cpu = Some(local_cpu);
+                        // Transition migration state: Local/Requested → InTransit.
+                        match sf.migration_state.try_transition(
+                            crate::sched::state::MigrationState::InTransit,
+                        ) {
+                            Ok(new_state) => {
+                                crate::kdebug!(
+                                    "MIGRATE[tid={}]: {:?} → InTransit (steal cpu{} → cpu{})",
+                                    stolen_id,
+                                    sf.migration_state,
+                                    victim_cpu,
+                                    local_cpu,
+                                );
+                                sf.migration_state = new_state;
+                            }
+                            Err(bad_state) => {
+                                crate::kdebug!(
+                                    "MIGRATE[tid={}]: illegal steal transition from {:?} (cpu{} → cpu{})",
+                                    stolen_id,
+                                    bad_state,
+                                    victim_cpu,
+                                    local_cpu,
+                                );
+                            }
+                        }
                     }
                     self.state
                         .note_enqueue_cause(stolen_id, crate::sched::state::EnqueueCause::Steal);
@@ -5264,6 +5325,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 42);
 
@@ -5304,6 +5366,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 43);
 
@@ -5351,6 +5414,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         let sched_ptr = alloc::boxed::Box::into_raw(sched);
@@ -5497,6 +5561,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         let task_normal = crate::task::Task {
@@ -5586,6 +5651,7 @@ mod tests {
             enqueued_at_tick: 600,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 1002,
@@ -5602,6 +5668,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 1001);
         sched.state.enqueue_task(0, TaskPriority::Low as usize, 1002);
@@ -5646,6 +5713,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
 
@@ -5669,6 +5737,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 4002,
@@ -5683,6 +5752,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 4001);
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 4002);
@@ -5787,6 +5857,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -5802,6 +5873,7 @@ mod tests {
             enqueued_at_tick: 500,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 2002);
 
@@ -5858,6 +5930,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: types::SPIN_YIELD_PENALTY_THRESHOLD,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 6002,
@@ -5872,6 +5945,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.note_enqueue_cause(6001, crate::sched::state::EnqueueCause::YieldRequeue);
         sched.state.enqueue_task(0, TaskPriority::Realtime as usize, 6002);
@@ -5916,6 +5990,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: types::SPIN_YIELD_PENALTY_THRESHOLD + 5,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 6102,
@@ -5930,6 +6005,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.note_enqueue_cause(6101, crate::sched::state::EnqueueCause::Wake);
         sched.state.enqueue_task(0, TaskPriority::High as usize, 6102);
@@ -6036,6 +6112,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -6050,6 +6127,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
 
@@ -6124,6 +6202,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         // Sleeping task pinned to CPU 1 (a different CPU from current_cpu_index == 0).
@@ -6142,6 +6221,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
 
@@ -6205,6 +6285,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         for tid in [9_102, 9_103] {
@@ -6224,6 +6305,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.add_task_to_sleep_queue(tid, 50);
         }
@@ -6268,6 +6350,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.add_task_to_sleep_queue(tid, 50);
@@ -6334,6 +6417,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         // Runnable task incorrectly queued on CPU 0 but pinned to CPU 1.
@@ -6352,6 +6436,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9102);
@@ -6470,6 +6555,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         // Fill CPU 0's normal queue with misrouted tasks pinned to CPU 1.
@@ -6491,6 +6577,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.enqueue_task(0, TaskPriority::Normal as usize, tid);
@@ -6553,6 +6640,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         // Runnable task incorrectly queued on CPU 0 but pinned to CPU 1.
@@ -6572,6 +6660,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 9301);
 
@@ -6966,6 +7055,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 6001,
@@ -6979,6 +7069,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
 
@@ -7021,6 +7112,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         let task = crate::task::Task {
@@ -7186,6 +7278,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 6_301,
@@ -7200,6 +7293,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         let _ = sched.state.register_waiter(6_301, state::WaitReason::BlockCurrent);
         sched.state.add_task_to_sleep_queue(6_301, 7);
@@ -7248,6 +7342,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         let task = crate::task::Task {
@@ -7613,6 +7708,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         };
         sched.state.insert_task(target_fields);
 
@@ -7688,6 +7784,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 8304,
@@ -7702,6 +7799,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         // Seed stale queue membership for the exiting task and ensure another
@@ -7765,6 +7863,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 8311,
@@ -7779,6 +7878,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8311);
 
@@ -7817,6 +7917,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         let termination = mark_task_exited_in_registry::<MockRuntime>(8306, 202);
@@ -7850,6 +7951,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 8305,
@@ -7864,6 +7966,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, 8305);
@@ -9033,6 +9136,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
@@ -9154,6 +9258,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 9901,
@@ -9168,6 +9273,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         let (_ipi, _deferred) =
@@ -9217,6 +9323,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: 9911,
@@ -9231,6 +9338,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         // Make CPU 0 overloaded relative to CPU 1.
@@ -9252,6 +9360,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
@@ -9303,6 +9412,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -9317,6 +9427,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
 
@@ -9336,6 +9447,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.enqueue_task(2, TaskPriority::Low as usize, id);
@@ -9567,6 +9679,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         let sleeping = make_task(9921, TaskState::Blocked, TaskPriority::Normal);
@@ -9584,6 +9697,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
 
@@ -9605,6 +9719,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
@@ -9656,6 +9771,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         // Keep CPU 0 overloaded for Any-affinity wake routing.
@@ -9675,6 +9791,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.enqueue_task(0, TaskPriority::Low as usize, id);
@@ -9696,6 +9813,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.add_task_to_sleep_queue(id, 50);
@@ -9757,6 +9875,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
@@ -9772,6 +9891,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
 
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, 9930);
@@ -9829,6 +9949,7 @@ mod tests {
                 timeslice_remaining: types::DEFAULT_TIMESLICE,
                 enqueued_at_tick: 0,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
                 wake_pending: false,
             });
             sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
@@ -9850,6 +9971,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, stealable_tid);
@@ -9897,6 +10019,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
 
@@ -9934,6 +10057,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
         }
@@ -9981,6 +10105,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         });
         sched.state.enqueue_task(0, TaskPriority::Normal as usize, tid);
 
@@ -10017,6 +10142,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
         }
@@ -10066,6 +10192,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
         }
@@ -10087,6 +10214,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.enqueue_task(10, TaskPriority::Normal as usize, tid);
         }
@@ -10134,6 +10262,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.enqueue_task(10, TaskPriority::Normal as usize, tid);
         }
@@ -10181,6 +10310,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.enqueue_task(cpu, TaskPriority::Normal as usize, tid);
         }
@@ -10207,6 +10337,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         };
 
         let (last, wake, run) = task_cpu_trace_strings(Some(9), Some(&sf));
@@ -10230,6 +10361,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         };
 
         let (last, wake, run) = task_cpu_trace_strings(Some(4), Some(&sf));
@@ -10410,6 +10542,7 @@ mod tests {
             timeslice_remaining: 2,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.per_cpu[0].current = Some(tid);
@@ -10578,6 +10711,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         sched.state.per_cpu[0].current = Some(current_tid);
@@ -10596,6 +10730,7 @@ mod tests {
             timeslice_remaining: types::DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
             wake_pending: false,
         });
         enqueue_remote_wake_mailbox(0, types::RemoteWakeMailboxEntry {
@@ -10651,6 +10786,7 @@ mod tests {
                 enqueued_at_tick: 0,
                 wake_pending: false,
                 voluntary_yields: 0,
+                migration_state: MigrationState::Local,
             });
             sched.state.enqueue_task(cpu, TaskPriority::Normal as usize, tid);
         }

@@ -75,6 +75,92 @@ pub enum WaitReason {
     BlockCurrent,
 }
 
+/// CPU index type alias used by migration state.
+pub type CpuId = usize;
+
+/// Explicit migration state for a kernel thread.
+///
+/// Tracks the lifecycle of a task moving between CPUs so that migration is
+/// always observable and never silently bypasses safety checks.  The valid
+/// transitions are:
+///
+/// ```text
+/// Local ──────────────────────► Requested { target }
+///   ▲                                    │           │
+///   │  (arrived at destination)          │ (steal /  │ (cancelled /
+///   │                                    │  balance) │  target offline)
+///   │                                    ▼           │
+///   └──────────────────────────── InTransit          │
+///                                                    ▼
+///                                                  Local
+///
+/// Any ─────────────────────────► Pinned   (affinity locked)
+/// Pinned ──────────────────────► Local    (affinity cleared)
+/// ```
+///
+/// Tasks in the `Running` lifecycle state **must not** be migrated; call
+/// [`MigrationState::is_migratable`] before attempting any move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationState {
+    /// Task is resident on its current CPU with no pending migration.
+    Local,
+    /// Migration to `target` has been requested (e.g. by wake placement or
+    /// the load balancer) but the task has not yet been dequeued for transit.
+    Requested { target: CpuId },
+    /// Task has been dequeued from the source CPU and is being placed on the
+    /// destination CPU.  No further migration may be initiated until the task
+    /// arrives and transitions back to `Local`.
+    InTransit,
+    /// Task is pinned by its affinity and may not be migrated.
+    Pinned,
+}
+
+impl Default for MigrationState {
+    fn default() -> Self {
+        MigrationState::Local
+    }
+}
+
+impl MigrationState {
+    /// Return `true` if the task is currently eligible for migration.
+    ///
+    /// A task in `Running` lifecycle state must never be migrated, so callers
+    /// should gate any migration attempt with this check combined with a
+    /// `TaskState::Running` guard.  Additionally a `Pinned` or already
+    /// `InTransit` task must not be re-migrated.
+    #[inline]
+    pub fn is_migratable(self) -> bool {
+        matches!(self, MigrationState::Local | MigrationState::Requested { .. })
+    }
+
+    /// Attempt a state transition, returning the new state on success or `Err`
+    /// with the current state on an illegal transition.
+    ///
+    /// Legal transitions:
+    /// - `Local` → `Requested { target }`
+    /// - `Local` → `Pinned`
+    /// - `Requested { .. }` → `InTransit`
+    /// - `Requested { .. }` → `Local`  (cancellation)
+    /// - `InTransit` → `Local`          (arrival)
+    /// - `Pinned` → `Local`             (affinity cleared)
+    pub fn try_transition(self, next: MigrationState) -> Result<MigrationState, MigrationState> {
+        let allowed = match (self, next) {
+            (MigrationState::Local, MigrationState::Requested { .. }) => true,
+            (MigrationState::Local, MigrationState::Pinned) => true,
+            (MigrationState::Requested { .. }, MigrationState::InTransit) => true,
+            (MigrationState::Requested { .. }, MigrationState::Local) => true,
+            (MigrationState::InTransit, MigrationState::Local) => true,
+            (MigrationState::Pinned, MigrationState::Local) => true,
+            _ => false,
+        };
+        if allowed {
+            Ok(next)
+        } else {
+            Err(self)
+        }
+    }
+}
+
 pub const WAKE_LATENCY_HIST_BUCKETS: usize = 5;
 pub const IDLE_EPISODE_HIST_BUCKETS: usize = 4;
 const RUNQ_STALE_PURGE_BUDGET: usize = 32;
@@ -365,6 +451,14 @@ pub struct ThreadSchedFields {
     /// spin-yield anti-patterns (e.g. a task that never truly blocks will show
     /// a rapidly-growing counter here).
     pub voluntary_yields: u64,
+    /// Explicit migration lifecycle state.
+    ///
+    /// Tracks whether this task has a pending migration request, is currently
+    /// in transit between CPUs, or is pinned.  Updated by the steal, balance,
+    /// and placement paths.  Use [`MigrationState::is_migratable`] and
+    /// [`MigrationState::try_transition`] to enforce safe state transitions
+    /// before initiating any cross-CPU movement.
+    pub migration_state: MigrationState,
 }
 /// Backward-compatible alias — prefer `ThreadSchedFields` in new code.
 pub type TaskSchedFields = ThreadSchedFields;
@@ -1151,6 +1245,7 @@ mod tests {
             enqueued_at_tick: 0,
             wake_pending: false,
             voluntary_yields: 0,
+            migration_state: MigrationState::Local,
         }
     }
 
@@ -1705,5 +1800,90 @@ mod tests {
         assert_eq!(stats.mailbox_pushes, 0);
         assert_eq!(stats.mailbox_drains, 0);
         assert_eq!(stats.mailbox_tasks_drained, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // MigrationState tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn migration_state_default_is_local() {
+        assert_eq!(MigrationState::default(), MigrationState::Local);
+    }
+
+    #[test]
+    fn migration_state_local_is_migratable() {
+        assert!(MigrationState::Local.is_migratable());
+    }
+
+    #[test]
+    fn migration_state_requested_is_migratable() {
+        assert!(MigrationState::Requested { target: 1 }.is_migratable());
+    }
+
+    #[test]
+    fn migration_state_in_transit_is_not_migratable() {
+        assert!(!MigrationState::InTransit.is_migratable());
+    }
+
+    #[test]
+    fn migration_state_pinned_is_not_migratable() {
+        assert!(!MigrationState::Pinned.is_migratable());
+    }
+
+    #[test]
+    fn migration_state_legal_transitions() {
+        // Local → Requested
+        assert_eq!(
+            MigrationState::Local.try_transition(MigrationState::Requested { target: 2 }),
+            Ok(MigrationState::Requested { target: 2 }),
+        );
+        // Local → Pinned
+        assert_eq!(
+            MigrationState::Local.try_transition(MigrationState::Pinned),
+            Ok(MigrationState::Pinned),
+        );
+        // Requested → InTransit
+        assert_eq!(
+            MigrationState::Requested { target: 2 }.try_transition(MigrationState::InTransit),
+            Ok(MigrationState::InTransit),
+        );
+        // Requested → Local (cancellation)
+        assert_eq!(
+            MigrationState::Requested { target: 2 }.try_transition(MigrationState::Local),
+            Ok(MigrationState::Local),
+        );
+        // InTransit → Local (arrival)
+        assert_eq!(
+            MigrationState::InTransit.try_transition(MigrationState::Local),
+            Ok(MigrationState::Local),
+        );
+        // Pinned → Local (affinity cleared)
+        assert_eq!(
+            MigrationState::Pinned.try_transition(MigrationState::Local),
+            Ok(MigrationState::Local),
+        );
+    }
+
+    #[test]
+    fn migration_state_illegal_transitions_return_err() {
+        // InTransit → Requested is not allowed (no re-migration while in flight)
+        assert!(
+            MigrationState::InTransit
+                .try_transition(MigrationState::Requested { target: 1 })
+                .is_err()
+        );
+        // Pinned → InTransit is not allowed
+        assert!(MigrationState::Pinned.try_transition(MigrationState::InTransit).is_err());
+        // Local → InTransit is not a direct allowed transition
+        assert!(MigrationState::Local.try_transition(MigrationState::InTransit).is_err());
+        // InTransit → Pinned is not allowed
+        assert!(MigrationState::InTransit.try_transition(MigrationState::Pinned).is_err());
+    }
+
+    #[test]
+    fn thread_sched_fields_includes_migration_state() {
+        let fields = sched_fields(1, TaskState::Runnable, TaskPriority::Normal);
+        assert_eq!(fields.migration_state, MigrationState::Local);
     }
 }
