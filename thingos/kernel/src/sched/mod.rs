@@ -3454,7 +3454,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 .state
                 .get_task(stolen_id)
                 .map(|sf| sf.priority as usize)
-                .unwrap_or(1);
+                .unwrap_or(TaskPriority::Normal as usize);
 
             // Place the task into the target CPU's run queue.
             self.state.enqueue_task(least_cpu, priority, stolen_id);
@@ -10447,14 +10447,13 @@ mod tests {
     #[test]
     fn test_periodic_load_balance_rate_limited() {
         let _g = init_test_env();
-        // Tick = 0, last_balance_tick = 0, so balance runs once (same tick, 0-0=0
-        // < INTERVAL). Set up a severe imbalance: CPU 1 has 4 tasks, CPU 0 zero.
+        // Set up a severe imbalance: CPU 1 has 4 tasks, CPU 0 has zero.
         let tasks: &[(u64, usize)] =
             &[(20_000, 1), (20_001, 1), (20_002, 1), (20_003, 1)];
         let mut sched = make_periodic_balance_sched(2, tasks);
 
-        // Tick 0: first call should respect that last_balance_tick = 0 and now = 0;
-        // wrapping_sub(0, 0) = 0 < INTERVAL → no migration on tick 0.
+        // Tick 0: last_balance_tick = 0 and now = 0, so wrapping_sub(0, 0) = 0
+        // which is less than INTERVAL → balance must NOT run yet.
         TICK_COUNT.store(0, Ordering::Relaxed);
         let before = PROF_PERIODIC_BALANCE_MIGRATIONS.load(Ordering::Relaxed);
         sched.periodic_load_balance();

@@ -47,7 +47,7 @@ pub const SPIN_YIELD_PENALTY_BANDS: usize = 1;
 
 /// Minimum scheduler ticks between periodic load-balance passes.
 ///
-/// At the default 100 Hz timer, 20 ticks ≈ 200 ms.  The cooldown prevents
+/// At the default 100 Hz timer, 20 ticks ≈ 200 ms. The cooldown prevents
 /// the balancer from running too frequently, which would cause oscillation
 /// (tasks bouncing back and forth between CPUs every tick).
 pub const PERIODIC_BALANCE_INTERVAL_TICKS: u64 = 20;
@@ -64,6 +64,8 @@ pub const PERIODIC_BALANCE_MAX_MIGRATIONS_PER_RUN: usize = 2;
 /// A difference of 2 means we only migrate when the busiest CPU has at least
 /// 2 more runnable tasks than the least-loaded CPU.  This prevents the
 /// balancer from oscillating tasks for a marginal (1-task) imbalance.
+/// This threshold is enforced both initially and before each individual
+/// migration step to prevent over-correction mid-pass.
 pub const PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF: usize = 2;
 
 // PerCpu is now in state.rs
