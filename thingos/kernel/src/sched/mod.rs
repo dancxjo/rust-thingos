@@ -312,6 +312,19 @@ const PREPARE_SCHEDULE_MISROUTE_BACKLOG_CAP: usize = 128;
 // Keep steal scans bounded to limit idle-path latency while still peeking past
 // a small pinned/unstealable head segment.
 const STEAL_SCAN_DEPTH_PER_PRIORITY: usize = 8;
+/// Minimum run-queue depth on a victim CPU before it becomes a steal target.
+///
+/// A threshold of 2 means we only steal when there is genuine imbalance: the
+/// victim already has one task running plus at least one waiting.
+const STEAL_MIN_VICTIM_DEPTH: usize = 2;
+/// CPU-index radius that defines "nearby" CPUs for steal ordering.
+///
+/// CPUs whose index falls within `[local - STEAL_NEARBY_RADIUS, local +
+/// STEAL_NEARBY_RADIUS]` (inclusive, clamped to valid range) are tried first
+/// during `idle_steal`.  This is a topology heuristic: nearby indices are
+/// often on the same package or share last-level cache, so stealing from them
+/// tends to have lower cache-miss overhead than stealing from distant CPUs.
+const STEAL_NEARBY_RADIUS: usize = 4;
 // Allow local wake routing for Any-affinity tasks when the previous CPU is
 // meaningfully busier, while still preserving cache locality under similar load.
 const ANY_WAKE_LOCAL_DEPTH_BIAS: usize = 1;
@@ -3005,10 +3018,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     if pick_attempts >= PREPARE_SCHEDULE_PICK_BUDGET {
                         crate::kwarn!("SCHED: CPU {} Priority 0 pick budget exhausted!", cpu_idx);
                     }
-                    // Attempt to steal a task from the most-loaded peer CPU before
-                    // falling back to the idle task.  This prevents the scheduler from
-                    // going idle on a CPU while other CPUs have run queues backed up.
-                    let stolen = self.steal_task_for(cpu_idx);
+                    // Attempt to steal a task from a peer CPU before falling
+                    // back to the idle task.  Prefer nearby CPUs first to
+                    // exploit shared caches and reduce inter-socket traffic.
+                    // See `idle_steal` for the full selection algorithm.
+                    let stolen = self.idle_steal(cpu_idx);
                     if stolen.is_some() {
                         stolen
                     } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
@@ -3191,22 +3205,27 @@ impl<R: BootRuntime> types::Scheduler<R> {
         Some(SwitchDecision { cpu_idx, from_tid: current_id, to_tid: next_id })
     }
 
-    /// Steal the highest-priority `Affinity::Any` task from the most-loaded
-    /// peer CPU that has at least 2 runnable tasks.
+    /// Try to steal exactly one `Affinity::Any` task from `victim_cpu` into
+    /// `local_cpu`.
     ///
-    /// Called when the local run queue is empty before falling back to the
-    /// idle task.  Only moves tasks whose affinity allows placement on any
-    /// CPU; pinned tasks are never stolen.
-    fn steal_task_for(&mut self, local_cpu: usize) -> Option<TaskId> {
-        let per_cpu_len = self.state.per_cpu.len();
-        // Find the peer CPU with the most queued work.
-        let (busiest_cpu, busiest_depth) = (0..per_cpu_len)
-            .filter(|&cpu| cpu != local_cpu && self.state.online_cpus.contains(&cpu))
-            .map(|cpu| (cpu, runq_depth_for_cpu(&self.state, cpu)))
-            .max_by_key(|&(_, depth)| depth)?;
-        // Require at least 2 tasks on the busiest CPU so we only steal when
-        // there is genuine imbalance (1 task is already being consumed there).
-        if busiest_depth < 2 {
+    /// The victim must have at least `min_depth` runnable tasks so that we do
+    /// not drain a peer that only has one task remaining (which would be
+    /// consumed by the peer's own next scheduling cycle anyway).
+    ///
+    /// Scans priority queues from highest to lowest, peeking at most
+    /// `STEAL_SCAN_DEPTH_PER_PRIORITY` entries per level to keep the path
+    /// bounded.  Only `Affinity::Any` tasks are eligible; pinned tasks are
+    /// skipped.
+    ///
+    /// Returns the stolen `TaskId` (removed from the victim's run queue and
+    /// ready to be dispatched on `local_cpu`), or `None` if no suitable task
+    /// was found.
+    fn try_steal_one(&mut self, local_cpu: usize, victim_cpu: usize, min_depth: usize) -> Option<TaskId> {
+        if victim_cpu == local_cpu {
+            return None;
+        }
+        let victim_depth = runq_depth_for_cpu(&self.state, victim_cpu);
+        if victim_depth < min_depth {
             return None;
         }
         // Steal the highest-priority non-pinned task.
@@ -3215,13 +3234,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
         for p in (1..5).rev() {
             // Bound the lookahead so idle-path steal attempts stay predictable.
             let scan_limit =
-                self.state.per_cpu[busiest_cpu].runq[p].len().min(STEAL_SCAN_DEPTH_PER_PRIORITY);
+                self.state.per_cpu[victim_cpu].runq[p].len().min(STEAL_SCAN_DEPTH_PER_PRIORITY);
             let mut candidate_index = None;
             for idx in 0..scan_limit {
                 // Re-read by index each step; if this slot no longer exists
                 // (e.g. queue compaction from prior lazy-invalidated removals),
                 // stop this priority scan attempt.
-                let Some(tid) = self.state.per_cpu[busiest_cpu].runq[p].get(idx).copied() else {
+                let Some(tid) = self.state.per_cpu[victim_cpu].runq[p].get(idx).copied() else {
                     break;
                 };
                 let stealable = match self.state.get_thread(tid) {
@@ -3231,7 +3250,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         // `SchedState::dequeue_thread_front` comment).
                         sf.state != TaskState::Dead
                             // Validate canonical placement before steal.
-                            && sf.runq_location == Some((busiest_cpu, p))
+                            && sf.runq_location == Some((victim_cpu, p))
                             && matches!(sf.affinity, crate::task::Affinity::Any)
                     }
                     _ => false,
@@ -3242,8 +3261,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 }
             }
             if let Some(idx) = candidate_index {
-                if let Some(stolen_id) = self.state.dequeue_task_at(busiest_cpu, p, idx) {
-                    if let Some(pc) = self.state.per_cpu.get_mut(busiest_cpu) {
+                if let Some(stolen_id) = self.state.dequeue_task_at(victim_cpu, p, idx) {
+                    if let Some(pc) = self.state.per_cpu.get_mut(victim_cpu) {
                         pc.stats.steals_out = pc.stats.steals_out.saturating_add(1);
                     }
                     if let Some(pc) = self.state.per_cpu.get_mut(local_cpu) {
@@ -3260,6 +3279,75 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
         }
         None
+    }
+
+    /// Attempt to steal work from a peer CPU when the local run queue is empty.
+    ///
+    /// This is the idle-path entry point for work stealing.  It builds an
+    /// ordered candidate list that **prefers nearby CPUs** (indices within
+    /// `STEAL_NEARBY_RADIUS` of `local_cpu`) over distant ones, to exploit
+    /// shared caches and reduce inter-socket traffic.  Within each proximity
+    /// group the candidates are sorted by descending run-queue depth so we
+    /// target the most imbalanced peer first.
+    ///
+    /// The search stops at the first successful steal so that every idle CPU
+    /// gets exactly one task per call, avoiding a thundering-herd scenario
+    /// where many idle CPUs simultaneously drain a single loaded peer.
+    ///
+    /// # Anti-thrashing
+    ///
+    /// A minimum depth threshold (`STEAL_MIN_VICTIM_DEPTH`) ensures that a
+    /// victim CPU must have at least two runnable tasks before we steal from
+    /// it.  This prevents repeatedly passing a single task back and forth
+    /// between CPUs when the system is nearly idle.
+    fn idle_steal(&mut self, local_cpu: usize) -> Option<TaskId> {
+        let per_cpu_len = self.state.per_cpu.len();
+
+        // Partition online peer CPUs into nearby and far groups, collecting
+        // their current run-queue depths at the same time.
+        let max_nearby = per_cpu_len.min(STEAL_NEARBY_RADIUS * 2 + 1);
+        let mut nearby: alloc::vec::Vec<(usize, usize)> =
+            alloc::vec::Vec::with_capacity(max_nearby);
+        let max_far = per_cpu_len.saturating_sub(max_nearby);
+        let mut far: alloc::vec::Vec<(usize, usize)> =
+            alloc::vec::Vec::with_capacity(max_far);
+
+        for &cpu in &self.state.online_cpus {
+            if cpu == local_cpu || cpu >= per_cpu_len {
+                continue;
+            }
+            let depth = runq_depth_for_cpu(&self.state, cpu);
+            // Clamp subtraction to avoid wrapping on usize arithmetic.
+            let dist = if cpu >= local_cpu {
+                cpu - local_cpu
+            } else {
+                local_cpu - cpu
+            };
+            if dist <= STEAL_NEARBY_RADIUS {
+                nearby.push((cpu, depth));
+            } else {
+                far.push((cpu, depth));
+            }
+        }
+
+        // Sort each group so we try the most-loaded victim first.
+        nearby.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        far.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+        // Try nearby CPUs first, then fall back to distant ones.
+        for (victim_cpu, _) in nearby.iter().chain(far.iter()).copied() {
+            if let Some(stolen) = self.try_steal_one(local_cpu, victim_cpu, STEAL_MIN_VICTIM_DEPTH) {
+                return Some(stolen);
+            }
+        }
+        None
+    }
+
+    /// Convenience wrapper kept for backward compatibility with callers that
+    /// used the old name.  Delegates to [`idle_steal`][Self::idle_steal].
+    #[inline]
+    fn steal_task_for(&mut self, local_cpu: usize) -> Option<TaskId> {
+        self.idle_steal(local_cpu)
     }
 
     pub fn terminate_current(
@@ -9604,6 +9692,331 @@ mod tests {
                 .iter()
                 .any(|&tid| tid == stealable_tid),
             "stealable task beyond scan-depth cap should remain on donor queue"
+        );
+    }
+
+    // ── try_steal_one tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_try_steal_one_returns_none_when_victim_below_min_depth() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        // Only one task on CPU 1 — below the min_depth=2 threshold.
+        let tid = 10_001u64;
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(tid, TaskState::Runnable, TaskPriority::Normal)));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(1),
+            wake_cpu: Some(1),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+
+        // min_depth=2 but victim has only 1 task — should return None.
+        let result = sched.try_steal_one(0, 1, 2);
+        assert_eq!(result, None, "should not steal when victim depth < min_depth");
+    }
+
+    #[test]
+    fn test_try_steal_one_steals_when_victim_meets_min_depth() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        // Two tasks on CPU 1.
+        for tid in [10_010u64, 10_011u64] {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        let stolen = sched.try_steal_one(0, 1, 2);
+        assert!(stolen.is_some(), "should steal when victim has >= min_depth tasks");
+        let stolen_id = stolen.unwrap();
+        assert!(
+            stolen_id == 10_010 || stolen_id == 10_011,
+            "stolen task must come from victim CPU 1"
+        );
+        assert_eq!(
+            sched.state.get_task(stolen_id).and_then(|sf| sf.wake_cpu),
+            Some(0),
+            "stolen task wake_cpu must point to local CPU"
+        );
+        assert_eq!(
+            sched.state.get_task(stolen_id).and_then(|sf| sf.runq_location),
+            None,
+            "stolen task must be removed from victim run queue"
+        );
+    }
+
+    #[test]
+    fn test_try_steal_one_returns_none_for_same_cpu() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.mark_cpu_online(0);
+
+        let tid = 10_020u64;
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(make_task(tid, TaskState::Runnable, TaskPriority::Normal)));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid,
+            runq_location: None,
+            state: TaskState::Runnable,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            wake_pending: false,
+            voluntary_yields: 0,
+        });
+        sched.state.enqueue_task(0, TaskPriority::Normal as usize, tid);
+
+        // local_cpu == victim_cpu → always None (cannot steal from self).
+        assert_eq!(sched.try_steal_one(0, 0, 1), None);
+    }
+
+    #[test]
+    fn test_try_steal_one_skips_pinned_tasks() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..2 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        sched.state.mark_cpu_online(0);
+        sched.state.mark_cpu_online(1);
+
+        // Two tasks on CPU 1, both pinned to CPU 1.
+        for tid in [10_030u64, 10_031u64] {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Pinned(1),
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        assert_eq!(
+            sched.try_steal_one(0, 1, 2),
+            None,
+            "pinned tasks must never be stolen"
+        );
+    }
+
+    // ── idle_steal tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_idle_steal_prefers_nearby_cpu_over_distant() {
+        let _g = init_test_env();
+
+        // CPU layout: local=0, nearby=1 (within radius), far=10.
+        // We need at least 11 per_cpu slots.
+        let num_cpus = 11usize;
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..num_cpus {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        for i in [0usize, 1, 10] {
+            sched.state.mark_cpu_online(i);
+        }
+
+        // Place two tasks on nearby CPU 1 and two tasks on far CPU 10.
+        let nearby_tids = [10_100u64, 10_101u64];
+        let far_tids = [10_110u64, 10_111u64];
+
+        for &tid in &nearby_tids {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(1),
+                wake_cpu: Some(1),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.enqueue_task(1, TaskPriority::Normal as usize, tid);
+        }
+
+        for &tid in &far_tids {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(10),
+                wake_cpu: Some(10),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.enqueue_task(10, TaskPriority::Normal as usize, tid);
+        }
+
+        // idle_steal from CPU 0 should pick from nearby CPU 1 (within
+        // STEAL_NEARBY_RADIUS) before trying distant CPU 10.
+        let stolen = sched.idle_steal(0);
+        assert!(stolen.is_some(), "idle_steal should find work");
+        let stolen_id = stolen.unwrap();
+        assert!(
+            nearby_tids.contains(&stolen_id),
+            "idle_steal should prefer nearby CPU 1 over far CPU 10 (stolen={stolen_id})"
+        );
+    }
+
+    #[test]
+    fn test_idle_steal_falls_back_to_distant_when_nearby_empty() {
+        let _g = init_test_env();
+
+        let num_cpus = 11usize;
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..num_cpus {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        for i in [0usize, 10] {
+            sched.state.mark_cpu_online(i);
+        }
+
+        // Only far CPU 10 has work.
+        let far_tids = [10_200u64, 10_201u64];
+        for &tid in &far_tids {
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(10),
+                wake_cpu: Some(10),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.enqueue_task(10, TaskPriority::Normal as usize, tid);
+        }
+
+        let stolen = sched.idle_steal(0);
+        assert!(
+            stolen.is_some(),
+            "idle_steal should fall back to distant CPUs when nearby CPUs have no work"
+        );
+        let stolen_id = stolen.unwrap();
+        assert!(
+            far_tids.contains(&stolen_id),
+            "should steal from far CPU 10 when it is the only loaded CPU"
+        );
+    }
+
+    #[test]
+    fn test_idle_steal_returns_none_when_all_cpus_have_single_task() {
+        let _g = init_test_env();
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        for _ in 0..3 {
+            sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        }
+        for i in 0..3 {
+            sched.state.mark_cpu_online(i);
+        }
+
+        // Each peer CPU has exactly 1 task — below the min_depth=2 threshold.
+        for cpu in 1..3usize {
+            let tid = 10_300u64 + cpu as u64;
+            crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
+                make_task(tid, TaskState::Runnable, TaskPriority::Normal),
+            ));
+            sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+                tid,
+                runq_location: None,
+                state: TaskState::Runnable,
+                priority: TaskPriority::Normal,
+                affinity: Affinity::Any,
+                last_cpu: Some(cpu),
+                wake_cpu: Some(cpu),
+                run_cpu: None,
+                timeslice_remaining: types::DEFAULT_TIMESLICE,
+                enqueued_at_tick: 0,
+                wake_pending: false,
+                voluntary_yields: 0,
+            });
+            sched.state.enqueue_task(cpu, TaskPriority::Normal as usize, tid);
+        }
+
+        assert_eq!(
+            sched.idle_steal(0),
+            None,
+            "idle_steal must not steal when no CPU has >= 2 runnable tasks (anti-thrash)"
         );
     }
 
