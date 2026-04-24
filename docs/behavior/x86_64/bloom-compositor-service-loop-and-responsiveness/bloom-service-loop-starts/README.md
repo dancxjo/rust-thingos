@@ -1,4 +1,4 @@
-# ❌ Scenario: bloom I/O thread starts independently of the render loop
+# ❌ Scenario: bloom service loop starts
 
 > Last run: 2026-04-23 21:19:50
 
@@ -7,7 +7,8 @@
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
 | 1 | Given the machine is booted | ✅ | 8408ms | - - - |
-| 2 | Then the log should match pattern "bloom: I/O thread started" | ❌ | 1007ms | - [📜](./02/serial.log) - |
+| 2 | Then the log should match pattern "bloom: service loop started" | ❌ | 1007ms | - [📜](./02/serial.log) - |
+
 
 <details>
 <summary>📜 Full Serial Log</summary>

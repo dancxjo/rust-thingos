@@ -5,52 +5,41 @@ extern crate alloc;
 
 mod damage;
 mod display;
+mod frame_clock;
 mod input;
+mod loop_types;
 mod protocol;
 mod render;
 mod scene;
-
-use alloc::collections::VecDeque;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+mod services;
+mod world;
 
 use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
 use damage::DamageTracker;
 use display::DisplayBackend;
+use frame_clock::FrameClock;
 use input::InputState;
-use protocol::{
-    AckEvent, ClientRequest, EVT_ACK, EVT_FRAME_DONE, FrameDoneEvent, MessageHeader, parse_request,
-    to_vec,
-};
+use loop_types::BloomLoop;
 use render::CompositorVisuals;
-use scene::{Scene, SurfaceBuffer};
-use spin::Mutex;
-use stem::syscall::port::port_try_recv;
+use scene::Scene;
+use services::input_service::InputService;
+use services::wallpaper::WallpaperService;
+use services::wayland::WaylandService;
 use stem::syscall::vfs::{
-    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_path,
-    vfs_write,
+    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_path, vfs_write,
 };
-use stem::syscall::{port_create, port_send_all};
+use stem::syscall::port_create;
 use stem::{error, info, warn};
+use world::BloomWorld;
 
 const SERVICE_PATH: &str = "/services/bloom";
-
-/// Events decoded by the I/O thread and forwarded to the render thread.
-enum IoEvent {
-    /// Raw bytes from a client service-port message.
-    Service(Vec<u8>),
-    /// Raw bytes from the bristle (HID) event port.
-    Bristle(Vec<u8>),
-    /// The wallpaper-watch file reported a modification.
-    WallpaperChange,
-}
-
-type IoQueue = Arc<Mutex<VecDeque<IoEvent>>>;
+const WP_PATH: &str = "/session/desktop/wallpaper";
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
     info!("bloom: compositor service starting");
 
+    // ── Connect to the display ────────────────────────────────────────────────
     let mut display_opt = None;
     for _ in 0..50 {
         display_opt = DisplayBackend::connect("/dev/display/card0");
@@ -60,7 +49,7 @@ fn main(_arg: usize) -> ! {
         stem::sleep_ms(100);
     }
 
-    let mut display = if let Some(d) = display_opt {
+    let display = if let Some(d) = display_opt {
         d
     } else {
         error!("bloom: failed to connect to /dev/display/card0 after retries");
@@ -75,9 +64,10 @@ fn main(_arg: usize) -> ! {
             stem::sleep_ms(1000);
         }
     }
-    let mut primary = outputs[0];
+    let primary = outputs[0];
     info!("bloom: output0 {}x{} @ {}mHz", primary.width, primary.height, primary.refresh_mhz);
 
+    // ── Create and publish the service port ───────────────────────────────────
     info!("bloom: creating service port...");
     let (service_write, service_read) = match port_create(65536) {
         Ok(pair) => pair,
@@ -90,388 +80,80 @@ fn main(_arg: usize) -> ! {
     };
     publish_service_handle(SERVICE_PATH, service_write);
 
+    // ── Session directories + wallpaper ───────────────────────────────────────
     let _ = vfs_mkdir("/session");
     let _ = vfs_mkdir("/session/desktop");
-    let wp_path = "/session/desktop/wallpaper";
 
     let mut visuals = CompositorVisuals::new();
     // Synchronous load at startup — no render loop running yet so blocking is fine.
-    visuals.prepare_background(&display, wp_path);
+    visuals.prepare_background(&display, WP_PATH);
     if visuals.fallback_buffer_id().is_none() {
         visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
     }
 
-    let mut scene = Scene::new();
+    // ── Initial scene / damage / input state ─────────────────────────────────
+    let scene = Scene::new();
     let mut damage = DamageTracker::new();
     damage.mark_full(primary.width, primary.height);
+    let input = InputState::new(primary.width, primary.height);
 
-    let mut input = InputState::new(primary.width, primary.height);
-
-    // ── Create bristle event port pair ───────────────────────────────────────
-    // bloom creates its own port pair for receiving bristle HID events and
-    // registers the write end with bristle via an inbox message.
-    // 4096-byte capacity matches other device ports in the system; each
-    // BristleEvent is at most ~32 bytes so this holds ≥128 queued events.
-    let (bristle_evt_write, bristle_evt_read) = match port_create(4096) {
-        Ok(pair) => pair,
+    // ── Bristle event port ────────────────────────────────────────────────────
+    // bloom creates a port pair for bristle HID events and registers the write
+    // end with bristle; the read end is watched in the service loop.
+    // register_with_bristle is called only after the read end is successfully
+    // bridged to a VFS FD, so the write handle we hand to bristle is always
+    // paired with an FD that bloom will actually watch.
+    let bristle_fd = match port_create(4096) {
+        Ok((write_handle, read_handle)) => {
+            match vfs_handle_from_port(read_handle) {
+                Ok(fd) => {
+                    register_with_bristle(write_handle);
+                    Some(fd)
+                }
+                Err(e) => {
+                    warn!("bloom: failed to bridge bristle port to FD: {:?}", e);
+                    None
+                }
+            }
+        }
         Err(e) => {
             warn!("bloom: failed to create bristle event port: {:?}", e);
-            (0, 0)
+            None
         }
     };
 
-    let bristle_fd = if bristle_evt_read != 0 {
-        vfs_handle_from_port(bristle_evt_read).ok()
-    } else {
-        None
-    };
+    // ── Wallpaper watch FD ────────────────────────────────────────────────────
+    let wp_watch_fd = vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0).ok();
 
-    // Register with bristle once it is ready.
-    register_with_bristle(bristle_evt_write);
+    // ── Assemble BloomWorld ───────────────────────────────────────────────────
+    let mut world = BloomWorld::new(scene, damage, input, visuals, display, primary);
 
-    let service_fd = vfs_handle_from_port(service_read).ok();
-    let wp_watch_fd = vfs_watch_path(wp_path, abi::vfs_watch::mask::ALL_EVENTS, 0).ok();
+    // ── Build and populate the BloomLoop ─────────────────────────────────────
+    let frame_clock = FrameClock::new(primary.refresh_mhz);
+    let mut bloom_loop = BloomLoop::new(frame_clock);
 
-    // ── Notification channel ─────────────────────────────────────────────────
-    // The I/O thread sends a single byte here whenever it pushes at least one
-    // event.  The render thread waits on this fd (with a 16 ms timeout) so it
-    // is woken promptly when I/O arrives.
-    let (notify_write, notify_read) = match port_create(4096) {
-        Ok(pair) => pair,
-        Err(e) => {
-            error!("bloom: failed to create notification port: {:?}", e);
-            loop {
-                stem::sleep_ms(1000);
-            }
+    // Service port → WaylandService
+    match vfs_handle_from_port(service_read) {
+        Ok(fd) => {
+            bloom_loop.add_service(alloc::boxed::Box::new(WaylandService::new(fd)));
         }
-    };
-    let notify_read_fd = vfs_handle_from_port(notify_read).ok();
-
-    // ── Shared event queue ───────────────────────────────────────────────────
-    let io_queue: IoQueue = Arc::new(Mutex::new(VecDeque::new()));
-
-    // ── I/O thread ──────────────────────────────────────────────────────────
-    // Owns the WaitSet and all input file descriptors.  Reads events and pushes
-    // them into `io_queue`, then pings the render thread via `notify_write`.
-    {
-        let queue = io_queue.clone();
-
-        let mut ws = stem::wait_set::WaitSet::new();
-        let service_token = service_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
-        let bristle_token = bristle_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
-        let wp_watch_token = wp_watch_fd.and_then(|fd| ws.add_fd_readable(fd).ok());
-
-        if ws.is_empty() {
-            warn!("bloom: I/O thread has no event sources to watch");
-        }
-
-        let _ = stem::thread::spawn_task_detached(move || {
-            info!("bloom: I/O thread started");
-            if ws.is_empty() {
-                return;
-            }
-            let mut io_buf = [0u8; 512];
-            loop {
-                let events = match ws.wait(None::<stem::time::Duration>) {
-                    Ok(evs) => evs,
-                    Err(_) => {
-                        stem::sleep_ms(10);
-                        continue;
-                    }
-                };
-
-                let mut pushed = false;
-                for ev in events {
-                    if !ev.is_readable() {
-                        continue;
-                    }
-
-                    if Some(ev.token()) == service_token {
-                        if let Some(fd) = service_fd {
-                            if let Ok(n) = vfs_read(fd, &mut io_buf) {
-                                if n > 0 {
-                                    queue
-                                        .lock()
-                                        .push_back(IoEvent::Service(io_buf[..n].to_vec()));
-                                    pushed = true;
-                                }
-                            }
-                        }
-                    } else if Some(ev.token()) == bristle_token {
-                        if let Some(fd) = bristle_fd {
-                            if let Ok(n) = vfs_read(fd, &mut io_buf) {
-                                if n > 0 {
-                                    queue
-                                        .lock()
-                                        .push_back(IoEvent::Bristle(io_buf[..n].to_vec()));
-                                    pushed = true;
-                                }
-                            }
-                        }
-                    } else if Some(ev.token()) == wp_watch_token {
-                        // Drain the watch event data.
-                        if let Some(fd) = wp_watch_fd {
-                            let mut dump = [0u8; 1024];
-                            let _ = vfs_read(fd, &mut dump);
-                        }
-                        queue.lock().push_back(IoEvent::WallpaperChange);
-                        pushed = true;
-                    }
-                }
-
-                if pushed {
-                    // Wake the render thread.
-                    let _ = port_send_all(notify_write, &[1u8]);
-                }
-            }
-        });
-    }
-
-    // ── Render loop ──────────────────────────────────────────────────────────
-    // Drains the shared I/O queue, reacts to events, presents frames, and
-    // waits on the notification fd (with a 16 ms cap for vsync pacing).
-    let mut render_ws = stem::wait_set::WaitSet::new();
-    if let Some(fd) = notify_read_fd {
-        let _ = render_ws.add_fd_readable(fd);
-    }
-    let use_render_ws = !render_ws.is_empty();
-
-    let mut needs_redraw = true;
-
-    loop {
-        // 1. Drain queued I/O events.
-        let events: Vec<IoEvent> = {
-            let mut q = io_queue.lock();
-            q.drain(..).collect()
-        };
-        for ev in events {
-            match ev {
-                IoEvent::Service(data) => {
-                    if process_client_message(
-                        &data,
-                        &display,
-                        &mut scene,
-                        &mut damage,
-                        &mut needs_redraw,
-                    ) {
-                        needs_redraw = true;
-                    }
-                }
-                IoEvent::Bristle(data) => {
-                    input.handle_bristle_event(&data, &mut scene, &mut damage);
-                    needs_redraw = true;
-                }
-                IoEvent::WallpaperChange => {
-                    info!("bloom: reacting to wallpaper change (async)");
-                    visuals.start_background_load(&display, wp_path);
-                }
-            }
-        }
-
-        // 2. Pick up any wallpaper the background worker has finished.
-        if visuals.poll_ready_background(&display) {
-            damage.mark_full(primary.width, primary.height);
-            needs_redraw = true;
-        }
-
-        // 3. Present if there is something to show.
-        if needs_redraw && damage.is_dirty() {
-            let composition = scene.collect_composition();
-            let pending_damage = damage.take();
-            let present =
-                display.present(&composition, &pending_damage, visuals.fallback_buffer_id());
-            if present.success {
-                let ts = stem::monotonic_ns();
-                for entry in composition {
-                    if let Some(client_id) = scene.surface_client(entry.surface_id) {
-                        if let Some(ch) = scene.client_event_port(client_id) {
-                            let done = FrameDoneEvent {
-                                header: msg_header(EVT_FRAME_DONE),
-                                surface_id: entry.surface_id,
-                                serial: ts,
-                                timestamp_ns: ts,
-                            };
-                            let _ = port_send_all(ch, &to_vec(&done));
-                        }
-                    }
-                }
-                needs_redraw = false;
-            } else {
-                damage.restore(pending_damage);
-                needs_redraw = true;
-            }
-        }
-
-        // 4. Wait for the next event or vsync pacing deadline (~60 fps).
-        if use_render_ws {
-            let _ = render_ws
-                .wait(Some(core::time::Duration::from_millis(16)));
-            // Drain pending notification bytes so the next wait doesn't
-            // return immediately when the queue is already empty.
-            let mut drain_buf = [0u8; 256];
-            loop {
-                match port_try_recv(notify_read, &mut drain_buf) {
-                    Ok(n) if n > 0 => {}
-                    _ => break,
-                }
-            }
-        } else {
-            stem::sleep_ms(16);
+        Err(_) => {
+            error!("bloom: failed to bridge service port to FD");
         }
     }
-}
 
-fn process_client_message(
-    raw: &[u8],
-    display: &DisplayBackend,
-    scene: &mut Scene,
-    damage: &mut DamageTracker,
-    needs_redraw: &mut bool,
-) -> bool {
-    let Some(req) = parse_request(raw) else {
-        return false;
-    };
-
-    match req {
-        ClientRequest::Connect(req) => {
-            let client_id =
-                if req.event_port == 0 { 0 } else { scene.register_client(req.event_port, None) };
-            send_ack(req.reply_port, 0, client_id, 0);
-            client_id != 0
-        }
-        ClientRequest::ConnectInbox(req) => {
-            let client_id = if req.event_port == 0 {
-                0
-            } else {
-                let input_pid = if req.input_pid == 0 { None } else { Some(req.input_pid) };
-                scene.register_client(req.event_port, input_pid)
-            };
-            send_ack(req.reply_port, 0, client_id, 0);
-            client_id != 0
-        }
-        ClientRequest::CreateSurface(req) => {
-            let Some(surface_id) = scene.create_surface(req.client_id) else {
-                send_ack(req.reply_port, 1, 0, 0);
-                return false;
-            };
-            send_ack(req.reply_port, 0, surface_id, 0);
-            true
-        }
-        ClientRequest::DestroySurface(req) => {
-            let Some(release_ids) = scene.destroy_surface(req.client_id, req.surface_id) else {
-                send_ack(req.reply_port, 1, 0, 0);
-                return false;
-            };
-            for id in release_ids {
-                display.release_buffer(id);
-            }
-            send_ack(req.reply_port, 0, req.surface_id, 0);
-            damage.mark_dirty();
-            *needs_redraw = true;
-            true
-        }
-        ClientRequest::AttachBuffer(req) => {
-            let Some(buffer_id) = display.import_buffer(
-                req.handle_thing,
-                req.width,
-                req.height,
-                req.stride,
-                req.format,
-                req.modifier,
-            ) else {
-                send_ack(req.reply_port, 2, 0, 0);
-                return false;
-            };
-
-            let old_pending = scene.attach_pending_buffer(
-                req.client_id,
-                req.surface_id,
-                SurfaceBuffer {
-                    buffer_id,
-                    width: req.width,
-                    height: req.height,
-                    stride: req.stride,
-                },
-            );
-            match old_pending {
-                Some(Some(old_id)) => {
-                    display.release_buffer(old_id);
-                    send_ack(req.reply_port, 0, buffer_id, 0);
-                    true
-                }
-                Some(None) => {
-                    send_ack(req.reply_port, 0, buffer_id, 0);
-                    true
-                }
-                None => {
-                    display.release_buffer(buffer_id);
-                    send_ack(req.reply_port, 1, 0, 0);
-                    false
-                }
-            }
-        }
-        ClientRequest::Damage(req) => {
-            if scene.damage_pending(req.client_id, req.surface_id, req.rect) {
-                damage.mark_rect(req.rect);
-                send_ack(req.reply_port, 0, 0, 0);
-                true
-            } else {
-                send_ack(req.reply_port, 1, 0, 0);
-                false
-            }
-        }
-        ClientRequest::SetInputRegion(req) => {
-            if scene.set_pending_input_region(req.client_id, req.surface_id, req.rect) {
-                send_ack(req.reply_port, 0, 0, 0);
-                true
-            } else {
-                send_ack(req.reply_port, 1, 0, 0);
-                false
-            }
-        }
-        ClientRequest::SetOpaqueRegion(req) => {
-            if scene.set_pending_opaque_region(req.client_id, req.surface_id, req.rect) {
-                send_ack(req.reply_port, 0, 0, 0);
-                true
-            } else {
-                send_ack(req.reply_port, 1, 0, 0);
-                false
-            }
-        }
-        ClientRequest::SetDestRect(req) => {
-            if scene.set_pending_dest_rect(req.client_id, req.surface_id, req.rect) {
-                send_ack(req.reply_port, 0, 0, 0);
-                true
-            } else {
-                send_ack(req.reply_port, 1, 0, 0);
-                false
-            }
-        }
-        ClientRequest::SetZOrder(req) => {
-            if scene.set_pending_z_order(req.client_id, req.surface_id, req.z_order) {
-                send_ack(req.reply_port, 0, 0, 0);
-                true
-            } else {
-                send_ack(req.reply_port, 1, 0, 0);
-                false
-            }
-        }
-        ClientRequest::Commit(req) => {
-            let Some(result) = scene.commit_surface(req.client_id, req.surface_id) else {
-                send_ack(req.reply_port, 1, 0, 0);
-                return false;
-            };
-            for id in result.released_buffer_ids {
-                display.release_buffer(id);
-            }
-            send_ack(req.reply_port, 0, req.surface_id, result.frame_serial);
-            if result.changed {
-                damage.mark_dirty();
-                *needs_redraw = true;
-            }
-            result.changed
-        }
+    // Bristle FD → InputService
+    if let Some(fd) = bristle_fd {
+        bloom_loop.add_service(alloc::boxed::Box::new(InputService::new(fd)));
     }
+
+    // Wallpaper watch → WallpaperService
+    if let Some(fd) = wp_watch_fd {
+        bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(fd, WP_PATH)));
+    }
+
+    // ── Run forever ───────────────────────────────────────────────────────────
+    bloom_loop.run(&mut world)
 }
 
 fn publish_service_handle(path: &str, handle: u32) {
@@ -481,14 +163,6 @@ fn publish_service_handle(path: &str, handle: u32) {
         let _ = vfs_write(fd, text.as_bytes());
         let _ = vfs_close(fd);
     }
-}
-
-fn send_ack(reply_port: u32, status: u32, value: u32, serial: u64) {
-    if reply_port == 0 {
-        return;
-    }
-    let ack = AckEvent { header: msg_header(EVT_ACK), status, value, serial };
-    let _ = port_send_all(reply_port, &to_vec(&ack));
 }
 
 /// Read bristle's PID from `/run/bristle/pid`.
@@ -529,7 +203,7 @@ fn register_with_bristle(evt_write_handle: u32) {
         }
     };
 
-    use abi::hid::{KIND_BRISTLE_REGISTER_SINK, BRISTLE_SINK_TAG_BLOOM, encode_register_sink};
+    use abi::hid::{BRISTLE_SINK_TAG_BLOOM, KIND_BRISTLE_REGISTER_SINK, encode_register_sink};
     use abi::wire::KindId;
     use stem::syscall::message::msg_send;
 
@@ -538,8 +212,4 @@ fn register_with_bristle(evt_write_handle: u32) {
         Ok(()) => info!("bloom: registered with bristle (pid={})", bristle_pid),
         Err(e) => warn!("bloom: bristle registration failed: {:?}", e),
     }
-}
-
-fn msg_header(msg_type: u16) -> MessageHeader {
-    protocol::msg_header(msg_type)
 }
