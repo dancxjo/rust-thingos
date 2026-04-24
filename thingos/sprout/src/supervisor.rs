@@ -183,13 +183,17 @@ impl Supervisor {
             match svc.next_event(timeout) {
                 Ok(ServiceEvent::Message { kind, payload }) => {
                     // No Sprout-level inbox protocol is defined yet.  Log
-                    // and drop unknown messages rather than failing the loop.
+                    // and drop unknown messages rather than failing the
+                    // loop.  We deliberately do *not* run a tick here so
+                    // that a hypothetical burst of inbox messages cannot
+                    // accelerate the supervision cadence beyond the 100ms
+                    // `Timeout` rhythm — this matches Cambium's
+                    // `messages_drained` / `reconcile_due` separation.
                     stem::debug!(
                         "SPROUT: ServiceLoop inbox message kind={:?} ({} bytes) — ignored",
                         kind,
                         payload.len()
                     );
-                    self.tick_supervisor();
                 }
                 Ok(ServiceEvent::Ready { token, event }) => {
                     // No secondary readiness sources are registered yet, but
