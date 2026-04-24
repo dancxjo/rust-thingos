@@ -596,6 +596,8 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     let _ = root_fs.mkdir("bin");
     let _ = root_fs.mkdir("etc");
     let _ = root_fs.mkdir("share");
+    let _ = root_fs.mkdir("media");
+    let _ = root_fs.mkdir("media/cdrom");
     let _ = root_fs.mkdir("mnt");
     let _ = root_fs.mkdir("dev");
     let _ = root_fs.mkdir("dev/display");
