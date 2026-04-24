@@ -1,12 +1,12 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-23 21:03:05
+> Last run: 2026-04-23 21:19:50
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [Bin Utils Traditional Functionality](bin-utils-traditional-functionality/README.md) | 4/5 | ❌ |
+| [Bin Utils Traditional Functionality](bin-utils-traditional-functionality/README.md) | 3/5 | ❌ |
 | [Bloom compositor threading and responsiveness](bloom-compositor-threading-and-responsiveness/README.md) | 0/8 | ❌ |
 | [Boot progress milestone text reporting](boot-progress-milestone-text-reporting/README.md) | 4/4 | ✅ |
 | [Scheduler entry latency instrumentation](scheduler-entry-latency-instrumentation/README.md) | 1/1 | ✅ |
@@ -21,5 +21,5 @@
 | [ServiceLoop — inbox-backed control plane for ThingOS services](serviceloop-inbox-backed-control-plane-for-thingos-services/README.md) | 7/7 | ✅ |
 | [Shell Command Repetition](shell-command-repetition/README.md) | 1/2 | ❌ |
 | [Terminal parser and renderer threading](terminal-parser-and-renderer-threading/README.md) | 0/4 | ❌ |
-| [VFS Extended Attributes](vfs-extended-attributes/README.md) | 0/1 | ❌ |
+| [VFS Extended Attributes](vfs-extended-attributes/README.md) | 1/1 | ✅ |
 | [Wikipedia Redirect](wikipedia-redirect/README.md) | 0/1 | ❌ |
