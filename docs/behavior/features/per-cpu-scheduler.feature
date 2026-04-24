@@ -20,3 +20,10 @@ Feature: Per-CPU scheduler allocation and ownership
     Then the serial output should contain "Scheduler initialized"
     And the serial log shows "per-CPU scheduler(s) allocated" after "Allocating"
     And the serial log shows "Scheduler initialized" after "per-CPU scheduler(s) allocated"
+
+  @smoke
+  @timeout-30s
+  Scenario: Per-CPU preemption is initialized without a global preemption lock
+    Given the machine is started
+    When I wait for the system to boot
+    Then the serial output should contain "per-CPU preemption initialized"

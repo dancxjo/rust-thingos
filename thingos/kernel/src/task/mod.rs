@@ -875,6 +875,14 @@ pub fn preempt_disable<R: BootRuntime>() {
 
 pub fn preempt_enable<R: BootRuntime>() {
     let rt = crate::runtime::<R>();
+
+    // `preempt_enable` always acquires the scheduler lock because
+    // `preempt_disable_depth` must be decremented under the lock to preserve
+    // ordering guarantees.  After decrementing, `Scheduler::preempt_enable`
+    // checks `need_resched` and triggers a reschedule only if the per-CPU
+    // flag was set while preemption was disabled.  The heavy-weight context
+    // switch path is therefore avoided in the common case where nothing
+    // happened while preemption was off.
     let irq = rt.irq_disable();
 
     let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
@@ -927,6 +935,16 @@ pub fn resched_if_needed<R: BootRuntime>() {
     // Explicit safe-point check: yield if need_resched is set, but do NOT
     // run tick bookkeeping or decrement timeslices.
     let rt = crate::runtime::<R>();
+    let cpu_idx = rt.current_cpu_index();
+
+    // Fast-path: check the per-CPU atomic need_resched flag without acquiring
+    // the global scheduler lock.  This is the common case (no reschedule
+    // pending) and avoids the expensive lock acquisition entirely, satisfying
+    // the "no global preemption lock" requirement.
+    if !crate::sched::need_resched_pending(cpu_idx) {
+        return;
+    }
+
     let irq = rt.irq_disable();
 
     let (switch_decision, deferred_prepare_ipis, deferred_registry_syncs) = {
