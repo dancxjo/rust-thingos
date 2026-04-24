@@ -4,6 +4,8 @@
 
 use core::mem::size_of;
 
+use crate::KindId;
+
 pub const DRIVER_MAGIC: u32 = 0x4452_5650; // "DRVP"
 pub const DRIVER_VERSION: u16 = 0;
 
@@ -688,5 +690,186 @@ pub fn decode_texture_created_response_le(buf: &[u8]) -> Option<TextureCreatedRe
         client_id: u64::from_le_bytes(buf[0..8].try_into().ok()?),
         resource_id: u32::from_le_bytes(buf[8..12].try_into().ok()?),
         status: u32::from_le_bytes(buf[12..16].try_into().ok()?),
+    })
+}
+
+// ── Inbox control-plane ───────────────────────────────────────────────────────
+//
+// KindIds and payload types for the inbox-backed display driver control plane.
+// Requests carry a `reply_pid` field so the driver can send typed replies back
+// to the caller's inbox without a pre-established port connection.
+//
+// KindId values are randomly generated UUID v4 bytes.
+
+/// Client → Driver: initiate protocol handshake.
+///
+/// UUID: `5a321b8f-91e7-4c5d-bc6f-a893740e2b17`
+pub const KIND_DRV_DISPLAY_HELLO: KindId = KindId([
+    0x5a, 0x32, 0x1b, 0x8f, 0x91, 0xe7, 0x4c, 0x5d,
+    0xbc, 0x6f, 0xa8, 0x93, 0x74, 0x0e, 0x2b, 0x17,
+]);
+
+/// Driver → Client: reply to HELLO with negotiated capabilities.
+///
+/// UUID: `f12e7a4c-63d5-48a9-b781-3e5f920dc468`
+pub const KIND_DRV_DISPLAY_WELCOME: KindId = KindId([
+    0xf1, 0x2e, 0x7a, 0x4c, 0x63, 0xd5, 0x48, 0xa9,
+    0xb7, 0x81, 0x3e, 0x5f, 0x92, 0x0d, 0xc4, 0x68,
+]);
+
+/// Client → Driver: bind a framebuffer FD.
+///
+/// UUID: `8c473f5e-219a-4b8d-e672-c38415f79b52`
+pub const KIND_DRV_DISPLAY_BIND: KindId = KindId([
+    0x8c, 0x47, 0x3f, 0x5e, 0x21, 0x9a, 0x4b, 0x8d,
+    0xe6, 0x72, 0xc3, 0x84, 0x15, 0xf7, 0x9b, 0x52,
+]);
+
+/// Client → Driver: present a frame.
+///
+/// UUID: `9b4e276f-c183-4da2-e579-316c84f50ba7`
+pub const KIND_DRV_DISPLAY_PRESENT: KindId = KindId([
+    0x9b, 0x4e, 0x27, 0x6f, 0xc1, 0x83, 0x4d, 0xa2,
+    0xe5, 0x79, 0x31, 0x6c, 0x84, 0xf5, 0x0b, 0xa7,
+]);
+
+/// Driver → Client: acknowledge a request.
+///
+/// UUID: `3e91b27c-584a-4fd6-a15e-8723c96b148d`
+pub const KIND_DRV_DISPLAY_ACK: KindId = KindId([
+    0x3e, 0x91, 0xb2, 0x7c, 0x58, 0x4a, 0x4f, 0xd6,
+    0xa1, 0x5e, 0x87, 0x23, 0xc9, 0x6b, 0x14, 0x8d,
+]);
+
+/// Driver → Client: error response.
+///
+/// UUID: `726c8d39-e4b5-4a17-932f-c685471eda90`
+pub const KIND_DRV_DISPLAY_ERR: KindId = KindId([
+    0x72, 0x6c, 0x8d, 0x39, 0xe4, 0xb5, 0x4a, 0x17,
+    0x93, 0x2f, 0xc6, 0x85, 0x47, 0x1e, 0xda, 0x90,
+]);
+
+// ── Inbox request payload types ───────────────────────────────────────────────
+
+/// Payload for [`KIND_DRV_DISPLAY_HELLO`] (client → driver).
+///
+/// `reply_pid` carries the sender's PID so the driver can send the
+/// [`KIND_DRV_DISPLAY_WELCOME`] reply to the caller's inbox.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct HelloReqInbox {
+    pub reply_pid: u32,
+    pub proto_major: u16,
+    pub proto_minor: u16,
+    pub want_caps: u32,
+    pub _pad: u32,
+}
+
+pub const HELLO_REQ_INBOX_WIRE_SIZE: usize = size_of::<HelloReqInbox>();
+
+/// Payload for [`KIND_DRV_DISPLAY_BIND`] (client → driver).
+///
+/// `reply_pid` carries the sender's PID for the ACK/ERR reply.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BindReqInbox {
+    pub reply_pid: u32,
+    pub fb_fd: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub format: u32,
+}
+
+pub const BIND_REQ_INBOX_WIRE_SIZE: usize = size_of::<BindReqInbox>();
+
+/// Payload for [`KIND_DRV_DISPLAY_PRESENT`] (client → driver).
+///
+/// `reply_pid` carries the sender's PID for the ACK/ERR reply.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PresentReqInbox {
+    pub reply_pid: u32,
+    pub flags: u32,
+    pub rect_count: u32,
+    pub _pad: u32,
+}
+
+pub const PRESENT_REQ_INBOX_WIRE_SIZE: usize = size_of::<PresentReqInbox>();
+
+// ── Inbox encode/decode helpers ───────────────────────────────────────────────
+
+pub fn encode_hello_req_inbox_le(req: &HelloReqInbox, out: &mut [u8]) -> Option<usize> {
+    if out.len() < HELLO_REQ_INBOX_WIRE_SIZE {
+        return None;
+    }
+    out[0..4].copy_from_slice(&req.reply_pid.to_le_bytes());
+    out[4..6].copy_from_slice(&req.proto_major.to_le_bytes());
+    out[6..8].copy_from_slice(&req.proto_minor.to_le_bytes());
+    out[8..12].copy_from_slice(&req.want_caps.to_le_bytes());
+    out[12..16].copy_from_slice(&req._pad.to_le_bytes());
+    Some(HELLO_REQ_INBOX_WIRE_SIZE)
+}
+
+pub fn decode_hello_req_inbox_le(buf: &[u8]) -> Option<HelloReqInbox> {
+    if buf.len() < HELLO_REQ_INBOX_WIRE_SIZE {
+        return None;
+    }
+    Some(HelloReqInbox {
+        reply_pid: u32::from_le_bytes(buf[0..4].try_into().ok()?),
+        proto_major: u16::from_le_bytes(buf[4..6].try_into().ok()?),
+        proto_minor: u16::from_le_bytes(buf[6..8].try_into().ok()?),
+        want_caps: u32::from_le_bytes(buf[8..12].try_into().ok()?),
+        _pad: u32::from_le_bytes(buf[12..16].try_into().ok()?),
+    })
+}
+
+pub fn encode_bind_req_inbox_le(req: &BindReqInbox, out: &mut [u8]) -> Option<usize> {
+    if out.len() < BIND_REQ_INBOX_WIRE_SIZE {
+        return None;
+    }
+    out[0..4].copy_from_slice(&req.reply_pid.to_le_bytes());
+    out[4..8].copy_from_slice(&req.fb_fd.to_le_bytes());
+    out[8..12].copy_from_slice(&req.width.to_le_bytes());
+    out[12..16].copy_from_slice(&req.height.to_le_bytes());
+    out[16..20].copy_from_slice(&req.stride.to_le_bytes());
+    out[20..24].copy_from_slice(&req.format.to_le_bytes());
+    Some(BIND_REQ_INBOX_WIRE_SIZE)
+}
+
+pub fn decode_bind_req_inbox_le(buf: &[u8]) -> Option<BindReqInbox> {
+    if buf.len() < BIND_REQ_INBOX_WIRE_SIZE {
+        return None;
+    }
+    Some(BindReqInbox {
+        reply_pid: u32::from_le_bytes(buf[0..4].try_into().ok()?),
+        fb_fd: u32::from_le_bytes(buf[4..8].try_into().ok()?),
+        width: u32::from_le_bytes(buf[8..12].try_into().ok()?),
+        height: u32::from_le_bytes(buf[12..16].try_into().ok()?),
+        stride: u32::from_le_bytes(buf[16..20].try_into().ok()?),
+        format: u32::from_le_bytes(buf[20..24].try_into().ok()?),
+    })
+}
+
+pub fn encode_present_req_inbox_le(req: &PresentReqInbox, out: &mut [u8]) -> Option<usize> {
+    if out.len() < PRESENT_REQ_INBOX_WIRE_SIZE {
+        return None;
+    }
+    out[0..4].copy_from_slice(&req.reply_pid.to_le_bytes());
+    out[4..8].copy_from_slice(&req.flags.to_le_bytes());
+    out[8..12].copy_from_slice(&req.rect_count.to_le_bytes());
+    out[12..16].copy_from_slice(&req._pad.to_le_bytes());
+    Some(PRESENT_REQ_INBOX_WIRE_SIZE)
+}
+
+pub fn decode_present_req_inbox_le(buf: &[u8]) -> Option<PresentReqInbox> {
+    if buf.len() < PRESENT_REQ_INBOX_WIRE_SIZE {
+        return None;
+    }
+    Some(PresentReqInbox {
+        reply_pid: u32::from_le_bytes(buf[0..4].try_into().ok()?),
+        flags: u32::from_le_bytes(buf[4..8].try_into().ok()?),
+        rect_count: u32::from_le_bytes(buf[8..12].try_into().ok()?),
+        _pad: u32::from_le_bytes(buf[12..16].try_into().ok()?),
     })
 }
