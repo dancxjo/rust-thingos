@@ -15,6 +15,7 @@ mod task;
 
 #[stem::main]
 fn main(arg0: usize) -> ! {
+    stem::info!("SPROUT: ENTERING MAIN (arg0={})", arg0);
     let cpu = stem::arch::whoami();
     stem::debug!(
         "[sprout] whoami: cs=0x{:x} ss=0x{:x} cpl={} rsp=0x{:x} rip=0x{:x} rflags=0x{:x}",

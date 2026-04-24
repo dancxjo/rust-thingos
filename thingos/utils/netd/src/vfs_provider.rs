@@ -308,7 +308,7 @@ impl NetVfsProvider {
         Ok(Some((hdr.resp_port as PortHandle, op, hdr.req_id, payload)))
     }
 
-    fn try_next_request(&mut self) -> Result<Option<(PortHandle, VfsRpcOp, u16, Vec<u8>)>, Errno> {
+    pub fn try_next_request(&mut self) -> Result<Option<(PortHandle, VfsRpcOp, u16, Vec<u8>)>, Errno> {
         loop {
             match self.try_parse_one() {
                 Ok(Some(req)) => return Ok(Some(req)),
@@ -490,7 +490,7 @@ impl NetVfsProvider {
 
     // ── RPC dispatch ─────────────────────────────────────────────────────────
 
-    fn handle_decoded<D: smoltcp::phy::Device>(
+    pub fn handle_decoded<D: smoltcp::phy::Device>(
         &mut self,
         iface: &mut Interface,
         device: &mut D,
@@ -544,7 +544,7 @@ impl NetVfsProvider {
 
     // ── Lookup ────────────────────────────────────────────────────────────────
 
-    fn op_lookup(&self, resp_port: PortHandle, req_id: u16, payload: &[u8]) {
+    pub fn op_lookup(&self, resp_port: PortHandle, req_id: u16, payload: &[u8]) {
         if payload.len() < 4 {
             send_err(resp_port, req_id, E_INVAL);
             return;

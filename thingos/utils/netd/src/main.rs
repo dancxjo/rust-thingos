@@ -59,6 +59,7 @@ use abi::seed::{
 use abi::syscall::vfs_flags::{O_CREAT, O_NONBLOCK, O_RDONLY, O_TRUNC, O_WRONLY};
 use abi::syscall::{PollHandle, poll_flags};
 use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
+use abi::vfs::VfsRpcOp;
 use cmd_queue::{CmdQueue, EventQueue, NetCommand, NetEvent, new_queues};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
@@ -71,7 +72,7 @@ use stem::syscall::{argv_get, exit};
 use stem::{debug, info, warn};
 use vfs_device::VfsNicDevice;
 use vfs_provider::{
-    ICMP_DYN_BASE, TCP_DYN_BASE, UDP_DYN_BASE, NetVfsProvider,
+    ICMP_DYN_BASE, TCP_DYN_BASE, UDP_DYN_BASE, NetVfsProvider, E_OK,
 };
 
 /// Path prefix for the virtio NIC VFS provider (published by virtio_netd).
@@ -514,16 +515,30 @@ fn run_rpc_thread(
         }
 
         // ── Process one VFS RPC (acquire / release lock per RPC) ─────────────
-        let did_rpc = {
-            let mut state = net_state.lock();
-            let did = state.drain_one_rpc(&mut net_provider);
-            if did {
-                // Push notifications immediately after each RPC so clients
-                // see socket-state changes without waiting for the poll thread.
-                state.gc_and_notify();
+        let did_rpc = match net_provider.try_next_request() {
+            Ok(Some((resp_port, op, req_id, payload))) => {
+                if op == VfsRpcOp::Lookup {
+                    net_provider.op_lookup(resp_port, req_id, &payload);
+                } else if op == VfsRpcOp::SubscribeReady {
+                    vfs_provider::send_resp(resp_port, req_id, &[E_OK]);
+                } else {
+                    let mut state = net_state.lock();
+                    net_provider.handle_decoded(
+                        &mut state.iface,
+                        &mut state.device,
+                        &mut state.socket_set,
+                        &mut state.socket_api,
+                        resp_port,
+                        op,
+                        req_id,
+                        &payload,
+                    );
+                    state.gc_and_notify();
+                }
+                true
             }
-            did
-        }; // ← lock released here
+            _ => false,
+        };
 
         // ── Enqueue DNS / deferred-connect commands if needed ────────────────
         if !dns_in_flight {
@@ -601,44 +616,9 @@ fn main(arg: usize) -> ! {
     let config = Config::new(EthernetAddress(mac).into());
     let mut iface = Interface::new(config, &mut device, VfsNicDevice::now());
 
-    if cfg.oneshot {
-        debug!("NETD: oneshot mode enabled — DHCP probe will exit after completion");
-        match dhcp::run_dhcp(&mut iface, &mut device) {
-            Ok(cfg) => {
-                debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
-                exit(0);
-            }
-            Err(e) => {
-                warn!("NETD: DHCP failed in oneshot mode: {:?}", e);
-                exit(1);
-            }
-        }
-    }
-
-    debug!("NETD: Running DHCP...");
-    let dhcp_config = match dhcp::run_dhcp(&mut iface, &mut device) {
-        Ok(cfg) => {
-            debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
-            cfg
-        }
-        Err(e) => {
-            warn!("NETD: DHCP failed: {:?}", e);
-            loop {
-                stem::time::sleep_ms(1000);
-            }
-        }
-    };
-
     debug!("NETD: creating SocketApi...");
     let socket_api = SocketApi::new();
-    debug!("NETD: scanning NIC units...");
-    let _known_nic_units = scan_registered_nic_units();
-    debug!("NETD: NIC units scanned.");
 
-    // Do not mount /net until the service can actively process RPCs.
-    // Mounting before startup init finishes can let early clients issue
-    // lookups while this thread is still preparing state, which may trigger
-    // provider timeout taint.
     let mount_point = cfg.mount_point.clone();
     let mut net_provider = loop {
         match NetVfsProvider::new(mac, mtu, initial_link_up) {
@@ -650,13 +630,6 @@ fn main(arg: usize) -> ! {
         }
     };
 
-    net_provider.set_ip_config(
-        dhcp_config.ip,
-        dhcp_config.prefix_len,
-        dhcp_config.gateway,
-        dhcp_config.dns,
-    );
-
     debug!("NETD: bridging request port to fd...");
     let req_fd = loop {
         match stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()) {
@@ -667,7 +640,7 @@ fn main(arg: usize) -> ! {
             }
         }
     };
-    debug!("NETD: request fd={}", req_fd);
+
     debug!("NETD: setting up /dev/net watch...");
     let nic_watch_fd =
         match vfs_watch_path("/dev/net", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
@@ -677,7 +650,6 @@ fn main(arg: usize) -> ! {
                 None
             }
         };
-    debug!("NETD: watch fd={:?}", nic_watch_fd);
 
     // Now mount the provider just before entering the service loop
     loop {
@@ -690,43 +662,33 @@ fn main(arg: usize) -> ! {
         }
     }
 
-    let ready_announced = false;
-    debug!("NETD: entering two-thread service loop");
-
     // ── Build NetworkPollState ───────────────────────────────────────────────
     // Leak the socket storage so `SocketSet<'static>` can live in the Arc.
-    // The allocation is intentionally permanent for the lifetime of the process.
     let socket_storage_slice: &'static mut [SocketStorage<'static>] = {
         let mut v: Vec<SocketStorage<'static>> = Vec::with_capacity(256);
-        for i in 0..256usize {
-            if i % 64 == 0 {
-                debug!("NETD: pushing socket storage {}...", i);
-            }
+        for _ in 0..256usize {
             v.push(SocketStorage::EMPTY);
         }
         Box::leak(v.into_boxed_slice())
     };
-    debug!("NETD: creating SocketSet (static storage)...");
     let socket_set: SocketSet<'static> = SocketSet::new(socket_storage_slice);
     let last_link_state = device.link_up();
-    debug!("NETD: building NetworkPollState...");
     let net_state = Arc::new(Mutex::new(NetworkPollState {
         iface,
         device,
         socket_set,
         socket_api,
         last_link_state,
-        ip_configured: net_provider.ip_config.is_some(),
-        ready_announced,
+        ip_configured: false,
+        ready_announced: false,
         req_write: net_provider.req_write,
         mount_point: mount_point.clone(),
     }));
 
-    // ── Create command / event queues ────────────────────────────────────────
     let (cmd_queue, event_queue) = new_queues();
 
-    // ── Spawn the RPC/dispatch thread ────────────────────────────────────────
-    debug!("NETD: spawning RPC dispatch thread...");
+    // ── Spawn the RPC/dispatch thread early ──────────────────────────────────
+    debug!("NETD: spawning RPC dispatch thread (pre-DHCP)...");
     {
         let net_state_rpc = net_state.clone();
         let cmd_q = cmd_queue.clone();
@@ -734,6 +696,40 @@ fn main(arg: usize) -> ! {
         let _ = stem::thread::spawn_task_detached(move || {
             run_rpc_thread(net_provider, net_state_rpc, cmd_q, evt_q, req_fd, nic_watch_fd);
         });
+    }
+
+    if cfg.oneshot {
+        debug!("NETD: oneshot mode enabled — DHCP probe will exit after completion");
+        let mut state = net_state.lock();
+        match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
+            Ok(cfg) => {
+                debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
+                exit(0);
+            }
+            Err(e) => {
+                warn!("NETD: DHCP failed in oneshot mode: {:?}", e);
+                exit(1);
+            }
+        }
+    }
+
+    debug!("NETD: Running DHCP...");
+    let dhcp_config = loop {
+        let mut state = net_state.lock();
+        match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
+            Ok(cfg) => break cfg,
+            Err(e) => {
+                warn!("NETD: DHCP failed: {:?}; retrying in 5s", e);
+                drop(state);
+                stem::time::sleep_ms(5000);
+            }
+        }
+    };
+
+    debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", dhcp_config.ip, dhcp_config.gateway, dhcp_config.dns);
+    {
+        let mut state = net_state.lock();
+        state.ip_configured = true;
     }
 
     // ── Main thread becomes the network poll thread ──────────────────────────

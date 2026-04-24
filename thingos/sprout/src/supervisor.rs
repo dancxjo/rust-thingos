@@ -9,6 +9,7 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 // Modules are now declared in main.rs
 use alloc::sync::Arc;
@@ -41,6 +42,10 @@ const SUPERVISOR_TICK_MS: u64 = 100;
 /// match Cambium and to comfortably hold a `THINGOS_JOB_EXIT` notification
 /// (10 bytes) plus future control messages.
 const INBOX_MAX_PAYLOAD: usize = 256;
+const PROBE_IDLE: u8 = 0;
+const PROBE_IN_FLIGHT: u8 = 1;
+const PROBE_SUCCESS: u8 = 2;
+const PROBE_FAILURE: u8 = 3;
 
 pub struct Config {
     pub force_bootfb: bool,
@@ -68,10 +73,13 @@ pub struct Supervisor {
     supervisor_port_write: Option<u32>,
     /// Wait token for the supervisor port.
     supervisor_token: Option<stem::wait_set::WaitToken>,
+    /// Atomic status of the background netd liveness probe.
+    netd_probe_status: Arc<AtomicU8>,
 }
 
 impl Supervisor {
     pub fn new(registry_ptr: usize) -> Self {
+        info!("SPROUT: Initializing Supervisor...");
         let config = Self::parse_cmdline();
         let (write, read) = stem::syscall::port_create(4096).unwrap_or((0, 0));
         Self {
@@ -90,6 +98,7 @@ impl Supervisor {
             supervisor_port_read: if read != 0 { Some(read) } else { None },
             supervisor_port_write: if write != 0 { Some(write) } else { None },
             supervisor_token: None,
+            netd_probe_status: Arc::new(AtomicU8::new(PROBE_IDLE)),
         }
     }
 
@@ -137,7 +146,7 @@ impl Supervisor {
     }
 
     pub fn run_forever(&mut self) -> ! {
-        stem::debug!("SPROUT: Supervisor session started (MINIMAL MODE)");
+        info!("SPROUT: Supervisor session started (MINIMAL MODE)");
 
         // Ensure canonical device directories exist.
         let _ = stem::syscall::vfs::vfs_mkdir("/dev/display");
@@ -305,17 +314,18 @@ impl Supervisor {
         };
 
         let mut data_buf = [0u8; 1024];
-        let mut fds_buf = [0u32; 8];
-        match stem::syscall::socket::recvmsg(fd, &mut data_buf, &mut fds_buf) {
-            Ok((n, num_fds)) => {
-                if let Some((header, payload)) = display_driver_protocol::parse_message(&data_buf[..n]) {
+        let mut handles = [0u32; 4];
+        match stem::syscall::socket::recvmsg(fd, &mut data_buf, &mut handles) {
+            Ok((n, h_count)) => {
+                let payload = &data_buf[..n];
+                let handle = if h_count > 0 { Some(handles[0]) } else { None };
+                if let Some((header, payload)) = display_driver_protocol::parse_message(payload) {
                     match header.msg_type {
                         supervisor_protocol::MSG_BIND_READY => {
                             if let Some(bind_payload) =
                                 supervisor_protocol::decode_bind_ready_le(payload)
                             {
-                                let attached_handle = if num_fds > 0 { Some(fds_buf[0]) } else { None };
-                                self.handle_bind_ready(bind_payload, attached_handle);
+                                self.handle_bind_ready(bind_payload, handle);
                             }
                         }
                         _ => {
@@ -522,6 +532,7 @@ impl Supervisor {
             self.netd_verified = false;
             self.netd_probe_failures = 0;
             self.netd_last_probe_ns = 0;
+            self.netd_probe_status.store(PROBE_IDLE, Ordering::SeqCst);
             if let Some(pid) = current_pid {
                 info!("SPROUT: Tracking netd activation (PID={})", pid);
             }
@@ -535,37 +546,26 @@ impl Supervisor {
             return;
         }
 
-        if !path_exists(NETD_READY_PATH) {
-            return;
-        }
-
-        let now_ns = stem::monotonic_ns();
-        if now_ns.saturating_sub(self.netd_last_probe_ns) < NETD_PROBE_INTERVAL_NS {
-            return;
-        }
-        self.netd_last_probe_ns = now_ns;
-
-        match stem::syscall::vfs::vfs_open(
-            NETD_LIVENESS_PATH,
-            abi::syscall::vfs_flags::O_RDONLY | abi::syscall::vfs_flags::O_NONBLOCK,
-        ) {
-            Ok(fd) => {
-                let _ = stem::syscall::vfs::vfs_close(fd);
+        // Check background probe results
+        match self.netd_probe_status.load(Ordering::SeqCst) {
+            PROBE_SUCCESS => {
                 self.netd_verified = true;
+                self.netd_probe_failures = 0;
+                self.netd_probe_status.store(PROBE_IDLE, Ordering::SeqCst);
                 info!(
                     "SPROUT: netd activation probe succeeded for PID {} ({} is responsive)",
-                    netd_pid,
-                    NETD_LIVENESS_PATH
+                    netd_pid, NETD_LIVENESS_PATH
                 );
+                return;
             }
-            Err(e) => {
+            PROBE_FAILURE => {
                 self.netd_probe_failures = self.netd_probe_failures.saturating_add(1);
+                self.netd_probe_status.store(PROBE_IDLE, Ordering::SeqCst);
                 warn!(
-                    "SPROUT: netd activation probe failed for PID {} (attempt {}/{}): {:?}",
+                    "SPROUT: netd activation probe failed for PID {} (attempt {}/{}): VFS TIMEOUT/ERROR",
                     netd_pid,
                     self.netd_probe_failures,
-                    NETD_MAX_PROBE_FAILURES,
-                    e
+                    NETD_MAX_PROBE_FAILURES
                 );
                 if self.netd_probe_failures >= NETD_MAX_PROBE_FAILURES {
                     warn!(
@@ -576,8 +576,40 @@ impl Supervisor {
                     self.netd_probe_failures = 0;
                     self.netd_last_probe_ns = 0;
                 }
+                return;
             }
+            PROBE_IN_FLIGHT => return,
+            PROBE_IDLE => {}
+            _ => {}
         }
+
+        if !path_exists(NETD_READY_PATH) {
+            return;
+        }
+
+        let now_ns = stem::monotonic_ns();
+        if now_ns.saturating_sub(self.netd_last_probe_ns) < NETD_PROBE_INTERVAL_NS {
+            return;
+        }
+        self.netd_last_probe_ns = now_ns;
+
+        // Launch background probe
+        self.netd_probe_status.store(PROBE_IN_FLIGHT, Ordering::SeqCst);
+        let status = self.netd_probe_status.clone();
+        let _ = stem::thread::spawn_task_detached(move || {
+            match stem::syscall::vfs::vfs_open(
+                NETD_LIVENESS_PATH,
+                abi::syscall::vfs_flags::O_RDONLY | abi::syscall::vfs_flags::O_NONBLOCK,
+            ) {
+                Ok(fd) => {
+                    let _ = stem::syscall::vfs::vfs_close(fd);
+                    status.store(PROBE_SUCCESS, Ordering::SeqCst);
+                }
+                Err(_) => {
+                    status.store(PROBE_FAILURE, Ordering::SeqCst);
+                }
+            }
+        });
     }
 
     #[allow(dead_code)]
