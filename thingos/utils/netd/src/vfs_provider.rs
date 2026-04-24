@@ -82,7 +82,7 @@ use crate::socket_api::SocketApi;
 
 // ── errno shorthands ─────────────────────────────────────────────────────────
 
-const E_OK: u8 = 0;
+pub const E_OK: u8 = 0;
 const E_NOENT: u8 = 2;
 const E_IO: u8 = 5;
 const E_INVAL: u8 = 22;
@@ -511,15 +511,15 @@ impl NetVfsProvider {
             VfsRpcOp::Stat => self.op_stat(resp_port, req_id, payload, socket_api),
             VfsRpcOp::Close => self.op_close(resp_port, req_id, payload, socket_set, socket_api),
             VfsRpcOp::Poll => self.op_poll(resp_port, req_id, payload, socket_set, socket_api),
-            VfsRpcOp::DeviceCall => send_err(resp_port, req_id, E_NOTSUP),
-            VfsRpcOp::Rename => send_err(resp_port, req_id, E_NOTSUP),
-            VfsRpcOp::SubscribeReady => send_resp(resp_port, req_id, &[E_OK]),
-            VfsRpcOp::UnsubscribeReady => send_resp(resp_port, req_id, &[E_OK]),
+            VfsRpcOp::DeviceCall => send_err(resp_port, req_id, E_NOTSUP as u8),
+            VfsRpcOp::Rename => send_err(resp_port, req_id, E_NOTSUP as u8),
+            VfsRpcOp::SubscribeReady => send_resp(resp_port, req_id, &[E_OK as u8]),
+            VfsRpcOp::UnsubscribeReady => send_resp(resp_port, req_id, &[E_OK as u8]),
             VfsRpcOp::AttrGet
             | VfsRpcOp::AttrSet
             | VfsRpcOp::AttrRemove
             | VfsRpcOp::AttrList
-            | VfsRpcOp::Readlink => send_err(resp_port, req_id, E_NOTSUP),
+            | VfsRpcOp::Readlink => send_err(resp_port, req_id, E_NOTSUP as u8),
         }
     }
 
@@ -600,7 +600,7 @@ impl NetVfsProvider {
             ReadResult::EOF => send_data(resp_port, req_id, &[]),
             ReadResult::Again => send_err(resp_port, req_id, 11), // EAGAIN
             ReadResult::Error => send_err(resp_port, req_id, E_IO),
-            ReadResult::NotSupported => send_err(resp_port, req_id, E_NOTSUP),
+            ReadResult::NotSupported => send_err(resp_port, req_id, E_NOTSUP as u8),
         }
     }
 
@@ -635,7 +635,7 @@ impl NetVfsProvider {
             WriteResult::Ok(n) => send_write_ok(resp_port, req_id, n as u32),
             WriteResult::Error => send_err(resp_port, req_id, E_IO),
             WriteResult::ReadOnly => send_err(resp_port, req_id, E_ROFS),
-            WriteResult::NotSupported => send_err(resp_port, req_id, E_NOTSUP),
+            WriteResult::NotSupported => send_err(resp_port, req_id, E_NOTSUP as u8),
             WriteResult::Deferred => {
                 // If deferred, we need to update the last deferred connect to have the req_id
                 if let Some(dc) = self.deferred_connects.last_mut() {
@@ -701,7 +701,7 @@ impl NetVfsProvider {
         }
 
         let mut resp = [0u8; 21]; // 1 + 4 + 8 + 8
-        resp[0] = E_OK;
+        resp[0] = E_OK as u8;
         resp[1..5].copy_from_slice(&mode.to_le_bytes());
         resp[5..13].copy_from_slice(&(size as u64).to_le_bytes());
         resp[13..21].copy_from_slice(&handle.to_le_bytes());
@@ -745,7 +745,7 @@ impl NetVfsProvider {
             }
         }
 
-        send_resp(resp_port, req_id, &[E_OK]);
+        send_resp(resp_port, req_id, &[E_OK as u8]);
     }
 
     // ── Poll ─────────────────────────────────────────────────────────────────
@@ -770,7 +770,7 @@ impl NetVfsProvider {
         trace!("NETD: op_poll handle={} revents=0x{:04x}", handle, revents);
 
         let mut resp = [0u8; 5];
-        resp[0] = E_OK;
+        resp[0] = E_OK as u8;
         resp[1..5].copy_from_slice(&revents.to_le_bytes());
         send_resp(resp_port, req_id, &resp);
     }
@@ -1949,7 +1949,7 @@ enum WriteResult {
 
 // ── Wire helpers ─────────────────────────────────────────────────────────────
 
-fn send_resp(port: PortHandle, req_id: u16, data: &[u8]) {
+pub fn send_resp(port: PortHandle, req_id: u16, data: &[u8]) {
     let mut resp = Vec::with_capacity(2 + data.len());
     resp.extend_from_slice(&req_id.to_le_bytes());
     resp.extend_from_slice(data);
