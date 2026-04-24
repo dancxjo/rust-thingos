@@ -459,6 +459,9 @@ pub struct Thing {
 /// Sprout supervisor inbox once the driver has finished initialising.
 ///
 /// Replaces the legacy per-task `drv_resp_write` port handshake.
+///
+/// The constant value is a randomly generated UUID v4:
+/// `4f72a31e-b5c2-47d8-916e-3f0ad4882ce5`.
 pub const KIND_ID_THINGOS_DRIVER_READY: [u8; 16] = [
     0x4f, 0x72, 0xa3, 0x1e, 0xb5, 0xc2, 0x47, 0xd8, 0x91, 0x6e, 0x3f, 0x0a, 0xd4, 0x88, 0x2c, 0xe5,
 ];
@@ -496,6 +499,11 @@ impl DriverReadyV1 {
     ///
     /// Returns `None` if `bytes` is too short or the `version` field is not
     /// equal to `1`.
+    ///
+    /// Note: `flags` and `reserved` are not validated — they must be `0` by
+    /// the V1 spec but Sprout accepts non-zero values to allow future minor
+    /// extensions without dropping messages.  Callers should treat the sender
+    /// (Cambium) as trusted since messages arrive via the kernel inbox.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < core::mem::size_of::<Self>() {
             return None;

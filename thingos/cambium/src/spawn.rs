@@ -276,6 +276,14 @@ impl ManagedDriver {
 
 /// Send a `DRIVER_READY` inbox message to the Sprout supervisor (our parent
 /// process) so it can mark the corresponding `ManagedTask` as ready.
+///
+/// # Assumption
+///
+/// Cambium is always spawned directly by Sprout (PID 1 / the supervisor) and
+/// is never reparented.  `getppid()` therefore reliably returns Sprout's PID.
+/// If Cambium were ever launched from a different parent, this would send the
+/// notification to the wrong process — a log warning would indicate the
+/// failure.
 fn send_driver_ready(driver_pid: u64) {
     let sprout_pid = stem::syscall::getppid();
     if sprout_pid == 0 {
