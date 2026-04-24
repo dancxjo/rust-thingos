@@ -2,13 +2,13 @@
 //!
 //! Discovers block devices in the system graph, probes them for ISO9660
 //! filesystems, and mounts the first one found as a userland VFS provider at
-//! `/mnt/iso` using the thingos Act V VFS provider mechanism.
+//! `/media/cdrom` using the thingos Act V VFS provider mechanism.
 //!
 //! ## How it works
 //!
 //! 1. **Discovery** — scans the graph for DEV_STORAGE_BLOCK_DEVICE nodes.
 //! 2. **Probing** — reads each block device and looks for a valid ISO9660 PVD.
-//! 3. **Mounting** — calls `SYS_FS_MOUNT(provider_port, "/mnt/iso")` so the
+//! 3. **Mounting** — calls `SYS_FS_MOUNT(provider_port, "/media/cdrom")` so the
 //!    kernel routes VFS operations here.
 //! 4. **Service loop** — uses [`ipc_helpers::provider::ProviderLoop`] to read
 //!    requests, dispatch them to the [`IsoFs`] library, and send typed
@@ -49,7 +49,7 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_umount}
 use stem::syscall::{PortHandle, argv_get, port_create, vfs_mount};
 use stem::{info, warn};
 
-const DEFAULT_MOUNT_POINT: &str = "/mnt/iso";
+const DEFAULT_MOUNT_POINT: &str = "/media/cdrom";
 const SEED_NAME: &[u8] = b"iso9660d";
 const HOOK_MOUNT_V1: &[u8] = b"_start";
 const HOOK_UNMOUNT_V1: &[u8] = b"thingos_vfs_unmount_v1";

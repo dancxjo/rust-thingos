@@ -459,7 +459,7 @@ pub fn build_iso_with_config(
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
     sh.write_file(
         iso_root.join("etc/fstab"),
-        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /mnt/iso iso9660 defaults 0 0\nnone /hosts mdns defaults 0 0\n",
+        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /media/cdrom iso9660 defaults 0 0\nnone /hosts mdns defaults 0 0\n",
     )?;
     sh.write_file(iso_root.join("etc/hostname"), "thingos\n")?;
 
