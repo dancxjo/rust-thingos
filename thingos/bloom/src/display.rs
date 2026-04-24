@@ -78,11 +78,20 @@ impl DisplayBackend {
         height: u32,
         stride: u32,
         format: PixelFormat,
-        modifier: u64,
+        offset: u64,
     ) -> Option<u32> {
-        let handle =
-            BufferHandle { handle: thing, offset: 0, width, height, stride, format, modifier };
-        device_call::<BufferHandle, ()>(self.fd, DISPLAY_OP_IMPORT_BUFFER, &handle, None)
+        let bh = BufferHandle { handle: thing, width, height, stride, format, offset };
+        let mut id = 0u32;
+        match device_call(self.fd, DISPLAY_OP_IMPORT_BUFFER, &bh, Some(&mut id)) {
+            Ok(_) => {
+                stem::info!("bloom: imported buffer {}x{} as ID={}", width, height, id);
+                Some(id)
+            }
+            Err(e) => {
+                stem::error!("bloom: failed to import buffer: {:?}", e);
+                None
+            }
+        }
     }
 
     pub fn release_buffer(&self, buffer_id: u32) {
@@ -122,34 +131,45 @@ impl DisplayBackend {
             alpha,
             _reserved: [0; 7],
         };
-        PresentResult { success: commit_display_planes(self.fd, &[plane], CommitFlags::VSYNC) }
-    }
-}
-
-fn commit_display_planes(fd: u32, planes: &[PlaneCommit], flags: CommitFlags) -> bool {
-    let req = CommitRequest { commit_count: planes.len() as u32, flags, commits_ptr: 0 };
-
-    let req_size = core::mem::size_of::<CommitRequest>();
-    let planes_size = core::mem::size_of_val(planes);
-    let mut payload = Vec::with_capacity(req_size + planes_size);
-    let req_bytes = unsafe { core::slice::from_raw_parts(&req as *const _ as *const u8, req_size) };
-    payload.extend_from_slice(req_bytes);
-    if planes_size > 0 {
-        let plane_bytes =
-            unsafe { core::slice::from_raw_parts(planes.as_ptr() as *const u8, planes_size) };
-        payload.extend_from_slice(plane_bytes);
+        PresentResult { success: self.commit_display_planes(&[plane]) }
     }
 
-    let call = DeviceCall {
-        kind: DeviceKind::Display,
-        op: DISPLAY_OP_COMMIT,
-        in_ptr: payload.as_ptr() as u64,
-        in_len: payload.len() as u32,
-        out_ptr: 0,
-        out_len: 0,
-    };
+    pub fn commit_display_planes(&self, planes: &[PlaneCommit]) -> bool {
+        let req = CommitRequest { commit_count: planes.len() as u32, flags: CommitFlags::VSYNC, commits_ptr: 0 };
+        let header_size = core::mem::size_of::<CommitRequest>();
+        let plane_size = core::mem::size_of::<PlaneCommit>();
+        let mut buf = alloc::vec![0u8; header_size + planes.len() * plane_size];
 
-    vfs_device_call_raw(fd, &call).is_ok()
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &req as *const _ as *const u8,
+                buf.as_mut_ptr(),
+                header_size,
+            );
+            core::ptr::copy_nonoverlapping(
+                planes.as_ptr() as *const u8,
+                buf.as_mut_ptr().add(header_size),
+                planes.len() * plane_size,
+            );
+        }
+
+        let call = abi::device::DeviceCall {
+            kind: abi::device::DeviceKind::Display,
+            op: DISPLAY_OP_COMMIT,
+            in_ptr: buf.as_ptr() as u64,
+            in_len: buf.len() as u32,
+            out_ptr: 0,
+            out_len: 0,
+        };
+
+        match unsafe { vfs_device_call_raw(self.fd, &call) } {
+            Ok(_) => true,
+            Err(e) => {
+                stem::error!("bloom: DISPLAY_OP_COMMIT failed: {:?}", e);
+                false
+            }
+        }
+    }
 }
 
 fn get_display_info(fd: u32) -> Option<DisplayInfo> {

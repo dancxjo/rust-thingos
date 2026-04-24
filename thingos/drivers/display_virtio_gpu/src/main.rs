@@ -310,6 +310,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
     match call.op {
         DISPLAY_OP_GET_INFO => {
+            stem::info!("DISP: DISPLAY_OP_GET_INFO requested");
             let info = DisplayInfo {
                 card_id: 0,
                 preferred_mode: DisplayMode {
@@ -322,6 +323,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 supported_formats: 1 << 1,
                 caps: DisplayCaps::ATOMIC,
             };
+            stem::info!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
                 core::slice::from_raw_parts(
                     &info as *const _ as *const u8,
@@ -336,6 +338,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
             let bh: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+            stem::info!("DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd={}, size={}x{}", bh.handle, bh.width, bh.height);
             let size = (bh.height as usize).saturating_mul(bh.stride as usize);
             let req = abi::vm::VmMapReq {
                 addr_hint: 0,
@@ -348,6 +351,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 Ok(map_resp) => {
                     let id = BufferId(driver.next_import_id);
                     driver.next_import_id = driver.next_import_id.saturating_add(1);
+                    stem::info!("DISP: Imported buffer as ID={}", id.0);
                     driver.imported_buffers.insert(
                         id,
                         ImportedBuffer {
@@ -360,7 +364,10 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     );
                     ProviderResponse::ok_device_call(id.0, &[])
                 }
-                Err(_) => ProviderResponse::err(Errno::ENOMEM),
+                Err(e) => {
+                    stem::error!("DISP: Failed to vm_map imported buffer: {:?}", e);
+                    ProviderResponse::err(Errno::ENOMEM)
+                }
             }
         }
         DISPLAY_OP_RELEASE_BUFFER => {
@@ -385,6 +392,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
             let plane_size = core::mem::size_of::<PlaneCommit>();
             let plane_count = req.commit_count as usize;
+            stem::info!("DISP: DISPLAY_OP_COMMIT requested: planes={}", plane_count);
             let needed = header_size.saturating_add(plane_count.saturating_mul(plane_size));
             if plane_count > 0 && call_payload.len() < needed {
                 return ProviderResponse::err(Errno::EINVAL);
@@ -490,14 +498,21 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 // Transfer blitted pixels to the GPU and flush to the display.
                 if let Some(dmg) = damage {
                     let res_id = driver.frame_pool[idx].res_id;
-                    let _ = driver.gpu.transfer_to_host(res_id, dmg);
-                    let _ = driver.gpu.flush_resource(res_id, dmg);
-                    let _ =
-                        driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height);
+                    if let Err(e) = driver.gpu.transfer_to_host(res_id, dmg) {
+                        stem::error!("DISP: transfer_to_host failed: {}", e);
+                    }
+                    if let Err(e) = driver.gpu.flush_resource(res_id, dmg) {
+                        stem::error!("DISP: flush_resource failed: {}", e);
+                    }
+                    if let Err(e) =
+                        driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height) {
+                        stem::error!("DISP: set_scanout failed: {}", e);
+                    }
                     driver.present_seq += 1;
                     driver.frame_pool[idx].last_present_seq = driver.present_seq;
                     driver.last_presented_idx = Some(idx);
                     driver.current_res_id = res_id;
+                    stem::info!("DISP: COMMIT complete (seq={})", driver.present_seq);
                     driver.current_fd = Some(driver.frame_pool[idx].fd);
                 }
             }

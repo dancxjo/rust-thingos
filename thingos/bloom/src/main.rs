@@ -41,9 +41,10 @@ fn main(_arg: usize) -> ! {
 
     // ── Connect to the display ────────────────────────────────────────────────
     let mut display_opt = None;
-    for _ in 0..50 {
+    for i in 0..50 {
         display_opt = DisplayBackend::connect("/dev/display/card0");
         if display_opt.is_some() {
+            stem::info!("bloom: connected to /dev/display/card0 on try {}", i);
             break;
         }
         stem::sleep_ms(100);
@@ -86,10 +87,13 @@ fn main(_arg: usize) -> ! {
 
     let mut visuals = CompositorVisuals::new();
     // Synchronous load at startup — no render loop running yet so blocking is fine.
+    stem::info!("bloom: preparing background {}", WP_PATH);
     visuals.prepare_background(&display, WP_PATH);
     if visuals.fallback_buffer_id().is_none() {
+        stem::info!("bloom: background failed, trying fallback");
         visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
     }
+    stem::info!("bloom: background buffer_id={:?}", visuals.fallback_buffer_id());
 
     // ── Initial scene / damage / input state ─────────────────────────────────
     let scene = Scene::new();

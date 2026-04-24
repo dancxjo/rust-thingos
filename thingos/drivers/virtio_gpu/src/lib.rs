@@ -766,6 +766,9 @@ impl VirtioGpu {
 
     /// Send a command and wait for response
     fn send_cmd(&mut self, cmd: &[u8], resp_size: usize) -> Result<(), &'static str> {
+        let cmd_type = unsafe { *(cmd.as_ptr() as *const u32) };
+        // stem::info!("VirtioGpu: sending cmd type=0x{:x}", cmd_type);
+
         // Copy command to DMA buffer
         let cmd_ptr = self.cmd_buf as *mut u8;
         unsafe {
@@ -811,18 +814,22 @@ impl VirtioGpu {
                 if resp_type >= VIRTIO_GPU_RESP_OK_NODATA {
                     return Ok(());
                 } else {
-                    stem::error!("VirtioGpu: Command failed with resp_type={}", resp_type);
+                    stem::error!(
+                        "VirtioGpu: Command 0x{:x} failed with resp_type=0x{:x}",
+                        cmd_type,
+                        resp_type
+                    );
                     return Err("Command failed");
                 }
             }
-            if i % 100 == 0 {
+            if i % 1000 == 0 {
                 stem::yield_now();
             } else {
                 core::hint::spin_loop();
             }
         }
 
-        stem::error!("VirtioGpu: Command timeout!");
+        stem::error!("VirtioGpu: Command 0x{:x} timeout!", cmd_type);
         Err("Command timeout")
     }
 
