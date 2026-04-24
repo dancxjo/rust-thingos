@@ -137,6 +137,7 @@ members = [
   "thingos/utils/placed",
   "thingos/utils/poll_mux",
   "thingos/utils/proc_smoke",
+  "thingos/utils/printf",
   "thingos/utils/ps",
   "thingos/utils/pwd",
   "thingos/utils/reboot",
@@ -194,7 +195,7 @@ exclude = [
 panic = "abort"
 
 [profile.dev]
-panic = "unwind"
+panic = "abort"
 
 [profile.bench]
 debug = true

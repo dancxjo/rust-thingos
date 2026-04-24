@@ -5228,6 +5228,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "printf"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+]
+
+[[package]]
 name = "proc-macro-error-attr2"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

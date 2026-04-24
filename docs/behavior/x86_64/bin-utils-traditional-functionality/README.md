@@ -1,12 +1,12 @@
 # Feature: Bin Utils Traditional Functionality
 
-> Last run: 2026-04-24 11:14:27
+> Last run: 2026-04-24 11:32:56
 
 ## Scenarios
 
 | Scenario | Steps | Status | Link |
 |----------|-------|--------|------|
-| echo, pipe, and wc work together | 3/4 | ❌ | [View Details](echo-pipe-and-wc-work-together/README.md) |
+| echo, pipe, and wc work together | 4/4 | ✅ | [View Details](echo-pipe-and-wc-work-together/README.md) |
 | grep filters piped input correctly | 4/4 | ✅ | [View Details](grep-filters-piped-input-correctly/README.md) |
 | 3-command pipeline with cat as middle filter | 3/4 | ❌ | [View Details](3-command-pipeline-with-cat-as-middle-filter/README.md) |
 | POSIX behavior - grep -v for inverted match (expected to fail if not implemented) | 5/6 | ❌ | [View Details](posix-behavior-grep-v-for-inverted-match-expected-to-fail-if-not-implemented/README.md) |

@@ -702,7 +702,7 @@ pub fn strip_ansi(s: &str) -> String {
     use std::sync::OnceLock;
     static ANSI_RE: OnceLock<Regex> = OnceLock::new();
     let re = ANSI_RE.get_or_init(|| {
-        Regex::new(r"[\u001b\u009b][\[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]")
+        Regex::new(r"[\u001b\u009b][\[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)*[0-9A-Za-z=><~]")
             .expect("Invalid ANSI regex")
     });
     re.replace_all(s, "").replace('\r', "")

@@ -2025,7 +2025,16 @@ async fn command_output_strictly_be(world: &mut ThingOsWorld, expected: String) 
         
         for line in clean_log.lines() {
             let trimmed = line.trim();
-            if !trimmed.starts_with('[') && !trimmed.contains(">") && trimmed == expected.trim() {
+            // A line is a log line if it starts with '[' or contains '] [INFO ' etc.
+            // Be broad to avoid false positives in command output.
+            let is_log = trimmed.starts_with('[') 
+                || trimmed.contains("] [INFO ]") 
+                || trimmed.contains("] [WARN ]") 
+                || trimmed.contains("] [ERROR]") 
+                || trimmed.contains("] [DEBUG]") 
+                || trimmed.contains("] [TRACE]");
+            
+            if !is_log && !trimmed.contains(">") && trimmed == expected.trim() {
                 found = true;
                 break;
             }
@@ -2062,7 +2071,14 @@ async fn command_output_not_contains(world: &mut ThingOsWorld, unexpected: Strin
     for line in clean_log.lines() {
         let trimmed = line.trim();
         // Skip kernel/service log lines and prompt lines
-        if trimmed.starts_with('[') || trimmed.contains(">") {
+        let is_log = trimmed.starts_with('[') 
+            || trimmed.contains("] [INFO ]") 
+            || trimmed.contains("] [WARN ]") 
+            || trimmed.contains("] [ERROR]") 
+            || trimmed.contains("] [DEBUG]") 
+            || trimmed.contains("] [TRACE]");
+
+        if is_log || trimmed.contains(">") {
             continue;
         }
         // Skip the echoed command line itself so that patterns that appear in
