@@ -110,7 +110,9 @@ fn main(_arg: usize) -> ! {
     // ── Create bristle event port pair ───────────────────────────────────────
     // bloom creates its own port pair for receiving bristle HID events and
     // registers the write end with bristle via an inbox message.
-    let (bristle_evt_write, bristle_evt_read) = match port_create(65536) {
+    // 4096-byte capacity matches other device ports in the system; each
+    // BristleEvent is at most ~32 bytes so this holds ≥128 queued events.
+    let (bristle_evt_write, bristle_evt_read) = match port_create(4096) {
         Ok(pair) => pair,
         Err(e) => {
             warn!("bloom: failed to create bristle event port: {:?}", e);
