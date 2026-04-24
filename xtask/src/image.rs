@@ -61,6 +61,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "mkdir", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "mount", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "echo", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "printf", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "grep", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "pwd", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "touch", is_init: true, boot_module: true, features: vec![] },
