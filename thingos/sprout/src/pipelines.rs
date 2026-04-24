@@ -437,14 +437,50 @@ pub fn setup_terminal(
     }
 }
 
+/// Input broker handle set.
+///
+/// Both fields are kept for API compatibility but are now always zero.
+/// Bloom and echo register event sinks with bristle via inbox messages
+/// (see `abi::hid::KIND_BRISTLE_REGISTER_SINK`).
 #[derive(Clone, Copy, Debug)]
 pub struct InputHandles {
+    /// Unused — bloom registers with bristle via inbox.
     pub bloom_evt_read: PortHandle,
+    /// Unused — echo registers with bristle via inbox.
     pub evt_input_echo_read: PortHandle,
 }
 
-pub fn setup_input_broker(_shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHandles {
-    info!("SPROUT: Input driver startup is disabled (network-only mode)");
+/// Spawn bristle (the unified HID broker) and return an `InputHandles`.
+///
+/// Bristle opens a `ServiceLoop`-backed inbox and publishes device port write
+/// handles to `/run/bristle/kbd_in` and `/run/bristle/mouse_in` so PS/2
+/// drivers can write events.  Bloom and echo register as event sinks by
+/// sending inbox messages once bristle is running.
+pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHandles {
+    match stem::syscall::spawn_process("/bin/bristle", 0) {
+        Ok(pid) => {
+            info!("SPROUT: Spawned bristle (PID={})", pid);
+            let _ = stem::thread::set_priority(pid, 3);
+            let mut tasks = shared_tasks.lock();
+            tasks.push(ManagedTask {
+                name: "bristle".to_string(),
+                kind: TaskKind::Service("svc.bristle".to_string()),
+                module_path: "/bin/bristle".to_string(),
+                pid: Some(pid),
+                restarts: 0,
+                spawn_arg: 0,
+                bind_instance_id: 0,
+                drv_req_write: 0,
+                drv_resp_read: 0,
+                boot_req_read: 0,
+                boot_resp_write: 0,
+                resp_fd: None,
+            });
+        }
+        Err(e) => {
+            warn!("SPROUT: Failed to spawn bristle: {:?}", e);
+        }
+    }
     InputHandles { bloom_evt_read: 0, evt_input_echo_read: 0 }
 }
 

@@ -12,7 +12,7 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
-use stem::syscall::vfs::{vfs_handle_from_port, vfs_write};
+use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_open, vfs_read, vfs_write};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::{debug, error, info};
 
@@ -269,11 +269,51 @@ fn init_mouse() {
     debug!("ps2_mouse: init done");
 }
 
-#[stem::main]
-fn main(raw_write_handle: usize) -> ! {
-    let handle = raw_write_handle as u32;
+/// Path where bristle publishes the mouse port write handle.
+const BRISTLE_MOUSE_IN_PATH: &str = "/run/bristle/mouse_in";
 
-    stem::debug!("ps2_mouse: online (handle={})", handle);
+/// Read a port write handle from a bristle device-handle file.
+///
+/// The file contains the handle as a decimal ASCII string followed by `\n`.
+/// Returns `None` if the file cannot be opened or parsed.
+fn read_bristle_handle(path: &str) -> Option<u32> {
+    let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
+    let mut buf = [0u8; 32];
+    let n = vfs_read(fd, &mut buf).unwrap_or(0);
+    let _ = vfs_close(fd);
+    if n == 0 {
+        return None;
+    }
+    let s = core::str::from_utf8(&buf[..n]).ok()?.trim();
+    s.parse::<u32>().ok()
+}
+
+#[stem::main]
+fn main(_raw_arg: usize) -> ! {
+    stem::debug!("ps2_mouse: online — waiting for bristle device handle");
+
+    // Wait for bristle to publish the mouse port write handle.
+    if let Err(e) = stem::fs::wait_until_exists(BRISTLE_MOUSE_IN_PATH) {
+        stem::error!("ps2_mouse: failed waiting for {}: {:?}", BRISTLE_MOUSE_IN_PATH, e);
+        loop {
+            stem::time::sleep_ms(1000);
+        }
+    }
+
+    let handle = match read_bristle_handle(BRISTLE_MOUSE_IN_PATH) {
+        Some(h) if h != 0 => h,
+        _ => {
+            stem::error!(
+                "ps2_mouse: failed to read bristle handle from {}",
+                BRISTLE_MOUSE_IN_PATH
+            );
+            loop {
+                stem::time::sleep_ms(1000);
+            }
+        }
+    };
+
+    stem::debug!("ps2_mouse: bristle handle={}", handle);
 
     // Bridge the write port handle to a VFS file descriptor so all I/O
     // flows through the VFS-first message path rather than the legacy port API.

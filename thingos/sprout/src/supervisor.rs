@@ -21,7 +21,7 @@ use stem::time::Duration;
 use stem::{info, warn};
 
 use crate::ledger::DeviceLedger;
-use crate::pipelines::{mount_hosts_cache, setup_serial_shell};
+use crate::pipelines::{mount_hosts_cache, setup_input_broker, setup_serial_shell};
 use crate::task::{ManagedTask, TaskKind};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
@@ -54,6 +54,10 @@ pub struct Supervisor {
     netd_verified: bool,
     netd_probe_failures: u32,
     netd_last_probe_ns: u64,
+    /// Whether bristle has been spawned (guarded so we only launch once).
+    bristle_spawned: bool,
+    /// Whether bloom has been spawned (guarded so we only launch once).
+    bloom_spawned: bool,
 }
 
 impl Supervisor {
@@ -69,6 +73,8 @@ impl Supervisor {
             netd_verified: false,
             netd_probe_failures: 0,
             netd_last_probe_ns: 0,
+            bristle_spawned: false,
+            bloom_spawned: false,
         }
     }
 
@@ -240,6 +246,10 @@ impl Supervisor {
         self.spawn_netd_if_ready();
         stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
         self.verify_netd_liveness();
+        stem::trace!("SPROUT: Loop iteration: spawn_bristle_if_needed");
+        self.spawn_bristle_if_needed();
+        stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
+        self.spawn_bloom_if_ready();
         stem::trace!("SPROUT: Loop iteration: run_health_vine");
         run_health_vine(&self.tasks);
         stem::trace!("SPROUT: Loop iteration: tick complete");
@@ -384,6 +394,55 @@ impl Supervisor {
     #[allow(dead_code)]
     pub fn monitor(&mut self) {
         run_health_vine(&self.tasks);
+    }
+
+    /// Spawn bristle (HID broker) the first time we tick after boot.
+    ///
+    /// Bristle opens a ServiceLoop inbox and publishes device handles to VFS
+    /// so PS/2 drivers and bloom can find it.
+    fn spawn_bristle_if_needed(&mut self) {
+        if self.bristle_spawned {
+            return;
+        }
+        setup_input_broker(self.tasks.clone());
+        self.bristle_spawned = true;
+    }
+
+    /// Spawn bloom once a display device is available.
+    ///
+    /// Bloom self-registers with bristle after startup via inbox message.
+    fn spawn_bloom_if_ready(&mut self) {
+        if self.bloom_spawned {
+            return;
+        }
+        if !path_exists("/dev/display/card0") {
+            return;
+        }
+        match stem::syscall::spawn_process("/bin/bloom", 0) {
+            Ok(pid) => {
+                info!("SPROUT: Spawned bloom (PID={})", pid);
+                let _ = stem::thread::set_priority(pid, 2);
+                let mut tasks = self.tasks.lock();
+                tasks.push(crate::task::ManagedTask {
+                    name: "bloom".to_string(),
+                    kind: crate::task::TaskKind::Service("svc.bloom".to_string()),
+                    module_path: "/bin/bloom".to_string(),
+                    pid: Some(pid),
+                    restarts: 0,
+                    spawn_arg: 0,
+                    bind_instance_id: 0,
+                    drv_req_write: 0,
+                    drv_resp_read: 0,
+                    boot_req_read: 0,
+                    boot_resp_write: 0,
+                    resp_fd: None,
+                });
+            }
+            Err(e) => {
+                warn!("SPROUT: Failed to spawn bloom: {:?}", e);
+            }
+        }
+        self.bloom_spawned = true;
     }
 
     #[allow(dead_code)]
