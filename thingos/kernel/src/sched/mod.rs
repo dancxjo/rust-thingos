@@ -29,6 +29,23 @@
 //! [`Scheduler`] coordinates cross-CPU policy — task placement, load
 //! balancing, diagnostics — without owning CPU-local execution state directly.
 //!
+//! ## Per-CPU Preemption (No Global Preemption Lock)
+//!
+//! Preemption decisions are made **independently per CPU** without a global
+//! preemption lock:
+//!
+//! * The per-CPU `need_resched` flag (mirrored to the lockless
+//!   [`GLOBAL_NEED_RESCHED`] array) is set by:
+//!   - the timer tick handler when the current task's timeslice expires,
+//!   - the remote-wake mailbox drain when a higher-priority task is woken,
+//!   - cross-CPU wakeup/IPI delivery paths.
+//! * Safe-point callers (e.g. `task::resched_if_needed`,
+//!   `task::preempt_enable`) first check [`need_resched_pending`] atomically
+//!   — **without** acquiring the scheduler lock — and only acquire the lock
+//!   when a reschedule is actually needed.
+//! * Each CPU therefore makes its own preemption decision based solely on
+//!   its own per-CPU atomic flag, scaling independently with CPU count.
+//!
 //! Lock-order policy:
 //! - `SCHEDULER` must never take `task::registry::REGISTRY` or
 //!   `device_registry::REGISTRY`.
@@ -1037,6 +1054,23 @@ pub(crate) fn set_global_need_resched(cpu: usize) -> bool {
         PROF_RESCHED_COALESCED.fetch_add(1, Ordering::Relaxed);
     }
     was_set
+}
+
+/// Returns `true` if the local CPU has a pending reschedule request.
+///
+/// This is a **lock-free** fast-path check that reads the per-CPU atomic
+/// `need_resched` flag without acquiring the global scheduler lock.  Callers
+/// (e.g. `resched_if_needed`, `preempt_enable`) use this to skip the
+/// expensive lock acquisition when no reschedule is pending.
+///
+/// The flag is set by:
+/// * the timer tick handler (timeslice expiry, lock-skip self-healing),
+/// * remote-wake mailbox drain (higher-priority task woken on this CPU),
+/// * `wake_sleepers` / misrouted-requeue paths, and
+/// * `set_global_need_resched` from any cross-CPU delivery path.
+#[inline]
+pub fn need_resched_pending(cpu: usize) -> bool {
+    global_need_resched_load(cpu, Ordering::Acquire)
 }
 
 #[inline]
@@ -2211,6 +2245,10 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         sched.state.per_cpu.push(cpu_sched);
     }
     crate::kinfo!("SCHED: {} per-CPU scheduler(s) allocated", cpu_total);
+    crate::kinfo!(
+        "SCHED: per-CPU preemption initialized ({} independent preemption domains, no global preemption lock)",
+        cpu_total
+    );
 
     sched.total_cpu_count = cpu_total;
     sched.state.set_boot_cpu_online();
@@ -2324,6 +2362,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
         if self.state.per_cpu[cpu_idx].preempt_disable_depth > 0 {
             if global_requested {
                 self.state.per_cpu[cpu_idx].need_resched = true;
+                // Mirror to the per-CPU atomic flag so the lockless fast-path
+                // in resched_if_needed / preempt_enable can observe it without
+                // re-acquiring the scheduler lock.
+                set_global_need_resched(cpu_idx);
             }
             return None;
         }
@@ -2454,6 +2496,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 self.state.per_cpu[cpu_idx].current == self.state.per_cpu[cpu_idx].idle_task;
             if priority >= current_prio || is_idle {
                 self.state.per_cpu[cpu_idx].need_resched = true;
+                // Mirror to the per-CPU atomic flag so the lockless fast-path
+                // in resched_if_needed / preempt_enable can see it.
+                set_global_need_resched(cpu_idx);
             }
         }
     }
@@ -2570,6 +2615,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             if priority > current_prio {
                 if actual_cpu == current_cpu {
                     self.state.per_cpu[current_cpu].need_resched = true;
+                    // Mirror to the per-CPU atomic flag so the lockless
+                    // fast-path in resched_if_needed / preempt_enable sees it.
+                    set_global_need_resched(current_cpu);
                 }
             }
 
@@ -10404,6 +10452,169 @@ mod tests {
             global_need_resched_load(invalid_cpu, core::sync::atomic::Ordering::Acquire),
             "invalid cpu should conservatively report pending resched"
         );
+    }
+
+    // ── per-CPU preemption tests ──────────────────────────────────────────────
+
+    /// `need_resched_pending` returns false when the per-CPU atomic flag is clear.
+    #[test]
+    fn test_need_resched_pending_returns_false_when_clear() {
+        let _g = init_test_env();
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
+        assert!(
+            !need_resched_pending(0),
+            "need_resched_pending should return false when the per-CPU flag is clear"
+        );
+    }
+
+    /// `need_resched_pending` returns true after `set_global_need_resched` is called.
+    #[test]
+    fn test_need_resched_pending_returns_true_after_set() {
+        let _g = init_test_env();
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
+        set_global_need_resched(0);
+        assert!(
+            need_resched_pending(0),
+            "need_resched_pending should return true after set_global_need_resched"
+        );
+        // Cleanup
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
+    }
+
+    /// Setting `CpuScheduler.need_resched = true` when preempt is disabled also
+    /// mirrors the flag to the per-CPU atomic so the lockless fast-path sees it.
+    ///
+    /// Flow under test:
+    /// 1. `set_global_need_resched(0)` raises the per-CPU atomic flag.
+    /// 2. `schedule_point(PreemptTick)` atomically *clears* the flag via
+    ///    `global_need_resched_swap(cpu_idx, false)` and records it as
+    ///    `global_requested = true`.
+    /// 3. Because `preempt_disable_depth > 0`, the reschedule is deferred:
+    ///    `need_resched = true` is set AND `set_global_need_resched(cpu_idx)`
+    ///    re-raises the per-CPU atomic flag.
+    /// 4. After returning, `need_resched_pending(0)` must be `true`.
+    ///    Without the mirroring call added in step 3, the flag would remain
+    ///    cleared (step 2) and this assertion would fail.
+    #[test]
+    fn test_schedule_point_preempt_disabled_mirrors_need_resched_to_atomic() {
+        let _g = init_test_env();
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+        sched.state.per_cpu[0].current = Some(1);
+        // Disable preemption on CPU 0
+        sched.state.per_cpu[0].preempt_disable_depth = 1;
+
+        let mut lock = SCHEDULER.lock();
+        *lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+        drop(lock);
+
+        // Simulate a global reschedule request arriving while preemption is disabled.
+        set_global_need_resched(0);
+
+        // Verify the flag is set before the call.
+        assert!(
+            need_resched_pending(0),
+            "pre-condition: flag should be set before schedule_point"
+        );
+
+        {
+            let l = SCHEDULER.lock();
+            if let Some(ptr) = *l {
+                let s = unsafe { &mut *(ptr as *mut types::Scheduler<MockRuntime>) };
+                // schedule_point internally clears the atomic flag via
+                // global_need_resched_swap(cpu_idx, false), then — because
+                // preempt_disable_depth > 0 — calls set_global_need_resched to
+                // re-raise it.  The assertion below catches the case where the
+                // mirroring call is absent (flag stays cleared after the swap).
+                s.schedule_point(ScheduleReason::PreemptTick);
+            }
+            drop(l);
+        }
+
+        // The per-CPU lock-free flag must be re-raised by the mirroring in
+        // schedule_point.  Without mirroring the swap(false) above would have
+        // left it cleared.
+        assert!(
+            need_resched_pending(0),
+            "schedule_point with preempt disabled should mirror need_resched back to the atomic flag"
+        );
+        // The local (in-lock) need_resched field must also be set.
+        assert!(
+            sched.state.per_cpu[0].need_resched,
+            "CpuScheduler.need_resched should be set when preempt is disabled and a resched was requested"
+        );
+
+        let mut sched_lock = SCHEDULER.lock();
+        *sched_lock = None;
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
+    }
+
+    /// Draining the remote wake mailbox with a higher-priority task sets
+    /// `need_resched` and mirrors it to the per-CPU atomic.
+    #[test]
+    fn test_drain_wake_mailbox_mirrors_need_resched_to_atomic() {
+        let _g = init_test_env();
+        TICK_COUNT.store(50, Ordering::Relaxed);
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
+
+        let mut sched = types::Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+        // Current task on CPU 0 at Normal priority
+        let current_tid = 500u64;
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: current_tid,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: TaskPriority::Normal,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        sched.state.per_cpu[0].current = Some(current_tid);
+
+        // Push a Realtime task into the mailbox for CPU 0
+        let rt_tid = 501u64;
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: rt_tid,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: TaskPriority::Realtime,
+            affinity: Affinity::Any,
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            wake_pending: false,
+        });
+        enqueue_remote_wake_mailbox(0, types::RemoteWakeMailboxEntry {
+            tid: rt_tid,
+            priority: TaskPriority::Realtime as usize,
+            wake_mono: 0,
+            enqueued_at_tick: 50,
+        });
+
+        sched.drain_remote_wake_mailbox(0);
+
+        assert!(
+            sched.state.per_cpu[0].need_resched,
+            "need_resched should be set after draining a higher-priority wake"
+        );
+        assert!(
+            need_resched_pending(0),
+            "per-CPU atomic flag should be mirrored after drain sets need_resched"
+        );
+
+        clear_global_need_resched(0, core::sync::atomic::Ordering::Release);
     }
 
     // ── periodic_load_balance tests ───────────────────────────────────────────
