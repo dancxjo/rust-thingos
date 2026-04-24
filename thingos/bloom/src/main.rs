@@ -14,7 +14,7 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
+use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
 use damage::DamageTracker;
 use display::DisplayBackend;
 use input::InputState;
@@ -48,7 +48,7 @@ enum IoEvent {
 type IoQueue = Arc<Mutex<VecDeque<IoEvent>>>;
 
 #[stem::main]
-fn main(arg: usize) -> ! {
+fn main(_arg: usize) -> ! {
     info!("bloom: compositor service starting");
 
     let mut display_opt = None;
@@ -106,17 +106,30 @@ fn main(arg: usize) -> ! {
     damage.mark_full(primary.width, primary.height);
 
     let mut input = InputState::new(primary.width, primary.height);
-    let bristle_evt_read = decode_bristle_arg(arg as u64);
-    if bristle_evt_read != 0 {
-        info!("bloom: listening for bristle events on port {}", bristle_evt_read);
+
+    // ── Create bristle event port pair ───────────────────────────────────────
+    // bloom creates its own port pair for receiving bristle HID events and
+    // registers the write end with bristle via an inbox message.
+    // 4096-byte capacity matches other device ports in the system; each
+    // BristleEvent is at most ~32 bytes so this holds ≥128 queued events.
+    let (bristle_evt_write, bristle_evt_read) = match port_create(4096) {
+        Ok(pair) => pair,
+        Err(e) => {
+            warn!("bloom: failed to create bristle event port: {:?}", e);
+            (0, 0)
+        }
+    };
+
+    let bristle_fd = if bristle_evt_read != 0 {
+        vfs_handle_from_port(bristle_evt_read).ok()
     } else {
-        warn!("bloom: no bristle event port provided");
-    }
+        None
+    };
+
+    // Register with bristle once it is ready.
+    register_with_bristle(bristle_evt_write);
 
     let service_fd = vfs_handle_from_port(service_read).ok();
-    let bristle_fd =
-        if bristle_evt_read != 0 { vfs_handle_from_port(bristle_evt_read).ok() } else { None };
-
     let wp_watch_fd = vfs_watch_path(wp_path, abi::vfs_watch::mask::ALL_EVENTS, 0).ok();
 
     // ── Notification channel ─────────────────────────────────────────────────
@@ -478,13 +491,52 @@ fn send_ack(reply_port: u32, status: u32, value: u32, serial: u64) {
     let _ = port_send_all(reply_port, &to_vec(&ack));
 }
 
-fn decode_bristle_arg(arg: u64) -> u32 {
-    if arg == 0 {
-        0
-    } else if arg <= u32::MAX as u64 {
-        arg as u32
-    } else {
-        (arg & 0xFFFF) as u32
+/// Read bristle's PID from `/run/bristle/pid`.
+fn read_bristle_pid() -> Option<u32> {
+    let fd = vfs_open("/run/bristle/pid", O_RDONLY).ok()?;
+    let mut buf = [0u8; 32];
+    let n = vfs_read(fd, &mut buf).unwrap_or(0);
+    let _ = vfs_close(fd);
+    if n == 0 {
+        return None;
+    }
+    let s = core::str::from_utf8(&buf[..n]).ok()?.trim();
+    s.parse::<u32>().ok()
+}
+
+/// Register bloom as a bristle event sink.
+///
+/// Waits for bristle to be ready (its PID file to appear), then sends a
+/// `RegisterSink` inbox message with `BRISTLE_SINK_TAG_BLOOM` and the bloom
+/// port write handle so bristle can deliver normalized HID events.
+fn register_with_bristle(evt_write_handle: u32) {
+    if evt_write_handle == 0 {
+        warn!("bloom: no event write handle — skipping bristle registration");
+        return;
+    }
+
+    // Wait for bristle's PID file.
+    if let Err(e) = stem::fs::wait_until_exists("/run/bristle/pid") {
+        warn!("bloom: failed waiting for /run/bristle/pid: {:?}", e);
+        return;
+    }
+
+    let bristle_pid = match read_bristle_pid() {
+        Some(p) => p,
+        None => {
+            warn!("bloom: could not read bristle PID");
+            return;
+        }
+    };
+
+    use abi::hid::{KIND_BRISTLE_REGISTER_SINK, BRISTLE_SINK_TAG_BLOOM, encode_register_sink};
+    use abi::wire::KindId;
+    use stem::syscall::message::msg_send;
+
+    let payload = encode_register_sink(BRISTLE_SINK_TAG_BLOOM, evt_write_handle);
+    match msg_send(bristle_pid, KindId(KIND_BRISTLE_REGISTER_SINK), &payload) {
+        Ok(()) => info!("bloom: registered with bristle (pid={})", bristle_pid),
+        Err(e) => warn!("bloom: bristle registration failed: {:?}", e),
     }
 }
 

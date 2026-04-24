@@ -86,8 +86,8 @@ bloom/src/main.rs:146
 bloom/src/main.rs:220
   [R] WaitSet (render thread) — vblank/timer FD
 
-bristle/src/main.rs:83
-  [R] WaitSet — multiplexes kbd + mouse port FDs + bloom evt port
+bristle/src/main.rs — ServiceLoop edition
+  [R] ServiceLoop — multiplexes inbox (control) + kbd/mouse port FDs
 
 drivers/ahci_disk/src/main.rs:721
   [R] WaitSet — multiplexes per-port request port FDs (one per SATA port)
@@ -304,9 +304,21 @@ drivers/ata_disk/src/main.rs:22,157,169,646,736,754,780,812,887,910
 drivers/display_fake/src/main.rs:16,71,101,108,129,143
   [D] send_msg / send_msg_split / send_ack / send_err — all via port_send
 
-bristle/src/main.rs:19,55-65
-  [C] kbd_read / mouse_read / bloom_evt_write / evt_input_echo_write
-      — four port handles packed into a single usize arg (legacy fanout)
+bristle/src/main.rs — ServiceLoop edition
+  [R] ServiceLoop — inbox-backed loop for control messages +
+      add_fd_readable for kbd and mouse port read FDs
+  Bristle publishes its PID to /run/bristle/pid and writes device
+  port write handles to /run/bristle/kbd_in + /run/bristle/mouse_in.
+  Consumers (bloom, echo) send KIND_BRISTLE_REGISTER_SINK inbox
+  messages to subscribe for normalized HID events.
+
+drivers/ps2_kbd/src/main.rs
+  [C] Reads /run/bristle/kbd_in for the write port handle
+      (replaced packed usize spawn arg)
+
+drivers/ps2_mouse/src/main.rs
+  [C] Reads /run/bristle/mouse_in for the write port handle
+      (replaced packed usize spawn arg)
 
 --- Sprout supervisor handshake ---
 
@@ -374,9 +386,13 @@ stem/src/wait_set.rs
   [C] WaitSet::add_vfs_watch       (#[deprecated] → add_fd_readable)
   [C] WaitSet::add_graph_op        (#[deprecated] → ENOSYS)
 
-bristle/src/main.rs:62-65
-  [C] Packed four-port-handle usize argument (kbd/mouse/bloom/echo)
-      — legacy encoding; candidate for inbox message + WaitSet migration
+bristle/src/main.rs — ServiceLoop edition
+  [R] ServiceLoop (WaitSet-backed inbox + device FDs) — MIGRATED
+      No packed port argument.
+
+bloom/src/main.rs
+  [C] Creates its own event port pair and registers with bristle
+      via KIND_BRISTLE_REGISTER_SINK inbox message — MIGRATED
 
 sprout/src/task.rs
   [C] Four PortHandles per ManagedTask for boot handshake
