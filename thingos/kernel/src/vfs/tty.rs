@@ -41,6 +41,9 @@ pub struct LineDiscipline {
     pub termios: Mutex<Termios>,
     /// Controlling session and foreground group.
     pub presence: Arc<Mutex<crate::presence::ConsolePresenceState>>,
+    /// Serializes access to the hardware-to-discipline transfer to prevent
+    /// character reordering when multiple CPUs poll the same device.
+    pub input_lock: Mutex<()>,
 }
 
 impl LineDiscipline {
@@ -49,6 +52,7 @@ impl LineDiscipline {
             buf: Mutex::new(VecDeque::with_capacity(1024)),
             termios: Mutex::new(DEFAULT_TERMIOS),
             presence: Arc::new(Mutex::new(crate::presence::ConsolePresenceState::default())),
+            input_lock: Mutex::new(()),
         }
     }
 
@@ -57,11 +61,16 @@ impl LineDiscipline {
             buf: Mutex::new(VecDeque::with_capacity(1024)),
             termios: Mutex::new(DEFAULT_TERMIOS),
             presence,
+            input_lock: Mutex::new(()),
         }
     }
 
     /// Process raw input bytes from the hardware.
     pub fn drain_input(&self, hw: &dyn TtyHardware) -> bool {
+        let rt = crate::runtime_base();
+        let irq_state = rt.irq_disable();
+        let _input_guard = self.input_lock.lock();
+
         let termios = *self.termios.lock();
         let canonical = termios.c_lflag & ICANON != 0;
         let do_echo = termios.c_lflag & ECHO != 0;
@@ -167,7 +176,7 @@ impl LineDiscipline {
                 }
             }
         }
-
+        rt.irq_restore(irq_state);
         interrupted
     }
 }

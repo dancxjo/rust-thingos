@@ -1,9 +1,9 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-24 17:40:56
+> Last run: 2026-04-24 17:53:29
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [Process Reaping Smoke Test](process-reaping-smoke-test/README.md) | 1/1 | ✅ |
+| [Scheduler diagnostics exposed via /proc/sched](scheduler-diagnostics-exposed-via-proc-sched/README.md) | 0/4 | ❌ |

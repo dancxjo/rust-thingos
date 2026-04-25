@@ -1456,6 +1456,36 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
     Ok(())
 }
 
+#[when(regex = r#"^the shell command "(.+)" succeeds$"#)]
+async fn when_shell_command_succeeds(
+    world: &mut ThingOsWorld,
+    command: String,
+) -> Result<(), StepError> {
+    // Type the command followed by Enter
+    when_type_on_serial(world, format!("{}\n", command)).await?;
+
+    // Wait for the prompt to return (indicating command completion)
+    // sh prompt usually contains " > "
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(10);
+    loop {
+        let log = world.get_serial_log().await;
+        let start_offset = world.serial_checkpoint.min(log.len());
+        let recent = strip_ansi(&log[start_offset..]);
+        if recent.contains(" > ") {
+            break;
+        }
+        if start.elapsed() >= timeout {
+            return Err(StepError(format!(
+                "Timeout waiting for command '{}' to complete (prompt not found)",
+                command
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 #[then(regex = r#"^the latest serial output should not contain "(.+)"$"#)]
 async fn latest_serial_not_contains(
     world: &mut ThingOsWorld,
