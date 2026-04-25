@@ -33,15 +33,109 @@
 //! | `/proc/<pid>/place`              | Canonical `thingos::place::Place` — world/visibility context (Phase 8)  |
 //! | `/proc/<pid>/presence`           | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
 //! | `/proc/<pid>/job_observer`       | Write-only registration of caller inbox as `JobExit` observer |
+//! | `/proc/<pid>/serviceloop/`       | Directory of ServiceLoop watchdog metrics |
+//! | `/proc/<pid>/serviceloop/last_enter_wait_ns`    | Monotonic ns of last wait entry |
+//! | `/proc/<pid>/serviceloop/last_exit_wait_ns`     | Monotonic ns of last wait exit |
+//! | `/proc/<pid>/serviceloop/last_dispatch_start_ns`| Monotonic ns of last dispatch start |
+//! | `/proc/<pid>/serviceloop/last_dispatch_end_ns`  | Monotonic ns of last dispatch end |
+//! | `/proc/<pid>/serviceloop/current_event_kind`    | Current event kind sentinel or KindId high bytes |
+//! | `/proc/self/serviceloop/stats`   | Write-only: publish ServiceLoop metrics from userspace |
 
+use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
+use spin::Mutex;
 
 use super::{VfsDriver, VfsNode, VfsStat};
+
+// ── ServiceLoop stats registry ────────────────────────────────────────────────
+
+/// Per-loop instrumentation snapshot stored by a userspace daemon via
+/// `/proc/self/serviceloop/stats`.
+#[derive(Clone, Debug, Default)]
+pub struct ServiceLoopStats {
+    pub last_enter_wait_ns: u64,
+    pub last_exit_wait_ns: u64,
+    pub last_dispatch_start_ns: u64,
+    pub last_dispatch_end_ns: u64,
+    pub current_event_kind: u64,
+}
+
+impl ServiceLoopStats {
+    /// Parse the text format written by `stem::service_loop::ServiceLoop::publish_metrics`.
+    ///
+    /// Format:
+    /// ```text
+    /// last_enter_wait_ns: <u64>
+    /// last_exit_wait_ns: <u64>
+    /// last_dispatch_start_ns: <u64>
+    /// last_dispatch_end_ns: <u64>
+    /// current_event_kind: <u64>
+    /// ```
+    fn from_text(text: &str) -> Option<Self> {
+        let mut s = Self::default();
+        let mut found = 0u8;
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(v) = line.strip_prefix("last_enter_wait_ns:") {
+                s.last_enter_wait_ns = v.trim().parse().ok()?;
+                found |= 1;
+            } else if let Some(v) = line.strip_prefix("last_exit_wait_ns:") {
+                s.last_exit_wait_ns = v.trim().parse().ok()?;
+                found |= 2;
+            } else if let Some(v) = line.strip_prefix("last_dispatch_start_ns:") {
+                s.last_dispatch_start_ns = v.trim().parse().ok()?;
+                found |= 4;
+            } else if let Some(v) = line.strip_prefix("last_dispatch_end_ns:") {
+                s.last_dispatch_end_ns = v.trim().parse().ok()?;
+                found |= 8;
+            } else if let Some(v) = line.strip_prefix("current_event_kind:") {
+                s.current_event_kind = v.trim().parse().ok()?;
+                found |= 16;
+            }
+        }
+        // All 5 fields are required.
+        if found == 0b11111 { Some(s) } else { None }
+    }
+
+    /// Format the stats as a newline-terminated text block.
+    fn as_text(&self) -> String {
+        alloc::format!(
+            "last_enter_wait_ns: {}\nlast_exit_wait_ns: {}\nlast_dispatch_start_ns: {}\nlast_dispatch_end_ns: {}\ncurrent_event_kind: {}\n",
+            self.last_enter_wait_ns,
+            self.last_exit_wait_ns,
+            self.last_dispatch_start_ns,
+            self.last_dispatch_end_ns,
+            self.current_event_kind,
+        )
+    }
+}
+
+/// Global per-pid service loop stats registry.
+///
+/// Written by userspace via `/proc/self/serviceloop/stats`, read via
+/// `/proc/<pid>/serviceloop/*`.
+static SERVICE_LOOP_STATS: Mutex<BTreeMap<u32, ServiceLoopStats>> =
+    Mutex::new(BTreeMap::new());
+
+/// Store (or update) service loop stats for the given PID.
+pub fn publish_service_loop_stats(pid: u32, stats: ServiceLoopStats) {
+    SERVICE_LOOP_STATS.lock().insert(pid, stats);
+}
+
+/// Retrieve service loop stats for the given PID, if any have been published.
+pub fn get_service_loop_stats(pid: u32) -> Option<ServiceLoopStats> {
+    SERVICE_LOOP_STATS.lock().get(&pid).cloned()
+}
+
+/// Remove service loop stats for the given PID (called on process exit).
+pub fn remove_service_loop_stats(pid: u32) {
+    SERVICE_LOOP_STATS.lock().remove(&pid);
+}
 
 // ── ProcFs driver ─────────────────────────────────────────────────────────────
 
@@ -112,6 +206,10 @@ impl VfsDriver for ProcFs {
                 let inbox = crate::inbox::get_inbox(inbox_id).ok_or(Errno::ENOENT)?;
                 Ok(Arc::new(crate::vfs::inbox_node::InboxNode::new(inbox)))
             }
+            // /proc/self/serviceloop — ServiceLoop watchdog metrics directory.
+            "self/serviceloop" => Ok(Arc::new(ProcSelfServiceLoopDirNode)),
+            // /proc/self/serviceloop/stats — write-only: publish metrics from userspace.
+            "self/serviceloop/stats" => Ok(Arc::new(ProcSelfServiceLoopStatsNode)),
             _ => {
                 // Try to match /proc/sched/cpu<N> paths.
                 if let Some(rest) = path.strip_prefix("sched/cpu") {
@@ -143,6 +241,12 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
     if rest == "task" || rest.starts_with("task/") {
         let tid_and_rest = rest.strip_prefix("task/").unwrap_or("");
         return lookup_pid_task(pid, tid_and_rest);
+    }
+
+    // serviceloop paths are backed by the kernel-side stats registry, not the
+    // process snapshot, so we can serve them even when no snapshot is present.
+    if rest == "serviceloop" || rest.starts_with("serviceloop/") {
+        return lookup_pid_serviceloop(pid, rest);
     }
 
     let snap = process_snapshot(pid).ok_or(Errno::ENOENT)?;
@@ -301,6 +405,49 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         }
         // /proc/<pid>/job_observer — register caller inbox for JobExit notifications.
         "job_observer" => Ok(Arc::new(ProcPidJobObserverNode { pid })),
+        _ => Err(Errno::ENOENT),
+    }
+}
+
+/// Look up a node inside `/proc/<pid>/serviceloop/`.
+fn lookup_pid_serviceloop(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
+    match rest {
+        "serviceloop" => Ok(Arc::new(ProcPidServiceLoopDirNode { pid })),
+        "serviceloop/last_enter_wait_ns" => {
+            let text = get_service_loop_stats(pid)
+                .map(|s| alloc::format!("{}\n", s.last_enter_wait_ns))
+                .unwrap_or_else(|| alloc::string::String::from("0\n"));
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 1;
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
+        }
+        "serviceloop/last_exit_wait_ns" => {
+            let text = get_service_loop_stats(pid)
+                .map(|s| alloc::format!("{}\n", s.last_exit_wait_ns))
+                .unwrap_or_else(|| alloc::string::String::from("0\n"));
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 2;
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
+        }
+        "serviceloop/last_dispatch_start_ns" => {
+            let text = get_service_loop_stats(pid)
+                .map(|s| alloc::format!("{}\n", s.last_dispatch_start_ns))
+                .unwrap_or_else(|| alloc::string::String::from("0\n"));
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 3;
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
+        }
+        "serviceloop/last_dispatch_end_ns" => {
+            let text = get_service_loop_stats(pid)
+                .map(|s| alloc::format!("{}\n", s.last_dispatch_end_ns))
+                .unwrap_or_else(|| alloc::string::String::from("0\n"));
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 4;
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
+        }
+        "serviceloop/current_event_kind" => {
+            let text = get_service_loop_stats(pid)
+                .map(|s| alloc::format!("{}\n", s.current_event_kind))
+                .unwrap_or_else(|| alloc::string::String::from("0\n"));
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 5;
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
+        }
         _ => Err(Errno::ENOENT),
     }
 }
@@ -522,6 +669,7 @@ impl VfsNode for ProcPidDirNode {
             "presence",
             "inbox",
             "job_observer",
+            "serviceloop",
         ];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
@@ -578,6 +726,102 @@ impl VfsNode for ProcPidJobObserverNode {
             ino: PROC_PID_BASE_INO
                 + self.pid as u64 * PROC_PID_INO_STRIDE
                 + PROC_PID_JOB_OBSERVER_INO_OFFSET,
+            ..Default::default()
+        })
+    }
+}
+
+// ── /proc/<pid>/serviceloop/ directory ───────────────────────────────────────
+
+/// Per-pid ServiceLoop watchdog metrics directory.
+struct ProcPidServiceLoopDirNode {
+    pid: u32,
+}
+
+impl VfsNode for ProcPidServiceLoopDirNode {
+    fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFDIR | 0o555,
+            size: 0,
+            ino: 0xE000_0000_0000_0000u64 | (self.pid as u64),
+            ..Default::default()
+        })
+    }
+    fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let entries = [
+            "last_enter_wait_ns",
+            "last_exit_wait_ns",
+            "last_dispatch_start_ns",
+            "last_dispatch_end_ns",
+            "current_event_kind",
+        ];
+        super::write_readdir_entries(entries.into_iter(), offset, buf)
+    }
+}
+
+// ── /proc/self/serviceloop/ directory ────────────────────────────────────────
+
+/// `/proc/self/serviceloop/` directory node.
+struct ProcSelfServiceLoopDirNode;
+
+impl VfsNode for ProcSelfServiceLoopDirNode {
+    fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFDIR | 0o755,
+            size: 0,
+            ino: 0xF100_0000_0000_0000u64,
+            ..Default::default()
+        })
+    }
+    fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let entries = ["stats"];
+        super::write_readdir_entries(entries.into_iter(), offset, buf)
+    }
+}
+
+// ── /proc/self/serviceloop/stats — publish metrics from userspace ─────────────
+
+/// Write-only node for publishing ServiceLoop metrics from userspace.
+///
+/// The calling process writes a key-value text block (as produced by
+/// `stem::service_loop::LoopMetricsSnapshot::write_text`) to this path.
+/// The kernel parses it and stores the result in [`SERVICE_LOOP_STATS`],
+/// making it visible via `/proc/<pid>/serviceloop/*`.
+struct ProcSelfServiceLoopStatsNode;
+
+impl VfsNode for ProcSelfServiceLoopStatsNode {
+    fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(Errno::EACCES)
+    }
+
+    fn write(&self, _offset: u64, buf: &[u8]) -> SysResult<usize> {
+        let pid = {
+            let pinfo = crate::sched::process_info_current().ok_or(Errno::ESRCH)?;
+            pinfo.lock().pid
+        };
+        let text = core::str::from_utf8(buf).map_err(|_| Errno::EINVAL)?;
+        let stats = ServiceLoopStats::from_text(text).ok_or(Errno::EINVAL)?;
+        publish_service_loop_stats(pid, stats);
+        Ok(buf.len())
+    }
+
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFREG | 0o200,
+            size: 0,
+            ino: 0xF200_0000_0000_0000u64,
             ..Default::default()
         })
     }
@@ -691,7 +935,7 @@ impl VfsNode for ProcSelfDirNode {
         Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 210, ..Default::default() })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
-        let entries = ["exe", "authority", "place", "presence", "inbox"];
+        let entries = ["exe", "authority", "place", "presence", "inbox", "serviceloop"];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
 }
@@ -1639,5 +1883,65 @@ mod tests {
     #[test]
     fn test_sched_unknown_subpath_returns_enoent() {
         assert!(matches!(lookup("sched/bogus"), Err(Errno::ENOENT)));
+    }
+
+    // ── ServiceLoop stats registry tests ─────────────────────────────────────
+
+    #[test]
+    fn test_service_loop_stats_from_text_round_trip() {
+        let text = "last_enter_wait_ns: 100\nlast_exit_wait_ns: 200\nlast_dispatch_start_ns: 250\nlast_dispatch_end_ns: 300\ncurrent_event_kind: 0\n";
+        let s = ServiceLoopStats::from_text(text).expect("should parse");
+        assert_eq!(s.last_enter_wait_ns, 100);
+        assert_eq!(s.last_exit_wait_ns, 200);
+        assert_eq!(s.last_dispatch_start_ns, 250);
+        assert_eq!(s.last_dispatch_end_ns, 300);
+        assert_eq!(s.current_event_kind, 0);
+    }
+
+    #[test]
+    fn test_service_loop_stats_from_text_missing_field_returns_none() {
+        // Only 4 of the 5 required fields.
+        let text = "last_enter_wait_ns: 1\nlast_exit_wait_ns: 2\nlast_dispatch_start_ns: 3\nlast_dispatch_end_ns: 4\n";
+        assert!(ServiceLoopStats::from_text(text).is_none());
+    }
+
+    #[test]
+    fn test_service_loop_stats_as_text_parseable() {
+        let s = ServiceLoopStats {
+            last_enter_wait_ns: 10,
+            last_exit_wait_ns: 20,
+            last_dispatch_start_ns: 30,
+            last_dispatch_end_ns: 40,
+            current_event_kind: 5,
+        };
+        let text = s.as_text();
+        let parsed = ServiceLoopStats::from_text(&text).expect("as_text output must be parseable");
+        assert_eq!(parsed.last_enter_wait_ns, 10);
+        assert_eq!(parsed.last_dispatch_end_ns, 40);
+        assert_eq!(parsed.current_event_kind, 5);
+    }
+
+    #[test]
+    fn test_publish_and_get_service_loop_stats() {
+        let stats = ServiceLoopStats {
+            last_enter_wait_ns: 999,
+            last_exit_wait_ns: 1000,
+            last_dispatch_start_ns: 1001,
+            last_dispatch_end_ns: 1002,
+            current_event_kind: 42,
+        };
+        publish_service_loop_stats(77777, stats.clone());
+        let retrieved = get_service_loop_stats(77777).expect("should retrieve published stats");
+        assert_eq!(retrieved.last_enter_wait_ns, 999);
+        assert_eq!(retrieved.current_event_kind, 42);
+        // Cleanup.
+        remove_service_loop_stats(77777);
+        assert!(get_service_loop_stats(77777).is_none());
+    }
+
+    #[test]
+    fn test_get_service_loop_stats_missing_returns_none() {
+        // Use a PID unlikely to be registered.
+        assert!(get_service_loop_stats(99998).is_none());
     }
 }
