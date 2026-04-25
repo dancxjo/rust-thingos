@@ -16,7 +16,7 @@ const THINGOS_DRIVER_NAME: &[u8] = b"ps2_kbd";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
+    fn thingos_driver_start_safe(ctx: *const ()) -> Status;
 }
 
 #[unsafe(no_mangle)]
