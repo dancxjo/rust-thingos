@@ -5,7 +5,7 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::driver_interface::{
-    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
     ProbeResult, Status,
 };
 use abi::seed::{HOST_DRIVER, INTERFACE_DRIVER_V1, SEED_ABI_VERSION, Seed, SeedInterface};
@@ -66,7 +66,7 @@ unsafe extern "C" fn thingos_driver_probe(
     Status::NoMatch
 }
 
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverEntryCtx) -> Status {
     main(0)
 }
 

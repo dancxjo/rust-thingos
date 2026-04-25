@@ -603,6 +603,8 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     let _ = root_fs.mkdir("dev/display");
     crate::kdebug!("VFS: Created /dev/display directory");
     let _ = root_fs.mkdir("dev/input");
+    let _ = root_fs.mkdir("dev/storage");
+    crate::kdebug!("VFS: Created /dev/storage directory");
     let _ = root_fs.mkdir("proc");
     let _ = root_fs.mkdir("sys");
     let _ = root_fs.mkdir("tmp");

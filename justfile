@@ -181,6 +181,11 @@ run-bios:
     fi
     {{xtask}} run-bios --qemu-flags "{{qemuflags}}"
 
+# Run with ATA-compatible CD-ROM (using machine=pc for legacy IDE).
+run-ata *args:
+    @just run QEMUFLAGS="{{qemuflags}} -machine pc" {{args}}
+
+
 # Build the kernel.
 kernel arch=karch:
     {{xtask}} build --env {{arch}} --profile {{rust_profile}}

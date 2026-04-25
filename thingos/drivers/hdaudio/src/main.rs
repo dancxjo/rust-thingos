@@ -24,7 +24,7 @@ use core::ptr::{read_volatile, write_volatile};
 use abi::device::DeviceKind;
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
-    DriverStartContext, ProbeResult, Status,
+    DriverEntryCtx, ProbeResult, Status,
 };
 use abi::sound::{
     AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START,
@@ -41,7 +41,7 @@ const THINGOS_DRIVER_NAME: &[u8] = b"hdaudio";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
 }
 
 #[unsafe(no_mangle)]
@@ -94,7 +94,7 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
     main(ctx as usize)
 }
 

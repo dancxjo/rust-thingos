@@ -37,7 +37,7 @@ use abi::device::DeviceKind;
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
     DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
-    DriverStartContext, ProbeResult, Status,
+    ProbeResult, Status,
 };
 use abi::errors::Errno;
 use abi::sound::{
@@ -75,7 +75,7 @@ const THINGOS_DRIVER_NAME: &[u8] = b"virtio_sound";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
 }
 
 #[unsafe(no_mangle)]
@@ -130,7 +130,7 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
     main(ctx as usize)
 }
 

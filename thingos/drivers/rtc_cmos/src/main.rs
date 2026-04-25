@@ -5,8 +5,8 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::driver_interface::{
-    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
-    ProbeResult, Status,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
+    DriverStartContext, ProbeResult, Status,
 };
 use stem::abi::driver_ctx::DriverCtx;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};

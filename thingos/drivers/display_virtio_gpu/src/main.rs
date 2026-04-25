@@ -12,7 +12,7 @@ use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
-    DriverStartContext, ProbeResult, Status,
+    DriverEntryCtx, ProbeResult, Status,
 };
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
@@ -25,7 +25,7 @@ const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
 }
 
 #[unsafe(no_mangle)]
@@ -80,7 +80,7 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
     main(ctx as usize)
 }
 

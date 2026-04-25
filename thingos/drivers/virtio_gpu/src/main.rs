@@ -9,7 +9,7 @@ use core::ptr::write_volatile;
 use abi::device::PCI_IRQ_MODE_MSIX;
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
-    DriverStartContext, ProbeResult, Status,
+    DriverEntryCtx, ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::device::device_enable_msi;
@@ -47,7 +47,7 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     if is_match { Status::Ok } else { Status::NoMatch }
 }
 
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverEntryCtx) -> Status {
     main(0)
 }
 

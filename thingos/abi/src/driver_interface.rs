@@ -268,7 +268,7 @@ pub struct DriverDescriptor {
     pub driver_class: DriverClass,
     pub flags: u64,
     pub probe: unsafe extern "C" fn(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status,
-    pub start: unsafe extern "C" fn(ctx: *const DriverStartContext) -> Status,
+    pub start: unsafe extern "C" fn(ctx: *const DriverEntryCtx) -> Status,
 }
 
 unsafe impl Sync for DriverDescriptor {}

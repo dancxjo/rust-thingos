@@ -9,7 +9,7 @@ mod protocol;
 
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
-    DriverStartContext, ProbeResult, Status,
+    DriverEntryCtx, ProbeResult, Status,
 };
 use driver::Rtl8168Driver;
 use protocol::{MSG_FRAME_RX, MSG_FRAME_TX, MSG_MAC_REQ, MSG_MAC_RESP, NetDriverMsg};
@@ -22,7 +22,7 @@ const THINGOS_DRIVER_NAME: &[u8] = b"rtl8168d";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
 }
 
 #[unsafe(no_mangle)]
@@ -61,7 +61,7 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
     thingos_driver_start(ctx)
 }
 
@@ -81,7 +81,7 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     if is_match { Status::Ok } else { Status::NoMatch }
 }
 
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverEntryCtx) -> Status {
     main(0)
 }
 

@@ -22,7 +22,7 @@ pub enum BlockError {
 ///
 /// Implementations provide synchronous sector reads. The sector size
 /// is device-dependent (typically 512 for ATA, 2048 for ATAPI CD-ROM).
-pub trait BlockDevice {
+pub trait BlockDevice: Send + Sync {
     /// Read sectors from the device.
     ///
     /// # Arguments

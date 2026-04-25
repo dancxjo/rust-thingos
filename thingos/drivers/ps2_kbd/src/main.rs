@@ -5,7 +5,7 @@ use core::default::Default;
 extern crate alloc;
 
 use abi::driver_interface::{
-    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
     ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
@@ -16,7 +16,7 @@ const THINGOS_DRIVER_NAME: &[u8] = b"ps2_kbd";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
 }
 
 #[unsafe(no_mangle)]
@@ -55,7 +55,7 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
     thingos_driver_start(ctx)
 }
 
@@ -74,7 +74,7 @@ unsafe extern "C" fn thingos_driver_probe(
     Status::NoMatch
 }
 
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverEntryCtx) -> Status {
     main(0)
 }
 

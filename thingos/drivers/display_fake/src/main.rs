@@ -7,7 +7,7 @@ extern crate alloc;
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
 use abi::driver_interface::{
-    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverStartContext,
+    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
     ProbeResult, Status,
 };
 use abi::errors::Errno;
@@ -46,7 +46,7 @@ unsafe extern "C" fn thingos_driver_probe(
     Status::NoMatch
 }
 
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverEntryCtx) -> Status {
     main(0)
 }
 

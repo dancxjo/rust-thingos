@@ -1,34 +1,36 @@
-//! ATA Disk Driver (Read-only v0)
+//! ATA Disk Driver (VFS-native)
 //!
-//! Userspace driver that detects ATA devices on legacy ports and registers
-//! them in the System Graph. Uses ioport_read/write syscalls for PIO access.
+//! Userspace driver that detects ATA/ATAPI devices on IDE controllers
+//! and exposes them as VFS files in `/dev/storage/`.
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
-use alloc::vec;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::time::Duration;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::driver_interface::{
-    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
-    DriverStartContext, ProbeResult, Status,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_INTERFACE_ABI_VERSION, DeviceInfo,
+    DriverClass, DriverDescriptor, DriverInterfaceV1, DriverEntryCtx,
+    ProbeResult, Status,
 };
-use abi::errors::Errno;
-use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
-use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
-use stem::abi::block_device_protocol::*;
+use abi::errors::{Errno, SysResult};
+use abi::vfs_rpc::VfsRpcOp;
+use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
+use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::{vfs_handle_from_port, vfs_mount};
-use stem::syscall::{PortHandle, ioport_read, ioport_write, port_create, port_send, port_try_recv};
-use stem::{error, info};
+use stem::syscall::{device_claim, ioport_read, ioport_write, port_create};
+use stem::{debug, error, info, warn};
+
 const THINGOS_DRIVER_NAME: &[u8] = b"ata_disk";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
 }
 
 #[unsafe(no_mangle)]
@@ -43,7 +45,19 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     #[cfg(target_arch = "x86_64")]
     start: thingos_driver_start_safe,
     #[cfg(not(target_arch = "x86_64"))]
-    start: thingos_driver_start,
+    start: thingos_driver_start_rust,
+};
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THING_DRIVER_V1: DriverInterfaceV1 = DriverInterfaceV1 {
+    abi_version: DRIVER_INTERFACE_ABI_VERSION,
+    flags: 1, // DRIVER_FLAG_PCI
+    vendor_id: 0,
+    device_id: 0,
+    class_code: 0x010100, // Mass Storage : IDE Controller
+    class_mask: 0xFFFF00, // Match Class and Subclass
+    entry_symbol: [0u8; 32],
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -52,45 +66,36 @@ core::arch::global_asm!(
     .section .text
     .global thingos_driver_start_safe
     thingos_driver_start_safe:
-        // RSP = 16n (kernel spawn)
         sub rsp, 8
         push rdi
-        // Call std initialization (TLS, etc)
         call thingos_runtime_setup
-        // Restore RDI and realign for the next call.
         pop rdi
         add rsp, 8
-        // CALL will push 8 bytes, so inside Rust entry RSP = 16n + 8.
         call thingos_driver_start_rust
         ret
 "#
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
-    thingos_driver_start(ctx)
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
+    main(ctx as usize)
 }
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
-    if out.is_null() {
-        return Status::InvalidArgument;
-    }
+    if out.is_null() { return Status::InvalidArgument; }
     let out = &mut *out;
     out.claimed_class = DriverClass::Block;
     out.flags = 0;
 
-    // Match ISA legacy IDE devices (registered with BusKind::Isa).
-    // Also accept Unknown bus (default for sysfs-registered ISA devices).
-    let is_isa = if dev.is_null() {
-        false
-    } else {
-        let dev = &*dev;
-        dev.bus == BusKind::Isa as u32 || dev.bus == BusKind::Unknown as u32
-    };
+    if dev.is_null() { return Status::NoMatch; }
+    let dev = &*dev;
 
-    if is_isa {
+    let is_pci_ide = dev.bus == BusKind::Pci as u32 && (dev.class_code & 0xFFFF00) == 0x010100;
+    let is_isa = dev.bus == BusKind::Isa as u32 || dev.bus == BusKind::Unknown as u32;
+
+    if is_pci_ide || is_isa {
         out.matched = 1;
-        out.score = 700;
+        out.score = if is_pci_ide { 800 } else { 700 };
         Status::Ok
     } else {
         out.matched = 0;
@@ -99,28 +104,23 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     }
 }
 
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverStartContext) -> Status {
-    main(0)
-}
-
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]
 #[used]
 pub static MANIFEST: ManifestHeader = ManifestHeader {
     magic: MANIFEST_MAGIC,
-    kind: ModuleKind::Service,
-    device_kind: *b"dev.storage.ata\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+    kind: ModuleKind::Driver,
+    device_kind: *b"dev.storage.Ide\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
     version: 1,
     _reserved: 0,
 };
 
-// ATA port bases (legacy)
+// ATA constants
 const ATA_PRIMARY_IO: u16 = 0x1F0;
 const ATA_PRIMARY_CTRL: u16 = 0x3F6;
 const ATA_SECONDARY_IO: u16 = 0x170;
 const ATA_SECONDARY_CTRL: u16 = 0x376;
 
-// ATA register offsets from IO base
 const ATA_REG_DATA: u16 = 0;
 const ATA_REG_SECCOUNT: u16 = 2;
 const ATA_REG_LBA_LO: u16 = 3;
@@ -130,24 +130,37 @@ const ATA_REG_DRIVE: u16 = 6;
 const ATA_REG_STATUS: u16 = 7;
 const ATA_REG_COMMAND: u16 = 7;
 
-// ATA commands
 const ATA_CMD_IDENTIFY: u8 = 0xEC;
 const ATA_CMD_IDENTIFY_PACKET: u8 = 0xA1;
 const ATA_CMD_PACKET: u8 = 0xA0;
-const ATA_CMD_READ_SECTORS: u8 = 0x20; // LBA28
-const ATA_CMD_READ_SECTORS_EXT: u8 = 0x24; // LBA48
+const ATA_CMD_READ_SECTORS: u8 = 0x20;
+const ATA_CMD_READ_SECTORS_EXT: u8 = 0x24;
 
-// ATAPI signatures (after IDENTIFY, in LBA mid/hi)
 const ATAPI_SIG_MID: u8 = 0x14;
 const ATAPI_SIG_HI: u8 = 0xEB;
 
-// ATAPI CD-ROM sector size
-const ATAPI_SECTOR_SIZE: u64 = 2048;
-
-// Status bits
 const ATA_SR_BSY: u8 = 0x80;
 const ATA_SR_DRQ: u8 = 0x08;
 const ATA_SR_ERR: u8 = 0x01;
+
+const S_IFREG: u32 = 0o100000;
+const S_IFDIR: u32 = 0o040000;
+
+// ── Hardware Helpers ─────────────────────────────────────────────────────────
+
+fn ata_inb(port: u16) -> u8 { ioport_read(port as usize, 1) as u8 }
+fn ata_inw(port: u16) -> u16 { ioport_read(port as usize, 2) as u16 }
+fn ata_outb(port: u16, val: u8) { ioport_write(port as usize, val as usize, 1); }
+fn ata_outw(port: u16, val: u16) { ioport_write(port as usize, val as usize, 2); }
+
+fn wait_bsy_clear(io_base: u16) -> bool {
+    for _ in 0..100000 {
+        if ata_inb(io_base + ATA_REG_STATUS) & ATA_SR_BSY == 0 { return true; }
+    }
+    false
+}
+
+// ── ATA Disk Implementation ──────────────────────────────────────────────────
 
 struct AtaDisk {
     io_base: u16,
@@ -155,812 +168,292 @@ struct AtaDisk {
     sector_count: u64,
     sector_size: u32,
     supports_lba48: bool,
-    model: [u8; 40],
-    serial: [u8; 20],
-    read_port_handle: Option<PortHandle>,
 }
 
-/// ATAPI (CD-ROM) device
+impl BlockDevice for AtaDisk {
+    fn sector_size(&self) -> u64 { self.sector_size as u64 }
+    fn sector_count(&self) -> Option<u64> { Some(self.sector_count) }
+
+    fn read_sectors(&self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
+        if count == 0 { return Ok(()); }
+        if !self.supports_lba48 && lba > 0x0FFFFFFF { return Err(BlockError::OutOfRange); }
+        
+        let drive_sel = if self.is_slave { 0xF0 } else { 0xE0 };
+
+        // For simplicity, handle multiple sectors by calling hardware for each or batching
+        // Here we'll do the LBA setup once and loop DRQ.
+        if self.supports_lba48 {
+            ata_outb(self.io_base + ATA_REG_DRIVE, drive_sel);
+            ata_outb(self.io_base + ATA_REG_SECCOUNT, ((count >> 8) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_LO, ((lba >> 24) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_MID, ((lba >> 32) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_HI, ((lba >> 40) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_SECCOUNT, (count & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_LO, (lba & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_MID, ((lba >> 8) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_HI, ((lba >> 16) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS_EXT);
+        } else {
+            let lba28 = lba as u32;
+            ata_outb(self.io_base + ATA_REG_DRIVE, drive_sel | ((lba28 >> 24) & 0x0F) as u8);
+            ata_outb(self.io_base + ATA_REG_SECCOUNT, count as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_LO, (lba28 & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_MID, ((lba28 >> 8) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_LBA_HI, ((lba28 >> 16) & 0xFF) as u8);
+            ata_outb(self.io_base + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS);
+        }
+
+        let mut offset = 0;
+        for _ in 0..count {
+            loop {
+                let status = ata_inb(self.io_base + ATA_REG_STATUS);
+                if status & ATA_SR_ERR != 0 { return Err(BlockError::IoError); }
+                if status & ATA_SR_DRQ != 0 { break; }
+            }
+            for _ in 0..256 {
+                let word = ata_inw(self.io_base + ATA_REG_DATA);
+                if offset + 1 < buf.len() {
+                    buf[offset] = (word & 0xFF) as u8;
+                    buf[offset + 1] = (word >> 8) as u8;
+                    offset += 2;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// ── ATAPI Device Implementation ──────────────────────────────────────────────
+
 struct AtapiDevice {
     io_base: u16,
     ctrl_base: u16,
     is_slave: bool,
-    sector_size: u32,
-    sector_count: u64,
-    model: [u8; 40],
-    serial: [u8; 20],
-    read_port_handle: Option<PortHandle>,
 }
 
-fn ata_inb(port: u16) -> u8 {
-    ioport_read(port as usize, 1) as u8
+impl BlockDevice for AtapiDevice {
+    fn sector_size(&self) -> u64 { 2048 }
+
+    fn read_sectors(&self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
+        if count == 0 { return Ok(()); }
+        let mut offset = 0;
+        for i in 0..count {
+            self.read_one_sector(lba + i, &mut buf[offset..offset + 2048])?;
+            offset += 2048;
+        }
+        Ok(())
+    }
 }
 
-fn ata_inw(port: u16) -> u16 {
-    ioport_read(port as usize, 2) as u16
+impl AtapiDevice {
+    fn read_one_sector(&self, lba: u64, buf: &mut [u8]) -> Result<(), BlockError> {
+        let drive_sel = if self.is_slave { 0xB0 } else { 0xA0 };
+        ata_outb(self.io_base + ATA_REG_DRIVE, drive_sel);
+        for _ in 0..4 { ata_inb(self.ctrl_base); }
+        if !wait_bsy_clear(self.io_base) { return Err(BlockError::NotReady); }
+
+        let byte_count = 2048u16;
+        ata_outb(self.io_base + ATA_REG_LBA_MID, (byte_count & 0xFF) as u8);
+        ata_outb(self.io_base + ATA_REG_LBA_HI, ((byte_count >> 8) & 0xFF) as u8);
+        ata_outb(self.io_base + ATA_REG_COMMAND, ATA_CMD_PACKET);
+
+        for _ in 0..100000 {
+            let status = ata_inb(self.io_base + ATA_REG_STATUS);
+            if status & ATA_SR_ERR != 0 { return Err(BlockError::IoError); }
+            if status & ATA_SR_DRQ != 0 { break; }
+        }
+
+        let lba32 = lba as u32;
+        let packet: [u16; 6] = [
+            0x00A8, // READ(12)
+            ((lba32 >> 24) as u16) << 8 | ((lba32 >> 16) as u16 & 0xFF),
+            ((lba32 >> 8) as u16 & 0xFF) << 8 | (lba32 as u16 & 0xFF),
+            0, // length high
+            1, // length low (1 sector)
+            0,
+        ];
+        for word in packet { ata_outw(self.io_base + ATA_REG_DATA, word); }
+
+        loop {
+            let status = ata_inb(self.io_base + ATA_REG_STATUS);
+            if status & ATA_SR_ERR != 0 { return Err(BlockError::IoError); }
+            if status & ATA_SR_BSY == 0 && status & ATA_SR_DRQ != 0 { break; }
+        }
+
+        for i in 0..1024 {
+            let word = ata_inw(self.io_base + ATA_REG_DATA);
+            buf[i * 2] = (word & 0xFF) as u8;
+            buf[i * 2 + 1] = (word >> 8) as u8;
+        }
+        Ok(())
+    }
 }
 
-fn ata_outb(port: u16, val: u8) {
-    ioport_write(port as usize, val as usize, 1);
+// ── VFS Provider ─────────────────────────────────────────────────────────────
+
+struct StorageProvider {
+    device: Arc<dyn BlockDevice>,
 }
 
-fn wait_bsy_clear(io_base: u16) -> bool {
-    for _ in 0..100000 {
-        let status = ata_inb(io_base + ATA_REG_STATUS);
-        if status & ATA_SR_BSY == 0 {
-            return true;
+impl StorageProvider {
+    fn handle_rpc(&self, req: &ProviderRequest) -> ProviderResponse {
+        match req.op {
+            VfsRpcOp::Lookup => ProviderResponse::ok_u64(1),
+            VfsRpcOp::Stat => {
+                let size = self.device.sector_count().unwrap_or(0) * self.device.sector_size();
+                ProviderResponse::ok_stat(S_IFREG | 0o444, size, 1)
+            }
+            VfsRpcOp::Read => {
+                let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
+                let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
+                
+                let sector_size = self.device.sector_size();
+                let mut data = Vec::with_capacity(len);
+                data.resize(len, 0);
+
+                // Handle simple sector-aligned read for now (good enough for iso9660d)
+                let lba = offset / sector_size;
+                let count = (len as u64 + sector_size - 1) / sector_size;
+                
+                // If not aligned, we'd need a bounce buffer, but let's assume alignment for iso9660
+                let mut bounce = Vec::with_capacity((count * sector_size) as usize);
+                bounce.resize((count * sector_size) as usize, 0);
+                
+                match self.device.read_sectors(lba, count, &mut bounce) {
+                    Ok(_) => {
+                        let inner_off = (offset % sector_size) as usize;
+                        ProviderResponse::ok_bytes(&bounce[inner_off..inner_off + len])
+                    }
+                    Err(_) => ProviderResponse::err(Errno::EIO),
+                }
+            }
+            _ => ProviderResponse::err(Errno::ENOSYS),
         }
     }
-    false
 }
 
-fn identify_drive(io_base: u16, ctrl_base: u16, is_slave: bool) -> Option<AtaDisk> {
-    // Select drive
-    let drive_sel = if is_slave { 0xB0 } else { 0xA0 };
-    info!("ATA_DISK: identify_drive(base={:x}, slave={}) - selecting drive {:x}", io_base, is_slave, drive_sel);
-    ata_outb(io_base + ATA_REG_DRIVE, drive_sel);
+// ── Main Entry ───────────────────────────────────────────────────────────────
 
-    // Small delay (read alternate status 4 times)
-    for _ in 0..4 {
-        ata_inb(ctrl_base);
+#[stem::main]
+fn main(ctx_ptr: usize) -> ! {
+    info!("ATA_DISK: Starting Generic IDE/ATAPI VFS driver");
+
+    let primary_io = ATA_PRIMARY_IO;
+    let primary_ctrl = ATA_PRIMARY_CTRL;
+    let secondary_io = ATA_SECONDARY_IO;
+    let secondary_ctrl = ATA_SECONDARY_CTRL;
+
+    if ctx_ptr != 0 {
+        let ctx = unsafe { &*(ctx_ptr as *const DriverEntryCtx) };
+        let path = ctx.device_path_str();
+        let _ = device_claim(path);
+        // In a real IDE controller we'd read the BARs here if not using legacy ports,
+        // but for now we stick to defaults if they work.
     }
 
-    // Clear sector count and LBA registers
-    ata_outb(io_base + ATA_REG_SECCOUNT, 0);
-    ata_outb(io_base + ATA_REG_LBA_LO, 0);
-    ata_outb(io_base + ATA_REG_LBA_MID, 0);
-    ata_outb(io_base + ATA_REG_LBA_HI, 0);
-
-    // Send IDENTIFY command
-    ata_outb(io_base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
-
-    // Check if drive exists
-    let status = ata_inb(io_base + ATA_REG_STATUS);
-    info!("ATA_DISK: identify_drive - initial status: {:x}", status);
-    if status == 0 || status == 0xFF {
-        return None; // No drive
+    let mut devices = Vec::new();
+    
+    // Primary Master
+    if let Some(disk) = identify_ata(primary_io, primary_ctrl, false) {
+        devices.push((Arc::new(disk) as Arc<dyn BlockDevice>, "ide_0_0"));
+    } else if let Some(dev) = identify_atapi_probe(primary_io, primary_ctrl, false) {
+        devices.push((Arc::new(dev) as Arc<dyn BlockDevice>, "atapi_0_0"));
+    }
+    // Primary Slave
+    if let Some(disk) = identify_ata(primary_io, primary_ctrl, true) {
+        devices.push((Arc::new(disk) as Arc<dyn BlockDevice>, "ide_0_1"));
+    } else if let Some(dev) = identify_atapi_probe(primary_io, primary_ctrl, true) {
+        devices.push((Arc::new(dev) as Arc<dyn BlockDevice>, "atapi_0_1"));
+    }
+    // Secondary Master
+    if let Some(disk) = identify_ata(secondary_io, secondary_ctrl, false) {
+        devices.push((Arc::new(disk) as Arc<dyn BlockDevice>, "ide_1_0"));
+    } else if let Some(dev) = identify_atapi_probe(secondary_io, secondary_ctrl, false) {
+        devices.push((Arc::new(dev) as Arc<dyn BlockDevice>, "atapi_1_0"));
+    }
+    // Secondary Slave
+    if let Some(disk) = identify_ata(secondary_io, secondary_ctrl, true) {
+        devices.push((Arc::new(disk) as Arc<dyn BlockDevice>, "ide_1_1"));
+    } else if let Some(dev) = identify_atapi_probe(secondary_io, secondary_ctrl, true) {
+        devices.push((Arc::new(dev) as Arc<dyn BlockDevice>, "atapi_1_1"));
     }
 
-    // Wait for BSY to clear
-    if !wait_bsy_clear(io_base) {
-        return None;
+    info!("ATA_DISK: Found {} storage device(s)", devices.len());
+
+    for (device, name) in devices {
+        let path = format!("/dev/storage/{}", name);
+        let provider = Arc::new(StorageProvider { device });
+        
+        let (vfs_write, vfs_read) = port_create(65536).expect("ata_disk: port_create failed");
+        vfs_mount(vfs_write, &path).expect("ata_disk: vfs_mount failed");
+        info!("ATA_DISK: Mounted {} at {}", name, path);
+
+        stem::thread::spawn_task_detached(move || {
+            let mut ploop = ProviderLoop::new(vfs_read);
+            loop {
+                if let Ok(Some(req)) = ploop.try_next_request() {
+                    let resp = provider.handle_rpc(&req);
+                    let _ = ploop.send_response(&req, resp);
+                }
+                stem::yield_now();
+            }
+        }).expect("ata_disk: thread spawn failed");
     }
 
-    // Check for ATAPI (different signature in LBA mid/hi)
-    let lba_mid = ata_inb(io_base + ATA_REG_LBA_MID);
-    let lba_hi = ata_inb(io_base + ATA_REG_LBA_HI);
-    info!("ATA_DISK: identify_drive - signature mid={:x} hi={:x}", lba_mid, lba_hi);
-    if lba_mid == ATAPI_SIG_MID && lba_hi == ATAPI_SIG_HI {
-        return None; // ATAPI device - handled separately
-    }
-    if lba_mid != 0 || lba_hi != 0 {
-        return None; // Unknown signature
-    }
+    loop { stem::syscall::sleep_ms(60000); }
+}
 
-    // Wait for DRQ or ERR
+fn identify_ata(io: u16, ctrl: u16, slave: bool) -> Option<AtaDisk> {
+    let drive_sel = if slave { 0xB0 } else { 0xA0 };
+    ata_outb(io + ATA_REG_DRIVE, drive_sel);
+    for _ in 0..4 { ata_inb(ctrl); }
+    ata_outb(io + ATA_REG_SECCOUNT, 0);
+    ata_outb(io + ATA_REG_LBA_LO, 0);
+    ata_outb(io + ATA_REG_LBA_MID, 0);
+    ata_outb(io + ATA_REG_LBA_HI, 0);
+    ata_outb(io + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
+
+    let status = ata_inb(io + ATA_REG_STATUS);
+    if status == 0 || status == 0xFF { return None; }
+    if !wait_bsy_clear(io) { return None; }
+
+    let lba_mid = ata_inb(io + ATA_REG_LBA_MID);
+    let lba_hi = ata_inb(io + ATA_REG_LBA_HI);
+    if lba_mid != 0 || lba_hi != 0 { return None; }
+
     loop {
-        let status = ata_inb(io_base + ATA_REG_STATUS);
-        if status & ATA_SR_DRQ != 0 {
-            break;
-        }
-        if status & ATA_SR_ERR != 0 {
-            return None;
-        }
-        if status == 0 {
-            return None;
-        }
+        let s = ata_inb(io + ATA_REG_STATUS);
+        if s & ATA_SR_DRQ != 0 { break; }
+        if s & ATA_SR_ERR != 0 { return None; }
     }
 
-    // Read 256 words of identification data
     let mut ident = [0u16; 256];
-    for i in 0..256 {
-        ident[i] = ata_inw(io_base + ATA_REG_DATA);
-    }
+    for i in 0..256 { ident[i] = ata_inw(io + ATA_REG_DATA); }
 
-    // Parse identification data
-    let supports_lba48 = (ident[83] & (1 << 10)) != 0;
-
-    let sector_count = if supports_lba48 {
-        (ident[100] as u64)
-            | ((ident[101] as u64) << 16)
-            | ((ident[102] as u64) << 32)
-            | ((ident[103] as u64) << 48)
+    let lba48 = (ident[83] & (1 << 10)) != 0;
+    let count = if lba48 {
+        (ident[100] as u64) | ((ident[101] as u64) << 16) | ((ident[102] as u64) << 32) | ((ident[103] as u64) << 48)
     } else {
         (ident[60] as u64) | ((ident[61] as u64) << 16)
     };
 
-    // Extract model string (words 27-46, byte-swapped)
-    let mut model = [0u8; 40];
-    for i in 0..20 {
-        let word = ident[27 + i];
-        model[i * 2] = (word >> 8) as u8;
-        model[i * 2 + 1] = (word & 0xFF) as u8;
-    }
-
-    Some(AtaDisk {
-        io_base,
-        is_slave,
-        sector_count,
-        sector_size: 512,
-        supports_lba48,
-        model,
-        serial: [0u8; 20],
-        read_port_handle: None,
-    })
+    Some(AtaDisk { io_base: io, is_slave: slave, sector_count: count, sector_size: 512, supports_lba48: lba48 })
 }
 
-fn read_sectors(
-    disk: &AtaDisk,
-    lba: u64,
-    count: u16,
-    buf: &mut [u8],
-) -> Result<usize, &'static str> {
-    if count == 0 || count > 256 {
-        return Err("Invalid sector count");
-    }
+fn identify_atapi_probe(io: u16, ctrl: u16, slave: bool) -> Option<AtapiDevice> {
+    let drive_sel = if slave { 0xB0 } else { 0xA0 };
+    ata_outb(io + ATA_REG_DRIVE, drive_sel);
+    for _ in 0..4 { ata_inb(ctrl); }
+    ata_outb(io + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
+    let status = ata_inb(io + ATA_REG_STATUS);
+    if status == 0 || status == 0xFF { return None; }
+    if !wait_bsy_clear(io) { return None; }
 
-    let bytes_needed = count as usize * 512;
-    if buf.len() < bytes_needed {
-        return Err("Buffer too small");
-    }
-
-    if !disk.supports_lba48 && lba > 0x0FFFFFFF {
-        return Err("LBA out of range for LBA28");
-    }
-
-    let drive_sel = if disk.is_slave { 0xF0 } else { 0xE0 };
-
-    if disk.supports_lba48 {
-        ata_outb(disk.io_base + ATA_REG_DRIVE, drive_sel);
-        ata_outb(disk.io_base + ATA_REG_SECCOUNT, ((count >> 8) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_LO, ((lba >> 24) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_MID, ((lba >> 32) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_HI, ((lba >> 40) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_SECCOUNT, (count & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_LO, (lba & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_MID, ((lba >> 8) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_HI, ((lba >> 16) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS_EXT);
+    let lba_mid = ata_inb(io + ATA_REG_LBA_MID);
+    let lba_hi = ata_inb(io + ATA_REG_LBA_HI);
+    if lba_mid == ATAPI_SIG_MID && lba_hi == ATAPI_SIG_HI {
+        Some(AtapiDevice { io_base: io, ctrl_base: ctrl, is_slave: slave })
     } else {
-        let lba28 = lba as u32;
-        ata_outb(disk.io_base + ATA_REG_DRIVE, drive_sel | ((lba28 >> 24) & 0x0F) as u8);
-        ata_outb(disk.io_base + ATA_REG_SECCOUNT, count as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_LO, (lba28 & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_MID, ((lba28 >> 8) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_LBA_HI, ((lba28 >> 16) & 0xFF) as u8);
-        ata_outb(disk.io_base + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS);
-    }
-
-    let mut offset = 0;
-    for _ in 0..count {
-        loop {
-            let status = ata_inb(disk.io_base + ATA_REG_STATUS);
-            if status & ATA_SR_ERR != 0 {
-                return Err("Read error");
-            }
-            if status & ATA_SR_DRQ != 0 {
-                break;
-            }
-        }
-
-        for _ in 0..256 {
-            let word = ata_inw(disk.io_base + ATA_REG_DATA);
-            buf[offset] = (word & 0xFF) as u8;
-            buf[offset + 1] = (word >> 8) as u8;
-            offset += 2;
-        }
-    }
-
-    Ok(bytes_needed)
-}
-
-fn register_disk(disk: &mut AtaDisk, port: &str, drive: &str) {
-    // Create RPC port for block device service (4KB buffer)
-    let (write_handle, read_handle) = match port_create(4096) {
-        Ok(handles) => handles,
-        Err(e) => {
-            error!("ATA_DISK: Failed to create port: {:?}", e);
-            return;
-        }
-    };
-    disk.read_port_handle = Some(read_handle);
-
-    // Publish to VFS
-    use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
-    let _ = vfs_mkdir("/services/storage");
-    let name = alloc::format!("/services/storage/ata_{}_{}", port, drive);
-    if let Ok(fd) =
-        vfs_open(&name, abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR)
-    {
-        let _ = vfs_write(fd, alloc::format!("{}", write_handle).as_bytes());
-        let _ = vfs_close(fd);
-    }
-
-    let model_str = core::str::from_utf8(&disk.model).unwrap_or("Unknown").trim();
-
-    info!(
-        "ATA_DISK: Registered disk ch={} drv={} sectors={} lba48={} model='{}' rpc_port={}",
-        port, drive, disk.sector_count, disk.supports_lba48, model_str, write_handle
-    );
-}
-
-/// Identify an ATAPI device (CD-ROM, DVD, etc.)
-fn identify_atapi(io_base: u16, ctrl_base: u16, is_slave: bool) -> Option<AtapiDevice> {
-    // Select drive
-    let drive_sel = if is_slave { 0xB0 } else { 0xA0 };
-    ata_outb(io_base + ATA_REG_DRIVE, drive_sel);
-
-    // Small delay
-    for _ in 0..4 {
-        ata_inb(ctrl_base);
-    }
-
-    // Clear registers
-    ata_outb(io_base + ATA_REG_SECCOUNT, 0);
-    ata_outb(io_base + ATA_REG_LBA_LO, 0);
-    ata_outb(io_base + ATA_REG_LBA_MID, 0);
-    ata_outb(io_base + ATA_REG_LBA_HI, 0);
-
-    // Send IDENTIFY command first to detect signature
-    ata_outb(io_base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
-
-    let status = ata_inb(io_base + ATA_REG_STATUS);
-    if status == 0 || status == 0xFF {
-        return None;
-    }
-
-    if !wait_bsy_clear(io_base) {
-        return None;
-    }
-
-    // Check for ATAPI signature
-    let lba_mid = ata_inb(io_base + ATA_REG_LBA_MID);
-    let lba_hi = ata_inb(io_base + ATA_REG_LBA_HI);
-    if lba_mid != ATAPI_SIG_MID || lba_hi != ATAPI_SIG_HI {
-        return None;
-    }
-
-    // Now send IDENTIFY PACKET DEVICE
-    ata_outb(io_base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY_PACKET);
-
-    if !wait_bsy_clear(io_base) {
-        return None;
-    }
-
-    // Wait for DRQ
-    for _ in 0..10000 {
-        let status = ata_inb(io_base + ATA_REG_STATUS);
-        if status & ATA_SR_ERR != 0 {
-            return None;
-        }
-        if status & ATA_SR_DRQ != 0 {
-            break;
-        }
-    }
-
-    // Read 256 words of identification
-    let mut ident = [0u16; 256];
-    for i in 0..256 {
-        ident[i] = ata_inw(io_base + ATA_REG_DATA);
-    }
-
-    // Extract model (words 27-46, byte-swapped)
-    let mut model = [0u8; 40];
-    for i in 0..20 {
-        let word = ident[27 + i];
-        model[i * 2] = (word >> 8) as u8;
-        model[i * 2 + 1] = (word & 0xFF) as u8;
-    }
-
-    Some(AtapiDevice {
-        io_base,
-        ctrl_base,
-        is_slave,
-        sector_size: 2048,
-        sector_count: 0,
-        model,
-        serial: [0u8; 20],
-        read_port_handle: None,
-    })
-}
-
-/// Read sectors from ATAPI device using SCSI READ(12) packet command.
-/// Sector size is 2048 bytes for CD-ROM.
-pub fn atapi_read_sectors(
-    dev: &AtapiDevice,
-    lba: u64,
-    count: u32,
-    buf: &mut [u8],
-) -> Result<usize, &'static str> {
-    if count == 0 || count > 32 {
-        return Err("Invalid sector count");
-    }
-    let bytes_needed = count as usize * ATAPI_SECTOR_SIZE as usize;
-    if buf.len() < bytes_needed {
-        return Err("Buffer too small");
-    }
-
-    // Select drive
-    let drive_sel = if dev.is_slave { 0xB0 } else { 0xA0 };
-    ata_outb(dev.io_base + ATA_REG_DRIVE, drive_sel);
-
-    // Delay
-    for _ in 0..4 {
-        ata_inb(dev.ctrl_base);
-    }
-
-    if !wait_bsy_clear(dev.io_base) {
-        return Err("Device busy");
-    }
-
-    // Set byte count limit (max transfer size)
-    let byte_count = bytes_needed as u16;
-    ata_outb(dev.io_base + ATA_REG_LBA_MID, (byte_count & 0xFF) as u8);
-    ata_outb(dev.io_base + ATA_REG_LBA_HI, ((byte_count >> 8) & 0xFF) as u8);
-
-    // Send PACKET command
-    ata_outb(dev.io_base + ATA_REG_COMMAND, ATA_CMD_PACKET);
-
-    // Wait for DRQ (ready to receive packet)
-    for _ in 0..100000 {
-        let status = ata_inb(dev.io_base + ATA_REG_STATUS);
-        if status & ATA_SR_ERR != 0 {
-            return Err("Packet command error");
-        }
-        if status & ATA_SR_DRQ != 0 {
-            break;
-        }
-    }
-
-    // Build SCSI READ(12) command (12 bytes, padded to 6 words)
-    let lba32 = lba as u32;
-    let packet: [u16; 6] = [
-        0x00A8, // READ(12) opcode = 0xA8, flags = 0
-        ((lba32 >> 24) as u16) << 8 | ((lba32 >> 16) as u16 & 0xFF), // LBA high
-        ((lba32 >> 8) as u16 & 0xFF) << 8 | (lba32 as u16 & 0xFF), // LBA low
-        ((count >> 24) as u16) << 8 | ((count >> 16) as u16 & 0xFF), // Transfer length high
-        ((count >> 8) as u16 & 0xFF) << 8 | (count as u16 & 0xFF), // Transfer length low
-        0x0000, // Control
-    ];
-
-    // Send packet (6 words)
-    for word in packet {
-        ata_outw(dev.io_base + ATA_REG_DATA, word);
-    }
-
-    // Read data
-    let mut offset = 0;
-    for _ in 0..count {
-        // Wait for DRQ
-        loop {
-            let status = ata_inb(dev.io_base + ATA_REG_STATUS);
-            if status & ATA_SR_ERR != 0 {
-                return Err("Read error");
-            }
-            if status & ATA_SR_BSY == 0 && status & ATA_SR_DRQ != 0 {
-                break;
-            }
-        }
-
-        // Read 2048 bytes (1024 words)
-        for _ in 0..1024 {
-            let word = ata_inw(dev.io_base + ATA_REG_DATA);
-            buf[offset] = (word & 0xFF) as u8;
-            buf[offset + 1] = (word >> 8) as u8;
-            offset += 2;
-        }
-    }
-
-    Ok(bytes_needed)
-}
-
-fn ata_outw(port: u16, val: u16) {
-    // Write 16-bit word using ioport_write with size=2
-    ioport_write(port as usize, val as usize, 2);
-}
-
-fn register_atapi(dev: &mut AtapiDevice, port: &str, drive: &str) {
-    // Create RPC port for block device service (4KB buffer)
-    let (write_handle, read_handle) = match port_create(4096) {
-        Ok(handles) => handles,
-        Err(e) => {
-            error!("ATA_DISK: Failed to create port: {:?}", e);
-            return;
-        }
-    };
-    dev.read_port_handle = Some(read_handle);
-
-    // Publish to VFS
-    use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_open, vfs_write};
-    let _ = vfs_mkdir("/services/storage");
-    let name = alloc::format!("/services/storage/atapi_{}_{}", port, drive);
-    if let Ok(fd) =
-        vfs_open(&name, abi::syscall::vfs_flags::O_CREAT | abi::syscall::vfs_flags::O_RDWR)
-    {
-        let _ = vfs_write(fd, alloc::format!("{}", write_handle).as_bytes());
-        let _ = vfs_close(fd);
-    }
-
-    let model_str = core::str::from_utf8(&dev.model).unwrap_or("ATAPI Device").trim();
-
-    info!(
-        "ATA_DISK: Registered ATAPI ch={} drv={} model='{}' rpc_port={}",
-        port, drive, model_str, write_handle
-    );
-}
-
-#[stem::main]
-fn main(_arg: usize) -> ! {
-    info!("ATA_DISK: Starting ATA disk driver v1 (with ATAPI support)");
-
-    let mut disks: Vec<AtaDisk> = Vec::new();
-    let mut atapi_devs: Vec<AtapiDevice> = Vec::new();
-
-    // Probe primary port - ATA
-    info!("ATA_DISK: Probing primary port (0x1F0)...");
-    if let Some(mut disk) = identify_drive(ATA_PRIMARY_IO, ATA_PRIMARY_CTRL, false) {
-        info!("ATA_DISK: Found primary master (ATA)");
-        register_disk(&mut disk, "primary", "master");
-        disks.push(disk);
-    } else if let Some(mut dev) = identify_atapi(ATA_PRIMARY_IO, ATA_PRIMARY_CTRL, false) {
-        info!("ATA_DISK: Found primary master (ATAPI)");
-        register_atapi(&mut dev, "primary", "master");
-        atapi_devs.push(dev);
-    }
-
-    if let Some(mut disk) = identify_drive(ATA_PRIMARY_IO, ATA_PRIMARY_CTRL, true) {
-        info!("ATA_DISK: Found primary slave (ATA)");
-        register_disk(&mut disk, "primary", "slave");
-        disks.push(disk);
-    } else if let Some(mut dev) = identify_atapi(ATA_PRIMARY_IO, ATA_PRIMARY_CTRL, true) {
-        info!("ATA_DISK: Found primary slave (ATAPI)");
-        register_atapi(&mut dev, "primary", "slave");
-        atapi_devs.push(dev);
-    }
-
-    // Probe secondary port
-    info!("ATA_DISK: Probing secondary port (0x170)...");
-    if let Some(mut disk) = identify_drive(ATA_SECONDARY_IO, ATA_SECONDARY_CTRL, false) {
-        info!("ATA_DISK: Found secondary master (ATA)");
-        register_disk(&mut disk, "secondary", "master");
-        disks.push(disk);
-    } else if let Some(mut dev) = identify_atapi(ATA_SECONDARY_IO, ATA_SECONDARY_CTRL, false) {
-        info!("ATA_DISK: Found secondary master (ATAPI)");
-        register_atapi(&mut dev, "secondary", "master");
-        atapi_devs.push(dev);
-    }
-
-    if let Some(mut disk) = identify_drive(ATA_SECONDARY_IO, ATA_SECONDARY_CTRL, true) {
-        info!("ATA_DISK: Found secondary slave (ATA)");
-        register_disk(&mut disk, "secondary", "slave");
-        disks.push(disk);
-    } else if let Some(mut dev) = identify_atapi(ATA_SECONDARY_IO, ATA_SECONDARY_CTRL, true) {
-        info!("ATA_DISK: Found secondary slave (ATAPI)");
-        register_atapi(&mut dev, "secondary", "slave");
-        atapi_devs.push(dev);
-    }
-
-    // Summary
-    info!("ATA_DISK: Found {} ATA disk(s), {} ATAPI device(s)", disks.len(), atapi_devs.len());
-
-    info!("ATA_DISK: Entering RPC service loop");
-
-    // Create a VFS provider port pair and mount it so this driver participates
-    // in the inbox-backed actor model (ServiceProviderLoop control plane).
-    let (vfs_write, vfs_read) = match port_create(65536) {
-        Ok(pair) => pair,
-        Err(e) => {
-            error!("ATA_DISK: Failed to create VFS provider port: {:?}", e);
-            loop {
-                stem::syscall::sleep_ms(60_000);
-            }
-        }
-    };
-    match vfs_mount(vfs_write, "/dev/ata_ctl") {
-        Ok(()) => info!("ATA_DISK: VFS provider mounted at /dev/ata_ctl"),
-        Err(e) => error!("ATA_DISK: vfs_mount(/dev/ata_ctl) failed: {:?}", e),
-    }
-
-    let mut svc = match ServiceProviderLoop::new(ProviderLoop::new(vfs_read), 4096) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("ATA_DISK: ServiceProviderLoop::new failed: {:?}", e);
-            loop {
-                stem::syscall::sleep_ms(60_000);
-            }
-        }
-    };
-
-    // Register each per-device request handle as a secondary FD-readable source.
-    let mut tok_to_handle: Vec<(stem::wait_set::WaitToken, PortHandle)> = Vec::new();
-
-    for disk in &disks {
-        if let Some(h) = disk.read_port_handle {
-            if let Ok(fd) = vfs_handle_from_port(h) {
-                info!("ATA_DISK: Registering port handle {} (FD {})", h, fd);
-                if let Ok(tok) = svc.add_fd_readable(fd) {
-                    info!("ATA_DISK: Added FD {} with token {:?}", fd, tok);
-                    tok_to_handle.push((tok, h));
-                }
-            }
-        }
-    }
-    for dev in &atapi_devs {
-        if let Some(h) = dev.read_port_handle {
-            if let Ok(fd) = vfs_handle_from_port(h) {
-                if let Ok(tok) = svc.add_fd_readable(fd) {
-                    tok_to_handle.push((tok, h));
-                }
-            }
-        }
-    }
-
-    if tok_to_handle.is_empty() {
-        info!("ATA_DISK: No active devices to service");
-    }
-
-    info!("ATA_DISK: Entering main service loop...");
-    // Main service loop — inbox-first dispatch via ServiceProviderLoop.
-    loop {
-        info!("ATA_DISK: Calling svc.next_event()...");
-        match svc.next_event(None) {
-            Ok(ServiceProviderEvent::ProviderRequest(req)) => {
-                // This driver does not expose a VFS file hierarchy; return
-                // ENOSYS for any VFS RPC directed at the provider mount.
-                let _ = svc.send_response(&req, ProviderResponse::err(Errno::ENOSYS));
-            }
-
-            Ok(ServiceProviderEvent::Ready { token, event }) if event.is_readable() => {
-                let ready_handle = match tok_to_handle.iter().find(|(t, _)| *t == token) {
-                    Some((_, h)) => *h,
-                    None => continue,
-                };
-
-                // Find the device that has data and dispatch the request.
-                let mut found = false;
-                for disk in &disks {
-                    if disk.read_port_handle == Some(ready_handle) {
-                        let mut buf = [0u8; 4096];
-                        match port_try_recv(ready_handle, &mut buf) {
-                            Ok(len) if len > 0 => {
-                                handle_ata_request(disk, &buf[..len], ready_handle);
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("ATA_DISK: port_try_recv failed: {:?}", e);
-                            }
-                        }
-                        found = true;
-                        break;
-                    }
-                }
-
-                if !found {
-                    for dev in &atapi_devs {
-                        if dev.read_port_handle == Some(ready_handle) {
-                            let mut buf = [0u8; 4096];
-                            match port_try_recv(ready_handle, &mut buf) {
-                                Ok(len) if len > 0 => {
-                                    handle_atapi_request(dev, &buf[..len], ready_handle);
-                                }
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error!("ATA_DISK: port_try_recv failed: {:?}", e);
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-
-            Ok(ServiceProviderEvent::InboxClosed) => {
-                info!("ATA_DISK: inbox closed — exiting service loop");
-                break;
-            }
-
-            Ok(_) => {}
-
-            Err(e) => {
-                error!("ATA_DISK: next_event error: {:?}", e);
-                stem::sleep(Duration::from_millis(100));
-            }
-        }
-    }
-
-    stem::syscall::exit(0);
-}
-
-/// Handle a block device RPC request for ATA disk
-fn handle_ata_request(disk: &AtaDisk, request_data: &[u8], port_handle: PortHandle) {
-    if request_data.is_empty() {
-        send_error_response(port_handle, BlockDeviceError::InvalidParam);
-        return;
-    }
-
-    let request_type = request_data[0];
-
-    match request_type {
-        0 => handle_ata_identify(disk, port_handle),
-        1 => handle_ata_read(disk, &request_data[1..], port_handle),
-        2 => send_error_response(port_handle, BlockDeviceError::NotSupported), // Write not supported
-        3 => send_error_response(port_handle, BlockDeviceError::NotSupported), // Flush not supported
-        _ => send_error_response(port_handle, BlockDeviceError::InvalidParam),
-    }
-}
-
-/// Handle Identify request for ATA disk
-fn handle_ata_identify(disk: &AtaDisk, port_handle: PortHandle) {
-    let response = IdentifyResponse {
-        sector_size: disk.sector_size,
-        sector_count: disk.sector_count,
-        model: disk.model,
-        serial: disk.serial,
-        flags: if disk.supports_lba48 { device_flags::LBA48 } else { 0 },
-    };
-
-    let mut response_buf = [0u8; core::mem::size_of::<IdentifyResponse>() + 1];
-    response_buf[0] = BlockDeviceResponse::Ok as u8;
-
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            &response as *const _ as *const u8,
-            response_buf[1..].as_mut_ptr(),
-            core::mem::size_of::<IdentifyResponse>(),
-        );
-    }
-
-    if let Err(e) = port_send(port_handle, &response_buf) {
-        error!("ATA_DISK: Failed to send Identify response: {:?}", e);
-    }
-}
-
-/// Handle Read request for ATA disk
-fn handle_ata_read(disk: &AtaDisk, request_data: &[u8], port_handle: PortHandle) {
-    if request_data.len() < core::mem::size_of::<ReadRequest>() {
-        send_error_response(port_handle, BlockDeviceError::InvalidParam);
-        return;
-    }
-
-    let req: ReadRequest =
-        unsafe { core::ptr::read_unaligned(request_data.as_ptr() as *const ReadRequest) };
-
-    // Validate sector count (max 7 sectors of 512 bytes to fit in 4KB port buffer)
-    if req.sector_count == 0 || req.sector_count > 7 {
-        send_error_response(port_handle, BlockDeviceError::InvalidParam);
-        return;
-    }
-
-    if disk.sector_count > 0 && req.lba.saturating_add(req.sector_count as u64) > disk.sector_count
-    {
-        send_error_response(port_handle, BlockDeviceError::OutOfRange);
-        return;
-    }
-
-    // Read the data
-    let bytes_to_read = (req.sector_count as usize) * 512;
-    let mut data = vec![0u8; bytes_to_read];
-
-    match read_sectors(disk, req.lba, req.sector_count as u16, &mut data) {
-        Ok(_) => send_read_response(port_handle, &data),
-        Err(_) => send_error_response(port_handle, BlockDeviceError::IoError),
-    }
-}
-
-/// Handle a block device RPC request for ATAPI device
-fn handle_atapi_request(dev: &AtapiDevice, request_data: &[u8], port_handle: PortHandle) {
-    if request_data.is_empty() {
-        send_error_response(port_handle, BlockDeviceError::InvalidParam);
-        return;
-    }
-
-    let request_type = request_data[0];
-
-    match request_type {
-        0 => handle_atapi_identify(dev, port_handle),
-        1 => handle_atapi_read(dev, &request_data[1..], port_handle),
-        2 => send_error_response(port_handle, BlockDeviceError::NotSupported), // Write not supported
-        3 => send_error_response(port_handle, BlockDeviceError::NotSupported), // Flush not supported
-        _ => send_error_response(port_handle, BlockDeviceError::InvalidParam),
-    }
-}
-
-/// Handle Identify request for ATAPI device
-fn handle_atapi_identify(dev: &AtapiDevice, port_handle: PortHandle) {
-    let response = IdentifyResponse {
-        sector_size: dev.sector_size,
-        sector_count: dev.sector_count,
-        model: dev.model,
-        serial: dev.serial,
-        flags: 0,
-    };
-
-    let mut response_buf = [0u8; core::mem::size_of::<IdentifyResponse>() + 1];
-    response_buf[0] = BlockDeviceResponse::Ok as u8;
-
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            &response as *const _ as *const u8,
-            response_buf[1..].as_mut_ptr(),
-            core::mem::size_of::<IdentifyResponse>(),
-        );
-    }
-
-    if let Err(e) = port_send(port_handle, &response_buf) {
-        error!("ATA_DISK: Failed to send Identify response: {:?}", e);
-    }
-}
-
-/// Handle Read request for ATAPI device
-fn handle_atapi_read(dev: &AtapiDevice, request_data: &[u8], port_handle: PortHandle) {
-    if request_data.len() < core::mem::size_of::<ReadRequest>() {
-        send_error_response(port_handle, BlockDeviceError::InvalidParam);
-        return;
-    }
-
-    let req: ReadRequest =
-        unsafe { core::ptr::read_unaligned(request_data.as_ptr() as *const ReadRequest) };
-
-    // Validate sector count (max 1 sector of 2048 bytes to fit in 4KB port buffer)
-    if req.sector_count == 0 || req.sector_count > 1 {
-        send_error_response(port_handle, BlockDeviceError::InvalidParam);
-        return;
-    }
-
-    if dev.sector_count > 0 && req.lba.saturating_add(req.sector_count as u64) > dev.sector_count {
-        send_error_response(port_handle, BlockDeviceError::OutOfRange);
-        return;
-    }
-
-    // Read the data
-    let bytes_to_read = (req.sector_count as usize) * 2048;
-    let mut data = vec![0u8; bytes_to_read];
-
-    match atapi_read_sectors(dev, req.lba, req.sector_count, &mut data) {
-        Ok(_) => send_read_response(port_handle, &data),
-        Err(_) => send_error_response(port_handle, BlockDeviceError::IoError),
-    }
-}
-
-/// Send a Read success response
-fn send_read_response(port_handle: PortHandle, data: &[u8]) {
-    let header = ReadResponse { data_len: data.len() as u32 };
-
-    let response_size = 1 + core::mem::size_of::<ReadResponse>() + data.len();
-    let mut response_buf = vec![0u8; response_size];
-    response_buf[0] = BlockDeviceResponse::Ok as u8;
-
-    unsafe {
-        let header_bytes = core::slice::from_raw_parts(
-            &header as *const _ as *const u8,
-            core::mem::size_of::<ReadResponse>(),
-        );
-        response_buf[1..1 + core::mem::size_of::<ReadResponse>()].copy_from_slice(header_bytes);
-    }
-
-    response_buf[1 + core::mem::size_of::<ReadResponse>()..].copy_from_slice(data);
-
-    if let Err(e) = port_send(port_handle, &response_buf) {
-        error!("ATA_DISK: Failed to send Read response: {:?}", e);
-    }
-}
-
-/// Send an error response
-fn send_error_response(port_handle: PortHandle, error_code: BlockDeviceError) {
-    let error_resp = ErrorResponse { error_code: error_code as u8, _reserved: [0; 3] };
-
-    let mut response_buf = [0u8; 1 + core::mem::size_of::<ErrorResponse>()];
-    response_buf[0] = BlockDeviceResponse::Error as u8;
-
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            &error_resp as *const _ as *const u8,
-            response_buf[1..].as_mut_ptr(),
-            core::mem::size_of::<ErrorResponse>(),
-        );
-    }
-
-    if let Err(e) = port_send(port_handle, &response_buf) {
-        error!("ATA_DISK: Failed to send Error response: {:?}", e);
+        None
     }
 }

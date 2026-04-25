@@ -130,6 +130,7 @@ impl VfsDriver for DevFs {
             "input" => return Ok(Arc::new(DevSubDirNode::new("input/"))),
             "audio" => return Ok(Arc::new(DevSubDirNode::new("audio/"))),
             "net" => return Ok(Arc::new(DevSubDirNode::new("net/"))),
+            "storage" => return Ok(Arc::new(DevSubDirNode::new("storage/"))),
             _ => {}
         }
 
@@ -204,6 +205,18 @@ impl VfsNode for DevSubDirNode {
                 }
             }
         }
+
+        // Include mounts under this path from the global mount table.
+        // This allows drivers to register via vfs_mount() without needing
+        // to call devfs::register() explicitly.
+        let full_path = format!("/dev/{}", self.prefix.trim_end_matches('/'));
+        let mounts = super::mount::get_mounts_under(&full_path);
+        for m in mounts {
+            if !names.contains(&m) {
+                names.push(m);
+            }
+        }
+
         super::write_readdir_entries(names.iter().map(|s| s.as_str()), offset, buf)
     }
 }
@@ -238,6 +251,7 @@ impl VfsNode for DevDirNode {
         names.push("input".to_string());
         names.push("audio".to_string());
         names.push("net".to_string());
+        names.push("storage".to_string());
         names.push("rtc".to_string());
         names.push("random".to_string());
         names.push("urandom".to_string());
