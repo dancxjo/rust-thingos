@@ -18,6 +18,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use blossom::{BlossomCommand, BlossomError};
+use stem::{debug as blossom_debug, warn as blossom_warn};
 
 use crate::wayland::client::{ObjectEntry, WaylandClient};
 use crate::wayland::ipc;
@@ -413,6 +414,11 @@ fn dispatch_surface(
         WL_SURFACE_FRAME => {
             let cb_id = read_u32(&msg.data, 0).unwrap_or(0);
             if cb_id != 0 {
+                blossom_debug!(
+                    "wayland-server: wl_surface obj={} registered frame callback cb={}",
+                    obj_id,
+                    cb_id
+                );
                 client.insert(cb_id, ObjectEntry::Callback);
                 if let Some(ObjectEntry::Surface { pending_frame_cb, .. }) =
                     client.objects.get_mut(&obj_id)
@@ -473,6 +479,10 @@ fn handle_surface_commit(
         let has_buffer = pending_buffer.is_some();
         match blossom.on_surface_commit(xdg_id, has_buffer) {
             Err(BlossomError::CommitBeforeAckConfigure { .. }) => {
+                blossom_warn!(
+                    "wayland-server: xdg_surface error: buffer committed before ack_configure (obj={})",
+                    xdg_id
+                );
                 client.send_protocol_error(
                     xdg_id,
                     1, // xdg_surface error: unconfigured_buffer
@@ -581,6 +591,11 @@ fn dispatch_xdg_wm_base(
             let client_id = client.fd;
             match blossom.get_xdg_surface(client_id, new_id, bloom_surface_id) {
                 Ok(_) => {
+                    blossom_debug!(
+                        "wayland-server: xdg_surface obj={} created for surface={}",
+                        new_id,
+                        bloom_surface_id
+                    );
                     client.insert(new_id, ObjectEntry::XdgSurface { bloom_surface_id });
                     // Link the wl_surface back to this xdg_surface.
                     if let Some(ObjectEntry::Surface { xdg_surface_obj, .. }) =
@@ -590,6 +605,10 @@ fn dispatch_xdg_wm_base(
                     }
                 }
                 Err(BlossomError::XdgSurfaceAlreadyExists { .. }) => {
+                    blossom_warn!(
+                        "wayland-server: xdg_surface error: role conflict for surface={}",
+                        bloom_surface_id
+                    );
                     client.send_protocol_error(obj_id, 0, "wl_surface already has xdg_surface");
                 }
                 Err(_) => {}
@@ -597,6 +616,7 @@ fn dispatch_xdg_wm_base(
         }
         XDG_WM_BASE_PONG => {
             let serial = read_u32(&msg.data, 0).unwrap_or(0);
+            blossom_debug!("wayland-server: xdg_wm_base.pong serial={} received", serial);
             blossom.pong(serial);
         }
         _ => {}
@@ -627,6 +647,7 @@ fn dispatch_xdg_surface(
 
     match msg.opcode {
         XDG_SURFACE_DESTROY => {
+            blossom_debug!("wayland-server: xdg_surface obj={} destroyed", obj_id);
             if let Ok(cmds) = blossom.destroy_xdg_surface(obj_id) {
                 send_blossom_commands(client, &cmds, cmd_write);
             }
@@ -639,6 +660,11 @@ fn dispatch_xdg_surface(
             };
             match blossom.get_toplevel(client_id, obj_id, new_id) {
                 Ok(cmds) => {
+                    blossom_debug!(
+                        "wayland-server: xdg_toplevel obj={} assigned to xdg_surface={}",
+                        new_id,
+                        obj_id
+                    );
                     client.insert(
                         new_id,
                         ObjectEntry::XdgToplevel { xdg_surface_obj: obj_id },
@@ -646,6 +672,10 @@ fn dispatch_xdg_surface(
                     send_blossom_commands(client, &cmds, cmd_write);
                 }
                 Err(BlossomError::XdgSurfaceAlreadyHasRole { .. }) => {
+                    blossom_warn!(
+                        "wayland-server: xdg_surface error: surface={} already has a role",
+                        obj_id
+                    );
                     client.send_protocol_error(obj_id, 4, "xdg_surface already has a role");
                 }
                 Err(_) => {}
@@ -653,6 +683,7 @@ fn dispatch_xdg_surface(
         }
         XDG_SURFACE_GET_POPUP => {
             // Unsupported in v1 — send protocol error.
+            blossom_warn!("wayland-server: xdg_surface.get_popup rejected: not supported in v1");
             client.send_protocol_error(obj_id, 0, "get_popup not supported in v1");
         }
         XDG_SURFACE_SET_WINDOW_GEOMETRY => {
@@ -665,8 +696,17 @@ fn dispatch_xdg_surface(
         XDG_SURFACE_ACK_CONFIGURE => {
             let serial = read_u32(&msg.data, 0).unwrap_or(0);
             match blossom.ack_configure(obj_id, serial) {
-                Ok(_) => {}
+                Ok(_) => {
+                    blossom_debug!(
+                        "wayland-server: xdg_surface.ack_configure serial={} accepted",
+                        serial
+                    );
+                }
                 Err(BlossomError::UnknownSerial { .. }) => {
+                    blossom_warn!(
+                        "wayland-server: xdg_surface error: invalid serial {} in ack_configure",
+                        serial
+                    );
                     client.send_protocol_error(obj_id, 3, "invalid serial in ack_configure");
                 }
                 Err(_) => {}
@@ -702,6 +742,7 @@ fn dispatch_xdg_toplevel(
 ) -> Vec<Vec<u8>> {
     match msg.opcode {
         XDG_TOPLEVEL_DESTROY => {
+            blossom_debug!("wayland-server: xdg_toplevel obj={} destroyed", obj_id);
             let _ = blossom.destroy_toplevel(obj_id);
             client.destroy(obj_id);
         }
@@ -712,12 +753,18 @@ fn dispatch_xdg_toplevel(
         XDG_TOPLEVEL_SET_TITLE => {
             if let Some((s, _)) = read_string(&msg.data, 0) {
                 let title = String::from_utf8_lossy(s).into_owned();
+                blossom_debug!("wayland-server: xdg_toplevel obj={} title=\"{}\"", obj_id, title);
                 let _ = blossom.set_title(obj_id, title);
             }
         }
         XDG_TOPLEVEL_SET_APP_ID => {
             if let Some((s, _)) = read_string(&msg.data, 0) {
                 let app_id = String::from_utf8_lossy(s).into_owned();
+                blossom_debug!(
+                    "wayland-server: xdg_toplevel obj={} app_id=\"{}\"",
+                    obj_id,
+                    app_id
+                );
                 let _ = blossom.set_app_id(obj_id, app_id);
             }
         }
@@ -801,9 +848,18 @@ pub fn send_blossom_commands(
             BlossomCommand::SendXdgSurfaceConfigure { xdg_surface, serial, .. } => {
                 // xdg_surface.configure(serial: uint)
                 // opcode 0
+                blossom_debug!(
+                    "wayland-server: xdg_surface.configure serial={} sent to obj={}",
+                    serial,
+                    xdg_surface
+                );
                 client.send(*xdg_surface, 0, &serial.to_ne_bytes());
             }
-            BlossomCommand::MarkSurfaceReadyForMapping { .. } => {
+            BlossomCommand::MarkSurfaceReadyForMapping { surface } => {
+                blossom_debug!(
+                    "wayland-server: surface {} ready for mapping",
+                    surface
+                );
                 // No outgoing Wayland event needed; the compositor will map
                 // the surface based on the commit IPC command.
             }
@@ -815,6 +871,10 @@ pub fn send_blossom_commands(
             BlossomCommand::SendPing { wm_base, serial, .. } => {
                 // xdg_wm_base.ping(serial: uint)
                 // opcode 0
+                blossom_debug!(
+                    "wayland-server: xdg_wm_base.ping serial={} sent",
+                    serial
+                );
                 client.send(*wm_base, 0, &serial.to_ne_bytes());
             }
         }
