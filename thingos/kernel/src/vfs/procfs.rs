@@ -33,7 +33,14 @@
 //! | `/proc/<pid>/place`              | Canonical `thingos::place::Place` — world/visibility context (Phase 8)  |
 //! | `/proc/<pid>/presence`           | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
 //! | `/proc/<pid>/job_observer`       | Write-only registration of caller inbox as `JobExit` observer |
-//! | `/proc/<pid>/serviceloop/`       | Directory of ServiceLoop watchdog metrics |
+//! | `/proc/<pid>/serviceloop/`       | ServiceLoop diagnostic directory (state, name, last\_event, and precision timestamps) |
+//! | `/proc/<pid>/serviceloop/name`            | Human-readable loop name |
+//! | `/proc/<pid>/serviceloop/state`           | Coarse loop state (idle/waiting/dispatching/shutdown) |
+//! | `/proc/<pid>/serviceloop/last_event`      | Label of the last dispatched event |
+//! | `/proc/<pid>/serviceloop/last_dispatch_ns`| Monotonic ns of last dispatch |
+//! | `/proc/<pid>/serviceloop/wakeups`         | Total wakeup count |
+//! | `/proc/<pid>/serviceloop/timeouts`        | Timeout wakeup count |
+//! | `/proc/<pid>/serviceloop/errors`          | Dispatch error count |
 //! | `/proc/<pid>/serviceloop/last_enter_wait_ns`    | Monotonic ns of last wait entry |
 //! | `/proc/<pid>/serviceloop/last_exit_wait_ns`     | Monotonic ns of last wait exit |
 //! | `/proc/<pid>/serviceloop/last_dispatch_start_ns`| Monotonic ns of last dispatch start |
@@ -249,12 +256,6 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         return lookup_pid_task(pid, tid_and_rest);
     }
 
-    // serviceloop paths are backed by the kernel-side stats registry, not the
-    // process snapshot, so we can serve them even when no snapshot is present.
-    if rest == "serviceloop" || rest.starts_with("serviceloop/") {
-        return lookup_pid_serviceloop(pid, rest);
-    }
-
     let snap = process_snapshot(pid).ok_or(Errno::ENOENT)?;
 
     match rest {
@@ -411,53 +412,111 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         }
         // /proc/<pid>/job_observer — register caller inbox for JobExit notifications.
         "job_observer" => Ok(Arc::new(ProcPidJobObserverNode { pid })),
-        _ => Err(Errno::ENOENT),
-    }
-}
-
-/// Look up a node inside `/proc/<pid>/serviceloop/`.
-fn lookup_pid_serviceloop(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
-    match rest {
+        // /proc/<pid>/serviceloop — ServiceLoop diagnostic directory.
         "serviceloop" => Ok(Arc::new(ProcPidServiceLoopDirNode { pid })),
+        // /proc/<pid>/serviceloop/<file> — individual ServiceLoop diagnostic files.
+        //
+        // Coarse state fields (name/state/last_event/…) come from ProcessInfo,
+        // populated by SYS_SERVICE_LOOP_REPORT.  Precision timing fields
+        // (last_enter_wait_ns/…) come from the SERVICE_LOOP_STATS registry,
+        // populated by /proc/self/serviceloop/stats writes.
+        "serviceloop/name"
+        | "serviceloop/state"
+        | "serviceloop/last_event"
+        | "serviceloop/last_dispatch_ns"
+        | "serviceloop/wakeups"
+        | "serviceloop/timeouts"
+        | "serviceloop/errors" => {
+            let file = rest.strip_prefix("serviceloop/").unwrap_or(rest);
+            let pinfo =
+                crate::sched::process_info_for_tid_current(pid as u64).ok_or(Errno::ENOENT)?;
+            let diag = pinfo.lock().service_loop.clone();
+            let text = match file {
+                "name" => {
+                    let name = diag.as_ref().map(|d| d.name.as_str()).unwrap_or("-");
+                    alloc::format!("{}\n", name)
+                }
+                "state" => {
+                    let s = diag.as_ref().map(|d| d.state.as_str()).unwrap_or("idle");
+                    alloc::format!("{}\n", s)
+                }
+                "last_event" => {
+                    let ev = diag.as_ref().map(|d| d.last_event.as_str()).unwrap_or("-");
+                    alloc::format!("{}\n", ev)
+                }
+                "last_dispatch_ns" => {
+                    let ts = diag.as_ref().map(|d| d.last_dispatch_ns).unwrap_or(0);
+                    alloc::format!("{}\n", ts)
+                }
+                "wakeups" => {
+                    let n = diag.as_ref().map(|d| d.wakeups).unwrap_or(0);
+                    alloc::format!("{}\n", n)
+                }
+                "timeouts" => {
+                    let n = diag.as_ref().map(|d| d.timeouts).unwrap_or(0);
+                    alloc::format!("{}\n", n)
+                }
+                "errors" => {
+                    let n = diag.as_ref().map(|d| d.errors).unwrap_or(0);
+                    alloc::format!("{}\n", n)
+                }
+                _ => return Err(Errno::ENOENT),
+            };
+            // Inode: top nibble 0xE, next 32 bits = pid, file discriminant in low bits.
+            let file_idx: u64 = match file {
+                "name" => 0,
+                "state" => 1,
+                "last_event" => 2,
+                "last_dispatch_ns" => 3,
+                "wakeups" => 4,
+                "timeouts" => 5,
+                "errors" => 6,
+                _ => 7,
+            };
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 16) | file_idx;
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
+        }
+        // /proc/<pid>/serviceloop/<precision-timing-file> — hot-path timing metrics.
         "serviceloop/last_enter_wait_ns" => {
             let text = get_service_loop_stats(pid)
                 .map(|s| alloc::format!("{}\n", s.last_enter_wait_ns))
                 .unwrap_or_else(|| alloc::string::String::from("0\n"));
-            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 1;
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 16) | 8;
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
         }
         "serviceloop/last_exit_wait_ns" => {
             let text = get_service_loop_stats(pid)
                 .map(|s| alloc::format!("{}\n", s.last_exit_wait_ns))
                 .unwrap_or_else(|| alloc::string::String::from("0\n"));
-            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 2;
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 16) | 9;
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
         }
         "serviceloop/last_dispatch_start_ns" => {
             let text = get_service_loop_stats(pid)
                 .map(|s| alloc::format!("{}\n", s.last_dispatch_start_ns))
                 .unwrap_or_else(|| alloc::string::String::from("0\n"));
-            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 3;
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 16) | 10;
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
         }
         "serviceloop/last_dispatch_end_ns" => {
             let text = get_service_loop_stats(pid)
                 .map(|s| alloc::format!("{}\n", s.last_dispatch_end_ns))
                 .unwrap_or_else(|| alloc::string::String::from("0\n"));
-            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 4;
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 16) | 11;
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
         }
         "serviceloop/current_event_kind" => {
             let text = get_service_loop_stats(pid)
                 .map(|s| alloc::format!("{}\n", s.current_event_kind))
                 .unwrap_or_else(|| alloc::string::String::from("0\n"));
-            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 5) | 5;
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 16) | 12;
             Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
         }
         _ => Err(Errno::ENOENT),
     }
 }
-///
+
+
 /// `tid_and_rest` is everything after `"task/"`, e.g. `""` (the directory
 /// itself), `"100"` (per-thread directory), or `"100/name"` (thread name).
 fn lookup_pid_task(pid: u32, tid_and_rest: &str) -> SysResult<Arc<dyn VfsNode>> {
@@ -737,9 +796,12 @@ impl VfsNode for ProcPidJobObserverNode {
     }
 }
 
-// ── /proc/<pid>/serviceloop/ directory ───────────────────────────────────────
+// ── /proc/<pid>/serviceloop/ directory ────────────────────────────────────────
 
-/// Per-pid ServiceLoop watchdog metrics directory.
+/// Directory node for `/proc/<pid>/serviceloop/`.
+///
+/// Exposes diagnostic state reported via `SYS_SERVICE_LOOP_REPORT` and
+/// precision timestamps from the `ServiceLoop` hot path.
 struct ProcPidServiceLoopDirNode {
     pid: u32,
 }
@@ -755,12 +817,19 @@ impl VfsNode for ProcPidServiceLoopDirNode {
         Ok(VfsStat {
             mode: VfsStat::S_IFDIR | 0o555,
             size: 0,
-            ino: 0xE000_0000_0000_0000u64 | (self.pid as u64),
+            ino: 0xE000_0000_0000_0000u64 | ((self.pid as u64) << 16) | 0xFF,
             ..Default::default()
         })
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let entries = [
+            "name",
+            "state",
+            "last_event",
+            "last_dispatch_ns",
+            "wakeups",
+            "timeouts",
+            "errors",
             "last_enter_wait_ns",
             "last_exit_wait_ns",
             "last_dispatch_start_ns",
@@ -797,14 +866,18 @@ impl VfsNode for ProcSelfServiceLoopDirNode {
     }
 }
 
-// ── /proc/self/serviceloop/stats — publish metrics from userspace ─────────────
+// ── /proc/self/serviceloop/stats — publish precision metrics from userspace ────
 
-/// Write-only node for publishing ServiceLoop metrics from userspace.
+/// Write-only node for publishing ServiceLoop precision timing metrics from userspace.
 ///
 /// The calling process writes a key-value text block (as produced by
 /// `stem::service_loop::LoopMetricsSnapshot::write_text`) to this path.
 /// The kernel parses it and stores the result in [`SERVICE_LOOP_STATS`],
-/// making it visible via `/proc/<pid>/serviceloop/*`.
+/// making it visible via `/proc/<pid>/serviceloop/{last_enter_wait_ns,…}`.
+///
+/// Note: coarse loop state (`state`, `name`, `last_event`, etc.) is reported
+/// through `SYS_SERVICE_LOOP_REPORT` which writes into `ProcessInfo::service_loop`.
+/// Both mechanisms are read by `/proc/<pid>/serviceloop/`.
 struct ProcSelfServiceLoopStatsNode;
 
 impl VfsNode for ProcSelfServiceLoopStatsNode {
@@ -834,6 +907,7 @@ impl VfsNode for ProcSelfServiceLoopStatsNode {
 }
 
 // ── /proc/<pid>/fd/ directory ─────────────────────────────────────────────────
+
 
 struct ProcPidFdDirNode {
     #[allow(dead_code)]

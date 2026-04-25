@@ -59,10 +59,7 @@ pub fn sys_wait_many(
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
     loop {
         let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
-        let ready = {
-            let lock = pinfo_arc.lock();
-            collect_ready(&lock, specs, &mut results[..results_cap])?
-        };
+        let ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
         if ready > 0 {
             unsafe {
                 let src = core::slice::from_raw_parts(
@@ -108,10 +105,7 @@ pub fn sys_wait_many(
         }
 
         let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
-        let ready = {
-            let lock = pinfo_arc.lock();
-            collect_ready(&lock, specs, &mut results[..results_cap])?
-        };
+        let ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
         if ready > 0 || timeout_expired(timeout_tick) {
             cleanup_all(&regs, tid, timeout_tick)?;
             let count = if ready > 0 {
@@ -162,7 +156,7 @@ fn timeout_expired(timeout_tick: Option<u64>) -> bool {
 }
 
 fn collect_ready(
-    pinfo: &crate::task::ProcessInfo,
+    pinfo_arc: &Arc<spin::Mutex<crate::task::ProcessInfo>>,
     specs: &[WaitSpec],
     out: &mut [WaitResult],
 ) -> SysResult<usize> {
@@ -172,7 +166,7 @@ fn collect_ready(
             break;
         }
         crate::ktrace!("collect_ready: polling spec[{}] kind={} object={:x} token={:x}", count, spec.kind, spec.object, spec.token);
-        if let Some(result) = poll_spec(pinfo, spec)? {
+        if let Some(result) = poll_spec(pinfo_arc, spec)? {
             out[count] = result;
             count += 1;
         }
@@ -181,10 +175,13 @@ fn collect_ready(
 }
 
 #[allow(deprecated)] // handle legacy WaitKind variants that map to ENOSYS
-fn poll_spec(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
+fn poll_spec(
+    pinfo_arc: &Arc<spin::Mutex<crate::task::ProcessInfo>>,
+    spec: &WaitSpec,
+) -> SysResult<Option<WaitResult>> {
     match WaitKind::from_u32(spec.kind).ok_or(Errno::EINVAL)? {
-        WaitKind::Port => poll_port(pinfo, spec),
-        WaitKind::Fd => poll_fd(pinfo, spec),
+        WaitKind::Port => poll_port(pinfo_arc, spec),
+        WaitKind::Fd => poll_fd(pinfo_arc, spec),
         WaitKind::GraphOp => poll_graph_op(spec),
         WaitKind::TaskExit => poll_task_exit(spec),
         WaitKind::Irq => Ok(poll_irq(spec)),
@@ -204,41 +201,49 @@ fn error_result(spec: &WaitSpec, errno: Errno) -> WaitResult {
     }
 }
 
-fn poll_port(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
+fn poll_port(
+    pinfo_arc: &Arc<spin::Mutex<crate::task::ProcessInfo>>,
+    spec: &WaitSpec,
+) -> SysResult<Option<WaitResult>> {
     let handle = crate::ipc::IpcHandle(spec.object as u32);
-    let table = &pinfo.ipc_table;
     let mut ready_flags = 0u32;
     let mut value = 0i64;
 
     if (spec.flags & wait::interest::READABLE) != 0 {
-        match table.get(handle, crate::ipc::IpcHandleMode::Read) {
-            Some(entry) => {
-                let port = Arc::clone(&entry.port);
-                let is_empty = port.is_empty();
-                let has_writers = port.has_writers();
-                if !is_empty {
-                    ready_flags |= wait::ready::READABLE;
-                    value = port.len() as i64;
-                } else if !has_writers {
-                    ready_flags |= wait::ready::HANGUP;
-                }
+        let port = {
+            let pinfo = pinfo_arc.lock();
+            let table = &pinfo.ipc_table;
+            match table.get(handle, crate::ipc::IpcHandleMode::Read) {
+                Some(entry) => Arc::clone(&entry.port),
+                None => return Ok(Some(error_result(spec, Errno::EBADF))),
             }
-            None => return Ok(Some(error_result(spec, Errno::EBADF))),
+        };
+
+        let is_empty = port.is_empty();
+        let has_writers = port.has_writers();
+        if !is_empty {
+            ready_flags |= wait::ready::READABLE;
+            value = port.len() as i64;
+        } else if !has_writers {
+            ready_flags |= wait::ready::HANGUP;
         }
     }
 
     if (spec.flags & wait::interest::WRITABLE) != 0 {
-        match table.get(handle, crate::ipc::IpcHandleMode::Write) {
-            Some(entry) => {
-                let port = Arc::clone(&entry.port);
-                if !port.is_full() {
-                    ready_flags |= wait::ready::WRITABLE;
-                    value = port.available() as i64;
-                } else if !port.has_readers() {
-                    ready_flags |= wait::ready::HANGUP;
-                }
+        let port = {
+            let pinfo = pinfo_arc.lock();
+            let table = &pinfo.ipc_table;
+            match table.get(handle, crate::ipc::IpcHandleMode::Write) {
+                Some(entry) => Arc::clone(&entry.port),
+                None => return Ok(Some(error_result(spec, Errno::EBADF))),
             }
-            None => return Ok(Some(error_result(spec, Errno::EBADF))),
+        };
+
+        if !port.is_full() {
+            ready_flags |= wait::ready::WRITABLE;
+            value = port.available() as i64;
+        } else if !port.has_readers() {
+            ready_flags |= wait::ready::HANGUP;
         }
     }
 
@@ -256,11 +261,16 @@ fn poll_port(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Opt
     }
 }
 
-fn poll_fd(pinfo: &crate::task::ProcessInfo, spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
-    let revents = {
+fn poll_fd(
+    pinfo_arc: &Arc<spin::Mutex<crate::task::ProcessInfo>>,
+    spec: &WaitSpec,
+) -> SysResult<Option<WaitResult>> {
+    let node = {
+        let pinfo = pinfo_arc.lock();
         let entry = pinfo.handle_table.get(spec.object as u32)?;
-        entry.node.poll()
+        entry.node.clone()
     };
+    let revents = node.poll();
     let mut ready_flags = 0u32;
     if (spec.flags & wait::interest::READABLE) != 0
         && (revents & abi::syscall::poll_flags::POLLIN) != 0
@@ -471,6 +481,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }))
     }
 
@@ -485,10 +496,7 @@ mod tests {
             crate::sched::hooks::PROCESS_INFO_HOOK = Some(fd_test_process_info_hook);
         }
         FD_TEST_PINFO.lock().replace(pinfo.clone());
-        let result = {
-            let lock = pinfo.lock();
-            poll_spec(&lock, spec)
-        };
+        let result = poll_spec(&pinfo, spec);
         unsafe {
             crate::sched::hooks::PROCESS_INFO_HOOK = None;
             crate::sched::hooks::CURRENT_TID_HOOK = None;
@@ -654,7 +662,7 @@ mod tests {
         let mut results = [WaitResult::default(); 2];
         let ready = {
             let lock = pinfo.lock();
-            collect_ready(&lock, &specs, &mut results).expect("collect")
+            collect_ready(pinfo, &specs, &mut results).expect("collect")
         };
         assert_eq!(ready, 2);
         assert_eq!(results[0].token, 1);
@@ -704,7 +712,7 @@ mod tests {
         let mut results = [WaitResult::default(); 1];
         let ready = {
             let lock = pinfo.lock();
-            collect_ready(&lock, &specs, &mut results).expect("collect")
+            collect_ready(pinfo, &specs, &mut results).expect("collect")
         };
         assert_eq!(ready, 1);
         assert_eq!(results[0].token, 101);

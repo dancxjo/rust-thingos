@@ -202,6 +202,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }))
     }
 

@@ -386,6 +386,19 @@ pub const SYS_LOG_SET_LEVEL: u32 = 0x7003;
 /// Mix caller-supplied bytes into the kernel entropy pool and mark it seeded.
 /// Intended for privileged entropy-source drivers (analogous to `SYS_TIME_ANCHOR`).
 pub const SYS_ENTROPY_SEED: u32 = 0x7004;
+/// Report the calling process's ServiceLoop diagnostic state to the kernel.
+///
+/// Used by `stem::service_loop::ServiceLoop` to publish observability data
+/// that is then readable via `/proc/<pid>/serviceloop/`.
+///
+/// Args:
+///   0: state tag — 0=idle, 1=waiting, 2=dispatching, 3=shutdown
+///   1: name_ptr  — pointer to loop-name UTF-8 bytes (may be null)
+///   2: name_len  — byte length of name string
+///   3: last_event_ptr — pointer to last-event kind UTF-8 bytes (may be null)
+///   4: last_event_len — byte length of last-event string
+///   5: last_dispatch_ns — monotonic nanosecond timestamp of last dispatch
+pub const SYS_SERVICE_LOOP_REPORT: u32 = 0x7005;
 
 pub mod reboot_cmd {
     pub const RESTART: u32 = 0;

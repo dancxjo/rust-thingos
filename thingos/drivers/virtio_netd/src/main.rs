@@ -503,6 +503,11 @@ fn start_provider_thread(
             };
         provider_started.store(true, Ordering::Release);
 
+        // Short timeout so we periodically poll the hardware even when no VFS
+        // requests are pending.  1 ms is enough to drain RX bursts promptly
+        // without spinning.
+        let poll_timeout = stem::time::Duration::from_millis(1);
+
         loop {
             // Check shutdown flag first so we exit promptly after the main
             // thread unmounts the provider and requests a clean stop.
@@ -511,29 +516,6 @@ fn start_provider_thread(
                 break;
             }
 
-            {
-                let mut driver = shared.driver.lock();
-                if let Some(link_up) = driver.poll_link_change() {
-                    let event = if link_up { "link-up" } else { "link-down" };
-                    {
-                        let mut state = shared.state.lock();
-                        state.link_up = link_up;
-                        state.push_event(event);
-                    }
-                    stem::debug!("VIRTIO_NETD: Link state changed: {}", event);
-                    let _ = stem::syscall::vfs::vfs_notify(
-                        req_write,
-                        HANDLE_EVENTS,
-                        abi::syscall::poll_flags::POLLIN,
-                    );
-                }
-            }
-        // Short timeout so we periodically poll the hardware even when no VFS
-        // requests are pending.  1 ms is enough to drain RX bursts promptly
-        // without spinning.
-        let poll_timeout = stem::time::Duration::from_millis(1);
-
-        loop {
             // Poll device state before each blocking wait so we never miss a
             // frame or link-change that arrived between loop iterations.
             poll_device(&shared, req_write);
