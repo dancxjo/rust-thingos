@@ -74,6 +74,9 @@ impl VfsDriver for ProcFs {
             "ipc/ports" => Ok(Arc::new(IpcDiagNode::ports())),
             "ipc/pipes" => Ok(Arc::new(IpcDiagNode::pipes())),
             "ipc/vfs_rpc" => Ok(Arc::new(IpcDiagNode::vfs_rpc())),
+            // /proc/sched — scheduler diagnostics directory
+            "sched" => Ok(Arc::new(SchedDirNode)),
+            "sched/stat" => Ok(Arc::new(SchedStatNode)),
             // /proc/self — virtual directory for the calling process
             "self" => Ok(Arc::new(ProcSelfDirNode)),
             // /proc/self/exe — symlink to the current process's executable
@@ -110,6 +113,13 @@ impl VfsDriver for ProcFs {
                 Ok(Arc::new(crate::vfs::inbox_node::InboxNode::new(inbox)))
             }
             _ => {
+                // Try to match /proc/sched/cpu<N> paths.
+                if let Some(rest) = path.strip_prefix("sched/cpu") {
+                    if let Ok(cpu_id) = rest.parse::<usize>() {
+                        return Ok(Arc::new(SchedCpuNode { cpu_id }));
+                    }
+                }
+
                 // Try to match /proc/<pid>/... paths.
                 // `path` is already relative to the mount point, so it looks
                 // like "42/status", "42/cmdline", "42", etc.
@@ -459,6 +469,7 @@ impl VfsNode for ProcDirNode {
             String::from("cpuinfo"),
             String::from("uptime"),
             String::from("ipc"),
+            String::from("sched"),
             String::from("self"),
         ];
         for pid in process_ids() {
@@ -1136,6 +1147,125 @@ impl VfsNode for IpcDiagNode {
     }
 }
 
+// ── /proc/sched/ — scheduler diagnostics ─────────────────────────────────────
+//
+// | Path                 | Contents                                        |
+// |----------------------|-------------------------------------------------|
+// | `/proc/sched`        | Directory listing                               |
+// | `/proc/sched/stat`   | One block per online CPU with all counters      |
+// | `/proc/sched/cpu<N>` | Single-CPU counters for CPU N                   |
+
+/// Directory node for `/proc/sched`.
+struct SchedDirNode;
+
+impl VfsNode for SchedDirNode {
+    fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 600, ..Default::default() })
+    }
+    fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let diag = crate::sched::collect_sched_diag_current();
+        let mut names: Vec<String> = Vec::with_capacity(diag.per_cpu.len() + 1);
+        names.push(String::from("stat"));
+        for cpu in &diag.per_cpu {
+            names.push(alloc::format!("cpu{}", cpu.cpu_id));
+        }
+        super::write_readdir_entries(names.iter().map(|s: &String| s.as_str()), offset, buf)
+    }
+}
+
+/// Render a single [`CpuSchedDiag`] into a key: value text block.
+fn render_cpu_sched_diag(cpu: &crate::sched::CpuSchedDiag) -> String {
+    alloc::format!(
+        "cpu: {}\nrunnable_count: {}\ncontext_switches: {}\nwakeups: {}\nsteals_in: {}\nsteals_out: {}\ntimer_interrupts: {}\nidle_total_us: {}\nidle_episodes: {}\ndispatch_count: {}\nresched_ipi_received: {}\nmailbox_pushes: {}\nmailbox_tasks_drained: {}\n",
+        cpu.cpu_id,
+        cpu.runnable_count,
+        cpu.context_switches,
+        cpu.wakeups,
+        cpu.steals_in,
+        cpu.steals_out,
+        cpu.timer_interrupts,
+        cpu.idle_total_us,
+        cpu.idle_episodes,
+        cpu.dispatch_count,
+        cpu.resched_ipi_received,
+        cpu.mailbox_pushes,
+        cpu.mailbox_tasks_drained,
+    )
+}
+
+/// `/proc/sched/stat` — aggregate per-CPU scheduler metrics.
+///
+/// Emits one block per online CPU, each containing all tracked counters.
+/// Blocks are separated by a blank line for easy `grep`/`awk` consumption.
+struct SchedStatNode;
+
+impl VfsNode for SchedStatNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let diag = crate::sched::collect_sched_diag_current();
+        let mut text = alloc::format!("online_cpus: {}\n\n", diag.online_cpu_count);
+        for cpu in &diag.per_cpu {
+            text.push_str(&render_cpu_sched_diag(cpu));
+            text.push('\n');
+        }
+        let data = text.as_bytes();
+        let off = offset as usize;
+        if off >= data.len() {
+            return Ok(0);
+        }
+        let n = (data.len() - off).min(buf.len());
+        buf[..n].copy_from_slice(&data[off..off + n]);
+        Ok(n)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EROFS)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat { mode: VfsStat::S_IFREG | 0o444, size: 0, ino: 601, ..Default::default() })
+    }
+}
+
+/// `/proc/sched/cpu<N>` — per-CPU scheduler metrics for a single CPU.
+struct SchedCpuNode {
+    cpu_id: usize,
+}
+
+impl VfsNode for SchedCpuNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let diag = crate::sched::collect_sched_diag_current();
+        // Try direct index first (cpu_id usually equals vector position for
+        // contiguous online CPUs), then fall back to a linear search.
+        let cpu = diag
+            .per_cpu
+            .get(self.cpu_id)
+            .filter(|c| c.cpu_id == self.cpu_id)
+            .or_else(|| diag.per_cpu.iter().find(|c| c.cpu_id == self.cpu_id))
+            .ok_or(Errno::ENOENT)?;
+        let text = render_cpu_sched_diag(cpu);
+        let data = text.as_bytes();
+        let off = offset as usize;
+        if off >= data.len() {
+            return Ok(0);
+        }
+        let n = (data.len() - off).min(buf.len());
+        buf[..n].copy_from_slice(&data[off..off + n]);
+        Ok(n)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EROFS)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        // Inode: top nibble 0x6, bottom 16 bits = cpu_id.
+        let ino = 0x6000_0000_0000_0000u64 | (self.cpu_id as u64 & 0xFFFF);
+        Ok(VfsStat { mode: VfsStat::S_IFREG | 0o444, size: 0, ino, ..Default::default() })
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1432,5 +1562,82 @@ mod tests {
         let snapshot = snapshot_with_states(crate::task::TaskState::Dead, Vec::new());
         let text = render_proc_status_text(&snapshot);
         assert!(text.contains("State:\tZ\n"), "unexpected text: {text}");
+    }
+
+    // ── /proc/sched ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_lookup_sched_dir_succeeds() {
+        let node = lookup("sched").unwrap();
+        let stat = node.stat().unwrap();
+        assert!(stat.is_dir(), "sched should be a directory");
+        assert_eq!(stat.mode & 0o777, 0o555);
+    }
+
+    #[test]
+    fn test_sched_dir_write_returns_eisdir() {
+        let node = lookup("sched").unwrap();
+        assert!(matches!(node.write(0, b"x"), Err(Errno::EISDIR)));
+    }
+
+    #[test]
+    fn test_lookup_sched_stat_succeeds() {
+        let node = lookup("sched/stat").unwrap();
+        let stat = node.stat().unwrap();
+        assert!(!stat.is_dir(), "sched/stat should be a regular file");
+        assert_eq!(stat.mode & 0o777, 0o444);
+    }
+
+    #[test]
+    fn test_sched_stat_is_readable() {
+        let node = lookup("sched/stat").unwrap();
+        let mut buf = [0u8; 512];
+        let n = node.read(0, &mut buf).unwrap();
+        assert!(n > 0, "sched/stat should produce output");
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("online_cpus:"), "sched/stat must contain 'online_cpus:': {s}");
+    }
+
+    #[test]
+    fn test_sched_stat_is_readonly() {
+        let node = lookup("sched/stat").unwrap();
+        assert!(matches!(node.write(0, b"x"), Err(Errno::EROFS)));
+    }
+
+    #[test]
+    fn test_sched_dir_readdir_includes_stat() {
+        let node = lookup("sched").unwrap();
+        let mut buf = [0u8; 256];
+        let n = node.readdir(0, &mut buf).unwrap();
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("stat"), "sched readdir must list 'stat': {s}");
+    }
+
+    #[test]
+    fn test_root_readdir_includes_sched() {
+        let node = lookup("").unwrap();
+        let mut buf = [0u8; 512];
+        let n = node.readdir(0, &mut buf).unwrap();
+        let s = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(s.contains("sched"), "root readdir must list 'sched': {s}");
+    }
+
+    #[test]
+    fn test_sched_cpu_invalid_returns_enoent() {
+        // CPU 9999 is never online so should return ENOENT.
+        let node = lookup("sched/cpu9999").unwrap();
+        let mut buf = [0u8; 256];
+        assert!(matches!(node.read(0, &mut buf), Err(Errno::ENOENT)));
+    }
+
+    #[test]
+    fn test_sched_cpu_node_is_readonly() {
+        let node = lookup("sched/cpu9999").unwrap();
+        assert!(matches!(node.write(0, b"x"), Err(Errno::EROFS)));
+    }
+
+    #[test]
+    fn test_sched_unknown_subpath_returns_enoent() {
+        assert!(matches!(lookup("sched/bogus"), Err(Errno::ENOENT)));
     }
 }

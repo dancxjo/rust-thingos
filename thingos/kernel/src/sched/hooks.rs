@@ -531,6 +531,61 @@ pub fn list_processes_current() -> Vec<ProcessSnapshot> {
     if let Some(hook) = unsafe { LIST_PROCESSES_HOOK } { hook() } else { Vec::new() }
 }
 
+// ── Scheduler diagnostics snapshot ───────────────────────────────────────────
+
+/// Per-CPU scheduler metrics snapshot for diagnostic/observability use.
+///
+/// Collected atomically (under the scheduler lock) and exposed through
+/// `/proc/sched/stat` and `/proc/sched/cpu<N>`.
+#[derive(Debug, Clone, Default)]
+pub struct CpuSchedDiag {
+    /// Logical CPU index.
+    pub cpu_id: usize,
+    /// Number of runnable tasks in the non-idle priority queues.
+    pub runnable_count: usize,
+    /// Total context switches performed on this CPU.
+    pub context_switches: u64,
+    /// Total wakeups (tasks moved from blocked/sleep to runnable).
+    pub wakeups: u64,
+    /// Tasks stolen from other CPUs by this CPU (work-stealing).
+    pub steals_in: u64,
+    /// Tasks stolen from this CPU by other CPUs.
+    pub steals_out: u64,
+    /// Total timer interrupts processed by this CPU.
+    pub timer_interrupts: u64,
+    /// Cumulative idle time in microseconds.
+    pub idle_total_us: u64,
+    /// Number of idle episodes (transitions into idle).
+    pub idle_episodes: u64,
+    /// Tasks dispatched (descheduled and replaced) on this CPU.
+    pub dispatch_count: u64,
+    /// Cross-CPU reschedule IPIs received by this CPU.
+    pub resched_ipi_received: u64,
+    /// Entries pushed into this CPU's wake mailbox by remote CPUs.
+    pub mailbox_pushes: u64,
+    /// Tasks drained from this CPU's wake mailbox into its local run queue.
+    pub mailbox_tasks_drained: u64,
+}
+
+/// Global (aggregate-across-all-CPUs) scheduler diagnostic snapshot.
+#[derive(Debug, Clone, Default)]
+pub struct SchedDiag {
+    /// Number of CPUs currently online.
+    pub online_cpu_count: usize,
+    /// Per-CPU diagnostics, indexed by CPU id.
+    pub per_cpu: Vec<CpuSchedDiag>,
+}
+
+pub(crate) static mut COLLECT_SCHED_DIAG_HOOK: Option<fn() -> SchedDiag> = None;
+
+/// Collect a live scheduler diagnostics snapshot without a runtime type parameter.
+///
+/// Returns a default (all-zero) snapshot when the scheduler hook has not been
+/// installed yet (early boot or test environment without a full scheduler).
+pub fn collect_sched_diag_current() -> SchedDiag {
+    if let Some(hook) = unsafe { COLLECT_SCHED_DIAG_HOOK } { hook() } else { SchedDiag::default() }
+}
+
 pub fn list_process_ids_by_pgid_current(pgid: u32) -> Vec<u32> {
     if let Some(hook) = unsafe { LIST_PROCESS_IDS_BY_PGID_HOOK } { hook(pgid) } else { Vec::new() }
 }
