@@ -17,6 +17,7 @@ use abi::driver_interface::{
     DriverEntryCtx, ProbeResult, Status,
 };
 use abi::errors::{Errno, SysResult};
+use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -48,16 +49,14 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
 };
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
-    if out.is_null() { return Status::InvalidArgument; }
-    let out = &mut *out;
-    out.claimed_class = DriverClass::Block;
-    out.flags = 0;
-
-    if dev.is_null() { return Status::NoMatch; }
+    if dev.is_null() || out.is_null() { return Status::InvalidArgument; }
     let dev = &*dev;
+    let out = &mut *out;
     let is_match = dev.bus == BusKind::Pci as u32 && (dev.class_code & 0x00ff_ffff) == 0x010601;
     out.matched = if is_match { 1 } else { 0 };
     out.score = if is_match { 900 } else { 0 };
+    out.claimed_class = DriverClass::Block;
+    out.flags = 0;
     if is_match { Status::Ok } else { Status::NoMatch }
 }
 
@@ -274,28 +273,37 @@ impl StorageProvider {
     }
 }
 
-#[stem::main]
-fn main(ctx_ptr: usize) -> ! {
-    info!("AHCI: Starting AHCI VFS driver");
-    let (claim, device_path) = if ctx_ptr != 0 {
-        let ctx = unsafe { &*(ctx_ptr as *const DriverEntryCtx) };
-        let path = ctx.device_path_str();
-        match device_claim(path) {
-            Ok(c) => (c, path),
-            Err(_) => {
-                warn!("AHCI: failed to claim device {}", path);
-                stem::syscall::exit(Status::NoMatch as i32);
+fn resolve_device_path(boot_fd: usize) -> String {
+    if boot_fd != 0 {
+        let req = VmMapReq {
+            addr_hint: 0,
+            len: 4096,
+            prot: VmProt::READ | VmProt::USER,
+            flags: VmMapFlags::empty(),
+            backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
+        };
+        if let Ok(resp) = stem::syscall::vm_map(&req) {
+            let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+            if ctx.version == 1 {
+                let s = ctx.device_path_str();
+                if !s.is_empty() {
+                    return s.to_string();
+                }
             }
         }
-    } else {
-        // Fallback for manual launch or older cambium
-        let path = "pci-0000:00:1f.2"; // A more likely default for QEMU Q35
-        match device_claim(path) {
-            Ok(c) => (c, path),
-            Err(_) => {
-                warn!("AHCI: fallback claim failed for {}", path);
-                stem::syscall::exit(Status::NoMatch as i32);
-            }
+    }
+    "pci-0000:00:1f.2".to_string()
+}
+
+#[stem::main]
+fn main(boot_fd: usize) -> ! {
+    info!("AHCI: Starting AHCI VFS driver");
+    let device_path = resolve_device_path(boot_fd);
+    let claim = match device_claim(&device_path) {
+        Ok(c) => c,
+        Err(_) => {
+            warn!("AHCI: failed to claim device {}", device_path);
+            stem::syscall::exit(Status::NoMatch as i32);
         }
     };
 

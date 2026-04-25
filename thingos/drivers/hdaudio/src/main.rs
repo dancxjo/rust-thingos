@@ -26,6 +26,7 @@ use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
     DriverEntryCtx, ProbeResult, Status,
 };
+use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use abi::sound::{
     AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START,
     AUDIO_STOP, AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo,
@@ -209,26 +210,36 @@ struct HdaController {
 fn main(boot_fd: usize) -> ! {
     debug!("HDAUDIO: starting (boot_fd={})", boot_fd);
 
-    let mut path_buf = [0u8; 128];
-    let path_len = if boot_fd != 0 {
-        use stem::syscall::vfs::vfs_read;
-        vfs_read(boot_fd as u32, &mut path_buf).unwrap_or(0)
+    let dev_path = if boot_fd != 0 {
+        let req = VmMapReq {
+            addr_hint: 0,
+            len: 4096,
+            prot: VmProt::READ | VmProt::USER,
+            flags: VmMapFlags::empty(),
+            backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
+        };
+        if let Ok(resp) = stem::syscall::vm_map(&req) {
+            let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+            if ctx.version == 1 {
+                let s = ctx.device_path_str();
+                if !s.is_empty() {
+                    Some(alloc::string::String::from(s))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     } else {
-        0
+        None
     };
 
-    let path_str = if path_len > 0 {
-        core::str::from_utf8(&path_buf[..path_len]).unwrap_or("").trim_matches(char::from(0))
-    } else {
-        ""
-    };
-
-    debug!("HDAUDIO: using device path: {}", path_str);
-
-    let dev_path = if !path_str.is_empty() {
-        alloc::string::String::from(path_str)
-    } else {
-        match find_hda_device() {
+    let dev_path = match dev_path {
+        Some(p) => p,
+        None => match find_hda_device() {
             Some(p) => p,
             None => {
                 error!("HDAUDIO: no HDA PCI device found");
@@ -236,7 +247,7 @@ fn main(boot_fd: usize) -> ! {
                     stem::time::sleep_ms(1000);
                 }
             }
-        }
+        },
     };
 
     debug!("HDAUDIO: claiming PCI device at '{}'...", dev_path);

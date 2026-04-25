@@ -18,6 +18,7 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use abi::errors::{Errno, SysResult};
+use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -82,13 +83,9 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> St
 }
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
-    if out.is_null() { return Status::InvalidArgument; }
-    let out = &mut *out;
-    out.claimed_class = DriverClass::Block;
-    out.flags = 0;
-
-    if dev.is_null() { return Status::NoMatch; }
+    if dev.is_null() || out.is_null() { return Status::InvalidArgument; }
     let dev = &*dev;
+    let out = &mut *out;
 
     let is_pci_ide = dev.bus == BusKind::Pci as u32 && (dev.class_code & 0xFFFF00) == 0x010100;
     let is_isa = dev.bus == BusKind::Isa as u32 || dev.bus == BusKind::Unknown as u32;
@@ -96,10 +93,14 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     if is_pci_ide || is_isa {
         out.matched = 1;
         out.score = if is_pci_ide { 800 } else { 700 };
+        out.claimed_class = DriverClass::Block;
+        out.flags = 0;
         Status::Ok
     } else {
         out.matched = 0;
         out.score = 0;
+        out.claimed_class = DriverClass::Block;
+        out.flags = 0;
         Status::NoMatch
     }
 }
@@ -335,7 +336,7 @@ impl StorageProvider {
 // ── Main Entry ───────────────────────────────────────────────────────────────
 
 #[stem::main]
-fn main(ctx_ptr: usize) -> ! {
+fn main(boot_fd: usize) -> ! {
     info!("ATA_DISK: Starting Generic IDE/ATAPI VFS driver");
 
     let primary_io = ATA_PRIMARY_IO;
@@ -343,12 +344,25 @@ fn main(ctx_ptr: usize) -> ! {
     let secondary_io = ATA_SECONDARY_IO;
     let secondary_ctrl = ATA_SECONDARY_CTRL;
 
-    if ctx_ptr != 0 {
-        let ctx = unsafe { &*(ctx_ptr as *const DriverEntryCtx) };
-        let path = ctx.device_path_str();
-        let _ = device_claim(path);
-        // In a real IDE controller we'd read the BARs here if not using legacy ports,
-        // but for now we stick to defaults if they work.
+    if boot_fd != 0 {
+        let req = VmMapReq {
+            addr_hint: 0,
+            len: 4096,
+            prot: VmProt::READ | VmProt::USER,
+            flags: VmMapFlags::empty(),
+            backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
+        };
+        if let Ok(resp) = stem::syscall::vm_map(&req) {
+            let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+            if ctx.version == 1 {
+                let path = ctx.device_path_str();
+                if !path.is_empty() {
+                    let _ = device_claim(path);
+                    // In a real IDE controller we'd read the BARs here if not using legacy ports,
+                    // but for now we stick to defaults if they work.
+                }
+            }
+        }
     }
 
     let mut devices = Vec::new();
