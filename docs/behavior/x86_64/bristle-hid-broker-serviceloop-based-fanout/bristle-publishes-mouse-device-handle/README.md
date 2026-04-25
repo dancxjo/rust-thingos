@@ -1,12 +1,11 @@
-# ❌ Scenario: bristle publishes mouse device handle
+# ✅ Scenario: bristle publishes mouse device handle
 
-> Last run: 2026-04-24 17:34:52
+> Last run: 2026-04-24 17:40:56
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Then the log should match pattern "bristle: published device handles .*mouse_in=[0-9]+" | ❌ | 1010ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

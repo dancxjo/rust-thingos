@@ -1,12 +1,11 @@
-# ❌ Scenario: bristle publishes its PID file on startup
+# ✅ Scenario: bristle publishes its PID file on startup
 
-> Last run: 2026-04-24 17:34:52
+> Last run: 2026-04-24 17:40:56
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Then the log should match pattern "bristle: published pid [1-9][0-9]* to /run/bristle/pid" | ❌ | 1027ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>

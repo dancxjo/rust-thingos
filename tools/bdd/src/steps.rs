@@ -1504,12 +1504,17 @@ async fn latest_serial_contains(
         }
         eprintln!("=== End Recent Output ===\n");
         return Err(StepError(format!(
-            "Expected latest serial output to contain '{}', but it was not present",
+            "Expected latest serial output to contain '{}', but it was missing",
             expected
         )));
     }
 
     Ok(())
+}
+
+#[then(regex = r#"^the output contains "(.+)"$"#)]
+async fn then_output_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+    latest_serial_contains(world, expected).await
 }
 
 #[when(regex = r#"^I press (.+)$"#)]

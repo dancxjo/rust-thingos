@@ -1,12 +1,11 @@
 # ✅ Scenario: No legacy readiness port fields remain in use
 
-> Last run: 2026-04-24 16:20:53
+> Last run: 2026-04-24 17:34:52
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | When the system finishes bringing up supervised services | ⏭️ | 1ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
