@@ -80,6 +80,7 @@ fn default_process_info(
         exec_path: alloc::string::String::new(),
         authority: crate::task::ProcessAuthority::root(),
         space,
+        service_loop: None,
     }))
 }
 
@@ -107,6 +108,7 @@ fn inherit_process_info<R: BootRuntime>(
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::inherit(parent.authority),
             space,
+            service_loop: None,
         }))
     } else {
         default_process_info(pid, ppid, space)
@@ -1434,6 +1436,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         exec_path: alloc::format!("/boot/{}", module.name),
         authority,
         space: crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
+        service_loop: None,
     }));
 
     // Store name, process_info, and initial TLS thread pointer on the task struct.
@@ -1763,6 +1766,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         exec_path: alloc::string::String::from(path),
         authority,
         space: crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
+        service_loop: None,
     }));
 
     // Step 8: Attach the ProcessInfo to the new task and record its TLS base.
@@ -1944,6 +1948,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }))
     }
 

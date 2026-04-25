@@ -8367,6 +8367,7 @@ mod tests {
                 exec_path: alloc::string::String::new(),
                 authority: crate::task::ProcessAuthority::root(),
                 space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
             }))),
             user_fs_base: 0,
             detached: false,
@@ -8433,6 +8434,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         let mut sibling = make_task(1221, TaskState::Dead, TaskPriority::Normal);
@@ -8723,6 +8725,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         {
@@ -8761,6 +8764,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         // Register both tasks.
@@ -8820,6 +8824,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
@@ -8888,6 +8893,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         // Child process (pid 9800) whose leader exits with code 7.
@@ -8911,6 +8917,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
@@ -8963,6 +8970,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
@@ -9066,6 +9074,7 @@ mod tests {
             exec_path: alloc::string::String::from("/old/binary"),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(
@@ -9148,6 +9157,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         // Before exec: flag is clear — new threads would be accepted.

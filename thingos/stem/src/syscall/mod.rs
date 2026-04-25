@@ -655,6 +655,37 @@ pub fn task_interrupt(tid: u64) -> Result<(), Errno> {
     abi::errors::errno(ret).map(|_| ())
 }
 
+/// Report the calling process's `ServiceLoop` diagnostic state to the kernel.
+///
+/// The reported state is stored in the kernel's per-process record and
+/// exposed read-only at `/proc/<pid>/serviceloop/`.  A zero-length slice for
+/// `name` or `last_event` leaves the previously stored value unchanged.
+///
+/// # Arguments
+/// - `state_tag` — 0=idle, 1=waiting, 2=dispatching, 3=shutdown
+/// - `name` — human-readable loop name (at most 64 bytes)
+/// - `last_event` — label for the last dispatched event (at most 64 bytes)
+/// - `last_dispatch_ns` — monotonic nanosecond timestamp
+pub fn service_loop_report(
+    state_tag: u32,
+    name: &[u8],
+    last_event: &[u8],
+    last_dispatch_ns: u64,
+) -> Result<(), Errno> {
+    let ret = unsafe {
+        raw_syscall6(
+            SYS_SERVICE_LOOP_REPORT,
+            state_tag as usize,
+            name.as_ptr() as usize,
+            name.len(),
+            last_event.as_ptr() as usize,
+            last_event.len(),
+            last_dispatch_ns as usize,
+        )
+    };
+    abi::errors::errno(ret).map(|_| ())
+}
+
 pub fn spawn_process_ex(
     name: &str,
     argv: &[&[u8]],

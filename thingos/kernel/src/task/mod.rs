@@ -400,6 +400,65 @@ impl ProcessUnixCompat {
     }
 }
 
+// ── ServiceLoopDiag ───────────────────────────────────────────────────────────
+
+/// Diagnostic state for a process's `ServiceLoop`, reported by userspace via
+/// `SYS_SERVICE_LOOP_REPORT` and exposed read-only at
+/// `/proc/<pid>/serviceloop/`.
+///
+/// All string fields are bounded: `name` is at most 64 bytes and `last_event`
+/// is at most 64 bytes; oversized values are silently truncated by the syscall
+/// handler.
+#[derive(Debug, Clone, Default)]
+pub struct ServiceLoopDiag {
+    /// Human-readable loop name (at most 64 bytes, UTF-8 best-effort).
+    pub name: alloc::string::String,
+    /// Current loop state.
+    pub state: ServiceLoopState,
+    /// Kind of the last event processed (at most 64 bytes).
+    pub last_event: alloc::string::String,
+    /// Monotonic nanosecond timestamp of the last dispatch.
+    pub last_dispatch_ns: u64,
+    /// Total wakeup count.
+    pub wakeups: u64,
+    /// Timeout wakeup count.
+    pub timeouts: u64,
+    /// Dispatch error count.
+    pub errors: u64,
+}
+
+/// Coarse state of a `ServiceLoop`, as reported by `SYS_SERVICE_LOOP_REPORT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum ServiceLoopState {
+    #[default]
+    Idle = 0,
+    Waiting = 1,
+    Dispatching = 2,
+    Shutdown = 3,
+}
+
+impl ServiceLoopState {
+    /// Parse from the raw tag passed in the syscall argument.
+    pub fn from_tag(tag: u32) -> Self {
+        match tag {
+            1 => Self::Waiting,
+            2 => Self::Dispatching,
+            3 => Self::Shutdown,
+            _ => Self::Idle,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Waiting => "waiting",
+            Self::Dispatching => "dispatching",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
 /// Compatibility process aggregation object.
 ///
 /// A `Process` is a **thin runtime aggregator/wiring shell** that composes
@@ -559,6 +618,12 @@ pub struct Process {
     /// token, and the first-class [`crate::space::Space`] object wrapper.
     /// See [`ProcessAddressSpace`] for the full design rationale.
     pub space: ProcessAddressSpace,
+
+    // ── Service-loop diagnostics (observability) ──────────────────────────────
+    /// ServiceLoop diagnostic state reported by userspace via
+    /// `SYS_SERVICE_LOOP_REPORT`.  Exposed read-only at
+    /// `/proc/<pid>/serviceloop/`.  `None` until the process calls the syscall.
+    pub service_loop: Option<ServiceLoopDiag>,
 }
 
 /// Backward-compatible alias — prefer `Process` in new code.

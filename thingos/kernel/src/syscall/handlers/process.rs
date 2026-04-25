@@ -840,6 +840,65 @@ pub fn sys_task_exec(
     unreachable!()
 }
 
+/// `SYS_SERVICE_LOOP_REPORT`: Report the calling process's service-loop diagnostic state.
+///
+/// Called by `stem::service_loop::ServiceLoop` on each state transition.
+/// The reported state is stored in `Process::service_loop` and exposed through
+/// `/proc/<pid>/serviceloop/`.
+///
+/// # Arguments
+/// - `state_tag` — 0=idle, 1=waiting, 2=dispatching, 3=shutdown
+/// - `name_ptr` / `name_len` — UTF-8 loop name (0/0 = no change)
+/// - `last_event_ptr` / `last_event_len` — UTF-8 last-event label (0/0 = no change)
+/// - `last_dispatch_ns` — monotonic nanosecond timestamp
+pub fn sys_service_loop_report(
+    state_tag: usize,
+    name_ptr: usize,
+    name_len: usize,
+    last_event_ptr: usize,
+    last_event_len: usize,
+    last_dispatch_ns: usize,
+) -> SysResult<usize> {
+    let pinfo = scheduler::process_info_current().ok_or(Errno::ESRCH)?;
+
+    // Copy the name string from userspace (bounded to 64 bytes).
+    let name = if name_ptr != 0 && name_len > 0 {
+        let len = name_len.min(64);
+        validate_user_range(name_ptr, len, false)?;
+        let mut buf = alloc::vec![0u8; len];
+        unsafe { copyin(&mut buf, name_ptr)? };
+        alloc::string::String::from_utf8_lossy(&buf).into_owned()
+    } else {
+        alloc::string::String::new()
+    };
+
+    // Copy the last-event string from userspace (bounded to 64 bytes).
+    let last_event = if last_event_ptr != 0 && last_event_len > 0 {
+        let len = last_event_len.min(64);
+        validate_user_range(last_event_ptr, len, false)?;
+        let mut buf = alloc::vec![0u8; len];
+        unsafe { copyin(&mut buf, last_event_ptr)? };
+        alloc::string::String::from_utf8_lossy(&buf).into_owned()
+    } else {
+        alloc::string::String::new()
+    };
+
+    let state = crate::task::ServiceLoopState::from_tag(state_tag as u32);
+    let last_dispatch_ns = last_dispatch_ns as u64;
+
+    let mut proc = pinfo.lock();
+    let diag = proc.service_loop.get_or_insert_with(Default::default);
+    diag.state = state;
+    if !name.is_empty() {
+        diag.name = name;
+    }
+    if !last_event.is_empty() {
+        diag.last_event = last_event;
+    }
+    diag.last_dispatch_ns = last_dispatch_ns;
+
+    Ok(0)
+}
 #[cfg(test)]
 mod tests {
     use abi::errors::Errno;
