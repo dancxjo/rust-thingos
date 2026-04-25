@@ -28,8 +28,9 @@ use ipc_helpers::provider::ProviderLoop;
 use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
+use stem::service_loop::ServiceLoop;
 use stem::syscall::port_create;
-use stem::syscall::vfs::vfs_mount;
+use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_umount};
 use stem::{error, warn};
 use vfs_provider::{HANDLE_EVENTS, HANDLE_RX, NetVfsState, handle_vfs_rpc};
 
@@ -129,6 +130,9 @@ struct SupervisorBootstrap {
 struct ProviderShared {
     driver: Mutex<VirtioNetDriver>,
     state: Mutex<NetVfsState>,
+    /// Set by the main thread when shutdown is initiated.  The provider
+    /// thread checks this flag and exits its poll loop cleanly.
+    shutdown_requested: AtomicBool,
 }
 
 #[unsafe(no_mangle)]
@@ -269,15 +273,19 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     let shared = Arc::new(ProviderShared {
         driver: Mutex::new(driver),
         state: Mutex::new(NetVfsState::new(mac, initial_link_up, features)),
+        shutdown_requested: AtomicBool::new(false),
     });
     let provider_started = Arc::new(AtomicBool::new(false));
 
-    start_provider_thread(shared, req_write, req_read, provider_started.clone())
+    start_provider_thread(shared.clone(), req_write, req_read, provider_started.clone())
         .expect("virtio_netd: failed to start provider thread");
 
     while !provider_started.load(Ordering::Acquire) {
         stem::syscall::yield_now();
     }
+
+    // Track the effective mount path so we can unmount during shutdown.
+    let mut effective_mount_path: Option<String> = None;
 
     if let Some(bootstrap) = bootstrap {
         let drv_resp_write_fd = stem::syscall::vfs::vfs_handle_from_port(bootstrap.drv_resp_write)
@@ -329,6 +337,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
                                 "VIRTIO_NETD: Sovereign registration COMPLETE. Assigned: {}",
                                 path
                             );
+                            effective_mount_path = Some(path.to_string());
                             break assigned.bind_instance_id;
                         }
                     } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
@@ -374,15 +383,67 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         }
     } else {
         match vfs_mount(req_write, DEFAULT_MOUNT_PATH) {
-            Ok(()) => stem::debug!("VIRTIO_NETD: Mounted at {}", DEFAULT_MOUNT_PATH),
+            Ok(()) => {
+                stem::debug!("VIRTIO_NETD: Mounted at {}", DEFAULT_MOUNT_PATH);
+                effective_mount_path = Some(DEFAULT_MOUNT_PATH.to_string());
+            }
             Err(e) => warn!("VIRTIO_NETD: vfs_mount({}) failed: {:?}", DEFAULT_MOUNT_PATH, e),
         }
     }
 
-    stem::debug!("VIRTIO_NETD: Provider thread live at {}", DEFAULT_MOUNT_PATH);
-    loop {
-        stem::yield_now();
+    stem::debug!("VIRTIO_NETD: Provider thread live, entering control loop");
+
+    // Block the main thread in a ServiceLoop waiting for a shutdown signal.
+    // When the inbox is closed (supervisor or kernel requests shutdown),
+    // run the canonical shutdown sequence:
+    //   1. Stop accepting new work  — signal the provider thread
+    //   2. Unmount the VFS path    — remove the stale mount
+    //   3. Close the port handle   — free kernel resources
+    //   4. Flush logs              — logged at each step
+    //   5. Exit cleanly            — stem::syscall::exit(0)
+    let mut svc = match ServiceLoop::new(256) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("VIRTIO_NETD: Failed to create ServiceLoop for shutdown: {:?}", e);
+            // Fallback: spin forever (pre-existing behavior).
+            loop {
+                stem::yield_now();
+            }
+        }
+    };
+
+    if let Err(e) = svc.run_until_shutdown(
+        |_event| core::ops::ControlFlow::Continue(()),
+        || {
+            stem::info!("VIRTIO_NETD: shutdown initiated — stopping provider thread");
+
+            // Step 1: Signal the provider thread to stop.
+            shared.shutdown_requested.store(true, Ordering::Release);
+
+            // Step 2: Unmount the VFS provider path.
+            if let Some(ref path) = effective_mount_path {
+                stem::info!("VIRTIO_NETD: unmounting {}", path);
+                match vfs_umount(path) {
+                    Ok(()) => stem::info!("VIRTIO_NETD: unmounted {}", path),
+                    Err(e) => warn!("VIRTIO_NETD: vfs_umount({}) failed: {:?}", path, e),
+                }
+            }
+
+            // Step 3: Close the provider write-end handle (no more
+            //         notifications; the read-end closes when the provider
+            //         thread exits via process exit).
+            let _ = vfs_close(req_write);
+
+            // Step 4: Logs emitted above at each step.
+            stem::info!("VIRTIO_NETD: shutdown complete");
+        },
+        None,
+    ) {
+        warn!("VIRTIO_NETD: ServiceLoop error during shutdown: {:?}", e);
     }
+
+    // Step 5: Exit cleanly.
+    stem::syscall::exit(0);
 }
 
 /// Poll the VirtIO-NET device for incoming frames and link-state changes,
@@ -442,6 +503,31 @@ fn start_provider_thread(
             };
         provider_started.store(true, Ordering::Release);
 
+        loop {
+            // Check shutdown flag first so we exit promptly after the main
+            // thread unmounts the provider and requests a clean stop.
+            if shared.shutdown_requested.load(Ordering::Acquire) {
+                stem::info!("VIRTIO_NETD: provider thread: shutdown requested — exiting");
+                break;
+            }
+
+            {
+                let mut driver = shared.driver.lock();
+                if let Some(link_up) = driver.poll_link_change() {
+                    let event = if link_up { "link-up" } else { "link-down" };
+                    {
+                        let mut state = shared.state.lock();
+                        state.link_up = link_up;
+                        state.push_event(event);
+                    }
+                    stem::debug!("VIRTIO_NETD: Link state changed: {}", event);
+                    let _ = stem::syscall::vfs::vfs_notify(
+                        req_write,
+                        HANDLE_EVENTS,
+                        abi::syscall::poll_flags::POLLIN,
+                    );
+                }
+            }
         // Short timeout so we periodically poll the hardware even when no VFS
         // requests are pending.  1 ms is enough to drain RX bursts promptly
         // without spinning.
