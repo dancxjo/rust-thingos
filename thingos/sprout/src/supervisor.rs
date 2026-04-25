@@ -19,7 +19,7 @@ use spin::Mutex;
 use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::time::Duration;
-use stem::{debug, info, warn};
+use stem::{debug, info, trace, warn};
 
 use crate::ledger::DeviceLedger;
 use crate::pipelines::{mount_hosts_cache, setup_display_pipeline, setup_input_broker, setup_serial_shell};
