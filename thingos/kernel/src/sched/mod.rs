@@ -171,6 +171,31 @@ fn debug_assert_scheduler_not_held_by_this_cpu<R: BootRuntime>(context: &str) {
     }
 }
 
+/// Assert that a run-queue enqueue targets the **calling CPU** only.
+///
+/// Per-CPU run queues are **owned** by their CPU.  Only the owning CPU must
+/// enqueue tasks directly into its own run queue; all other CPUs must route
+/// through the per-CPU [`WakeMailbox`][crate::sched::state::WakeMailbox] (via
+/// [`enqueue_remote_wake_mailbox`]).
+///
+/// This function increments [`PROF_CROSS_CPU_RUNQ_DIRECT_ENQUEUE`] in all
+/// build configurations whenever a violation is detected, and additionally
+/// fires a [`debug_assert`] in debug builds.
+#[inline]
+fn debug_assert_runq_cpu_is_local<R: BootRuntime>(target_cpu: usize) {
+    let current = crate::runtime::<R>().current_cpu_index();
+    if target_cpu != current {
+        PROF_CROSS_CPU_RUNQ_DIRECT_ENQUEUE.fetch_add(1, Ordering::Relaxed);
+        #[cfg(all(debug_assertions, not(test)))]
+        debug_assert_eq!(
+            target_cpu, current,
+            "SCHED ownership violation: CPU {} attempted direct enqueue into CPU {}'s run queue; \
+             use enqueue_remote_wake_mailbox() for cross-CPU operations",
+            current, target_cpu
+        );
+    }
+}
+
 #[inline]
 pub(crate) fn scheduler_lock_held_by_this_cpu<R: BootRuntime>() -> bool {
     let owner = SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
@@ -284,6 +309,12 @@ pub static PROF_IMBALANCE_LONGEST_US: AtomicU64 = AtomicU64::new(0);
 
 /// Total tasks migrated by the periodic load balancer (slow-path balancing).
 pub static PROF_PERIODIC_BALANCE_MIGRATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Count of cross-CPU direct run-queue enqueue attempts that violated per-CPU
+/// ownership rules.  These are expected to be zero after all callers correctly
+/// route remote wakeups through the mailbox.  A non-zero value in production
+/// indicates a regression in locking discipline.
+pub static PROF_CROSS_CPU_RUNQ_DIRECT_ENQUEUE: AtomicU64 = AtomicU64::new(0);
 
 /// Per-CPU count of entries pushed into the wake mailbox by remote CPUs.
 ///
@@ -2444,6 +2475,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
     }
 
     fn drain_remote_wake_mailbox(&mut self, cpu_idx: usize) {
+        // This function must only be called by the CPU that owns cpu_idx.
+        // Verify this invariant in non-test debug builds.
+        debug_assert_runq_cpu_is_local::<R>(cpu_idx);
+
         let pending = take_remote_wake_mailbox(cpu_idx);
         if pending.is_empty() {
             return;
@@ -2614,7 +2649,22 @@ impl<R: BootRuntime> types::Scheduler<R> {
             self.state.note_enqueue_cause(tid, crate::sched::state::EnqueueCause::Wake);
 
             let actual_cpu = if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
-            self.state.enqueue_task(actual_cpu, priority, tid);
+            if actual_cpu == current_cpu {
+                // Local CPU: enqueue directly into the local run queue.
+                self.state.enqueue_task(actual_cpu, priority, tid);
+            } else {
+                // Remote CPU: push through the wake mailbox so the owning CPU
+                // enqueues the task itself, preserving per-CPU ownership.
+                enqueue_remote_wake_mailbox(
+                    actual_cpu,
+                    types::RemoteWakeMailboxEntry {
+                        tid,
+                        priority,
+                        enqueued_at_tick: now,
+                        wake_mono,
+                    },
+                );
+            }
             if let Some(pc) = self.state.per_cpu.get_mut(actual_cpu) {
                 pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
             }
@@ -2796,12 +2846,32 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// short picker fast path even when a large misroute backlog exists.
     #[inline]
     fn flush_pending_misrouted_requeues_bounded(&mut self, max_to_flush: usize) {
+        let current_cpu = current_cpu_index::<R>();
+        let now_tick = TICK_COUNT.load(Ordering::Relaxed);
         for _ in 0..max_to_flush {
             let Some((prio, target_cpu, id)) = self.pending_misrouted_requeues.pop() else {
                 break;
             };
-            self.state.enqueue_task(target_cpu, prio, id);
-            self.state.note_enqueue_cause(id, crate::sched::state::EnqueueCause::AffinityRepair);
+            if target_cpu == current_cpu {
+                // Owning CPU: enqueue directly.
+                self.state.enqueue_task(target_cpu, prio, id);
+                self.state
+                    .note_enqueue_cause(id, crate::sched::state::EnqueueCause::AffinityRepair);
+            } else {
+                // Remote CPU: route through mailbox to preserve per-CPU
+                // ownership.  The drain on the target CPU will enqueue the
+                // task; the IPI below ensures the drain runs promptly.
+                let wake_mono = crate::runtime::<R>().mono_ticks();
+                enqueue_remote_wake_mailbox(
+                    target_cpu,
+                    types::RemoteWakeMailboxEntry {
+                        tid: id,
+                        priority: prio,
+                        enqueued_at_tick: now_tick,
+                        wake_mono,
+                    },
+                );
+            }
             self.queue_prepare_schedule_ipi_dedup(target_cpu);
         }
     }
@@ -2887,9 +2957,25 @@ impl<R: BootRuntime> types::Scheduler<R> {
             return;
         }
         // Backlog safety valve: avoid unbounded memory growth if misroute intake
-        // outpaces the bounded per-call repair budget.
-        self.state.enqueue_task(target_cpu, prio, id);
-        self.state.note_enqueue_cause(id, crate::sched::state::EnqueueCause::AffinityRepair);
+        // outpaces the bounded per-call repair budget.  Route through the
+        // mailbox for remote CPUs to preserve per-CPU ownership.
+        let current_cpu = current_cpu_index::<R>();
+        if target_cpu == current_cpu {
+            self.state.enqueue_task(target_cpu, prio, id);
+            self.state.note_enqueue_cause(id, crate::sched::state::EnqueueCause::AffinityRepair);
+        } else {
+            let now_tick = TICK_COUNT.load(Ordering::Relaxed);
+            let wake_mono = crate::runtime::<R>().mono_ticks();
+            enqueue_remote_wake_mailbox(
+                target_cpu,
+                types::RemoteWakeMailboxEntry {
+                    tid: id,
+                    priority: prio,
+                    enqueued_at_tick: now_tick,
+                    wake_mono,
+                },
+            );
+        }
         self.queue_prepare_schedule_ipi_dedup(target_cpu);
     }
 
@@ -3632,8 +3718,25 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 .map(|sf| sf.priority as usize)
                 .unwrap_or(TaskPriority::Normal as usize);
 
-            // Place the task into the target CPU's run queue.
-            self.state.enqueue_task(least_cpu, priority, stolen_id);
+            // Place the task into the target CPU's run queue.  Route through
+            // the wake mailbox when least_cpu is a remote CPU so that only the
+            // owning CPU directly mutates its own run queue.
+            let current_cpu = current_cpu_index::<R>();
+            if least_cpu == current_cpu {
+                self.state.enqueue_task(least_cpu, priority, stolen_id);
+            } else {
+                let now_tick = TICK_COUNT.load(Ordering::Relaxed);
+                let wake_mono = crate::runtime::<R>().mono_ticks();
+                enqueue_remote_wake_mailbox(
+                    least_cpu,
+                    types::RemoteWakeMailboxEntry {
+                        tid: stolen_id,
+                        priority,
+                        enqueued_at_tick: now_tick,
+                        wake_mono,
+                    },
+                );
+            }
 
             migrated += 1;
             PROF_PERIODIC_BALANCE_MIGRATIONS.fetch_add(1, Ordering::Relaxed);
@@ -3733,7 +3836,28 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         if let Some(cpu) = requeue_cpu {
             self.state.remove_task_from_runq(id);
-            self.state.enqueue_task(cpu, priority as usize, id);
+            // Route through mailbox for remote CPUs so only the owning CPU
+            // mutates its own run queue directly.
+            let current_cpu = current_cpu_index::<R>();
+            if cpu == current_cpu {
+                self.state.enqueue_task(cpu, priority as usize, id);
+                // The priority changed; ask the local CPU to reschedule so it
+                // can pick up the re-enqueued task at the new priority.
+                self.state.per_cpu[cpu].need_resched = true;
+            } else {
+                let now_tick = TICK_COUNT.load(Ordering::Relaxed);
+                let wake_mono = crate::runtime::<R>().mono_ticks();
+                enqueue_remote_wake_mailbox(
+                    cpu,
+                    types::RemoteWakeMailboxEntry {
+                        tid: id,
+                        priority: priority as usize,
+                        enqueued_at_tick: now_tick,
+                        wake_mono,
+                    },
+                );
+                self.queue_prepare_schedule_ipi_dedup(cpu);
+            }
         }
         true
     }

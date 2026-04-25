@@ -342,7 +342,26 @@ pub fn wake_task_locked<R: BootRuntime>(
             sf.wake_cpu = Some(safe_cpu);
         }
 
-        sched.state.enqueue_task(safe_cpu, task_priority, id);
+        let current_cpu = super::current_cpu_index::<R>();
+        if safe_cpu == current_cpu {
+            // Local CPU: enqueue directly into the local run queue.
+            sched.state.enqueue_task(safe_cpu, task_priority, id);
+        } else {
+            // Remote CPU: route through the per-CPU wake mailbox so the owning
+            // CPU enqueues the task itself.  This preserves the per-CPU
+            // ownership invariant: only the owning CPU mutates its run queue.
+            let now_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+            let wake_mono = crate::runtime::<R>().mono_ticks();
+            super::enqueue_remote_wake_mailbox(
+                safe_cpu,
+                crate::sched::types::RemoteWakeMailboxEntry {
+                    tid: id,
+                    priority: task_priority,
+                    enqueued_at_tick: now_tick,
+                    wake_mono,
+                },
+            );
+        }
         if let Some(pc) = sched.state.per_cpu.get_mut(safe_cpu) {
             pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
         }
