@@ -1170,7 +1170,8 @@ impl VfsNode for SchedDirNode {
     }
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let diag = crate::sched::collect_sched_diag_current();
-        let mut names: Vec<String> = alloc::vec![String::from("stat")];
+        let mut names: Vec<String> = Vec::with_capacity(diag.per_cpu.len() + 1);
+        names.push(String::from("stat"));
         for cpu in &diag.per_cpu {
             names.push(alloc::format!("cpu{}", cpu.cpu_id));
         }
@@ -1237,7 +1238,14 @@ struct SchedCpuNode {
 impl VfsNode for SchedCpuNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let diag = crate::sched::collect_sched_diag_current();
-        let cpu = diag.per_cpu.iter().find(|c| c.cpu_id == self.cpu_id).ok_or(Errno::ENOENT)?;
+        // Try direct index first (cpu_id usually equals vector position for
+        // contiguous online CPUs), then fall back to a linear search.
+        let cpu = diag
+            .per_cpu
+            .get(self.cpu_id)
+            .filter(|c| c.cpu_id == self.cpu_id)
+            .or_else(|| diag.per_cpu.iter().find(|c| c.cpu_id == self.cpu_id))
+            .ok_or(Errno::ENOENT)?;
         let text = render_cpu_sched_diag(cpu);
         let data = text.as_bytes();
         let off = offset as usize;

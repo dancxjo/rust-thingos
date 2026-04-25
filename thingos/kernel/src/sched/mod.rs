@@ -5227,7 +5227,9 @@ pub fn collect_sched_diag<R: BootRuntime>() -> hooks::SchedDiag {
     };
     let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
 
-    let mut per_cpu = alloc::vec::Vec::with_capacity(sched.state.online_cpus.len());
+    let mut per_cpu = alloc::vec::Vec::with_capacity(
+        sched.state.online_cpus.iter().filter(|&&i| i < sched.state.per_cpu.len()).count(),
+    );
     for &i in &sched.state.online_cpus {
         if i >= sched.state.per_cpu.len() {
             continue;
