@@ -2539,12 +2539,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
             // Policy: decide whether the incoming task should preempt the
             // currently running task on this CPU.
-            if crate::sched::policy::SchedPolicy::should_preempt_on_wake(
-                &self.policy,
-                &self.state,
-                cpu_idx,
-                priority,
-            ) {
+            if self.policy.should_preempt_on_wake(&self.state, cpu_idx, priority) {
                 self.state.per_cpu[cpu_idx].need_resched = true;
                 // Mirror to the per-CPU atomic flag so the lockless fast-path
                 // in resched_if_needed / preempt_enable can see it.
@@ -3047,9 +3042,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             && dequeue_failures < PREPARE_SCHEDULE_PICK_BUDGET
         {
             // Policy: choose the best candidate from the run queues.
-            let Some((p, best_idx)) =
-                crate::sched::policy::SchedPolicy::pick_next_task(&self.policy, &self.state, cpu_idx, now)
-            else {
+            let Some((p, best_idx)) = self.policy.pick_next_task(&self.state, cpu_idx, now) else {
                 break;
             };
 

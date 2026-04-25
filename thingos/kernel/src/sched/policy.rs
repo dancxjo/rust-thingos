@@ -295,9 +295,16 @@ mod tests {
         task_state: TaskState,
         cpu: usize,
     ) -> ThreadSchedFields {
+        let priority = match prio {
+            0 => TaskPriority::Idle,
+            1 => TaskPriority::Low,
+            2 => TaskPriority::Normal,
+            3 => TaskPriority::High,
+            _ => TaskPriority::Realtime,
+        };
         ThreadSchedFields {
             tid,
-            priority: unsafe { core::mem::transmute::<u8, TaskPriority>(prio as u8) },
+            priority,
             state: task_state,
             timeslice_remaining: DEFAULT_TIMESLICE,
             enqueued_at_tick: 0,
