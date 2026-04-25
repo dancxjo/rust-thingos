@@ -1,15 +1,12 @@
 # ❌ Scenario: /proc/sched directory is visible in the root procfs listing
 
-> Last run: 2026-04-24 17:59:53
+> Last run: 2026-04-24 18:00:28
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is started | ✅ | 0ms | - - - |
-| 2 | When I wait for the system to boot | ✅ | 22181ms | - [📜](./02/serial.log) - |
-| 3 | And the shell command "ls /proc" succeeds | ✅ | 443ms | - [📜](./03/serial.log) - |
-| 4 | Then the output contains "sched" | ❌ | 1034ms | - [📜](./04/serial.log) - |
+| 1 | Given the machine is started | ❌ | 1006ms | - - - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
