@@ -140,14 +140,18 @@ impl WaylandCommandService {
             return false;
         }
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
-        let x = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4])) as i32;
-        let y = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4])) as i32;
+        let x = i32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+        let y = i32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
         let w = u32::from_ne_bytes(data[16..20].try_into().unwrap_or([0; 4]));
         let h = u32::from_ne_bytes(data[20..24].try_into().unwrap_or([0; 4]));
+        // Clamp x/y to zero: Wayland permits negative damage coordinates to
+        // indicate off-screen area, but the scene damage tracker uses u32.
+        let x = x.max(0) as u32;
+        let y = y.max(0) as u32;
         world.scene.damage_pending(
             self.wayland_client_id,
             bloom_surface_id,
-            abi::display_protocol::Rect { x: x as u32, y: y as u32, w, h },
+            abi::display_protocol::Rect { x, y, w, h },
         );
         false
     }

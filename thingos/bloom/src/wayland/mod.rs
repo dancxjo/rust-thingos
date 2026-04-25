@@ -347,8 +347,10 @@ impl WaylandServer {
                 let timestamp_ms =
                     u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
                 for client in self.clients.values_mut() {
-                    let _: alloc::vec::Vec<u32> =
-                        client.fire_frame_cbs(bloom_surface_id, timestamp_ms);
+                    // fire_frame_cbs returns the IDs that were fired; we only
+                    // need the side-effect (sending wl_callback.done), so the
+                    // list is intentionally dropped.
+                    drop(client.fire_frame_cbs(bloom_surface_id, timestamp_ms));
                 }
             }
             _ => {}

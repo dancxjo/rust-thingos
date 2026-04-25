@@ -79,7 +79,14 @@ impl SerialGenerator {
         Self(0)
     }
 
-    /// Return the next serial (wraps on overflow — unlikely in practice).
+    /// Return the next serial.
+    ///
+    /// The counter wraps on overflow, which is safe: the Wayland xdg-shell
+    /// spec only requires that pending serials be tracked within a single
+    /// configure/ack cycle.  A wrap would only cause confusion if more than
+    /// 2³² configures were outstanding simultaneously, which is not a realistic
+    /// scenario.  Outstanding pending serials are validated by set membership,
+    /// not by magnitude, so wrap-around does not introduce security issues.
     pub fn next(&mut self) -> ConfigureSerial {
         self.0 = self.0.wrapping_add(1);
         self.0

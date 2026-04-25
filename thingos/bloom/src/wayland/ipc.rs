@@ -84,8 +84,8 @@ pub struct WCmdDamage {
     pub msg_type: u8, // = WCMD_DAMAGE
     pub _pad: [u8; 3],
     pub bloom_surface_id: u32,
-    pub x: u32,
-    pub y: u32,
+    pub x: i32,
+    pub y: i32,
     pub w: u32,
     pub h: u32,
 }
@@ -175,7 +175,7 @@ pub fn encode_import_attach(
     out
 }
 
-pub fn encode_damage(bloom_surface_id: u32, x: u32, y: u32, w: u32, h: u32) -> [u8; 24] {
+pub fn encode_damage(bloom_surface_id: u32, x: i32, y: i32, w: u32, h: u32) -> [u8; 24] {
     let msg = WCmdDamage { msg_type: WCMD_DAMAGE, _pad: [0; 3], bloom_surface_id, x, y, w, h };
     let mut out = [0u8; 24];
     out.copy_from_slice(as_bytes!(msg, WCmdDamage));

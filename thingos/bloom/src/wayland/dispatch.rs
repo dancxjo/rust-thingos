@@ -399,8 +399,8 @@ fn dispatch_surface(
         }
 
         WL_SURFACE_DAMAGE | WL_SURFACE_DAMAGE_BUFFER => {
-            let x = read_i32(&msg.data, 0).unwrap_or(0) as u32;
-            let y = read_i32(&msg.data, 4).unwrap_or(0) as u32;
+            let x = read_i32(&msg.data, 0).unwrap_or(0);
+            let y = read_i32(&msg.data, 4).unwrap_or(0);
             let w = read_i32(&msg.data, 8).unwrap_or(0) as u32;
             let h = read_i32(&msg.data, 12).unwrap_or(0) as u32;
             if let Some(ObjectEntry::Surface { pending_damage, .. }) =

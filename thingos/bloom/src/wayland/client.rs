@@ -36,8 +36,8 @@ pub enum ObjectEntry {
         xdg_surface_obj: Option<u32>,
         /// Pending buffer object ID (set by wl_surface.attach).
         pending_buffer: Option<u32>,
-        /// Pending damage rect (x, y, w, h).
-        pending_damage: Option<(u32, u32, u32, u32)>,
+        /// Pending damage rect (x, y as i32; w, h as u32 matching Wayland wire).
+        pending_damage: Option<(i32, i32, u32, u32)>,
         /// Pending frame callback object ID.
         pending_frame_cb: Option<u32>,
     },
