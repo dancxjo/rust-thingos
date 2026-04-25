@@ -25,6 +25,7 @@ use abi::driver_interface::{
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::VirtioNetDriver;
 use ipc_helpers::provider::ProviderLoop;
+use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::service_loop::ServiceLoop;
@@ -445,6 +446,44 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
     stem::syscall::exit(0);
 }
 
+/// Poll the VirtIO-NET device for incoming frames and link-state changes,
+/// pushing any new data into the shared state and issuing VFS notifications.
+fn poll_device(shared: &ProviderShared, req_write: u32) {
+    {
+        let mut driver = shared.driver.lock();
+        if let Some(link_up) = driver.poll_link_change() {
+            let event = if link_up { "link-up" } else { "link-down" };
+            {
+                let mut state = shared.state.lock();
+                state.link_up = link_up;
+                state.push_event(event);
+            }
+            stem::debug!("VIRTIO_NETD: Link state changed: {}", event);
+            let _ = stem::syscall::vfs::vfs_notify(
+                req_write,
+                HANDLE_EVENTS,
+                abi::syscall::poll_flags::POLLIN,
+            );
+        }
+    }
+
+    {
+        let mut driver = shared.driver.lock();
+        if let Some(frame) = driver.poll_rx() {
+            let frame_vec: alloc::vec::Vec<u8> = frame.to_vec();
+            {
+                let mut state = shared.state.lock();
+                state.push_rx_frame(frame_vec);
+            }
+            let _ = stem::syscall::vfs::vfs_notify(
+                req_write,
+                HANDLE_RX,
+                abi::syscall::poll_flags::POLLIN,
+            );
+        }
+    }
+}
+
 fn start_provider_thread(
     shared: Arc<ProviderShared>,
     req_write: u32,
@@ -453,7 +492,15 @@ fn start_provider_thread(
 ) -> Result<(), abi::errors::Errno> {
     stem::thread::spawn_task_detached(move || {
         stem::debug!("VIRTIO_NETD: Entering VFS provider service loop at {}", DEFAULT_MOUNT_PATH);
-        let mut provider_loop = ProviderLoop::new(req_read);
+        let provider_loop = ProviderLoop::new(req_read);
+        let mut svc_loop =
+            match ServiceProviderLoop::new(provider_loop, abi::vfs_rpc::VFS_RPC_MAX_REQ * 8) {
+                Ok(l) => l,
+                Err(e) => {
+                    warn!("VIRTIO_NETD: failed to create ServiceProviderLoop: {:?}", e);
+                    return;
+                }
+            };
         provider_started.store(true, Ordering::Release);
 
         loop {
@@ -481,25 +528,18 @@ fn start_provider_thread(
                     );
                 }
             }
+        // Short timeout so we periodically poll the hardware even when no VFS
+        // requests are pending.  1 ms is enough to drain RX bursts promptly
+        // without spinning.
+        let poll_timeout = stem::time::Duration::from_millis(1);
 
-            {
-                let mut driver = shared.driver.lock();
-                if let Some(frame) = driver.poll_rx() {
-                    let frame_vec: alloc::vec::Vec<u8> = frame.to_vec();
-                    {
-                        let mut state = shared.state.lock();
-                        state.push_rx_frame(frame_vec);
-                    }
-                    let _ = stem::syscall::vfs::vfs_notify(
-                        req_write,
-                        HANDLE_RX,
-                        abi::syscall::poll_flags::POLLIN,
-                    );
-                }
-            }
+        loop {
+            // Poll device state before each blocking wait so we never miss a
+            // frame or link-change that arrived between loop iterations.
+            poll_device(&shared, req_write);
 
-            match provider_loop.try_next_request() {
-                Ok(Some(req)) => {
+            match svc_loop.next_event(Some(poll_timeout)) {
+                Ok(ServiceProviderEvent::ProviderRequest(req)) => {
                     let op = req.op;
                     let resp_port = req.resp_port;
                     let req_payload_len = req.payload.len();
@@ -534,25 +574,42 @@ fn start_provider_thread(
                             resp_port
                         );
                     }
-                    if let Err(e) = provider_loop.send_response(&req, resp) {
+                    if let Err(e) = svc_loop.send_response(&req, resp) {
                         warn!("VIRTIO_NETD: send_response failed: {:?}", e);
-                    } else {
-                        if op != abi::vfs_rpc::VfsRpcOp::Poll {
-                            stem::trace!(
-                                "VIRTIO_NETD: send_response end op={:?} resp_port={}",
-                                op,
-                                resp_port
-                            );
-                        }
+                    } else if op != abi::vfs_rpc::VfsRpcOp::Poll {
+                        stem::trace!(
+                            "VIRTIO_NETD: send_response end op={:?} resp_port={}",
+                            op,
+                            resp_port
+                        );
                     }
                 }
-                Ok(None) => {}
+                Ok(ServiceProviderEvent::Timeout) => {
+                    // Timeout fired — device is polled at the top of the next
+                    // iteration; nothing else to do here.
+                }
+                Ok(ServiceProviderEvent::InboxClosed) => {
+                    stem::debug!("VIRTIO_NETD: inbox closed, exiting provider loop");
+                    break;
+                }
+                Ok(ServiceProviderEvent::Message { kind, payload }) => {
+                    // virtio_netd does not currently register as an inbox actor;
+                    // control messages are not expected but are silently dropped
+                    // in case the runtime delivers them during startup.
+                    stem::trace!(
+                        "VIRTIO_NETD: unexpected inbox message kind={:?} payload_len={}",
+                        kind,
+                        payload.len()
+                    );
+                }
+                Ok(ServiceProviderEvent::Ready { .. }) => {
+                    // No secondary sources are registered beyond the provider
+                    // port, so this arm is unreachable in normal operation.
+                }
                 Err(e) => {
-                    warn!("VIRTIO_NETD: provider port error: {:?}", e);
+                    warn!("VIRTIO_NETD: provider loop error: {:?}", e);
                 }
             }
-
-            stem::yield_now();
         }
     })?;
     Ok(())
