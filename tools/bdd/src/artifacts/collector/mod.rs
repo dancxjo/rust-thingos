@@ -30,6 +30,10 @@ pub struct ArtifactCollector {
     step_start_time: Option<std::time::Instant>,
     /// Full serial log pending for scenario end
     pending_scenario_serial: String,
+    /// Optional assertion buffer set by steps to record the data they asserted on.
+    /// When present, this is written into the step's serial.log so developers can
+    /// see the evidence that made a step pass.
+    step_assertion_buffer: Option<String>,
 }
 
 impl ArtifactCollector {
@@ -49,6 +53,7 @@ impl ArtifactCollector {
             step_start_serial_len: 0,
             step_start_time: None,
             pending_scenario_serial: String::new(),
+            step_assertion_buffer: None,
         }
     }
 
@@ -178,6 +183,23 @@ impl ArtifactCollector {
         self.pending_scenario_serial = serial.to_string();
     }
 
+    /// Record the assertion evidence for the current step.
+    ///
+    /// Call this from within a step function when the step has found the data
+    /// it asserts on. The buffer will be written into the step's `serial.log`
+    /// so that developers can see exactly what satisfied the assertion, even
+    /// when the raw serial delta for that step is empty (e.g. the output
+    /// arrived before the assertion step started).
+    ///
+    /// `label` is a short human-readable name for the buffer (e.g.
+    /// `"Command Output"`). `buffer` is the content to include.
+    pub fn set_step_assertion_buffer(&mut self, label: &str, buffer: &str) {
+        self.step_assertion_buffer = Some(format!(
+            "=== {} ===\n{}\n=== End {} ===\n",
+            label, buffer, label
+        ));
+    }
+
     /// Called when a step starts.
     pub fn on_step_start(
         &mut self,
@@ -189,6 +211,7 @@ impl ArtifactCollector {
         self.step_counter += 1;
         self.step_start_serial_len = serial_len;
         self.step_start_time = Some(std::time::Instant::now());
+        self.step_assertion_buffer = None;
 
         let dir = self.step_dir();
         let _ = fs::create_dir_all(&dir);
@@ -238,10 +261,28 @@ impl ArtifactCollector {
             String::new()
         };
 
+        // Build the log file content. When a step has recorded assertion evidence
+        // (via set_step_assertion_buffer), prepend it so developers can see exactly
+        // what data the assertion matched — even when the raw serial delta is empty
+        // because the command output arrived before this assertion step started.
+        let log_content = match self.step_assertion_buffer.take() {
+            Some(assertion_buf) => {
+                if step_serial.is_empty() {
+                    assertion_buf
+                } else {
+                    format!(
+                        "{}\n=== Serial Log (since step start) ===\n{}\n=== End Serial Log ===\n",
+                        assertion_buf, step_serial
+                    )
+                }
+            }
+            None => step_serial.clone(),
+        };
+
         let step_dir = self.step_dir();
         let log_path = step_dir.join("serial.log");
-        if !step_serial.is_empty() {
-            let _ = fs::write(&log_path, &step_serial);
+        if !log_content.is_empty() {
+            let _ = fs::write(&log_path, &log_content);
         }
 
         if let Some(feature) = self.features.last_mut() {
@@ -252,7 +293,7 @@ impl ArtifactCollector {
                     step.screenshot_after = screenshot_after;
                     step.registers = registers;
                     step.serial_log = if log_path.exists() { Some(log_path.clone()) } else { None };
-                    step.serial_excerpt = step_serial;
+                    step.serial_excerpt = log_content;
                     step.duration_ms = duration_ms;
                 }
             }
@@ -411,5 +452,63 @@ mod tests {
         assert_eq!(passed, 1, "expected 1 passed");
         assert_eq!(pending, 2, "expected 2 pending (empty + all-skipped)");
         assert_eq!(failed, 1, "expected 1 failed");
+    }
+
+    /// When a step sets an assertion buffer, the step serial_excerpt should
+    /// contain the labeled assertion evidence instead of an empty raw delta.
+    #[test]
+    fn step_assertion_buffer_is_included_in_serial_excerpt() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+        collector.on_scenario_start("assertion buffer scenario");
+
+        // Simulate: serial log already has content before the step starts.
+        let full_serial = "old boot output\n";
+        // Step starts at the end of the existing serial (delta will be empty).
+        collector.on_step_start("Then", "command output contains hello", full_serial.len(), None);
+
+        // The step logic finds its match and registers the assertion buffer.
+        collector.set_step_assertion_buffer("Command Output", "1  hello");
+
+        // Step ends with the same serial (no new data arrived during this step).
+        collector.on_step_end(StepResult::Passed, None, None, None, full_serial);
+
+        let step = &collector.features[0].scenarios[0].steps[0];
+        assert!(
+            step.serial_excerpt.contains("1  hello"),
+            "serial_excerpt must contain the assertion evidence: {:?}",
+            step.serial_excerpt
+        );
+        assert!(
+            step.serial_excerpt.contains("Command Output"),
+            "serial_excerpt must include the assertion label: {:?}",
+            step.serial_excerpt
+        );
+    }
+
+    /// Assertion buffer is cleared at step start so it does not leak to the next step.
+    #[test]
+    fn assertion_buffer_cleared_on_step_start() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+        collector.on_scenario_start("buffer isolation scenario");
+
+        // First step sets an assertion buffer.
+        collector.on_step_start("Then", "step one", 0, None);
+        collector.set_step_assertion_buffer("Command Output", "step one output");
+        collector.on_step_end(StepResult::Passed, None, None, None, "step one output\n");
+
+        // Second step has no assertion buffer set.
+        let full_serial = "step one output\nstep two output\n";
+        collector.on_step_start("Then", "step two", "step one output\n".len(), None);
+        // Do NOT call set_step_assertion_buffer here.
+        collector.on_step_end(StepResult::Passed, None, None, None, full_serial);
+
+        let step2 = &collector.features[0].scenarios[0].steps[1];
+        assert!(
+            !step2.serial_excerpt.contains("step one output"),
+            "second step must not include first step's assertion buffer: {:?}",
+            step2.serial_excerpt
+        );
     }
 }
