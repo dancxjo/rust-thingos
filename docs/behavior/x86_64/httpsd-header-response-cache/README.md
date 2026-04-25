@@ -1,6 +1,6 @@
 # Feature: httpsd header/response cache
 
-> Last run: 2026-04-25 09:08:47
+> Last run: 2026-04-25 13:10:40
 
 ## Scenarios
 
@@ -8,4 +8,4 @@
 |----------|-------|--------|------|
 | Response headers are published as xattrs | 3/4 | ❌ | [View Details](response-headers-are-published-as-xattrs/README.md) |
 | Cache mount exposes the raw response head and index | 3/4 | ❌ | [View Details](cache-mount-exposes-the-raw-response-head-and-index/README.md) |
-| 3xx redirects surface as symlinks after first fetch | 0/1 | ❌ | [View Details](3xx-redirects-surface-as-symlinks-after-first-fetch/README.md) |
+| 3xx redirects surface as symlinks after first fetch | 3/4 | ❌ | [View Details](3xx-redirects-surface-as-symlinks-after-first-fetch/README.md) |

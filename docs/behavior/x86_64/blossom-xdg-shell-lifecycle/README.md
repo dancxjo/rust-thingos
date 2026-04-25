@@ -1,6 +1,6 @@
 # Feature: blossom xdg-shell lifecycle
 
-> Last run: 2026-04-25 09:08:47
+> Last run: 2026-04-25 13:10:40
 
 ## Scenarios
 
