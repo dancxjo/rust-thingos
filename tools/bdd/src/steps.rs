@@ -2219,14 +2219,13 @@ async fn serial_shell_still_responsive(world: &mut ThingOsWorld) -> Result<(), S
     // Send a simple echo command
     let probe = "SHELL_ALIVE_PROBE";
     let mut data = format!("echo {}\n", probe).into_bytes();
-    for b in &data {
+    for b in data {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("Serial write failed: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = data; // suppress unused warning
     // Wait for the probe string to appear in log
     let found = world.wait_for_serial(probe, 10.0).await;
     if !found {
@@ -2301,14 +2300,13 @@ async fn wayland_client_connected(world: &mut ThingOsWorld) -> Result<(), StepEr
     // the full xdg-shell protocol lifecycle.
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut data = b"wayland_hello &\n".to_vec();
-    for b in &data {
+    for b in data {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("Serial write failed: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = data;
     // Wait for the client to connect.
     let found = world
         .wait_for_serial("wayland_hello: connected to /run/wayland-0", 15.0)
@@ -2840,8 +2838,8 @@ async fn compositor_marks_surface_for_mapping(
 #[when(regex = r#"^the client sends xdg_toplevel\.set_title "(.+)"$"#)]
 async fn client_sends_set_title(world: &mut ThingOsWorld, title: String) -> Result<(), StepError> {
     let pattern = format!("wayland-server: xdg_toplevel obj=");
-    let found = world.wait_for_serial(&pattern, 10.0).await;
-    let _ = found;
+    // Wait briefly for the log to appear before checking.
+    let _ = world.wait_for_serial(&pattern, 10.0).await;
     // wayland_hello sets title="Thing-OS XDG Demo".
     let log = world.get_serial_log().await;
     if log.contains("wayland-server: xdg_toplevel obj=") && log.contains("title=") {
@@ -2950,8 +2948,8 @@ async fn client_responds_with_pong(world: &mut ThingOsWorld) -> Result<(), StepE
 /// `When the client sends xdg_toplevel.destroy`
 #[when("the client sends xdg_toplevel.destroy")]
 async fn client_sends_toplevel_destroy(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    let found = world.wait_for_serial("wayland-server: xdg_toplevel obj=", 5.0).await;
-    let _ = found;
+    // Wait briefly for any outstanding toplevel logs.
+    let _ = world.wait_for_serial("wayland-server: xdg_toplevel obj=", 5.0).await;
     // wayland_hello doesn't explicitly destroy; the compositor gets client disconnected.
     // Check for toplevel destroy log (wayland_hello may stay running).
     let log = world.get_serial_log().await;
@@ -3049,10 +3047,8 @@ async fn client_has_fully_configured_toplevel(
 /// `And the client has called wl_surface.frame to register a callback`
 #[given("the client has called wl_surface.frame to register a callback")]
 async fn client_registered_frame_callback(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    let found = world
-        .wait_for_serial("wayland-server: wl_surface obj=", 10.0)
-        .await;
-    let _ = found;
+    // Wait briefly for the frame callback log to appear.
+    let _ = world.wait_for_serial("wayland-server: wl_surface obj=", 10.0).await;
     let log = world.get_serial_log().await;
     if log.contains("registered frame callback") {
         eprintln!("│  │  │      ✅ Frame callback registered");
@@ -3129,14 +3125,13 @@ async fn serviceloop_harness_available(world: &mut ThingOsWorld) -> Result<(), S
     // Check by trying to stat/exec it via the serial shell.
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"ls /bin/sl_harness\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write failed: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let log = world.get_serial_log().await;
     let start = world.serial_checkpoint.min(log.len());
@@ -3159,14 +3154,13 @@ async fn harness_creates_service_loop(world: &mut ThingOsWorld) -> Result<(), St
     world.serial_checkpoint = world.get_serial_log().await.len();
     // Launch the harness in the background; it awaits further commands.
     let mut cmd = b"sl_harness create 4096\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     // Wait for the harness to confirm creation.
     let found = world.wait_for_serial("SLHARNESS:Created", 10.0).await;
     if !found {
@@ -3185,14 +3179,13 @@ async fn send_typed_message_to_harness(
     kind: String,
 ) -> Result<(), StepError> {
     let mut cmd = format!("sl_harness send {}\n", kind).into_bytes();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     eprintln!("│  │  │      📨 Sent '{}' to harness inbox", kind);
     Ok(())
 }
@@ -3232,14 +3225,13 @@ async fn harness_no_ready_before_message(_world: &mut ThingOsWorld) {
 #[when("the harness registers a pipe read-end as a secondary FD")]
 async fn harness_registers_pipe_fd(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness register_pipe\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     let found = world.wait_for_serial("SLHARNESS:PipeRegistered", 5.0).await;
     if !found {
         return Err(StepError(
@@ -3253,14 +3245,13 @@ async fn harness_registers_pipe_fd(world: &mut ThingOsWorld) -> Result<(), StepE
 #[when("the pipe write-end is filled with 8 bytes of data")]
 async fn pipe_write_end_filled(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness fill_pipe\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     Ok(())
 }
 
@@ -3322,14 +3313,13 @@ async fn harness_observes_pipe_ready(world: &mut ThingOsWorld) -> Result<(), Ste
 )]
 async fn harness_subscribes_to_irq(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness register_irq\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     let found = world.wait_for_serial("SLHARNESS:IrqRegistered", 5.0).await;
     if !found {
         return Err(StepError("Harness did not confirm IRQ registration".to_string()));
@@ -3341,14 +3331,13 @@ async fn harness_subscribes_to_irq(world: &mut ThingOsWorld) -> Result<(), StepE
 #[when("the synthetic test IRQ is fired")]
 async fn synthetic_irq_fired(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness fire_irq\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     Ok(())
 }
 
@@ -3372,14 +3361,13 @@ async fn harness_observes_irq_ready(world: &mut ThingOsWorld) -> Result<(), Step
 #[when("the harness's inbox is closed by the supervisor")]
 async fn harness_inbox_closed(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness close_inbox\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     Ok(())
 }
 
@@ -3443,14 +3431,13 @@ async fn harness_low_cpu_after_close(world: &mut ThingOsWorld) -> Result<(), Ste
 async fn send_4_typed_messages(world: &mut ThingOsWorld, kind: String) -> Result<(), StepError> {
     for _ in 0..4 {
         let mut cmd = format!("sl_harness send {}\n", kind).into_bytes();
-        for b in &cmd {
+        for b in cmd {
             world
-                .serial_write(&[*b])
+                .serial_write(&[b])
                 .await
                 .map_err(|e| StepError(format!("serial write: {}", e)))?;
             tokio::time::sleep(std::time::Duration::from_millis(15)).await;
         }
-        let _ = cmd;
     }
     eprintln!("│  │  │      📨 Sent 4 '{}' messages to harness inbox", kind);
     Ok(())
@@ -3460,14 +3447,13 @@ async fn send_4_typed_messages(world: &mut ThingOsWorld, kind: String) -> Result
 #[when("the harness calls next_event followed by drain_inbox")]
 async fn harness_calls_next_then_drain(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness drain\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     Ok(())
 }
 
@@ -3525,14 +3511,13 @@ async fn harness_attempts_remove_inbox_token(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
     let mut cmd = b"sl_harness remove_inbox\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     Ok(())
 }
 
@@ -3577,14 +3562,13 @@ async fn harness_arms_shutdown_hook(
     tag: String,
 ) -> Result<(), StepError> {
     let mut cmd = format!("sl_harness arm_shutdown_hook {}\n", tag).into_bytes();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     eprintln!("│  │  │      🔧 Armed shutdown hook with tag '{}'", tag);
     Ok(())
 }
@@ -3628,14 +3612,13 @@ async fn run_until_shutdown_returned(world: &mut ThingOsWorld) -> Result<(), Ste
 #[when("the handler returns Break on the next Message event")]
 async fn handler_returns_break(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness arm_break_handler\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     eprintln!("│  │  │      🔧 Armed Break handler");
     Ok(())
 }
@@ -3654,14 +3637,13 @@ async fn vfs_provider_mounted_at(
     // For the test scenario we launch it and request the given path.
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = format!("vfs_test_provider {} &\n", path).into_bytes();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     // Wait for the provider to mount.
     let marker = format!("vfs_test_provider: mounted at {}", path);
     let found = world.wait_for_serial(&marker, 15.0).await;
@@ -3714,14 +3696,13 @@ async fn shutdown_sequence_called(world: &mut ThingOsWorld) -> Result<(), StepEr
     // Signal shutdown to vfs_test_provider via a typed inbox message.
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"vfs_test_provider --shutdown\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     // Wait for the shutdown to begin.
     let found =
         world.wait_for_serial("ServiceProviderLoop: initiating graceful shutdown", 15.0).await;
@@ -3744,14 +3725,13 @@ async fn path_no_longer_accessible(
     // Try to access the path via the serial shell.
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = format!("ls {}\n", path).into_bytes();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let log = world.get_serial_log().await;
     let start = world.serial_checkpoint.min(log.len());
@@ -3799,14 +3779,13 @@ async fn shutdown_sequence_called_twice(world: &mut ThingOsWorld) -> Result<(), 
     // Second shutdown — should be idempotent
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"vfs_test_provider --shutdown\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     eprintln!("│  │  │      ✅ Shutdown sequence called twice");
     Ok(())
@@ -3860,14 +3839,13 @@ async fn provider_daemon_inbox_closed(world: &mut ThingOsWorld) -> Result<(), St
     // Simulate inbox closure by sending a kill/close-inbox command.
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"vfs_test_provider --close-inbox\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     eprintln!("│  │  │      📭 Provider daemon inbox close requested");
     Ok(())
 }
@@ -3941,14 +3919,13 @@ async fn kernel_closes_virtio_netd_inbox(world: &mut ThingOsWorld) -> Result<(),
     // Send a signal/command to simulate inbox closure via the serial shell.
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"kill $(pgrep virtio_netd)\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     eprintln!("│  │  │      📭 virtio_netd inbox closure triggered");
     Ok(())
@@ -3959,14 +3936,13 @@ async fn kernel_closes_virtio_netd_inbox(world: &mut ThingOsWorld) -> Result<(),
 async fn virtio_netd_started_again(world: &mut ThingOsWorld) -> Result<(), StepError> {
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"virtio_netd &\n".to_vec();
-    for b in &cmd {
+    for b in cmd {
         world
-            .serial_write(&[*b])
+            .serial_write(&[b])
             .await
             .map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
-    let _ = cmd;
     eprintln!("│  │  │      🚀 virtio_netd restarted");
     Ok(())
 }
