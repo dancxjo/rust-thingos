@@ -370,7 +370,7 @@ pub fn setup_terminal(
     display: Option<DisplayHandles>,
     _input: InputHandles,
 ) {
-    debug!("SPROUT: Setting up Terminal...");
+    info!("SPROUT: Setting up Terminal...");
     ensure_session_roots();
 
     let Some(display) = display else {

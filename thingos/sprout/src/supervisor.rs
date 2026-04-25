@@ -149,7 +149,7 @@ impl Supervisor {
     }
 
     pub fn run_forever(&mut self) -> ! {
-        info!("SPROUT: Supervisor session started (MINIMAL MODE)");
+        info!("SPROUT: Supervisor session started (FULL PIPELINE MODE)");
 
         // Ensure canonical device directories exist.
         let _ = stem::syscall::vfs::vfs_mkdir("/dev/display");
@@ -180,7 +180,8 @@ impl Supervisor {
         stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
         stem::debug!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
 
-        stem::debug!("SPROUT: Running registration + health supervision loop");
+        stem::info!("SPROUT: Entering supervisor service loop (tick={}ms)", SUPERVISOR_TICK_MS);
+        self.tick_supervisor();
 
         // Drive supervision through the canonical Layer 3 `ServiceLoop`
         // (inbox-backed actor) instead of a hand-rolled `sleep_ms(100)` loop.
@@ -431,8 +432,7 @@ impl Supervisor {
     /// One iteration of the periodic supervisor work that previously ran
     /// inside the hand-rolled `loop { ...; sleep_ms(100); }` body.
     fn tick_supervisor(&mut self) {
-        stem::trace!("SPROUT: Supervisor tick...");
-        /*
+        trace!("SPROUT: Supervisor tick...");
         stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
         self.spawn_netd_if_ready();
         stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
@@ -443,7 +443,6 @@ impl Supervisor {
         self.spawn_bristle_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
         self.spawn_bloom_if_ready();
-        */
         stem::trace!("SPROUT: Loop iteration: run_health_vine");
         run_health_vine(&self.tasks);
         /*
