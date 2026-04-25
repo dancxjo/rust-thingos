@@ -102,41 +102,51 @@ impl DisplayBackend {
     pub fn present(
         &self,
         composition_list: &[CompositionEntry],
-        damage: &[Rect],
+        _damage: &[Rect],
         fallback_buffer: Option<u32>,
     ) -> PresentResult {
-        let _ = damage;
-        let selected = composition_list
-            .iter()
-            .max_by_key(|entry| entry.z_order)
-            .map(|entry| {
-                (entry.buffer_id, entry.src_rect, entry.dest_rect, entry.z_order, entry.alpha)
-            })
-            .or_else(|| {
-                fallback_buffer.map(|id| {
-                    let (w, h) = self.output_size();
-                    (id, Rect { x: 0, y: 0, w, h }, Rect { x: 0, y: 0, w, h }, 0, 255)
-                })
+        let mut planes = Vec::new();
+
+        // 1. Background plane
+        if let Some(id) = fallback_buffer {
+            let (w, h) = self.output_size();
+            planes.push(PlaneCommit {
+                plane_id: PlaneId(0),
+                buffer_id: abi::display::BufferId(id),
+                dest_rect: Rect { x: 0, y: 0, w, h },
+                src_rect: Rect { x: 0, y: 0, w, h },
+                z_order: 0,
+                alpha: 255,
+                _reserved: [0; 7],
             });
+        }
 
-        let Some((buffer_id, src_rect, dest_rect, z_order, alpha)) = selected else {
+        // 2. Surface planes
+        for entry in composition_list {
+            planes.push(PlaneCommit {
+                plane_id: PlaneId(planes.len() as u32),
+                buffer_id: abi::display::BufferId(entry.buffer_id),
+                dest_rect: entry.dest_rect,
+                src_rect: entry.src_rect,
+                z_order: entry.z_order,
+                alpha: entry.alpha,
+                _reserved: [0; 7],
+            });
+        }
+
+        if planes.is_empty() {
             return PresentResult { success: true };
-        };
+        }
 
-        let plane = PlaneCommit {
-            plane_id: PlaneId(0),
-            buffer_id: abi::display::BufferId(buffer_id),
-            dest_rect,
-            src_rect,
-            z_order,
-            alpha,
-            _reserved: [0; 7],
-        };
-        PresentResult { success: self.commit_display_planes(&[plane]) }
+        PresentResult { success: self.commit_display_planes(&planes) }
     }
 
     pub fn commit_display_planes(&self, planes: &[PlaneCommit]) -> bool {
-        let req = CommitRequest { commit_count: planes.len() as u32, flags: CommitFlags::VSYNC, commits_ptr: 0 };
+        let req = CommitRequest {
+            commit_count: planes.len() as u32,
+            flags: CommitFlags::VSYNC,
+            commits_ptr: 0,
+        };
         let header_size = core::mem::size_of::<CommitRequest>();
         let plane_size = core::mem::size_of::<PlaneCommit>();
         let mut buf = alloc::vec![0u8; header_size + planes.len() * plane_size];

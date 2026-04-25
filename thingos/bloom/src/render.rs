@@ -46,10 +46,7 @@ struct WallpaperLoader {
 
 impl WallpaperLoader {
     fn new() -> Self {
-        Self {
-            ready: Arc::new(Mutex::new(None)),
-            loading: Arc::new(AtomicBool::new(false)),
-        }
+        Self { ready: Arc::new(Mutex::new(None)), loading: Arc::new(AtomicBool::new(false)) }
     }
 }
 
@@ -183,14 +180,13 @@ impl CompositorVisuals {
         loading_flag.store(true, Ordering::Release);
 
         let spawn_result = stem::thread::spawn_task_detached(move || {
-            let mut texture =
-                match Texture::new("bloom.compositor.background", width, height, 4) {
-                    Some(t) => t,
-                    None => {
-                        loading_flag.store(false, Ordering::Release);
-                        return;
-                    }
-                };
+            let mut texture = match Texture::new("bloom.compositor.background", width, height, 4) {
+                Some(t) => t,
+                None => {
+                    loading_flag.store(false, Ordering::Release);
+                    return;
+                }
+            };
 
             let res = (prepare_bg)(
                 path_c.as_ptr(),

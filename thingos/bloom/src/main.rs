@@ -25,10 +25,10 @@ use scene::Scene;
 use services::input_service::InputService;
 use services::wallpaper::WallpaperService;
 use services::wayland::WaylandService;
+use stem::syscall::port_create;
 use stem::syscall::vfs::{
     vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_path, vfs_write,
 };
-use stem::syscall::port_create;
 use stem::{error, info, warn};
 use world::BloomWorld;
 
@@ -109,18 +109,16 @@ fn main(_arg: usize) -> ! {
     // bridged to a VFS FD, so the write handle we hand to bristle is always
     // paired with an FD that bloom will actually watch.
     let bristle_fd = match port_create(4096) {
-        Ok((write_handle, read_handle)) => {
-            match vfs_handle_from_port(read_handle) {
-                Ok(fd) => {
-                    register_with_bristle(write_handle);
-                    Some(fd)
-                }
-                Err(e) => {
-                    warn!("bloom: failed to bridge bristle port to FD: {:?}", e);
-                    None
-                }
+        Ok((write_handle, read_handle)) => match vfs_handle_from_port(read_handle) {
+            Ok(fd) => {
+                register_with_bristle(write_handle);
+                Some(fd)
             }
-        }
+            Err(e) => {
+                warn!("bloom: failed to bridge bristle port to FD: {:?}", e);
+                None
+            }
+        },
         Err(e) => {
             warn!("bloom: failed to create bristle event port: {:?}", e);
             None

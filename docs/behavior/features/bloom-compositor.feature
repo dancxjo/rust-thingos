@@ -73,4 +73,4 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the log should match pattern "bloom: service loop started"
     And the log should match pattern "bloom: output0 [0-9]+x[0-9]+"
-
+    And the log should match pattern "First frame rendered"

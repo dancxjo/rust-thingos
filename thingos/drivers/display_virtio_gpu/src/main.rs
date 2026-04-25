@@ -6,7 +6,7 @@ extern crate alloc;
 use abi::display::{
     BufferHandle, BufferId, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
     DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps, DisplayInfo, DisplayMode,
-    PlaneCommit, PlaneId,
+    PlaneCommit,
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -339,7 +339,12 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
             let bh: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
-            stem::debug!("DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd={}, size={}x{}", bh.handle, bh.width, bh.height);
+            stem::debug!(
+                "DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd={}, size={}x{}",
+                bh.handle,
+                bh.width,
+                bh.height
+            );
             let size = (bh.height as usize).saturating_mul(bh.stride as usize);
             let req = abi::vm::VmMapReq {
                 addr_hint: 0,
@@ -406,7 +411,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     let off = i * plane_size;
                     let plane: PlaneCommit = unsafe {
                         core::ptr::read_unaligned(
-                            raw_planes[off..off + plane_size].as_ptr() as *const _,
+                            raw_planes[off..off + plane_size].as_ptr() as *const _
                         )
                     };
                     planes.push(plane);
@@ -415,8 +420,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
             if !planes.is_empty() {
                 let idx = driver.next_buffer_idx;
-                driver.next_buffer_idx =
-                    (driver.next_buffer_idx + 1) % driver.frame_pool.len();
+                driver.next_buffer_idx = (driver.next_buffer_idx + 1) % driver.frame_pool.len();
 
                 let bpp = if driver.disp_width > 0 {
                     (driver.disp_stride / driver.disp_width).max(1) as usize
@@ -428,9 +432,6 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
                 // Blit each plane's imported buffer into the DMA frame pool buffer.
                 for plane in &planes {
-                    if plane.plane_id != PlaneId(0) {
-                        continue;
-                    }
                     let src = match driver.imported_buffers.get(&plane.buffer_id) {
                         Some(s) => s,
                         None => continue,
@@ -438,28 +439,18 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
                     let src_x = plane.src_rect.x.min(src.width) as usize;
                     let src_y = plane.src_rect.y.min(src.height) as usize;
-                    let src_w = plane
-                        .src_rect
-                        .w
-                        .min(src.width.saturating_sub(plane.src_rect.x))
-                        as usize;
-                    let src_h = plane
-                        .src_rect
-                        .h
-                        .min(src.height.saturating_sub(plane.src_rect.y))
-                        as usize;
+                    let src_w =
+                        plane.src_rect.w.min(src.width.saturating_sub(plane.src_rect.x)) as usize;
+                    let src_h =
+                        plane.src_rect.h.min(src.height.saturating_sub(plane.src_rect.y)) as usize;
                     let dst_x = plane.dest_rect.x.min(driver.disp_width) as usize;
                     let dst_y = plane.dest_rect.y.min(driver.disp_height) as usize;
-                    let dst_w = plane
-                        .dest_rect
-                        .w
-                        .min(driver.disp_width.saturating_sub(plane.dest_rect.x))
-                        as usize;
-                    let dst_h = plane
-                        .dest_rect
-                        .h
-                        .min(driver.disp_height.saturating_sub(plane.dest_rect.y))
-                        as usize;
+                    let dst_w =
+                        plane.dest_rect.w.min(driver.disp_width.saturating_sub(plane.dest_rect.x))
+                            as usize;
+                    let dst_h =
+                        plane.dest_rect.h.min(driver.disp_height.saturating_sub(plane.dest_rect.y))
+                            as usize;
                     let copy_w = src_w.min(dst_w);
                     let copy_h = src_h.min(dst_h);
                     if copy_w == 0 || copy_h == 0 {
@@ -506,7 +497,8 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         stem::error!("DISP: flush_resource failed: {}", e);
                     }
                     if let Err(e) =
-                        driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height) {
+                        driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height)
+                    {
                         stem::error!("DISP: set_scanout failed: {}", e);
                     }
                     driver.present_seq += 1;
@@ -523,7 +515,6 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }
-
 
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]
@@ -1110,8 +1101,7 @@ fn main(boot_arg: usize) -> ! {
                         };
                     }
 
-                    driver.next_buffer_idx =
-                        (driver.next_buffer_idx + 1) % driver.frame_pool.len();
+                    driver.next_buffer_idx = (driver.next_buffer_idx + 1) % driver.frame_pool.len();
 
                     let acquired = drvproto::AcquiredPayload {
                         handle: driver.frame_pool[idx].fd,
@@ -1180,12 +1170,8 @@ fn main(boot_arg: usize) -> ! {
                         if present.rect_count == 0
                             || (present._pad & drvproto::PRESENT_FLAG_FULLFRAME != 0)
                         {
-                            let full_rect = Rect {
-                                x: 0,
-                                y: 0,
-                                w: driver.disp_width,
-                                h: driver.disp_height,
-                            };
+                            let full_rect =
+                                Rect { x: 0, y: 0, w: driver.disp_width, h: driver.disp_height };
                             stem::trace!(
                                 "display_virtio_gpu: calling present_rect for full_rect..."
                             );
@@ -1250,9 +1236,8 @@ fn main(boot_arg: usize) -> ! {
                                 if valid_rects.len() > 1 && union_area > sum_area * 2 {
                                     // Distant rects case: per-rect flush
                                     for &rect in &valid_rects {
-                                        let _ = driver
-                                            .gpu
-                                            .flush_resource(driver.current_res_id, rect);
+                                        let _ =
+                                            driver.gpu.flush_resource(driver.current_res_id, rect);
                                     }
                                     stats.total_flushes += valid_rects.len() as u32;
                                     stats.per_rect_flush_count += 1;
@@ -1427,7 +1412,8 @@ fn main(boot_arg: usize) -> ! {
                                             match stem::syscall::shared_memory_phys(fd) {
                                                 Ok(phys_addr) => {
                                                     // Attach backing and transfer
-                                                    if driver.gpu
+                                                    if driver
+                                                        .gpu
                                                         .attach_backing_3d(
                                                             hdr.resource_id,
                                                             phys_addr,
@@ -1435,7 +1421,8 @@ fn main(boot_arg: usize) -> ! {
                                                         )
                                                         .is_ok()
                                                     {
-                                                        if driver.gpu
+                                                        if driver
+                                                            .gpu
                                                             .transfer_to_host_3d(
                                                                 1,
                                                                 hdr.resource_id,

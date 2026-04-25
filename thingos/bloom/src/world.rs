@@ -78,8 +78,7 @@ impl BloomWorld {
                 true
             }
             ClientRequest::DestroySurface(req) => {
-                let Some(release_ids) =
-                    self.scene.destroy_surface(req.client_id, req.surface_id)
+                let Some(release_ids) = self.scene.destroy_surface(req.client_id, req.surface_id)
                 else {
                     send_ack(req.reply_port, 1, 0, 0);
                     return false;
@@ -224,11 +223,8 @@ impl BloomWorld {
     pub fn try_present(&mut self) -> Option<Vec<CompositionEntry>> {
         let composition = self.scene.collect_composition();
         let pending_damage = self.damage.take();
-        let result = self.display.present(
-            &composition,
-            &pending_damage,
-            self.visuals.fallback_buffer_id(),
-        );
+        let result =
+            self.display.present(&composition, &pending_damage, self.visuals.fallback_buffer_id());
         if result.success {
             Some(composition)
         } else {

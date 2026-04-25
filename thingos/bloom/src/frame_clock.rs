@@ -62,8 +62,10 @@ impl FrameClock {
         now >= next
     }
 
-    /// Milliseconds until the next repaint is allowed, or `None` if a repaint
-    /// is already due (or no repaint has been requested).
+    /// Milliseconds until the next repaint is allowed.
+    ///
+    /// Returns `Some(0)` when a repaint is due now, and `None` only when no
+    /// repaint is pending.
     ///
     /// Pass this as the `timeout` to `WaitSet::wait` so the loop wakes up
     /// exactly when the next frame window opens.
@@ -74,7 +76,7 @@ impl FrameClock {
         let now = monotonic_ns();
         let next = self.last_commit_ns.saturating_add(self.frame_interval_ns);
         if now >= next {
-            None // repaint is already due
+            Some(0)
         } else {
             let diff_ns = next - now;
             // Convert nanoseconds to milliseconds, rounding up to avoid

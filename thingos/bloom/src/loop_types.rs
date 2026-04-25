@@ -57,6 +57,8 @@ use crate::world::BloomWorld;
 pub enum Interest {
     /// Wake when this file descriptor becomes readable.
     FdReadable(u32),
+    /// Wake when this file descriptor becomes writable.
+    FdWritable(u32),
 }
 
 // ── LoopEvent ────────────────────────────────────────────────────────────────
@@ -186,19 +188,28 @@ impl BloomLoop {
         let idx = self.services.len();
         for interest in svc.interests() {
             match interest {
-                Interest::FdReadable(fd) => {
-                    match self.wait_set.add_fd_readable(*fd) {
-                        Ok(token) => self.regs.push(Registration { token, svc_idx: idx }),
-                        Err(e) => {
-                            stem::warn!(
-                                "bloom: failed to register {} interest on fd {}: {:?}",
-                                svc.name(),
-                                fd,
-                                e
-                            );
-                        }
+                Interest::FdReadable(fd) => match self.wait_set.add_fd_readable(*fd) {
+                    Ok(token) => self.regs.push(Registration { token, svc_idx: idx }),
+                    Err(e) => {
+                        stem::warn!(
+                            "bloom: failed to register {} interest on fd {}: {:?}",
+                            svc.name(),
+                            fd,
+                            e
+                        );
                     }
-                }
+                },
+                Interest::FdWritable(fd) => match self.wait_set.add_fd_writable(*fd) {
+                    Ok(token) => self.regs.push(Registration { token, svc_idx: idx }),
+                    Err(e) => {
+                        stem::warn!(
+                            "bloom: failed to register {} writable interest on fd {}: {:?}",
+                            svc.name(),
+                            fd,
+                            e
+                        );
+                    }
+                },
             }
         }
         self.services.push(svc);
@@ -230,8 +241,7 @@ impl BloomLoop {
         while self.timers.front().map_or(false, |t| t.expiry_ns <= now) {
             let t = self.timers.pop_front().expect("checked above");
             fired = true;
-            let action = self.services[t.svc_idx]
-                .dispatch(LoopEvent::Timer(t.id), world);
+            let action = self.services[t.svc_idx].dispatch(LoopEvent::Timer(t.id), world);
             wake |= self.apply_action(action, t.svc_idx);
         }
         (fired, wake)
@@ -302,6 +312,7 @@ impl BloomLoop {
         // When any service returns `Wake`, this flag is set and the next wait
         // uses a zero timeout so the loop iterates immediately.
         let mut wake_requested = false;
+        let mut first_frame_rendered = false;
         loop {
             // ── 1. Wait for the next event ────────────────────────────────
             let timeout = if wake_requested {
@@ -315,9 +326,7 @@ impl BloomLoop {
                 // No FDs registered yet; pace with the frame interval.
                 // Respect a zero timeout (e.g. from Wake) by skipping the sleep
                 // entirely so the loop can re-run immediately.
-                let sleep_ms = timeout
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(16);
+                let sleep_ms = timeout.map(|d| d.as_millis() as u64).unwrap_or(16);
                 if sleep_ms > 0 {
                     stem::sleep_ms(sleep_ms);
                 }
@@ -341,15 +350,12 @@ impl BloomLoop {
                 self.frame_clock.request_repaint();
             } else {
                 for ev in events {
-                    let svc_idx = self
-                        .regs
-                        .iter()
-                        .find(|r| r.token == ev.token())
-                        .map(|r| r.svc_idx);
+                    let svc_idx =
+                        self.regs.iter().find(|r| r.token == ev.token()).map(|r| r.svc_idx);
 
                     if let Some(idx) = svc_idx {
-                        let action = self.services[idx]
-                            .dispatch(LoopEvent::FdReady(ev.token()), world);
+                        let action =
+                            self.services[idx].dispatch(LoopEvent::FdReady(ev.token()), world);
                         wake_requested |= self.apply_action(action, idx);
                     }
                 }
@@ -375,6 +381,10 @@ impl BloomLoop {
                 if let Some(composition) = world.try_present() {
                     world.send_frame_callbacks(&composition);
                     self.frame_clock.after_commit();
+                    if !first_frame_rendered {
+                        stem::info!("First frame rendered");
+                        first_frame_rendered = true;
+                    }
                 } else {
                     // Present failed; retry on the next frame.
                     self.frame_clock.request_repaint();
