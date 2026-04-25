@@ -622,15 +622,13 @@ impl VfsNode for ProviderNode {
     }
 
     fn poll(&self) -> u16 {
-        let mut payload = [0u8; 12];
-        payload[..8].copy_from_slice(&self.handle.to_le_bytes());
-        let events = abi::syscall::poll_flags::POLLIN | abi::syscall::poll_flags::POLLOUT;
-        payload[8..12].copy_from_slice(&(events as u32).to_le_bytes());
-        let resp = self.rpc.rpc(VfsRpcOp::Poll, &payload);
-        match resp {
-            Ok(r) => parse_response_u32(&r).unwrap_or(0) as u16,
-            Err(_) => abi::syscall::poll_flags::POLLERR,
-        }
+        // North Star: VFS poll() must never block. Provider RPCs are synchronous
+        // and may block for seconds, which deadlocks the kernel if poll() is
+        // called while holding the ProcessInfo spinlock (as sys_wait_many does).
+        //
+        // For now, we return a conservative "always ready" mask. Subsequent
+        // read/write calls will perform the actual blocking RPC safely.
+        abi::syscall::poll_flags::POLLIN | abi::syscall::poll_flags::POLLOUT
     }
 
     fn add_waiter(&self, tid: u64) {
