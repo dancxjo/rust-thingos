@@ -8,7 +8,7 @@ use abi::vm::{
 };
 
 /// Base address for anonymous VM mappings (stacks, etc).
-/// Uses high user VA space to avoid collision with bytespace mappings at 0x1000_0000.
+/// Uses high user VA space to avoid collision with legacy memory ranges.
 const USER_VM_BASE: u64 = 0x4000_0000_0000; // 64TB mark
 static NEXT_USER_MAP: AtomicU64 = AtomicU64::new(USER_VM_BASE);
 

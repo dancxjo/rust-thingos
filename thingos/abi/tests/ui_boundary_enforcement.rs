@@ -16,11 +16,11 @@ fn ui_intent_contract_documented() {
     // The boundary is enforced at compile time through Rust's module privacy:
     // - blossom::graph_ui is pub(crate) — not externally importable
     // - blossom::read_string_prop is pub(crate)
-    // - blossom::read_bytespace is pub(crate)
+    // - blossom::read_buffer is pub(crate)
     //
     // Any attempt to import these from outside blossom will fail:
     //   use blossom::graph_ui;        // error: module `graph_ui` is private
-    //   use blossom::read_bytespace;  // error: function `read_bytespace` is private
+    //   use blossom::read_buffer;  // error: function `read_buffer` is private
 }
 
 #[test]

@@ -262,6 +262,33 @@ async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> 
         }
 
         if found {
+            // Collect filtered command output lines so the step log reflects the
+            // data that satisfied the assertion (not just the raw serial delta).
+            let cmd_output: Vec<&str> = clean_log
+                .lines()
+                .filter(|l| {
+                    let t = l.trim();
+                    !t.starts_with('[')
+                        && !t.contains("[INFO ]")
+                        && !t.contains("[WARN ]")
+                        && !t.contains("[ERROR]")
+                        && !t.contains("[DEBUG]")
+                        && !t.contains("[TRACE]")
+                        && !t.contains("boot_progress:")
+                        && !t.contains("SPROUT:")
+                        && !t.contains('>')
+                        && !t.is_empty()
+                })
+                .collect();
+            eprintln!("│  │  │      ✅ Command output contains '{}':", expected);
+            for l in &cmd_output {
+                eprintln!("│  │  │         {}", l);
+            }
+            let buffer = cmd_output.join("\n");
+            crate::artifacts::global()
+                .lock()
+                .await
+                .set_step_assertion_buffer("Command Output", &buffer);
             return Ok(());
         }
 
@@ -304,6 +331,33 @@ async fn latest_command_output_contains(world: &mut ThingOsWorld, expected: Stri
         }
         
         if found {
+            // Collect filtered command output lines so the step log reflects the
+            // data that satisfied the assertion (not just the raw serial delta).
+            let cmd_output: Vec<&str> = clean_log
+                .lines()
+                .filter(|l| {
+                    let t = l.trim();
+                    !t.starts_with('[')
+                        && !t.contains("[INFO ]")
+                        && !t.contains("[WARN ]")
+                        && !t.contains("[ERROR]")
+                        && !t.contains("[DEBUG]")
+                        && !t.contains("[TRACE]")
+                        && !t.contains("boot_progress:")
+                        && !t.contains("SPROUT:")
+                        && !t.contains('>')
+                        && !t.is_empty()
+                })
+                .collect();
+            eprintln!("│  │  │      ✅ Latest command output contains '{}':", expected);
+            for l in &cmd_output {
+                eprintln!("│  │  │         {}", l);
+            }
+            let buffer = cmd_output.join("\n");
+            crate::artifacts::global()
+                .lock()
+                .await
+                .set_step_assertion_buffer("Command Output", &buffer);
             return Ok(());
         }
         
@@ -347,6 +401,33 @@ async fn command_output_strictly_be(world: &mut ThingOsWorld, expected: String) 
         }
         
         if found {
+            // Collect filtered command output lines so the step log reflects the
+            // data that satisfied the assertion (not just the raw serial delta).
+            let cmd_output: Vec<&str> = clean_log
+                .lines()
+                .filter(|l| {
+                    let t = l.trim();
+                    !t.starts_with('[')
+                        && !t.contains("[INFO ]")
+                        && !t.contains("[WARN ]")
+                        && !t.contains("[ERROR]")
+                        && !t.contains("[DEBUG]")
+                        && !t.contains("[TRACE]")
+                        && !t.contains("boot_progress:")
+                        && !t.contains("SPROUT:")
+                        && !t.contains('>')
+                        && !t.is_empty()
+                })
+                .collect();
+            eprintln!("│  │  │      ✅ Command output strictly matches '{}':", expected);
+            for l in &cmd_output {
+                eprintln!("│  │  │         {}", l);
+            }
+            let buffer = cmd_output.join("\n");
+            crate::artifacts::global()
+                .lock()
+                .await
+                .set_step_assertion_buffer("Command Output", &buffer);
             return Ok(());
         }
         

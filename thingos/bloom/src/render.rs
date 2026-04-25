@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::pixel::PixelFormat;
 use libdl::{RTLD_NOW, dlopen_str, dlsym_bytes};
-use pistil::Texture;
+use pistil_types::Texture;
 use spin::Mutex;
 
 use crate::display::DisplayBackend;

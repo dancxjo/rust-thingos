@@ -23,8 +23,6 @@ pub struct DevTreeCtx {
     pub hhdm: usize,
     pub acpi_rsdp: Option<usize>,
     pub dtb_ptr: Option<usize>,
-    pub dtb_bytespace: Option<abi::types::ThingId>,
-    pub dtb_node_id: Option<abi::types::ThingId>,
 }
 
 pub fn init() -> Result<DevTreeCtx, ()> {
@@ -58,8 +56,6 @@ pub fn init() -> Result<DevTreeCtx, ()> {
         hhdm,
         acpi_rsdp,
         dtb_ptr,
-        dtb_bytespace: None,
-        dtb_node_id: None,
     })
 }
 

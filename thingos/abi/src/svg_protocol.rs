@@ -1,7 +1,7 @@
 //! SVG IPC Protocol - Control-plane messages for blossom service.
 //!
 //! This module defines the wire-compatible IPC protocol for SVG rasterization requests.
-//! Raster pixels are transferred via Bytespace, not inline in IPC messages.
+//! Raster pixels are transferred via shared memory, not inline in IPC messages.
 
 extern crate alloc;
 

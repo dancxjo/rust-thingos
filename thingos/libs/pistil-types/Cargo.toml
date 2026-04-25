@@ -1,0 +1,9 @@
+[package]
+name = "pistil-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stem = { path = "../../stem" }
+abi = { path = "../../abi" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }

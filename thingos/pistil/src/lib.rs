@@ -17,6 +17,8 @@ pub mod raster;
 pub mod tessellate;
 pub mod typography;
 
+pub use pistil_types::{Canvas, Color, Point, Rect, Size, Texture};
+
 const SEED_NAME: &[u8] = b"pistil";
 
 #[unsafe(no_mangle)]
@@ -37,129 +39,6 @@ pub static THINGOS_SEED: Seed = Seed {
         SeedInterface::zero(),
     ],
 };
-
-pub struct Texture {
-    pub fd: u32,
-    pub ptr: *mut u8,
-    pub width: u32,
-    pub height: u32,
-    pub stride: u32,
-    pub bpp: u8,
-    pub size: usize,
-}
-
-impl Texture {
-    pub fn new(name: &str, width: u32, height: u32, bpp: u8) -> Option<Self> {
-        let stride = width * bpp as u32;
-        let size = (height as usize) * (stride as usize);
-        let fd = memfd_create(name, size).ok()? as u32;
-
-        let req = VmMapReq {
-            addr_hint: 0,
-            len: size,
-            prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
-            flags: VmMapFlags::SHARED,
-            backing: VmBacking::File { thing: fd, offset: 0 },
-        };
-
-        let resp = vm_map(&req).ok()?;
-
-        Some(Self { fd, ptr: resp.addr as *mut u8, width, height, stride, bpp, size })
-    }
-
-    pub fn as_slice_mut(&mut self) -> &mut [u32] {
-        if self.bpp != 4 {
-            panic!("Texture is not 4bpp");
-        }
-        unsafe { core::slice::from_raw_parts_mut(self.ptr as *mut u32, self.size / 4) }
-    }
-
-    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.size) }
-    }
-}
-
-impl Drop for Texture {
-    fn drop(&mut self) {
-        let _ = vm_unmap(self.ptr as usize, self.size);
-        // FD close is intentionally omitted to preserve existing texture/buffer
-        // ownership behavior across call sites that export/import this handle.
-    }
-}
-
-// SAFETY: `Texture` owns a private memory-mapped region backed by a memfd.
-// The raw `ptr` field is valid for the lifetime of the Texture and points to
-// process-owned memory.  Sending a Texture across thread boundaries is safe as
-// long as only one thread accesses the mapped region at a time; callers that
-// hand a Texture off to a worker thread must ensure no aliased access occurs
-// during the transfer (which the `WallpaperLoader` in bloom guarantees via the
-// `loading` atomic flag).
-unsafe impl Send for Texture {}
-
-pub struct Canvas<'a> {
-    pub buffer: &'a mut [u32],
-    pub width: u32,
-    pub height: u32,
-    pub stride_pixels: u32,
-}
-
-impl<'a> Canvas<'a> {
-    pub fn new(buffer: &'a mut [u32], width: u32, height: u32, stride_pixels: u32) -> Self {
-        Self { buffer, width, height, stride_pixels }
-    }
-
-    pub fn from_texture(texture: &'a mut Texture) -> Self {
-        let width = texture.width;
-        let height = texture.height;
-        let stride_pixels = texture.stride / 4;
-        Self { buffer: texture.as_slice_mut(), width, height, stride_pixels }
-    }
-
-    pub fn clear(&mut self, color: u32) {
-        self.buffer.fill(color);
-    }
-
-    pub fn put_pixel(&mut self, x: u32, y: u32, color: u32) {
-        if x < self.width && y < self.height {
-            self.buffer[(y * self.stride_pixels + x) as usize] = color;
-        }
-    }
-
-    pub fn blit(
-        &mut self,
-        src: &[u32],
-        src_width: u32,
-        src_height: u32,
-        src_stride_pixels: u32,
-        dst_x: i32,
-        dst_y: i32,
-    ) {
-        for sy in 0..src_height {
-            let dy = dst_y + sy as i32;
-            if dy < 0 || dy >= self.height as i32 {
-                continue;
-            }
-
-            for sx in 0..src_width {
-                let dx = dst_x + sx as i32;
-                if dx < 0 || dx >= self.width as i32 {
-                    continue;
-                }
-
-                let color = src[(sy * src_stride_pixels + sx) as usize];
-                // Simple alpha blending if needed, but for wallpaper we just blit.
-                if (color >> 24) == 0xFF {
-                    self.buffer[(dy as u32 * self.stride_pixels + dx as u32) as usize] = color;
-                } else if (color >> 24) > 0 {
-                    // Basic alpha blending
-                    let dst_idx = (dy as u32 * self.stride_pixels + dx as u32) as usize;
-                    let dst_color = self.buffer[dst_idx];
-                    self.buffer[dst_idx] = blend(dst_color, color);
-                }
-            }
-        }
-    }
-}
 
 fn blend(dst: u32, src: u32) -> u32 {
     let alpha = (src >> 24) as u32;

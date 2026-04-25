@@ -34,7 +34,7 @@
 //!     published_kinds: &["Asset"],
 //!     published_properties: &[
 //!         "asset.name", "asset.kind", "asset.hash",
-//!         "asset.size", "asset.bytespace", "asset.generation",
+//!         "asset.size", "asset.generation",
 //!         "asset.source", "asset.ready"
 //!     ],
 //!     idempotent: true,

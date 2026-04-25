@@ -38,7 +38,7 @@ This document defines the architectural boundary between applications, the Petal
 │ - Manages text measurement, font rendering      │
 └─────────────────────────────────────────────────┘
                       │
-                      │ Paint bytespace
+                      │ Paint data
                       ▼
 ┌─────────────────────────────────────────────────┐
 │ Bloom (Compositor)                              │
@@ -143,7 +143,7 @@ These functions serialize the scene to the graph and increment the generation co
 The Blossom service is responsible for:
 
 1. **Reading UI intent** from graph nodes via watches on:
-   - `ui.scene_bytespace`: Serialized scene data
+   - `ui.scene_data`: Serialized scene data
    - `ui.scene_gen`: Scene generation number
    - Window properties (width, height, background, focus)
 
@@ -156,7 +156,7 @@ The Blossom service is responsible for:
 3. **Generating paint commands**:
    - Creating drawlists from the laid-out scene
    - Emitting fill, stroke, text, image commands
-   - Writing to `ui.paint_bytespace`
+   - Writing to `ui.paint_data`
    - Incrementing `ui.paint_gen`
 
 4. **Optional: Writing back computed bounds** (for debugging):
@@ -169,7 +169,7 @@ The Blossom service is responsible for:
 
 ```
 ui.window
-  ├─ ui.scene_bytespace → serialized Scene
+  ├─ ui.scene_data → serialized Scene
   ├─ ui.scene_gen → generation counter (incremented on publish)
   ├─ ui.bg_color → window background color
   ├─ ui.title → window title (optional)
@@ -177,13 +177,13 @@ ui.window
   └─ ui.height → window height (set by WM or app)
 ```
 
-The `scene_bytespace` contains a serialized representation of the `Scene` tree built by the app.
+The `scene_data` contains a serialized representation of the `Scene` tree built by the app.
 
 ### Paint Output (Written by Blossom)
 
 ```
 ui.window
-  ├─ ui.paint_bytespace → serialized paint commands
+  ├─ ui.paint_data → serialized paint commands
   └─ ui.paint_gen → generation counter (incremented by Blossom)
 ```
 
