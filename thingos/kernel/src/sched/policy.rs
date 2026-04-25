@@ -84,7 +84,7 @@ pub trait SchedPolicy {
 /// 2. Tie on priority: lower virtual runtime wins (CFS-style).
 /// 3. Tie on both: lower base-priority queue wins (larger age debt).
 #[inline]
-pub(crate) fn is_better_pick_candidate(
+pub(super) fn is_better_pick_candidate(
     eff: usize,
     vruntime: u64,
     queue_idx: usize,
@@ -129,7 +129,7 @@ impl DefaultPolicy {
     const RUNQ_LEVELS: usize = 5;
 
     /// Maximum number of candidates to inspect per priority level per pick.
-    pub(crate) const FAIR_SCAN_DEPTH: usize = 8;
+    const FAIR_SCAN_DEPTH: usize = 8;
 
     /// Minimum run-queue depth difference before redirecting a woken task to a
     /// less-loaded CPU.

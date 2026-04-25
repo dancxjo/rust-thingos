@@ -3036,7 +3036,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let mut next_id = None;
         let mut pick_attempts = 0usize;
         let mut dequeue_failures = 0usize;
-        // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick.
+        // Priority scan — skip dead and misrouted tasks, evaluating aging on pick.
         // Policy decides which (queue, index) to try; mechanism dequeues and validates.
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET
             && dequeue_failures < PREPARE_SCHEDULE_PICK_BUDGET
