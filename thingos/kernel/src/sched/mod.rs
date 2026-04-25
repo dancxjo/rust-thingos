@@ -56,6 +56,7 @@ pub(crate) mod blocking;
 pub mod bridge;
 pub mod hooks;
 pub use hooks::protect_user_range_current;
+pub mod policy;
 mod sleep;
 mod spawn;
 mod stack;
@@ -89,6 +90,7 @@ pub use hooks::{
     unregister_task_exit_waiter_current, unregister_timeout_wake_current, waitpid_current,
     yield_now_current,
 };
+pub use policy::{DefaultPolicy, SchedPolicy};
 pub use sleep::{sleep_ms, sleep_ticks, sleep_until, yield_now};
 pub use spawn::{
     SpawnExResult, StdioSpec, boot_spawn_process, spawn, spawn_user_task_full, spawn_user_thread,
@@ -442,6 +444,13 @@ fn vruntime_tick_delta(priority: TaskPriority) -> u64 {
     }
 }
 
+/// Legacy pick-candidate comparison helper.
+///
+/// This function has been superseded by
+/// [`crate::sched::policy::is_better_pick_candidate`], which is called from
+/// [`crate::sched::policy::DefaultPolicy::pick_next_task`].  It is retained
+/// here to avoid breaking any code that may reference it directly.
+#[allow(dead_code)]
 #[inline]
 fn better_fair_pick_candidate(
     eff: usize,
@@ -2528,14 +2537,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
             }
 
-            let current_prio = self.state.per_cpu[cpu_idx]
-                .current
-                .and_then(|cid| self.state.get_thread(cid))
-                .map(|sf| sf.priority as usize)
-                .unwrap_or(0);
-            let is_idle =
-                self.state.per_cpu[cpu_idx].current == self.state.per_cpu[cpu_idx].idle_task;
-            if priority >= current_prio || is_idle {
+            // Policy: decide whether the incoming task should preempt the
+            // currently running task on this CPU.
+            if crate::sched::policy::SchedPolicy::should_preempt_on_wake(
+                &self.policy,
+                &self.state,
+                cpu_idx,
+                priority,
+            ) {
                 self.state.per_cpu[cpu_idx].need_resched = true;
                 // Mirror to the per-CPU atomic flag so the lockless fast-path
                 // in resched_if_needed / preempt_enable can see it.
@@ -3032,137 +3041,85 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let mut next_id = None;
         let mut pick_attempts = 0usize;
         let mut dequeue_failures = 0usize;
-        // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick
+        // Priority scan — skip dead and misrouted tasks, evaluating aging on-pick.
+        // Policy decides which (queue, index) to try; mechanism dequeues and validates.
         while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET
             && dequeue_failures < PREPARE_SCHEDULE_PICK_BUDGET
         {
-            let mut best_q = None;
-            let mut best_idx = None;
-            let mut best_tid = None;
-            let mut best_eff = 0;
-            let mut best_vruntime = u64::MAX;
-            // Rotating scan seed: naturally wraps with usize arithmetic and is
-            // bounded back to queue length via modulo below.
-            let scan_base = self.state.per_cpu[cpu_idx].stats.dispatch_count as usize;
-
-            for p in (1..5).rev() {
-                let runq_len = self.state.per_cpu[cpu_idx].runq[p].len();
-                if runq_len == 0 {
-                    continue;
-                }
-                let scan_len = runq_len.min(PREPARE_SCHEDULE_FAIR_SCAN_DEPTH_PER_PRIORITY);
-                for step in 0..scan_len {
-                    let idx = (scan_base + step) % runq_len;
-                    let Some(&id) = self.state.per_cpu[cpu_idx].runq[p].get(idx) else {
-                        continue;
-                    };
-                    let Some(sf) = self.state.get_thread(id) else {
-                        continue;
-                    };
-                    if sf.runq_location != Some((cpu_idx, p)) {
-                        continue;
-                    }
-                    if sf.state == TaskState::Dead || sf.state == TaskState::Blocked {
-                        continue;
-                    }
-
-                    let mut eff = p; // Start with base priority (queue index)
-                    if p < 4 {
-                        // aging only applies up to High
-                        let wait_ticks = now.saturating_sub(sf.enqueued_at_tick);
-                        let boost = (wait_ticks / types::AGING_THRESHOLD_TICKS) as usize;
-                        let boost = boost.min(types::MAX_PRIORITY_BOOST);
-                        eff = (p + boost).min(4);
-                    }
-                    let vruntime = self.state.task_runtime_stats(id).fair_vruntime;
-                    // CFS-style tie-break: for equal effective priority, prefer
-                    // the least-served runnable task (lower vruntime).
-                    //
-                    // Preserve previous anti-starvation behavior for exact ties:
-                    // if both effective priority and vruntime are equal, prefer
-                    // the lower-base-priority queue candidate (larger age debt).
-                    let better = better_fair_pick_candidate(
-                        eff,
-                        vruntime,
-                        p,
-                        best_eff,
-                        best_vruntime,
-                        best_q,
-                    );
-                    if better {
-                        best_eff = eff;
-                        best_vruntime = vruntime;
-                        best_q = Some(p);
-                        best_idx = Some(idx);
-                        best_tid = Some(id);
-                    }
-                }
-            }
-
-            if let (Some(p), Some(best_idx), Some(best_tid)) = (best_q, best_idx, best_tid) {
-                let still_same = self.state.per_cpu[cpu_idx].runq[p]
-                    .get(best_idx)
-                    .copied()
-                    .is_some_and(|tid| tid == best_tid);
-                if !still_same {
-                    dequeue_failures = dequeue_failures.saturating_add(1);
-                    continue;
-                }
-                let Some(id) = self.state.dequeue_task_at(cpu_idx, p, best_idx) else {
-                    // Dequeue returned None despite the peek succeeding; the entry
-                    // must have been concurrently removed (e.g., by a misroute
-                    // repair). Skip and retry the priority scan.
-                    dequeue_failures = dequeue_failures.saturating_add(1);
-                    continue;
-                };
-                if id != best_tid {
-                    self.state.enqueue_task(cpu_idx, p, id);
-                    dequeue_failures = dequeue_failures.saturating_add(1);
-                    continue;
-                };
-                pick_attempts += 1;
-                self.metrics.pops += 1;
-
-                // Use the hot-field cache for dead/affinity checks to avoid a
-                // nested REGISTRY lock on every task dequeue.
-                match self.state.get_thread(id) {
-                    None => continue, // stale runq entry — skip
-                    Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
-                        // Skip non-runnable tasks.
-                        continue;
-                    }
-                    Some(sf) => {
-                        if let crate::task::Affinity::Pinned(target) = sf.affinity {
-                            if target != cpu_idx && target < per_cpu_len {
-                                self.defer_or_repair_misroute(sf.priority as usize, target, id);
-                                continue;
-                            }
-                        }
-                        if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
-                            if !aff.allows(cpu_idx, per_cpu_len) {
-                                // Fall back to the queued CPU (clamped) when no
-                                // allowed CPU is currently online, rather than
-                                // hard-coding CPU 0 which may itself be offline.
-                                let target = aff
-                                    .pick_cpu(per_cpu_len)
-                                    .unwrap_or_else(|| sf.last_cpu
-                                        .filter(|&c| c < per_cpu_len)
-                                        .unwrap_or_else(|| self.state.pick_online_cpu_excluding_bsp(0)));
-                                crate::kdebug!(
-                                    "SCHED[affinity]: tid={} misrouted to cpu{}, re-routing to cpu{} \
-                                     (allowed={:#x})",
-                                    id, cpu_idx, target, aff.allowed.0
-                                );
-                                self.defer_or_repair_misroute(sf.priority as usize, target, id);
-                                continue;
-                            }
-                        }
-                        next_id = Some(id);
-                        break;
-                    }
-                }
-            } else {
+            // Policy: choose the best candidate from the run queues.
+            let Some((p, best_idx)) =
+                crate::sched::policy::SchedPolicy::pick_next_task(&self.policy, &self.state, cpu_idx, now)
+            else {
                 break;
+            };
+
+            // Mechanism: peek to capture the TID at the selected position.
+            let Some(&best_tid) = self.state.per_cpu[cpu_idx].runq[p].get(best_idx) else {
+                dequeue_failures = dequeue_failures.saturating_add(1);
+                continue;
+            };
+
+            // Mechanism: confirm the entry is still at the expected index and dequeue it.
+            let still_same = self.state.per_cpu[cpu_idx].runq[p]
+                .get(best_idx)
+                .copied()
+                .is_some_and(|tid| tid == best_tid);
+            if !still_same {
+                dequeue_failures = dequeue_failures.saturating_add(1);
+                continue;
+            }
+            let Some(id) = self.state.dequeue_task_at(cpu_idx, p, best_idx) else {
+                // Dequeue returned None despite the peek succeeding; the entry
+                // must have been concurrently removed (e.g., by a misroute
+                // repair). Skip and retry the priority scan.
+                dequeue_failures = dequeue_failures.saturating_add(1);
+                continue;
+            };
+            if id != best_tid {
+                self.state.enqueue_task(cpu_idx, p, id);
+                dequeue_failures = dequeue_failures.saturating_add(1);
+                continue;
+            };
+            pick_attempts += 1;
+            self.metrics.pops += 1;
+
+            // Mechanism: validate the dequeued task (dead/blocked/affinity checks).
+            // Uses the hot-field cache to avoid a nested REGISTRY lock on every dequeue.
+            match self.state.get_thread(id) {
+                None => continue, // stale runq entry — skip
+                Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
+                    // Skip non-runnable tasks.
+                    continue;
+                }
+                Some(sf) => {
+                    if let crate::task::Affinity::Pinned(target) = sf.affinity {
+                        if target != cpu_idx && target < per_cpu_len {
+                            self.defer_or_repair_misroute(sf.priority as usize, target, id);
+                            continue;
+                        }
+                    }
+                    if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
+                        if !aff.allows(cpu_idx, per_cpu_len) {
+                            // Fall back to the queued CPU (clamped) when no
+                            // allowed CPU is currently online, rather than
+                            // hard-coding CPU 0 which may itself be offline.
+                            let target = aff
+                                .pick_cpu(per_cpu_len)
+                                .unwrap_or_else(|| sf.last_cpu
+                                    .filter(|&c| c < per_cpu_len)
+                                    .unwrap_or_else(|| self.state.pick_online_cpu_excluding_bsp(0)));
+                            crate::kdebug!(
+                                "SCHED[affinity]: tid={} misrouted to cpu{}, re-routing to cpu{} \
+                                 (allowed={:#x})",
+                                id, cpu_idx, target, aff.allowed.0
+                            );
+                            self.defer_or_repair_misroute(sf.priority as usize, target, id);
+                            continue;
+                        }
+                    }
+                    next_id = Some(id);
+                    break;
+                }
             }
         }
 
