@@ -76,6 +76,31 @@ impl DeferredRing {
     fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    /// Prepend bytes at the *front* of the ring so they are drained first.
+    ///
+    /// This is used when bytes were drained for rendering but could not be
+    /// rendered (because the console lock was busy).  Putting them back at the
+    /// front preserves the original output order: the re-enqueued bytes will be
+    /// consumed before any bytes that were pushed while the lock was contended.
+    ///
+    /// If there is not enough free space for all of `data`, the oldest (leading)
+    /// bytes are silently discarded.
+    fn push_front_slice(&mut self, data: &[u8]) {
+        let space = DEFERRED_CAP - self.len;
+        let n = data.len().min(space);
+        if n == 0 {
+            return;
+        }
+        // If we must truncate, skip the leading (earliest-enqueued) bytes in
+        // `data` so we keep the bytes that are closest to the current ring head.
+        let skip = data.len() - n;
+        self.head = (self.head + DEFERRED_CAP - n) % DEFERRED_CAP;
+        for (i, &b) in data[skip..].iter().enumerate() {
+            self.buf[(self.head + i) % DEFERRED_CAP] = b;
+        }
+        self.len += n;
+    }
 }
 
 static DEFERRED: Mutex<DeferredRing> = Mutex::new(DeferredRing::new());
@@ -786,11 +811,11 @@ pub fn flush_deferred() {
             }
         }
     } else {
-        // Console is busy — re-enqueue bytes so they aren't lost.
-        // They may appear after any bytes that arrived in the meantime,
-        // which is an acceptable reorder for a debug console.
+        // Console is busy — re-enqueue bytes at the *front* of the ring so
+        // they are rendered before any bytes that arrived in the meantime,
+        // preserving output order.
         if let Some(mut ring) = DEFERRED.try_lock() {
-            ring.push_slice(&local[..n]);
+            ring.push_front_slice(&local[..n]);
         }
         // If we can't re-lock the ring either, the bytes are lost — acceptable
         // for a debug console under extreme contention.
@@ -832,7 +857,7 @@ pub fn flush_deferred_idle() {
         }
     } else {
         if let Some(mut ring) = DEFERRED.try_lock() {
-            ring.push_slice(&local[..n]);
+            ring.push_front_slice(&local[..n]);
         }
     }
 }
@@ -923,5 +948,84 @@ pub unsafe fn force_unlock() {
         CONSOLE.force_unlock();
         DEFERRED.force_unlock();
         SERIAL_DEFERRED.force_unlock();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeferredRing, DEFERRED_CAP};
+
+    fn drain_all(ring: &mut DeferredRing, out: &mut [u8]) -> usize {
+        ring.drain(out)
+    }
+
+    #[test]
+    fn push_front_slice_preserves_order() {
+        let mut ring = DeferredRing::new();
+        // Simulate: "line1\n" was drained but could not be rendered.
+        // Meanwhile "line2\n" was pushed.
+        ring.push_slice(b"line2\n");
+        // Re-enqueue "line1\n" at the front.
+        ring.push_front_slice(b"line1\n");
+        // Drain should give line1 before line2.
+        let mut out = [0u8; 12];
+        let n = drain_all(&mut ring, &mut out);
+        assert_eq!(&out[..n], b"line1\nline2\n");
+    }
+
+    #[test]
+    fn push_front_slice_wraps_correctly() {
+        // Fill the ring almost full so the head wraps around the array boundary.
+        let mut ring = DeferredRing::new();
+        // Advance head to near the end of the buffer.
+        let filler = [b'x'; DEFERRED_CAP - 4];
+        ring.push_slice(&filler);
+        let mut discard = [0u8; DEFERRED_CAP];
+        ring.drain(&mut discard[..DEFERRED_CAP - 4]);
+        // Ring is now empty but head is at DEFERRED_CAP - 4.
+        ring.push_slice(b"new ");
+        ring.push_front_slice(b"old ");
+        let mut out = [0u8; 8];
+        let n = drain_all(&mut ring, &mut out);
+        assert_eq!(&out[..n], b"old new ");
+    }
+
+    #[test]
+    fn push_front_slice_truncates_to_free_space() {
+        // Fill all but 3 bytes.
+        let mut ring = DeferredRing::new();
+        let filler = [b'y'; DEFERRED_CAP - 3];
+        ring.push_slice(&filler);
+        // Try to prepend 6 bytes — only 3 should fit (oldest 3 are dropped).
+        ring.push_front_slice(b"abcdef");
+        // The ring should be full.
+        assert_eq!(ring.len, DEFERRED_CAP);
+        // Drain first 3 bytes — should be "def" (last 3 of "abcdef").
+        let mut head = [0u8; 3];
+        ring.drain(&mut head);
+        assert_eq!(&head, b"def");
+    }
+
+    #[test]
+    fn push_front_slice_empty_data_is_noop() {
+        let mut ring = DeferredRing::new();
+        ring.push_slice(b"hello");
+        ring.push_front_slice(b"");
+        let mut out = [0u8; 5];
+        let n = drain_all(&mut ring, &mut out);
+        assert_eq!(&out[..n], b"hello");
+    }
+
+    #[test]
+    fn push_front_slice_full_ring_drops_all() {
+        let mut ring = DeferredRing::new();
+        let filler = [b'z'; DEFERRED_CAP];
+        ring.push_slice(&filler);
+        // Ring is full — push_front_slice must not corrupt it.
+        ring.push_front_slice(b"ignored");
+        assert_eq!(ring.len, DEFERRED_CAP);
+        let mut out = [0u8; DEFERRED_CAP];
+        let n = drain_all(&mut ring, &mut out);
+        assert!(out[..n].iter().all(|&b| b == b'z'));
     }
 }

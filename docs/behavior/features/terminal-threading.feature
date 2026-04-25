@@ -29,3 +29,13 @@ Feature: Terminal parser and renderer threading
     Then the log should match pattern "Terminal: Renderer thread spawned"
     And the log should match pattern "Terminal: Liveness check - frame 0"
     And the log should match pattern "Terminal: Liveness check - frame 60"
+
+  Scenario: Terminal output lines appear in order when console lock is contended
+    # When the framebuffer console lock is busy at flush time, drained bytes must
+    # be placed back at the *front* of the deferred ring buffer so they are
+    # rendered before any bytes that arrived while the lock was held.  This
+    # ensures multi-line output does not appear out of sequence on the F12
+    # onscreen terminal.
+    Given the machine is booted
+    Then the log should match pattern "Terminal: Renderer thread spawned"
+    And the log lines matching "Terminal: line" should appear in ascending numeric order
