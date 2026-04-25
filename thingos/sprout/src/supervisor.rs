@@ -19,7 +19,7 @@ use spin::Mutex;
 use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::time::Duration;
-use stem::{info, warn};
+use stem::{debug, info, trace, warn};
 
 use crate::ledger::DeviceLedger;
 use crate::pipelines::{mount_hosts_cache, setup_display_pipeline, setup_input_broker, setup_serial_shell};
@@ -175,7 +175,7 @@ impl Supervisor {
 
         // Stage 5: Start netd only after the network driver publishes its VFS tree.
         stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
-        info!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
+        stem::debug!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
 
         stem::debug!("SPROUT: Running registration + health supervision loop");
 
@@ -347,11 +347,11 @@ impl Supervisor {
         payload: supervisor_protocol::BindReadyPayload,
         attached_handle: Option<u32>,
     ) {
-        info!("SPROUT: BIND_READY from instance_id=0x{:x}", payload.bind_instance_id);
+        debug!("SPROUT: BIND_READY from instance_id=0x{:x}", payload.bind_instance_id);
 
         if (payload.class_mask & classes::DISPLAY_CARD) != 0 {
             if let Some(handle) = attached_handle {
-                info!(
+                debug!(
                     "SPROUT: Registering DISPLAY_CARD at /dev/display/card0 (handle={})",
                     handle
                 );
@@ -365,7 +365,7 @@ impl Supervisor {
                     tasks.iter_mut().find(|t| t.bind_instance_id == payload.bind_instance_id)
                 {
                     task.ready = true;
-                    info!("SPROUT: Handshake complete — task '{}' marked ready", task.name);
+                    debug!("SPROUT: Handshake complete — task '{}' marked ready", task.name);
 
                     // Send MSG_BIND_ASSIGNED back to the driver.
                     if let Some(req_port) = task.req_write_port {
@@ -392,7 +392,7 @@ impl Supervisor {
                                 &assigned_bytes[..len],
                             ) {
                                 let res = stem::syscall::port_send(req_port, &msg_buf[..total_len]);
-                                info!("SPROUT: Sent MSG_BIND_ASSIGNED to req_port {} (res={:?})", req_port, res);
+                                debug!("SPROUT: Sent MSG_BIND_ASSIGNED to req_port {} (res={:?})", req_port, res);
                             }
                         }
                     }
@@ -416,20 +416,20 @@ impl Supervisor {
     /// One iteration of the periodic supervisor work that previously ran
     /// inside the hand-rolled `loop { ...; sleep_ms(100); }` body.
     fn tick_supervisor(&mut self) {
-        stem::info!("SPROUT: Supervisor tick...");
-        stem::info!("SPROUT: Loop iteration: spawn_netd_if_ready");
+        stem::trace!("SPROUT: Supervisor tick...");
+        stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
         self.spawn_netd_if_ready();
-        stem::info!("SPROUT: Loop iteration: verify_netd_liveness");
+        stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
         self.verify_netd_liveness();
-        stem::info!("SPROUT: Loop iteration: spawn_display_if_needed");
+        stem::trace!("SPROUT: Loop iteration: spawn_display_if_needed");
         self.spawn_display_if_needed();
-        stem::info!("SPROUT: Loop iteration: spawn_bristle_if_needed");
+        stem::trace!("SPROUT: Loop iteration: spawn_bristle_if_needed");
         self.spawn_bristle_if_needed();
-        stem::info!("SPROUT: Loop iteration: spawn_bloom_if_ready");
+        stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
         self.spawn_bloom_if_ready();
-        stem::info!("SPROUT: Loop iteration: run_health_vine");
+        stem::trace!("SPROUT: Loop iteration: run_health_vine");
         run_health_vine(&self.tasks);
-        stem::info!("SPROUT: Loop iteration: tick complete");
+        stem::trace!("SPROUT: Loop iteration: tick complete");
     }
 
     fn spawn_display_if_needed(&mut self) {

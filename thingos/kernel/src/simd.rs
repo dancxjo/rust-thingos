@@ -66,11 +66,11 @@ impl SimdState {
 }
 
 pub fn self_test<R: BootRuntime>(rt: &R) {
-    use crate::kinfo;
+    use crate::kdebug;
 
     let (size, align) = rt.simd_state_layout();
     if size == 0 {
-        kinfo!("SIMD self-test skipped (no SIMD support)");
+        kdebug!("SIMD self-test skipped (no SIMD support)");
         return;
     }
 
@@ -82,13 +82,13 @@ pub fn self_test<R: BootRuntime>(rt: &R) {
         let buffer = storage.0.as_mut_ptr();
 
         if size > 1024 || align > 16 {
-            kinfo!("SIMD self-test skipped (size/align too large for stack buffer)");
+            kdebug!("SIMD self-test skipped (size/align too large for stack buffer)");
             return;
         }
 
         unsafe { rt.simd_save(buffer) };
         unsafe { rt.simd_restore(buffer) };
 
-        kinfo!("SIMD self-test passed (save/restore cycle)");
+        kdebug!("SIMD self-test passed (save/restore cycle)");
     });
 }

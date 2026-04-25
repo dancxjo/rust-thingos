@@ -116,20 +116,20 @@ pub fn init<R: BootRuntime>(_rt: &R) {
     let mut heap = kernel_heap().lock();
     crate::kdebug!("[kernel:global_alloc] kernel_heap lock ok");
     // Keep early boot fast: bootstrap with a smaller heap and grow on demand.
-    crate::kdebug!("[kernel:global_alloc] reserve_region begin");
+    crate::ktrace!("[kernel:global_alloc] reserve_region begin");
     let (base, size) = heap
         .reserve_region::<R>(BOOTSTRAP_HEAP_PAGES)
         .expect("Failed to reserve kernel heap region");
-    crate::kdebug!("[kernel:global_alloc] reserve_region ok");
+    crate::ktrace!("[kernel:global_alloc] reserve_region ok");
 
     unsafe {
-        crate::kdebug!("[kernel:global_alloc] inner allocator init begin");
+        crate::ktrace!("[kernel:global_alloc] inner allocator init begin");
         INNER_ALLOCATOR.lock().init(base as *mut u8, size);
     }
-    crate::kdebug!("[kernel:global_alloc] inner allocator init ok");
+    crate::ktrace!("[kernel:global_alloc] inner allocator init ok");
     HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
-    crate::kdebug!("[kernel:global_alloc] heap top store ok");
-    crate::kdebug!("[kernel:global_alloc] init done");
+    crate::ktrace!("[kernel:global_alloc] heap top store ok");
+    crate::ktrace!("[kernel:global_alloc] init done");
 }
 
 #[cfg(not(test))]
