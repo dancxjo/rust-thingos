@@ -16,7 +16,7 @@ use driver::BootFbDriver;
 use ipc_helpers::provider::ProviderLoop;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::vfs::vfs_handle_from_port;
-use stem::syscall::{port_create, port_recv};
+use stem::syscall::{port_create, port_recv, port_send};
 use stem::{debug, info, warn};
 use vfs_provider::dispatch_vfs_rpc;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_bootfb";
@@ -339,8 +339,7 @@ fn main(boot_fd: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ =
-                    stem::syscall::socket::sendmsg(supervisor_port_fd, &svc_buf[..total_len], &[]);
+                let _ = port_send(supervisor_port, &svc_buf[..total_len]);
                 debug!("display_bootfb: Sent MSG_SERVICE_READY.");
             }
         }

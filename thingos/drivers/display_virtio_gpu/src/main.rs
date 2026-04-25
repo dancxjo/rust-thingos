@@ -18,7 +18,7 @@ use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::syscall::{PortHandle, port_create};
+use stem::syscall::{PortHandle, port_create, port_send};
 use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
@@ -268,7 +268,7 @@ fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
     };
     stem::debug!("DISP: vfs_lookup path='{}'", path);
     let handle: u64 = match path.trim_matches('/') {
-        "" => HANDLE_ROOT,
+        "" => HANDLE_CARD,
         "card0" => HANDLE_CARD,
         _ => return ProviderResponse::err(Errno::ENOENT),
     };
@@ -966,8 +966,7 @@ fn main(boot_arg: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ =
-                    stem::syscall::socket::sendmsg(supervisor_port_fd, &svc_buf[..total_len], &[]);
+                let _ = port_send(supervisor_port, &svc_buf[..total_len]);
                 debug!("display_virtio_gpu: Sent MSG_SERVICE_READY.");
             }
         }
@@ -1004,6 +1003,7 @@ fn main(boot_arg: usize) -> ! {
     // ProviderLoop handles VFS RPC framing and correctly prefixes every
     // response with the req_id the kernel needs to route the reply.
     let mut vfs_loop = ProviderLoop::new(vfs_read);
+    info!("display_virtio_gpu: VFS provider loop online");
 
     loop {
         stem::trace!("display_virtio_gpu: waiting on WaitSet...");
@@ -1016,14 +1016,6 @@ fn main(boot_arg: usize) -> ! {
                     if ev.token() == vfs_read_tok && ev.is_readable() {
                         stem::trace!("display_virtio_gpu: vfs_read readable token fired");
                     }
-                }
-
-                // Drain VFS RPCs via ProviderLoop. ProviderLoop correctly prefixes
-                // every response with the req_id so the kernel can route replies.
-                while let Ok(Some(req)) = vfs_loop.try_next_request() {
-                    stem::debug!("display_virtio_gpu: VFS RPC op={:?}", req.op);
-                    let resp = dispatch_vfs_rpc(&mut driver, &req);
-                    vfs_loop.send_response(&req, resp).ok();
                 }
 
                 let mut read_total = 0;
@@ -1056,6 +1048,13 @@ fn main(boot_arg: usize) -> ! {
             Err(e) => {
                 stem::trace!("display_virtio_gpu: WaitSet returned ERR: {:?}", e);
             }
+        }
+
+        // Always drain VFS RPCs, even if readiness wait fails or times out.
+        while let Ok(Some(req)) = vfs_loop.try_next_request() {
+            stem::debug!("display_virtio_gpu: VFS RPC op={:?}", req.op);
+            let resp = dispatch_vfs_rpc(&mut driver, &req);
+            vfs_loop.send_response(&req, resp).ok();
         }
 
         while let Some((header, payload)) = frames.next_message() {

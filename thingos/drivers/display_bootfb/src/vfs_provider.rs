@@ -73,7 +73,7 @@ fn lookup(payload: &[u8]) -> ProviderResponse {
     let path = path.trim_matches('/');
 
     let handle: u64 = match path {
-        "" => HANDLE_ROOT,
+        "" => HANDLE_CARD,
         "card0" => HANDLE_CARD,
         _ => return ProviderResponse::err(Errno::ENOENT),
     };
