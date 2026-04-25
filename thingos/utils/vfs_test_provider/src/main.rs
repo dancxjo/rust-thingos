@@ -217,16 +217,25 @@ fn main(_arg: usize) -> ! {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/// Extract a `u64` handle from the first 8 bytes of `payload`.
+///
+/// Returns 0 on under-length payloads (the kernel always supplies at least
+/// 8 bytes for handle-bearing operations, so this is a safe default rather
+/// than a real fallback).
+#[inline]
+fn extract_handle(payload: &[u8]) -> u64 {
+    if payload.len() >= 8 {
+        u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]))
+    } else {
+        0
+    }
+}
+
 /// Returns `true` if this request targets the `/hang` file handle.
 fn is_hang_request(op: &VfsRpcOp, payload: &[u8]) -> bool {
     match op {
         VfsRpcOp::Read | VfsRpcOp::Stat | VfsRpcOp::Close => {
-            if payload.len() >= 8 {
-                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                handle == HANDLE_HANG
-            } else {
-                false
-            }
+            payload.len() >= 8 && extract_handle(payload) == HANDLE_HANG
         }
         _ => false,
     }
@@ -236,12 +245,7 @@ fn is_hang_request(op: &VfsRpcOp, payload: &[u8]) -> bool {
 fn is_slow_request(op: &VfsRpcOp, payload: &[u8]) -> bool {
     match op {
         VfsRpcOp::Read | VfsRpcOp::Stat => {
-            if payload.len() >= 8 {
-                let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                handle == HANDLE_SLOW
-            } else {
-                false
-            }
+            payload.len() >= 8 && extract_handle(payload) == HANDLE_SLOW
         }
         _ => false,
     }
@@ -252,6 +256,8 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
     match op {
         // ── Lookup ────────────────────────────────────────────────────────
         VfsRpcOp::Lookup => {
+            // The Lookup payload is: [path_len: u32][path_bytes...].
+            // Offset 4 skips the 4-byte little-endian path-length prefix.
             let path = if payload.len() > 4 {
                 core::str::from_utf8(&payload[4..]).unwrap_or("")
             } else {
@@ -276,7 +282,7 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
             if payload.len() < 8 {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+            let handle = extract_handle(payload);
             match handle {
                 HANDLE_ROOT => ProviderResponse::ok_stat(0o040_555, 0, HANDLE_ROOT),
                 HANDLE_FAST => {
@@ -302,7 +308,7 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
             if payload.len() < 8 {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+            let handle = extract_handle(payload);
             match handle {
                 HANDLE_FAST => ProviderResponse::ok_read(FAST_CONTENT),
                 HANDLE_SLOW => ProviderResponse::ok_read(SLOW_CONTENT),
@@ -310,9 +316,11 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
                 HANDLE_HANG => ProviderResponse::err(Errno::EIO),
                 HANDLE_BURST => ProviderResponse::ok_read(BURST_CONTENT),
                 HANDLE_MALFORMED => {
-                    // Return a response whose first bytes claim there are more
-                    // data bytes than the rest of the payload contains, making
-                    // it structurally malformed from the consumer's point of view.
+                    // The four 0xff bytes are an intentionally invalid length
+                    // prefix (claiming 0xFFFFFFFF = 4 GiB of data follows)
+                    // while only a short string actually follows.  This makes
+                    // the payload structurally malformed from any consumer that
+                    // interprets the first four bytes as a byte count.
                     let garbage: &[u8] = b"\xff\xff\xff\xffMALFORMED_PAYLOAD";
                     ProviderResponse::ok_bytes(garbage)
                 }
@@ -329,11 +337,7 @@ fn dispatch(op: &VfsRpcOp, payload: &[u8]) -> ProviderResponse {
 
         // ── Readdir ───────────────────────────────────────────────────────
         VfsRpcOp::Readdir => {
-            let handle = if payload.len() >= 8 {
-                u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]))
-            } else {
-                0
-            };
+            let handle = if payload.len() >= 8 { extract_handle(payload) } else { 0 };
             if handle == HANDLE_ROOT {
                 let mut out = Vec::new();
                 for &(name, entry_handle) in ENTRIES {
