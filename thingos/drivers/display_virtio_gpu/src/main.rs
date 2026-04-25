@@ -1530,6 +1530,5 @@ fn main(boot_arg: usize) -> ! {
                 _ => {}
             }
         }
-        stem::yield_now();
     }
 }

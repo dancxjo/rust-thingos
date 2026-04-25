@@ -930,7 +930,7 @@ static TRYLOCK_MISS_LAST_WARN_TICK: [AtomicU64; types::MAX_CPUS] = {
 /// Under SMP the scheduler lock can be briefly held by another CPU during its
 /// own scheduling cycle; 50 fired too readily at startup with 6 vCPUs. 100
 /// gives better signal-to-noise without hiding genuine long-hold-time issues.
-pub const TRYLOCK_MISS_WARN_THRESHOLD: u64 = 100;
+pub const TRYLOCK_MISS_WARN_THRESHOLD: u64 = 1000;
 
 /// Minimum interval between threshold warning emissions per CPU.
 pub const TRYLOCK_MISS_WARN_COOLDOWN_SECS: u64 = 30;
@@ -2522,6 +2522,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
             let _ = self.state.remove_task_from_sleep_queue(tid);
 
             if let Some(sf) = self.state.get_thread_mut(tid) {
+                if sf.last_cpu.is_some_and(|c| c != cpu_idx) {
+                    if sf.migration_state == MigrationState::Local {
+                        let _ = sf.migration_state.try_transition(MigrationState::Requested { target: cpu_idx });
+                    }
+                    if let MigrationState::Requested { .. } = sf.migration_state {
+                        let _ = sf.migration_state.try_transition(MigrationState::InTransit);
+                    }
+                }
                 sf.state = TaskState::Runnable;
                 sf.enqueued_at_tick = wake.enqueued_at_tick;
                 sf.wake_cpu = Some(cpu_idx);
@@ -2639,6 +2647,14 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let wake_mono = crate::runtime::<R>().mono_ticks();
         for (tid, priority, target_cpu) in to_wake {
             if let Some(sf) = self.state.get_thread_mut(tid) {
+                if sf.last_cpu.is_some_and(|c| c != target_cpu) {
+                    if sf.migration_state == MigrationState::Local {
+                        let _ = sf.migration_state.try_transition(MigrationState::Requested { target: target_cpu });
+                    }
+                    if let MigrationState::Requested { .. } = sf.migration_state {
+                        let _ = sf.migration_state.try_transition(MigrationState::InTransit);
+                    }
+                }
                 sf.state = TaskState::Runnable;
                 sf.enqueued_at_tick = now;
                 sf.wake_cpu = Some(target_cpu);
@@ -3306,11 +3322,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     Err(bad_state) => {
                         // An unexpected migration state on arrival is a logic
                         // error: the task arrived on a new CPU but was not in
-                        // InTransit or Local as expected.  Log at warning level
-                        // so it appears in normal debug builds, then force-reset
-                        // to Local so the task can continue running and be
-                        // migrated again in the future.
-                        crate::kdebug!(
+                        // InTransit or Local as expected.  Log at debug level
+                        // only to avoid flooding the console during high-load
+                        // migration storms, then force-reset to Local so the
+                        // task can continue running.
+                        crate::ktrace!(
                             "MIGRATE[tid={}]: BUG: unexpected migration state {:?} on arrival \
                              at cpu{} — forcing Local to allow forward progress",
                             next_id,
