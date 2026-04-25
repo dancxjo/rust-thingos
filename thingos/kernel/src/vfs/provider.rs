@@ -622,13 +622,17 @@ impl VfsNode for ProviderNode {
     }
 
     fn poll(&self) -> u16 {
-        // North Star: VFS poll() must never block. Provider RPCs are synchronous
-        // and may block for seconds, which deadlocks the kernel if poll() is
-        // called while holding the ProcessInfo spinlock (as sys_wait_many does).
+        // North Star: VFS poll() must never block. However, ProviderNode is a
+        // synchronous bridge to a userspace driver.
         //
-        // For now, we return a conservative "always ready" mask. Subsequent
-        // read/write calls will perform the actual blocking RPC safely.
-        abi::syscall::poll_flags::POLLIN | abi::syscall::poll_flags::POLLOUT
+        // Now that sys_wait_many has been refactored to release the ProcessInfo
+        // lock before calling poll(), it is safe for us to perform this RPC.
+        let mut payload = [0u8; 8];
+        payload.copy_from_slice(&self.handle.to_le_bytes());
+        match self.rpc.rpc(VfsRpcOp::Poll, &payload) {
+            Ok(resp) if resp.len() >= 2 => u16::from_le_bytes([resp[0], resp[1]]),
+            _ => 0,
+        }
     }
 
     fn add_waiter(&self, tid: u64) {
