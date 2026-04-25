@@ -367,6 +367,59 @@ impl ServiceLoop {
         }
     }
 
+    /// Convenience driver that adds a one-shot shutdown hook.
+    ///
+    /// Loops on `next_event`, dispatching to `handler` for normal events.
+    /// When [`ServiceEvent::InboxClosed`] is received, `on_shutdown` is
+    /// called exactly once and then this method returns `Ok(())`.
+    /// `on_shutdown` is also called if `handler` returns
+    /// `ControlFlow::Break`.
+    ///
+    /// This is the preferred entry point for daemons that want the
+    /// canonical shutdown contract:
+    ///
+    /// ```no_run
+    /// use core::ops::ControlFlow;
+    /// use stem::service_loop::{ServiceEvent, ServiceLoop};
+    ///
+    /// let mut svc = ServiceLoop::new(4096).unwrap();
+    /// svc.run_until_shutdown(
+    ///     |ev| match ev {
+    ///         ServiceEvent::Message { .. } => ControlFlow::Continue(()),
+    ///         _ => ControlFlow::Continue(()),
+    ///     },
+    ///     || {
+    ///         // cleanup: unmount paths, close handles, flush logs …
+    ///     },
+    ///     None,
+    /// ).unwrap();
+    /// ```
+    pub fn run_until_shutdown<F, S>(
+        &mut self,
+        mut handler: F,
+        on_shutdown: S,
+        timeout: Option<Duration>,
+    ) -> Result<(), Errno>
+    where
+        F: FnMut(ServiceEvent<'_>) -> ControlFlow<()>,
+        S: FnOnce(),
+    {
+        loop {
+            match self.next_event(timeout)? {
+                ServiceEvent::InboxClosed => {
+                    on_shutdown();
+                    return Ok(());
+                }
+                event => {
+                    if let ControlFlow::Break(()) = handler(event) {
+                        on_shutdown();
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
     // ── internals ────────────────────────────────────────────────────────
 
     fn recv_one_inbox_message(&mut self) -> Result<ServiceEvent<'_>, Errno> {

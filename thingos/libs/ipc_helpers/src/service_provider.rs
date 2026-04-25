@@ -69,10 +69,14 @@
 //! - Does **not** introduce an async runtime.
 
 use abi::wire::KindId;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::ops::ControlFlow;
 
 use crate::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::errors::Errno;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
+use stem::syscall::vfs::{vfs_close, vfs_umount};
 use stem::time::Duration;
 use stem::wait_set::{WaitEvent, WaitToken};
 
@@ -137,6 +141,10 @@ pub struct ServiceProviderLoop {
     /// The `WaitToken` assigned to the provider port inside the
     /// `ServiceLoop`'s `WaitSet`.
     provider_token: WaitToken,
+    /// VFS mount paths registered for cleanup during graceful shutdown.
+    mount_paths: Vec<String>,
+    /// Idempotency guard: set to `true` once `shutdown_sequence` has run.
+    shutdown_done: bool,
 }
 
 impl ServiceProviderLoop {
@@ -160,7 +168,7 @@ impl ServiceProviderLoop {
         // port handle is always safe (zero-extends, no data loss).
         #[allow(deprecated)]
         let provider_token = svc.add_port_readable(provider.port_handle() as u64)?;
-        Ok(Self { svc, provider, provider_token })
+        Ok(Self { svc, provider, provider_token, mount_paths: Vec::new(), shutdown_done: false })
     }
 
     /// The [`WaitToken`] assigned to the provider port inside the
@@ -172,6 +180,120 @@ impl ServiceProviderLoop {
     #[inline]
     pub fn provider_token(&self) -> WaitToken {
         self.provider_token
+    }
+
+    // ── graceful shutdown ─────────────────────────────────────────────────
+
+    /// Register a VFS mount path to be unmounted during graceful shutdown.
+    ///
+    /// Call this once per mounted path *before* entering the event loop.
+    /// Paths are unmounted in registration order by [`shutdown_sequence`].
+    ///
+    /// [`shutdown_sequence`]: Self::shutdown_sequence
+    pub fn register_mount_path(&mut self, path: &str) {
+        self.mount_paths.push(String::from(path));
+    }
+
+    /// Execute the canonical graceful-shutdown sequence.
+    ///
+    /// Steps (in order):
+    /// 1. **Stop accepting new work** — the caller must not call
+    ///    `next_event` after this returns.
+    /// 2. **Unmount VFS provider paths** — every path registered with
+    ///    [`register_mount_path`] is unmounted via `vfs_umount`.  Failures
+    ///    are logged as warnings and do not abort the sequence.
+    /// 3. **Close the provider port handle** — best-effort `vfs_close`
+    ///    on the port read handle so the kernel can reclaim resources.
+    /// 4. **Log shutdown progression** — each step is logged at `info`
+    ///    level so operators can observe the sequence in the kernel log.
+    ///
+    /// This method is **idempotent**: subsequent calls after the first are
+    /// silent no-ops, so it is safe to call from error paths and drop
+    /// implementations.
+    ///
+    /// [`register_mount_path`]: Self::register_mount_path
+    pub fn shutdown_sequence(&mut self) {
+        if self.shutdown_done {
+            return;
+        }
+        self.shutdown_done = true;
+
+        stem::info!("ServiceProviderLoop: initiating graceful shutdown");
+
+        // Step 2: Unmount all registered VFS provider paths.
+        for path in &self.mount_paths {
+            stem::info!("ServiceProviderLoop: unmounting {}", path);
+            match vfs_umount(path) {
+                Ok(()) => stem::info!("ServiceProviderLoop: unmounted {}", path),
+                Err(e) => stem::warn!(
+                    "ServiceProviderLoop: vfs_umount({}) failed: {:?} (continuing)",
+                    path,
+                    e
+                ),
+            }
+        }
+
+        // Step 3: Close the provider port read handle.
+        let _ = vfs_close(self.provider.port_handle());
+
+        stem::info!("ServiceProviderLoop: shutdown complete");
+    }
+
+    /// Run the event loop until the inbox is closed (or the handler
+    /// requests a break), then call [`shutdown_sequence`] and return.
+    ///
+    /// This is the preferred entry point for provider daemons that want
+    /// the full graceful-shutdown contract built in:
+    ///
+    /// ```text
+    /// InboxClosed  ──►  shutdown_sequence()  ──►  return
+    /// handler Break ──►  shutdown_sequence()  ──►  return
+    /// next_event Err ──►  shutdown_sequence()  ──►  return
+    /// ```
+    ///
+    /// Register mount paths before calling this method:
+    ///
+    /// ```ignore
+    /// svc.register_mount_path("/dev/net/virtio0");
+    /// svc.run_until_shutdown(|ev| {
+    ///     // handle ProviderRequest / Message / Ready events
+    ///     ControlFlow::Continue(())
+    /// }, None);
+    /// ```
+    ///
+    /// [`shutdown_sequence`]: Self::shutdown_sequence
+    pub fn run_until_shutdown<F>(&mut self, mut handler: F, timeout: Option<Duration>)
+    where
+        F: FnMut(ServiceProviderEvent<'_>) -> ControlFlow<()>,
+    {
+        loop {
+            match self.next_event(timeout) {
+                Ok(ServiceProviderEvent::InboxClosed) => {
+                    stem::info!(
+                        "ServiceProviderLoop: inbox closed — initiating graceful shutdown"
+                    );
+                    self.shutdown_sequence();
+                    return;
+                }
+                Ok(event) => {
+                    if let ControlFlow::Break(()) = handler(event) {
+                        stem::info!(
+                            "ServiceProviderLoop: handler requested shutdown"
+                        );
+                        self.shutdown_sequence();
+                        return;
+                    }
+                }
+                Err(e) => {
+                    stem::warn!(
+                        "ServiceProviderLoop: next_event error {:?} — initiating graceful shutdown",
+                        e
+                    );
+                    self.shutdown_sequence();
+                    return;
+                }
+            }
+        }
     }
 
     // ── secondary registration (thin pass-throughs to ServiceLoop) ───────

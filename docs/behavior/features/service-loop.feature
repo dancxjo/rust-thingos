@@ -75,3 +75,21 @@ Feature: ServiceLoop — inbox-backed control plane for ThingOS services
     And the harness attempts to remove the inbox token
     Then the remove call should report "false"
     And the ServiceLoop should still have the inbox registered
+
+  Scenario: run_until_shutdown calls the shutdown hook on inbox close
+    # Verifies the canonical one-shot shutdown pattern.  The hook must be
+    # called exactly once, and the helper must return cleanly so the caller
+    # can proceed to exit(0).
+    When the harness creates a ServiceLoop with max_payload 4096
+    And the harness arms a run_until_shutdown hook that records "shutdown-called"
+    And the harness's inbox is closed by the supervisor
+    Then the harness should observe "shutdown-called" in the hook output within 5s
+    And run_until_shutdown should have returned to the caller
+
+  Scenario: run_until_shutdown calls the shutdown hook on handler Break
+    When the harness creates a ServiceLoop with max_payload 4096
+    And the harness arms a run_until_shutdown hook that records "shutdown-called"
+    And the handler returns Break on the next Message event
+    And another task sends a typed message with kind "test.break" to the harness inbox
+    Then the harness should observe "shutdown-called" in the hook output within 5s
+    And run_until_shutdown should have returned to the caller
