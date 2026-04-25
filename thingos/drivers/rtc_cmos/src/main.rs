@@ -6,7 +6,7 @@ extern crate alloc;
 
 use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
-    DriverStartContext, ProbeResult, Status,
+    ProbeResult, Status,
 };
 use stem::abi::driver_ctx::DriverCtx;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -16,7 +16,7 @@ const THINGOS_DRIVER_NAME: &[u8] = b"rtc_cmos";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverStartContext) -> Status;
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
 }
 
 #[unsafe(no_mangle)]
@@ -29,7 +29,7 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     flags: 0,
     probe: thingos_driver_probe,
     #[cfg(target_arch = "x86_64")]
-    start: thingos_driver_start_safe,
+    start: thingos_driver_start_safe as unsafe extern "C" fn(ctx: *const DriverEntryCtx) -> Status,
     #[cfg(not(target_arch = "x86_64"))]
     start: thingos_driver_start_rust,
 };
@@ -83,7 +83,7 @@ core::arch::global_asm!(
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverStartContext) -> Status {
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
     main(ctx as usize)
 }
 
