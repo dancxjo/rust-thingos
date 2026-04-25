@@ -1,15 +1,12 @@
 # ❌ Scenario: echo, pipe, and wc work together
 
-> Last run: 2026-04-25 09:08:47
+> Last run: 2026-04-25 11:42:22
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ✅ | 8410ms | - [📜](./01/serial.log) - |
-| 2 | When I wait for the shell prompt | ✅ | 252ms | - [📜](./02/serial.log) - |
-| 3 | And I type "echo hello world | wc -w" on the serial console | ✅ | 10408ms | - [📜](./03/serial.log) - |
-| 4 | Then the command output should strictly be "2" | ❌ | 6072ms | - [📜](./04/serial.log) - |
+| 1 | Given the machine is booted | ❌ | 1001ms | - [📜](./01/serial.log) - |
 
 <details>
 <summary>📜 Full Serial Log</summary>
