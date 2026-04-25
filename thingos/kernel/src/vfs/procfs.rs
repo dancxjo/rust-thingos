@@ -207,6 +207,12 @@ impl VfsDriver for ProcFs {
                 Ok(Arc::new(crate::vfs::inbox_node::InboxNode::new(inbox)))
             }
             // /proc/self/serviceloop — ServiceLoop watchdog metrics directory.
+            //
+            // Note: `/proc/self/serviceloop/` only exposes `stats` (write-only
+            // endpoint for publishing metrics).  The readable metric files
+            // (`last_enter_wait_ns`, etc.) are served under
+            // `/proc/<pid>/serviceloop/` after the daemon has written its
+            // first snapshot.
             "self/serviceloop" => Ok(Arc::new(ProcSelfServiceLoopDirNode)),
             // /proc/self/serviceloop/stats — write-only: publish metrics from userspace.
             "self/serviceloop/stats" => Ok(Arc::new(ProcSelfServiceLoopStatsNode)),

@@ -628,7 +628,8 @@ impl ServiceLoop {
                     .last_dispatch_start_ns
                     .store(crate::time::monotonic_ns(), Ordering::Relaxed);
                 // Use the high 8 bytes of the KindId as a compact identifier.
-                let kind_hi = u64::from_le_bytes(kind.0[0..8].try_into().unwrap_or([0u8; 8]));
+                let kind_hi =
+                    u64::from_le_bytes(kind.0[0..8].try_into().expect("KindId is 16 bytes"));
                 self.metrics.current_event_kind.store(kind_hi, Ordering::Relaxed);
                 let copy_len = n.min(self.scratch.len());
                 Ok(ServiceEvent::Message { kind, payload: &self.scratch[..copy_len] })

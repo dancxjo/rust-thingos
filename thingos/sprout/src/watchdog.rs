@@ -74,7 +74,6 @@ impl DaemonLoopStats {
         // Mirrors the `EVENT_KIND_*` constants in `stem::service_loop`.
         match self.current_event_kind {
             0 => "idle",
-            u64::MAX => "unknown",
             v if v == u64::MAX - 1 => "ready",
             v if v == u64::MAX - 2 => "inbox_closed",
             v if v == u64::MAX - 3 => "timeout",
@@ -96,41 +95,56 @@ fn read_u64_from_proc(path: &str) -> u64 {
     s.parse::<u64>().unwrap_or(0)
 }
 
+/// Build a path like `/proc/<pid>/serviceloop/<metric>` into a stack buffer.
+///
+/// Returns a `&str` slice referencing the written portion of `buf`.
+/// Panics if `buf` is too small (256 bytes is sufficient for any real PID).
+fn proc_sl_path<'a>(buf: &'a mut [u8; 64], pid: u64, metric: &str) -> &'a str {
+    use core::fmt::Write as _;
+    let mut w = stem::utils::SliceWriter::new(buf);
+    let _ = core::write!(w, "/proc/{}/serviceloop/{}", pid, metric);
+    let n = w.written();
+    core::str::from_utf8(&buf[..n]).unwrap_or("")
+}
+
 /// Read the serviceloop stats for a given PID from procfs.
 ///
 /// Returns `None` if the pid has no published serviceloop stats (i.e. the
 /// `/proc/<pid>/serviceloop/last_enter_wait_ns` file cannot be opened or
 /// returns 0 for everything, which is indistinguishable from "never published").
 pub fn read_daemon_stats(pid: u64) -> Option<DaemonLoopStats> {
-    // Use the stats directory path prefix.
-    let prefix = alloc::format!("/proc/{}/serviceloop", pid);
-
-    // If the directory doesn't open (ENOENT), this daemon hasn't published.
-    let dir_fd = stem::syscall::vfs::vfs_open(&prefix, abi::syscall::vfs_flags::O_RDONLY);
-    match dir_fd {
+    // Probe the directory to confirm stats have been published.
+    let mut dir_buf = [0u8; 64];
+    let dir_path = proc_sl_path(&mut dir_buf, pid, "");
+    // proc_sl_path appends a trailing '/' which the VFS accepts as a dir.
+    let dir_path = dir_path.trim_end_matches('/');
+    match stem::syscall::vfs::vfs_open(dir_path, abi::syscall::vfs_flags::O_RDONLY) {
         Ok(fd) => {
             let _ = stem::syscall::vfs::vfs_close(fd);
         }
         Err(_) => return None,
     }
 
+    let mut b = [0u8; 64];
     Some(DaemonLoopStats {
         pid,
-        last_enter_wait_ns: read_u64_from_proc(
-            &alloc::format!("{}/last_enter_wait_ns", prefix),
-        ),
-        last_exit_wait_ns: read_u64_from_proc(
-            &alloc::format!("{}/last_exit_wait_ns", prefix),
-        ),
-        last_dispatch_start_ns: read_u64_from_proc(
-            &alloc::format!("{}/last_dispatch_start_ns", prefix),
-        ),
-        last_dispatch_end_ns: read_u64_from_proc(
-            &alloc::format!("{}/last_dispatch_end_ns", prefix),
-        ),
-        current_event_kind: read_u64_from_proc(
-            &alloc::format!("{}/current_event_kind", prefix),
-        ),
+        last_enter_wait_ns: read_u64_from_proc(proc_sl_path(&mut b, pid, "last_enter_wait_ns")),
+        last_exit_wait_ns: read_u64_from_proc(proc_sl_path(&mut b, pid, "last_exit_wait_ns")),
+        last_dispatch_start_ns: read_u64_from_proc(proc_sl_path(
+            &mut b,
+            pid,
+            "last_dispatch_start_ns",
+        )),
+        last_dispatch_end_ns: read_u64_from_proc(proc_sl_path(
+            &mut b,
+            pid,
+            "last_dispatch_end_ns",
+        )),
+        current_event_kind: read_u64_from_proc(proc_sl_path(
+            &mut b,
+            pid,
+            "current_event_kind",
+        )),
     })
 }
 
