@@ -641,11 +641,16 @@ name = "bloom"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "blossom",
  "libdl",
  "pistil",
  "spin",
  "stem",
 ]
+
+[[package]]
+name = "blossom"
+version = "0.1.0"
 
 [[package]]
 name = "bran"

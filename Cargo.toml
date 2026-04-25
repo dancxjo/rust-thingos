@@ -90,6 +90,7 @@ members = [
   "thingos/utils/attr_set",
   "thingos/utils/basename",
   "thingos/bloom",
+  "thingos/blossom",
   "thingos/bristle",
   "thingos/utils/cat",
   "thingos/utils/clear",
