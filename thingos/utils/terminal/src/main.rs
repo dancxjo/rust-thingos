@@ -644,7 +644,7 @@ fn main(arg: usize) -> ! {
         match stem::syscall::vm_map(&req) {
             Ok(resp) => resp.addr as *mut u32,
             Err(e) => {
-                error!("Terminal: Failed to map FB bytespace {}: {:?}", fb_id, e);
+                error!("Terminal: Failed to map FB buffer {}: {:?}", fb_id, e);
                 stem::syscall::exit(1);
             }
         }

@@ -47,12 +47,10 @@ fn font_graph_keys_exist() {
     assert!(!keys::FONT_SLOPE.is_empty());
 
     // Blob keys
-    assert!(!keys::FONT_BYTESPACE.is_empty());
     assert!(!keys::FONT_BLOB_SHA256.is_empty());
     assert!(!keys::FONT_BLOB_MIME.is_empty());
 
     // Atlas keys
-    assert!(!keys::FONT_ATLAS_BYTESPACE.is_empty());
     assert!(!keys::FONT_ATLAS_WIDTH.is_empty());
     assert!(!keys::FONT_ATLAS_HEIGHT.is_empty());
     assert!(!keys::FONT_ATLAS_FORMAT.is_empty());
@@ -61,7 +59,6 @@ fn font_graph_keys_exist() {
     // Glyph keys
     assert!(!keys::FONT_GLYPH_CODEPOINT.is_empty());
     assert!(!keys::FONT_GLYPH_PX_SIZE.is_empty());
-    assert!(!keys::FONT_GLYPH_BITMAP.is_empty());
     assert!(!keys::FONT_GLYPH_ADVANCE.is_empty());
 }
 

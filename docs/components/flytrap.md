@@ -38,7 +38,6 @@ Thing: Asset {
     asset.kind: String,        // Type: font, svg, image, cursor, raw
     asset.hash: u64,           // SHA-256 hash (first 8 bytes)
     asset.size: u64,           // Size in bytes
-    asset.bytespace: ThingId,  // Reference to content
     asset.generation: u64,     // Increments on change
     asset.source: String,      // Origin (e.g., "boot")
     asset.ready: u64,          // 1 if ready for use
@@ -58,7 +57,7 @@ The service watches for:
 
 #### 3. Asset Publication
 When a new asset is discovered:
-1. Map the bytespace content
+1. Access the content (via VFS or shared memory)
 2. Compute SHA-256 hash
 3. Determine asset kind (font, svg, image, etc.)
 4. Check for existing asset with same name
@@ -119,8 +118,8 @@ if old_hash != hash {
 ## Future Enhancements
 
 1. **Asset Removal Detection**: Watch for Delete events on BOOT_MODULE nodes
-2. **Bytespace Change Watching**: Detect when asset content changes without new BOOT_MODULE
-3. **Cross-Name Deduplication**: Share bytespaces for assets with identical hash but different names
+2. Content Change Watching: Detect when asset content changes without new BOOT_MODULE
+3. Cross-Name Deduplication: Share content for assets with identical hash but different names
 4. **Asset Metadata Caching**: Cache parsed metadata (font metrics, SVG dimensions, etc.)
 
 ## Dependencies

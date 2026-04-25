@@ -28,7 +28,7 @@ This document defines the canonical logging level semantics for ThingOS kernel a
 ```rust
 kerror!("failed to map region {:#x}-{:#x}: {:?}", start, end, err);
 error!("device {} init failed; continuing without it", dev_id);
-kerror!("corrupt data in bytespace {}: invariant broken", bs_id);
+kerror!("corrupt data in buffer {}: invariant broken", buffer_id);
 error!("panic in task {}: {}", tid, msg);
 ```
 

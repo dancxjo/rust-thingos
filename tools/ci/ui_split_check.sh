@@ -21,7 +21,7 @@ if rg -n "SVG|svg::|raster::|DrawCmd|PaintObject|font_graph" thingos/bloom/src \
 fi
 
 # Only Blossom should write snapshot keys.
-if rg -n "prop_set\([^\)]*(UI_SNAPSHOT_BYTESPACE|UI_SNAPSHOT_WIDTH|UI_SNAPSHOT_HEIGHT|UI_SNAPSHOT_STRIDE|UI_SNAPSHOT_FORMAT|UI_PRESENT_EPOCH)" \
+if rg -n "prop_set\([^\)]*(UI_SNAPSHOT_WIDTH|UI_SNAPSHOT_HEIGHT|UI_SNAPSHOT_STRIDE|UI_SNAPSHOT_FORMAT|UI_PRESENT_EPOCH)" \
   thingos/utils thingos/bloom thingos/bristle thingos/pistil thingos/sprout --glob '*.rs' --glob '!thingos/utils/blossom/**' >/dev/null; then
   echo "ui-split: snapshot keys written outside Blossom" >&2
   fail=1

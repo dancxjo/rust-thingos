@@ -54,11 +54,11 @@ pub struct ServiceContract {
 Contracts are published to the graph with these properties:
 
 - `service.contract.name`: Service canonical name
-- `service.contract.watched_kinds`: Bytespace containing watched kind list
-- `service.contract.published_kinds`: Bytespace containing published kind list
-- `service.contract.published_properties`: Bytespace containing property key list
+- `service.contract.watched_kinds`: Buffer containing watched kind list
+- `service.contract.published_kinds`: Buffer containing published kind list
+- `service.contract.published_properties`: Buffer containing property key list
 - `service.contract.idempotent`: 1 if idempotent, 0 if stateful
-- `service.contract.boot_assumptions`: Bytespace (MUST be empty)
+- `service.contract.boot_assumptions`: Buffer (MUST be empty)
 - `service.contract.status`: "declared", "registered", "active", "error"
 - `service.contract.version`: Monotonic version counter
 
@@ -88,7 +88,6 @@ const INGESTD_CONTRACT: ServiceContract = ServiceContract {
         "asset.kind", 
         "asset.hash",
         "asset.size",
-        "asset.bytespace",
         "asset.generation",
         "asset.source",
         "asset.ready",
@@ -147,7 +146,6 @@ const INGESTD_CONTRACT: ServiceContract = ServiceContract {
         "asset.kind",       // Type: font, svg, image, etc.
         "asset.hash",       // SHA-256 content hash
         "asset.size",       // Size in bytes
-        "asset.bytespace",  // Content reference
         "asset.generation", // Change counter
         "asset.source",     // Origin: "boot", "iso9660", etc.
         "asset.ready",      // 1 when ready for use

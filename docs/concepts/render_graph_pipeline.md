@@ -7,7 +7,7 @@ in the graph using content hashes, so geometry/coverage can be reused when paint
 ## Canonical layering
 
 - Apps / Clients
-  - Publish DrawList bytes + generation counters.
+  - Publish DrawList data + generation counters.
   - No damage, caching, or raster decisions.
 - Graph
   - Owns truth: drawlists, assets, window topology.
@@ -20,15 +20,15 @@ in the graph using content hashes, so geometry/coverage can be reused when paint
 
 Required per `UI_WINDOW`:
 
-- `ui.drawlist.bytespace` (`keys::UI_DRAWLIST_BYTESPACE`)
+- `ui.drawlist.data` (`keys::UI_DRAWLIST_DATA`)
 - `ui.drawlist.gen` (`keys::UI_DRAWLIST_GEN`)
-- `ui.viewport.bytespace` (`keys::UI_VIEWPORT_BYTESPACE`, `abi::geometry::RectI32Wire`)
+- `ui.viewport.data` (`keys::UI_VIEWPORT_DATA`, `abi::geometry::RectI32Wire`)
 
 Optional:
 
-- `ui.transform.bytespace` (`keys::UI_TRANSFORM_BYTESPACE`, `abi::geometry::Mat3x2fWire`)
+- `ui.transform.data` (`keys::UI_TRANSFORM_DATA`, `abi::geometry::Mat3x2fWire`)
 - `ui.transform.gen` (`keys::UI_TRANSFORM_GEN`)
-- `ui.clip.bytespace` (`keys::UI_CLIP_BYTESPACE`)
+- `ui.clip.data` (`keys::UI_CLIP_DATA`)
 - `ui.clip.gen` (`keys::UI_CLIP_GEN`)
 
 Bloom watches only `ui.drawlist.gen` (plus optional transform/clip gens). No per-primitive watches.
@@ -36,7 +36,7 @@ Bloom watches only `ui.drawlist.gen` (plus optional transform/clip gens). No per
 ## DrawList wire format
 
 See `abi::drawlist` for the packed TLV format. Commands are immutable generations. A drawlist
-update must bump `ui.drawlist.gen` and rewrite the drawlist bytespace.
+update must bump `ui.drawlist.gen` and rewrite the drawlist data.
 
 ## Renderer-derived node kinds
 

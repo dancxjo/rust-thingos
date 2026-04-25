@@ -37,7 +37,6 @@ fn test_content_keys_exist() {
     assert_eq!(keys::FILE_SIZE, "file.size");
     assert_eq!(keys::FILE_HASH, "file.hash");
     assert_eq!(keys::FILE_MIME, "file.mime");
-    assert_eq!(keys::FILE_BYTESPACE, "file.bytespace");
     assert_eq!(keys::FILE_SOURCE, "file.source");
 
     // Directory properties

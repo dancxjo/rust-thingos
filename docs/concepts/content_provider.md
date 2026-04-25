@@ -46,7 +46,6 @@ Represents a file from any content source.
 - `file.size` (u64): File size in bytes
 - `file.hash` (u64): Content hash (SHA-256 first 8 bytes, little-endian)
 - `file.mime` (symbol, optional): MIME type (e.g., "image/svg+xml", "application/font-sfnt")
-- `file.bytespace` (ThingId): Bytespace containing file content
 - `file.source` (ThingId): Reference to ContentSource node
 
 #### Directory Nodes
@@ -75,7 +74,7 @@ Represents a directory in the content graph (future enhancement).
 3. For each module, creates:
    - An `Asset` node (backward compatibility with existing consumers)
    - A `content.File` node with computed content hash and MIME type
-4. Bytespaces point directly to physical memory (HHDM-mapped, zero-copy)
+4. Content is reachable via VFS path (e.g., `/boot/modules/{name}`)
 
 ### ISO9660 Source
 
@@ -87,7 +86,7 @@ Represents a directory in the content graph (future enhancement).
 4. For each file:
    - Creates a `boot.Module` node (backward compatibility)
    - Creates a `content.File` node with computed content hash and MIME type
-5. Bytespaces are dynamically allocated and populated from disk reads
+5. Content is reachable via VFS path (e.g., `/dev/cdrom0/{path}`)
 
 ### Content Discovery
 
@@ -132,10 +131,7 @@ if let Ok(count) = find(kinds::CONTENT_FILE, &mut files) {
         if let Ok(len) = describe_symbol(name_sym as u32, &mut buf) {
             let name = core::str::from_utf8(&buf[..len]).unwrap_or("");
             if name.ends_with("cursor.svg") {
-                // Found it!
-                let bs_id = ThingId::from_u64(prop_get(file_id, keys::FILE_BYTESPACE).unwrap());
-                let size = prop_get(file_id, keys::FILE_SIZE).unwrap() as usize;
-                // Read content from bytespace...
+                // Found it! Use VFS to read the content.
                 break;
             }
         }
@@ -145,40 +141,22 @@ if let Ok(count) = find(kinds::CONTENT_FILE, &mut files) {
 
 ### Reading File Content
 
-```rust
-let bs_id = ThingId::from_u64(prop_get(file_id, keys::FILE_BYTESPACE).unwrap());
-let size = prop_get(file_id, keys::FILE_SIZE).unwrap() as usize;
+Files are accessed via standard VFS syscalls (`open`, `read`, `mmap`).
 
-// Map bytespace
-let ptr = bytespace_map(bs_id)?;
+```rust
+// Open and mmap file content
+let fd = stem::syscall::open("/path/to/file", abi::numbers::OpenFlags::READ)?;
+let size = stem::syscall::fstat(fd)?.size;
+let ptr = stem::syscall::vm_map(&abi::syscall::VmMapRequest {
+    backing: abi::syscall::VmBacking::File { fd, offset: 0 },
+    addr: 0,
+    size,
+    flags: abi::syscall::VmFlags::READ,
+})?;
+
 let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, size) };
 
 // Use content...
-
-// Unmap when done
-bytespace_unmap(bs_id, ptr)?;
-```
-
-### Verifying Content Integrity
-
-```rust
-use sha2::{Digest, Sha256};
-
-let expected_hash = prop_get(file_id, keys::FILE_HASH).unwrap();
-
-// Map and hash content
-let ptr = bytespace_map(bs_id)?;
-let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, size) };
-
-let mut hasher = Sha256::new();
-hasher.update(slice);
-let hash_bytes = hasher.finalize();
-let computed_hash = u64::from_le_bytes([
-    hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3],
-    hash_bytes[4], hash_bytes[5], hash_bytes[6], hash_bytes[7],
-]);
-
-assert_eq!(computed_hash, expected_hash, "Content hash mismatch!");
 ```
 
 ## Backward Compatibility

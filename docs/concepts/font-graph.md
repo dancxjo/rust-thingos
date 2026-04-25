@@ -9,7 +9,7 @@ Thing-OS implements a graph-native font system where fonts are first-class citiz
 | `font.Superfamily` | Broad grouping (e.g., "Noto") |
 | `font.Family` | Collection of related typefaces (e.g., "Noto Sans") |
 | `font.Face` | Specific weight/style/stretch (e.g., "Noto Sans Bold") |
-| `font.Blob` | Raw font file backing store (bytespace) |
+| `font.Blob` | Raw font file backing store |
 | `font.File` | Metadata about source file |
 | `font.Atlas` | Glyph atlas for (face, size) - contains rendered glyphs |
 | `font.Coverage` | Character coverage information |
@@ -22,7 +22,6 @@ Thing-OS implements a graph-native font system where fonts are first-class citiz
 | `font.contains` | Superfamily/Family | Family/Face | Hierarchy |
 | `font.has_face` | Family | Face | Face membership |
 | `font.has_blob` | Face | Blob | Raw file backing |
-| `font.has_asset` | Face | Bytespace | Legacy alias for has_blob |
 | `font.has_atlas` | Face | Atlas | Runtime atlas |
 | `font.has_coverage` | Face | Coverage | Character coverage |
 | `font.fallback_to` | Family | Family | Fallback chain |
@@ -30,22 +29,22 @@ Thing-OS implements a graph-native font system where fonts are first-class citiz
 ## Required Properties
 
 ### Font Family (`font.Family`)
-- `font.name` (string bytespace): Human-readable name
+- `font.name` (string): Human-readable name
 - `font.family_key` (u64): Normalized lookup key (interned)
 
 ### Font Face (`font.Face`)
-- `font.style` (string bytespace): Style name ("Regular", "Bold", etc.)
+- `font.style` (string): Style name ("Regular", "Bold", etc.)
 - `font.weight` (u16): CSS-style weight (100-900, 400=Regular)
 - `font.width` (u16): Width/stretch (1-9, 5=Normal)
 - `font.slope` (u8): 0=Upright, 1=Italic, 2=Oblique
 
 ### Font Blob (`font.Blob`)
-- `bytespace` (ThingId): Raw font file data
+- `file.source` (ThingId): Reference to font file node
 - `font.blob.sha256` (string): Content hash for identity
 - `font.blob.mime` (string): MIME type (`font/ttf`, `font/otf`)
 
 ### Font Atlas (`font.Atlas`)
-- `font.atlas.bytespace` (ThingId): Pixel buffer
+- `font.atlas.buffer` (ThingId): Pixel buffer (mem.Range)
 - `font.atlas.width` (u32): Atlas width in pixels
 - `font.atlas.height` (u32): Atlas height in pixels
 - `font.atlas.format` (u8): 0=A8 (grayscale), 1=RGBA8888

@@ -18,6 +18,6 @@ By separating them, we keep the compositor fast and responsive. If the UI render
 *   **Vector Graphics**: Renders SVG-like paths and shapes.
 *   **Text Layout**: Handles font rendering and text flow.
 *   **UI Layout**: Computes the size and position of UI widgets based on constraints (flexbox-like).
-*   **Paint**: Writes the resulting pixels into a shared memory buffer (bytespace) which Bloom then displays.
+*   **Paint**: Writes the resulting pixels into a shared memory buffer which Bloom then displays.
 
 Applications describe *what* they want to look like (the Scene Graph), and Blossom handles *how* to draw it.

@@ -939,7 +939,7 @@ fn main(_arg: usize) -> ! {
             name: "filesystem",
             func: test_fs,
             fatal: false,
-            hint: "check PAL fs/thingos.rs, resolver/handles/metadata, bytespace ops",
+            hint: "check PAL fs/thingos.rs, resolver/handles/metadata, memory ops",
         },
         Test {
             name: "threads + sync",

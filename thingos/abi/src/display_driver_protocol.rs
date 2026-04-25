@@ -122,7 +122,7 @@ pub struct ErrResp {
     pub code: u32,
 }
 
-/// Driver offers a pre-allocated framebuffer bytespace for zero-copy rendering.
+/// Driver offers a pre-allocated framebuffer buffer for zero-copy rendering.
 /// Sent by driver to compositor after MSG_WELCOME.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

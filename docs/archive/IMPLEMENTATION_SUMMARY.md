@@ -15,7 +15,7 @@ Successfully implemented a unified content provider service that materializes fi
 
 **New Properties:**
 - ContentSource: `kind`, `name`, `priority`, `state`, `gen`
-- File: `name`, `size`, `hash`, `mime`, `bytespace`, `source`
+- File: `name`, `size`, `hash`, `mime`, `source`
 - Directory: `name`, `path`
 
 **New Relationships:**
@@ -38,7 +38,7 @@ Successfully implemented a unified content provider service that materializes fi
 **Key Features:**
 - Content hash deduplication
 - MIME type detection
-- Zero-copy bytespaces (HHDM-mapped physical memory)
+- Zero-copy shared memory (HHDM-mapped physical memory)
 - Logging for debugging and monitoring
 
 ### 3. ISO Integration (userspace/iso_reader/src/main.rs)
@@ -52,7 +52,7 @@ Successfully implemented a unified content provider service that materializes fi
 **Key Features:**
 - Content hash computation for integrity verification
 - MIME type inference from file extensions
-- Dynamic bytespace allocation
+- Dynamic buffer allocation
 - Comprehensive error logging
 
 **Dependencies Added:**

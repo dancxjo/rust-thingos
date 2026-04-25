@@ -39,7 +39,7 @@ pub struct TextBitmap {
     pub width: u32,
     pub height: u32,
     pub baseline_y: i32,
-    pub buffer_id: u64, // Bytespace ID containing raw pixels (ARGB or A8)
+    pub buffer_id: u64, // Shared buffer ID containing raw pixels (ARGB or A8)
     pub buffer_size: usize,
     pub format_a8: bool, // true = A8, false = ARGB
 }

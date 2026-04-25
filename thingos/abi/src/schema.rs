@@ -47,7 +47,6 @@ pub mod keys {
     pub const HEIGHT: &str = "height";
     pub const STRIDE: &str = "stride";
     pub const BPP: &str = "bpp";
-    pub const BYTESPACE: &str = "bytespace"; // Used for Sprout shortcut
     pub const IRQ: &str = "irq";
     pub const UNIX_SECONDS: &str = "unix_seconds";
     pub const OFFSET_NS: &str = "offset_ns";
@@ -210,9 +209,7 @@ pub mod keys {
     pub const UI_RADIUS: &str = "ui.radius";
     pub const UI_TITLE: &str = "ui.title";
     pub const UI_WINDOW_ICON: &str = "ui.window.icon";
-    /// Bytespace id of icon pixel/SVG data for list items
-    pub const UI_ICON_BYTESPACE: &str = "ui.icon.bytespace";
-    /// Icon color for list items (ARGB u32, used when no bytespace icon)
+    /// Icon color for list items (ARGB u32)
     pub const UI_ICON_COLOR: &str = "ui.icon.color";
     pub const UI_WINDOW_SHADED: &str = "ui.window.shaded";
     pub const UI_HIDDEN: &str = "ui.hidden";
@@ -229,27 +226,17 @@ pub mod keys {
     pub const UI_ALIGN: &str = "ui.align";
     /// Flex justify-content: 0=Start, 1=Center, 2=End, 3=SpaceBetween
     pub const UI_JUSTIFY: &str = "ui.justify";
-    /// Font name bytespace (string, e.g. "NotoSans-Regular")
-    pub const UI_FONT_NAME: &str = "ui.font_name";
-    /// Placeholder text bytespace for text input
-    pub const UI_PLACEHOLDER: &str = "ui.placeholder";
-    /// Placeholder text bytespace for text input (canonical alias)
-    pub const UI_PLACEHOLDER_TEXT: &str = "ui.placeholder_text";
     /// Text input cursor position (u64)
     pub const UI_CURSOR_POS: &str = "ui.cursor_pos";
     /// Text input cursor position (u64, canonical alias)
     pub const UI_CURSOR: &str = "ui.cursor";
-    /// Text input current value bytespace
-    pub const UI_INPUT_VALUE: &str = "ui.input_value";
-    /// Stable UI identity key (bytespace UTF-8 string)
-    pub const UI_KEY: &str = "ui.key";
-    /// Optional class list (bytespace UTF-8 string, whitespace-separated)
+    /// Optional class list (interned string, whitespace-separated)
     pub const UI_CLASS: &str = "ui.class";
     /// Optional stylesheet attached to a window (ThingId as u64)
     pub const UI_STYLESHEET: &str = "ui.stylesheet";
     /// Global default stylesheet (ThingId as u64), typically set on ui.Crown
     pub const UI_STYLESHEET_DEFAULT: &str = "ui.stylesheet.default";
-    /// Optional UI role/classification string for tooling (bytespace UTF-8 string)
+    /// Optional UI role/classification string for tooling
     pub const UI_ROLE: &str = "ui.role";
     /// Whether a node can receive input focus (0/1)
     pub const UI_FOCUSABLE: &str = "ui.focusable";
@@ -296,36 +283,11 @@ pub mod keys {
     pub const UI_CHECKBOX_CHECKED: &str = "ui.checkbox.checked";
     pub const UI_CHECKBOX_INDETERMINATE: &str = "ui.checkbox.indeterminate";
     pub const UI_CHECKBOX_VALUE_ID: &str = "ui.checkbox.value_id";
-    /// Deprecated single-slot queue bytespace (superseded by UI_EVENT_LOG/UI_EVENT_CURSOR).
-    pub const UI_EVENT_QUEUE: &str = "ui.event.queue";
-    /// Append-only UI event stream bytespace.
-    pub const UI_EVENT_LOG: &str = "ui.event.log";
-    /// Consumer cursor into UI_EVENT_LOG (byte offset).
-    pub const UI_EVENT_CURSOR: &str = "ui.event.cursor";
     pub const UI_EVENT_GEN: &str = "ui.event.gen";
-    // DrawList (VFS-native vector program) properties
-    /// Bytespace id containing packed drawlist commands.
-    pub const UI_DRAWLIST_BYTESPACE: &str = "ui.drawlist.bytespace";
-    /// Monotonic generation for drawlist updates.
-    pub const UI_DRAWLIST_GEN: &str = "ui.drawlist.gen";
-    /// Optional: ThingId owner (window/surface/widget subtree).
-    pub const UI_DRAWLIST_OWNER: &str = "ui.drawlist.owner";
-    /// Optional: Bounding rectangle bytespace (RectI32Wire).
-    pub const UI_DRAWLIST_BOUNDS: &str = "ui.drawlist.bounds";
-    /// Optional: Debug name string bytespace.
-    pub const UI_DRAWLIST_DEBUG_NAME: &str = "ui.drawlist.debug_name";
     /// Monotonic generation for scene updates.
     pub const UI_SCENE_GEN: &str = "ui.scene.gen";
-    /// Bytespace id containing packed paint ops.
-    pub const UI_PAINT_BYTESPACE: &str = "ui.paint.bytespace";
     /// Monotonic generation for paint updates.
     pub const UI_PAINT_GEN: &str = "ui.paint.gen";
-    /// Optional viewport bounds in pixels (RectI32Wire bytespace).
-    pub const UI_VIEWPORT_BYTESPACE: &str = "ui.viewport.bytespace";
-    /// Optional affine transform from window-local to device coords (Mat3x2fWire bytespace).
-    pub const UI_TRANSFORM_BYTESPACE: &str = "ui.transform.bytespace";
-    /// Optional clip program bytespace (packed clip paths/rect stack).
-    pub const UI_CLIP_BYTESPACE: &str = "ui.clip.bytespace";
     /// Optional monotonic generation for clip updates.
     pub const UI_CLIP_GEN: &str = "ui.clip.gen";
     /// Optional monotonic generation for transform updates.
@@ -393,10 +355,6 @@ pub mod keys {
     pub const UI_STYLE_MIN_WIDTH: &str = "ui.style.min_width";
     pub const UI_STYLE_MIN_HEIGHT: &str = "ui.style.min_height";
     pub const UI_STYLE_CURSOR_COLOR: &str = "ui.style.cursor.color";
-    /// Snapshot bytespace id containing a view's latest presented pixels.
-    ///
-    /// Reserved for presenter-owned updates (Blossom).
-    pub const UI_SNAPSHOT_BYTESPACE: &str = "ui.snapshot.bytespace";
     /// Snapshot width in pixels for the presented surface.
     pub const UI_SNAPSHOT_WIDTH: &str = "ui.snapshot.width";
     /// Snapshot height in pixels for the presented surface.
@@ -413,7 +371,6 @@ pub mod keys {
     pub const UI_PAINT_EPOCH: &str = "ui.paint.epoch";
 
     // Cursor Snapshot keys
-    pub const UI_CURSOR_SNAPSHOT_BYTESPACE: &str = "ui.cursor.snapshot.bytespace";
     pub const UI_CURSOR_SNAPSHOT_WIDTH: &str = "ui.cursor.snapshot.width";
     pub const UI_CURSOR_SNAPSHOT_HEIGHT: &str = "ui.cursor.snapshot.height";
     pub const UI_CURSOR_SNAPSHOT_STRIDE: &str = "ui.cursor.snapshot.stride";
@@ -426,16 +383,11 @@ pub mod keys {
     /// Dirty flag for MUTABLE_DIRTY mode (0 = clean, 1 = dirty).
     /// Compositor must not read snapshot while dirty=1.
     pub const UI_SNAPSHOT_DIRTY: &str = "ui.snapshot.dirty";
-    /// Frozen flag indicating snapshot bytespace is immutable.
+    /// Frozen flag indicating snapshot is immutable.
     /// Set automatically by presenter when committing in WRITE_ONCE mode.
     pub const UI_SNAPSHOT_FROZEN: &str = "ui.snapshot.frozen";
 
-    /// Optional bytespace id for packed damage rects.
-    ///
-    /// Bloom may publish these as derived, non-authoritative hints. They must
-    /// never be required for correctness.
-    pub const UI_DAMAGE_RECTS_BYTESPACE: &str = "ui.damage.rects.bytespace";
-    /// Tile asset bytespace id for UI_TILE nodes (e.g. SVG source).
+    /// Tile asset ID for UI_TILE nodes (e.g. SVG source).
     pub const UI_TILE_ASSET: &str = "ui.tile.asset";
     /// Optional tile state for UI_TILE nodes (0 = placeholder, 1 = ready).
     pub const UI_TILE_STATE: &str = "ui.tile.state";
@@ -448,7 +400,6 @@ pub mod keys {
     pub const FONT_WEIGHT: &str = "font.weight";
     pub const FONT_WIDTH: &str = "font.width";
     pub const FONT_SLOPE: &str = "font.slope";
-    pub const FONT_BYTESPACE: &str = "font.bytespace";
     pub const FONT_SIZE_BYTES: &str = "font.size_bytes";
     pub const FONT_COVERAGE_RANGES: &str = "font.coverage_ranges";
     pub const FONT_COVERAGE_COUNT: &str = "font.coverage_count";
@@ -464,7 +415,6 @@ pub mod keys {
     pub const FONT_GLYPH_HEIGHT: &str = "font.glyph.height";
     pub const FONT_GLYPH_OFFSET_X: &str = "font.glyph.offset_x";
     pub const FONT_GLYPH_OFFSET_Y: &str = "font.glyph.offset_y";
-    pub const FONT_GLYPH_BITMAP: &str = "font.glyph.bitmap"; // Bytespace ID
     pub const FONT_GLYPH_CACHE_KEY: &str = "font.glyph.cache_key";
 
     // Font Request Properties
@@ -479,7 +429,6 @@ pub mod keys {
     pub const FONT_BLOB_MIME: &str = "font.blob.mime";
 
     // Font Atlas Properties
-    pub const FONT_ATLAS_BYTESPACE: &str = "font.atlas.bytespace";
     pub const FONT_ATLAS_WIDTH: &str = "font.atlas.width";
     pub const FONT_ATLAS_HEIGHT: &str = "font.atlas.height";
     pub const FONT_ATLAS_FORMAT: &str = "font.atlas.format"; // 0=A8, 1=RGBA8888
@@ -488,7 +437,6 @@ pub mod keys {
     // SVG Cache Properties (Blossom service)
     pub const SVG_CONTENT_HASH: &str = "svg.content_hash";
     pub const SVG_VARIANT_HASH: &str = "svg.variant_hash";
-    pub const SVG_RASTER_BYTESPACE: &str = "svg.raster.bytespace";
     pub const SVG_RASTER_WIDTH: &str = "svg.raster.width";
     pub const SVG_RASTER_HEIGHT: &str = "svg.raster.height";
     pub const SVG_RASTER_STRIDE: &str = "svg.raster.stride";
@@ -500,7 +448,6 @@ pub mod keys {
     pub const ASSET_SOURCE: &str = "asset.source";
     pub const ASSET_HASH: &str = "asset.hash";
     pub const ASSET_SIZE: &str = "asset.size";
-    pub const ASSET_BYTESPACE: &str = "asset.bytespace";
     pub const ASSET_GENERATION: &str = "asset.generation";
     pub const ASSET_ERROR: &str = "asset.error";
     /// Boolean: 1 if asset successfully loaded and ready for use
@@ -529,8 +476,6 @@ pub mod keys {
     pub const FILE_HASH: &str = "file.hash";
     /// File MIME type (optional)
     pub const FILE_MIME: &str = "file.mime";
-    /// File bytespace ID for content
-    pub const FILE_BYTESPACE: &str = "file.bytespace";
     /// File source (ThingId of ContentSource)
     pub const FILE_SOURCE: &str = "file.source";
     /// Directory name (leaf name)
@@ -541,16 +486,10 @@ pub mod keys {
     // Service Contract Properties
     /// Service contract name (service canonical name)
     pub const SERVICE_CONTRACT_NAME: &str = "service.contract.name";
-    /// Service contract watched kinds (bytespace containing list of kind names)
-    pub const SERVICE_CONTRACT_WATCHED_KINDS: &str = "service.contract.watched_kinds";
-    /// Service contract published kinds (bytespace containing list of kind names)
-    pub const SERVICE_CONTRACT_PUBLISHED_KINDS: &str = "service.contract.published_kinds";
-    /// Service contract published properties (bytespace containing list of property keys)
+    /// Service contract published properties (list of property keys)
     pub const SERVICE_CONTRACT_PUBLISHED_PROPERTIES: &str = "service.contract.published_properties";
     /// Service contract idempotency flag (1 if idempotent, 0 if stateful)
     pub const SERVICE_CONTRACT_IDEMPOTENT: &str = "service.contract.idempotent";
-    /// Service contract boot assumptions (bytespace, MUST be empty for watch-driven services)
-    pub const SERVICE_CONTRACT_BOOT_ASSUMPTIONS: &str = "service.contract.boot_assumptions";
     /// Service contract status ("declared", "registered", "active", "error")
     pub const SERVICE_CONTRACT_STATUS: &str = "service.contract.status";
     /// Service contract version (monotonic, increments on contract updates)
@@ -604,7 +543,6 @@ pub mod kinds {
     pub const MEM_RANGE: &str = "mem.Range";
     pub const DEV_RTC_CMOS: &str = "dev.rtc.Cmos";
     pub const SHARED_MEMORY: &str = "SharedMemory";
-    pub const BYTESPACE: &str = "Bytespace"; // Legacy alias
     pub const RES_IO_PORT_RANGE: &str = "res.io.PortRange";
     pub const DEV_DISPLAY_FRAMEBUFFER: &str = "dev.display.Framebuffer";
     pub const PROC_KERNEL: &str = "proc.Kernel";
@@ -690,10 +628,7 @@ pub mod kinds {
     pub const UI_CHECKBOX: &str = "ui.Checkbox";
     pub const UI_COLUMN: &str = "ui.Container.Column";
     pub const UI_LIST_ITEM: &str = "ui.ListItem";
-    /// Graph-native drawlist (stable identity, packed ops in bytespace).
-    pub const UI_DRAWLIST: &str = "ui.DrawList";
-
-    // Font Graph Kinds
+    pub const CLOCK: &str = "Clock";
     pub const FONT_SUPERFAMILY: &str = "font.Superfamily";
     pub const FONT_FAMILY: &str = "font.Family";
     pub const FONT_FACE: &str = "font.Face";
@@ -706,7 +641,7 @@ pub mod kinds {
     pub const FONT_IMPORT_REQUEST: &str = "font.ImportRequest";
     pub const FONT_GLYPH_REQUEST: &str = "font.GlyphRequest";
 
-    pub const CLOCK: &str = "Clock";
+
 
     pub const BINDING: &str = "Binding";
 
@@ -765,25 +700,22 @@ pub mod kinds {
 ///
 /// ## Write-Once Mode (Default)
 ///
-/// 1. Painter allocates a bytespace and renders into it.
-/// 2. Painter sets UI_SNAPSHOT_* metadata (bytespace, width, height, stride, format).
+/// 1. Painter allocates a surface and renders into it.
+/// 2. Painter sets UI_SNAPSHOT_* metadata (width, height, stride, format).
 /// 3. Painter sets UI_SNAPSHOT_FROZEN=1 (optional explicit freeze).
 /// 4. Painter sets UI_PRESENT_EPOCH to commit the snapshot.
-/// 5. Compositor reads snapshot; bytespace must not be mutated.
-/// 6. For next frame, painter allocates NEW bytespace and repeats.
+/// 5. Compositor reads snapshot.
+/// 6. For next frame, painter repeats.
 ///
 /// ## Invariants
 ///
-/// - A snapshot bytespace with a non-zero epoch MUST NOT be mutated.
 /// - If UI_SNAPSHOT_MODE is unset, assume WRITE_ONCE.
-/// - Two successive frames MUST NOT alias the same bytespace unless
+/// - Two successive frames MUST NOT alias the same memory unless
 ///   the first frame's epoch has been superseded.
 ///
 /// ## Anti-Aliasing Guarantee
 ///
 /// ```text
-/// Frame N:   epoch=5, bytespace=0x1234
-/// Frame N+1: epoch=6, bytespace=0x5678  // MUST be different
 ///                                        // OR epoch=5 still present (no update)
 /// ```
 pub mod ui_snapshot {
@@ -795,14 +727,13 @@ pub mod ui_snapshot {
 /// Snapshot semantic modes for UI presentation surfaces.
 pub mod snapshot_mode {
     /// Write-once mode: snapshot is immutable after presentation.
-    /// The bytespace becomes frozen when UI_PRESENT_EPOCH is set.
-    /// Updates require creating a new bytespace and atomically
-    /// replacing UI_SNAPSHOT_BYTESPACE.
+    /// The surface becomes frozen when UI_PRESENT_EPOCH is set.
+    /// Updates require creating a new shared buffer and atomically
+    /// replacing metadata.
     pub const WRITE_ONCE: u64 = 0;
 
     /// Mutable mode with dirty tracking (reserved for future use).
-    /// The bytespace can be modified in place; writers must set
-    /// UI_SNAPSHOT_DIRTY=1 before mutation and clear it after.
+    /// Writers must set UI_SNAPSHOT_DIRTY=1 before mutation and clear it after.
     /// Compositor must check dirty flag and skip/retry if set.
     pub const MUTABLE_DIRTY: u64 = 1;
 }
@@ -910,8 +841,6 @@ pub mod rels {
     pub const TASK_CHILD_OF: &str = "TASK_CHILD_OF";
     /// Task was spawned by another task (semantic "caused" edge)
     pub const TASK_SPAWNED: &str = "TASK_SPAWNED";
-    /// Thread uses a bytespace mapping (proc.Thread -> Bytespace)
-    pub const THREAD_USES_BYTESPACE: &str = "THREAD_USES_BYTESPACE";
     /// Task is pinned to a specific CPU (proc.Thread -> dev.Cpu)
     pub const PINNED_TO: &str = "PINNED_TO";
 

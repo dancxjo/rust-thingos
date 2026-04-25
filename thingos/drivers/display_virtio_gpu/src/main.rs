@@ -772,7 +772,7 @@ fn main(boot_arg: usize) -> ! {
     }
 
     // =========================================================================
-    // FRAME POOL SETUP: Create GPU resources and bytespaces for triple buffering
+    // FRAME POOL SETUP: Create GPU resources and buffers for triple buffering
     // =========================================================================
     let (disp_width, disp_height, disp_stride, disp_format) = get_display_dimensions();
     let disp_size = (disp_height as usize) * (disp_stride as usize);
@@ -782,7 +782,7 @@ fn main(boot_arg: usize) -> ! {
         disp_width, disp_height, disp_stride, disp_format
     );
 
-    // Single buffer for now - multi-buffer requires cross-process bytespace access
+    // Single buffer for now - multi-buffer requires cross-process shared memory access
     let frame_pool_count = 1;
     let mut frame_pool_buffers = alloc::vec::Vec::new();
     for i in 0..frame_pool_count {

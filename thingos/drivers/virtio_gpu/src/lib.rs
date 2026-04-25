@@ -54,7 +54,7 @@ pub struct VirtioGpu {
     cmd_buf: u64,      // Virtual address
     cmd_buf_phys: u64, // Physical address
 
-    // Track if using external bytespace (display driver mode)
+    // Track if using external shared memory (display driver mode)
     external_backing: bool,
 
     // Virgl 3D support

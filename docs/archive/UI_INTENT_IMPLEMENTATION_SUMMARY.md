@@ -50,7 +50,7 @@ Fixed doctests in `abi/src/drawlist.rs`:
             ▼
 ┌─────────────────────────────────┐
 │ Graph Database                  │  Stores UI intent
-│ (Thing-OS graph)                │  ui.scene_bytespace
+│ (Thing-OS graph)                │  ui.scene_data
 └─────────────────────────────────┘
             │
             │ Watches changes
@@ -59,7 +59,7 @@ Fixed doctests in `abi/src/drawlist.rs`:
 │ Blossom Service                 │  Layout & Paint
 │ (userspace/blossom)             │  Reads intent
 │ - layout (private)              │  Produces paint
-│ - emit_paint (private)          │  ui.paint_bytespace
+│ - emit_paint (private)          │  ui.paint_data
 │ - scene (private)               │
 └─────────────────────────────────┘
             │
