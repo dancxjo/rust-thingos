@@ -12,6 +12,7 @@ mod protocol;
 mod render;
 mod scene;
 mod services;
+mod wayland;
 mod world;
 
 use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
@@ -25,11 +26,13 @@ use scene::Scene;
 use services::input_service::InputService;
 use services::wallpaper::WallpaperService;
 use services::wayland::WaylandService;
+use services::wayland_cmd::WaylandCommandService;
 use stem::syscall::port_create;
 use stem::syscall::vfs::{
     vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_path, vfs_write,
 };
 use stem::{error, info, warn};
+use wayland::WaylandThreadArgs;
 use world::BloomWorld;
 
 const SERVICE_PATH: &str = "/services/bloom";
@@ -131,11 +134,15 @@ fn main(_arg: usize) -> ! {
     // ── Assemble BloomWorld ───────────────────────────────────────────────────
     let mut world = BloomWorld::new(scene, damage, input, visuals, display, primary);
 
+    // ── Register the Wayland compositor as a scene client ────────────────────
+    // All Wayland surfaces are owned by this single bloom scene client.
+    let wayland_client_id = world.scene.register_client(0, None);
+
     // ── Build and populate the BloomLoop ─────────────────────────────────────
     let frame_clock = FrameClock::new(primary.refresh_mhz);
     let mut bloom_loop = BloomLoop::new(frame_clock);
 
-    // Service port → WaylandService
+    // Service port → WaylandService (native bloom protocol)
     match vfs_handle_from_port(service_read) {
         Ok(fd) => {
             bloom_loop.add_service(alloc::boxed::Box::new(WaylandService::new(fd)));
@@ -153,6 +160,46 @@ fn main(_arg: usize) -> ! {
     // Wallpaper watch → WallpaperService
     if let Some(fd) = wp_watch_fd {
         bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(fd, WP_PATH)));
+    }
+
+    // ── Spawn Wayland server thread + wire IPC ports ──────────────────────────
+    // cmd port: Wayland → Main (surface operations)
+    // evt port: Main → Wayland (buffer releases, frame dones)
+    match (port_create(65536), port_create(65536)) {
+        (Ok((cmd_write, cmd_read)), Ok((evt_write, evt_read))) => {
+            match (vfs_handle_from_port(cmd_read), vfs_handle_from_port(evt_read)) {
+                (Ok(cmd_read_fd), Ok(evt_read_fd)) => {
+                    // Let world send frame-done events to the Wayland thread.
+                    world.wayland_evt_write = Some(evt_write);
+
+                    // Spawn the Wayland server (runs its own ServiceLoop).
+                    let args =
+                        alloc::boxed::Box::new(WaylandThreadArgs { cmd_write, evt_read_fd });
+                    let arg_ptr = alloc::boxed::Box::into_raw(args) as usize;
+                    match stem::thread::spawn_with_arg(wayland::wayland_thread_entry, arg_ptr) {
+                        Ok(_) => {
+                            info!("bloom: Wayland server thread spawned");
+                            bloom_loop.add_service(alloc::boxed::Box::new(
+                                WaylandCommandService::new(
+                                    cmd_read_fd,
+                                    evt_write,
+                                    wayland_client_id,
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            warn!("bloom: failed to spawn Wayland server thread: {:?}", e);
+                            // Recover the allocation to avoid leaking it.
+                            let _ = unsafe {
+                                alloc::boxed::Box::from_raw(arg_ptr as *mut WaylandThreadArgs)
+                            };
+                        }
+                    }
+                }
+                _ => warn!("bloom: failed to bridge Wayland IPC ports to FDs"),
+            }
+        }
+        _ => warn!("bloom: failed to create Wayland IPC port pair"),
     }
 
     // ── Run forever ───────────────────────────────────────────────────────────

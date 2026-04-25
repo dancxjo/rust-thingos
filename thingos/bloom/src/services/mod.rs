@@ -3,3 +3,4 @@
 pub mod input_service;
 pub mod wallpaper;
 pub mod wayland;
+pub mod wayland_cmd;

@@ -27,6 +27,8 @@ pub struct BloomWorld {
     pub visuals: CompositorVisuals,
     pub display: DisplayBackend,
     pub primary: OutputInfo,
+    /// Port write handle to the Wayland server thread's event port, if running.
+    pub wayland_evt_write: Option<u32>,
 }
 
 impl BloomWorld {
@@ -38,7 +40,7 @@ impl BloomWorld {
         display: DisplayBackend,
         primary: OutputInfo,
     ) -> Self {
-        Self { scene, damage, input, visuals, display, primary }
+        Self { scene, damage, input, visuals, display, primary, wayland_evt_write: None }
     }
 
     /// Process one raw Wayland client message.
@@ -202,6 +204,7 @@ impl BloomWorld {
     /// `composition`.
     pub fn send_frame_callbacks(&self, composition: &[CompositionEntry]) {
         let ts = stem::time::monotonic_ns();
+        let timestamp_ms = (ts / 1_000_000) as u32;
         for entry in composition {
             if let Some(client_id) = self.scene.surface_client(entry.surface_id) {
                 if let Some(ch) = self.scene.client_event_port(client_id) {
@@ -213,6 +216,11 @@ impl BloomWorld {
                     };
                     let _ = port_send_all(ch, &to_vec(&done));
                 }
+            }
+            // Notify the Wayland server thread so it can fire wl_callback.done.
+            if let Some(evt_write) = self.wayland_evt_write {
+                let msg = crate::wayland::ipc::encode_frame_done(entry.surface_id, timestamp_ms);
+                let _ = port_send_all(evt_write, &msg);
             }
         }
     }

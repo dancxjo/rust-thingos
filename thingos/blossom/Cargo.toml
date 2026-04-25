@@ -1,0 +1,9 @@
+[package]
+name = "blossom"
+version = "0.1.0"
+edition = "2021"
+description = "xdg-shell protocol layer for the bloom Wayland compositor"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
