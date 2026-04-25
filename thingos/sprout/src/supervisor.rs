@@ -9,12 +9,13 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use core::sync::atomic::{AtomicU8, Ordering};
-
 // Modules are now declared in main.rs
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU8, Ordering};
 
+use abi::display_driver_protocol;
+use abi::supervisor_protocol::{self, classes};
 use spin::Mutex;
 use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
 use stem::service_loop::{ServiceEvent, ServiceLoop};
@@ -22,11 +23,10 @@ use stem::time::Duration;
 use stem::{debug, info, trace, warn};
 
 use crate::ledger::DeviceLedger;
-use crate::pipelines::{mount_hosts_cache, setup_display_pipeline, setup_input_broker, setup_serial_shell};
+use crate::pipelines::{
+    mount_hosts_cache, setup_display_pipeline, setup_input_broker, setup_serial_shell,
+};
 use crate::task::{ManagedTask, TaskKind};
-
-use abi::display_driver_protocol;
-use abi::supervisor_protocol::{self, classes};
 
 const RUN_POLL_MUX_SELF_TEST: bool = false;
 const NETD_PROVIDER_PATH: &str = "/dev/net/virtio0/rx";
@@ -65,6 +65,8 @@ pub struct Supervisor {
     bristle_spawned: bool,
     /// Whether bloom has been spawned (guarded so we only launch once).
     bloom_spawned: bool,
+    /// Whether `/dev/display/card0` has been mounted by the display driver.
+    display_card_ready: bool,
     /// Whether the display driver has been spawned.
     display_spawned: bool,
     /// Read end of the supervisor port for sovereign registration.
@@ -94,6 +96,7 @@ impl Supervisor {
             netd_last_probe_ns: 0,
             bristle_spawned: false,
             bloom_spawned: false,
+            display_card_ready: false,
             display_spawned: false,
             supervisor_port_read: if read != 0 { Some(read) } else { None },
             supervisor_port_write: if write != 0 { Some(write) } else { None },
@@ -214,7 +217,9 @@ impl Supervisor {
             if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(read_handle) {
                 match svc.add_fd_readable(fd) {
                     Ok(tok) => self.supervisor_token = Some(tok),
-                    Err(e) => warn!("SPROUT: failed to register supervisor port in ServiceLoop: {:?}", e),
+                    Err(e) => {
+                        warn!("SPROUT: failed to register supervisor port in ServiceLoop: {:?}", e)
+                    }
                 }
             }
         }
@@ -274,16 +279,16 @@ impl Supervisor {
         let msg = match DriverReadyV1::from_bytes(payload) {
             Some(m) => m,
             None => {
-                warn!("SPROUT: DRIVER_READY payload too short or wrong version ({} bytes)", payload.len());
+                warn!(
+                    "SPROUT: DRIVER_READY payload too short or wrong version ({} bytes)",
+                    payload.len()
+                );
                 return;
             }
         };
 
         if msg.status != 0 {
-            warn!(
-                "SPROUT: DRIVER_READY from PID {} reported error status {}",
-                msg.pid, msg.status
-            );
+            warn!("SPROUT: DRIVER_READY from PID {} reported error status {}", msg.pid, msg.status);
         }
 
         let mut tasks = self.tasks.lock();
@@ -330,7 +335,10 @@ impl Supervisor {
                             }
                         }
                         _ => {
-                            stem::debug!("SPROUT: supervisor port unknown msg_type=0x{:x}", header.msg_type);
+                            stem::debug!(
+                                "SPROUT: supervisor port unknown msg_type=0x{:x}",
+                                header.msg_type
+                            );
                         }
                     }
                 }
@@ -356,7 +364,10 @@ impl Supervisor {
                     handle
                 );
                 match stem::syscall::vfs::vfs_mount(handle, "/dev/display/card0") {
-                    Ok(_) => info!("SPROUT: Mounted /dev/display/card0 successfully"),
+                    Ok(_) => {
+                        info!("SPROUT: Mounted /dev/display/card0 successfully");
+                        self.display_card_ready = true;
+                    }
                     Err(e) => warn!("SPROUT: Failed to mount /dev/display/card0: {:?}", e),
                 }
 
@@ -380,7 +391,8 @@ impl Supervisor {
                                 p
                             },
                         };
-                        let mut assigned_bytes = [0u8; supervisor_protocol::BIND_ASSIGNED_PAYLOAD_SIZE];
+                        let mut assigned_bytes =
+                            [0u8; supervisor_protocol::BIND_ASSIGNED_PAYLOAD_SIZE];
                         if let Some(len) = supervisor_protocol::encode_bind_assigned_le(
                             &assigned,
                             &mut assigned_bytes,
@@ -392,7 +404,10 @@ impl Supervisor {
                                 &assigned_bytes[..len],
                             ) {
                                 let res = stem::syscall::port_send(req_port, &msg_buf[..total_len]);
-                                debug!("SPROUT: Sent MSG_BIND_ASSIGNED to req_port {} (res={:?})", req_port, res);
+                                debug!(
+                                    "SPROUT: Sent MSG_BIND_ASSIGNED to req_port {} (res={:?})",
+                                    req_port, res
+                                );
                             }
                         }
                     }
@@ -450,10 +465,7 @@ impl Supervisor {
             bind_instance_id,
             self.config.force_bootfb,
         ) {
-            info!(
-                "SPROUT: Display pipeline initialized (backend={})",
-                handles.backend_name
-            );
+            info!("SPROUT: Display pipeline initialized (backend={})", handles.backend_name);
             self.display_spawned = true;
         }
     }
@@ -566,9 +578,7 @@ impl Supervisor {
                 self.netd_probe_status.store(PROBE_IDLE, Ordering::SeqCst);
                 warn!(
                     "SPROUT: netd activation probe failed for PID {} (attempt {}/{}): VFS TIMEOUT/ERROR",
-                    netd_pid,
-                    self.netd_probe_failures,
-                    NETD_MAX_PROBE_FAILURES
+                    netd_pid, self.netd_probe_failures, NETD_MAX_PROBE_FAILURES
                 );
                 if self.netd_probe_failures >= NETD_MAX_PROBE_FAILURES {
                     warn!(
@@ -640,10 +650,8 @@ impl Supervisor {
             return;
         }
         stem::info!("SPROUT: Checking if bloom is ready to spawn (/dev/display/card0)...");
-        stem::info!("SPROUT: Calling path_exists(/dev/display/card0)...");
-        let exists = path_exists("/dev/display/card0");
-        stem::info!("SPROUT: path_exists returned {}", exists);
-        if !exists {
+        if !self.display_card_ready {
+            stem::info!("SPROUT: display card not ready yet");
             return;
         }
         match stem::syscall::spawn_process("/bin/bloom", 0) {
@@ -665,10 +673,6 @@ impl Supervisor {
         }
         self.bloom_spawned = true;
     }
-
-
-
-
 }
 
 fn path_exists(path: &str) -> bool {
