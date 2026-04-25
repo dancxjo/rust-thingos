@@ -350,7 +350,15 @@ impl WaylandServer {
                     // fire_frame_cbs returns the IDs that were fired; we only
                     // need the side-effect (sending wl_callback.done), so the
                     // list is intentionally dropped.
-                    drop(client.fire_frame_cbs(bloom_surface_id, timestamp_ms));
+                    let fired = client.fire_frame_cbs(bloom_surface_id, timestamp_ms);
+                    if !fired.is_empty() {
+                        stem::debug!(
+                            "wayland-server: frame callback done surface={} ts={}ms callbacks={}",
+                            bloom_surface_id,
+                            timestamp_ms,
+                            fired.len()
+                        );
+                    }
                 }
             }
             _ => {}
