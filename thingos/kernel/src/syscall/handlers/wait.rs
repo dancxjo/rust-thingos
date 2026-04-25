@@ -25,6 +25,15 @@ pub fn sys_wait_many(
     let tid = unsafe { crate::sched::current_tid_current() };
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ESRCH)?;
 
+    // Debug: Check for GS corruption early
+    {
+        let cpu_idx = crate::runtime_base().current_cpu_index();
+        let real_cpu_id = crate::runtime_base().current_cpu_id().0 as usize;
+        if cpu_idx != real_cpu_id {
+            panic!("GS CORRUPTION DETECTED in sys_wait_many: Core {} thinks it is index {} via GS!", real_cpu_id, cpu_idx);
+        }
+    }
+
     if spec_count == 0 || spec_count > wait::WAIT_MANY_MAX_ITEMS {
         return Err(Errno::EINVAL);
     }
@@ -53,7 +62,11 @@ pub fn sys_wait_many(
 
     let regs = {
         let lock = pinfo_arc.lock();
-        register_all(&lock, specs, tid)?
+        let r = register_all(&lock, specs, tid)?;
+        if let Some(deadline) = timeout_tick {
+            crate::sched::register_timeout_wake_current(tid, deadline);
+        }
+        r
     };
 
     let mut ready = 0;
@@ -116,7 +129,7 @@ fn collect_ready(
         if count >= out.len() {
             break;
         }
-        crate::ktrace!("collect_ready: polling spec[{}] kind={} object={:x} token={:x}", count, spec.kind, spec.object, spec.token);
+        // crate::kinfo!("collect_ready: polling spec[{}] kind={} object={:x} token={:x}", count, spec.kind, spec.object, spec.token);
         if let Some(result) = poll_spec(pinfo_arc, spec)? {
             out[count] = result;
             count += 1;
@@ -221,6 +234,11 @@ fn poll_fd(
         let entry = pinfo.handle_table.get(spec.object as u32)?;
         entry.node.clone()
     };
+
+    // let raw_ptr: *const dyn crate::vfs::VfsNode = Arc::as_ptr(&node);
+    // let (ptr, vtable) = unsafe { core::mem::transmute::<*const dyn crate::vfs::VfsNode, (usize, usize)>(raw_ptr) };
+    // crate::kinfo!("poll_fd: fd={} node_ptr={:x} vtable={:x}", spec.object, ptr, vtable);
+
     let revents = node.poll();
     let mut ready_flags = 0u32;
     if (spec.flags & wait::interest::READABLE) != 0

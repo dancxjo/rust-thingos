@@ -425,17 +425,27 @@ pub fn sys_device_alloc_dma(claim_handle: usize, page_count: usize) -> SysResult
 
 /// Get physical address of a DMA allocation
 pub fn sys_device_dma_phys(virt_addr: usize) -> SysResult<usize> {
-    let hhdm_offset = crate::boot_info::get().map(|i| i.hhdm_offset).unwrap_or(0);
+    let boot_info = match crate::boot_info::get() {
+        Some(info) => info,
+        None => return Err(Errno::EINVAL),
+    };
+    let hhdm_offset = boot_info.hhdm_offset;
+
     if (virt_addr as u64) < hhdm_offset {
         // Try translating referencing current user page table
         if let Some(phys) = crate::memory::translate_user_page(virt_addr as u64) {
             return Ok(phys as usize);
         }
-
-        return Err(Errno::EINVAL);
+        Err(Errno::EINVAL)
+    } else {
+        // Address is in HHDM range. REJECT for security.
+        crate::kerror!(
+            "DMA: Process {} tried to translate HHDM address 0x{:x}!",
+            unsafe { crate::sched::current_tid_current() },
+            virt_addr
+        );
+        Err(Errno::EPERM)
     }
-    let phys = (virt_addr as u64) - hhdm_offset;
-    Ok(phys as usize)
 }
 
 pub fn sys_device_ioport(port: usize, val: usize, write: bool, width: usize) -> SysResult<usize> {

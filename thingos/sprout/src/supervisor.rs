@@ -162,14 +162,14 @@ impl Supervisor {
             SERIAL_SHELL_HEADSTART_MS
         );
         stem::sleep_ms(SERIAL_SHELL_HEADSTART_MS);
-        stem::debug!("SPROUT: Continuing supervisor startup");
+        stem::info!("SPROUT: Continuing supervisor startup");
 
         // Stage 2: Start cambium for driver discovery.
-        stem::debug!("SPROUT: Spawning cambium for driver discovery...");
+        stem::info!("SPROUT: Spawning cambium for driver discovery...");
         self.spawn_cambium();
 
         // Stage 3: Mount iso9660d (ISO9660 VFS provider).
-        stem::debug!("SPROUT: Spawning iso9660d...");
+        stem::info!("SPROUT: Spawning iso9660d...");
         self.spawn_iso9660d();
 
         // Stage 4: Mount local hostname cache before netd. Mesocarp can serve

@@ -80,7 +80,7 @@ fn cpu_id_from_gs_index_fallback() -> CpuId {
     let idx: u64;
     unsafe {
         asm!(
-            "mov {}, gs:[16]",
+            "mov {:e}, gs:[16]",
             out(reg) idx,
             options(nostack, preserves_flags, readonly)
         );
@@ -848,7 +848,7 @@ impl ArchRuntime for X86_64Runtime {
         let idx: u64;
         unsafe {
             core::arch::asm!(
-                "mov {}, gs:[16]",
+                "mov {:e}, gs:[16]",
                 out(reg) idx,
                 options(nostack, preserves_flags, readonly)
             );

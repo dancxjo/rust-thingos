@@ -229,12 +229,23 @@ impl AhciDevice {
         while (mmio_read32(pb, PORT_TFD) & 0x88) != 0 && timeout > 0 { timeout -= 1; }
         if timeout == 0 { return Err(BlockError::NotReady); }
 
+        stem::info!("AHCI: sending command for LBA {}", lba);
         mmio_write32(pb, PORT_CI, 1);
+        let mut loop_timeout = 1000000;
         loop {
             let ci = mmio_read32(pb, PORT_CI);
             if ci & 1 == 0 { break; }
-            if mmio_read32(pb, PORT_IS) & (1 << 30) != 0 { return Err(BlockError::IoError); }
+            if mmio_read32(pb, PORT_IS) & (1 << 30) != 0 { 
+                stem::error!("AHCI: IoError on port {}", self.port);
+                return Err(BlockError::IoError); 
+            }
+            loop_timeout -= 1;
+            if loop_timeout == 0 {
+                stem::error!("AHCI: command timeout on port {}", self.port);
+                return Err(BlockError::NotReady);
+            }
         }
+        stem::info!("AHCI: command completed for LBA {}", lba);
 
         let src = unsafe { core::slice::from_raw_parts((self.dma_virt as usize + OFFSET_DATA) as *const u8, 2048) };
         buf[0..2048].copy_from_slice(src);
@@ -255,6 +266,7 @@ impl StorageProvider {
             VfsRpcOp::Read => {
                 let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
                 let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
+                stem::info!("AHCI: Read RPC offset={} len={}", offset, len);
                 let sector_size = self.device.sector_size();
                 let start_lba = offset / sector_size;
                 let end_lba = if len > 0 {

@@ -28,7 +28,7 @@ use abi::driver_interface::{
 };
 use abi::seed::{INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
 use abi::syscall::vfs_flags::O_RDONLY;
-use stem::debug;
+use stem::{debug, info};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek};
 
 /// Maximum ELF binary size the catalog will read into memory for symbol
@@ -135,7 +135,7 @@ impl Catalog {
         for &dir in SEARCH_PATHS {
             self.scan_dir(dir);
         }
-        debug!("DEVD CATALOG: {} driver(s) found", self.entries.len());
+        stem::info!("DEVD CATALOG: {} driver(s) found", self.entries.len());
     }
 
     /// Return the first driver entry whose PCI match criteria cover the given
@@ -319,7 +319,7 @@ impl Catalog {
             })
             .unwrap_or_else(|| "unknown".into());
 
-        debug!(
+        info!(
             "DEVD CATALOG: registered driver '{}' name='{}' class={:?} kind='{}' start='{}'",
             path, driver_name, descriptor.driver_class, device_kind, start_symbol
         );

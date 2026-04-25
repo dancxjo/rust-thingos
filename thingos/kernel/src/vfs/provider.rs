@@ -138,9 +138,9 @@ impl ProviderRpc {
 
     /// Perform a multiplexed, concurrent round-trip RPC with the provider.
     pub fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<Vec<u8>> {
-        crate::kdebug!("VFS_RPC: request op={:?} len={}", op, payload.len());
-        let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
         let tid = unsafe { crate::sched::current_tid_current() };
+        crate::kinfo!("VFS_RPC: request op={:?} len={} tid={}", op, payload.len(), tid);
+        let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
 
         let mut msg = Vec::with_capacity(7 + payload.len());
         msg.extend_from_slice(&self.resp_write_handle.to_le_bytes());
@@ -175,10 +175,10 @@ impl ProviderRpc {
 
                     let status = resp[0];
                     if status != 0 {
-                        crate::kdebug!("VFS_RPC: response op={:?} id={} -> ERR({})", op, req_id, status);
+                        crate::kinfo!("VFS_RPC: response op={:?} id={} -> ERR({})", op, req_id, status);
                         return Err(errno_from_u8(status));
                     }
-                    crate::kdebug!("VFS_RPC: response op={:?} id={} -> OK({})", op, req_id, resp.len() - 1);
+                    crate::kinfo!("VFS_RPC: response op={:?} id={} -> OK({})", op, req_id, resp.len() - 1);
                     return Ok(resp[1..].to_vec());
                 }
 
@@ -236,7 +236,7 @@ impl ProviderRpc {
 
             let now_ns = crate::time::monotonic_now_ns();
             if now_ns >= deadline_ns {
-                crate::kerror!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
+                crate::kinfo!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
                 state.ops.remove(&req_id);

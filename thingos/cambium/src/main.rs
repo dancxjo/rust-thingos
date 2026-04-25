@@ -25,7 +25,7 @@ use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::KindId;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_watch_path, vfs_write};
 use stem::time::Duration;
-use stem::{debug, error, warn};
+use stem::{debug, error, info, warn};
 use sysfs::{SysDevice, scan_devices};
 
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
@@ -48,6 +48,7 @@ const JOB_EXIT_STATE_EXITED: u8 = 2;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    stem::info!("CAMBIUM: main started");
     // ── Parse argv ──────────────────────────────────────────────────────────
     let args = get_args();
 
@@ -185,7 +186,7 @@ fn path_exists(path: &str) -> bool {
 // ── Daemon mode ──────────────────────────────────────────────────────────────
 
 fn run_daemon_mode() -> ! {
-    debug!("CAMBIUM: starting device discovery manager (daemon mode)");
+    stem::info!("CAMBIUM: starting device discovery manager (daemon mode)");
 
     let mut drivers: BTreeMap<String, ManagedDriver> = BTreeMap::new();
     let mut catalog = Catalog::new();
@@ -245,7 +246,7 @@ fn run_daemon_mode() -> ! {
 
         match svc.next_event(timeout) {
             Ok(ServiceEvent::Message { kind, payload }) => {
-                debug!("CAMBIUM: ServiceLoop wake — inbox message");
+                stem::info!("CAMBIUM: ServiceLoop wake — inbox message");
                 handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
                 messages_drained = true;
             }
@@ -259,7 +260,7 @@ fn run_daemon_mode() -> ! {
                 }
                 if let Some((dev_token, dev_fd)) = devices_watch_token {
                     if token == dev_token {
-                        debug!("CAMBIUM: ServiceLoop wake — /sys/devices watch readable");
+                        stem::info!("CAMBIUM: ServiceLoop wake — /sys/devices watch readable");
                         if event.is_readable() {
                             drain_watch_fd(dev_fd);
                         }
@@ -268,7 +269,7 @@ fn run_daemon_mode() -> ! {
                 }
             }
             Ok(ServiceEvent::Timeout) => {
-                debug!("CAMBIUM: ServiceLoop wake — reconcile tick");
+                stem::info!("CAMBIUM: ServiceLoop wake — reconcile tick");
                 reconcile_due = true;
             }
             Ok(ServiceEvent::InboxClosed) => {
@@ -411,6 +412,8 @@ fn reconcile_devices(
     let mut seen = BTreeMap::new();
 
     for device in devices {
+        stem::info!("CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}", 
+            device.slot, device.kind, device.vendor_id, device.device_id, device.class_code, device.present);
         seen.insert(device.slot.clone(), ());
         if !device.present {
             continue;
