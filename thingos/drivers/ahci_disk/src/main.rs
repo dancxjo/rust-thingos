@@ -23,8 +23,10 @@ use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::vfs_mount;
-use stem::syscall::{device_claim, device_dma_phys, device_map_mmio, port_create};
-use stem::{debug, error, info, warn};
+use stem::syscall::{
+    device_alloc_dma, device_claim, device_dma_phys, device_map_mmio, port_create,
+};
+use stem::{debug, error, info, warn, yield_now};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ahci_disk";
 
@@ -49,7 +51,9 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
 };
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
-    if dev.is_null() || out.is_null() { return Status::InvalidArgument; }
+    if dev.is_null() || out.is_null() {
+        return Status::InvalidArgument;
+    }
     let dev = &*dev;
     let out = &mut *out;
     let is_match = dev.bus == BusKind::Pci as u32 && (dev.class_code & 0x00ff_ffff) == 0x010601;
@@ -57,7 +61,11 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     out.score = if is_match { 900 } else { 0 };
     out.claimed_class = DriverClass::Block;
     out.flags = 0;
-    if is_match { Status::Ok } else { Status::NoMatch }
+    if is_match {
+        Status::Ok
+    } else {
+        Status::NoMatch
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -121,10 +129,6 @@ const PORT_CMD_FRE: u32 = 1 << 4;
 const FIS_TYPE_REG_H2D: u8 = 0x27;
 const ATA_CMD_PACKET: u8 = 0xA0;
 
-#[repr(C, align(4096))]
-struct DmaBuffer { data: [u8; 4096] }
-static mut DMA_BUFFER: DmaBuffer = DmaBuffer { data: [0; 4096] };
-
 const OFFSET_CMD_LIST: usize = 0x000;
 const OFFSET_FIS: usize = 0x400;
 const OFFSET_CMD_TABLE: usize = 0x500;
@@ -132,17 +136,31 @@ const OFFSET_DATA: usize = 0x600;
 
 #[repr(C, packed)]
 struct CommandHeader {
-    cfl: u8, pm: u8, prdtl: u16, prdbc: u32, ctba: u32, ctbau: u32, reserved: [u32; 4],
+    cfl: u8,
+    pm: u8,
+    prdtl: u16,
+    prdbc: u32,
+    ctba: u32,
+    ctbau: u32,
+    reserved: [u32; 4],
 }
 
 #[repr(C, packed)]
 struct CommandTable {
-    cfis: [u8; 64], acmd: [u8; 16], reserved: [u8; 48], prdt: [PrdtEntry; 1],
+    cfis: [u8; 64],
+    acmd: [u8; 16],
+    reserved: [u8; 48],
+    prdt: [PrdtEntry; 1],
 }
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
-struct PrdtEntry { dba: u32, dbau: u32, reserved: u32, dbc: u32 }
+struct PrdtEntry {
+    dba: u32,
+    dbau: u32,
+    reserved: u32,
+    dbc: u32,
+}
 
 fn mmio_read32(base: u64, offset: usize) -> u32 {
     unsafe { core::ptr::read_volatile((base as usize + offset) as *const u32) }
@@ -150,7 +168,9 @@ fn mmio_read32(base: u64, offset: usize) -> u32 {
 fn mmio_write32(base: u64, offset: usize, val: u32) {
     unsafe { core::ptr::write_volatile((base as usize + offset) as *mut u32, val) }
 }
-fn port_base(hba_base: u64, port: u32) -> u64 { hba_base + HBA_PORT_BASE as u64 + (port as u64 * 0x80) }
+fn port_base(hba_base: u64, port: u32) -> u64 {
+    hba_base + HBA_PORT_BASE as u64 + (port as u64 * 0x80)
+}
 
 struct AhciDevice {
     mmio_base: u64,
@@ -161,11 +181,17 @@ struct AhciDevice {
 }
 
 impl BlockDevice for AhciDevice {
-    fn sector_size(&self) -> u64 { if self.is_atapi { 2048 } else { 512 } }
-    fn sector_count(&self) -> Option<u64> { Some(0) } // Unknown for now
+    fn sector_size(&self) -> u64 {
+        if self.is_atapi { 2048 } else { 512 }
+    }
+    fn sector_count(&self) -> Option<u64> {
+        Some(0)
+    } // Unknown for now
 
     fn read_sectors(&self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
-        if count == 0 { return Ok(()); }
+        if count == 0 {
+            return Ok(());
+        }
         let mut current_lba = lba;
         let mut offset = 0;
         let ss = self.sector_size() as usize;
@@ -187,7 +213,7 @@ impl AhciDevice {
     fn read_atapi_sector(&self, lba: u64, buf: &mut [u8]) -> Result<(), BlockError> {
         let pb = port_base(self.mmio_base, self.port);
         mmio_write32(pb, PORT_IS, 0xFFFFFFFF);
-        
+
         let ds = 2048;
         let prdt = PrdtEntry {
             dba: (self.dma_phys as usize + OFFSET_DATA) as u32,
@@ -205,7 +231,7 @@ impl AhciDevice {
             tbl.cfis[3] = 1;
             tbl.cfis[5] = (ds as u32 & 0xFF) as u8;
             tbl.cfis[6] = ((ds as u32 >> 8) & 0xFF) as u8;
-            
+
             tbl.acmd.fill(0);
             let lba32 = lba as u32;
             tbl.acmd[0] = 0x28; // READ10
@@ -226,34 +252,50 @@ impl AhciDevice {
         }
 
         let mut timeout = 100000;
-        while (mmio_read32(pb, PORT_TFD) & 0x88) != 0 && timeout > 0 { timeout -= 1; }
-        if timeout == 0 { return Err(BlockError::NotReady); }
+        while (mmio_read32(pb, PORT_TFD) & 0x88) != 0 && timeout > 0 {
+            timeout -= 1;
+            if timeout % 1000 == 0 {
+                yield_now();
+            }
+        }
+        if timeout == 0 {
+            return Err(BlockError::NotReady);
+        }
 
-        stem::info!("AHCI: sending command for LBA {}", lba);
+        debug!("AHCI: sending command for LBA {}", lba);
         mmio_write32(pb, PORT_CI, 1);
-        let mut loop_timeout = 1000000;
+        let mut loop_timeout = 10000000; // Increased timeout
         loop {
             let ci = mmio_read32(pb, PORT_CI);
-            if ci & 1 == 0 { break; }
-            if mmio_read32(pb, PORT_IS) & (1 << 30) != 0 { 
-                stem::error!("AHCI: IoError on port {}", self.port);
-                return Err(BlockError::IoError); 
+            if ci & 1 == 0 {
+                break;
+            }
+            if mmio_read32(pb, PORT_IS) & (1 << 30) != 0 {
+                error!("AHCI: IoError on port {}", self.port);
+                return Err(BlockError::IoError);
             }
             loop_timeout -= 1;
+            if loop_timeout % 1000 == 0 {
+                yield_now();
+            }
             if loop_timeout == 0 {
-                stem::error!("AHCI: command timeout on port {}", self.port);
+                error!("AHCI: command timeout on port {}", self.port);
                 return Err(BlockError::NotReady);
             }
         }
-        stem::info!("AHCI: command completed for LBA {}", lba);
+        debug!("AHCI: command completed for LBA {}", lba);
 
-        let src = unsafe { core::slice::from_raw_parts((self.dma_virt as usize + OFFSET_DATA) as *const u8, 2048) };
+        let src = unsafe {
+            core::slice::from_raw_parts((self.dma_virt as usize + OFFSET_DATA) as *const u8, 2048)
+        };
         buf[0..2048].copy_from_slice(src);
         Ok(())
     }
 }
 
-struct StorageProvider { device: Arc<dyn BlockDevice> }
+struct StorageProvider {
+    device: Arc<dyn BlockDevice>,
+}
 
 impl StorageProvider {
     fn handle_rpc(&self, req: &ProviderRequest) -> ProviderResponse {
@@ -266,14 +308,10 @@ impl StorageProvider {
             VfsRpcOp::Read => {
                 let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
                 let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
-                stem::info!("AHCI: Read RPC offset={} len={}", offset, len);
+                debug!("AHCI: Read RPC offset={} len={}", offset, len);
                 let sector_size = self.device.sector_size();
                 let start_lba = offset / sector_size;
-                let end_lba = if len > 0 {
-                    (offset + len as u64 - 1) / sector_size
-                } else {
-                    start_lba.saturating_sub(1)
-                };
+                let end_lba = if len > 0 { (offset + len as u64 - 1) / sector_size } else { start_lba.saturating_sub(1) };
                 let count = if len > 0 { end_lba - start_lba + 1 } else { 0 };
                 let mut bounce = Vec::with_capacity((count * sector_size) as usize);
                 bounce.resize((count * sector_size) as usize, 0);
@@ -338,23 +376,35 @@ fn main(boot_fd: usize) -> ! {
             stem::syscall::exit(Status::BindFailed as i32);
         }
     };
-    
+
     // Enable AHCI
     mmio_write32(mmio, HBA_GHC, mmio_read32(mmio, HBA_GHC) | (1 << 31));
-    
-    let dma_virt = unsafe { DMA_BUFFER.data.as_mut_ptr() as u64 };
-    let dma_phys = device_dma_phys(dma_virt).expect("AHCI: dma_phys failed");
+
     let pi = mmio_read32(mmio, HBA_PI);
 
     for port_num in 0..32 {
-        if pi & (1 << port_num) == 0 { continue; }
+        if pi & (1 << port_num) == 0 {
+            continue;
+        }
         let pb = port_base(mmio, port_num);
         let ssts = mmio_read32(pb, PORT_SSTS);
-        if (ssts & 0x0F) != 0x03 || (ssts & 0x0F00) != 0x0100 { continue; }
-        
+        if (ssts & 0x0F) != 0x03 || (ssts & 0x0F00) != 0x0100 {
+            continue;
+        }
+
         let sig = mmio_read32(pb, PORT_SIG);
         let is_atapi = sig == SATA_SIG_ATAPI;
         let name = if is_atapi { format!("atapi{}", port_num) } else { format!("ahci{}", port_num) };
+
+        // Allocate unique DMA buffer for this device
+        let dma_virt = match device_alloc_dma(claim, 1) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("AHCI: failed to alloc DMA for port {}: {:?}", port_num, e);
+                continue;
+            }
+        };
+        let dma_phys = device_dma_phys(dma_virt).expect("AHCI: dma_phys failed");
 
         // Setup Port
         let clb = dma_phys + OFFSET_CMD_LIST as u64;
@@ -379,10 +429,14 @@ fn main(boot_fd: usize) -> ! {
                     let resp = provider.handle_rpc(&req);
                     let _ = ploop.send_response(&req, resp);
                 }
-                stem::yield_now();
+                yield_now();
             }
-        }).unwrap();
+        })
+        .unwrap();
     }
 
-    loop { stem::syscall::sleep_ms(60000); }
+    loop {
+        stem::syscall::sleep_ms(60000);
+    }
 }
+

@@ -53,7 +53,7 @@ fn ns_to_timeout_ms(ns: u64) -> u64 {
 
 fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Result<u16, String> {
     let thing = i32::try_from(fd).map_err(|_| format!("{context}: fd out of range"))?;
-    info!("http: waiting for {} readiness (fd={})...", context, fd);
+    trace!("http: waiting for {} readiness (fd={})...", context, fd);
     loop {
         let timeout_ms = timeout_ms_until_deadline(deadline_ns)
             .map_err(|_| format!("{context}: timed out waiting for readiness"))?;
@@ -68,7 +68,7 @@ fn wait_fd_ready(fd: u32, events: u16, deadline_ns: u64, context: &str) -> Resul
                 if pollfd[0].revents == 0 {
                     continue;
                 }
-                info!(
+                trace!(
                     "http: wait_fd_ready complete for {} revents=0x{:04x}",
                     context, pollfd[0].revents
                 );
@@ -490,7 +490,7 @@ where
                 }
                 Ok(written) => {
                     offset += written;
-                    info!("http: background task: wrote {} bytes (total={})", written, offset);
+                    trace!("http: background task: wrote {} bytes (total={})", written, offset);
                 }
                 Err(e) => {
                     let msg = format!("ERR: https write failed: {:?}", e);
@@ -514,17 +514,17 @@ where
         loop {
             match tls.read(&mut buf) {
                 Ok(0) => {
-                    info!("http: background task: TLS read returned EOF");
+                    debug!("http: background task: TLS read returned EOF");
                     break;
                 }
                 Ok(n) => {
-                    info!("http: background task: read {} bytes from TLS", n);
+                    trace!("http: background task: read {} bytes from TLS", n);
                     let mut offset = 0;
                     while offset < n {
                         match port_send_all(write_handle, &buf[offset..n]) {
                             Ok(written) => {
                                 offset += written;
-                                info!(
+                                trace!(
                                     "http: background task: forwarded {} bytes to foreground",
                                     written
                                 );
@@ -583,7 +583,7 @@ where
             break;
         }
 
-        info!(
+        trace!(
             "http: waiting for header data from port (attempt={}/{})",
             attempt, MAX_HEADER_READ_ITERATIONS
         );
@@ -593,7 +593,7 @@ where
                 break;
             }
             Ok(n) => {
-                info!("http: received {} bytes from background TLS thread", n);
+                trace!("http: received {} bytes from background TLS thread", n);
                 let chunk = &buf[..n];
                 // Check if it's an error message from the thread
                 if chunk.starts_with(b"ERR: ") {

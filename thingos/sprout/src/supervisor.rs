@@ -652,9 +652,9 @@ impl Supervisor {
         if self.bloom_spawned {
             return;
         }
-        stem::info!("SPROUT: Checking if bloom is ready to spawn (/dev/display/card0)...");
+        stem::debug!("SPROUT: Checking if bloom is ready to spawn (/dev/display/card0)...");
         if !self.display_card_ready {
-            stem::info!("SPROUT: display card not ready yet");
+            stem::debug!("SPROUT: display card not ready yet");
             return;
         }
         match stem::syscall::spawn_process("/bin/bloom", 0) {

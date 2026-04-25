@@ -246,7 +246,7 @@ fn run_daemon_mode() -> ! {
 
         match svc.next_event(timeout) {
             Ok(ServiceEvent::Message { kind, payload }) => {
-                stem::info!("CAMBIUM: ServiceLoop wake — inbox message");
+                stem::debug!("CAMBIUM: ServiceLoop wake — inbox message");
                 handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
                 messages_drained = true;
             }
@@ -260,7 +260,7 @@ fn run_daemon_mode() -> ! {
                 }
                 if let Some((dev_token, dev_fd)) = devices_watch_token {
                     if token == dev_token {
-                        stem::info!("CAMBIUM: ServiceLoop wake — /sys/devices watch readable");
+                        stem::debug!("CAMBIUM: ServiceLoop wake — /sys/devices watch readable");
                         if event.is_readable() {
                             drain_watch_fd(dev_fd);
                         }
@@ -269,7 +269,7 @@ fn run_daemon_mode() -> ! {
                 }
             }
             Ok(ServiceEvent::Timeout) => {
-                stem::info!("CAMBIUM: ServiceLoop wake — reconcile tick");
+                stem::debug!("CAMBIUM: ServiceLoop wake — reconcile tick");
                 reconcile_due = true;
             }
             Ok(ServiceEvent::InboxClosed) => {
@@ -412,7 +412,7 @@ fn reconcile_devices(
     let mut seen = BTreeMap::new();
 
     for device in devices {
-        stem::info!("CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}", 
+        stem::debug!("CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}", 
             device.slot, device.kind, device.vendor_id, device.device_id, device.class_code, device.present);
         seen.insert(device.slot.clone(), ());
         if !device.present {
