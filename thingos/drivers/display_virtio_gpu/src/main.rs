@@ -19,7 +19,7 @@ use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::syscall::{PortHandle, port_create};
-use stem::{debug, info, trace, warn};
+use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
 
@@ -179,7 +179,7 @@ impl PresentStats {
 
     fn log_and_reset(&mut self) {
         if self.frame_count > 0 {
-            info!(
+            debug!(
                 "display_virtio_gpu stats: frames={}, rects_in={}, transfers={}, flushes={}, union_flush={}, per_rect_flush={}, frame_pool={}",
                 self.frame_count,
                 self.total_rects_in,
@@ -266,7 +266,7 @@ fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
         Ok(s) => s,
         Err(_) => return ProviderResponse::err(Errno::EINVAL),
     };
-    stem::info!("DISP: vfs_lookup path='{}'", path);
+    stem::debug!("DISP: vfs_lookup path='{}'", path);
     let handle: u64 = match path.trim_matches('/') {
         "" => HANDLE_ROOT,
         "card0" => HANDLE_CARD,
@@ -311,7 +311,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
     match call.op {
         DISPLAY_OP_GET_INFO => {
-            stem::info!("DISP: DISPLAY_OP_GET_INFO requested");
+            stem::debug!("DISP: DISPLAY_OP_GET_INFO requested");
             let info = DisplayInfo {
                 card_id: 0,
                 preferred_mode: DisplayMode {
@@ -324,7 +324,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 supported_formats: 1 << 1,
                 caps: DisplayCaps::ATOMIC,
             };
-            stem::info!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
+            stem::debug!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
                 core::slice::from_raw_parts(
                     &info as *const _ as *const u8,
@@ -339,7 +339,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
             let bh: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
-            stem::info!("DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd={}, size={}x{}", bh.handle, bh.width, bh.height);
+            stem::debug!("DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd={}, size={}x{}", bh.handle, bh.width, bh.height);
             let size = (bh.height as usize).saturating_mul(bh.stride as usize);
             let req = abi::vm::VmMapReq {
                 addr_hint: 0,
@@ -352,7 +352,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 Ok(map_resp) => {
                     let id = BufferId(driver.next_import_id);
                     driver.next_import_id = driver.next_import_id.saturating_add(1);
-                    stem::info!("DISP: Imported buffer as ID={}", id.0);
+                    stem::debug!("DISP: Imported buffer as ID={}", id.0);
                     driver.imported_buffers.insert(
                         id,
                         ImportedBuffer {
@@ -393,7 +393,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
             let plane_size = core::mem::size_of::<PlaneCommit>();
             let plane_count = req.commit_count as usize;
-            stem::info!("DISP: DISPLAY_OP_COMMIT requested: planes={}", plane_count);
+            stem::debug!("DISP: DISPLAY_OP_COMMIT requested: planes={}", plane_count);
             let needed = header_size.saturating_add(plane_count.saturating_mul(plane_size));
             if plane_count > 0 && call_payload.len() < needed {
                 return ProviderResponse::err(Errno::EINVAL);
@@ -513,7 +513,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     driver.frame_pool[idx].last_present_seq = driver.present_seq;
                     driver.last_presented_idx = Some(idx);
                     driver.current_res_id = res_id;
-                    stem::info!("DISP: COMMIT complete (seq={})", driver.present_seq);
+                    stem::debug!("DISP: COMMIT complete (seq={})", driver.present_seq);
                     driver.current_fd = Some(driver.frame_pool[idx].fd);
                 }
             }
@@ -677,8 +677,8 @@ fn main(boot_arg: usize) -> ! {
         );
         stem::syscall::exit(1);
     }
-    stem::info!("display_virtio_gpu: Starting VFS-native VirtIO GPU driver...");
-    stem::info!("display_virtio_gpu: boot_arg={}", boot_arg);
+    stem::debug!("display_virtio_gpu: Starting VFS-native VirtIO GPU driver...");
+    stem::debug!("display_virtio_gpu: boot_arg={}", boot_arg);
 
     let mut drv_req_read = 0;
     let mut drv_resp_write = 0;
@@ -694,10 +694,10 @@ fn main(boot_arg: usize) -> ! {
         backing: abi::vm::VmBacking::File { thing: boot_arg as u32, offset: 0 },
     };
 
-    stem::info!("display_virtio_gpu: Mapping bootstrap memfd {} size={}...", boot_arg, boot_size);
+    stem::debug!("display_virtio_gpu: Mapping bootstrap memfd {} size={}...", boot_arg, boot_size);
     match stem::syscall::vm_map(&req) {
         Ok(resp) => {
-            stem::info!("display_virtio_gpu: vm_map success at 0x{:x}", resp.addr);
+            stem::debug!("display_virtio_gpu: vm_map success at 0x{:x}", resp.addr);
             let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
             // slice[3..5]: bind_instance_id (u64)
 
@@ -709,7 +709,7 @@ fn main(boot_arg: usize) -> ! {
             let id_high = slice[4] as u64;
             bind_instance_id = id_low | (id_high << 32);
 
-            stem::info!(
+            stem::debug!(
                 "display_virtio_gpu: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
                 drv_req_read,
                 drv_resp_write,
@@ -718,7 +718,7 @@ fn main(boot_arg: usize) -> ! {
             );
         }
         Err(e) => {
-            stem::info!(
+            stem::error!(
                 "display_virtio_gpu: ERROR: Failed to vm_map bootstrap memfd {}: {:?}",
                 boot_arg,
                 e
@@ -727,7 +727,7 @@ fn main(boot_arg: usize) -> ! {
     }
 
     if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {
-        stem::info!(
+        stem::error!(
             "DISP: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
             drv_req_read,
             drv_resp_write,
@@ -739,7 +739,7 @@ fn main(boot_arg: usize) -> ! {
         }
     }
 
-    info!(
+    debug!(
         "display_virtio_gpu: starting (drv_req_r={}, drv_resp_w={}, svc={}, id={})",
         drv_req_read, drv_resp_write, supervisor_port, bind_instance_id
     );
@@ -748,7 +748,7 @@ fn main(boot_arg: usize) -> ! {
     let gpu_path = match find_gpu() {
         Some(path) => path,
         None => {
-            info!("display_virtio_gpu: GPU device not found");
+            error!("display_virtio_gpu: GPU device not found");
             loop {
                 stem::time::sleep_ms(1);
             }
@@ -758,7 +758,7 @@ fn main(boot_arg: usize) -> ! {
     let mut gpu = match VirtioGpu::new(&gpu_path) {
         Ok(g) => g,
         Err(e) => {
-            info!("display_virtio_gpu: Failed to initialize GPU: {:?}", e);
+            error!("display_virtio_gpu: Failed to initialize GPU: {:?}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
@@ -766,7 +766,7 @@ fn main(boot_arg: usize) -> ! {
     };
 
     if let Err(e) = gpu.init_virtio() {
-        info!("display_virtio_gpu: Virtio init failed: {}", e);
+        error!("display_virtio_gpu: Virtio init failed: {}", e);
         loop {
             stem::time::sleep_ms(1);
         }
@@ -775,9 +775,9 @@ fn main(boot_arg: usize) -> ! {
     info!("display_virtio_gpu: GPU initialized successfully");
 
     if gpu.has_3d_feature() {
-        info!("display_virtio_gpu: Virgl 3D supported");
+        debug!("display_virtio_gpu: Virgl 3D supported");
     } else {
-        info!("display_virtio_gpu: Virgl 3D not supported, using 2D only");
+        debug!("display_virtio_gpu: Virgl 3D not supported, using 2D only");
     }
 
     // =========================================================================
@@ -786,7 +786,7 @@ fn main(boot_arg: usize) -> ! {
     let (disp_width, disp_height, disp_stride, disp_format) = get_display_dimensions();
     let disp_size = (disp_height as usize) * (disp_stride as usize);
 
-    info!(
+    debug!(
         "display_virtio_gpu: creating frame pool 1x {}x{} stride={} format={}",
         disp_width, disp_height, disp_stride, disp_format
     );
@@ -798,7 +798,7 @@ fn main(boot_arg: usize) -> ! {
         let fd = match stem::syscall::memfd_create("frame_pool", disp_size) {
             Ok(id) => id,
             Err(e) => {
-                info!("display_virtio_gpu: memfd_create failed: {:?}", e);
+                error!("display_virtio_gpu: memfd_create failed: {:?}", e);
                 loop {
                     stem::time::sleep_ms(1);
                 }
@@ -808,7 +808,7 @@ fn main(boot_arg: usize) -> ! {
         let phys = match stem::syscall::shared_memory_phys(fd) {
             Ok(phys) => phys,
             Err(e) => {
-                info!("display_virtio_gpu: shared_memory_phys failed: {:?}", e);
+                error!("display_virtio_gpu: shared_memory_phys failed: {:?}", e);
                 loop {
                     stem::time::sleep_ms(1);
                 }
@@ -823,7 +823,7 @@ fn main(boot_arg: usize) -> ! {
         let map_resp = match stem::syscall::vm_map(&req) {
             Ok(resp) => resp,
             Err(e) => {
-                info!("display_virtio_gpu: vm_map(frame_pool) failed: {:?}", e);
+                error!("display_virtio_gpu: vm_map(frame_pool) failed: {:?}", e);
                 loop {
                     stem::time::sleep_ms(1);
                 }
@@ -833,13 +833,13 @@ fn main(boot_arg: usize) -> ! {
         let res_id = (i + 1) as u32;
         gpu.set_dimensions(disp_width, disp_height);
         if let Err(e) = gpu.create_resource_2d(res_id) {
-            info!("display_virtio_gpu: create_resource_2d failed: {}", e);
+            error!("display_virtio_gpu: create_resource_2d failed: {}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
         }
         if let Err(e) = gpu.attach_backing(res_id, phys, disp_size, disp_stride) {
-            info!("display_virtio_gpu: attach_backing failed: {}", e);
+            error!("display_virtio_gpu: attach_backing failed: {}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
@@ -857,13 +857,13 @@ fn main(boot_arg: usize) -> ! {
 
     // Set initial scanout to first buffer
     if let Err(e) = gpu.set_scanout(frame_pool_buffers[0].res_id, disp_width, disp_height) {
-        info!("display_virtio_gpu: set_scanout failed: {}", e);
+        error!("display_virtio_gpu: set_scanout failed: {}", e);
         loop {
             stem::time::sleep_ms(1);
         }
     }
 
-    info!(
+    debug!(
         "display_virtio_gpu: frame pool ready ({} buffer{})",
         frame_pool_count,
         if frame_pool_count == 1 { "" } else { "s" }
@@ -901,7 +901,7 @@ fn main(boot_arg: usize) -> ! {
             // Bundle the VFS provider handle and BIND_READY notification atomically.
             let _ =
                 stem::syscall::socket::sendmsg(supervisor_port_fd, &buf[..total_len], &[vfs_write]);
-            info!("display_virtio_gpu: Sent MSG_BIND_READY (ID: {})", bind_instance_id);
+            debug!("display_virtio_gpu: Sent MSG_BIND_READY (ID: {})", bind_instance_id);
         }
     }
 
@@ -918,11 +918,11 @@ fn main(boot_arg: usize) -> ! {
     // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
     let mut wait_buf = [0u8; 512];
     let mut loop_count = 0;
-    info!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
+    debug!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
     let assigned_bind_id = loop {
         loop_count += 1;
         if loop_count % 100 == 0 {
-            info!("display_virtio_gpu: Still waiting for BIND_ASSIGNED (loop={})...", loop_count);
+            debug!("display_virtio_gpu: Still waiting for BIND_ASSIGNED (loop={})...", loop_count);
         }
         if let Ok(n) = stem::syscall::port_try_recv(drv_req_read, &mut wait_buf) {
             if let Some((header, payload)) = drvproto::parse_message(&wait_buf[..n]) {
@@ -977,7 +977,7 @@ fn main(boot_arg: usize) -> ! {
             ) {
                 let _ =
                     stem::syscall::socket::sendmsg(supervisor_port_fd, &svc_buf[..total_len], &[]);
-                info!("display_virtio_gpu: Sent MSG_SERVICE_READY.");
+                debug!("display_virtio_gpu: Sent MSG_SERVICE_READY.");
             }
         }
     }
@@ -1075,7 +1075,7 @@ fn main(boot_arg: usize) -> ! {
             );
             match header.msg_type {
                 drvproto::MSG_HELLO => {
-                    info!("display_virtio_gpu: received MSG_HELLO");
+                    debug!("display_virtio_gpu: received MSG_HELLO");
                     let want_caps = drvproto::decode_hello_payload_le(payload)
                         .map(|hello| hello.want_caps)
                         .unwrap_or(0);
@@ -1095,7 +1095,7 @@ fn main(boot_arg: usize) -> ! {
                     }
                 }
                 drvproto::MSG_ACQUIRE => {
-                    stem::info!("display_virtio_gpu: received MSG_ACQUIRE");
+                    stem::debug!("display_virtio_gpu: received MSG_ACQUIRE");
                     let mut buffer_age = 0;
                     let idx = driver.next_buffer_idx;
 

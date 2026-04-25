@@ -1528,7 +1528,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 } else {
                     0
                 };
-                kinfo!("deferred_bootfb_gradient elapsed_ticks={}", elapsed);
+                kdebug!("deferred_bootfb_gradient elapsed_ticks={}", elapsed);
             }
 
             // No runnable work on this CPU — halt until the next interrupt

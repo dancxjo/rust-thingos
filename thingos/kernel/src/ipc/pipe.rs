@@ -111,7 +111,7 @@ impl RingBuf {
         }
         self.tail = (self.tail + n) % self.cap;
         self.len += n;
-        crate::kinfo!("PIPE_ENQUEUE: tail={} len={} n={}", self.tail, self.len, n);
+        crate::ktrace!("PIPE_ENQUEUE: tail={} len={} n={}", self.tail, self.len, n);
         n
     }
 }
@@ -396,7 +396,7 @@ impl crate::vfs::VfsNode for PipeReadNode {
                     Some(Ok(n))
                 } else if data.writers == 0 {
                     pair.read_waitq.remove(tid as u64);
-                    crate::kinfo!("PIPE_DEQUEUE: EOF reached (writers=0)");
+                    crate::kdebug!("PIPE_DEQUEUE: EOF reached (writers=0)");
                     Some(Ok(0)) // EOF
                 } else if data.nonblock {
                     pair.read_waitq.remove(tid as u64);
