@@ -360,8 +360,13 @@ pub(crate) fn console_foreground_pgid() -> Option<u32> {
 pub struct ConsoleNode;
 
 impl ConsoleNode {
-    pub fn handle_runtime_input_byte<R: crate::BootRuntimeBase + ?Sized>(_rt: &R, c: u8) -> bool {
-        get_console_ld().drain_input(&SerialHardware)
+    pub fn handle_runtime_input_byte<R: crate::BootRuntimeBase + ?Sized>(_rt: &R, _c: u8) -> bool {
+        // Break the recursive deadlock by returning false here.
+        // Returning false tells the HAL (bran) that the character was not
+        // handled, so it will be pushed into the HAL's console_rx buffer.
+        // The next time anyone calls rt.getchar() (including the original
+        // drain_input loop), they will see and process this character correctly.
+        false
     }
 
     pub fn poll_input() {

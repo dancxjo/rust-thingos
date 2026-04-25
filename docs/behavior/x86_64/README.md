@@ -1,9 +1,9 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-25 09:25:09
+> Last run: 2026-04-25 11:57:57
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [Bloom compositor service loop and responsiveness](bloom-compositor-service-loop-and-responsiveness/README.md) | 0/9 | ❌ |
+| [Bin Utils Traditional Functionality](bin-utils-traditional-functionality/README.md) | 1/3 | ❌ |
