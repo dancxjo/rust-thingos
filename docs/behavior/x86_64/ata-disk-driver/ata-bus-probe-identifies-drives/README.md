@@ -1,6 +1,6 @@
 # ✅ Scenario: ATA bus probe identifies drives
 
-> Last run: 2026-04-25 15:44:26
+> Last run: 2026-04-25 16:01:40
 
 ## Steps
 
