@@ -498,6 +498,7 @@ mod tests {
             exec_path: alloc::string::String::from("/bin/test"),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }))
     }
 
@@ -563,6 +564,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         let caller_tid: crate::task::TaskId = 9230;
@@ -592,6 +594,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         let caller_tid: crate::task::TaskId = 9240;
@@ -701,6 +704,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         // Set up: fd 0 survives, fd 1 has HANDLE_CLOEXEC.
@@ -748,6 +752,7 @@ mod tests {
             exec_path: alloc::string::String::new(),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         {
@@ -926,6 +931,7 @@ mod tests {
                 ));
                 crate::task::ProcessAddressSpace::from_parts(mappings, 0xDEAD_0000)
             },
+            service_loop: None,
         }))
     }
 
@@ -1165,6 +1171,7 @@ mod tests {
             exec_path: alloc::string::String::from("/old"),
             authority: crate::task::ProcessAuthority::root(),
             space: crate::task::ProcessAddressSpace::empty(),
+            service_loop: None,
         }));
 
         // ── Phase 1: set exec_in_progress ────────────────────────────────────

@@ -104,6 +104,25 @@ pub enum ServiceEvent<'a> {
     Timeout,
 }
 
+// ─── LoopState ───────────────────────────────────────────────────────────────
+
+/// Coarse state of a [`ServiceLoop`], mirroring the kernel's `ServiceLoopState`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum LoopState {
+    #[default]
+    Idle = 0,
+    Waiting = 1,
+    Dispatching = 2,
+    Shutdown = 3,
+}
+
+impl LoopState {
+    fn tag(self) -> u32 {
+        self as u32
+    }
+}
+
 // ─── ServiceLoop ─────────────────────────────────────────────────────────────
 
 /// Inbox-backed service loop.
@@ -118,6 +137,21 @@ pub struct ServiceLoop {
     /// `next_event` calls keep returning [`ServiceEvent::InboxClosed`] rather
     /// than busy-spinning.
     inbox_closed: bool,
+    // ── Diagnostic state (reported to the kernel via SYS_SERVICE_LOOP_REPORT) ─
+    /// Human-readable name for this loop instance (e.g. the service name).
+    name: Vec<u8>,
+    /// Current loop state.
+    state: LoopState,
+    /// Label of the last event dispatched.
+    last_event: Vec<u8>,
+    /// Monotonic nanosecond timestamp of the last dispatch.
+    last_dispatch_ns: u64,
+    /// Total wakeup count (incremented every time a non-timeout event fires).
+    wakeups: u64,
+    /// Timeout wakeup count.
+    timeouts: u64,
+    /// Dispatch error count.
+    errors: u64,
 }
 
 impl ServiceLoop {
@@ -152,7 +186,26 @@ impl ServiceLoop {
             waitset,
             scratch: vec![0u8; max_payload],
             inbox_closed: false,
+            name: Vec::new(),
+            state: LoopState::Idle,
+            last_event: Vec::new(),
+            last_dispatch_ns: 0,
+            wakeups: 0,
+            timeouts: 0,
+            errors: 0,
         })
+    }
+
+    /// Set a human-readable name for this loop instance.
+    ///
+    /// The name (up to 64 bytes) is reported to the kernel and appears in
+    /// `/proc/<pid>/serviceloop/name`.  Calling this is optional; without a
+    /// name the file contains `"-"`.
+    pub fn set_name(&mut self, name: &str) {
+        let bytes = name.as_bytes();
+        let len = bytes.len().min(64);
+        self.name = bytes[..len].to_vec();
+        self.report_state(LoopState::Idle, b"");
     }
 
     /// The token assigned to the inbox readiness source.
@@ -274,8 +327,12 @@ impl ServiceLoop {
             return Ok(ServiceEvent::InboxClosed);
         }
 
+        self.report_state(LoopState::Waiting, b"");
+
         let events = self.waitset.wait(timeout)?;
         if events.is_empty() {
+            self.timeouts = self.timeouts.saturating_add(1);
+            self.report_state(LoopState::Idle, b"timeout");
             return Ok(ServiceEvent::Timeout);
         }
 
@@ -297,16 +354,20 @@ impl ServiceLoop {
 
         if inbox_hangup {
             self.inbox_closed = true;
+            self.report_state(LoopState::Shutdown, b"inbox_closed");
             return Ok(ServiceEvent::InboxClosed);
         }
 
         if inbox_readable.is_some() {
+            self.wakeups = self.wakeups.saturating_add(1);
             return self.recv_one_inbox_message();
         }
 
         // Pass 2: first secondary ready event in kernel-returned order.
         for ev in events.into_iter() {
             if ev.token() != self.inbox_token {
+                self.wakeups = self.wakeups.saturating_add(1);
+                self.report_state(LoopState::Dispatching, b"ready");
                 return Ok(ServiceEvent::Ready { token: ev.token(), event: ev });
             }
         }
@@ -314,6 +375,7 @@ impl ServiceLoop {
         // Reachable only if the kernel returned events that were all the
         // inbox token with neither readability nor hangup set — treat as a
         // spurious wake and ask the caller to retry.
+        self.report_state(LoopState::Idle, b"spurious");
         Ok(ServiceEvent::Timeout)
     }
 
@@ -374,6 +436,7 @@ impl ServiceLoop {
         match msg_recv(&mut kind, &mut self.scratch) {
             Ok(n) => {
                 let copy_len = n.min(self.scratch.len());
+                self.report_state(LoopState::Dispatching, b"message");
                 Ok(ServiceEvent::Message { kind, payload: &self.scratch[..copy_len] })
             }
             Err(Errno::EAGAIN) => {
@@ -382,15 +445,42 @@ impl ServiceLoop {
                 // as Timeout so the caller's loop spins without crashing,
                 // matching the contract that EAGAIN is not a service-level
                 // error.
+                self.report_state(LoopState::Idle, b"spurious");
                 Ok(ServiceEvent::Timeout)
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                self.errors = self.errors.saturating_add(1);
+                Err(e)
+            }
         }
+    }
+
+    /// Report the current diagnostic state to the kernel via
+    /// `SYS_SERVICE_LOOP_REPORT`.
+    ///
+    /// This is a best-effort call; errors are silently ignored so that
+    /// missing procfs (e.g. in unit tests) does not break service logic.
+    fn report_state(&mut self, new_state: LoopState, event_label: &[u8]) {
+        self.state = new_state;
+        if !event_label.is_empty() {
+            let len = event_label.len().min(64);
+            self.last_event.clear();
+            self.last_event.extend_from_slice(&event_label[..len]);
+        }
+        self.last_dispatch_ns = crate::time::monotonic_ns();
+        let _ = crate::syscall::service_loop_report(
+            self.state.tag(),
+            &self.name,
+            &self.last_event,
+            self.last_dispatch_ns,
+        );
     }
 }
 
 impl Drop for ServiceLoop {
     fn drop(&mut self) {
+        // Best-effort: report shutdown state before closing.
+        self.report_state(LoopState::Shutdown, b"drop");
         // Best-effort: close the inbox FD we opened in `new`.  We don't
         // surface errors — Drop is a destructor.
         let _ = vfs_close(self.inbox_fd);

@@ -33,6 +33,7 @@
 //! | `/proc/<pid>/place`              | Canonical `thingos::place::Place` — world/visibility context (Phase 8)  |
 //! | `/proc/<pid>/presence`           | Canonical `thingos::presence::Presence` — terminal/session person-in-place semantics |
 //! | `/proc/<pid>/job_observer`       | Write-only registration of caller inbox as `JobExit` observer |
+//! | `/proc/<pid>/serviceloop/`       | ServiceLoop diagnostic directory (state, name, last\_event, …) |
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -301,6 +302,65 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         }
         // /proc/<pid>/job_observer — register caller inbox for JobExit notifications.
         "job_observer" => Ok(Arc::new(ProcPidJobObserverNode { pid })),
+        // /proc/<pid>/serviceloop — ServiceLoop diagnostic directory.
+        "serviceloop" => Ok(Arc::new(ProcPidServiceLoopDirNode { pid })),
+        // /proc/<pid>/serviceloop/<file> — individual ServiceLoop diagnostic files.
+        "serviceloop/name"
+        | "serviceloop/state"
+        | "serviceloop/last_event"
+        | "serviceloop/last_dispatch_ns"
+        | "serviceloop/wakeups"
+        | "serviceloop/timeouts"
+        | "serviceloop/errors" => {
+            let file = rest.strip_prefix("serviceloop/").unwrap_or(rest);
+            let pinfo =
+                crate::sched::process_info_for_tid_current(pid as u64).ok_or(Errno::ENOENT)?;
+            let diag = pinfo.lock().service_loop.clone();
+            let text = match file {
+                "name" => {
+                    let name = diag.as_ref().map(|d| d.name.as_str()).unwrap_or("-");
+                    alloc::format!("{}\n", name)
+                }
+                "state" => {
+                    let s = diag.as_ref().map(|d| d.state.as_str()).unwrap_or("idle");
+                    alloc::format!("{}\n", s)
+                }
+                "last_event" => {
+                    let ev = diag.as_ref().map(|d| d.last_event.as_str()).unwrap_or("-");
+                    alloc::format!("{}\n", ev)
+                }
+                "last_dispatch_ns" => {
+                    let ts = diag.as_ref().map(|d| d.last_dispatch_ns).unwrap_or(0);
+                    alloc::format!("{}\n", ts)
+                }
+                "wakeups" => {
+                    let n = diag.as_ref().map(|d| d.wakeups).unwrap_or(0);
+                    alloc::format!("{}\n", n)
+                }
+                "timeouts" => {
+                    let n = diag.as_ref().map(|d| d.timeouts).unwrap_or(0);
+                    alloc::format!("{}\n", n)
+                }
+                "errors" => {
+                    let n = diag.as_ref().map(|d| d.errors).unwrap_or(0);
+                    alloc::format!("{}\n", n)
+                }
+                _ => return Err(Errno::ENOENT),
+            };
+            // Inode: top nibble 0xE, next 32 bits = pid, file discriminant in low bits.
+            let file_idx: u64 = match file {
+                "name" => 0,
+                "state" => 1,
+                "last_event" => 2,
+                "last_dispatch_ns" => 3,
+                "wakeups" => 4,
+                "timeouts" => 5,
+                "errors" => 6,
+                _ => 7,
+            };
+            let ino = 0xE000_0000_0000_0000u64 | ((pid as u64) << 16) | file_idx;
+            Ok(Arc::new(DynamicTextNode::new(text.into_bytes(), ino)))
+        }
         _ => Err(Errno::ENOENT),
     }
 }
@@ -522,6 +582,7 @@ impl VfsNode for ProcPidDirNode {
             "presence",
             "inbox",
             "job_observer",
+            "serviceloop",
         ];
         super::write_readdir_entries(entries.into_iter(), offset, buf)
     }
@@ -583,7 +644,46 @@ impl VfsNode for ProcPidJobObserverNode {
     }
 }
 
-// ── /proc/<pid>/fd/ directory ─────────────────────────────────────────────────
+// ── /proc/<pid>/serviceloop/ directory ────────────────────────────────────────
+
+/// Directory node for `/proc/<pid>/serviceloop/`.
+///
+/// Exposes diagnostic state reported by the process's `ServiceLoop` via
+/// `SYS_SERVICE_LOOP_REPORT`.
+struct ProcPidServiceLoopDirNode {
+    pid: u32,
+}
+
+impl VfsNode for ProcPidServiceLoopDirNode {
+    fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFDIR | 0o555,
+            size: 0,
+            ino: 0xE000_0000_0000_0000u64 | ((self.pid as u64) << 16) | 0xFF,
+            ..Default::default()
+        })
+    }
+    fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let entries = [
+            "name",
+            "state",
+            "last_event",
+            "last_dispatch_ns",
+            "wakeups",
+            "timeouts",
+            "errors",
+        ];
+        super::write_readdir_entries(entries.into_iter(), offset, buf)
+    }
+}
+
+
 
 struct ProcPidFdDirNode {
     #[allow(dead_code)]
