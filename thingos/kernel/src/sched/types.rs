@@ -226,6 +226,10 @@ pub struct Scheduler<R: BootRuntime> {
     pub(crate) total_cpu_count: usize,
     pub(crate) bringup_in_progress: bool,
     pub(crate) metrics: SchedulerMetrics,
+    /// Scheduling policy: responsible for choosing the next task to run,
+    /// selecting CPU placement for woken tasks, and deciding whether to
+    /// preempt the currently running task on a wake event.
+    pub(crate) policy: crate::sched::policy::DefaultPolicy,
     /// IPIs deferred by `wake_sleepers`. Populated under the SCHEDULER lock and
     /// drained after the lock is released so that `send_ipi` is never called
     /// while SCHEDULER is held.
@@ -281,6 +285,7 @@ impl<R: BootRuntime> Scheduler<R> {
             total_cpu_count: 1,
             bringup_in_progress: false,
             metrics: SchedulerMetrics::new(),
+            policy: crate::sched::policy::DefaultPolicy::new(),
             pending_wake_ipis: alloc::vec::Vec::new(),
             wake_sleepers_budget_carry: 0,
             sleep_duration_ticks_by_tid: BTreeMap::new(),
