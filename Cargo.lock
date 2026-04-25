@@ -643,7 +643,7 @@ dependencies = [
  "abi",
  "blossom",
  "libdl",
- "pistil",
+ "pistil-types",
  "spin",
  "stem",
 ]
@@ -5068,6 +5068,16 @@ dependencies = [
  "abi",
  "fontdue",
  "libm",
+ "pistil-types",
+ "serde",
+ "stem",
+]
+
+[[package]]
+name = "pistil-types"
+version = "0.1.0"
+dependencies = [
+ "abi",
  "serde",
  "stem",
 ]
