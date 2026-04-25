@@ -3116,6 +3116,14 @@ async fn client_receives_callback_done(world: &mut ThingOsWorld) -> Result<(), S
 // If the harness is absent these steps will fail — that is intentional.
 // Implement the harness in utils/serviceloop_harness to make them pass.
 
+/// Structured log tag prefix emitted by the ServiceLoop test harness binary
+/// (`sl_harness` at `/bin/sl_harness`).  The harness prints `SLHARNESS:<event>:<detail>`
+/// lines to the serial console for each ServiceLoop event it observes, allowing the
+/// BDD runner to assert against observable system behaviour.  Example output:
+///   `SLHARNESS:Created`
+///   `SLHARNESS:Message:test.ping`
+///   `SLHARNESS:Ready:pipe_token`
+///   `SLHARNESS:InboxClosed`
 const SLHARNESS_PREFIX: &str = "SLHARNESS:";
 
 /// Background: `And the serviceloop test harness is available`
