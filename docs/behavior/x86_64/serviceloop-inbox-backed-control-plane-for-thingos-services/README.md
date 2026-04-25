@@ -1,6 +1,6 @@
 # Feature: ServiceLoop — inbox-backed control plane for ThingOS services
 
-> Last run: 2026-04-24 16:20:53
+> Last run: 2026-04-25 13:10:40
 
 ## Scenarios
 
@@ -13,3 +13,5 @@
 | closing the inbox surfaces a clean shutdown event | 0/0 | ✅ | [View Details](closing-the-inbox-surfaces-a-clean-shutdown-event/README.md) |
 | drain_inbox batches multiple messages in one wake | 0/0 | ✅ | [View Details](drain-inbox-batches-multiple-messages-in-one-wake/README.md) |
 | removing a secondary token does not detach the inbox | 0/0 | ✅ | [View Details](removing-a-secondary-token-does-not-detach-the-inbox/README.md) |
+| run_until_shutdown calls the shutdown hook on inbox close | 0/0 | ✅ | [View Details](run-until-shutdown-calls-the-shutdown-hook-on-inbox-close/README.md) |
+| run_until_shutdown calls the shutdown hook on handler Break | 0/0 | ✅ | [View Details](run-until-shutdown-calls-the-shutdown-hook-on-handler-break/README.md) |

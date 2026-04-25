@@ -1,4 +1,4 @@
-# ✅ Scenario: an IRQ-registered service wakes from add_irq
+# ✅ Scenario: run_until_shutdown calls the shutdown hook on handler Break
 
 > Last run: 2026-04-25 13:10:40
 
