@@ -26,6 +26,38 @@ impl StepResult {
     }
 }
 
+/// Outcome of a scenario execution.
+///
+/// A scenario is only `Passed` when at least one step ran and no step failed.
+/// A scenario with no steps or only skipped steps is `Pending`, not `Passed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScenarioOutcome {
+    /// At least one step ran (passed) and no step failed.
+    Passed,
+    /// No steps ran, or every step was skipped — the scenario is unimplemented.
+    Pending,
+    /// At least one step failed.
+    Failed,
+}
+
+impl ScenarioOutcome {
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            ScenarioOutcome::Passed => "✅",
+            ScenarioOutcome::Pending => "⏭️",
+            ScenarioOutcome::Failed => "❌",
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            ScenarioOutcome::Passed => "passed",
+            ScenarioOutcome::Pending => "pending",
+            ScenarioOutcome::Failed => "failed",
+        }
+    }
+}
+
 /// Captures details about a single step execution.
 #[derive(Debug, Clone)]
 pub struct StepArtifacts {
@@ -47,7 +79,7 @@ pub struct ScenarioArtifacts {
     pub name: String,
     pub dir: PathBuf,
     pub steps: Vec<StepArtifacts>,
-    pub passed: bool,
+    pub outcome: ScenarioOutcome,
 }
 
 /// Captures details about a feature execution.

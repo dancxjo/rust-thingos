@@ -116,7 +116,7 @@ impl ArtifactCollector {
                 name: name.to_string(),
                 dir,
                 steps: Vec::new(),
-                passed: true,
+                outcome: ScenarioOutcome::Pending,
             });
         }
     }
@@ -127,7 +127,19 @@ impl ArtifactCollector {
 
         let scenario_to_write = if let Some(feature) = self.features.last_mut() {
             if let Some(scenario) = feature.scenarios.last_mut() {
-                scenario.passed = passed;
+                // Compute outcome from step results:
+                // - No steps or all steps skipped → Pending (unimplemented scenario)
+                // - Any step failed (passed == false) → Failed
+                // - At least one step passed and none failed → Passed
+                scenario.outcome = if !passed {
+                    ScenarioOutcome::Failed
+                } else if scenario.steps.is_empty()
+                    || scenario.steps.iter().all(|s| s.result == StepResult::Skipped)
+                {
+                    ScenarioOutcome::Pending
+                } else {
+                    ScenarioOutcome::Passed
+                };
 
                 let log_path = scenario.dir.join("serial.log");
                 if !serial_to_write.is_empty() {
@@ -147,7 +159,7 @@ impl ArtifactCollector {
                 Ok(()) => {
                     let readme_path = scenario.dir.join("README.md");
                     eprintln!("│  │  └─ 📄 Generated: {}", readme_path.display());
-                    if !scenario.passed {
+                    if scenario.outcome == ScenarioOutcome::Failed {
                         crate::artifacts::print_readme_inline(
                             "📄 Scenario Failure Details",
                             &readme_path,
@@ -253,14 +265,28 @@ impl ArtifactCollector {
     }
 
     pub fn count_features(&self) -> (usize, usize) {
-        let passed = self.features.iter().filter(|f| f.scenarios.iter().all(|s| s.passed)).count();
+        let passed = self
+            .features
+            .iter()
+            .filter(|f| {
+                !f.scenarios.is_empty()
+                    && f.scenarios.iter().all(|s| s.outcome == ScenarioOutcome::Passed)
+            })
+            .count();
         (passed, self.features.len() - passed)
     }
 
-    pub(crate) fn count_scenarios(&self) -> (usize, usize) {
+    /// Returns `(passed, pending, failed)` scenario counts.
+    ///
+    /// - `passed`: at least one step ran and no step failed
+    /// - `pending`: no steps ran or every step was skipped (unimplemented)
+    /// - `failed`: at least one step failed
+    pub(crate) fn count_scenarios(&self) -> (usize, usize, usize) {
         let total: Vec<_> = self.features.iter().flat_map(|f| &f.scenarios).collect();
-        let passed = total.iter().filter(|s| s.passed).count();
-        (passed, total.len() - passed)
+        let passed = total.iter().filter(|s| s.outcome == ScenarioOutcome::Passed).count();
+        let pending = total.iter().filter(|s| s.outcome == ScenarioOutcome::Pending).count();
+        let failed = total.iter().filter(|s| s.outcome == ScenarioOutcome::Failed).count();
+        (passed, pending, failed)
     }
 
     pub fn slugify(name: &str) -> String {
@@ -272,5 +298,118 @@ impl ArtifactCollector {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("-")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_collector() -> ArtifactCollector {
+        let mut c = ArtifactCollector::new("test");
+        // Redirect base_dir to /tmp so tests don't pollute the repo
+        c.base_dir = std::path::PathBuf::from("/tmp/bdd-test-artifacts");
+        c
+    }
+
+    /// A scenario with no steps must be reported as Pending, not Passed.
+    #[test]
+    fn empty_scenario_is_pending_not_passed() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+        collector.on_scenario_start("empty scenario");
+        // No steps executed
+        collector.on_scenario_end(true, "");
+
+        let scenario = &collector.features[0].scenarios[0];
+        assert_eq!(
+            scenario.outcome,
+            ScenarioOutcome::Pending,
+            "A scenario with no steps must be Pending, not Passed"
+        );
+    }
+
+    /// A scenario where every step was skipped must be reported as Pending, not Passed.
+    #[test]
+    fn all_skipped_scenario_is_pending_not_passed() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+        collector.on_scenario_start("all-skipped scenario");
+        collector.on_step_start("Given", "something is set up", 0, None);
+        collector.on_step_end(StepResult::Skipped, None, None, None, "");
+        collector.on_step_start("When", "something happens", 0, None);
+        collector.on_step_end(StepResult::Skipped, None, None, None, "");
+        collector.on_scenario_end(true, "");
+
+        let scenario = &collector.features[0].scenarios[0];
+        assert_eq!(
+            scenario.outcome,
+            ScenarioOutcome::Pending,
+            "A scenario with only skipped steps must be Pending, not Passed"
+        );
+    }
+
+    /// A scenario with at least one passing step and no failures is Passed.
+    #[test]
+    fn scenario_with_passed_step_is_passed() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+        collector.on_scenario_start("passing scenario");
+        collector.on_step_start("Given", "a precondition", 0, None);
+        collector.on_step_end(StepResult::Passed, None, None, None, "");
+        collector.on_scenario_end(true, "");
+
+        let scenario = &collector.features[0].scenarios[0];
+        assert_eq!(scenario.outcome, ScenarioOutcome::Passed);
+    }
+
+    /// A scenario with a failed step must be Failed even if some steps passed.
+    #[test]
+    fn scenario_with_failed_step_is_failed() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+        collector.on_scenario_start("failing scenario");
+        collector.on_step_start("Given", "a precondition", 0, None);
+        collector.on_step_end(StepResult::Passed, None, None, None, "");
+        collector.on_step_start("Then", "something fails", 0, None);
+        collector.on_step_end(StepResult::Failed, None, None, None, "");
+        collector.on_scenario_end(false, "");
+
+        let scenario = &collector.features[0].scenarios[0];
+        assert_eq!(scenario.outcome, ScenarioOutcome::Failed);
+    }
+
+    /// count_scenarios must correctly separate passed, pending, and failed.
+    #[test]
+    fn count_scenarios_separates_passed_pending_failed() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+
+        // empty scenario → Pending
+        collector.on_scenario_start("s1 empty");
+        collector.on_scenario_end(true, "");
+
+        // all-skipped scenario → Pending
+        collector.on_scenario_start("s2 all skipped");
+        collector.on_step_start("Given", "x", 0, None);
+        collector.on_step_end(StepResult::Skipped, None, None, None, "");
+        collector.on_scenario_end(true, "");
+
+        // passing scenario → Passed
+        collector.on_scenario_start("s3 passing");
+        collector.on_step_start("Given", "x", 0, None);
+        collector.on_step_end(StepResult::Passed, None, None, None, "");
+        collector.on_scenario_end(true, "");
+
+        // failing scenario → Failed
+        collector.on_scenario_start("s4 failing");
+        collector.on_step_start("Given", "x", 0, None);
+        collector.on_step_end(StepResult::Failed, None, None, None, "");
+        collector.on_scenario_end(false, "");
+
+        let (passed, pending, failed) = collector.count_scenarios();
+        assert_eq!(passed, 1, "expected 1 passed");
+        assert_eq!(pending, 2, "expected 2 pending (empty + all-skipped)");
+        assert_eq!(failed, 1, "expected 1 failed");
     }
 }
