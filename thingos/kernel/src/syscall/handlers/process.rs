@@ -896,17 +896,10 @@ pub fn sys_service_loop_report(
         diag.last_event = last_event;
     }
     diag.last_dispatch_ns = last_dispatch_ns;
-    match state {
-        crate::task::ServiceLoopState::Waiting | crate::task::ServiceLoopState::Dispatching => {
-            diag.wakeups = diag.wakeups.saturating_add(1);
-        }
-        _ => {}
-    }
 
     Ok(0)
 }
-
-
+#[cfg(test)]
 mod tests {
     use abi::errors::Errno;
     use thingos::authority::Authority;

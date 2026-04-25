@@ -201,11 +201,14 @@ impl ServiceLoop {
     /// The name (up to 64 bytes) is reported to the kernel and appears in
     /// `/proc/<pid>/serviceloop/name`.  Calling this is optional; without a
     /// name the file contains `"-"`.
+    ///
+    /// This method only updates the stored name; the new name is included in
+    /// the next `report_state` call that occurs during normal loop operation.
+    /// It does not itself trigger a state transition or a syscall.
     pub fn set_name(&mut self, name: &str) {
         let bytes = name.as_bytes();
         let len = bytes.len().min(64);
         self.name = bytes[..len].to_vec();
-        self.report_state(LoopState::Idle, b"");
     }
 
     /// The token assigned to the inbox readiness source.
