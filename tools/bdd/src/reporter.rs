@@ -69,11 +69,14 @@ where
                 }
 
                 let collector = artifacts::global().lock().await;
-                let (passed, failed) = collector.count_scenarios();
+                let (passed, pending, failed) = collector.count_scenarios();
                 eprintln!("\n══════════════════════════════════════════════════════════════════");
                 eprintln!("                    Test Run Complete");
                 eprintln!("══════════════════════════════════════════════════════════════════");
-                eprintln!("\n📊 Scenarios: {} passed, {} failed", passed, failed);
+                eprintln!(
+                    "\n📊 Scenarios: ✅ {} passed  ⏭️ {} pending/skipped  ❌ {} failed",
+                    passed, pending, failed
+                );
                 eprintln!("📁 Results: {}\n", collector.base_dir.display());
             }
             Cucumber::Feature(feature, feat_event) => {

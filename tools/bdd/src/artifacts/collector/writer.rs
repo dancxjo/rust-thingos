@@ -21,17 +21,30 @@ pub fn generate_arch_readme(collector: &ArtifactCollector) -> std::io::Result<Pa
     writeln!(file, "|---------|-----------|--------|")?;
 
     for feature in &collector.features {
-        let passed_scenarios = feature.scenarios.iter().filter(|s| s.passed).count();
+        let passed_scenarios =
+            feature.scenarios.iter().filter(|s| s.outcome == ScenarioOutcome::Passed).count();
+        let pending_scenarios =
+            feature.scenarios.iter().filter(|s| s.outcome == ScenarioOutcome::Pending).count();
+        let failed_scenarios =
+            feature.scenarios.iter().filter(|s| s.outcome == ScenarioOutcome::Failed).count();
         let total_scenarios = feature.scenarios.len();
 
-        // Feature passes if all scenarios pass AND there's at least one scenario
-        let passed = total_scenarios > 0 && passed_scenarios == total_scenarios;
-        let icon = if passed { "✅" } else { "❌" };
+        let icon = if failed_scenarios > 0 {
+            "❌"
+        } else if passed_scenarios == total_scenarios && total_scenarios > 0 {
+            "✅"
+        } else {
+            "⏭️"
+        };
 
-        let rel_path = ArtifactCollector::slugify(&feature.name); // Using simple slugify for link
+        let rel_path = ArtifactCollector::slugify(&feature.name);
         let link = format!("[{}]({}/README.md)", feature.name, rel_path);
 
-        writeln!(file, "| {} | {}/{} | {} |", link, passed_scenarios, total_scenarios, icon)?;
+        writeln!(
+            file,
+            "| {} | ✅ {} / ⏭️ {} / ❌ {} | {} |",
+            link, passed_scenarios, pending_scenarios, failed_scenarios, icon
+        )?;
     }
 
     Ok(readme_path)
@@ -58,7 +71,7 @@ pub fn write_feature_readme(
     for scenario in &feature.scenarios {
         let passed_steps = scenario.steps.iter().filter(|s| s.result == StepResult::Passed).count();
         let total_steps = scenario.steps.len();
-        let icon = if scenario.passed { "✅" } else { "❌" };
+        let icon = scenario.outcome.emoji();
 
         let rel_path = ArtifactCollector::slugify(&scenario.name);
 
@@ -79,7 +92,7 @@ pub fn write_scenario_readme(
     let readme_path = scenario.dir.join("README.md");
     let mut file = fs::File::create(&readme_path)?;
 
-    let icon = if scenario.passed { "✅" } else { "❌" };
+    let icon = scenario.outcome.emoji();
 
     writeln!(file, "# {} Scenario: {}", icon, scenario.name)?;
     writeln!(file)?;
