@@ -353,14 +353,20 @@ fn main(boot_fd: usize) -> ! {
             backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
-            let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
-            if ctx.version == 1 {
-                let path = ctx.device_path_str();
-                if !path.is_empty() {
-                    let _ = device_claim(path);
-                    // In a real IDE controller we'd read the BARs here if not using legacy ports,
-                    // but for now we stick to defaults if they work.
+            let path_owned = {
+                let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+                if ctx.version == 1 {
+                    let path = ctx.device_path_str();
+                    if !path.is_empty() { Some(path.to_string()) } else { None }
+                } else {
+                    None
                 }
+            };
+            let _ = stem::syscall::vm_unmap(resp.addr, 4096);
+            if let Some(path) = path_owned {
+                let _ = device_claim(&path);
+                // In a real IDE controller we'd read the BARs here if not using legacy ports,
+                // but for now we stick to defaults if they work.
             }
         }
     }

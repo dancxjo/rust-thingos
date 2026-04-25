@@ -283,12 +283,18 @@ fn resolve_device_path(boot_fd: usize) -> String {
             backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
         };
         if let Ok(resp) = stem::syscall::vm_map(&req) {
-            let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
-            if ctx.version == 1 {
-                let s = ctx.device_path_str();
-                if !s.is_empty() {
-                    return s.to_string();
+            let path = {
+                let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+                if ctx.version == 1 {
+                    let s = ctx.device_path_str();
+                    if !s.is_empty() { Some(s.to_string()) } else { None }
+                } else {
+                    None
                 }
+            };
+            let _ = stem::syscall::vm_unmap(resp.addr, 4096);
+            if let Some(p) = path {
+                return p;
             }
         }
     }
