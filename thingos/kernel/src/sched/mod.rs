@@ -72,15 +72,16 @@ pub use blocking::{
     block_current, block_current_erased, init_blocking_hooks, wake_task, wake_task_erased,
 };
 pub use hooks::{
-    ProcessSnapshot, add_user_mapping_current, alloc_user_stack_current,
-    available_parallelism_current, check_user_mapping_current, current_priority_current,
-    current_task_name_current, current_task_resource_id, current_tid_current,
-    current_user_fs_base_current, dump_stats_current, exit_current, get_signal_mask_current,
-    get_thread_pending_current, get_user_mapping_at_current, handle_user_stack_fault_current,
-    interrupt_task_current, kill_by_tid_current, list_process_ids_by_pgid_current,
-    list_processes_current, poll_task_exit_current, process_info_current,
-    process_info_for_pid_current, process_info_for_tid_current, register_task_exit_waiter_current,
-    register_timeout_wake_current, remove_user_mappings_current, set_current_task_name_current,
+    CpuSchedDiag, ProcessSnapshot, SchedDiag, add_user_mapping_current, alloc_user_stack_current,
+    available_parallelism_current, check_user_mapping_current, collect_sched_diag_current,
+    current_priority_current, current_task_name_current, current_task_resource_id,
+    current_tid_current, current_user_fs_base_current, dump_stats_current, exit_current,
+    get_signal_mask_current, get_thread_pending_current, get_user_mapping_at_current,
+    handle_user_stack_fault_current, interrupt_task_current, kill_by_tid_current,
+    list_process_ids_by_pgid_current, list_processes_current, poll_task_exit_current,
+    process_info_current, process_info_for_pid_current, process_info_for_tid_current,
+    register_task_exit_waiter_current, register_timeout_wake_current,
+    remove_user_mappings_current, set_current_task_name_current,
     set_current_user_fs_base_current, set_priority_current, set_signal_mask_current,
     set_thread_pending_current, sleep_ticks_current, spawn_process_current,
     spawn_process_ex_current, spawn_process_from_path_current, spawn_user_thread_current,
@@ -2209,6 +2210,7 @@ pub fn init<R: BootRuntime>() {
             hooks::RUN_SCHEDULER_HOOK = Some(crate::task::run_scheduler::<R>);
             hooks::KILL_BY_TID_HOOK = Some(kill_by_tid::<R>);
             hooks::DUMP_STATS_HOOK = Some(crate::task::dump_stats::<R>);
+            hooks::COLLECT_SCHED_DIAG_HOOK = Some(collect_sched_diag::<R>);
             crate::memory::set_map_user_page_hook(stack::map_user_page::<R>);
             crate::memory::set_map_user_page_perms_hook(stack::map_user_page_perms::<R>);
             crate::memory::set_unmap_user_page_hook(stack::unmap_user_page::<R>);
@@ -5205,6 +5207,54 @@ pub fn dump_stats<R: BootRuntime>() {
     clear_sched_lock_tracking::<R>();
     drop(lock);
     rt.irq_restore(_irq);
+}
+
+/// Collect a [`hooks::SchedDiag`] snapshot without any debug output.
+///
+/// This is the back-end for the type-erased [`hooks::COLLECT_SCHED_DIAG_HOOK`]
+/// and is called by procfs to render `/proc/sched/stat` and
+/// `/proc/sched/cpu<N>`.
+pub fn collect_sched_diag<R: BootRuntime>() -> hooks::SchedDiag {
+    let rt = crate::runtime::<R>();
+    let _irq = rt.irq_disable();
+    let lock = SCHEDULER.lock();
+    let ptr = match lock.as_ref() {
+        Some(&p) => p,
+        None => {
+            rt.irq_restore(_irq);
+            return hooks::SchedDiag::default();
+        }
+    };
+    let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
+
+    let mut per_cpu = alloc::vec::Vec::with_capacity(sched.state.online_cpus.len());
+    for &i in &sched.state.online_cpus {
+        if i >= sched.state.per_cpu.len() {
+            continue;
+        }
+        let pc = &sched.state.per_cpu[i];
+        per_cpu.push(hooks::CpuSchedDiag {
+            cpu_id: i,
+            runnable_count: pc.runq.runnable_count(),
+            context_switches: pc.stats.context_switches,
+            wakeups: pc.stats.wakeups,
+            steals_in: pc.stats.steals_in,
+            steals_out: pc.stats.steals_out,
+            timer_interrupts: pc.stats.timer_interrupts,
+            idle_total_us: pc.stats.idle_total_us,
+            idle_episodes: pc.stats.idle_episodes,
+            dispatch_count: pc.stats.dispatch_count,
+            resched_ipi_received: pc.stats.resched_ipi_received,
+            mailbox_pushes: pc.stats.mailbox_pushes,
+            mailbox_tasks_drained: pc.stats.mailbox_tasks_drained,
+        });
+    }
+
+    let diag = hooks::SchedDiag { online_cpu_count: sched.state.online_cpu_count, per_cpu };
+
+    drop(lock);
+    rt.irq_restore(_irq);
+    diag
 }
 
 extern "C" fn idle_task<R: BootRuntime>(_: usize) -> ! {
