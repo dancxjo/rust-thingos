@@ -9302,6 +9302,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vfs_test_provider"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ipc_helpers",
+ "stem",
+]
+
+[[package]]
 name = "virtio"
 version = "0.1.0"
 dependencies = [
