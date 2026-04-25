@@ -444,6 +444,9 @@ impl Supervisor {
         self.spawn_bloom_if_ready();
         stem::trace!("SPROUT: Loop iteration: run_health_vine");
         run_health_vine(&self.tasks);
+        stem::trace!("SPROUT: Loop iteration: check_serviceloop_watchdog");
+        let pids = crate::watchdog::collect_monitored_pids(&self.tasks);
+        crate::watchdog::check_daemons(&pids, crate::watchdog::DEFAULT_STUCK_DISPATCH_NS);
         stem::trace!("SPROUT: Loop iteration: tick complete");
     }
 

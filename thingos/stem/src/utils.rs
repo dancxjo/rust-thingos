@@ -115,7 +115,38 @@ mod tests {
     }
 }
 
-/// Parse raw argv bytes into a vector of byte slices.
+/// A simple `core::fmt::Write` implementation that writes into a fixed byte
+/// slice.  Bytes beyond the end of the slice are silently dropped.
+///
+/// Used by [`LoopMetricsSnapshot::write_text`] to format diagnostic output
+/// without heap allocation.
+pub struct SliceWriter<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+}
+
+impl<'a> SliceWriter<'a> {
+    /// Create a new `SliceWriter` wrapping `buf`.
+    pub fn new(buf: &'a mut [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    /// Returns the number of bytes written so far.
+    pub fn written(&self) -> usize {
+        self.pos
+    }
+}
+
+impl core::fmt::Write for SliceWriter<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let remaining = self.buf.len().saturating_sub(self.pos);
+        let n = bytes.len().min(remaining);
+        self.buf[self.pos..self.pos + n].copy_from_slice(&bytes[..n]);
+        self.pos += n;
+        Ok(())
+    }
+}
 ///
 /// The format is: `[count: u32 LE] [len0: u32 LE] [arg0...] [len1: u32 LE] [arg1...]`
 pub fn parse_argv(buf: &[u8]) -> alloc::vec::Vec<&[u8]> {

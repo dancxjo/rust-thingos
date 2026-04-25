@@ -56,6 +56,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::ControlFlow;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::wire::KindId;
 
@@ -64,6 +65,127 @@ use crate::syscall::message::{msg_inbox_open_self, msg_recv};
 use crate::syscall::vfs::vfs_close;
 use crate::time::Duration;
 use crate::wait_set::{WaitEvent, WaitSet, WaitToken};
+
+// ─── LoopMetrics ─────────────────────────────────────────────────────────────
+
+/// Sentinel stored in [`LoopMetrics::current_event_kind`] when a
+/// [`ServiceEvent::Ready`] is being dispatched (not a typed message).
+pub const EVENT_KIND_READY: u64 = u64::MAX - 1;
+/// Sentinel stored in [`LoopMetrics::current_event_kind`] when
+/// [`ServiceEvent::InboxClosed`] is being dispatched.
+pub const EVENT_KIND_INBOX_CLOSED: u64 = u64::MAX - 2;
+/// Sentinel stored in [`LoopMetrics::current_event_kind`] when
+/// [`ServiceEvent::Timeout`] is being dispatched.
+pub const EVENT_KIND_TIMEOUT: u64 = u64::MAX - 3;
+/// Sentinel stored in [`LoopMetrics::current_event_kind`] when the loop is
+/// idle (blocked in `waitset.wait()`) or has not yet dispatched any event.
+pub const EVENT_KIND_IDLE: u64 = 0;
+
+/// Lightweight per-loop instrumentation for watchdog and diagnostics.
+///
+/// All fields are monotonic nanosecond timestamps (zero = "never observed") or
+/// a small sentinel integer, updated with `Relaxed` atomic stores so there is
+/// no measurable overhead in the dispatch hot path.
+///
+/// Exposed via [`ServiceLoop::metrics`] and written to
+/// `/proc/self/serviceloop/stats` by [`ServiceLoop::publish_metrics`].
+///
+/// # Detecting stuck daemons
+///
+/// A daemon is stuck in dispatch when:
+/// ```text
+/// current_time - last_dispatch_start_ns > THRESHOLD
+/// AND last_dispatch_end_ns < last_dispatch_start_ns
+/// ```
+/// A daemon has stopped waking when:
+/// ```text
+/// current_time - last_exit_wait_ns > THRESHOLD
+/// AND last_enter_wait_ns >= last_exit_wait_ns
+/// ```
+pub struct LoopMetrics {
+    /// Monotonic nanoseconds when the loop last called `waitset.wait()`
+    /// (i.e., blocked waiting for the next event).  Zero if never observed.
+    pub last_enter_wait_ns: AtomicU64,
+    /// Monotonic nanoseconds when `waitset.wait()` last returned
+    /// (i.e., an event was delivered to the loop).  Zero if never observed.
+    pub last_exit_wait_ns: AtomicU64,
+    /// Monotonic nanoseconds when the loop last began dispatching an event
+    /// to its caller (just before `next_event` returns).  Zero if never.
+    pub last_dispatch_start_ns: AtomicU64,
+    /// Monotonic nanoseconds when the loop last finished dispatching — i.e.,
+    /// when the caller returned control to `next_event` for the next cycle.
+    /// Zero if never observed (no second call to `next_event` yet).
+    pub last_dispatch_end_ns: AtomicU64,
+    /// Identifies the most recently dispatched event.
+    ///
+    /// For [`ServiceEvent::Message`] events this is the high 8 bytes of the
+    /// [`KindId`] (a stable fast-path identifier).
+    /// For other events use the `EVENT_KIND_*` sentinels defined in this
+    /// module.
+    pub current_event_kind: AtomicU64,
+}
+
+impl Default for LoopMetrics {
+    fn default() -> Self {
+        Self {
+            last_enter_wait_ns: AtomicU64::new(0),
+            last_exit_wait_ns: AtomicU64::new(0),
+            last_dispatch_start_ns: AtomicU64::new(0),
+            last_dispatch_end_ns: AtomicU64::new(0),
+            current_event_kind: AtomicU64::new(EVENT_KIND_IDLE),
+        }
+    }
+}
+
+impl LoopMetrics {
+    /// Snapshot all fields with `Relaxed` loads.
+    ///
+    /// The snapshot is not atomically consistent across fields, but is
+    /// sufficient for watchdog heuristics.
+    pub fn snapshot(&self) -> LoopMetricsSnapshot {
+        LoopMetricsSnapshot {
+            last_enter_wait_ns: self.last_enter_wait_ns.load(Ordering::Relaxed),
+            last_exit_wait_ns: self.last_exit_wait_ns.load(Ordering::Relaxed),
+            last_dispatch_start_ns: self.last_dispatch_start_ns.load(Ordering::Relaxed),
+            last_dispatch_end_ns: self.last_dispatch_end_ns.load(Ordering::Relaxed),
+            current_event_kind: self.current_event_kind.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// A non-atomic point-in-time snapshot of [`LoopMetrics`].
+///
+/// Produced by [`LoopMetrics::snapshot`] and suitable for serialisation,
+/// logging, or watchdog comparisons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoopMetricsSnapshot {
+    pub last_enter_wait_ns: u64,
+    pub last_exit_wait_ns: u64,
+    pub last_dispatch_start_ns: u64,
+    pub last_dispatch_end_ns: u64,
+    pub current_event_kind: u64,
+}
+
+impl LoopMetricsSnapshot {
+    /// Serialise the snapshot to the provided `buf` as a newline-terminated
+    /// text record compatible with `/proc/self/serviceloop/stats`.
+    ///
+    /// Returns the number of bytes written, or 0 if `buf` is too small.
+    pub fn write_text(&self, buf: &mut [u8]) -> usize {
+        use core::fmt::Write as _;
+        let mut w = crate::utils::SliceWriter::new(buf);
+        let _ = core::write!(
+            w,
+            "last_enter_wait_ns: {}\nlast_exit_wait_ns: {}\nlast_dispatch_start_ns: {}\nlast_dispatch_end_ns: {}\ncurrent_event_kind: {}\n",
+            self.last_enter_wait_ns,
+            self.last_exit_wait_ns,
+            self.last_dispatch_start_ns,
+            self.last_dispatch_end_ns,
+            self.current_event_kind,
+        );
+        w.written()
+    }
+}
 
 // ─── ServiceEvent ────────────────────────────────────────────────────────────
 
@@ -137,6 +259,8 @@ pub struct ServiceLoop {
     /// `next_event` calls keep returning [`ServiceEvent::InboxClosed`] rather
     /// than busy-spinning.
     inbox_closed: bool,
+    /// Per-loop instrumentation for watchdog and diagnostics.
+    metrics: LoopMetrics,
     // ── Diagnostic state (reported to the kernel via SYS_SERVICE_LOOP_REPORT) ─
     /// Human-readable name for this loop instance (e.g. the service name).
     name: Vec<u8>,
@@ -186,6 +310,7 @@ impl ServiceLoop {
             waitset,
             scratch: vec![0u8; max_payload],
             inbox_closed: false,
+            metrics: LoopMetrics::default(),
             name: Vec::new(),
             state: LoopState::Idle,
             last_event: Vec::new(),
@@ -309,6 +434,49 @@ impl ServiceLoop {
         self.waitset.remove(token)
     }
 
+    // ── instrumentation ──────────────────────────────────────────────────
+
+    /// Borrow the loop's per-instance instrumentation counters.
+    ///
+    /// All fields are `AtomicU64` and updated with `Relaxed` stores in the
+    /// dispatch hot path.  Use [`LoopMetrics::snapshot`] to take a
+    /// non-atomic point-in-time copy for logging or watchdog comparisons.
+    #[inline]
+    pub fn metrics(&self) -> &LoopMetrics {
+        &self.metrics
+    }
+
+    /// Serialise the current metrics snapshot to `buf` and return the byte
+    /// count written, or `Err(Errno::ENOBUFS)` when `buf` is too small to
+    /// hold even a minimal record.
+    ///
+    /// The output is a plain-text key-value block compatible with the
+    /// `/proc/self/serviceloop/stats` write format expected by the kernel.
+    pub fn format_metrics(&self, buf: &mut [u8]) -> Result<usize, Errno> {
+        let n = self.metrics.snapshot().write_text(buf);
+        if n == 0 { Err(Errno::ENOBUFS) } else { Ok(n) }
+    }
+
+    /// Write the current metrics snapshot to `/proc/self/serviceloop/stats`.
+    ///
+    /// This is an explicit, opt-in call that persists the loop's most recent
+    /// instrumentation state into the kernel-side procfs registry so that
+    /// external observers (e.g. Sprout's watchdog) can read it without
+    /// running inside the daemon's task.
+    ///
+    /// The write is a single VFS syscall; avoid calling it in the tight inner
+    /// loop.  A reasonable cadence is once per second or on a significant
+    /// state change.
+    ///
+    /// Errors are silently ignored to keep callers free of defensive
+    /// boilerplate — the metrics are advisory.
+    pub fn publish_metrics(&self) {
+        let mut buf = [0u8; 256];
+        if let Ok(n) = self.format_metrics(&mut buf) {
+            let _ = write_proc_serviceloop_stats(&buf[..n]);
+        }
+    }
+
     // ── core dispatch ────────────────────────────────────────────────────
 
     /// Block until at least one registered source becomes ready, then
@@ -324,16 +492,33 @@ impl ServiceLoop {
     /// `timeout = None` blocks indefinitely.  A finite timeout that elapses
     /// before any source fires returns [`ServiceEvent::Timeout`].
     pub fn next_event(&mut self, timeout: Option<Duration>) -> Result<ServiceEvent<'_>, Errno> {
+        // Mark the end of the previous dispatch cycle (or initialise to 0 on
+        // the very first call).  This timestamp captures how long the caller
+        // spent in their handler.
+        self.metrics.last_dispatch_end_ns.store(crate::time::monotonic_ns(), Ordering::Relaxed);
+        self.metrics.current_event_kind.store(EVENT_KIND_IDLE, Ordering::Relaxed);
+
         // Latched shutdown: keep returning InboxClosed so callers can break
         // their loop on a single match arm without spinning on EOF.
         if self.inbox_closed {
+            self.metrics
+                .last_dispatch_start_ns
+                .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+            self.metrics.current_event_kind.store(EVENT_KIND_INBOX_CLOSED, Ordering::Relaxed);
             return Ok(ServiceEvent::InboxClosed);
         }
 
+        self.metrics.last_enter_wait_ns.store(crate::time::monotonic_ns(), Ordering::Relaxed);
         self.report_state(LoopState::Waiting, b"");
 
         let events = self.waitset.wait(timeout)?;
+        self.metrics.last_exit_wait_ns.store(crate::time::monotonic_ns(), Ordering::Relaxed);
+
         if events.is_empty() {
+            self.metrics
+                .last_dispatch_start_ns
+                .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+            self.metrics.current_event_kind.store(EVENT_KIND_TIMEOUT, Ordering::Relaxed);
             self.timeouts = self.timeouts.saturating_add(1);
             self.report_state(LoopState::Idle, b"timeout");
             return Ok(ServiceEvent::Timeout);
@@ -357,6 +542,10 @@ impl ServiceLoop {
 
         if inbox_hangup {
             self.inbox_closed = true;
+            self.metrics
+                .last_dispatch_start_ns
+                .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+            self.metrics.current_event_kind.store(EVENT_KIND_INBOX_CLOSED, Ordering::Relaxed);
             self.report_state(LoopState::Shutdown, b"inbox_closed");
             return Ok(ServiceEvent::InboxClosed);
         }
@@ -369,6 +558,10 @@ impl ServiceLoop {
         // Pass 2: first secondary ready event in kernel-returned order.
         for ev in events.into_iter() {
             if ev.token() != self.inbox_token {
+                self.metrics
+                    .last_dispatch_start_ns
+                    .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+                self.metrics.current_event_kind.store(EVENT_KIND_READY, Ordering::Relaxed);
                 self.wakeups = self.wakeups.saturating_add(1);
                 self.report_state(LoopState::Dispatching, b"ready");
                 return Ok(ServiceEvent::Ready { token: ev.token(), event: ev });
@@ -378,6 +571,10 @@ impl ServiceLoop {
         // Reachable only if the kernel returned events that were all the
         // inbox token with neither readability nor hangup set — treat as a
         // spurious wake and ask the caller to retry.
+        self.metrics
+            .last_dispatch_start_ns
+            .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+        self.metrics.current_event_kind.store(EVENT_KIND_TIMEOUT, Ordering::Relaxed);
         self.report_state(LoopState::Idle, b"spurious");
         Ok(ServiceEvent::Timeout)
     }
@@ -491,6 +688,14 @@ impl ServiceLoop {
         let mut kind = KindId([0u8; 16]);
         match msg_recv(&mut kind, &mut self.scratch) {
             Ok(n) => {
+                // Record dispatch start and current event kind.
+                self.metrics
+                    .last_dispatch_start_ns
+                    .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+                // Use the high 8 bytes of the KindId as a compact identifier.
+                let kind_hi =
+                    u64::from_le_bytes(kind.0[0..8].try_into().expect("KindId is 16 bytes"));
+                self.metrics.current_event_kind.store(kind_hi, Ordering::Relaxed);
                 let copy_len = n.min(self.scratch.len());
                 self.report_state(LoopState::Dispatching, b"message");
                 Ok(ServiceEvent::Message { kind, payload: &self.scratch[..copy_len] })
@@ -501,6 +706,10 @@ impl ServiceLoop {
                 // as Timeout so the caller's loop spins without crashing,
                 // matching the contract that EAGAIN is not a service-level
                 // error.
+                self.metrics
+                    .last_dispatch_start_ns
+                    .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+                self.metrics.current_event_kind.store(EVENT_KIND_TIMEOUT, Ordering::Relaxed);
                 self.report_state(LoopState::Idle, b"spurious");
                 Ok(ServiceEvent::Timeout)
             }
@@ -543,6 +752,26 @@ impl Drop for ServiceLoop {
     }
 }
 
+// ─── procfs publish helper ───────────────────────────────────────────────────
+
+/// Write a metrics snapshot to `/proc/self/serviceloop/stats`.
+///
+/// The kernel will parse the text and store it in the per-pid service loop
+/// stats registry, making it readable via `/proc/<pid>/serviceloop/`.
+///
+/// Returns `Ok(())` on success and silently swallows any VFS error so
+/// callers (including [`ServiceLoop::publish_metrics`]) can treat publishing
+/// as best-effort.
+fn write_proc_serviceloop_stats(data: &[u8]) -> Result<(), Errno> {
+    let fd = crate::syscall::vfs::vfs_open(
+        "/proc/self/serviceloop/stats",
+        crate::abi::syscall::vfs_flags::O_WRONLY,
+    )?;
+    let _ = crate::syscall::vfs::vfs_write(fd, data);
+    let _ = crate::syscall::vfs::vfs_close(fd);
+    Ok(())
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -575,5 +804,120 @@ mod tests {
     fn service_event_terminal_variants_are_unit() {
         let _ = ServiceEvent::InboxClosed;
         let _ = ServiceEvent::Timeout;
+    }
+
+    // ── LoopMetrics tests ────────────────────────────────────────────────
+
+    /// `LoopMetrics` starts with all fields zero / idle.
+    #[test]
+    fn loop_metrics_default_is_zero() {
+        let m = LoopMetrics::default();
+        assert_eq!(m.last_enter_wait_ns.load(Ordering::Relaxed), 0);
+        assert_eq!(m.last_exit_wait_ns.load(Ordering::Relaxed), 0);
+        assert_eq!(m.last_dispatch_start_ns.load(Ordering::Relaxed), 0);
+        assert_eq!(m.last_dispatch_end_ns.load(Ordering::Relaxed), 0);
+        assert_eq!(m.current_event_kind.load(Ordering::Relaxed), EVENT_KIND_IDLE);
+    }
+
+    /// `LoopMetrics::snapshot` returns all fields as a `LoopMetricsSnapshot`.
+    #[test]
+    fn loop_metrics_snapshot_round_trips() {
+        let m = LoopMetrics::default();
+        m.last_enter_wait_ns.store(100, Ordering::Relaxed);
+        m.last_exit_wait_ns.store(200, Ordering::Relaxed);
+        m.last_dispatch_start_ns.store(250, Ordering::Relaxed);
+        m.last_dispatch_end_ns.store(300, Ordering::Relaxed);
+        m.current_event_kind.store(EVENT_KIND_READY, Ordering::Relaxed);
+
+        let s = m.snapshot();
+        assert_eq!(s.last_enter_wait_ns, 100);
+        assert_eq!(s.last_exit_wait_ns, 200);
+        assert_eq!(s.last_dispatch_start_ns, 250);
+        assert_eq!(s.last_dispatch_end_ns, 300);
+        assert_eq!(s.current_event_kind, EVENT_KIND_READY);
+    }
+
+    /// `LoopMetricsSnapshot::write_text` produces a parseable key-value block.
+    #[test]
+    fn loop_metrics_snapshot_write_text_format() {
+        let s = LoopMetricsSnapshot {
+            last_enter_wait_ns: 1000,
+            last_exit_wait_ns: 2000,
+            last_dispatch_start_ns: 2500,
+            last_dispatch_end_ns: 3000,
+            current_event_kind: EVENT_KIND_IDLE,
+        };
+        let mut buf = [0u8; 256];
+        let n = s.write_text(&mut buf);
+        assert!(n > 0, "write_text should produce output");
+        let text = core::str::from_utf8(&buf[..n]).expect("output must be valid UTF-8");
+        assert!(text.contains("last_enter_wait_ns: 1000"), "missing last_enter_wait_ns");
+        assert!(text.contains("last_exit_wait_ns: 2000"), "missing last_exit_wait_ns");
+        assert!(text.contains("last_dispatch_start_ns: 2500"), "missing last_dispatch_start_ns");
+        assert!(text.contains("last_dispatch_end_ns: 3000"), "missing last_dispatch_end_ns");
+        assert!(text.contains("current_event_kind: 0"), "missing current_event_kind");
+    }
+
+    /// `write_text` returns 0 when the buffer is too small (empty).
+    #[test]
+    fn loop_metrics_snapshot_write_text_empty_buf() {
+        let s = LoopMetricsSnapshot {
+            last_enter_wait_ns: 1,
+            last_exit_wait_ns: 2,
+            last_dispatch_start_ns: 3,
+            last_dispatch_end_ns: 4,
+            current_event_kind: 5,
+        };
+        let mut buf = [];
+        let n = s.write_text(&mut buf);
+        // write_text writes 0 bytes for an empty buf (no panic).
+        assert_eq!(n, 0);
+    }
+
+    /// Watchdog detection: a daemon with `last_dispatch_start_ns >
+    /// last_dispatch_end_ns` is currently in dispatch.
+    #[test]
+    fn watchdog_dispatch_stuck_detection() {
+        let m = LoopMetrics::default();
+        m.last_dispatch_start_ns.store(5000, Ordering::Relaxed);
+        // last_dispatch_end_ns stays at 0 (< start) — stuck in dispatch
+        let s = m.snapshot();
+        let in_dispatch =
+            s.last_dispatch_start_ns > 0 && s.last_dispatch_end_ns < s.last_dispatch_start_ns;
+        assert!(in_dispatch, "should be detected as stuck in dispatch");
+
+        // After dispatch ends, end >= start
+        m.last_dispatch_end_ns.store(6000, Ordering::Relaxed);
+        let s2 = m.snapshot();
+        let still_stuck =
+            s2.last_dispatch_start_ns > 0 && s2.last_dispatch_end_ns < s2.last_dispatch_start_ns;
+        assert!(!still_stuck, "should no longer be stuck after end >= start");
+    }
+
+    /// Watchdog detection: a daemon with no wakeups (`last_exit_wait_ns == 0`
+    /// or very old) over a long interval should be flagged.
+    #[test]
+    fn watchdog_no_wakeup_detection() {
+        let m = LoopMetrics::default();
+        // last_exit_wait_ns = 0 means never woken
+        let s = m.snapshot();
+        let never_woken = s.last_exit_wait_ns == 0;
+        assert!(never_woken, "default metrics should indicate no wakeups yet");
+    }
+
+    /// `EVENT_KIND_*` sentinels are distinct and non-overlapping with plausible
+    /// KindId high-byte values.
+    #[test]
+    fn event_kind_sentinels_are_distinct() {
+        assert_ne!(EVENT_KIND_IDLE, EVENT_KIND_READY);
+        assert_ne!(EVENT_KIND_IDLE, EVENT_KIND_INBOX_CLOSED);
+        assert_ne!(EVENT_KIND_IDLE, EVENT_KIND_TIMEOUT);
+        assert_ne!(EVENT_KIND_READY, EVENT_KIND_INBOX_CLOSED);
+        assert_ne!(EVENT_KIND_READY, EVENT_KIND_TIMEOUT);
+        assert_ne!(EVENT_KIND_INBOX_CLOSED, EVENT_KIND_TIMEOUT);
+        // Sentinels must not collide with common KindId high-bytes (all-zeros,
+        // all-ones minus the three reserved values are reserved).
+        assert_eq!(EVENT_KIND_IDLE, 0);
+        assert!(EVENT_KIND_READY > u64::MAX / 2, "sentinels live in high range");
     }
 }

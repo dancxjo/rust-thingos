@@ -12,6 +12,7 @@ mod pipelines;
 mod registry;
 mod supervisor;
 mod task;
+pub mod watchdog;
 
 #[stem::main]
 fn main(arg0: usize) -> ! {
