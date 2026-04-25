@@ -289,19 +289,38 @@ impl<R: BootRuntime> Scheduler<R> {
         } else {
             crate::task::registry::get_registry::<R>().insert(boxed_task);
         }
-        self.state.enqueue_task(safe_cpu, priority as usize, id);
+
+        let current_cpu = super::current_cpu_index::<R>();
+        if safe_cpu == current_cpu {
+            // Local CPU: enqueue directly into the local run queue.
+            self.state.enqueue_task(safe_cpu, priority as usize, id);
+        } else {
+            // Remote CPU: route through the wake mailbox so the owning CPU
+            // enqueues the task itself at its next scheduling point.
+            let now_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+            let wake_mono = crate::runtime::<R>().mono_ticks();
+            super::enqueue_remote_wake_mailbox(
+                safe_cpu,
+                super::types::RemoteWakeMailboxEntry {
+                    tid: id,
+                    priority: priority as usize,
+                    enqueued_at_tick: now_tick,
+                    wake_mono,
+                },
+            );
+        }
 
         // Under the scheduler lock we only mark the target CPU dirty.
         // The caller sends the IPI after unlocking so the target CPU's
         // resched handler can take the lock immediately.
-        if safe_cpu == super::current_cpu_index::<R>() {
+        if safe_cpu == current_cpu {
             self.state.per_cpu[safe_cpu].need_resched = true;
         }
         // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
         // handled post-lock by nudge_spawned_task to avoid sending IPIs while
         // holding the scheduler lock (which delays the target CPU's handler).
 
-        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
+        let _parent_tid = self.state.per_cpu[current_cpu].current;
 
         id
     }
@@ -415,16 +434,32 @@ impl<R: BootRuntime> Scheduler<R> {
         } else {
             crate::task::registry::get_registry::<R>().insert(boxed_task);
         }
-        self.state.enqueue_task(safe_cpu, priority as usize, id);
+
+        let current_cpu = super::current_cpu_index::<R>();
+        if safe_cpu == current_cpu {
+            self.state.enqueue_task(safe_cpu, priority as usize, id);
+        } else {
+            let now_tick = super::TICK_COUNT.load(Ordering::Relaxed);
+            let wake_mono = crate::runtime::<R>().mono_ticks();
+            super::enqueue_remote_wake_mailbox(
+                safe_cpu,
+                super::types::RemoteWakeMailboxEntry {
+                    tid: id,
+                    priority: priority as usize,
+                    enqueued_at_tick: now_tick,
+                    wake_mono,
+                },
+            );
+        }
 
         // Under the scheduler lock we only mark the target CPU dirty.
-        if safe_cpu == super::current_cpu_index::<R>() {
+        if safe_cpu == current_cpu {
             self.state.per_cpu[safe_cpu].need_resched = true;
         }
         // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
         // handled post-lock by nudge_spawned_task.
 
-        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
+        let _parent_tid = self.state.per_cpu[current_cpu].current;
 
         id
     }
@@ -509,15 +544,31 @@ impl<R: BootRuntime> Scheduler<R> {
         } else {
             crate::task::registry::get_registry::<R>().insert(boxed_task);
         }
-        self.state.enqueue_task(safe_cpu, priority as usize, id);
 
-        if safe_cpu == super::current_cpu_index::<R>() {
+        let current_cpu = super::current_cpu_index::<R>();
+        if safe_cpu == current_cpu {
+            self.state.enqueue_task(safe_cpu, priority as usize, id);
+        } else {
+            let now_tick = super::TICK_COUNT.load(Ordering::Relaxed);
+            let wake_mono = crate::runtime::<R>().mono_ticks();
+            super::enqueue_remote_wake_mailbox(
+                safe_cpu,
+                super::types::RemoteWakeMailboxEntry {
+                    tid: id,
+                    priority: priority as usize,
+                    enqueued_at_tick: now_tick,
+                    wake_mono,
+                },
+            );
+        }
+
+        if safe_cpu == current_cpu {
             self.state.per_cpu[safe_cpu].need_resched = true;
         }
         // GLOBAL_NEED_RESCHED and the actual IPI send for remote CPUs are
         // handled post-lock by nudge_spawned_task.
 
-        let _parent_tid = self.state.per_cpu[super::current_cpu_index::<R>()].current;
+        let _parent_tid = self.state.per_cpu[current_cpu].current;
         // Link affinity and initial location
         let _ = affinity; // affinity is captured in the task; no additional bookkeeping needed
         // Initial location matches target runq

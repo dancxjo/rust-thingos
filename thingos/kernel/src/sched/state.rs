@@ -1053,6 +1053,19 @@ impl SchedState {
         self.last_enqueue_cause.insert(tid, EnqueueCause::Spawn);
     }
 
+    /// Enqueue `tid` at priority `prio` on CPU `cpu`'s run queue.
+    ///
+    /// # Ownership contract
+    ///
+    /// **This function must only be called by the CPU that owns the run queue
+    /// (i.e. `cpu == current_cpu_index()`).** All other callers must instead
+    /// push a [`WakeMailboxEntry`] via the per-CPU [`WakeMailbox`] so that the
+    /// owning CPU performs the enqueue at its next scheduling point.
+    ///
+    /// Violating this rule takes `PER_CPU_RUNQ_LOCKS[cpu]` from a foreign CPU,
+    /// which defeats the per-CPU ownership invariant even though the global
+    /// `SCHEDULER` lock prevents data races today.  Higher-level paths enforce
+    /// this via [`debug_assert_runq_cpu_is_local`].
     pub fn enqueue_thread(&mut self, cpu: usize, prio: usize, tid: ThreadId) {
         if !self.validate_runq_cpu(cpu, "enqueue_thread") {
             return;
