@@ -22,6 +22,9 @@ pub fn sys_wait_many(
     results_cap: usize,
     timeout_ns: u64,
 ) -> SysResult<usize> {
+    let tid = unsafe { crate::sched::current_tid_current() };
+    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ESRCH)?;
+
     if spec_count == 0 || spec_count > wait::WAIT_MANY_MAX_ITEMS {
         return Err(Errno::EINVAL);
     }
@@ -29,128 +32,76 @@ pub fn sys_wait_many(
         return Err(Errno::EINVAL);
     }
 
-    validate_user_range(specs_ptr, spec_count * size_of::<WaitSpec>(), false)?;
-    validate_user_range(results_ptr, results_cap * size_of::<WaitResult>(), true)?;
-
-    let mut specs = [WaitSpec::default(); wait::WAIT_MANY_MAX_ITEMS];
+    let mut specs_buf = [WaitSpec::default(); wait::WAIT_MANY_MAX_ITEMS];
     unsafe {
         let dst = core::slice::from_raw_parts_mut(
-            specs.as_mut_ptr() as *mut u8,
+            specs_buf.as_mut_ptr() as *mut u8,
             spec_count * size_of::<WaitSpec>(),
         );
         super::copyin(dst, specs_ptr)?;
     }
-    let specs = &specs[..spec_count];
+    let specs = &specs_buf[..spec_count];
 
-    for spec in specs {
-        if WaitKind::from_u32(spec.kind).is_none() {
-            return Err(Errno::EINVAL);
-        }
-    }
+    let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
+    let results_cap = results_cap.min(wait::WAIT_MANY_MAX_ITEMS);
 
-    let tid = unsafe { crate::sched::current_tid_current() };
     let timeout_tick = if timeout_ns == u64::MAX {
         None
     } else {
-        let ticks = crate::time::duration_to_sleep_ticks(timeout_ns);
-        Some(crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) + ticks)
+        Some(crate::time::monotonic_now_ns().saturating_add(timeout_ns))
     };
 
-    let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+    let regs = {
+        let lock = pinfo_arc.lock();
+        register_all(&lock, specs, tid)?
+    };
+
+    let mut ready = 0;
     loop {
-        let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
-        let ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
-        if ready > 0 {
-            unsafe {
-                let src = core::slice::from_raw_parts(
-                    results.as_ptr() as *const u8,
-                    ready * size_of::<WaitResult>(),
-                );
-                super::copyout(results_ptr, src)?;
-            }
-            crate::kdebug!("sys_wait_many: returning {} results", ready);
-            return Ok(ready);
-        }
-
-        if timeout_expired(timeout_tick) {
-            let result = WaitResult {
-                kind: WaitKind::Timeout as u32,
-                flags: wait::ready::TIMEOUT,
-                object: 0,
-                token: 0,
-                value: 0,
-                reserved: 0,
-            };
-            unsafe {
-                let src = core::slice::from_raw_parts(
-                    &result as *const _ as *const u8,
-                    size_of::<WaitResult>(),
-                );
-                super::copyout(results_ptr, src)?;
-            }
-            return Ok(1);
-        }
-
-        crate::kdebug!("sys_wait_many: tid={} specs_ptr={:x} count={} timeout={} ticks", tid, specs_ptr, spec_count, timeout_tick.unwrap_or(0));
-        for (i, spec) in specs.iter().enumerate() {
-            crate::ktrace!("  spec[{}]: kind={} object={:x} flags={:x} token={:x}", i, spec.kind, spec.object, spec.flags, spec.token);
-        }
-
-        let regs = {
-            let lock = pinfo_arc.lock();
-            register_all(&lock, specs, tid)?
-        };
-        if let Some(deadline) = timeout_tick {
-            crate::sched::register_timeout_wake_current(tid, deadline);
-        }
-
-        let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
-        let ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
+        ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
         if ready > 0 || timeout_expired(timeout_tick) {
-            cleanup_all(&regs, tid, timeout_tick)?;
-            let count = if ready > 0 {
-                ready
-            } else {
-                results[0] = WaitResult {
-                    kind: WaitKind::Timeout as u32,
-                    flags: wait::ready::TIMEOUT,
-                    object: 0,
-                    token: 0,
-                    value: 0,
-                    reserved: 0,
-                };
-                1
-            };
-            unsafe {
-                let src = core::slice::from_raw_parts(
-                    results.as_ptr() as *const u8,
-                    count * size_of::<WaitResult>(),
-                );
-                super::copyout(results_ptr, src)?;
-            }
-            return Ok(count);
+            break;
         }
-
-        crate::kdebug!("sys_wait_many: blocking...");
-        unsafe {
-            crate::sched::block_current_erased();
-        }
-        crate::kdebug!("sys_wait_many: unblocked");
 
         if crate::sched::take_pending_interrupt_current() {
             cleanup_all(&regs, tid, timeout_tick)?;
             return Err(Errno::EINTR);
         }
 
-        cleanup_all(&regs, tid, timeout_tick)?;
+        unsafe {
+            crate::sched::block_current_erased();
+        }
     }
+
+    cleanup_all(&regs, tid, timeout_tick)?;
+
+    let count = if ready > 0 {
+        ready
+    } else {
+        results[0] = WaitResult {
+            kind: WaitKind::Timeout as u32,
+            flags: wait::ready::TIMEOUT,
+            object: 0,
+            token: 0,
+            value: 0,
+            reserved: 0,
+        };
+        1
+    };
+
+    unsafe {
+        let src = core::slice::from_raw_parts(
+            results.as_ptr() as *const u8,
+            count * size_of::<WaitResult>(),
+        );
+        super::copyout(results_ptr, src)?;
+    }
+    Ok(count)
 }
 
 fn timeout_expired(timeout_tick: Option<u64>) -> bool {
     match timeout_tick {
-        Some(deadline) => {
-            crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed) >= deadline
-        }
+        Some(deadline) => crate::time::monotonic_now_ns() >= deadline,
         None => false,
     }
 }

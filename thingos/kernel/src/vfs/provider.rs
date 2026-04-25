@@ -138,7 +138,7 @@ impl ProviderRpc {
 
     /// Perform a multiplexed, concurrent round-trip RPC with the provider.
     pub fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<Vec<u8>> {
-        crate::ktrace!("VFS_RPC: request op={:?} len={}", op, payload.len());
+        crate::kdebug!("VFS_RPC: request op={:?} len={}", op, payload.len());
         let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
         let tid = unsafe { crate::sched::current_tid_current() };
 
@@ -158,6 +158,7 @@ impl ProviderRpc {
         {
             let mut state = self.state.lock();
             let wq = Arc::new(WaitQueue::new());
+            wq.push_back(tid);
             state.waiters.insert(req_id, wq.clone());
             state.ops.insert(req_id, op);
         };
@@ -174,8 +175,10 @@ impl ProviderRpc {
 
                     let status = resp[0];
                     if status != 0 {
+                        crate::kdebug!("VFS_RPC: response op={:?} id={} -> ERR({})", op, req_id, status);
                         return Err(errno_from_u8(status));
                     }
+                    crate::kdebug!("VFS_RPC: response op={:?} id={} -> OK({})", op, req_id, resp.len() - 1);
                     return Ok(resp[1..].to_vec());
                 }
 
@@ -241,6 +244,9 @@ impl ProviderRpc {
             }
 
             self.resp.add_waiter(tid);
+            if let Some(wq) = self.state.lock().waiters.get(&req_id) {
+                wq.push_back(tid);
+            }
             crate::sched::register_timeout_wake_current(tid, deadline_ns);
             unsafe {
                 crate::sched::block_current_erased();

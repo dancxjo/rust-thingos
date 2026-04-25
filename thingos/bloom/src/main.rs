@@ -46,6 +46,7 @@ fn main(_arg: usize) -> ! {
     // ── Connect to the display ────────────────────────────────────────────────
     let mut display_opt = None;
     for i in 0..50 {
+        stem::info!("bloom: connect try {}...", i);
         display_opt = DisplayBackend::connect("/dev/display/card0");
         if display_opt.is_some() {
             stem::info!("bloom: connected to /dev/display/card0 on try {}", i);

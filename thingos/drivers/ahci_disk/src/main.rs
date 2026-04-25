@@ -256,11 +256,16 @@ impl StorageProvider {
                 let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
                 let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
                 let sector_size = self.device.sector_size();
-                let lba = offset / sector_size;
-                let count = (len as u64 + sector_size - 1) / sector_size;
+                let start_lba = offset / sector_size;
+                let end_lba = if len > 0 {
+                    (offset + len as u64 - 1) / sector_size
+                } else {
+                    start_lba.saturating_sub(1)
+                };
+                let count = if len > 0 { end_lba - start_lba + 1 } else { 0 };
                 let mut bounce = Vec::with_capacity((count * sector_size) as usize);
-                 bounce.resize((count * sector_size) as usize, 0);
-                match self.device.read_sectors(lba, count, &mut bounce) {
+                bounce.resize((count * sector_size) as usize, 0);
+                match self.device.read_sectors(start_lba, count, &mut bounce) {
                     Ok(_) => {
                         let inner_off = (offset % sector_size) as usize;
                         ProviderResponse::ok_bytes(&bounce[inner_off..inner_off + len])
