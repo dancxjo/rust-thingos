@@ -3839,6 +3839,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             let current_cpu = current_cpu_index::<R>();
             if cpu == current_cpu {
                 self.state.enqueue_task(cpu, priority as usize, id);
+                // The priority changed; ask the local CPU to reschedule so it
+                // can pick up the re-enqueued task at the new priority.
+                self.state.per_cpu[cpu].need_resched = true;
             } else {
                 let now_tick = TICK_COUNT.load(Ordering::Relaxed);
                 let wake_mono = crate::runtime::<R>().mono_ticks();

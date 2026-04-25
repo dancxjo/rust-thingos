@@ -291,14 +291,14 @@ impl<R: BootRuntime> Scheduler<R> {
         }
 
         let current_cpu = super::current_cpu_index::<R>();
+        let now_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        let wake_mono = crate::runtime::<R>().mono_ticks();
         if safe_cpu == current_cpu {
             // Local CPU: enqueue directly into the local run queue.
             self.state.enqueue_task(safe_cpu, priority as usize, id);
         } else {
             // Remote CPU: route through the wake mailbox so the owning CPU
             // enqueues the task itself at its next scheduling point.
-            let now_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
-            let wake_mono = crate::runtime::<R>().mono_ticks();
             super::enqueue_remote_wake_mailbox(
                 safe_cpu,
                 super::types::RemoteWakeMailboxEntry {
@@ -436,11 +436,11 @@ impl<R: BootRuntime> Scheduler<R> {
         }
 
         let current_cpu = super::current_cpu_index::<R>();
+        let now_tick = super::TICK_COUNT.load(Ordering::Relaxed);
+        let wake_mono = crate::runtime::<R>().mono_ticks();
         if safe_cpu == current_cpu {
             self.state.enqueue_task(safe_cpu, priority as usize, id);
         } else {
-            let now_tick = super::TICK_COUNT.load(Ordering::Relaxed);
-            let wake_mono = crate::runtime::<R>().mono_ticks();
             super::enqueue_remote_wake_mailbox(
                 safe_cpu,
                 super::types::RemoteWakeMailboxEntry {
@@ -546,11 +546,11 @@ impl<R: BootRuntime> Scheduler<R> {
         }
 
         let current_cpu = super::current_cpu_index::<R>();
+        let now_tick = super::TICK_COUNT.load(Ordering::Relaxed);
+        let wake_mono = crate::runtime::<R>().mono_ticks();
         if safe_cpu == current_cpu {
             self.state.enqueue_task(safe_cpu, priority as usize, id);
         } else {
-            let now_tick = super::TICK_COUNT.load(Ordering::Relaxed);
-            let wake_mono = crate::runtime::<R>().mono_ticks();
             super::enqueue_remote_wake_mailbox(
                 safe_cpu,
                 super::types::RemoteWakeMailboxEntry {
