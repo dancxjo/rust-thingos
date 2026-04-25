@@ -138,6 +138,7 @@ impl ProviderRpc {
 
     /// Perform a multiplexed, concurrent round-trip RPC with the provider.
     pub fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<Vec<u8>> {
+        crate::ktrace!("VFS_RPC: request op={:?} len={}", op, payload.len());
         let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
         let tid = unsafe { crate::sched::current_tid_current() };
 
@@ -622,17 +623,15 @@ impl VfsNode for ProviderNode {
     }
 
     fn poll(&self) -> u16 {
-        // North Star: VFS poll() must never block. However, ProviderNode is a
-        // synchronous bridge to a userspace driver.
+        // North Star: VFS poll() must never block. Provider RPCs are synchronous
+        // and may block for seconds, which deadlocks the kernel if poll() is
+        // called while holding the ProcessInfo spinlock.
         //
-        // Now that sys_wait_many has been refactored to release the ProcessInfo
-        // lock before calling poll(), it is safe for us to perform this RPC.
-        let mut payload = [0u8; 8];
-        payload.copy_from_slice(&self.handle.to_le_bytes());
-        match self.rpc.rpc(VfsRpcOp::Poll, &payload) {
-            Ok(resp) if resp.len() >= 2 => u16::from_le_bytes([resp[0], resp[1]]),
-            _ => 0,
-        }
+        // Even though sys_wait_many now releases the lock, blocking in poll()
+        // still makes wait_many essentially synchronous (stalling on one
+        // provider). We return "always ready" and let the subsequent read/write
+        // block safely.
+        abi::syscall::poll_flags::POLLIN | abi::syscall::poll_flags::POLLOUT
     }
 
     fn add_waiter(&self, tid: u64) {
