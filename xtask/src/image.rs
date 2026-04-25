@@ -153,6 +153,12 @@ pub fn default_programs() -> Vec<ProgramConfig> {
             features: vec![],
         },
         ProgramConfig {
+            name: "vfs_test_provider",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
+        ProgramConfig {
             name: "ipc_memfd_demo",
             is_init: false,
             boot_module: true,
