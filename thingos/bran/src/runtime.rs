@@ -13,6 +13,14 @@ pub trait ArchRuntime {
 
     fn init(&self, hhdm_offset: u64);
     fn putchar(&self, c: u8);
+    /// Write multiple bytes atomically to the serial port.
+    /// Default falls back to per-byte `putchar`; architectures should override
+    /// this to hold the serial TX lock for the entire buffer.
+    fn putbuf(&self, buf: &[u8]) {
+        for &b in buf {
+            self.putchar(b);
+        }
+    }
     /// Non-blocking serial read. Returns `Some(byte)` if data is available.
     fn getchar(&self) -> Option<u8> {
         None
@@ -361,6 +369,9 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     }
     fn serial_putchar_sync(&self, c: u8) {
         self.arch.putchar(c);
+    }
+    fn serial_putbuf_sync(&self, buf: &[u8]) {
+        self.arch.putbuf(buf);
     }
     fn fb_putchar(&self, c: u8) {
         crate::console::put_char(c);

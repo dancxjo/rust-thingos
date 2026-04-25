@@ -258,6 +258,24 @@ impl X86_64Runtime {
         }
     }
 
+    /// Write one byte to COM1, assuming `serial_tx_lock` is already held.
+    /// Busy-waits for the Transmitter Holding Register to be empty.
+    #[inline]
+    fn serial_write_byte_unlocked(c: u8) {
+        unsafe {
+            let port = 0x3f8u16;
+            loop {
+                let lsr: u8;
+                core::arch::asm!("in al, dx", out("al") lsr, in("dx") port + 5, options(nostack, preserves_flags));
+                if (lsr & 0x20) != 0 {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            core::arch::asm!("out dx, al", in("dx") port, in("al") c);
+        }
+    }
+
     /// TSC-based microsecond delay for SMP bring-up timing
     fn delay_us(&self, us: u64) {
         let ticks_to_wait = self.ticks_for_us(us);
@@ -417,18 +435,20 @@ impl ArchRuntime for X86_64Runtime {
         let state = self.irq_disable();
         {
             let _lock = self.serial_tx_lock.lock();
-            unsafe {
-                let port = 0x3f8u16;
-                // Wait for Transmitter Holding Register Empty (THRE)
-                loop {
-                    let lsr: u8;
-                    core::arch::asm!("in al, dx", out("al") lsr, in("dx") port + 5, options(nostack, preserves_flags));
-                    if (lsr & 0x20) != 0 {
-                        break;
-                    }
-                    core::hint::spin_loop();
-                }
-                core::arch::asm!("out dx, al", in("dx") port, in("al") c);
+            Self::serial_write_byte_unlocked(c);
+        }
+        self.irq_restore(state);
+    }
+
+    fn putbuf(&self, buf: &[u8]) {
+        if buf.is_empty() {
+            return;
+        }
+        let state = self.irq_disable();
+        {
+            let _lock = self.serial_tx_lock.lock();
+            for &c in buf {
+                Self::serial_write_byte_unlocked(c);
             }
         }
         self.irq_restore(state);

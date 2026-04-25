@@ -877,10 +877,8 @@ pub fn serial_flush_deferred() {
         return;
     }
 
-    // Drain directly to serial hardware
-    for &b in &local[..n] {
-        crate::RUNTIME.serial_putchar_sync(b);
-    }
+    // Drain directly to serial hardware — batch write to avoid interleaving
+    crate::RUNTIME.serial_putbuf_sync(&local[..n]);
 }
 
 pub fn serial_flush_deferred_idle() {
@@ -905,9 +903,8 @@ pub fn serial_flush_deferred_idle() {
         return;
     }
 
-    for &b in &local[..n] {
-        crate::RUNTIME.serial_putchar_sync(b);
-    }
+    // Batch write to avoid interleaving between CPUs
+    crate::RUNTIME.serial_putbuf_sync(&local[..n]);
 }
 
 pub fn serial_flush_sync() {
@@ -917,9 +914,7 @@ pub fn serial_flush_sync() {
         if n == 0 {
             break;
         }
-        for &b in &local[..n] {
-            crate::RUNTIME.serial_putchar_sync(b);
-        }
+        crate::RUNTIME.serial_putbuf_sync(&local[..n]);
     }
 }
 
