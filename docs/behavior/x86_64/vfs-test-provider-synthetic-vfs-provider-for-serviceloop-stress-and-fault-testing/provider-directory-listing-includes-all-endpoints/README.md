@@ -1,6 +1,6 @@
-# ✅ Scenario: provider directory listing includes all endpoints
+# ⏭️ Scenario: provider directory listing includes all endpoints
 
-> Last run: 2026-04-25 13:10:40
+> Last run: 2026-04-25 20:10:26
 
 ## Steps
 

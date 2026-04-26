@@ -50,11 +50,11 @@ unsafe impl GlobalAlloc for TracingAllocator {
             // we guarantee that any leftover block is at least 32 bytes long
             // (which is > maximum alignment padding + Hole size), preventing it from
             // creating < 24 byte holes that corrupt the free list.
-            let align = orig_align.max(8);
-            let mut size = orig_size.max(32);
-            if size % 32 != 0 {
-                size = size + (32 - (size % 32));
-            }
+            //
+            // Layout::from_size_align also requires that size is a multiple of align.
+            let align = orig_align.max(32);
+            let mask = align - 1;
+            let size = (orig_size + mask) & !mask;
 
             let safe_layout = Layout::from_size_align_unchecked(size, align);
 
@@ -84,11 +84,9 @@ unsafe impl GlobalAlloc for TracingAllocator {
             let orig_size = layout.size();
             let orig_align = layout.align();
 
-            let align = orig_align.max(8);
-            let mut size = orig_size.max(32);
-            if size % 32 != 0 {
-                size = size + (32 - (size % 32));
-            }
+            let align = orig_align.max(32);
+            let mask = align - 1;
+            let size = (orig_size + mask) & !mask;
 
             let safe_layout = Layout::from_size_align_unchecked(size, align);
 
