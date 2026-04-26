@@ -179,7 +179,17 @@ pub fn block_current<R: BootRuntime>() {
             rt.irq_restore(_irq);
             return;
         };
+        // Update CPU_CURRENT_TASK *before* the switch to prevent cross-CPU
+        // deadlocks from stale entries (see try_resched_if_needed comment).
+        let cpu_idx = super::current_cpu_index::<R>();
+        crate::sched::set_cpu_current_task(cpu_idx, switch.to_tid);
+
+        let mut _spins = 0u32;
         while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+            _spins += 1;
+            if _spins > 10_000 {
+                break;
+            }
             core::hint::spin_loop();
         }
 
@@ -197,6 +207,7 @@ pub fn block_current<R: BootRuntime>() {
             );
         }
 
+        // Post-switch: resumed task updates tracking for its current CPU.
         crate::sched::set_cpu_current_task(
             crate::runtime::<R>().current_cpu_index(),
             crate::runtime::<R>().current_tid(),

@@ -290,6 +290,10 @@ pub fn task_exec_current<R: BootRuntime>(
     // guards from this stack.
     crate::sched::clear_sched_lock_tracking::<R>();
 
+    // Pre-switch: update CPU_CURRENT_TASK so no stale entry lingers.
+    let exec_cpu = crate::sched::current_cpu_index::<R>();
+    crate::sched::set_cpu_current_task(exec_cpu, tid);
+
     let mut dummy_ctx = Default::default();
     // Discard the outgoing FS_BASE; switch in with the new image's TLS pointer.
     let mut _discard_tls: u64 = 0;

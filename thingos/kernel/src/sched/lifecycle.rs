@@ -637,16 +637,21 @@ pub fn exit<R: BootRuntime>(code: i32) {
         )
     });
 
+    // Pre-switch: update CPU_CURRENT_TASK to prevent cross-CPU deadlock.
+    let exit_cpu = current_cpu_index::<R>();
+    crate::sched::set_cpu_current_task(exit_cpu, switch.to_tid);
+
+    let mut _spins = 0u32;
     while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+        _spins += 1;
+        if _spins > 10_000 {
+            break;
+        }
         core::hint::spin_loop();
     }
 
     if switch.to_aspace != switch.from_aspace {
         rt.tasking().activate_address_space(switch.to_aspace);
-    }
-
-    while crate::sched::is_task_on_any_cpu(switch.to_tid) {
-        core::hint::spin_loop();
     }
 
     unsafe {

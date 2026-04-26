@@ -976,7 +976,9 @@ pub fn preempt_enable<R: BootRuntime>() {
             rt.irq_restore(irq);
             return;
         };
-        let _cr3_before = rt.debug_active_aspace_root();
+        // Pre-switch: update CPU_CURRENT_TASK to prevent cross-CPU deadlock.
+        let pe_cpu = rt.current_cpu_index();
+        crate::sched::set_cpu_current_task(pe_cpu, switch.to_tid);
 
         if switch.to_aspace != switch.from_aspace {
             rt.tasking().activate_address_space(switch.to_aspace);
@@ -993,6 +995,12 @@ pub fn preempt_enable<R: BootRuntime>() {
                 switch.to_user_fs_base,
             );
         }
+
+        // Post-switch: resumed task updates tracking for its current CPU.
+        crate::sched::set_cpu_current_task(
+            crate::runtime::<R>().current_cpu_index(),
+            crate::runtime::<R>().current_tid(),
+        );
     }
 
     rt.irq_restore(irq);
@@ -1040,7 +1048,9 @@ pub fn resched_if_needed<R: BootRuntime>() {
             rt.irq_restore(irq);
             return;
         };
-        let _cr3_before = rt.debug_active_aspace_root();
+        // Pre-switch: update CPU_CURRENT_TASK to prevent cross-CPU deadlock.
+        let rin_cpu = rt.current_cpu_index();
+        crate::sched::set_cpu_current_task(rin_cpu, switch.to_tid);
 
         if switch.to_aspace != switch.from_aspace {
             rt.tasking().activate_address_space(switch.to_aspace);
@@ -1057,6 +1067,12 @@ pub fn resched_if_needed<R: BootRuntime>() {
                 switch.to_user_fs_base,
             );
         }
+
+        // Post-switch: resumed task updates tracking for its current CPU.
+        crate::sched::set_cpu_current_task(
+            crate::runtime::<R>().current_cpu_index(),
+            crate::runtime::<R>().current_tid(),
+        );
     }
 
     rt.irq_restore(irq);

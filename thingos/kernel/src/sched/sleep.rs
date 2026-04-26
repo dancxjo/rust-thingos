@@ -55,7 +55,15 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             rt.irq_restore(_irq);
             return has_work;
         };
+        // Pre-switch: update CPU_CURRENT_TASK to prevent cross-CPU deadlock.
+        crate::sched::set_cpu_current_task(cpu_idx, switch.to_tid);
+
+        let mut _spins = 0u32;
         while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+            _spins += 1;
+            if _spins > 10_000 {
+                break;
+            }
             core::hint::spin_loop();
         }
 
@@ -73,6 +81,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
             );
         }
 
+        // Post-switch: resumed task updates tracking for its current CPU.
         crate::sched::set_cpu_current_task(
             crate::runtime::<R>().current_cpu_index(),
             crate::runtime::<R>().current_tid(),
@@ -198,7 +207,16 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             rt.irq_restore(_irq);
             return;
         };
+        // Pre-switch: update CPU_CURRENT_TASK to prevent cross-CPU deadlock.
+        let sleep_cpu = super::current_cpu_index::<R>();
+        crate::sched::set_cpu_current_task(sleep_cpu, switch.to_tid);
+
+        let mut _spins = 0u32;
         while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+            _spins += 1;
+            if _spins > 10_000 {
+                break;
+            }
             core::hint::spin_loop();
         }
 
@@ -216,6 +234,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
             );
         }
 
+        // Post-switch: resumed task updates tracking for its current CPU.
         crate::sched::set_cpu_current_task(
             crate::runtime::<R>().current_cpu_index(),
             crate::runtime::<R>().current_tid(),

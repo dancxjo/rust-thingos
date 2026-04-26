@@ -1468,7 +1468,23 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                     return;
                 };
 
+                // Update CPU_CURRENT_TASK *before* the switch so other CPUs
+                // never see a stale entry for the outgoing task.  This
+                // eliminates the cross-CPU deadlock where two CPUs spin on
+                // is_task_on_any_cpu with IRQs disabled, each waiting for
+                // the other's post-switch update.
+                crate::sched::set_cpu_current_task(cpu_idx, switch.to_tid);
+
+                // Bounded safety check: the target should no longer appear
+                // as current on any *other* CPU.  A brief spin covers the
+                // window where a remote CPU is between its own pre-switch
+                // update and switch_with_tls.
+                let mut _spins = 0u32;
                 while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+                    _spins += 1;
+                    if _spins > 10_000 {
+                        break;
+                    }
                     core::hint::spin_loop();
                 }
 
@@ -1486,6 +1502,9 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                     );
                 }
 
+                // Post-switch: the resumed task updates tracking for
+                // whichever CPU it is now running on (may differ from
+                // the CPU it was suspended on).
                 crate::sched::set_cpu_current_task(
                     crate::runtime::<R>().current_cpu_index(),
                     crate::runtime::<R>().current_tid(),
