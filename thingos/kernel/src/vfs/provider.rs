@@ -55,6 +55,7 @@ use spin::Mutex;
 use super::{OpenFlags, VfsDriver, VfsNode, VfsStat};
 use crate::sched::wait_queue::WaitQueue;
 use crate::syscall::validate::{copyin, copyout};
+use crate::vfs::memfd::MemFdNode;
 
 const VFS_RPC_MAX_RESP: usize = VFS_RPC_MAX_DATA + 64;
 
@@ -137,6 +138,12 @@ impl ProviderRpc {
     fn taint_with_cooldown(state: &mut RpcState) {
         state.tainted = true;
         state.tainted_until_ns = crate::time::monotonic_now_ns() + PROVIDER_TAINT_COOLDOWN_NS;
+    }
+
+    /// Return the PID of the provider process (the primary reader of the
+    /// request port).  Returns 0 when the provider PID is not yet known.
+    pub fn provider_pid(&self) -> u64 {
+        self.req.port().primary_reader_pid()
     }
 
     /// Perform a multiplexed, concurrent round-trip RPC with the provider.
@@ -426,11 +433,81 @@ fn get_resp_payload_len(op: VfsRpcOp, pending: &[u8]) -> Option<usize> {
             // This is a protocol weakness. For now we take everything in pending.
             Some(pending.len())
         }
+        VfsRpcOp::ReadIntoFd => Some(4), // bytes_written: u32
     }
 }
 
 unsafe impl Send for ProviderNode {}
 unsafe impl Sync for ProviderNode {}
+
+impl ProviderNode {
+    /// Attempt to load all `buf.len()` bytes via the memfd bulk-transfer path.
+    ///
+    /// 1. Allocates a `MemFdNode` of `buf.len()` bytes.
+    /// 2. Injects a writable fd for it into the provider's handle table.
+    /// 3. Issues a single `ReadIntoFd` RPC — the provider writes the entire
+    ///    file into the memfd with one `vfs_write` syscall.
+    /// 4. Removes the injected fd and copies out of the memfd.
+    ///
+    /// Returns `Err(Errno::ENOSYS)` when the provider PID is unknown so the
+    /// caller can fall back to the legacy looped-read path.
+    fn read_all_via_memfd(&self, buf: &mut [u8]) -> SysResult<usize> {
+        let size = buf.len();
+
+        // We need the provider's PID to inject the fd.
+        let provider_pid = self.rpc.provider_pid();
+        if provider_pid == 0 {
+            return Err(Errno::ENOSYS);
+        }
+
+        // Locate the provider's process info.
+        let provider_pinfo =
+            crate::sched::process_info_for_pid_current(provider_pid as u32)
+                .ok_or(Errno::ESRCH)?;
+
+        // Allocate a MemFdNode sized for the whole file.
+        let memfd = Arc::new(MemFdNode::new("elf-bulk-read", size)?);
+        let memfd_node: Arc<dyn VfsNode> = memfd.clone();
+
+        // Inject the memfd as a writable fd into the provider's handle table.
+        let dest_fd = {
+            let mut lock = provider_pinfo.lock();
+            lock.handle_table.open(
+                memfd_node,
+                OpenFlags::write_only(),
+                alloc::string::String::from("elf-bulk-read"),
+            )?
+        };
+
+        // Build the ReadIntoFd payload:
+        // [handle: u64][offset: u64][len: u32][dest_fd: u32]
+        let mut payload = [0u8; 24];
+        payload[0..8].copy_from_slice(&self.handle.to_le_bytes());
+        payload[8..16].copy_from_slice(&0u64.to_le_bytes());          // offset = 0
+        payload[16..20].copy_from_slice(&(size as u32).to_le_bytes()); // len
+        payload[20..24].copy_from_slice(&dest_fd.to_le_bytes());       // dest_fd
+
+        let rpc_result = self.rpc.rpc(VfsRpcOp::ReadIntoFd, &payload);
+
+        // Always remove the injected fd once the RPC has resolved.
+        {
+            let mut lock = provider_pinfo.lock();
+            let _ = lock.handle_table.close(dest_fd);
+        }
+
+        let resp = rpc_result?;
+        if resp.len() < 4 {
+            return Err(Errno::EIO);
+        }
+        let bytes_written =
+            u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]) as usize;
+
+        // Copy from the memfd physical pages into the caller's buffer.
+        // This is a plain memcpy inside the kernel — no IPC ring-buffer involved.
+        let n = memfd.read(0, &mut buf[..bytes_written.min(size)])?;
+        Ok(n)
+    }
+}
 
 impl VfsNode for ProviderNode {
     fn close(&self) {
@@ -439,6 +516,32 @@ impl VfsNode for ProviderNode {
         let mut payload = [0u8; 8];
         payload[..8].copy_from_slice(&self.handle.to_le_bytes());
         let _ = self.rpc.rpc(VfsRpcOp::Close, &payload);
+    }
+
+    /// Use the memfd bulk-transfer path when possible, falling back to the
+    /// legacy looped-`read` approach if the provider does not support
+    /// `ReadIntoFd` or if the provider PID is not known.
+    fn read_all_into(&self, buf: &mut [u8]) -> SysResult<usize> {
+        match self.read_all_via_memfd(buf) {
+            Ok(n) => return Ok(n),
+            // ENOSYS: provider PID unknown or provider does not support ReadIntoFd.
+            // ESRCH:  provider process gone (shouldn't happen in practice).
+            // Fall through to the legacy path for both.
+            Err(Errno::ENOSYS) | Err(Errno::ESRCH) => {}
+            Err(e) => return Err(e),
+        }
+
+        // Legacy fallback: loop over 64 KB `Read` RPCs.
+        let size = buf.len();
+        let mut pos = 0;
+        while pos < size {
+            let n = self.read(pos as u64, &mut buf[pos..])?;
+            if n == 0 {
+                break;
+            }
+            pos += n;
+        }
+        Ok(pos)
     }
 
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {

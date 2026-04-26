@@ -1522,19 +1522,12 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     #[cfg(feature = "spawn_timing")]
     let mut elf_read_calls: u32 = 0;
     let mut buffer = alloc::vec![0u8; size];
-    let mut read_pos = 0;
-    while read_pos < size {
-        let n = node.read(read_pos as u64, &mut buffer[read_pos..]).map_err(|e| e)?;
-        #[cfg(feature = "spawn_timing")]
-        {
-            elf_read_calls += 1;
-        }
-        if n == 0 {
-            break;
-        }
-        read_pos += n;
+    let read_n = node.read_all_into(&mut buffer).map_err(|e| e)?;
+    #[cfg(feature = "spawn_timing")]
+    {
+        elf_read_calls += 1;
     }
-    if read_pos < size {
+    if read_n < size {
         return Err(abi::errors::Errno::EIO);
     }
     #[cfg(feature = "spawn_timing")]

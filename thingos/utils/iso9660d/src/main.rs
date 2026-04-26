@@ -10,7 +10,6 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::sync::Arc;
 
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
@@ -18,7 +17,7 @@ use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use iso9660::{ISO_SECTOR_SIZE, IsoFs};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_mount};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_mount, vfs_write};
 use stem::syscall::{PortHandle, port_create};
 use stem::{info, warn};
 
@@ -37,6 +36,14 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 
 // ── VFS Block Device Adapter ────────────────────────────────────────────────
 
+/// A VFS block device that opens, seeks, reads, and closes the backing storage
+/// file on every `read_sectors` call.
+///
+/// The fd is intentionally **not** cached here: each `read_sectors` call is
+/// independent and iso9660d is single-threaded, so a cached fd would require
+/// interior mutability with no practical benefit over the open/close-per-call
+/// pattern (the kernel already handles rapid open/close efficiently at the
+/// driver level).
 struct VfsBlockDevice {
     path: String,
 }
@@ -76,6 +83,7 @@ fn dispatch_request(fs: &IsoFs, dev: &VfsBlockDevice, req: &ProviderRequest) -> 
     match req.op {
         VfsRpcOp::Lookup => handle_lookup(fs, dev, &req.payload),
         VfsRpcOp::Read => handle_read(dev, &req.payload),
+        VfsRpcOp::ReadIntoFd => handle_read_into_fd(dev, &req.payload),
         VfsRpcOp::Readdir => handle_readdir(fs, dev, &req.payload),
         VfsRpcOp::Stat => handle_stat(fs, dev, &req.payload),
         VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
@@ -110,6 +118,39 @@ fn handle_read(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
     let iso_file = iso9660::IsoFile { extent_lba: lba, size };
     match iso_file.read_range(dev, offset, len) {
         Ok(data) => ProviderResponse::ok_read(&data),
+        Err(_) => ProviderResponse::err(Errno::EIO),
+    }
+}
+
+/// Bulk-read handler: write the entire requested range directly into the
+/// kernel-injected memfd (identified by `dest_fd`) using a single `vfs_write`
+/// syscall.
+///
+/// Because `vfs_write` has no ring-buffer size limit, the full file content
+/// travels in one shot, reducing the kernel↔provider IPC round-trips from
+/// O(file_size / 64 KiB) to O(1).
+fn handle_read_into_fd(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 24 { return ProviderResponse::err(Errno::EINVAL); }
+    let handle  = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+    let offset  = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+    let len     = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
+    let dest_fd = u32::from_le_bytes(payload[20..24].try_into().unwrap());
+    let (lba, size) = decode_handle(handle);
+
+    if offset >= size as u64 {
+        return ProviderResponse::ok_written(0);
+    }
+
+    let iso_file = iso9660::IsoFile { extent_lba: lba, size };
+    let data = match iso_file.read_range(dev, offset, len) {
+        Ok(d) => d,
+        Err(_) => return ProviderResponse::err(Errno::EIO),
+    };
+
+    // Write the entire data into the kernel-allocated memfd in one syscall.
+    // No IPC ring-buffer limit applies here.
+    match vfs_write(dest_fd, &data) {
+        Ok(n) => ProviderResponse::ok_written(n as u32),
         Err(_) => ProviderResponse::err(Errno::EIO),
     }
 }

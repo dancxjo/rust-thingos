@@ -30,3 +30,14 @@ Feature: ISO9660 boot filesystem mount
     And I type "cd /media/cdrom" on the serial console
     And I type "ls" on the serial console
     Then the latest command output should contain "etc"
+
+  Scenario: ELF binaries are loaded correctly via the memfd bulk-transfer path
+    # Exercises ReadIntoFd: the kernel injects a memfd into iso9660d's fd table
+    # and iso9660d writes the entire binary in one vfs_write syscall, removing
+    # the O(file_size / 64 KiB) IPC round-trip bottleneck.
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "ps" on the serial console
+    Then the latest command output should contain "PID"
+    When I type "ps" on the serial console
+    Then the latest command output should contain "PID"

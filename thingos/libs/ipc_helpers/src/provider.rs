@@ -36,8 +36,8 @@
 
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp::{
-    AttrGet, AttrList, AttrRemove, AttrSet, Close, DeviceCall, Lookup, Poll, Read, Readdir,
-    Readlink, Rename, Stat, SubscribeReady, UnsubscribeReady, Write,
+    AttrGet, AttrList, AttrRemove, AttrSet, Close, DeviceCall, Lookup, Poll, Read, ReadIntoFd,
+    Readdir, Readlink, Rename, Stat, SubscribeReady, UnsubscribeReady, Write,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VFS_RPC_MAX_RESP, VfsRpcOp, VfsRpcReqHeader};
 use stem::syscall::port::{port_recv, port_send_all, port_try_recv};
@@ -214,6 +214,7 @@ impl ProviderLoop {
                 4 + path_len
             }
             Read | Readdir => 20,
+            ReadIntoFd => 24, // handle:u64 + offset:u64 + len:u32 + dest_fd:u32
             Write => {
                 if self.pending.len() < hdr_size + 20 {
                     return Ok(None);
