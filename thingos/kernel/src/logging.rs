@@ -333,9 +333,15 @@ impl fmt::Write for FixedBuf {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let src = s.as_bytes();
         let available = self.buf.len() - self.pos;
-        let to_copy = src.len().min(available);
-        self.buf[self.pos..self.pos + to_copy].copy_from_slice(&src[..to_copy]);
-        self.pos += to_copy;
+        if src.len() > available {
+            // Buffer full: copy what fits and signal truncation so callers
+            // know the output is incomplete.
+            self.buf[self.pos..].copy_from_slice(&src[..available]);
+            self.pos = self.buf.len();
+            return Err(fmt::Error);
+        }
+        self.buf[self.pos..self.pos + src.len()].copy_from_slice(src);
+        self.pos += src.len();
         Ok(())
     }
 }

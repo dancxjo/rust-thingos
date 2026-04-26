@@ -362,6 +362,8 @@ SYS_SET_PARAM(PARAM_LOGLEVEL, 4)
 
 
 
+## Rate Limiting (Future)
+
 For warnings that may occur frequently, consider adding rate-limiting utilities:
 
 ```rust
