@@ -819,6 +819,53 @@ pub fn is_runtime_initialized() -> bool {
     RUNTIME_BASE.is_initialized()
 }
 
+/// Kernel-wide shutdown state machine.
+///
+/// Ensures that system shutdown is **idempotent**: exactly one caller
+/// transitions from `Running` to `ShutdownRequested` and owns the teardown
+/// sequence.  Every subsequent caller sees `ShutdownRequested` and must not
+/// repeat the teardown.
+///
+/// States (encoded as a `u32` in an `AtomicU32`):
+/// - `0` – `Running`: normal operation
+/// - `1` – `ShutdownRequested`: teardown in progress; first caller owns it
+pub mod shutdown {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    const RUNNING: u32 = 0;
+    const SHUTDOWN_REQUESTED: u32 = 1;
+
+    static STATE: AtomicU32 = AtomicU32::new(RUNNING);
+
+    /// Attempt to claim the shutdown.
+    ///
+    /// Returns `true` if this caller is the **first** to request shutdown and
+    /// should proceed with teardown.  Returns `false` if shutdown is already
+    /// in progress — the duplicate caller should exit or wait, not repeat
+    /// the teardown sequence.
+    pub fn begin_shutdown() -> bool {
+        STATE
+            .compare_exchange(RUNNING, SHUTDOWN_REQUESTED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Returns `true` once any shutdown has been initiated.
+    ///
+    /// Safe to call from any context (including early boot and unit tests).
+    pub fn is_shutdown_in_progress() -> bool {
+        STATE.load(Ordering::Acquire) != RUNNING
+    }
+
+    /// Reset the shutdown state back to `Running`.
+    ///
+    /// **Only for use in unit tests.**  Calling this at runtime would allow a
+    /// second shutdown to proceed, which is incorrect.
+    #[cfg(test)]
+    pub fn reset_for_test() {
+        STATE.store(RUNNING, Ordering::Release);
+    }
+}
+
 // Global IO port accessor functions
 // On x86, these use inline asm. On other archs, they are no-ops.
 #[inline]
@@ -1783,5 +1830,36 @@ mod cmdline_loglevel_tests {
     #[test]
     fn last_valid_occurrence_wins() {
         assert_eq!(parse_cmdline_loglevel("loglevel=2 loglevel=trace"), Some(5));
+    }
+}
+
+#[cfg(test)]
+mod shutdown_state_tests {
+    use super::shutdown;
+
+    #[test]
+    fn first_caller_wins() {
+        shutdown::reset_for_test();
+        assert!(!shutdown::is_shutdown_in_progress());
+        assert!(shutdown::begin_shutdown(), "first caller should win");
+        assert!(shutdown::is_shutdown_in_progress());
+        shutdown::reset_for_test();
+    }
+
+    #[test]
+    fn duplicate_caller_loses() {
+        shutdown::reset_for_test();
+        assert!(shutdown::begin_shutdown(), "first caller should win");
+        assert!(!shutdown::begin_shutdown(), "duplicate caller should lose");
+        shutdown::reset_for_test();
+    }
+
+    #[test]
+    fn is_shutdown_in_progress_reflects_state() {
+        shutdown::reset_for_test();
+        assert!(!shutdown::is_shutdown_in_progress());
+        shutdown::begin_shutdown();
+        assert!(shutdown::is_shutdown_in_progress());
+        shutdown::reset_for_test();
     }
 }
