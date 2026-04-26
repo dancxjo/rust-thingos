@@ -29,7 +29,6 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use blossom::Blossom;
-
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::socket::{accept, bind, listen, socket};
 use stem::syscall::socket_domain::AF_UNIX;
@@ -326,8 +325,7 @@ impl WaylandServer {
                 if data.len() < 8 {
                     return;
                 }
-                let wl_buf_key =
-                    u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                let wl_buf_key = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
                 // Find which client owns this key and send wl_buffer.release.
                 for client in self.clients.values_mut() {
                     if let Some(&buf_obj) = client.buf_key_to_obj.get(&wl_buf_key) {
@@ -342,10 +340,8 @@ impl WaylandServer {
                 if data.len() < 12 {
                     return;
                 }
-                let bloom_surface_id =
-                    u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
-                let timestamp_ms =
-                    u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+                let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                let timestamp_ms = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
                 for client in self.clients.values_mut() {
                     // fire_frame_cbs returns the IDs that were fired; we only
                     // need the side-effect (sending wl_callback.done), so the

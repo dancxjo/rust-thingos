@@ -13,7 +13,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use abi::pixel::PixelFormat;
-
 use stem::syscall::port_send_all;
 use stem::syscall::vfs::vfs_read;
 use stem::{debug, warn};
@@ -84,7 +83,9 @@ impl WaylandCommandService {
             return false;
         }
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
-        if let Some(released) = world.scene.destroy_surface(self.wayland_client_id, bloom_surface_id) {
+        if let Some(released) =
+            world.scene.destroy_surface(self.wayland_client_id, bloom_surface_id)
+        {
             for buf_id in released {
                 world.display.release_buffer(buf_id);
                 if let Some(key) = self.bloom_to_buf_key.remove(&buf_id) {
@@ -115,13 +116,14 @@ impl WaylandCommandService {
             _ => PixelFormat::Bgra8888,
         };
 
-        let buffer_id = match world.display.import_buffer(handle, width, height, stride, pixel_fmt, 0) {
-            Some(id) => id,
-            None => {
-                warn!("wayland-cmd: import_buffer failed for surface {}", bloom_surface_id);
-                return false;
-            }
-        };
+        let buffer_id =
+            match world.display.import_buffer(handle, width, height, stride, pixel_fmt, 0) {
+                Some(id) => id,
+                None => {
+                    warn!("wayland-cmd: import_buffer failed for surface {}", bloom_surface_id);
+                    return false;
+                }
+            };
 
         // Track key → bloom_id mapping for later release.
         self.buf_key_to_bloom.insert(wl_buf_key, buffer_id);

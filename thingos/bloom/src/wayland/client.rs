@@ -20,14 +20,7 @@ pub enum ObjectEntry {
     /// wl_shm_pool.
     ShmPool { handle: u32, size: u32 },
     /// wl_buffer — created from a shm_pool.
-    Buffer {
-        handle: u32,
-        offset: u32,
-        width: u32,
-        height: u32,
-        stride: u32,
-        format: u32,
-    },
+    Buffer { handle: u32, offset: u32, width: u32, height: u32, stride: u32, format: u32 },
     /// wl_surface.
     Surface {
         /// Bloom scene surface ID (assigned by the main thread).
@@ -152,7 +145,9 @@ impl WaylandClient {
 
     /// Find the bloom_surface_id for a given wl_surface object ID.
     pub fn bloom_surface_id(&self, wl_surface_obj: u32) -> Option<u32> {
-        if let Some(ObjectEntry::Surface { bloom_surface_id, .. }) = self.objects.get(&wl_surface_obj) {
+        if let Some(ObjectEntry::Surface { bloom_surface_id, .. }) =
+            self.objects.get(&wl_surface_obj)
+        {
             Some(*bloom_surface_id)
         } else {
             None
@@ -190,10 +185,7 @@ impl WaylandClient {
     }
 
     /// Return the pending buffer entry if there is one attached to `wl_surface_obj`.
-    pub fn pending_buffer_entry(
-        &self,
-        wl_surface_obj: u32,
-    ) -> Option<(u32, &ObjectEntry)> {
+    pub fn pending_buffer_entry(&self, wl_surface_obj: u32) -> Option<(u32, &ObjectEntry)> {
         let pb = match self.objects.get(&wl_surface_obj)? {
             ObjectEntry::Surface { pending_buffer: Some(pb), .. } => *pb,
             _ => return None,
@@ -203,7 +195,10 @@ impl WaylandClient {
 
     /// Build a human-readable name for this client (for logs).
     pub fn describe(&self, app_id: Option<&str>) -> String {
-        if let Some(s) = app_id { alloc::format!("fd={} app={}", self.fd, s) }
-        else { alloc::format!("fd={}", self.fd) }
+        if let Some(s) = app_id {
+            alloc::format!("fd={} app={}", self.fd, s)
+        } else {
+            alloc::format!("fd={}", self.fd)
+        }
     }
 }

@@ -22,7 +22,7 @@ use stem::{debug as blossom_debug, warn as blossom_warn};
 
 use crate::wayland::client::{ObjectEntry, WaylandClient};
 use crate::wayland::ipc;
-use crate::wayland::wire::{read_i32, read_string, read_u32, WireMsg};
+use crate::wayland::wire::{WireMsg, read_i32, read_string, read_u32};
 
 // ── Global registry constants ────────────────────────────────────────────────
 
@@ -304,11 +304,7 @@ const WL_SHM_POOL_CREATE_BUFFER: u16 = 0;
 const WL_SHM_POOL_DESTROY: u16 = 1;
 const WL_SHM_POOL_RESIZE: u16 = 2;
 
-fn dispatch_shm_pool(
-    msg: &WireMsg,
-    client: &mut WaylandClient,
-    obj_id: u32,
-) -> Vec<Vec<u8>> {
+fn dispatch_shm_pool(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
     let handle = match client.objects.get(&obj_id) {
         Some(ObjectEntry::ShmPool { handle, .. }) => *handle,
         _ => return vec![],
@@ -347,11 +343,7 @@ fn dispatch_shm_pool(
 
 const WL_BUFFER_DESTROY: u16 = 0;
 
-fn dispatch_buffer(
-    msg: &WireMsg,
-    client: &mut WaylandClient,
-    obj_id: u32,
-) -> Vec<Vec<u8>> {
+fn dispatch_buffer(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
     if msg.opcode == WL_BUFFER_DESTROY {
         client.destroy(obj_id);
     }
@@ -507,7 +499,13 @@ fn handle_surface_commit(
             client.buf_key_to_obj.insert(key, buf_obj);
             out.push(
                 ipc::encode_import_attach(
-                    bloom_surface_id, key, handle, width, height, stride, format,
+                    bloom_surface_id,
+                    key,
+                    handle,
+                    width,
+                    height,
+                    stride,
+                    format,
                 )
                 .to_vec(),
             );
@@ -533,12 +531,8 @@ fn handle_surface_commit(
     out.push(ipc::encode_commit(bloom_surface_id, has_cb, cb_key).to_vec());
 
     // Clear pending state.
-    if let Some(ObjectEntry::Surface {
-        pending_buffer,
-        pending_damage,
-        pending_frame_cb,
-        ..
-    }) = client.objects.get_mut(&wl_surface_obj)
+    if let Some(ObjectEntry::Surface { pending_buffer, pending_damage, pending_frame_cb, .. }) =
+        client.objects.get_mut(&wl_surface_obj)
     {
         *pending_buffer = None;
         *pending_damage = None;
@@ -665,10 +659,7 @@ fn dispatch_xdg_surface(
                         new_id,
                         obj_id
                     );
-                    client.insert(
-                        new_id,
-                        ObjectEntry::XdgToplevel { xdg_surface_obj: obj_id },
-                    );
+                    client.insert(new_id, ObjectEntry::XdgToplevel { xdg_surface_obj: obj_id });
                     send_blossom_commands(client, &cmds, cmd_write);
                 }
                 Err(BlossomError::XdgSurfaceAlreadyHasRole { .. }) => {
@@ -760,11 +751,7 @@ fn dispatch_xdg_toplevel(
         XDG_TOPLEVEL_SET_APP_ID => {
             if let Some((s, _)) = read_string(&msg.data, 0) {
                 let app_id = String::from_utf8_lossy(s).into_owned();
-                blossom_debug!(
-                    "wayland-server: xdg_toplevel obj={} app_id=\"{}\"",
-                    obj_id,
-                    app_id
-                );
+                blossom_debug!("wayland-server: xdg_toplevel obj={} app_id=\"{}\"", obj_id, app_id);
                 let _ = blossom.set_app_id(obj_id, app_id);
             }
         }
@@ -814,11 +801,7 @@ fn dispatch_xdg_toplevel(
 /// Commands that produce outgoing IPC to the main thread are written to
 /// `cmd_write` directly (currently none — all blossom commands produce
 /// outgoing Wayland events).
-pub fn send_blossom_commands(
-    client: &mut WaylandClient,
-    cmds: &[BlossomCommand],
-    _cmd_write: u32,
-) {
+pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand], _cmd_write: u32) {
     use crate::wayland::wire::encode_array;
 
     for cmd in cmds {
@@ -856,10 +839,7 @@ pub fn send_blossom_commands(
                 client.send(*xdg_surface, 0, &serial.to_ne_bytes());
             }
             BlossomCommand::MarkSurfaceReadyForMapping { surface } => {
-                blossom_debug!(
-                    "wayland-server: surface {} ready for mapping",
-                    surface
-                );
+                blossom_debug!("wayland-server: surface {} ready for mapping", surface);
                 // No outgoing Wayland event needed; the compositor will map
                 // the surface based on the commit IPC command.
             }
@@ -871,10 +851,7 @@ pub fn send_blossom_commands(
             BlossomCommand::SendPing { wm_base, serial, .. } => {
                 // xdg_wm_base.ping(serial: uint)
                 // opcode 0
-                blossom_debug!(
-                    "wayland-server: xdg_wm_base.ping serial={} sent",
-                    serial
-                );
+                blossom_debug!("wayland-server: xdg_wm_base.ping serial={} sent", serial);
                 client.send(*wm_base, 0, &serial.to_ne_bytes());
             }
         }

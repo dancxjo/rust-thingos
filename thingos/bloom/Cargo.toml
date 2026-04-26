@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 stem = { path = "../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../abi" }
-libdl = { path = "../utils/libdl" }
+pistil = { path = "../pistil" }
 pistil-types = { path = "../libs/pistil-types" }
 blossom = { path = "../blossom" }
 spin = "0.9"

@@ -117,6 +117,11 @@ pub trait BloomService {
     /// Human-readable name for logging and diagnostics.
     fn name(&self) -> &'static str;
 
+    /// Optional startup action scheduled when the service is added to the loop.
+    fn on_added(&mut self) -> LoopAction {
+        LoopAction::None
+    }
+
     /// The set of readiness sources this service wants to watch.
     ///
     /// Called once when the service is added to [`BloomLoop`]; the loop
@@ -213,6 +218,8 @@ impl BloomLoop {
             }
         }
         self.services.push(svc);
+        let action = self.services[idx].on_added();
+        let _ = self.apply_action(action, idx);
     }
 
     /// Arm a one-shot timer for service `svc_idx`.
@@ -309,6 +316,12 @@ impl BloomLoop {
     ///   5. Presents a frame when the frame clock is due and damage is dirty.
     pub fn run(mut self, world: &mut BloomWorld) -> ! {
         stem::info!("bloom: service loop started");
+        stem::info!(
+            "bloom: output0 {}x{} @ {}mHz ready",
+            world.primary.width,
+            world.primary.height,
+            world.primary.refresh_mhz
+        );
         // When any service returns `Wake`, this flag is set and the next wait
         // uses a zero timeout so the loop iterates immediately.
         let mut wake_requested = false;

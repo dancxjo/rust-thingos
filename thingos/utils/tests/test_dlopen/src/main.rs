@@ -189,6 +189,12 @@ fn test_dlopen_pistil_shared_library() {
     let area_fn: extern "C" fn(u32, u32) -> u64 = unsafe { core::mem::transmute(area_sym) };
     assert_eq!(area_fn(9, 7), 63, "unexpected rectangle area result");
 
+    let prepare_sym = dlsym_bytes(handle, b"pistil_prepare_background");
+    assert!(
+        !prepare_sym.is_null(),
+        "expected exported symbol pistil_prepare_background in libpistil.so"
+    );
+
     let rc = dlclose(handle);
     assert_eq!(rc, 0, "dlclose should succeed for valid pistil handle");
 

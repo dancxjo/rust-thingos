@@ -89,17 +89,13 @@ pub fn decode_one(buf: &[u8]) -> Option<(WireMsg, usize)> {
 /// Read a u32 from `buf` at `offset`.
 #[inline]
 pub fn read_u32(buf: &[u8], offset: usize) -> Option<u32> {
-    buf.get(offset..offset + 4)
-        .and_then(|b| b.try_into().ok())
-        .map(u32::from_ne_bytes)
+    buf.get(offset..offset + 4).and_then(|b| b.try_into().ok()).map(u32::from_ne_bytes)
 }
 
 /// Read an i32 from `buf` at `offset`.
 #[inline]
 pub fn read_i32(buf: &[u8], offset: usize) -> Option<i32> {
-    buf.get(offset..offset + 4)
-        .and_then(|b| b.try_into().ok())
-        .map(i32::from_ne_bytes)
+    buf.get(offset..offset + 4).and_then(|b| b.try_into().ok()).map(i32::from_ne_bytes)
 }
 
 /// Read a length-prefixed Wayland string from `buf` at `offset`.

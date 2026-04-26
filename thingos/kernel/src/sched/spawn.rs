@@ -999,8 +999,9 @@ fn setup_stdio_fds<R: BootRuntime>(
     let console: Arc<dyn VfsNode> = Arc::new(crate::vfs::devfs::ConsoleNode);
     let null: Arc<dyn VfsNode> = Arc::new(crate::vfs::devfs::NullNode);
 
-    // Helper: inherit parent's fd by cloning the node Arc.
-    let inherited_node = |fd: u32| -> Option<(Arc<dyn VfsNode>, OpenFlags)> {
+    // Helper: inherit parent's fd by cloning the node Arc and preserving the
+    // original path. Watch delivery uses handle paths to compute mount IDs.
+    let inherited_node = |fd: u32| -> Option<(Arc<dyn VfsNode>, OpenFlags, alloc::string::String)> {
         let tid = crate::runtime::<R>().current_tid();
         crate::task::registry::get_task::<R>(tid)
             .and_then(|task| task.process_info.clone())
@@ -1008,7 +1009,7 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let lock = pi.lock();
                 lock.handle_table.get(fd).ok().map(|f| {
                     f.node.on_dup();
-                    (f.node.clone(), *f.status_flags.lock())
+                    (f.node.clone(), *f.status_flags.lock(), f.path.as_ref().clone())
                 })
             })
     };
@@ -1020,8 +1021,8 @@ fn setup_stdio_fds<R: BootRuntime>(
     // fd 0 — stdin
     match stdin_spec {
         StdioSpec::Inherit => {
-            if let Some((node, flags)) = inherited_node(0) {
-                let _ = handle_table.insert_at(0, node, flags, "/dev/console".into());
+            if let Some((node, flags, path)) = inherited_node(0) {
+                let _ = handle_table.insert_at(0, node, flags, path);
             } else {
                 let _ = handle_table.insert_at(
                     0,
@@ -1050,8 +1051,7 @@ fn setup_stdio_fds<R: BootRuntime>(
             stdin_pipe = id;
         }
         StdioSpec::Fd(fd) => {
-            if let Some((node, flags)) = inherited_node(fd) {
-                let path = alloc::format!("fd:{}", fd);
+            if let Some((node, flags, path)) = inherited_node(fd) {
                 let _ = handle_table.insert_at(0, node, flags, path);
             } else {
                 crate::kwarn!(
@@ -1084,8 +1084,8 @@ fn setup_stdio_fds<R: BootRuntime>(
     // fd 1 — stdout
     match stdout_spec {
         StdioSpec::Inherit => {
-            if let Some((node, flags)) = inherited_node(1) {
-                let _ = handle_table.insert_at(1, node, flags, "/dev/console".into());
+            if let Some((node, flags, path)) = inherited_node(1) {
+                let _ = handle_table.insert_at(1, node, flags, path);
             } else {
                 let _ = handle_table.insert_at(
                     1,
@@ -1116,8 +1116,7 @@ fn setup_stdio_fds<R: BootRuntime>(
             stdout_pipe = id;
         }
         StdioSpec::Fd(fd) => {
-            if let Some((node, flags)) = inherited_node(fd) {
-                let path = alloc::format!("fd:{}", fd);
+            if let Some((node, flags, path)) = inherited_node(fd) {
                 let _ = handle_table.insert_at(1, node, flags, path);
             } else {
                 crate::kwarn!(
@@ -1149,8 +1148,8 @@ fn setup_stdio_fds<R: BootRuntime>(
     // fd 2 — stderr
     match stderr_spec {
         StdioSpec::Inherit => {
-            if let Some((node, flags)) = inherited_node(2) {
-                let _ = handle_table.insert_at(2, node, flags, "/dev/console".into());
+            if let Some((node, flags, path)) = inherited_node(2) {
+                let _ = handle_table.insert_at(2, node, flags, path);
             } else {
                 let _ = handle_table.insert_at(
                     2,
@@ -1176,8 +1175,7 @@ fn setup_stdio_fds<R: BootRuntime>(
             stderr_pipe = id;
         }
         StdioSpec::Fd(fd) => {
-            if let Some((node, flags)) = inherited_node(fd) {
-                let path = alloc::format!("fd:{}", fd);
+            if let Some((node, flags, path)) = inherited_node(fd) {
                 let _ = handle_table.insert_at(2, node, flags, path);
             } else {
                 crate::kwarn!(

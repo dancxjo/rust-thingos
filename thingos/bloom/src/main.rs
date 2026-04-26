@@ -24,7 +24,7 @@ use loop_types::BloomLoop;
 use render::CompositorVisuals;
 use scene::Scene;
 use services::input_service::InputService;
-use services::wallpaper::WallpaperService;
+use services::wallpaper::{WallpaperService, ensure_wallpaper_config};
 use services::wayland::WaylandService;
 use services::wayland_cmd::WaylandCommandService;
 use stem::syscall::port_create;
@@ -91,14 +91,8 @@ fn main(_arg: usize) -> ! {
     let _ = vfs_mkdir("/session/desktop");
 
     let mut visuals = CompositorVisuals::new();
-    // Synchronous load at startup — no render loop running yet so blocking is fine.
-    stem::info!("bloom: preparing background {}", WP_PATH);
-    visuals.prepare_background(&display, WP_PATH);
-    if visuals.fallback_buffer_id().is_none() {
-        stem::info!("bloom: background failed, trying fallback");
-        visuals.prepare_background(&display, "/share/wallpapers/flower.bmp");
-    }
-    stem::info!("bloom: background buffer_id={:?}", visuals.fallback_buffer_id());
+    let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
+    stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
 
     // ── Initial scene / damage / input state ─────────────────────────────────
     let scene = Scene::new();
@@ -130,7 +124,16 @@ fn main(_arg: usize) -> ! {
     };
 
     // ── Wallpaper watch FD ────────────────────────────────────────────────────
-    let wp_watch_fd = vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0).ok();
+    let wp_watch_fd = match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
+        Ok(fd) => {
+            info!("bloom: watching wallpaper config {}", WP_PATH);
+            Some(fd)
+        }
+        Err(e) => {
+            warn!("bloom: failed to watch wallpaper config {}: {:?}", WP_PATH, e);
+            None
+        }
+    };
 
     // ── Assemble BloomWorld ───────────────────────────────────────────────────
     let mut world = BloomWorld::new(scene, damage, input, visuals, display, primary);
@@ -159,9 +162,7 @@ fn main(_arg: usize) -> ! {
     }
 
     // Wallpaper watch → WallpaperService
-    if let Some(fd) = wp_watch_fd {
-        bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(fd, WP_PATH)));
-    }
+    bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(wp_watch_fd, WP_PATH)));
 
     // ── Spawn Wayland server thread + wire IPC ports ──────────────────────────
     // cmd port: Wayland → Main (surface operations)
@@ -174,8 +175,7 @@ fn main(_arg: usize) -> ! {
                     world.wayland_evt_write = Some(evt_write);
 
                     // Spawn the Wayland server (runs its own ServiceLoop).
-                    let args =
-                        alloc::boxed::Box::new(WaylandThreadArgs { cmd_write, evt_read_fd });
+                    let args = alloc::boxed::Box::new(WaylandThreadArgs { cmd_write, evt_read_fd });
                     let arg_ptr = alloc::boxed::Box::into_raw(args) as usize;
                     match stem::thread::spawn_with_arg(wayland::wayland_thread_entry, arg_ptr) {
                         Ok(_) => {
@@ -231,25 +231,20 @@ fn read_bristle_pid() -> Option<u32> {
 
 /// Register bloom as a bristle event sink.
 ///
-/// Waits for bristle to be ready (its PID file to appear), then sends a
-/// `RegisterSink` inbox message with `BRISTLE_SINK_TAG_BLOOM` and the bloom
-/// port write handle so bristle can deliver normalized HID events.
+/// Sends a `RegisterSink` inbox message with `BRISTLE_SINK_TAG_BLOOM` and the
+/// bloom port write handle so bristle can deliver normalized HID events. This
+/// is intentionally best-effort during startup: Bloom must reach first paint
+/// even if bristle has not published its PID file yet.
 fn register_with_bristle(evt_write_handle: u32) {
     if evt_write_handle == 0 {
         warn!("bloom: no event write handle — skipping bristle registration");
         return;
     }
 
-    // Wait for bristle's PID file.
-    if let Err(e) = stem::fs::wait_until_exists("/run/bristle/pid") {
-        warn!("bloom: failed waiting for /run/bristle/pid: {:?}", e);
-        return;
-    }
-
     let bristle_pid = match read_bristle_pid() {
         Some(p) => p,
         None => {
-            warn!("bloom: could not read bristle PID");
+            warn!("bloom: bristle PID not ready; input registration skipped");
             return;
         }
     };

@@ -162,7 +162,7 @@ impl HandleTable {
         entry.handle_flags &= !HANDLE_CLOEXEC;
         // Close new_handle if open.
         if let Some(old_entry) = self.entries[new_idx].take() {
-            old_entry.node.close();
+            close_open_handle(old_entry);
         }
         self.entries[new_idx] = Some(entry);
         Ok(new_handle)
@@ -211,7 +211,7 @@ impl HandleTable {
     /// Close handle `fd`.  Returns `EBADF` if not open.
     pub fn close(&mut self, thing: u32) -> SysResult<()> {
         let entry = self.take(thing)?;
-        entry.node.close();
+        close_entry(entry);
         Ok(())
     }
 
@@ -219,7 +219,7 @@ impl HandleTable {
     pub fn close_all(&mut self) {
         for slot in self.entries.iter_mut() {
             if let Some(entry) = slot.take() {
-                entry.node.close();
+                close_entry(entry);
             }
         }
     }
@@ -234,11 +234,30 @@ impl HandleTable {
                 slot.as_ref().map(|e| e.handle_flags & HANDLE_CLOEXEC != 0).unwrap_or(false);
             if should_close {
                 if let Some(entry) = slot.take() {
-                    entry.node.close();
+                    close_entry(entry);
                 }
             }
         }
     }
+}
+
+pub fn close_open_handle(entry: OpenHandle) {
+    let was_writable = entry.status_flags.lock().is_writable();
+    if was_writable {
+        let mount_id = crate::vfs::mount::mount_id_for_path(&entry.path);
+        crate::vfs::watch::emit_event(
+            &*entry.node,
+            abi::vfs_watch::mask::MODIFY,
+            None,
+            0,
+            mount_id,
+        );
+    }
+    entry.node.close();
+}
+
+fn close_entry(entry: OpenHandle) {
+    close_open_handle(entry);
 }
 
 impl Drop for HandleTable {

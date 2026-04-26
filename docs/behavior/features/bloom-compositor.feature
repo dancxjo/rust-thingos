@@ -11,6 +11,10 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: compositor service starting" within 60s
     And the serial output should contain "bloom: output0" within 60s
 
+  Scenario: bloom links the pistil wallpaper renderer
+    Given the machine is booted
+    Then the serial output should contain "bloom: pistil background renderer ready" within 60s
+
   Scenario: bloom compositor remains observable after startup
     Given the machine is booted
     Then the serial output should contain "bloom: output0" within 60s
@@ -77,3 +81,10 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: service loop started" within 60s
     And the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "First frame rendered" within 60s
+
+  Scenario: failed wallpaper decode leaves previous wallpaper active
+    Given the machine is booted
+    Then the serial output should contain "bloom: service loop started" within 60s
+    When I wait for the shell prompt
+    And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
+    Then the log should match pattern "bloom: wallpaper worker: decode failed"

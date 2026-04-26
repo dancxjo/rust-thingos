@@ -1,5 +1,6 @@
 //! Image creation tasks - ISO and HDD.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
@@ -22,12 +23,147 @@ pub struct SharedLibraryConfig {
     pub file_name: &'static str,
 }
 
+#[derive(Clone, Copy)]
+struct WallpaperSpec {
+    file_name: &'static str,
+    variant: u8,
+}
+
+const DEFAULT_WALLPAPERS: [WallpaperSpec; 4] = [
+    WallpaperSpec { file_name: "flower.bmp", variant: 0 },
+    WallpaperSpec { file_name: "clouds.bmp", variant: 1 },
+    WallpaperSpec { file_name: "leather.bmp", variant: 2 },
+    WallpaperSpec { file_name: "linen.bmp", variant: 3 },
+];
+
 /// Configuration for ISO builds.
 #[derive(Default)]
 pub struct IsoConfig<'a> {
     pub resolution: Option<&'a str>,
     pub iso_path: Option<&'a Path>,
     pub loglevel: Option<&'a str>,
+}
+
+fn ensure_default_wallpapers(root: &Path) -> Result<()> {
+    let dir = root.join("wallpapers");
+    std::fs::create_dir_all(&dir)?;
+
+    for spec in DEFAULT_WALLPAPERS {
+        let path = dir.join(spec.file_name);
+        if !path.exists() {
+            write_generated_wallpaper(&path, spec.variant)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn asset_list_contains_wallpaper(assets: &[PathBuf], file_name: &str) -> bool {
+    let suffix = format!("wallpapers/{file_name}");
+    assets.iter().any(|asset| asset.to_string_lossy().replace('\\', "/").ends_with(&suffix))
+}
+
+fn stage_default_wallpapers_hdd(sh: &Shell, hdd: &str, arch: &str) -> Result<()> {
+    let staged = std::env::temp_dir().join(format!("thingos_default_wallpapers_{arch}"));
+    if staged.exists() {
+        std::fs::remove_dir_all(&staged)?;
+    }
+    ensure_default_wallpapers(&staged)?;
+
+    cmd!(sh, "mmd -i {hdd}@@1M ::/share").run().ok();
+    cmd!(sh, "mmd -i {hdd}@@1M ::/share/wallpapers").run().ok();
+    for wallpaper in DEFAULT_WALLPAPERS {
+        let src = staged.join("wallpapers").join(wallpaper.file_name);
+        let dst = format!("::/share/wallpapers/{}", wallpaper.file_name);
+        cmd!(sh, "mcopy -i {hdd}@@1M {src} {dst}").run()?;
+    }
+
+    std::fs::remove_dir_all(&staged)?;
+    Ok(())
+}
+
+fn write_generated_wallpaper(path: &Path, variant: u8) -> Result<()> {
+    let width = 320u32;
+    let height = 180u32;
+    let row_bytes = ((width * 3 + 3) / 4) * 4;
+    let image_size = row_bytes * height;
+    let file_size = 54 + image_size;
+
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(b"BM")?;
+    file.write_all(&file_size.to_le_bytes())?;
+    file.write_all(&[0u8; 4])?;
+    file.write_all(&54u32.to_le_bytes())?;
+    file.write_all(&40u32.to_le_bytes())?;
+    file.write_all(&(width as i32).to_le_bytes())?;
+    file.write_all(&(height as i32).to_le_bytes())?;
+    file.write_all(&1u16.to_le_bytes())?;
+    file.write_all(&24u16.to_le_bytes())?;
+    file.write_all(&0u32.to_le_bytes())?;
+    file.write_all(&image_size.to_le_bytes())?;
+    file.write_all(&2835u32.to_le_bytes())?;
+    file.write_all(&2835u32.to_le_bytes())?;
+    file.write_all(&0u32.to_le_bytes())?;
+    file.write_all(&0u32.to_le_bytes())?;
+
+    let mut row = vec![0u8; row_bytes as usize];
+    for file_y in 0..height {
+        let y = height - 1 - file_y;
+        row.fill(0);
+        for x in 0..width {
+            let (r, g, b) = wallpaper_pixel(variant, x, y, width, height);
+            let off = (x * 3) as usize;
+            row[off] = b;
+            row[off + 1] = g;
+            row[off + 2] = r;
+        }
+        file.write_all(&row)?;
+    }
+
+    Ok(())
+}
+
+fn wallpaper_pixel(variant: u8, x: u32, y: u32, width: u32, height: u32) -> (u8, u8, u8) {
+    match variant {
+        0 => {
+            let mut r = 22 + (x * 36 / width) as u8 + (y * 18 / height) as u8;
+            let mut g = 68 + (x * 54 / width) as u8;
+            let mut b = 104 + (y * 44 / height) as u8;
+            let cx = width as i32 / 2;
+            let cy = height as i32 / 2;
+            let xi = x as i32;
+            let yi = y as i32;
+            for (px, py) in [(0, -28), (27, -10), (18, 24), (-18, 24), (-27, -10)] {
+                let dx = xi - (cx + px);
+                let dy = yi - (cy + py);
+                if dx * dx + dy * dy < 24 * 24 {
+                    r = 236;
+                    g = 116;
+                    b = 174;
+                }
+            }
+            let dx = xi - cx;
+            let dy = yi - cy;
+            if dx * dx + dy * dy < 17 * 17 {
+                r = 255;
+                g = 205;
+                b = 83;
+            }
+            (r, g, b)
+        }
+        1 => {
+            let band = ((x + y * 2) % 97) as u8;
+            (60 + band / 4, 122 + band / 3, 182 + band / 2)
+        }
+        2 => {
+            let grain = ((x * 17 + y * 31 + (x ^ y) * 7) % 55) as u8;
+            (82 + grain, 53 + grain / 2, 38 + grain / 3)
+        }
+        _ => {
+            let weave = (((x / 6) + (y / 4)) % 2) as u8 * 18;
+            (188 + weave, 194 + weave, 176 + weave)
+        }
+    }
 }
 
 pub fn default_programs() -> Vec<ProgramConfig> {
@@ -264,6 +400,15 @@ fn generate_limine_config(
         }
     }
 
+    for wallpaper in DEFAULT_WALLPAPERS {
+        if !asset_list_contains_wallpaper(assets, wallpaper.file_name) {
+            common_modules.push_str(&format!(
+                "    module_path: boot():/share/wallpapers/{}\n",
+                wallpaper.file_name
+            ));
+        }
+    }
+
     common_modules.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
     common_modules.push_str("    module_path: boot():/etc/locale.conf\n");
     common_modules.push_str("    module_path: boot():/etc/profile\n");
@@ -398,6 +543,7 @@ pub fn build_iso_with_config(
     sh.create_dir(iso_root.join("https"))?;
 
     cmd!(sh, "cp -r assets {iso_root_name}/share").run()?;
+    ensure_default_wallpapers(&iso_root.join("share"))?;
 
     let mut asset_files = Vec::new();
     for entry in WalkDir::new("assets") {
@@ -827,6 +973,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/drivers ::/bin ::/lib")
         .run()?;
     cmd!(sh, "mcopy -i {hdd}@@1M -s assets ::").run()?;
+    stage_default_wallpapers_hdd(sh, &hdd, arch)?;
 
     let mut asset_files = Vec::new();
     for entry in WalkDir::new("assets") {

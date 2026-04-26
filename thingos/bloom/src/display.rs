@@ -135,7 +135,7 @@ impl DisplayBackend {
         }
 
         if planes.is_empty() {
-            return PresentResult { success: true };
+            return PresentResult { success: false };
         }
 
         PresentResult { success: self.commit_display_planes(&planes) }

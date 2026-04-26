@@ -189,7 +189,7 @@ pub fn sys_fs_close(fd: usize) -> SysResult<usize> {
     }
 
     let entry = pinfo_arc.lock().handle_table.take(fd as u32)?;
-    entry.node.close();
+    crate::vfs::handle_table::close_open_handle(entry);
     Ok(0)
 }
 
@@ -389,7 +389,7 @@ pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usiz
     }
 
     let mut kbuf = vec![0u8; buf_len];
-    unsafe { 
+    unsafe {
         crate::kdebug!("sys_fs_write: tid={} fd={} starting copyin", tid, fd);
         copyin(&mut kbuf, buf_ptr)?;
         crate::kdebug!("sys_fs_write: tid={} fd={} copyin ok", tid, fd);
@@ -401,11 +401,7 @@ pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usiz
         let file = lock.handle_table.get(fd as u32)?;
         let status_flags = *file.status_flags.lock();
         if !status_flags.is_writable() {
-            crate::kwarn!(
-                "VFS: sys_fs_write fd={} EBADF (not writable, path={:?})",
-                fd,
-                file.path
-            );
+            crate::kwarn!("VFS: sys_fs_write fd={} EBADF (not writable, path={:?})", fd, file.path);
             return Err(Errno::EBADF);
         }
         let mid = vfs::mount::mount_id_for_path_in_namespace(lock.namespace.id(), &file.path);
@@ -829,8 +825,12 @@ pub fn sys_fs_mount_ex(
     let req_port_id = crate::ipc::find_port_id(&req_port).ok_or(Errno::EBADF)?;
 
     // Build and mount the provider filesystem.
-    let provider_fs =
-        vfs::provider::ProviderFs::new(req_port.clone(), resp_port, resp_write_handle.0, req_port_id.0);
+    let provider_fs = vfs::provider::ProviderFs::new(
+        req_port.clone(),
+        resp_port,
+        resp_write_handle.0,
+        req_port_id.0,
+    );
 
     let driver: Arc<dyn vfs::VfsDriver> = if (flags & abi::syscall::mount_flags::MCOR) != 0 {
         Arc::new(vfs::overlay::OverlayFs::new(provider_fs as Arc<dyn vfs::VfsDriver>))
@@ -840,7 +840,12 @@ pub fn sys_fs_mount_ex(
 
     vfs::mount::mount(&abs_path, driver, flags);
 
-    crate::kdebug!("vfs: mounted userland provider at {} (flags: {:#x}) port={:p}", abs_path, flags, Arc::as_ptr(&req_port));
+    crate::kdebug!(
+        "vfs: mounted userland provider at {} (flags: {:#x}) port={:p}",
+        abs_path,
+        flags,
+        Arc::as_ptr(&req_port)
+    );
     Ok(0)
 }
 

@@ -42,7 +42,7 @@ pub const WEVT_FRAME_DONE: u8 = 2;
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct WCmdCreateSurface {
-    pub msg_type: u8,  // = WCMD_CREATE_SURFACE
+    pub msg_type: u8, // = WCMD_CREATE_SURFACE
     pub _pad: [u8; 3],
     pub reply_port: u32,
 }
@@ -140,11 +140,7 @@ pub fn encode_create_surface(reply_port: u32) -> [u8; 8] {
 }
 
 pub fn encode_destroy_surface(bloom_surface_id: u32) -> [u8; 8] {
-    let msg = WCmdDestroySurface {
-        msg_type: WCMD_DESTROY_SURFACE,
-        _pad: [0; 3],
-        bloom_surface_id,
-    };
+    let msg = WCmdDestroySurface { msg_type: WCMD_DESTROY_SURFACE, _pad: [0; 3], bloom_surface_id };
     let mut out = [0u8; 8];
     out.copy_from_slice(as_bytes!(msg, WCmdDestroySurface));
     out

@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::pixel::PixelFormat;
-use libdl::{RTLD_NOW, dlopen_str, dlsym_bytes};
+use pistil::compositor::pistil_prepare_background;
 use pistil_types::Texture;
 use spin::Mutex;
 
@@ -24,7 +24,6 @@ pub struct CompositorVisuals {
 }
 
 struct PistilLib {
-    _handle: *mut core::ffi::c_void,
     prepare_bg: PrepareBackgroundFn,
 }
 
@@ -52,43 +51,41 @@ impl WallpaperLoader {
 
 impl CompositorVisuals {
     pub fn new() -> Self {
-        let handle = dlopen_str("/lib/libpistil.so", RTLD_NOW);
-        if handle.is_null() {
-            let err_ptr = unsafe { libdl::dlerror() };
-            let err_msg = if !err_ptr.is_null() {
-                let mut len = 0;
-                while unsafe { *err_ptr.add(len) } != 0 {
-                    len += 1;
-                }
-                let slice = unsafe { core::slice::from_raw_parts(err_ptr as *const u8, len) };
-                core::str::from_utf8(slice).unwrap_or("non-utf8 error")
-            } else {
-                "unknown error"
-            };
-            stem::error!(
-                "bloom: failed to load /lib/libpistil.so: {} (falling back to periwinkle)",
-                err_msg
-            );
-            return Self { background: None, pistil: None, loader: WallpaperLoader::new() };
-        }
-        let pistil = {
-            let sym = dlsym_bytes(handle, b"pistil_prepare_background");
-            if !sym.is_null() {
-                Some(PistilLib {
-                    _handle: handle,
-                    prepare_bg: unsafe { core::mem::transmute(sym) },
-                })
-            } else {
-                stem::error!("bloom: failed to find pistil_prepare_background");
-                None
-            }
-        };
+        stem::info!("bloom: pistil background renderer ready");
+        let pistil = Some(PistilLib { prepare_bg: pistil_prepare_background });
 
         Self { background: None, pistil, loader: WallpaperLoader::new() }
     }
 
-    /// Synchronously decode and import a wallpaper.  Used at startup before
-    /// the render loop is running so a first frame can be presented immediately.
+    /// Install a solid-colour background that can be presented immediately.
+    pub fn prepare_solid_background(&mut self, display: &DisplayBackend, argb: u32) {
+        let (width, height) = display.output_size();
+
+        let mut texture = match Texture::new("bloom.compositor.background", width, height, 4) {
+            Some(t) => t,
+            None => return,
+        };
+        texture.as_slice_mut().fill(argb);
+
+        let Some(buffer_id) = display.import_buffer(
+            texture.fd,
+            width,
+            height,
+            texture.stride,
+            PixelFormat::Bgra8888,
+            0,
+        ) else {
+            return;
+        };
+
+        if let Some(old) = self.background.take() {
+            display.release_buffer(old.buffer_id);
+        }
+
+        self.background = Some(ServerBuffer { _texture: texture, buffer_id });
+    }
+
+    /// Synchronously decode and import a wallpaper.
     pub fn prepare_background(&mut self, display: &DisplayBackend, wallpaper_path: &str) {
         let (width, height) = display.output_size();
 

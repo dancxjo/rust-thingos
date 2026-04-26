@@ -59,6 +59,8 @@ pub const RTLD_LOCAL: i32 = 0x000;
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 
+const SHT_DYNAMIC: u32 = 6;
+
 const DT_NULL: i64 = 0;
 #[allow(dead_code)]
 const DT_NEEDED: i64 = 1;
@@ -82,6 +84,8 @@ const R_X86_64_RELATIVE: u32 = 8;
 
 const STB_GLOBAL: u8 = 1;
 const STB_WEAK: u8 = 2;
+
+const ET_DYN: u16 = 3;
 
 const PAGE_SIZE: usize = 4096;
 
@@ -341,6 +345,134 @@ fn elf_load_size(bytes: &[u8]) -> Option<usize> {
     if hi > lo { Some(hi - lo) } else { None }
 }
 
+#[derive(Clone, Copy)]
+struct DynamicInfo {
+    symtab_va: usize,
+    strtab_va: usize,
+    strsz: usize,
+    syment: usize,
+    rela: usize,
+    relasz: usize,
+    relaent: usize,
+    jmprel: usize,
+    pltrelsz: usize,
+}
+
+impl DynamicInfo {
+    const fn new() -> Self {
+        Self {
+            symtab_va: 0,
+            strtab_va: 0,
+            strsz: 0,
+            syment: 24,
+            rela: 0,
+            relasz: 0,
+            relaent: 24,
+            jmprel: 0,
+            pltrelsz: 0,
+        }
+    }
+
+    fn apply_bias(&mut self, e_type: u16, bias: usize) {
+        if e_type != ET_DYN {
+            return;
+        }
+
+        for addr in [&mut self.symtab_va, &mut self.strtab_va, &mut self.rela, &mut self.jmprel] {
+            if *addr != 0 {
+                *addr = (*addr).wrapping_add(bias);
+            }
+        }
+    }
+}
+
+fn dynamic_table_from_program_headers(
+    elf_bytes: &[u8],
+    bias: usize,
+    e_phoff: usize,
+    e_phentsize: usize,
+    e_phnum: usize,
+) -> Option<(usize, usize)> {
+    for i in 0..e_phnum {
+        let off = e_phoff + i * e_phentsize;
+        if read_u32_le(elf_bytes, off).unwrap_or(0) == PT_DYNAMIC {
+            let dyn_vaddr = read_u64_le(elf_bytes, off + 16).unwrap_or(0) as usize;
+            let dyn_va = dyn_vaddr.wrapping_add(bias);
+            let dyn_filesz = read_u64_le(elf_bytes, off + 32).unwrap_or(0) as usize;
+            let entry_count = if dyn_filesz > 0 { dyn_filesz / 16 } else { 256 };
+            return Some((dyn_va, entry_count));
+        }
+    }
+
+    None
+}
+
+fn dynamic_table_from_sections(elf_bytes: &[u8], bias: usize) -> Option<(usize, usize)> {
+    let e_shoff = read_u64_le(elf_bytes, 40)? as usize;
+    let e_shentsize = read_u16_le(elf_bytes, 58)? as usize;
+    let e_shnum = read_u16_le(elf_bytes, 60)? as usize;
+    if e_shoff == 0 || e_shentsize == 0 || e_shnum == 0 {
+        return None;
+    }
+
+    for i in 0..e_shnum {
+        let off = e_shoff + i * e_shentsize;
+        if off + e_shentsize > elf_bytes.len() {
+            return None;
+        }
+        if read_u32_le(elf_bytes, off + 4)? != SHT_DYNAMIC {
+            continue;
+        }
+
+        let sh_addr = read_u64_le(elf_bytes, off + 16)? as usize;
+        let sh_size = read_u64_le(elf_bytes, off + 32)? as usize;
+        let sh_entsize = read_u64_le(elf_bytes, off + 56).unwrap_or(16) as usize;
+        if sh_addr == 0 || sh_size == 0 || sh_entsize == 0 {
+            return None;
+        }
+
+        return Some((sh_addr.wrapping_add(bias), sh_size / sh_entsize));
+    }
+
+    None
+}
+
+fn dynamic_table(
+    elf_bytes: &[u8],
+    bias: usize,
+    e_phoff: usize,
+    e_phentsize: usize,
+    e_phnum: usize,
+) -> Option<(usize, usize)> {
+    dynamic_table_from_program_headers(elf_bytes, bias, e_phoff, e_phentsize, e_phnum)
+        .or_else(|| dynamic_table_from_sections(elf_bytes, bias))
+}
+
+fn read_dynamic_info(dyn_va: usize, entry_count: usize, e_type: u16, bias: usize) -> DynamicInfo {
+    let mut info = DynamicInfo::new();
+    let mut ptr = dyn_va as *const u64;
+    for _ in 0..entry_count {
+        let tag = unsafe { ptr.read_unaligned() } as i64;
+        let val = unsafe { ptr.add(1).read_unaligned() } as usize;
+        ptr = unsafe { ptr.add(2) };
+        match tag {
+            t if t == DT_NULL => break,
+            t if t == DT_SYMTAB => info.symtab_va = val,
+            t if t == DT_STRTAB => info.strtab_va = val,
+            t if t == DT_STRSZ => info.strsz = val,
+            t if t == DT_SYMENT => info.syment = val,
+            t if t == DT_RELA => info.rela = val,
+            t if t == DT_RELASZ => info.relasz = val,
+            t if t == DT_RELAENT => info.relaent = val,
+            t if t == DT_JMPREL => info.jmprel = val,
+            t if t == DT_PLTRELSZ => info.pltrelsz = val,
+            _ => {}
+        }
+    }
+    info.apply_bias(e_type, bias);
+    info
+}
+
 /// Map all `PT_LOAD` segments of `elf_bytes` into the address space at
 /// `load_base`.  Returns `(bias, symtab_va, strtab_va, strsz, syment, base,
 /// map_size)` on success, or an error message on failure.
@@ -381,11 +513,7 @@ fn map_elf(
         return Err(b"no PT_LOAD segments");
     }
 
-    let bias: usize = if e_type == 3 /* ET_DYN */ {
-        load_base.wrapping_sub(min_vaddr)
-    } else {
-        0
-    };
+    let bias: usize = if e_type == ET_DYN { load_base.wrapping_sub(min_vaddr) } else { 0 };
 
     let base = load_base;
     let mut map_end = load_base;
@@ -452,49 +580,21 @@ fn map_elf(
         }
     }
 
-    // Parse PT_DYNAMIC to obtain symbol table info.
-    let mut symtab_va = 0usize;
-    let mut strtab_va = 0usize;
-    let mut strsz = 0usize;
-    let mut syment = 24usize;
-
-    for i in 0..e_phnum {
-        let off = e_phoff + i * e_phentsize;
-        if read_u32_le(elf_bytes, off).unwrap_or(0) == PT_DYNAMIC {
-            let dyn_vaddr = read_u64_le(elf_bytes, off + 16).unwrap_or(0) as usize;
-            let dyn_va = dyn_vaddr.wrapping_add(bias);
-            let dyn_filesz = read_u64_le(elf_bytes, off + 32).unwrap_or(0) as usize;
-            let entry_count = dyn_filesz / 16;
-            let mut ptr = dyn_va as *const u64;
-            for _ in 0..entry_count {
-                let tag = unsafe { ptr.read_unaligned() } as i64;
-                let val = unsafe { ptr.add(1).read_unaligned() } as usize;
-                ptr = unsafe { ptr.add(2) };
-                match tag {
-                    t if t == DT_NULL => break,
-                    t if t == DT_SYMTAB => symtab_va = val,
-                    t if t == DT_STRTAB => strtab_va = val,
-                    t if t == DT_STRSZ => strsz = val,
-                    t if t == DT_SYMENT => syment = val,
-                    _ => {}
-                }
-            }
-            break;
-        }
-    }
-
-    // Apply DT_SYMTAB/DT_STRTAB bias for ET_DYN objects (their addresses are
-    // file-relative virtual addresses that need the load bias applied).
-    if e_type == 3 && symtab_va != 0 {
-        symtab_va = symtab_va.wrapping_add(bias);
-    }
-    if e_type == 3 && strtab_va != 0 {
-        strtab_va = strtab_va.wrapping_add(bias);
-    }
+    let dyn_info = dynamic_table(elf_bytes, bias, e_phoff, e_phentsize, e_phnum)
+        .map(|(dyn_va, entry_count)| read_dynamic_info(dyn_va, entry_count, e_type, bias))
+        .unwrap_or_else(DynamicInfo::new);
 
     let map_size = map_end.saturating_sub(base);
 
-    Ok((bias, symtab_va, strtab_va, strsz, syment, base, map_size))
+    Ok((
+        bias,
+        dyn_info.symtab_va,
+        dyn_info.strtab_va,
+        dyn_info.strsz,
+        dyn_info.syment,
+        base,
+        map_size,
+    ))
 }
 
 // ── Relocation processing ─────────────────────────────────────────────────────
@@ -534,8 +634,14 @@ fn process_rela_for_handle(
             // Each Elf64_Sym is `syment` bytes; st_name is the first u32.
             let sym_ptr = (symtab_va + r_sym * syment) as *const u8;
             let st_name = unsafe { read_u32_ptr(sym_ptr, 0) } as usize;
+            let st_shndx = unsafe { read_u16_ptr(sym_ptr, 6) };
+            let st_value = unsafe { read_u64_ptr(sym_ptr, 8) };
             let name = unsafe { strtab_str(strtab_va, st_name, strsz.saturating_sub(st_name)) };
-            lookup(name).unwrap_or(0)
+            if st_shndx != 0 && st_value != 0 {
+                st_value.wrapping_add(bias as u64)
+            } else {
+                lookup(name).unwrap_or(0)
+            }
         } else {
             0
         };
@@ -659,85 +765,58 @@ pub fn dlopen_str(path: &str, _flags: i32) -> *mut core::ffi::c_void {
 
     // Process relocations.  For simplicity we resolve against already-loaded
     // handles; the caller can load dependencies first if needed.
-    {
-        // Find PT_DYNAMIC to get relocation info.
-        if elf_bytes.len() >= 64 {
-            let e_phoff = read_u64_le(&elf_bytes, 32).unwrap_or(0) as usize;
-            let e_phentsize = read_u16_le(&elf_bytes, 54).unwrap_or(0) as usize;
-            let e_phnum = read_u16_le(&elf_bytes, 56).unwrap_or(0) as usize;
-            let e_type = read_u16_le(&elf_bytes, 16).unwrap_or(0);
+    if elf_bytes.len() >= 64 {
+        let e_phoff = read_u64_le(&elf_bytes, 32).unwrap_or(0) as usize;
+        let e_phentsize = read_u16_le(&elf_bytes, 54).unwrap_or(0) as usize;
+        let e_phnum = read_u16_le(&elf_bytes, 56).unwrap_or(0) as usize;
+        let e_type = read_u16_le(&elf_bytes, 16).unwrap_or(0);
 
-            for i in 0..e_phnum {
-                let off = e_phoff + i * e_phentsize;
-                if read_u32_le(&elf_bytes, off).unwrap_or(0) == PT_DYNAMIC {
-                    let dyn_vaddr = read_u64_le(&elf_bytes, off + 16).unwrap_or(0) as usize;
-                    let dyn_va = if e_type == 3 { dyn_vaddr.wrapping_add(bias) } else { dyn_vaddr };
-                    let dyn_filesz = read_u64_le(&elf_bytes, off + 32).unwrap_or(0) as usize;
-                    let entry_count = if dyn_filesz > 0 { dyn_filesz / 16 } else { 256 };
+        if let Some((dyn_va, entry_count)) =
+            dynamic_table(&elf_bytes, bias, e_phoff, e_phentsize, e_phnum)
+        {
+            let dyn_info = read_dynamic_info(dyn_va, entry_count, e_type, bias);
 
-                    let mut rela = 0usize;
-                    let mut relasz = 0usize;
-                    let mut relaent = 24usize;
-                    let mut jmprel = 0usize;
-                    let mut pltrelsz = 0usize;
-
-                    let mut ptr = dyn_va as *const u64;
-                    for _ in 0..entry_count {
-                        let tag = unsafe { ptr.read_unaligned() } as i64;
-                        let val = unsafe { ptr.add(1).read_unaligned() } as usize;
-                        ptr = unsafe { ptr.add(2) };
-                        match tag {
-                            t if t == DT_NULL => break,
-                            t if t == DT_RELA => rela = val,
-                            t if t == DT_RELASZ => relasz = val,
-                            t if t == DT_RELAENT => relaent = val,
-                            t if t == DT_JMPREL => jmprel = val,
-                            t if t == DT_PLTRELSZ => pltrelsz = val,
-                            _ => {}
-                        }
+            // Build a temporary lookup closure that searches all
+            // currently-loaded handles (snapshot taken while the lock is not
+            // held, to avoid deadlock during the reloc walk).
+            let lookup = |name: &[u8]| -> Option<u64> {
+                let ht = HANDLES.lock();
+                for slot in &ht.slots {
+                    if slot.state != SLOT_USED {
+                        continue;
                     }
-
-                    // Apply bias to rela/jmprel for ET_DYN.
-                    if e_type == 3 {
-                        if rela != 0 {
-                            rela = rela.wrapping_add(bias);
-                        }
-                        if jmprel != 0 {
-                            jmprel = jmprel.wrapping_add(bias);
-                        }
+                    if let Some(addr) = lookup_in_handle(slot, name) {
+                        return Some(addr as u64);
                     }
-
-                    // Build a temporary lookup closure that searches all
-                    // currently-loaded handles (snapshot taken while the
-                    // lock is not held, to avoid deadlock during the reloc
-                    // walk).
-                    let lookup = |name: &[u8]| -> Option<u64> {
-                        let ht = HANDLES.lock();
-                        for slot in &ht.slots {
-                            if slot.state != SLOT_USED {
-                                continue;
-                            }
-                            if let Some(addr) = lookup_in_handle(slot, name) {
-                                return Some(addr as u64);
-                            }
-                        }
-                        None
-                    };
-
-                    if rela != 0 {
-                        process_rela_for_handle(
-                            rela, relasz, relaent, bias, symtab_va, strtab_va, strsz, syment,
-                            &lookup,
-                        );
-                    }
-                    if jmprel != 0 {
-                        process_rela_for_handle(
-                            jmprel, pltrelsz, relaent, bias, symtab_va, strtab_va, strsz, syment,
-                            &lookup,
-                        );
-                    }
-                    break;
                 }
+                None
+            };
+
+            if dyn_info.rela != 0 {
+                process_rela_for_handle(
+                    dyn_info.rela,
+                    dyn_info.relasz,
+                    dyn_info.relaent,
+                    bias,
+                    symtab_va,
+                    strtab_va,
+                    strsz,
+                    syment,
+                    &lookup,
+                );
+            }
+            if dyn_info.jmprel != 0 {
+                process_rela_for_handle(
+                    dyn_info.jmprel,
+                    dyn_info.pltrelsz,
+                    dyn_info.relaent,
+                    bias,
+                    symtab_va,
+                    strtab_va,
+                    strsz,
+                    syment,
+                    &lookup,
+                );
             }
         }
     }
