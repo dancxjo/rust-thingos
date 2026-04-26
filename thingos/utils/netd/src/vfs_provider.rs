@@ -291,7 +291,8 @@ impl NetVfsProvider {
             | VfsRpcOp::AttrSet
             | VfsRpcOp::AttrRemove
             | VfsRpcOp::AttrList
-            | VfsRpcOp::Readlink => return Err(Errno::ENOTSUP),
+            | VfsRpcOp::Readlink
+            | VfsRpcOp::ReadIntoFd => return Err(Errno::ENOTSUP),
         };
 
         if payload_len > (VFS_RPC_MAX_REQ - hdr_size) {
@@ -519,7 +520,8 @@ impl NetVfsProvider {
             | VfsRpcOp::AttrSet
             | VfsRpcOp::AttrRemove
             | VfsRpcOp::AttrList
-            | VfsRpcOp::Readlink => send_err(resp_port, req_id, E_NOTSUP as u8),
+            | VfsRpcOp::Readlink
+            | VfsRpcOp::ReadIntoFd => send_err(resp_port, req_id, E_NOTSUP as u8),
         }
     }
 

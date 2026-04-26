@@ -55,6 +55,7 @@ pub fn dispatch_vfs_rpc(driver: &mut BootFbDriver, req: &ProviderRequest) -> Pro
         VfsRpcOp::Read | VfsRpcOp::Write | VfsRpcOp::Readdir | VfsRpcOp::Poll => {
             ProviderResponse::err(Errno::ENOSYS)
         }
+        VfsRpcOp::ReadIntoFd => ProviderResponse::err(Errno::ENOSYS),
     }
 }
 

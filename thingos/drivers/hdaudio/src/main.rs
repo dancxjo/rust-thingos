@@ -770,7 +770,8 @@ fn hda_dispatch_rpc(op: VfsRpcOp, payload: &[u8], card: &mut HdaAudioCard) -> Ve
         | VfsRpcOp::AttrSet
         | VfsRpcOp::AttrRemove
         | VfsRpcOp::AttrList
-        | VfsRpcOp::Readlink => hda_resp_err(38),
+        | VfsRpcOp::Readlink
+        | VfsRpcOp::ReadIntoFd => hda_resp_err(38),
     }
 }
 

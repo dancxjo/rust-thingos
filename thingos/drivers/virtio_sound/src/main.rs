@@ -617,7 +617,8 @@ fn dispatch_rpc(
         | VfsRpcOp::AttrSet
         | VfsRpcOp::AttrRemove
         | VfsRpcOp::AttrList
-        | VfsRpcOp::Readlink => (ProviderResponse::err(Errno::ENOTSUP), false),
+        | VfsRpcOp::Readlink
+        | VfsRpcOp::ReadIntoFd => (ProviderResponse::err(Errno::ENOTSUP), false),
     }
 }
 
