@@ -96,6 +96,17 @@ pub enum VfsRpcOp {
     /// with the target path.  The kernel calls this while resolving a path
     /// (up to `MAX_SYMLINK_FOLLOWS` times) to follow the link transparently.
     Readlink = 16,
+    /// Bulk-read: write all `len` bytes starting at `offset` directly into a
+    /// kernel-injected memfd fd instead of returning data in the IPC response.
+    ///
+    /// This is the preferred path for large reads (e.g. ELF loading during
+    /// spawn) because it eliminates ring-buffer size limits: the provider
+    /// writes the entire file via a single `vfs_write` syscall, and only a
+    /// small 4-byte "done" confirmation travels over the IPC channel.
+    ///
+    /// Payload:  `[handle: u64][offset: u64][len: u32][dest_fd: u32]`
+    /// Response payload (on OK): `[bytes_written: u32]`
+    ReadIntoFd = 17,
 }
 
 impl VfsRpcOp {
@@ -118,6 +129,7 @@ impl VfsRpcOp {
             14 => Some(Self::AttrRemove),
             15 => Some(Self::AttrList),
             16 => Some(Self::Readlink),
+            17 => Some(Self::ReadIntoFd),
             _ => None,
         }
     }

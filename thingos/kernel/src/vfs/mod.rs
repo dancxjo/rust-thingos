@@ -245,6 +245,26 @@ pub trait VfsNode: Send + Sync {
     /// Returns the number of bytes read, or 0 at EOF.
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize>;
 
+    /// Read exactly `buf.len()` bytes from offset 0 into `buf` using the most
+    /// efficient mechanism available for this node type.
+    ///
+    /// [`ProviderNode`] overrides this with the memfd bulk-transfer path
+    /// (`ReadIntoFd`) so that the entire file travels in a single IPC
+    /// round-trip regardless of size.  All other node types fall back to the
+    /// default, which calls [`read`] in a loop.
+    fn read_all_into(&self, buf: &mut [u8]) -> SysResult<usize> {
+        let size = buf.len();
+        let mut pos = 0;
+        while pos < size {
+            let n = self.read(pos as u64, &mut buf[pos..])?;
+            if n == 0 {
+                break;
+            }
+            pos += n;
+        }
+        Ok(pos)
+    }
+
     /// Write `buf` starting at `offset`.
     /// Returns the number of bytes written.
     fn write(&self, offset: u64, buf: &[u8]) -> SysResult<usize>;
