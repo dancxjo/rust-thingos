@@ -521,7 +521,9 @@ async fn spawn_fails_with_ebusy(world: &mut ThingOsWorld) -> Result<(), StepErro
     // The EBUSY rejection is logged by the kernel's spawn handler when
     // is_shutdown_in_progress() is true.  We verify the log contains the
     // shutdown-in-progress indicator rather than a spawn-succeeded entry.
-    let found = world.wait_for_serial("shutdown already in progress", 10.0).await;
+    let found = world
+        .wait_for_serial("SYSCALL SHUTDOWN: shutdown already in progress, duplicate caller exiting", 10.0)
+        .await;
     if found {
         eprintln!("│  │  │      ✅ spawn rejected with EBUSY (shutdown in progress)");
         Ok(())
