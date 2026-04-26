@@ -1,11 +1,21 @@
 use core::arch::asm;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use kernel::time::MonotonicClamp;
+
+/// 16550 UART TX FIFO depth (standard).
+const UART_FIFO_DEPTH: usize = 16;
+
+/// COM1 base I/O port.
+const COM1: u16 = 0x3F8;
+/// COM2 base I/O port.
+const COM2: u16 = 0x2F8;
 
 /// Serial port implementation for x86_64 using I/O port 0x3F8 (COM1).
 pub struct SerialPort {
     pub(crate) clamp: MonotonicClamp,
     freq_hz: AtomicU64,
+    /// Whether TX interrupts are currently armed on COM1.
+    tx_irq_armed: AtomicBool,
 }
 
 impl SerialPort {
@@ -13,21 +23,89 @@ impl SerialPort {
         Self {
             clamp: MonotonicClamp::new(),
             freq_hz: AtomicU64::new(0),
+            tx_irq_armed: AtomicBool::new(false),
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Non-blocking / FIFO-aware helpers
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if the TX Holding Register is empty (THRE bit in LSR).
+    /// This means the FIFO is fully drained and up to FIFO_DEPTH bytes can
+    /// be written without blocking.
+    #[inline]
+    pub fn uart_tx_ready() -> bool {
+        unsafe { (inb(COM1 + 5) & 0x20) != 0 }
+    }
+
+    /// Write up to `UART_FIFO_DEPTH` bytes into the TX FIFO without any
+    /// busy-wait.  Returns the number of bytes actually written.
+    ///
+    /// Caller must ensure THRE is set (via `uart_tx_ready()`) before calling.
+    /// After the burst, the FIFO will drain at wire speed; subsequent writes
+    /// should wait for THRE again.
+    pub fn write_fifo_burst(data: &[u8]) -> usize {
+        let n = data.len().min(UART_FIFO_DEPTH);
+        for &b in &data[..n] {
+            unsafe { outb(COM1, b) };
+        }
+        n
+    }
+
+    /// Arm the TX Holding Register Empty (THRE) interrupt on COM1.
+    ///
+    /// When armed, the UART fires IRQ4 each time the TX FIFO drains below
+    /// the trigger level, allowing us to refill it from the deferred ring
+    /// without polling.
+    pub fn arm_tx_interrupt(&self) {
+        if self.tx_irq_armed.load(Ordering::Relaxed) {
+            return;
+        }
+        unsafe {
+            // IER: bit 0 = Received Data Available, bit 1 = THRE
+            let ier = inb(COM1 + 1);
+            outb(COM1 + 1, ier | 0x02);
+        }
+        self.tx_irq_armed.store(true, Ordering::Relaxed);
+    }
+
+    /// Disarm the THRE interrupt on COM1.
+    ///
+    /// Called when the ring buffer is empty so we don't generate spurious
+    /// interrupts.
+    pub fn disarm_tx_interrupt(&self) {
+        if !self.tx_irq_armed.load(Ordering::Relaxed) {
+            return;
+        }
+        unsafe {
+            let ier = inb(COM1 + 1);
+            outb(COM1 + 1, ier & !0x02);
+        }
+        self.tx_irq_armed.store(false, Ordering::Relaxed);
+    }
+
+    /// Returns `true` if the THRE interrupt is currently armed.
+    #[inline]
+    pub fn is_tx_irq_armed(&self) -> bool {
+        self.tx_irq_armed.load(Ordering::Relaxed)
+    }
+
+    /// Synchronous single-byte write.  Spin-waits for TX ready.
+    ///
+    /// This is the **panic/sync fallback** path.  Normal logging should go
+    /// through the deferred ring buffer instead.
     pub fn putchar(&self, c: u8) {
         unsafe {
             // Wait for COM1 transmit empty
-            while (inb(0x3F8 + 5) & 0x20) == 0 {}
-            outb(0x3F8, c);
+            while (inb(COM1 + 5) & 0x20) == 0 {}
+            outb(COM1, c);
 
             // Mirror to COM2 if it exists (check if Scratch Register sticks)
-            // COM2 might not always be present or mapped, so we do a quick probe.
-            outb(0x2F8 + 7, 0xAE);
-            if inb(0x2F8 + 7) == 0xAE {
-                while (inb(0x2F8 + 5) & 0x20) == 0 {}
-                outb(0x2F8, c);
+            outb(COM2 + 7, 0xAE);
+            if inb(COM2 + 7) == 0xAE {
+                while (inb(COM2 + 5) & 0x20) == 0 {}
+                outb(COM2, c);
             }
         }
     }
@@ -36,15 +114,15 @@ impl SerialPort {
     pub fn getchar(&self) -> Option<u8> {
         unsafe {
             // Check COM1 (Data Ready)
-            if (inb(0x3F8 + 5) & 0x01) != 0 {
-                return Some(inb(0x3F8));
+            if (inb(COM1 + 5) & 0x01) != 0 {
+                return Some(inb(COM1));
             }
-            
+
             // Check COM2 (Data Ready)
-            if (inb(0x2F8 + 5) & 0x01) != 0 {
-                return Some(inb(0x2F8));
+            if (inb(COM2 + 5) & 0x01) != 0 {
+                return Some(inb(COM2));
             }
-            
+
             None
         }
     }

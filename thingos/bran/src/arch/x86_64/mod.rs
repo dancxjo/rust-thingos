@@ -22,6 +22,7 @@ pub mod simd;
 pub mod smp;
 pub mod syscall;
 pub mod task;
+pub mod serial;
 pub mod tls;
 pub mod trap;
 
@@ -40,6 +41,8 @@ pub struct X86_64Runtime {
 
     serial_buf: spin::Mutex<SerialBuffer>,
     serial_tx_lock: spin::Mutex<()>,
+    /// UART TX interrupt state (arm/disarm) for async serial drain.
+    pub serial: serial::SerialPort,
 }
 
 pub struct SerialBuffer {
@@ -255,6 +258,7 @@ impl X86_64Runtime {
             trampoline_ready: AtomicUsize::new(0),
             serial_buf: spin::Mutex::new(SerialBuffer::new()),
             serial_tx_lock: spin::Mutex::new(()),
+            serial: serial::SerialPort::new(),
         }
     }
 
@@ -468,6 +472,22 @@ impl ArchRuntime for X86_64Runtime {
         };
         self.irq_restore(irq);
         res
+    }
+
+    fn serial_tx_ready(&self) -> bool {
+        serial::SerialPort::uart_tx_ready()
+    }
+
+    fn write_serial_fifo_burst(&self, data: &[u8]) -> usize {
+        serial::SerialPort::write_fifo_burst(data)
+    }
+
+    fn arm_serial_tx_irq(&self) {
+        self.serial.arm_tx_interrupt();
+    }
+
+    fn disarm_serial_tx_irq(&self) {
+        self.serial.disarm_tx_interrupt();
     }
 
     fn halt(&self) -> ! {

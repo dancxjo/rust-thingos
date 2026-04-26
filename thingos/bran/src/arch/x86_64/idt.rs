@@ -1435,9 +1435,11 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
         // }
         // crate::theme::try_tick(now_ticks);
     } else if resolved == 0x24 {
-        // Serial interrupt - poll into buffer
-        // kernel::info!("[IRQ] Serial interrupt 0x24 fired");
+        // Serial interrupt (COM1 IRQ4) — handles both RX and TX:
+        // 1. Poll received bytes into the serial RX buffer
         crate::RUNTIME.arch.poll_serial();
+        // 2. Drain the deferred TX ring into the UART FIFO (THRE interrupt)
+        crate::console::serial_drain_irq();
     } else if resolved == IRQ_RESCHED_VECTOR {
         kernel::sched::on_resched_ipi::<crate::arch::CurrentRuntime>();
     } else if resolved == IRQ_TLB_SHOOTDOWN_VECTOR {

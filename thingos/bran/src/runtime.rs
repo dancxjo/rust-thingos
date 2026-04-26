@@ -253,6 +253,50 @@ pub trait ArchRuntime {
 
     /// Activates the onscreen terminal if supported.
     fn activate_onscreen_terminal(&self) {}
+
+    // -----------------------------------------------------------------------
+    // Async serial TX support
+    //
+    // These methods enable non-blocking serial output.  The deferred ring
+    // buffer in `console.rs` pushes bytes and then calls `arm_serial_tx_irq`
+    // to start draining.  The architecture's serial IRQ handler calls
+    // `console::serial_drain_irq()` which uses `serial_tx_ready()` and
+    // `write_serial_fifo_burst()` to move bytes to the hardware.
+    //
+    // Default implementations provide simple pass-through behaviour so
+    // architectures without hardware TX FIFOs (SBI, PL011 without IRQ
+    // wiring, etc.) still work — just without the full async benefit.
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if the serial TX hardware can accept more bytes
+    /// without blocking.  On UARTs with a FIFO this checks the THRE bit.
+    ///
+    /// Default: always `true` (assume the hardware is always ready).
+    fn serial_tx_ready(&self) -> bool {
+        true
+    }
+
+    /// Write up to one FIFO-depth worth of bytes to the serial TX hardware
+    /// without busy-waiting.  Returns the number of bytes consumed.
+    ///
+    /// Default: falls back to `putbuf()` (synchronous).
+    fn write_serial_fifo_burst(&self, data: &[u8]) -> usize {
+        self.putbuf(data);
+        data.len()
+    }
+
+    /// Arm the serial TX-empty interrupt so the IRQ handler will drain the
+    /// deferred ring buffer asynchronously.
+    ///
+    /// Default: no-op (architectures without TX interrupts rely on the
+    /// timer-tick and idle-loop flush paths instead).
+    fn arm_serial_tx_irq(&self) {}
+
+    /// Disarm the serial TX-empty interrupt (called when the ring buffer
+    /// is empty to avoid spurious IRQs).
+    ///
+    /// Default: no-op.
+    fn disarm_serial_tx_irq(&self) {}
 }
 
 // --- Generic Runtime ---
