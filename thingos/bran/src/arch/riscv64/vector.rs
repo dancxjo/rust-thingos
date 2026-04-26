@@ -191,6 +191,7 @@ pub unsafe extern "C" fn rust_trap_handler(tf: &mut UserTrapFrame) {
                 // trigger a reschedule if needed.
                 kernel::sched::on_tick::<crate::arch::CurrentRuntime>();
                 crate::console::flush_deferred();
+                crate::console::serial_flush_deferred();
                 crate::console::blink_cursor();
             }
             1 => {

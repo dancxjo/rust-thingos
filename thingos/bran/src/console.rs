@@ -3,6 +3,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use kernel::{BootRuntime, BootRuntimeBase};
 use spin::Mutex;
 
+use crate::runtime::ArchRuntime as _;
+
+
 use crate::framebuffer::Framebuffer;
 
 const CELL_H: u32 = 16;
@@ -742,7 +745,7 @@ pub fn serial_put_char(c: u8) {
     SERIAL_DEFERRED.lock().push(c);
     // Kick-start: arm the TX interrupt so the serial IRQ handler drains
     // the ring asynchronously.  This is a no-op if already armed.
-    crate::RUNTIME.arch.serial.arm_tx_interrupt();
+    crate::RUNTIME.arch.arm_serial_tx_irq();
 }
 
 /// Enqueue a byte slice for deferred framebuffer rendering.
@@ -759,7 +762,7 @@ pub fn serial_put_buf(buf: &[u8]) {
     }
     SERIAL_DEFERRED.lock().push_slice(buf);
     // Kick-start TX interrupt for async drain.
-    crate::RUNTIME.arch.serial.arm_tx_interrupt();
+    crate::RUNTIME.arch.arm_serial_tx_irq();
 }
 
 /// Called from the timer IRQ to blink the cursor.
@@ -907,7 +910,7 @@ pub fn serial_flush_deferred() {
     };
 
     // If the UART TX register isn't ready, don't stall — bail out.
-    if !crate::arch::x86_64::serial::SerialPort::uart_tx_ready() {
+    if !crate::RUNTIME.arch.serial_tx_ready() {
         return;
     }
 
@@ -919,14 +922,14 @@ pub fn serial_flush_deferred() {
         };
         if ring.is_empty() {
             // Nothing to send — disarm the TX interrupt to avoid spurious IRQs.
-            crate::RUNTIME.arch.serial.disarm_tx_interrupt();
+            crate::RUNTIME.arch.disarm_serial_tx_irq();
             return;
         }
         ring.drain(&mut local)
     };
 
     if n > 0 {
-        crate::arch::x86_64::serial::SerialPort::write_fifo_burst(&local[..n]);
+        crate::RUNTIME.arch.write_serial_fifo_burst(&local[..n]);
     }
 }
 
@@ -942,7 +945,7 @@ pub fn serial_drain_irq() {
     }
 
     // Check TX-ready first (should be set since THRE fired, but be safe).
-    if !crate::arch::x86_64::serial::SerialPort::uart_tx_ready() {
+    if !crate::RUNTIME.arch.serial_tx_ready() {
         return;
     }
 
@@ -957,11 +960,11 @@ pub fn serial_drain_irq() {
     };
 
     if n > 0 {
-        crate::arch::x86_64::serial::SerialPort::write_fifo_burst(&local[..n]);
+        crate::RUNTIME.arch.write_serial_fifo_burst(&local[..n]);
     }
 
     if empty {
-        crate::RUNTIME.arch.serial.disarm_tx_interrupt();
+        crate::RUNTIME.arch.disarm_serial_tx_irq();
     }
 }
 
@@ -980,7 +983,7 @@ pub fn serial_flush_deferred_idle() {
     // spin-wait.  If the UART isn't ready we bail immediately.
     let mut local = [0u8; 16];
     for _ in 0..128 {
-        if !crate::arch::x86_64::serial::SerialPort::uart_tx_ready() {
+        if !crate::RUNTIME.arch.serial_tx_ready() {
             return;
         }
 
@@ -990,14 +993,14 @@ pub fn serial_flush_deferred_idle() {
                 None => return,
             };
             if ring.is_empty() {
-                crate::RUNTIME.arch.serial.disarm_tx_interrupt();
+                crate::RUNTIME.arch.disarm_serial_tx_irq();
                 return;
             }
             ring.drain(&mut local)
         };
 
         if n > 0 {
-            crate::arch::x86_64::serial::SerialPort::write_fifo_burst(&local[..n]);
+            crate::RUNTIME.arch.write_serial_fifo_burst(&local[..n]);
         } else {
             break;
         }

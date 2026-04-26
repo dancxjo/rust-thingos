@@ -34,6 +34,7 @@ pub unsafe extern "C" fn handle_sync_el0_rust(tf: &mut UserTrapFrame, esr: u64) 
 pub unsafe extern "C" fn handle_irq_el0_rust() {
     kernel::sched::on_tick::<crate::arch::CurrentRuntime>();
     crate::console::flush_deferred();
+    crate::console::serial_flush_deferred();
     crate::console::blink_cursor();
 }
 
