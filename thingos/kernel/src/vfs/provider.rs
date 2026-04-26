@@ -47,9 +47,12 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, Ordering};
 use abi::errors::{Errno, SysResult};
 use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp, VfsRpcReqHeader};
+use abi::device::DeviceKind;
+use abi::display::ioctl::DISPLAY_OP_IMPORT_BUFFER;
+use abi::display::types::BufferHandle;
 use spin::Mutex;
 
-use super::{VfsDriver, VfsNode, VfsStat};
+use super::{OpenFlags, VfsDriver, VfsNode, VfsStat};
 use crate::sched::wait_queue::WaitQueue;
 use crate::syscall::validate::{copyin, copyout};
 
@@ -613,6 +616,46 @@ impl VfsNode for ProviderNode {
                 )?;
             }
         }
+
+        // FD Translation for Display IMPORT_BUFFER
+        if call.kind == DeviceKind::Display && call.op == DISPLAY_OP_IMPORT_BUFFER {
+            if in_len >= core::mem::size_of::<BufferHandle>() {
+                let bh_offset = 8 + core::mem::size_of::<abi::device::DeviceCall>();
+                let mut bh: BufferHandle = unsafe {
+                    core::ptr::read_unaligned(payload[bh_offset..].as_ptr() as *const _)
+                };
+
+                // 1. Resolve node in caller
+                let node = {
+                    let pinfo = crate::sched::process_info_current().ok_or(Errno::ENOENT)?;
+                    let lock = pinfo.lock();
+                    lock.handle_table.get(bh.handle)?.node.clone()
+                };
+
+                // 2. Find provider process and install node
+                let provider_pid = self.rpc.req.port().primary_reader_pid();
+                if provider_pid != 0 {
+                    if let Some(provider_pinfo) = crate::sched::process_info_for_pid_current(provider_pid as u32) {
+                        let mut lock = provider_pinfo.lock();
+                        let new_handle = lock.handle_table.open(
+                            node,
+                            OpenFlags::read_write(),
+                            alloc::format!("imported-buffer-{}", bh.handle)
+                        )?;
+                        bh.handle = new_handle;
+
+                        // Update payload with the translated handle
+                        unsafe {
+                            core::ptr::write_unaligned(
+                                payload[bh_offset..].as_mut_ptr() as *mut BufferHandle,
+                                bh
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         let resp = self.rpc.rpc(VfsRpcOp::DeviceCall, &payload)?;
         if resp.len() < 8 {
             return Err(Errno::EIO);

@@ -1,6 +1,6 @@
-# ✅ Scenario: create xdg_surface for a wl_surface succeeds
+# ⏭️ Scenario: create xdg_surface for a wl_surface succeeds
 
-> Last run: 2026-04-25 13:10:40
+> Last run: 2026-04-25 17:25:04
 
 ## Steps
 

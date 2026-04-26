@@ -180,6 +180,7 @@ impl Supervisor {
         stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
         stem::debug!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
 
+        stem::info!("SPROUT: Starting full pipeline (graphics + input)");
         stem::info!("SPROUT: Entering supervisor service loop (tick={}ms)", SUPERVISOR_TICK_MS);
         self.tick_supervisor();
 
