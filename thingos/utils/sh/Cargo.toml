@@ -3,6 +3,9 @@ name = "sh"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+spawn-timing = []
+
 [dependencies]
 stem = { path = "../../stem", features = ["rt"] }
 abi = { path = "../../abi" }
