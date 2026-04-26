@@ -494,6 +494,9 @@ pub fn sys_auxv_get(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
 pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
     use abi::types::{SpawnProcessExReq, SpawnProcessExResp};
 
+    #[cfg(feature = "spawn_timing")]
+    let t_syscall_entry = crate::trace::now();
+
     /// Maximum allowed length for a cwd path supplied via SpawnProcessExReq.
     const MAX_CWD_LEN: usize = 4096;
 
@@ -618,6 +621,8 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
     // Use the general-purpose VFS-based runtime process creation path.
     // The `name` field in the request is treated as the VFS path to the
     // executable (e.g. `/usr/bin/ls`).
+    #[cfg(feature = "spawn_timing")]
+    let t_spawn_call = crate::trace::now();
     let result = unsafe {
         scheduler::spawn_process_from_path_current(
             name,
@@ -633,6 +638,8 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
             entry_sym_override,
         )
     }?;
+    #[cfg(feature = "spawn_timing")]
+    let t_spawn_return = crate::trace::now();
 
     // Write the response
     unsafe {
@@ -658,6 +665,22 @@ pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize>
         result.child_tid,
         result.child_pid
     );
+    #[cfg(feature = "spawn_timing")]
+    {
+        let t_writeback_end = crate::trace::now();
+        let syscall_overhead_us = t_spawn_call.saturating_sub(t_syscall_entry) / 1_000;
+        let spawn_kernel_us = t_spawn_return.saturating_sub(t_spawn_call) / 1_000;
+        let writeback_us = t_writeback_end.saturating_sub(t_spawn_return) / 1_000;
+        let total_syscall_us = t_writeback_end.saturating_sub(t_syscall_entry) / 1_000;
+        crate::kinfo!(
+            "SPAWN_TIMING syscall '{}': total={}µs | pre_spawn={}µs spawn={}µs writeback={}µs",
+            name,
+            total_syscall_us,
+            syscall_overhead_us,
+            spawn_kernel_us,
+            writeback_us,
+        );
+    }
 
     Ok(result.child_tid as usize)
 }

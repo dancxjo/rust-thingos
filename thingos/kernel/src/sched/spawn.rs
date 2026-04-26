@@ -1496,7 +1496,12 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     fd_remap: Vec<abi::types::HandleRemap>,
     entry_sym_override: Option<alloc::string::String>,
 ) -> Result<SpawnExResult, abi::errors::Errno> {
+    #[cfg(feature = "spawn_timing")]
+    let t_spawn_start = crate::trace::now();
+
     // Step 1: Open the executable from the VFS.
+    #[cfg(feature = "spawn_timing")]
+    let t_vfs_open_start = crate::trace::now();
     let node = crate::vfs::mount::lookup(path).map_err(|_| abi::errors::Errno::ENOENT)?;
 
     let stat = node.stat().map_err(|e| e)?;
@@ -1508,12 +1513,22 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     if size > 64 * 1024 * 1024 {
         return Err(abi::errors::Errno::EFBIG);
     }
+    #[cfg(feature = "spawn_timing")]
+    let t_vfs_open_end = crate::trace::now();
 
     // Step 2: Read the ELF bytes into kernel memory.
+    #[cfg(feature = "spawn_timing")]
+    let t_elf_read_start = crate::trace::now();
+    #[cfg(feature = "spawn_timing")]
+    let mut elf_read_calls: u32 = 0;
     let mut buffer = alloc::vec![0u8; size];
     let mut read_pos = 0;
     while read_pos < size {
         let n = node.read(read_pos as u64, &mut buffer[read_pos..]).map_err(|e| e)?;
+        #[cfg(feature = "spawn_timing")]
+        {
+            elf_read_calls += 1;
+        }
         if n == 0 {
             break;
         }
@@ -1522,12 +1537,20 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     if read_pos < size {
         return Err(abi::errors::Errno::EIO);
     }
+    #[cfg(feature = "spawn_timing")]
+    let t_elf_read_end = crate::trace::now();
 
     // Step 3: Load the ELF into a fresh address space.
+    #[cfg(feature = "spawn_timing")]
+    let t_aspace_start = crate::trace::now();
     let rt = crate::runtime::<R>();
     let current_cpu = super::current_cpu_index::<R>();
     let aspace = rt.tasking().make_user_address_space();
+    #[cfg(feature = "spawn_timing")]
+    let t_aspace_end = crate::trace::now();
 
+    #[cfg(feature = "spawn_timing")]
+    let t_elf_load_start = crate::trace::now();
     // SAFETY: `load_module` is synchronous and does not retain the reference.
     let static_bytes: &'static [u8] = unsafe { core::mem::transmute(buffer.as_slice()) };
     let basename = path.rsplit('/').next().unwrap_or(path);
@@ -1546,6 +1569,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         crate::task::loader::load_module(rt, aspace, &module_desc)
             .ok_or(abi::errors::Errno::ENOEXEC)?;
     entry.arg0 = boot_arg as usize;
+    #[cfg(feature = "spawn_timing")]
+    let t_elf_load_end = crate::trace::now();
 
     // If the caller requested a specific driver entrypoint symbol, resolve it
     // from the binary bytes and override the default ELF e_entry.  The symbol
@@ -1594,6 +1619,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // Step 4: Create the scheduler task for the new process's initial thread.
     // Phase 1: minimal SCHEDULER critical section — allocate TID and register
     // scheduler-internal state. REGISTRY insertion is deferred until unlock.
+    #[cfg(feature = "spawn_timing")]
+    let t_task_create_start = crate::trace::now();
     let _irq = rt.irq_disable();
 
     crate::kdebug!("SPAWN_FROM_PATH: Starting Phase 1 for {}", path);
@@ -1615,6 +1642,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         let deferred_registry_inserts = sched.drain_pending_registry_inserts();
         (id, deferred_registry_inserts)
     };
+    #[cfg(feature = "spawn_timing")]
+    let t_task_create_end = crate::trace::now();
     crate::kdebug!("SPAWN_FROM_PATH: Phase 1 complete, ID={}, applying inserts", id);
     super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
     crate::kdebug!("SPAWN_FROM_PATH: Inserts applied, entering Phase 2");
@@ -1635,6 +1664,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     let final_argv = if argv.is_empty() { alloc::vec![basename.as_bytes().to_vec()] } else { argv };
 
     // Step 6: Inherit and set up stdio fds in the child's handle_table.
+    #[cfg(feature = "spawn_timing")]
+    let t_stdio_setup_start = crate::trace::now();
     let parent_tid = rt.current_tid();
     let parent_pinfo =
         crate::task::registry::get_task::<R>(parent_tid).and_then(|t| t.process_info.clone());
@@ -1712,6 +1743,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     }
 
     // Share the mapping list between the Thread and the Process.
+    #[cfg(feature = "spawn_timing")]
+    let t_stdio_setup_end = crate::trace::now();
     let task_mappings =
         crate::task::registry::get_task::<R>(id).map(|t| t.mappings.clone()).unwrap_or_else(|| {
             alloc::sync::Arc::new(spin::Mutex::new(crate::memory::mappings::MappingList::new()))
@@ -1744,6 +1777,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     };
 
     // Step 7: Build the ProcessInfo for the new process.
+    #[cfg(feature = "spawn_timing")]
+    let t_proc_reg_start = crate::trace::now();
     let pinfo = alloc::sync::Arc::new(spin::Mutex::new(ProcessInfo {
         pid: id as u32,
         job: crate::task::ProcessLifecycle::new(ppid, id),
@@ -1780,6 +1815,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
 
     // `inherited_handles` is reserved for future fd-inheritance; not yet wired.
     let _ = inherited_handles;
+    #[cfg(feature = "spawn_timing")]
+    let t_proc_reg_end = crate::trace::now();
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.
@@ -1788,6 +1825,34 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     crate::kdebug!("SPAWN_FROM_PATH: Task {} woken, restoring IRQs", id);
     rt.irq_restore(_irq);
     crate::kdebug!("SPAWN_FROM_PATH: Done for {}", path);
+
+    #[cfg(feature = "spawn_timing")]
+    {
+        let t_total_end = crate::trace::now();
+        let total_us = t_total_end.saturating_sub(t_spawn_start) / 1_000;
+        let vfs_open_us = t_vfs_open_end.saturating_sub(t_vfs_open_start) / 1_000;
+        let elf_read_us = t_elf_read_end.saturating_sub(t_elf_read_start) / 1_000;
+        let aspace_us = t_aspace_end.saturating_sub(t_aspace_start) / 1_000;
+        let elf_load_us = t_elf_load_end.saturating_sub(t_elf_load_start) / 1_000;
+        let task_create_us = t_task_create_end.saturating_sub(t_task_create_start) / 1_000;
+        let stdio_us = t_stdio_setup_end.saturating_sub(t_stdio_setup_start) / 1_000;
+        let proc_reg_us = t_proc_reg_end.saturating_sub(t_proc_reg_start) / 1_000;
+        crate::kinfo!(
+            "SPAWN_TIMING '{}': total={}µs | vfs_open={}µs elf_read={}µs({} reads, {} bytes) \
+             aspace={}µs elf_load={}µs task_create={}µs stdio={}µs proc_reg={}µs",
+            path,
+            total_us,
+            vfs_open_us,
+            elf_read_us,
+            elf_read_calls,
+            size,
+            aspace_us,
+            elf_load_us,
+            task_create_us,
+            stdio_us,
+            proc_reg_us,
+        );
+    }
 
     Ok(SpawnExResult {
         child_tid: id,
