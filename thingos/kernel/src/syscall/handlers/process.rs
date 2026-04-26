@@ -30,10 +30,20 @@ pub fn sys_reboot(cmd: usize) -> SysResult<usize> {
     match cmd as u32 {
         reboot_cmd::RESTART => {
             crate::kinfo!("SYSCALL REBOOT: system reboot requested");
+            if !crate::shutdown::begin_shutdown() {
+                crate::kinfo!("SYSCALL REBOOT: shutdown already in progress, duplicate caller exiting");
+                unsafe { crate::sched::exit_current(0); }
+                return Ok(0);
+            }
             crate::runtime_base().reboot();
         }
         reboot_cmd::HALT | reboot_cmd::POWER_OFF => {
             crate::kinfo!("SYSCALL SHUTDOWN: system shutdown requested");
+            if !crate::shutdown::begin_shutdown() {
+                crate::kinfo!("SYSCALL SHUTDOWN: shutdown already in progress, duplicate caller exiting");
+                unsafe { crate::sched::exit_current(0); }
+                return Ok(0);
+            }
             crate::runtime_base().shutdown();
         }
         _ => Err(Errno::EINVAL),
@@ -493,6 +503,14 @@ pub fn sys_auxv_get(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
 /// Args: req_ptr = pointer to SpawnProcessExReq, resp_ptr = pointer to SpawnProcessExResp.
 pub fn sys_spawn_process_ex(req_ptr: usize, resp_ptr: usize) -> SysResult<usize> {
     use abi::types::{SpawnProcessExReq, SpawnProcessExResp};
+
+    // Reject new process spawns once system shutdown has been initiated.
+    // This prevents new processes from being created while global teardown is
+    // in progress, which would otherwise cause scheduler starvation or
+    // duplicate-shutdown contention (the original 17-second delay bug).
+    if crate::shutdown::is_shutdown_in_progress() {
+        return Err(Errno::EBUSY);
+    }
 
     #[cfg(feature = "spawn_timing")]
     let t_syscall_entry = crate::trace::now();
