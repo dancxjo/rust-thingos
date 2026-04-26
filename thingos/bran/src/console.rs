@@ -24,6 +24,10 @@ const ACTIVATION_BANNER: &[u8] = b"\x1b[0mThing-OS kernel terminal (F12)\n";
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
 pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
 
+/// Lock to ensure only one CPU flushes the serial ring buffer at a time.
+/// This prevents chunk-level reordering of logs from different CPUs.
+static SERIAL_FLUSH_LOCK: Mutex<()> = Mutex::new(());
+
 // ---------------------------------------------------------------------------
 // Deferred output ring buffer
 //
@@ -885,25 +889,35 @@ pub fn serial_flush_deferred() {
         return;
     }
 
-    let mut local = [0u8; FLUSH_BATCH];
-
-    let n = {
-        let mut ring = match SERIAL_DEFERRED.try_lock() {
-            Some(r) => r,
-            None => return,
-        };
-        if ring.is_empty() {
-            return;
-        }
-        ring.drain(&mut local)
+    // Ensure only one CPU flushes at a time to prevent reordering.
+    let _flush_guard = match SERIAL_FLUSH_LOCK.try_lock() {
+        Some(g) => g,
+        None => return,
     };
 
-    if n == 0 {
-        return;
-    }
+    let mut local = [0u8; 1024];
+    loop {
+        let n = {
+            let mut ring = match SERIAL_DEFERRED.try_lock() {
+                Some(r) => r,
+                None => return,
+            };
+            if ring.is_empty() {
+                return;
+            }
+            ring.drain(&mut local)
+        };
 
-    // Drain directly to serial hardware — batch write to avoid interleaving
-    crate::RUNTIME.serial_putbuf_sync(&local[..n]);
+        if n > 0 {
+            // Drain directly to serial hardware — batch write to avoid interleaving.
+            // Holding SERIAL_FLUSH_LOCK ensures that even if serial_putbuf_sync
+            // drops the hardware lock, no other CPU can start a new flush and
+            // overtake us.
+            crate::RUNTIME.serial_putbuf_sync(&local[..n]);
+        } else {
+            break;
+        }
+    }
 }
 
 pub fn serial_flush_deferred_idle() {
@@ -911,25 +925,31 @@ pub fn serial_flush_deferred_idle() {
         return;
     }
 
-    let mut local = [0u8; FLUSH_BATCH_IDLE];
-
-    let n = {
-        let mut ring = match SERIAL_DEFERRED.try_lock() {
-            Some(r) => r,
-            None => return,
-        };
-        if ring.is_empty() {
-            return;
-        }
-        ring.drain(&mut local)
+    // Ensure only one CPU flushes at a time to prevent reordering.
+    let _flush_guard = match SERIAL_FLUSH_LOCK.try_lock() {
+        Some(g) => g,
+        None => return,
     };
 
-    if n == 0 {
-        return;
-    }
+    let mut local = [0u8; 2048];
+    loop {
+        let n = {
+            let mut ring = match SERIAL_DEFERRED.try_lock() {
+                Some(r) => r,
+                None => return,
+            };
+            if ring.is_empty() {
+                return;
+            }
+            ring.drain(&mut local)
+        };
 
-    // Batch write to avoid interleaving between CPUs
-    crate::RUNTIME.serial_putbuf_sync(&local[..n]);
+        if n > 0 {
+            crate::RUNTIME.serial_putbuf_sync(&local[..n]);
+        } else {
+            break;
+        }
+    }
 }
 
 pub fn serial_flush_sync() {

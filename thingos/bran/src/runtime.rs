@@ -347,24 +347,18 @@ impl LimineRuntimeData {
 
 impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
     fn putchar(&self, c: u8) {
-        // Drain pending RX before writing so bursty boot logs do not starve
-        // input polling.
-        self.poll_console_input();
         // Write to serial deferred ring buffer
         crate::console::serial_put_char(c);
         crate::console::put_char(c);
     }
     fn putbuf(&self, buf: &[u8]) {
-        self.poll_console_input();
         crate::console::serial_put_buf(buf);
         crate::console::put_buf(buf);
     }
     fn serial_putchar(&self, c: u8) {
-        self.poll_console_input();
         crate::console::serial_put_char(c);
     }
     fn serial_putbuf(&self, buf: &[u8]) {
-        self.poll_console_input();
         crate::console::serial_put_buf(buf);
     }
     fn serial_putchar_sync(&self, c: u8) {
