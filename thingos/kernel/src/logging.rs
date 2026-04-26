@@ -33,8 +33,10 @@ static MUTE_SERIAL: AtomicBool = AtomicBool::new(false);
 static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Off)
-/// Default is 2 (warn).
-static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(4);
+/// Default is 3 (info) — matches the xtask build default and keeps verbose
+/// debug/trace messages suppressed unless explicitly enabled via the kernel
+/// command-line (`loglevel=debug`) or `SYS_SET_PARAM`.
+static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(3);
 
 /// Set the minimum log level for output (0=Off, 1=Error+, 2=Warn+, etc.)
 pub fn set_log_level(level: u8) {
@@ -302,6 +304,42 @@ fn should_log(level: Level) -> bool {
     min > 0 && (level as u8) <= min
 }
 
+/// Maximum size of a pre-formatted log line (truncated if exceeded).
+const LOG_LINE_BUF_SIZE: usize = 1024;
+
+/// Fixed-capacity stack buffer for pre-formatting a log line without heap
+/// allocation.  Used by `_log_event` to assemble the complete message before
+/// acquiring any lock, keeping the `GLOBAL_LOGGER` critical section as short
+/// as possible.
+struct FixedBuf {
+    buf: [u8; LOG_LINE_BUF_SIZE],
+    pos: usize,
+}
+
+impl FixedBuf {
+    #[inline]
+    fn new() -> Self {
+        Self { buf: [0; LOG_LINE_BUF_SIZE], pos: 0 }
+    }
+
+    #[inline]
+    fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.pos]
+    }
+}
+
+impl fmt::Write for FixedBuf {
+    #[inline]
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let src = s.as_bytes();
+        let available = self.buf.len() - self.pos;
+        let to_copy = src.len().min(available);
+        self.buf[self.pos..self.pos + to_copy].copy_from_slice(&src[..to_copy]);
+        self.pos += to_copy;
+        Ok(())
+    }
+}
+
 pub fn _log_event(
     meta: LogMetadata,
     event_str: &str,
@@ -309,39 +347,50 @@ pub fn _log_event(
     fields: &[(&'static str, u64)],
     _about: &[u64],
 ) {
-    // Check log level filter
+    // Fast path: bail out before any lock or formatting work.
     if !should_log(meta.level) {
         return;
     }
     let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
 
-    // 1. Serial Output - human-readable format: [TIME] [LEVEL] [SOURCE] Message
+    // Collect timing/CPU info before acquiring any lock.
+    let (ts, cpu) = if crate::is_runtime_initialized() {
+        let rt = crate::runtime_base();
+        (rt.mono_ticks(), rt.current_cpu_index())
+    } else {
+        (0, 0)
+    };
+
+    // 1. Serial Output — pre-format the entire line into a stack buffer so
+    //    that the GLOBAL_LOGGER lock is held only for a single contiguous
+    //    `putbuf` call.  This reduces lock hold time and contention between
+    //    CPUs that log concurrently on the spawn / syscall hot path.
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
+        // Format: [TIME] [LEVEL] [SOURCE] [CPUx] Message [fields]\n
+        let mut linebuf = FixedBuf::new();
+        let _ = write!(
+            linebuf,
+            "[{}] [{}] [{}] [CPU{}] ",
+            ts,
+            level_to_colored_str(meta.level),
+            event_str,
+            cpu
+        );
+        let _ = linebuf.write_fmt(msg_fmt);
+        if !fields.is_empty() {
+            for (k, v) in fields {
+                let _ = write!(linebuf, " {}={}", k, v);
+            }
+        }
+        let _ = linebuf.write_char('\n');
+        let line = linebuf.as_bytes();
+
         let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
         let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
 
         let mut lock = GLOBAL_LOGGER.lock();
         if let Some(writer) = lock.as_mut() {
-            let ts = writer.runtime.mono_ticks();
-            // Human-readable format: [TIME] [LEVEL] [SOURCE] [CPUx] Message
-            let _ = write!(
-                writer,
-                "[{}] [{}] [{}] [CPU{}] ",
-                ts,
-                level_to_colored_str(meta.level),
-                event_str,
-                writer.runtime.current_cpu_index()
-            );
-            let _ = writer.write_fmt(msg_fmt);
-
-            // Append structured fields if any
-            if !fields.is_empty() {
-                for (k, v) in fields {
-                    let _ = write!(writer, " {}={}", k, v);
-                }
-            }
-
-            let _ = writer.write_char('\n');
+            write_crlf_translated(line, |chunk| writer.runtime.putbuf(chunk));
         }
         drop(lock);
 
@@ -350,14 +399,10 @@ pub fn _log_event(
         }
     }
 
-    // 2. Log Buffer Output
+    // 2. Log Buffer Output — plain (no ANSI colour codes) version stored in
+    //    the in-memory ring buffer for later retrieval.
     {
         let mut writer = LogBufferWriter;
-        let (ts, cpu) = if crate::is_runtime_initialized() {
-            (crate::runtime_base().mono_ticks(), crate::runtime_base().current_cpu_index())
-        } else {
-            (0, 0)
-        };
         let _ = write!(writer, "[{}] [{}] [{}] [CPU{}] ", ts, meta.level.as_str(), event_str, cpu);
         let _ = writer.write_fmt(msg_fmt);
         if !fields.is_empty() {

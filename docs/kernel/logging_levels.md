@@ -198,6 +198,9 @@ Use `kinfo!` for normal boot milestones, `kdebug!` for details.
 - Scheduler tick/task switch
 - Graph traversal
 - Present queue operations
+- **Syscall dispatch** — `SYS_SPAWN_PROCESS_EX`, `SYS_TASK_EXEC`, etc. each fires once
+  per process launch; `kinfo!` here would be emitted for every child spawned.
+  Use `kdebug!` for syscall-completion messages on these paths.
 
 ### Performance Guidelines
 
@@ -314,7 +317,50 @@ if log_enabled!(Level::Trace) {
 }
 ```
 
-## Rate Limiting (Future)
+## Default Log Level and Performance
+
+The kernel compile-time default is **Info (3)**, matching the xtask build default
+(`loglevel=info` in the kernel command-line).  This means `kdebug!` and `ktrace!`
+messages are suppressed unless the operator explicitly enables them:
+
+```
+# Enable debug logging (loglevel=debug in QEMU/boot config)
+just run --loglevel debug
+
+# Enable trace logging
+just run --loglevel trace
+```
+
+### Why the default matters for latency
+
+Serial logging on the hot path (syscall dispatch, process spawn) uses a
+**deferred ring buffer**: bytes are queued in memory and drained asynchronously
+by the UART TX interrupt.  Even so, each `kinfo!` / `kdebug!` call that passes
+the level filter still incurs:
+
+1. An atomic sequence-counter bump.
+2. A timestamp read (`mono_ticks()`).
+3. Stack allocation of a 1 KiB formatting buffer.
+4. String formatting (several `write_str` calls).
+5. Spin-lock acquisition on `GLOBAL_LOGGER` (IRQs disabled).
+6. A `serial_put_buf` call that locks the 64 KiB `SERIAL_DEFERRED` ring.
+7. A second spin-lock on `LOG_STATE` (the in-memory log ring).
+
+With the default set to Info, `kdebug!` calls on the spawn path return after
+step 1 (a single atomic load + compare), eliminating items 2–7 entirely.
+
+### Enabling verbose logging for diagnostics
+
+```
+# Kernel cmdline approach
+loglevel=4    # debug
+loglevel=5    # trace
+
+# Runtime approach (requires CAP_LOG_LEVEL)
+SYS_SET_PARAM(PARAM_LOGLEVEL, 4)
+```
+
+
 
 For warnings that may occur frequently, consider adding rate-limiting utilities:
 

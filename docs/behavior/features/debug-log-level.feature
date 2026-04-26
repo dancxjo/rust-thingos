@@ -43,6 +43,15 @@ Feature: Debug-level log output during boot
     Then the serial output should contain "Initializing VFS..."
     And the serial output should contain "Seeding entropy pool..."
 
+  @debug-level
+  @timeout-30s
+  Scenario: Spawn process syscall completion is reported at debug level
+    # SYSCALL SPAWN_PROCESS_EX completion is kdebug! — it fires on every
+    # process launch and must not appear in the default INFO stream.
+    Given the machine is started
+    When I wait for the system to boot
+    Then the serial output should contain "SYSCALL SPAWN_PROCESS_EX:"
+
   @smoke
   @timeout-30s
   Scenario: Debug-only messages are suppressed at default INFO log level
@@ -52,3 +61,12 @@ Feature: Debug-level log output during boot
     When I wait for the system to boot
     Then the serial output should contain "Entering scheduler loop."
     And the latest serial output should not contain "vfs: mounted devfs at /dev"
+
+  @smoke
+  @timeout-30s
+  Scenario: Spawn process syscall messages are suppressed at INFO log level
+    # SYSCALL SPAWN_PROCESS_EX is kdebug! and must not pollute the INFO stream,
+    # reducing spawn-path serial latency at default log level.
+    Given the machine is started
+    When I wait for the system to boot
+    Then the latest serial output should not contain "SYSCALL SPAWN_PROCESS_EX:"
