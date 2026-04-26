@@ -79,7 +79,8 @@ pub fn task_exec_current<R: BootRuntime>(
         (open_file.node.clone(), path)
     };
 
-    // 4. Read the entire file into kernel memory (v1)
+    // 4. Read the entire file into kernel memory, checking the page cache first
+    //    to avoid repeated IPC round-trips for the same executable.
     let stat = match node.stat() {
         Ok(s) => s,
         Err(e) => abort_exec!(e),
@@ -89,29 +90,47 @@ pub fn task_exec_current<R: BootRuntime>(
         // 64MB limit for now
         abort_exec!(Errno::EFBIG);
     }
-    let mut buffer = alloc::vec![0u8; size];
-    let mut read_pos = 0;
-    while read_pos < size {
-        let n = match node.read(read_pos as u64, &mut buffer[read_pos..]) {
-            Ok(n) => n,
-            Err(e) => abort_exec!(e),
-        };
-        if n == 0 {
-            break;
+    // Try the page cache before issuing IPC reads.
+    // `cached_buf` is declared here (outside the if-else) so that its lifetime
+    // covers `buffer`, which borrows from it.
+    let cached_buf: alloc::sync::Arc<alloc::vec::Vec<u8>>;
+    let buffer: &[u8] = if let Some(cached) = crate::vfs::page_cache::get(&exec_fd_path) {
+        crate::kdebug!("EXEC: page cache hit for '{}'", exec_fd_path);
+        cached_buf = cached;
+        &cached_buf[..]
+    } else {
+        let mut buf = alloc::vec![0u8; size];
+        let mut read_pos = 0;
+        while read_pos < size {
+            let n = match node.read(read_pos as u64, &mut buf[read_pos..]) {
+                Ok(n) => n,
+                Err(e) => abort_exec!(e),
+            };
+            if n == 0 {
+                break;
+            }
+            read_pos += n;
         }
-        read_pos += n;
-    }
-    if read_pos < size {
-        abort_exec!(Errno::EIO);
-    }
+        if read_pos < size {
+            abort_exec!(Errno::EIO);
+        }
+        crate::kdebug!("EXEC: page cache miss for '{}', caching {} bytes", exec_fd_path, size);
+        let arc_buf = alloc::sync::Arc::new(buf);
+        crate::vfs::page_cache::put(&exec_fd_path, arc_buf.clone());
+        cached_buf = arc_buf;
+        &cached_buf[..]
+    };
 
     // 5. Load ELF into a new address space
     let rt = crate::runtime::<R>();
     let new_aspace = rt.tasking().make_user_address_space();
 
     // We need a BootModuleDesc for load_module
-    // SAFETY: load_module is synchronous and does not store the reference.
-    let static_bytes: &'static [u8] = unsafe { core::mem::transmute(&buffer as &[u8]) };
+    // SAFETY: `load_module` is synchronous and does not retain the reference
+    // beyond the call.  The `cached_buf` Arc keeps the backing allocation alive
+    // for the entire duration of this function, so extending the lifetime to
+    // `'static` for the synchronous call is safe.
+    let static_bytes: &'static [u8] = unsafe { core::mem::transmute(buffer) };
     let module_desc = crate::BootModuleDesc {
         name: "exec_image",
         cmdline: "",

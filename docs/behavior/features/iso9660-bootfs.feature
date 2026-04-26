@@ -41,3 +41,15 @@ Feature: ISO9660 boot filesystem mount
     Then the latest command output should contain "PID"
     When I type "ps" on the serial console
     Then the latest command output should contain "PID"
+
+  Scenario: Repeated process spawns use the kernel page cache (no redundant IPC reads)
+    # Verifies that the second execution of /bin/ps does not re-read the ELF
+    # from iso9660d (the kernel VFS page cache serves the cached bytes).
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "ps" on the serial console
+    Then the latest command output should contain "PID"
+    And the log should match pattern "SPAWN: page cache miss for"
+    When I type "ps" on the serial console
+    Then the latest command output should contain "PID"
+    And the log should match pattern "SPAWN: page cache hit for"

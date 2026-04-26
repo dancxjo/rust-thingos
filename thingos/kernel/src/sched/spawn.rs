@@ -1516,20 +1516,35 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     #[cfg(feature = "spawn_timing")]
     let t_vfs_open_end = crate::trace::now();
 
-    // Step 2: Read the ELF bytes into kernel memory.
+    // Step 2: Read the ELF bytes into kernel memory, consulting the page cache
+    // first to avoid repeated IPC round-trips to iso9660d for the same binary.
     #[cfg(feature = "spawn_timing")]
     let t_elf_read_start = crate::trace::now();
     #[cfg(feature = "spawn_timing")]
     let mut elf_read_calls: u32 = 0;
-    let mut buffer = alloc::vec![0u8; size];
-    let read_n = node.read_all_into(&mut buffer).map_err(|e| e)?;
-    #[cfg(feature = "spawn_timing")]
-    {
-        elf_read_calls += 1;
-    }
-    if read_n < size {
-        return Err(abi::errors::Errno::EIO);
-    }
+    // `cached_buf` is declared here (outside the if-else) so that its lifetime
+    // covers `buffer`, which borrows from it.
+    let cached_buf: alloc::sync::Arc<alloc::vec::Vec<u8>>;
+    let buffer: &[u8] = if let Some(cached) = crate::vfs::page_cache::get(path) {
+        crate::kdebug!("SPAWN: page cache hit for '{}'", path);
+        cached_buf = cached;
+        &cached_buf[..]
+    } else {
+        let mut buf = alloc::vec![0u8; size];
+        let read_n = node.read_all_into(&mut buf).map_err(|e| e)?;
+        #[cfg(feature = "spawn_timing")]
+        {
+            elf_read_calls += 1;
+        }
+        if read_n < size {
+            return Err(abi::errors::Errno::EIO);
+        }
+        crate::kdebug!("SPAWN: page cache miss for '{}', caching {} bytes", path, size);
+        let arc_buf = alloc::sync::Arc::new(buf);
+        crate::vfs::page_cache::put(path, arc_buf.clone());
+        cached_buf = arc_buf;
+        &cached_buf[..]
+    };
     #[cfg(feature = "spawn_timing")]
     let t_elf_read_end = crate::trace::now();
 
@@ -1544,8 +1559,11 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
 
     #[cfg(feature = "spawn_timing")]
     let t_elf_load_start = crate::trace::now();
-    // SAFETY: `load_module` is synchronous and does not retain the reference.
-    let static_bytes: &'static [u8] = unsafe { core::mem::transmute(buffer.as_slice()) };
+    // SAFETY: `load_module` is synchronous and does not retain the reference
+    // beyond the call.  The `cached_buf` Arc keeps the backing allocation alive
+    // for the entire duration of this function, so extending the lifetime to
+    // `'static` for the synchronous call is safe.
+    let static_bytes: &'static [u8] = unsafe { core::mem::transmute(buffer) };
     let basename = path.rsplit('/').next().unwrap_or(path);
     // SAFETY: `load_module` is synchronous; `basename` outlives the call.
     let static_name: &'static str = unsafe { core::mem::transmute(basename) };
@@ -1573,7 +1591,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // re-read the min_vaddr directly from the binary.
     if let Some(sym_name) = &entry_sym_override {
         if let Some(sym_vaddr) =
-            crate::task::loader::resolve_elf64_symbol(&buffer, sym_name.as_str())
+            crate::task::loader::resolve_elf64_symbol(buffer, sym_name.as_str())
         {
             // Compute load bias: default load base is 0x200000; subtract min_vaddr.
             // The helper returns the file-relative VMA so we apply the same bias
@@ -1583,7 +1601,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
             // aux_info.entry_vaddr == elf_e_entry + bias, derive bias as:
             //   bias = entry_vaddr - (elf_e_entry from binary)
             // We don't have elf_e_entry separately, but we can re-read it cheaply.
-            let elf_e_entry = crate::task::loader::read_elf64_entry(&buffer).unwrap_or(0);
+            let elf_e_entry = crate::task::loader::read_elf64_entry(buffer).unwrap_or(0);
             let load_bias = if elf_e_entry != 0 {
                 (aux_info.entry_vaddr as i64).wrapping_sub(elf_e_entry as i64) as u64
             } else {

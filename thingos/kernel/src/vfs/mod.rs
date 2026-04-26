@@ -33,6 +33,7 @@ pub mod inbox_node;
 pub mod memfd;
 pub mod mount;
 pub mod overlay;
+pub mod page_cache;
 pub mod path;
 pub mod port_node;
 pub mod procfs;
