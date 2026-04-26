@@ -54,13 +54,14 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 **Thing-OS is a Rust fork that builds and customizes `std` for Thing-OS targets.**
 
 - The repository includes Rust `compiler/` and `library/` sources specifically so Thing-OS can evolve its own `std` behavior.
-- `stem::pal` remains the explicit platform abstraction for OS primitives and for crates that stay `no_std`.
-- Build tools (`xtask`, `tools/*`) can use `std` as host-side tooling.
+- `std` is allowed for non-kernel Thing-OS code. Use it in userspace, drivers, services, tests, and tooling when it improves correctness, compatibility, or maintainability.
+- `stem::pal` remains the explicit low-level/no_std platform abstraction for the kernel-adjacent runtime, PAL itself, and crates that intentionally stay `no_std`.
+- Build tools (`xtask`, `tools/*`) can use host `std` freely.
 
 **Key rules:**
-- Do not assume all runtime crates are `no_std`; choose `std` vs `no_std + stem` based on crate role and target constraints.
-- Kernel and other low-level/runtime-critical crates should continue to prefer explicit platform boundaries via `stem::pal`.
-- Run `python3 scripts/audit_platform_boundary.py` where boundary checks are expected by current project policy.
+- Do not add new blanket `no_std` requirements outside the kernel. Existing non-kernel `no_std` crates may migrate to Thing-OS `std` when convenient.
+- Kernel code must remain `no_std`; PAL/no_std crates should keep explicit platform boundaries via `stem::pal`.
+- Avoid host-only assumptions in target userspace. Prefer Thing-OS `std` APIs where available, and extend `library/std/src/sys/pal/thingos/` when the standard library needs more OS support.
 
 **See `docs/platform.md` for the complete platform layer contract.**
 

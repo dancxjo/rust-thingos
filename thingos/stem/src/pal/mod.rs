@@ -1,15 +1,15 @@
 //! Platform Abstraction Layer (PAL)
 //!
-//! This module defines the explicit contract between Thing-OS applications
-//! and the underlying platform. All platform-specific functionality must
-//! go through this layer.
+//! This module defines the explicit low-level contract between no_std
+//! Thing-OS code and the underlying platform. Normal non-kernel userspace
+//! may use Thing-OS `std` directly when that is more convenient.
 //!
 //! # Design Principles
 //!
 //! - **Explicit over implicit**: Platform capabilities are explicitly surfaced
 //! - **Minimal and stable**: Only essential platform primitives are exposed
 //! - **Replaceable**: Implementations can be swapped without breaking consumers
-//! - **No std leakage**: This layer ensures `no_std` compliance
+//! - **No std inside PAL**: This layer stays `no_std`
 //!
 //! # Platform Surface
 //!

@@ -1,6 +1,6 @@
-//! `WallpaperService` — reacts to VFS watch events on the wallpaper path and
-//! kicks off an async background decode via
-//! [`CompositorVisuals::start_background_load`].
+//! `WallpaperService` — reacts to VFS watch events on the wallpaper config
+//! path and asks [`CompositorVisuals::start_background_load`] to reload the
+//! compositor background.
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -72,14 +72,11 @@ fn wallpaper_config_stamp(config_path: &str) -> Option<WallpaperStamp> {
     })
 }
 
-/// Watches `/session/desktop/wallpaper` and triggers async background reloads.
+/// Watches `/session/desktop/wallpaper` and triggers background reloads.
 ///
 /// `fd` is the watch FD returned by `vfs_watch_path`.  When the watch fires,
 /// the service drains the event bytes (to keep the FD clear) and delegates
-/// the actual decode to [`CompositorVisuals::start_background_load`], which
-/// spawns a worker thread so the compositor loop is never blocked by image
-/// decoding.  The completed texture is picked up in the main loop by
-/// `poll_ready_background`.
+/// the actual reload to [`CompositorVisuals::start_background_load`].
 pub struct WallpaperService {
     fd: Option<u32>,
     config_path: &'static str,
@@ -122,7 +119,7 @@ impl WallpaperService {
         self.initial_loaded = true;
         self.last_stamp = wallpaper_config_stamp(self.config_path);
         let wallpaper_path = wallpaper_target_or_default(self.config_path);
-        stem::info!("bloom: reacting to wallpaper change (async): {}", wallpaper_path);
+        stem::info!("bloom: reacting to wallpaper change: {}", wallpaper_path);
         world.visuals.start_background_load(&world.display, &wallpaper_path);
     }
 

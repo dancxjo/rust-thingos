@@ -14,7 +14,7 @@
 //!     wait(min(frame_deadline, next_timer))   ← blocks until FD ready or timeout
 //!     for each ready FD → dispatch to owning service
 //!     fire elapsed one-shot timers → dispatch Timer(id) to requesting service
-//!     poll wallpaper worker
+//!     poll background reload state
 //!     if frame_clock.repaint_due() && damage.is_dirty() → present + callbacks
 //! }
 //! ```
@@ -312,7 +312,7 @@ impl BloomLoop {
     ///      of the frame deadline and any pending one-shot timers.
     ///   2. Dispatches each ready FD to the owning service.
     ///   3. Fires any one-shot timers whose expiry has elapsed.
-    ///   4. Polls the wallpaper worker for completed loads.
+    ///   4. Polls background reload state.
     ///   5. Presents a frame when the frame clock is due and damage is dirty.
     pub fn run(mut self, world: &mut BloomWorld) -> ! {
         stem::info!("bloom: service loop started");
@@ -378,7 +378,7 @@ impl BloomLoop {
             let (_fired, timer_wake) = self.fire_due_timers(world);
             wake_requested |= timer_wake;
 
-            // ── 4. Poll the async wallpaper worker ────────────────────────
+            // ── 4. Poll background reload state ───────────────────────────
             if world.visuals.poll_ready_background(&world.display) {
                 world.damage.mark_full(world.primary.width, world.primary.height);
                 self.frame_clock.request_repaint();

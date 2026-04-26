@@ -2,9 +2,8 @@ Feature: Bloom compositor service loop and responsiveness
 
   The bloom compositor is readiness-driven: a single service loop waits on
   all I/O sources (Wayland client port, bristle HID events, wallpaper watch)
-  and dispatches to focused service objects.  Wallpaper changes are decoded
-  in a background worker thread so the compositor loop is never blocked by
-  image decoding.
+  and dispatches to focused service objects.  Wallpaper changes are loaded
+  after the loop is live so first paint is not blocked by image decoding.
 
   Scenario: bloom compositor service starts and publishes its port
     Given the machine is booted
@@ -33,8 +32,8 @@ Feature: Bloom compositor service loop and responsiveness
 
   Scenario: bloom service loop processes multiple wallpaper events
     # Verifies that the service loop continues to ingest events even when
-    # a previous event triggered an async wallpaper decode: two rapid
-    # wallpaper-change writes are both processed.
+    # a previous event triggered a wallpaper reload: two rapid wallpaper-change
+    # writes are both processed.
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
@@ -43,16 +42,15 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
     And "bloom: reacting to wallpaper change" should appear at least 2 times
 
-  Scenario: wallpaper reload does not block the render loop
-    # Verifies the non-blocking design: a wallpaper-change event triggers an
-    # async worker (start_background_load) rather than a synchronous decode.
-    # The render thread immediately returns to its frame loop; the decoded
-    # texture is swapped in later via poll_ready_background.
+  Scenario: wallpaper reload happens after the service loop is live
+    # Verifies that a wallpaper-change event is handled by the service loop
+    # after startup.  The bundled wallpapers are small and decoded inline to
+    # avoid allocator corruption from concurrent background loads.
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
-    Then the serial output should contain "bloom: reacting to wallpaper change (async)" within 60s
+    Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
 
   Scenario: bloom display driver presents a unified device interface
     # Verifies that bloom can enumerate /dev/display/card0 regardless of
@@ -87,4 +85,4 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
     And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
-    Then the log should match pattern "bloom: wallpaper worker: decode failed"
+    Then the log should match pattern "bloom: wallpaper decode failed"

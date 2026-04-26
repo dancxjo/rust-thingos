@@ -12,7 +12,7 @@ architecture notes for the ThingOS kernel and userland.
 
 | File | What it covers |
 |---|---|
-| [`platform.md`](platform.md) | Platform layer contract — `stem` as `std`, `no_std` rules, `stem::pal` |
+| [`platform.md`](platform.md) | Platform layer contract — Thing-OS `std`, kernel `no_std`, and `stem::pal` |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | Project Heritage & Changes Log (History from 2025 – Present) |
 
 ---
@@ -54,7 +54,7 @@ One document per major crate/binary:
 | [`kernel.md`](components/kernel.md) | Kernel |
 | [`root.md`](components/root.md) | Root — graph/layout engine |
 | [`sprout.md`](components/sprout.md) | Sprout — init/process launcher |
-| [`stem.md`](components/stem.md) | Stem — platform library (`stem` = our `std`) |
+| [`stem.md`](components/stem.md) | Stem — low-level platform library and PAL helpers |
 | [`virtio_sound.md`](components/virtio_sound.md) | VirtIO Sound — `cambium` marker/export and VFS PCM path |
 
 ### `concepts/` — Design Concepts and Doctrine

@@ -1,14 +1,14 @@
 # Platform Abstraction Layer (PAL)
 
-This module defines the **explicit contract** between Thing-OS applications and the underlying platform.
+This module defines the **explicit low-level contract** between no_std Thing-OS code and the underlying platform. Non-kernel userspace may use Thing-OS `std` directly when that is more convenient.
 
 ## Purpose
 
 The PAL ensures that:
 1. Platform capabilities are **explicit**, not implicit
-2. The `no_std` boundary is enforced  
+2. The PAL's own `no_std` boundary is enforced
 3. Platform code can evolve without breaking consumers
-4. All platform-specific functionality goes through a single, auditable layer
+4. no_std platform primitives go through a single, auditable layer
 
 ## Modules
 
@@ -78,10 +78,10 @@ alloc::grow_heap(256 * 1024)?;  // Grow heap by 256KB
 
 ## Design Principles
 
-1. **Explicit > Implicit**: Every platform capability must be visible in PAL
+1. **Explicit > Implicit**: Every low-level no_std platform capability must be visible in PAL
 2. **Minimal API**: Only essential primitives, no convenience wrappers here
 3. **Syscall Boundary**: PAL wraps syscalls, higher-level APIs go in stem proper
-4. **No std**: PAL is strictly `no_std`, depends only on `core` + syscalls
+4. **No std inside PAL**: PAL is strictly `no_std`, depends only on `core` + syscalls
 
 ## Adding New Capabilities
 

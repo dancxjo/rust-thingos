@@ -1,6 +1,6 @@
 # Platform Abstraction Layer (PAL) Examples
 
-This document shows practical examples of how to use `stem::pal` correctly.
+This document shows practical examples of how to use `stem::pal` correctly in code that intentionally stays `no_std`. Normal non-kernel userspace may use Thing-OS `std` where it is more convenient.
 
 ## Example 1: Adding Custom Logging
 
@@ -198,24 +198,29 @@ fn main() {
 }
 ```
 
-This app is **completely platform-independent** because:
-- Uses `#![no_std]` - no std library
-- Uses `extern crate stem` - our platform layer
-- All platform operations go through `stem::pal`
+This app is **completely platform-independent for no_std targets** because:
+- Uses `#![no_std]` - no standard library dependency
+- Uses `extern crate stem` - our low-level platform layer
+- All direct platform operations go through `stem::pal`
 - Will work on x86_64, aarch64, riscv64, etc.
 
 ## Anti-Patterns (DON'T DO THIS)
 
-### ❌ Using std
+### ❌ Assuming std inside no_std/PAL code
 
 ```rust
-// WRONG - This will fail the platform audit
-use std::time::Instant;  // std::time is not available!
+#![no_std]
+
+// WRONG here: this crate explicitly promised no_std compatibility.
+use std::time::Instant;
 
 fn bad_timing() {
-    let now = Instant::now();  // Compile error in no_std
+    let now = Instant::now();
 }
 ```
+
+For normal non-kernel userspace, using `std::time::Instant` is fine once the
+Thing-OS `std` implementation supports the needed behavior.
 
 ### ❌ Bypassing PAL
 
@@ -271,8 +276,8 @@ pub mod json {
 1. **Use stem's high-level APIs** (macros, functions) for most code
 2. **PAL is for platform primitives** (syscall wrappers, thin abstractions)
 3. **Keep PAL minimal** - high-level features go in stem proper
-4. **Never use std** in kernel/userspace - always `#![no_std]`
-5. **Run the audit** regularly: `python3 scripts/audit_platform_boundary.py`
+4. **Use `std` in non-kernel userspace when it helps**; reserve `#![no_std]` for the kernel, PAL, and crates that deliberately need that compatibility
+5. **Run boundary checks** where they exist, and keep host-only assumptions out of target runtime code
 
 ## See Also
 

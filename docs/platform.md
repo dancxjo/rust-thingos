@@ -1,21 +1,21 @@
 # Platform Layer Contract
 
-This document defines the formal boundary between Thing-OS applications and the underlying platform for a repository that **builds and customizes Rust `std`** while also maintaining an explicit **stem PAL** for low-level platform primitives.
+This document defines the formal boundary between Thing-OS applications and the underlying platform for a repository that **builds and customizes Rust `std`** while also maintaining an explicit **stem PAL** for low-level/no_std platform primitives.
 
 ## Overview
 
-Thing-OS is a fork of Rust that includes `compiler/` and `library/` at the repository root so we can ship Thing-OS-specific `std` behavior. In parallel, we provide platform capabilities through the **stem** crate, which builds on `core` and `alloc` with our platform abstraction layer (`stem::pal`).
+Thing-OS is a fork of Rust that includes `compiler/` and `library/` at the repository root so we can ship Thing-OS-specific `std` behavior. Non-kernel Thing-OS code may use that `std` whenever it is the clearest tool. In parallel, the **stem** crate provides a `core`/`alloc` platform abstraction layer (`stem::pal`) for code that intentionally stays `no_std`.
 
 ### Why This Matters
 
 - **Sustainability**: We can evolve both Thing-OS `std` and PAL interfaces in-repo
-- **Safety**: Enforced boundary prevents accidental std contamination
-- **Clarity**: Platform capabilities are explicit and documented
-- **Incremental**: New platform features are added intentionally, not accidentally
+- **Pragmatism**: Userspace can use `std` directly when it improves the code
+- **Clarity**: Low-level platform capabilities are explicit and documented
+- **Incremental**: New platform features are added intentionally, either in `std` or in PAL as appropriate
 
 ## The Platform Abstraction Layer (PAL)
 
-The `stem::pal` module provides the **explicit contract** for all platform-specific functionality:
+The `stem::pal` module provides the **explicit contract** for low-level platform-specific functionality used by `no_std` crates and by the `std` implementation itself:
 
 ```rust
 pub mod pal {
@@ -39,10 +39,10 @@ To keep this failure mode explicit, Thing-OS runtime code emits a compile-time d
 
 ### Design Principles
 
-1. **Explicit over implicit**: All platform capabilities must go through PAL
-2. **Minimal and stable**: Only essential primitives are exposed
-3. **Replaceable**: Implementations can be swapped without breaking consumers
-4. **Clear boundary**: Platform-specific behavior should stay explicit even when `std` is available
+1. **Use `std` where it helps**: Non-kernel userspace, drivers, services, and tests may use Thing-OS `std`.
+2. **Keep the kernel small**: Kernel code remains `no_std`.
+3. **Keep PAL minimal**: PAL exposes the low-level primitives needed by no_std code and by `std`.
+4. **Keep OS behavior target-aware**: Extend `library/std/src/sys/pal/thingos/` or `stem::pal` when the platform surface needs to grow.
 
 ## What's Allowed Where
 
@@ -51,18 +51,19 @@ To keep this failure mode explicit, Thing-OS runtime code emits a compile-time d
 **Preferred building blocks:**
 - `core` - Rust's core library (no allocator, no platform)
 - `alloc` - Rust's allocator library (requires our global allocator)
+- Thing-OS `std` - Preferred for non-kernel code when available and convenient
 - `stem` - Our platform layer (includes `stem::pal`)
 - `abi` - Shared types and syscall interfaces
-- Thing-OS `std` (when appropriate for crate role and target behavior)
 
 **Boundary guidance:**
-- Kernel and low-level runtime crates should keep explicit platform boundaries and often remain `no_std`.
-- Higher-level runtime crates may use Thing-OS `std` when that improves correctness, compatibility, or maintainability.
-- Avoid accidental host-std assumptions; prefer target-aware APIs and explicit OS integration points.
+- Kernel code must remain `no_std`.
+- Non-kernel runtime crates are not required to stay `no_std`; migrate or start them on Thing-OS `std` when that makes the implementation better.
+- PAL itself and crates intentionally shared with the kernel can stay `no_std` and should use explicit `stem::pal` boundaries.
+- Avoid host-only assumptions in target userspace; if a `std` API is missing or wrong, fix the Thing-OS `std` PAL instead of working around it in every app.
 
 **How it's enforced:**
-- `scripts/audit_platform_boundary.py` verifies the currently configured boundary policy
-- CI/project checks may enforce additional crate-specific constraints
+- CI/project checks may enforce kernel-only or crate-specific constraints.
+- Boundary audits, when present, should reject host-only leaks and kernel `std` usage, not `std` usage in normal userspace.
 
 ### Build Tools (Compile-time Code)
 
@@ -71,7 +72,7 @@ To keep this failure mode explicit, Thing-OS runtime code emits a compile-time d
 - `tools/*` - Build-time utilities (pciids, bdd, unifont-gen, etc.)
 - `*-macros` - Proc-macro crates (run at compile time)
 
-These crates are clearly separated and never linked into the kernel or userspace binaries.
+These crates are clearly separated and never linked into the kernel. They may use host `std` freely.
 
 ## Porting Standard for Third-Party Rust Crates (`std` + `cfg(unix)`)
 
@@ -111,7 +112,12 @@ This keeps the compatibility layer narrow while covering the most common
 
 ## Adding New Platform Capabilities
 
-When you need a new platform capability (e.g., file I/O, networking), follow this process:
+When you need a new platform capability (e.g., file I/O, networking), first decide where it belongs:
+
+- Add or fix Thing-OS `std` behavior in `library/std/src/sys/pal/thingos/` when ordinary Rust userspace should get the capability through standard APIs.
+- Add or extend `stem::pal` when the capability is needed by `no_std` crates, PAL internals, or code shared with the kernel.
+
+For PAL additions, follow this process:
 
 ### 1. Define the PAL Interface
 
@@ -170,12 +176,9 @@ impl File {
 
 ### 5. Test the Boundary
 
-The platform boundary must remain auditable:
+The platform boundary must remain auditable where project checks exist:
 
 ```bash
-# Verify no std contamination
-python3 scripts/audit_platform_boundary.py
-
 # Run tests
 cargo test -p stem
 ```
@@ -184,7 +187,7 @@ cargo test -p stem
 
 ### Host-Dependent Code
 
-If you need host-specific functionality for development/testing, use the `xtask` crate or create a new crate under `tools/`. These are **never** linked into kernel/userspace.
+If you need host-specific functionality for development/testing, use the `xtask` crate or create a new crate under `tools/`. These are **never** linked into the kernel.
 
 Example:
 ```
@@ -197,7 +200,7 @@ tools/
 
 ### Testing
 
-Tests can use std via conditional compilation:
+Tests can use `std`. For crates that intentionally remain `no_std`, conditional compilation remains useful:
 
 ```rust
 #![cfg_attr(not(test), no_std)]
@@ -213,20 +216,21 @@ mod tests {
 
 ### Automated Audit
 
-Run the platform boundary audit when working on boundary-sensitive crates:
+Run platform boundary audits when they exist and when you are working on boundary-sensitive crates. Audits should focus on kernel `std` usage, host-only assumptions, and crate-specific no_std promises:
 
 ```bash
 python3 scripts/audit_platform_boundary.py
 ```
 
-This script validates the repository's current boundary policy and reports violations.
+If no audit script exists in the current checkout, rely on targeted builds/tests and manual review.
 
 ### Manual Review
 
 When reviewing code:
 - ✅ New `use stem::pal::*` in low-level/platform code - Good, explicit boundary
-- ✅ New `use std::*` in crates intended to run with Thing-OS `std` - Acceptable
+- ✅ New `use std::*` in non-kernel Thing-OS userspace - Acceptable, and often preferred
 - ❌ Host-only assumptions leaking into Thing-OS runtime code - **REJECT**
+- ❌ `std` linked into kernel code - **REJECT**
 - ❌ Platform behavior hidden behind unrelated abstractions - **REJECT**
 
 ## Current Platform Surface
@@ -266,19 +270,19 @@ Example progression:
 ## FAQ
 
 **Q: Can I use std in my userspace app?**  
-A: Yes, when the crate is intended to run with Thing-OS `std`. Use `stem::pal` (or stem wrappers) for explicit platform primitives and low-level boundaries.
+A: Yes. Use Thing-OS `std` wherever it makes non-kernel code clearer, more compatible, or easier to maintain.
 
 **Q: What if I need threading/async/sockets?**  
-A: If this is a low-level/platform contract, add or extend `stem::pal`. If this is higher-level runtime behavior, using Thing-OS `std` APIs can be appropriate.
+A: Prefer Thing-OS `std` APIs for normal userspace. If the API is missing or incomplete, extend `library/std/src/sys/pal/thingos/`. Add or extend `stem::pal` only when no_std or kernel-adjacent code needs the primitive.
 
 **Q: Can build tools use std?**  
 A: Yes! `xtask` and crates under `tools/` can use std freely.
 
 **Q: How do I know if my crate is compliant?**  
-A: Run `python3 scripts/audit_platform_boundary.py`. It will tell you.
+A: Kernel crates must stay no_std. For non-kernel crates, `std` is compliant unless the crate explicitly promises no_std compatibility or uses host-only behavior that Thing-OS cannot support.
 
 **Q: What if a dependency pulls in std?**  
-A: Choose a `no_std` compatible alternative, or add `default-features = false` in Cargo.toml.
+A: That is fine for non-kernel code. For kernel/PAL/shared no_std crates, choose a no_std-compatible dependency or disable default features.
 
 ## References
 
