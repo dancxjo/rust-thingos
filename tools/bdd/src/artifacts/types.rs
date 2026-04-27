@@ -28,13 +28,13 @@ impl StepResult {
 
 /// Outcome of a scenario execution.
 ///
-/// A scenario is only `Passed` when at least one step ran and no step failed.
-/// A scenario with no steps or only skipped steps is `Pending`, not `Passed`.
+/// A scenario is only `Passed` when at least one step ran and every recorded
+/// step passed. Any skipped step makes the scenario `Pending`, not `Passed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScenarioOutcome {
-    /// At least one step ran (passed) and no step failed.
+    /// At least one step ran and every step passed.
     Passed,
-    /// No steps ran, or every step was skipped — the scenario is unimplemented.
+    /// No steps ran, or at least one step was skipped.
     Pending,
     /// At least one step failed.
     Failed,

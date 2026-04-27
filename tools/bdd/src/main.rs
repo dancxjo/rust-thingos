@@ -95,21 +95,45 @@ fn main() {
         let collector = artifacts::global().lock().await;
         let mut arch_readme = None;
         // Generate architecture report
-        match collector.generate_arch_readme() {
+        let report_failed = match collector.generate_arch_readme() {
             Ok(path) => {
                 eprintln!("[bdd] Generated: {}", path.display());
                 arch_readme = Some(path);
+                false
             }
-            Err(e) => eprintln!("[bdd] WARNING: Failed to generate README: {}", e),
-        }
+            Err(e) => {
+                eprintln!("[bdd] ERROR: Failed to generate README: {}", e);
+                true
+            }
+        };
 
-        let (_, features_failed) = collector.count_features();
-        if features_failed > 0 {
+        let (passed, pending, failed) = collector.count_scenarios();
+        let total = collector.total_scenarios();
+        let has_run_errors = !collector.run_errors().is_empty();
+        let no_scenarios_executed = total == 0;
+        let failed_run =
+            report_failed || has_run_errors || no_scenarios_executed || pending > 0 || failed > 0;
+
+        if no_scenarios_executed {
+            eprintln!("[bdd] ERROR: no scenarios executed");
+        }
+        if pending > 0 {
+            eprintln!("[bdd] ERROR: {pending} pending/skipped scenario(s)");
+        }
+        if failed > 0 {
+            eprintln!("[bdd] ERROR: {failed} failed scenario(s)");
+        }
+        if has_run_errors {
+            eprintln!("[bdd] ERROR: {} run-level error(s)", collector.run_errors().len());
+        }
+        eprintln!("[bdd] Scenario summary: {passed} passed, {pending} pending, {failed} failed");
+
+        if failed_run {
             if let Some(path) = arch_readme {
                 artifacts::print_readme_inline("[bdd] Inline architecture README", &path, "[bdd] ");
             }
         }
-        features_failed > 0
+        failed_run
     });
 
     // Check for panics first

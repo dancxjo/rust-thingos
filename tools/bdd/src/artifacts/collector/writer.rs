@@ -15,6 +15,15 @@ pub fn generate_arch_readme(collector: &ArtifactCollector) -> std::io::Result<Pa
     writeln!(file, "> Last run: {}", collector.start_time.format("%Y-%m-%d %H:%M:%S"))?;
     writeln!(file)?;
 
+    if !collector.run_errors().is_empty() {
+        writeln!(file, "## Run Errors")?;
+        writeln!(file)?;
+        for error in collector.run_errors() {
+            writeln!(file, "- {}", error)?;
+        }
+        writeln!(file)?;
+    }
+
     writeln!(file, "## Features")?;
     writeln!(file)?;
     writeln!(file, "| Feature | Scenarios | Status |")?;

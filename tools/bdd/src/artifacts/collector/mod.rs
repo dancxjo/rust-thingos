@@ -24,6 +24,8 @@ pub struct ArtifactCollector {
     step_counter: usize,
     /// All collected features
     pub(crate) features: Vec<FeatureArtifacts>,
+    /// Non-scenario errors that invalidate the run, such as feature parse errors.
+    run_errors: Vec<String>,
     /// Serial log at start of current step (for diff)
     step_start_serial_len: usize,
     /// Step start time for duration tracking
@@ -50,6 +52,7 @@ impl ArtifactCollector {
             current_scenario: None,
             step_counter: 0,
             features: Vec::new(),
+            run_errors: Vec::new(),
             step_start_serial_len: 0,
             step_start_time: None,
             pending_scenario_serial: String::new(),
@@ -144,13 +147,13 @@ impl ArtifactCollector {
         let scenario_to_write = if let Some(feature) = self.features.last_mut() {
             if let Some(scenario) = feature.scenarios.last_mut() {
                 // Compute outcome from step results:
-                // - No steps or all steps skipped → Pending (unimplemented scenario)
                 // - Any step failed (passed == false) → Failed
-                // - At least one step passed and none failed → Passed
+                // - No steps or any skipped step → Pending
+                // - At least one step and every step passed → Passed
                 scenario.outcome = if !passed {
                     ScenarioOutcome::Failed
                 } else if scenario.steps.is_empty()
-                    || scenario.steps.iter().all(|s| s.result == StepResult::Skipped)
+                    || scenario.steps.iter().any(|s| s.result == StepResult::Skipped)
                 {
                     ScenarioOutcome::Pending
                 } else {
@@ -205,10 +208,8 @@ impl ArtifactCollector {
     /// `label` is a short human-readable name for the buffer (e.g.
     /// `"Command Output"`). `buffer` is the content to include.
     pub fn set_step_assertion_buffer(&mut self, label: &str, buffer: &str) {
-        self.step_assertion_buffer = Some(format!(
-            "=== {} ===\n{}\n=== End {} ===\n",
-            label, buffer, label
-        ));
+        self.step_assertion_buffer =
+            Some(format!("=== {} ===\n{}\n=== End {} ===\n", label, buffer, label));
     }
 
     /// Called when a step starts.
@@ -316,22 +317,19 @@ impl ArtifactCollector {
         writer::generate_arch_readme(self)
     }
 
-    pub fn count_features(&self) -> (usize, usize) {
-        let passed = self
-            .features
-            .iter()
-            .filter(|f| {
-                !f.scenarios.is_empty()
-                    && f.scenarios.iter().all(|s| s.outcome == ScenarioOutcome::Passed)
-            })
-            .count();
-        (passed, self.features.len() - passed)
+    /// Record a run-level error that is not attached to a scenario.
+    pub fn add_run_error(&mut self, error: impl Into<String>) {
+        self.run_errors.push(error.into());
+    }
+
+    pub fn run_errors(&self) -> &[String] {
+        &self.run_errors
     }
 
     /// Returns `(passed, pending, failed)` scenario counts.
     ///
-    /// - `passed`: at least one step ran and no step failed
-    /// - `pending`: no steps ran or every step was skipped (unimplemented)
+    /// - `passed`: at least one step ran and every step passed
+    /// - `pending`: no steps ran or at least one step was skipped
     /// - `failed`: at least one step failed
     pub(crate) fn count_scenarios(&self) -> (usize, usize, usize) {
         let total: Vec<_> = self.features.iter().flat_map(|f| &f.scenarios).collect();
@@ -339,6 +337,10 @@ impl ArtifactCollector {
         let pending = total.iter().filter(|s| s.outcome == ScenarioOutcome::Pending).count();
         let failed = total.iter().filter(|s| s.outcome == ScenarioOutcome::Failed).count();
         (passed, pending, failed)
+    }
+
+    pub(crate) fn total_scenarios(&self) -> usize {
+        self.features.iter().map(|f| f.scenarios.len()).sum()
     }
 
     pub fn slugify(name: &str) -> String {
@@ -431,6 +433,26 @@ mod tests {
         assert_eq!(scenario.outcome, ScenarioOutcome::Failed);
     }
 
+    /// A scenario with a skipped step must be Pending, even if another step passed.
+    #[test]
+    fn mixed_passed_and_skipped_scenario_is_pending() {
+        let mut collector = make_collector();
+        collector.on_feature_start("test feature");
+        collector.on_scenario_start("mixed scenario");
+        collector.on_step_start("Given", "a precondition", 0, None);
+        collector.on_step_end(StepResult::Passed, None, None, None, "");
+        collector.on_step_start("Then", "an unimplemented assertion", 0, None);
+        collector.on_step_end(StepResult::Skipped, None, None, None, "");
+        collector.on_scenario_end(true, "");
+
+        let scenario = &collector.features[0].scenarios[0];
+        assert_eq!(
+            scenario.outcome,
+            ScenarioOutcome::Pending,
+            "A scenario with any skipped step must be Pending, not Passed"
+        );
+    }
+
     /// count_scenarios must correctly separate passed, pending, and failed.
     #[test]
     fn count_scenarios_separates_passed_pending_failed() {
@@ -463,6 +485,14 @@ mod tests {
         assert_eq!(passed, 1, "expected 1 passed");
         assert_eq!(pending, 2, "expected 2 pending (empty + all-skipped)");
         assert_eq!(failed, 1, "expected 1 failed");
+    }
+
+    #[test]
+    fn run_errors_are_recorded() {
+        let mut collector = make_collector();
+        collector.add_run_error("feature parse failed");
+
+        assert_eq!(collector.run_errors(), &["feature parse failed"]);
     }
 
     /// When a step sets an assertion buffer, the step serial_excerpt should

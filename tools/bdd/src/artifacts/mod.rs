@@ -27,14 +27,23 @@ static SERIAL_LOG: OnceLock<Mutex<String>> = OnceLock::new();
 /// Initialize the global artifact collector for the given architecture.
 pub fn init_global(arch: &str) {
     let collector = ArtifactCollector::new(arch);
-    let _ = if std::env::var_os("BDD_FEATURE").is_none() {
+    let init_result = if std::env::var_os("BDD_FEATURE").is_none() {
         collector.init_clean()
     } else {
         collector.init()
     };
-    let _ = COLLECTOR.set(Mutex::new(collector));
-    let _ = SERIAL_LOG.set(Mutex::new(String::new()));
-    let _ = QMP_STREAM.set(Mutex::new(None));
+    init_result.unwrap_or_else(|e| {
+        panic!("failed to initialize BDD artifact directory for arch {arch}: {e}");
+    });
+    COLLECTOR
+        .set(Mutex::new(collector))
+        .unwrap_or_else(|_| panic!("BDD artifact collector already initialized"));
+    SERIAL_LOG
+        .set(Mutex::new(String::new()))
+        .unwrap_or_else(|_| panic!("BDD serial log cache already initialized"));
+    QMP_STREAM
+        .set(Mutex::new(None))
+        .unwrap_or_else(|_| panic!("BDD QMP stream cache already initialized"));
 }
 
 /// Get the global artifact collector.
