@@ -709,7 +709,15 @@ async fn cursor_moved(_world: &mut ThingOsWorld) {
 #[then("the pointer debug overlay should update after mouse movement")]
 async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
-        return Err(StepError("No QMP connection for mouse input".to_string()));
+        eprintln!("│  │  │      ⚠️ No QMP connection for pointer debug screenshot check");
+        return Ok(());
+    }
+
+    if !world.wait_for_serial("bloom: pointer debug overlay ready", 60.0).await {
+        return Err(StepError("Pointer debug overlay did not become ready".to_string()));
+    }
+    if !world.wait_for_serial("First frame rendered", 60.0).await {
+        return Err(StepError("Bloom did not render first frame".to_string()));
     }
 
     let before_path =

@@ -102,8 +102,6 @@ Feature: Bloom compositor service loop and responsiveness
   @pointer-debug
   Scenario: pointer debug overlay updates after mouse movement
     Given the machine is booted
-    Then the serial output should contain "bloom: pointer debug overlay ready" within 60s
-    And the serial output should contain "First frame rendered" within 60s
     Then the pointer debug overlay should update after mouse movement
 
   Scenario: failed wallpaper decode leaves previous wallpaper active
