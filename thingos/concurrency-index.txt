@@ -11,7 +11,7 @@ Legend
 [V]  VFS provider RPC loop
 [D]  driver control plane
 [B]  bulk data path (memfd / ring / DMA)
-[C]  compatibility shim / legacy port
+[C]  compatibility shim / port bridge
 [A]  accidental / ad-hoc concurrency
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -20,8 +20,7 @@ Legend
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 abi/src/wait.rs
-  [K] pub enum WaitKind { Port(deprecated), RootWatch(deprecated), TaskExit,
-      Irq, Timeout, GraphOp(deprecated), Fd }
+  [K] pub enum WaitKind { TaskExit, Irq, Timeout, Fd }
   [K] pub const WAIT_MANY_MAX_ITEMS: usize = 32
   [K] pub struct WaitSpec  { kind, flags, object, token }
   [K] pub struct WaitResult { kind, flags, object, token, value, reserved }
@@ -38,9 +37,7 @@ kernel/src/syscall/dispatch.rs:45
 kernel/src/syscall/handlers/wait.rs
   [K] pub fn sys_wait_many(…)          — top-level syscall entry point
   [K] fn poll_spec(pinfo, spec)         — dispatch on WaitKind
-  [K] fn poll_port(pinfo, spec)         — WaitKind::Port (legacy, still works)
   [K] fn poll_fd(pinfo, spec)           — WaitKind::Fd   (primary path)
-  [K] fn poll_graph_op(_spec)           — WaitKind::GraphOp → ENOSYS
   [K] fn poll_task_exit(spec)           — WaitKind::TaskExit
   [K] fn poll_irq(spec)                 — WaitKind::Irq
   [K] fn error_result(spec, errno)      — helper
@@ -72,10 +69,7 @@ stem/src/wait_set.rs
   [R]   add_fd_writable(fd)       — preferred API
   [R]   add_task_exit(tid)
   [R]   add_irq(irq_handle)
-  [R]   add_port_readable(handle) — #[deprecated] use add_fd_readable
-  [R]   add_port_writable(handle) — #[deprecated] use add_fd_writable
   [R]   add_vfs_watch(fd)         — #[deprecated] use add_fd_readable
-  [R]   add_graph_op(op)          — #[deprecated] → ENOSYS
   [R]   wait(timeout) → WaitEvents
 
 --- WaitSet callers ---
@@ -341,7 +335,7 @@ drivers/ps2_mouse/src/main.rs
 sprout/src/task.rs
   [R] ManagedTask { ready: bool, req_write_port: Option<u32> }
       — readiness-only port fields replaced by DRIVER_READY inbox message.
-      Legacy fields (drv_req_write, drv_resp_read, boot_req_read,
+      Removed readiness fields (drv_req_write, drv_resp_read, boot_req_read,
       boot_resp_write, resp_fd) have been removed.
 
 sprout/src/supervisor.rs
@@ -400,20 +394,12 @@ utils/ipc_memfd_demo/src/main.rs
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-7. COMPATIBILITY SHIMS / LEGACY PORTS  [C]
-   Deprecated WaitKind variants, legacy port packing
+7. COMPATIBILITY SHIMS / PORT BRIDGES  [C]
+   Port transports are bridged into VFS FDs before readiness waits
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-abi/src/wait.rs
-  [C] WaitKind::Port       (#[deprecated] — bridge via SYS_FD_FROM_HANDLE)
-  [C] WaitKind::RootWatch  (#[deprecated] → ENOSYS)
-  [C] WaitKind::GraphOp    (#[deprecated] → ENOSYS)
-
 stem/src/wait_set.rs
-  [C] WaitSet::add_port_readable   (#[deprecated])
-  [C] WaitSet::add_port_writable   (#[deprecated])
   [C] WaitSet::add_vfs_watch       (#[deprecated] → add_fd_readable)
-  [C] WaitSet::add_graph_op        (#[deprecated] → ENOSYS)
 
 bristle/src/main.rs — ServiceLoop edition
   [R] ServiceLoop (WaitSet-backed inbox + device FDs) — MIGRATED
@@ -484,8 +470,8 @@ kernel/src/task/mod.rs:829
 stem/src/thread.rs:10
   [R] pub fn spawn(entry) → Result<ThreadId, Errno>  — SYS_SPAWN_THREAD
 
-cambium/src/spawn.rs:103,153
-  [S] ManagedDriver::spawn_legacy / spawn_catalog — exec via memfd context
+cambium/src/spawn.rs
+  [S] ManagedDriver::spawn_via_entrypoint — exec via catalog driver entrypoint
 
 sprout/src/pipelines.rs
   [S] Pipeline spawn helpers: display, terminal, nectar, fetchd, bloom,

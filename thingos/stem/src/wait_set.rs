@@ -1,13 +1,13 @@
 //! High-level `WaitSet` primitive — FD-centric readiness substrate.
 //!
 //! `WaitSet` lets a task block until *any* of a collection of event sources
-//! becomes ready: things, ports, timers, task-exit signals, and IRQs.
+//! becomes ready: VFS file descriptors, timers, task-exit signals, and IRQs.
 //! Internally it builds a `WaitSpec` array and calls the `SYS_WAIT_MANY`
 //! syscall, which parks the calling task in the kernel until at least one
 //! source fires.
 //!
 //! This eliminates userspace polling loops.  Because all VFS-backed objects
-//! (pipes, sockets, and port ends bridged via `SYS_FS_FD_FROM_HANDLE`)
+//! (pipes, sockets, and port ends bridged via `SYS_HANDLE_FROM_PORT`)
 //! expose FD readiness, a single `WaitSet` can multiplex the complete set of
 //! I/O the calling task cares about.
 //!
@@ -18,7 +18,7 @@
 //! use core::time::Duration;
 //!
 //! let mut set = WaitSet::new();
-//! let rx_fd = 1u32;    // port end bridged via vfs_fd_from_handle
+//! let rx_fd = 1u32;    // port end bridged via vfs_handle_from_port
 //! let pipe_read_fd = 3u32;
 //! let tok_rx   = set.add_fd_readable(rx_fd).unwrap();
 //! let tok_pipe = set.add_fd_readable(pipe_read_fd).unwrap();
@@ -84,21 +84,20 @@ impl WaitEvent {
     }
 
     /// Optional value payload:
-    /// - port: bytes pending / space available
+    /// - fd: provider-specific readiness value, when available
     /// - task exit: exit code
-    /// - graph op: return value or errno
     #[inline]
     pub fn value(&self) -> i64 {
         self.result.value
     }
 
-    /// Port (or watch) has data available to read.
+    /// The source has data available to read.
     #[inline]
     pub fn is_readable(&self) -> bool {
         self.result.flags & abi::wait::ready::READABLE != 0
     }
 
-    /// Port has space to write.
+    /// The source has space to write.
     #[inline]
     pub fn is_writable(&self) -> bool {
         self.result.flags & abi::wait::ready::WRITABLE != 0
@@ -141,7 +140,7 @@ impl WaitEvent {
         self.result.flags & abi::wait::ready::IRQ != 0
     }
 
-    /// An async graph operation completed (successfully or with an error).
+    /// A source-specific operation completed.
     #[inline]
     pub fn is_done(&self) -> bool {
         self.result.flags & abi::wait::ready::DONE != 0
@@ -227,41 +226,10 @@ impl WaitSet {
 
     // ── registration API ──────────────────────────────────────────────────
 
-    /// Watch a port for incoming data.
-    ///
-    /// `handle` is the **read** end of the port (as returned by the low
-    /// half of `port_create`).
-    ///
-    /// # Deprecated
-    ///
-    /// Port-handle waits are superseded by FD-based readiness.  Bridge the
-    /// port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
-    /// `vfs_fd_from_handle`) and then use [`add_fd_readable`][Self::add_fd_readable].
-    #[deprecated(note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead")]
-    pub fn add_port_readable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
-        #[allow(deprecated)]
-        self.push_spec(WaitKind::Port, interest::READABLE, handle)
-    }
-
-    /// Watch a port for write space.
-    ///
-    /// `handle` is the **write** end of the port.
-    ///
-    /// # Deprecated
-    ///
-    /// Port-handle waits are superseded by FD-based readiness.  Bridge the
-    /// port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` (stem:
-    /// `vfs_fd_from_handle`) and then use [`add_fd_writable`][Self::add_fd_writable].
-    #[deprecated(note = "Use vfs_fd_from_handle to bridge the port then add_fd_writable instead")]
-    pub fn add_port_writable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
-        #[allow(deprecated)]
-        self.push_spec(WaitKind::Port, interest::WRITABLE, handle)
-    }
-
     /// Watch a VFS thing for readability.
     ///
     /// `fd` is any open handle: a pipe read-end, a socket, a port
-    /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
+    /// end that was bridged via `SYS_HANDLE_FROM_PORT`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLIN`.
     ///
     /// This is the recommended API for FD-based readiness.  The older
@@ -273,7 +241,7 @@ impl WaitSet {
     /// Watch a VFS thing for writability.
     ///
     /// `fd` is any open handle: a pipe write-end, a socket, a port
-    /// end that was bridged via `SYS_FS_FD_FROM_HANDLE`, or a device node.
+    /// end that was bridged via `SYS_HANDLE_FROM_PORT`, or a device node.
     /// The waiter wakes when the underlying node reports `POLLOUT`.
     pub fn add_fd_writable(&mut self, fd: u32) -> Result<WaitToken, Errno> {
         self.push_spec(WaitKind::Fd, interest::WRITABLE, fd as u64)
@@ -302,21 +270,6 @@ impl WaitSet {
     /// `irq_handle` is the handle returned by `device_irq_subscribe`.
     pub fn add_irq(&mut self, irq_handle: u64) -> Result<WaitToken, Errno> {
         self.push_spec(WaitKind::Irq, 0, irq_handle)
-    }
-
-    /// Watch for an async graph-operation to complete.
-    ///
-    /// # Deprecated
-    ///
-    /// Graph operations are removed.  The kernel returns `ENOSYS` for
-    /// `WaitKind::GraphOp`.  There is no direct replacement: async I/O should
-    /// be modelled as FD readiness via [`add_fd_readable`][Self::add_fd_readable].
-    #[deprecated(
-        note = "Graph ops are removed; model async I/O as FD readiness with add_fd_readable"
-    )]
-    pub fn add_graph_op(&mut self, op_handle: u64) -> Result<WaitToken, Errno> {
-        #[allow(deprecated)]
-        self.push_spec(WaitKind::GraphOp, 0, op_handle)
     }
 
     // ── removal ──────────────────────────────────────────────────────────
@@ -393,7 +346,6 @@ impl Default for WaitSet {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[allow(deprecated)] // add_port_readable / add_port_writable / WaitKind::Port deprecated; tests exercise backward compat
 mod tests {
     use abi::wait::WaitKind;
 
@@ -409,9 +361,9 @@ mod tests {
     #[test]
     fn add_increases_len() {
         let mut set = WaitSet::new();
-        let t1 = set.add_port_readable(1).unwrap();
+        let t1 = set.add_fd_readable(1).unwrap();
         assert_eq!(set.len(), 1);
-        let _t2 = set.add_fd_readable(2).unwrap();
+        let _t2 = set.add_fd_writable(2).unwrap();
         assert_eq!(set.len(), 2);
         // tokens are unique
         assert_ne!(t1.0, _t2.0);
@@ -420,7 +372,7 @@ mod tests {
     #[test]
     fn remove_returns_true_when_present() {
         let mut set = WaitSet::new();
-        let tok = set.add_port_readable(1).unwrap();
+        let tok = set.add_fd_readable(1).unwrap();
         assert!(set.remove(tok));
         assert!(set.is_empty());
     }
@@ -442,23 +394,24 @@ mod tests {
     fn exceeds_max_items_returns_enospc() {
         let mut set = WaitSet::new();
         for i in 0..WAIT_MANY_MAX_ITEMS as u64 {
-            set.add_port_readable(i).unwrap();
+            set.add_fd_readable(i as u32).unwrap();
         }
         // One more should fail
-        let res = set.add_port_readable(99);
+        let res = set.add_fd_readable(99);
         assert_eq!(res.unwrap_err(), Errno::ENOSPC);
     }
 
     #[test]
     fn specs_have_correct_kind() {
         let mut set = WaitSet::new();
-        let _ = set.add_port_readable(10).unwrap();
-        assert_eq!(set.specs[0].kind, WaitKind::Port as u32);
+        let _ = set.add_fd_readable(10).unwrap();
+        assert_eq!(set.specs[0].kind, WaitKind::Fd as u32);
         assert_eq!(set.specs[0].flags, interest::READABLE);
         assert_eq!(set.specs[0].object, 10);
 
-        let _ = set.add_fd_readable(5).unwrap();
+        let _ = set.add_fd_writable(5).unwrap();
         assert_eq!(set.specs[1].kind, WaitKind::Fd as u32);
+        assert_eq!(set.specs[1].flags, interest::WRITABLE);
         assert_eq!(set.specs[1].object, 5);
     }
 
@@ -466,7 +419,7 @@ mod tests {
     fn wait_event_flag_helpers() {
         use abi::wait::ready;
         let r = WaitResult {
-            kind: WaitKind::Port as u32,
+            kind: WaitKind::Fd as u32,
             flags: ready::READABLE | ready::HANGUP,
             object: 1,
             token: 42,

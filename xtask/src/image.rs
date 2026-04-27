@@ -37,9 +37,9 @@ const DEFAULT_WALLPAPERS: [WallpaperSpec; 5] = [
     WallpaperSpec { file_name: "linen.bmp", variant: 3 },
 ];
 
-const DEFAULT_BOOT_LOCALE: &str = "syc";
+const DEFAULT_BOOT_LOCALE: &str = "la";
 const DEFAULT_LOCALE_CONF: &str =
-    "LOCALE=syc\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n";
+    "LOCALE=la\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n";
 
 /// Configuration for ISO builds.
 #[derive(Default)]
@@ -463,26 +463,26 @@ fn generate_limine_config(
     }
 
     let default_loglevel = loglevel.unwrap_or("info");
-    let default_locale_arg = format!("locale={DEFAULT_BOOT_LOCALE}");
+    let default_language_arg = format!("language={DEFAULT_BOOT_LOCALE}");
     let mut entries = vec![
         LimineEntry {
             title: "ThingOS".to_string(),
-            kernel_cmdline: format!("loglevel={} {}", default_loglevel, default_locale_arg),
+            kernel_cmdline: format!("loglevel={} {}", default_loglevel, default_language_arg),
         },
         LimineEntry {
             title: "ThingOS (BootFB Fallback)".to_string(),
             kernel_cmdline: format!(
                 "loglevel={} {} display=bootfb",
-                default_loglevel, default_locale_arg
+                default_loglevel, default_language_arg
             ),
         },
         LimineEntry {
             title: "ThingOS (Debug)".to_string(),
-            kernel_cmdline: format!("loglevel=4 {}", default_locale_arg),
+            kernel_cmdline: format!("loglevel=4 {}", default_language_arg),
         },
         LimineEntry {
             title: "ThingOS (Trace)".to_string(),
-            kernel_cmdline: format!("loglevel=5 {}", default_locale_arg),
+            kernel_cmdline: format!("loglevel=5 {}", default_language_arg),
         },
     ];
 
@@ -492,7 +492,7 @@ fn generate_limine_config(
                 0,
                 LimineEntry {
                     title: "ThingOS (Custom)".to_string(),
-                    kernel_cmdline: format!("loglevel={l} {default_locale_arg}"),
+                    kernel_cmdline: format!("loglevel={l} {default_language_arg}"),
                 },
             );
         }
@@ -1156,9 +1156,9 @@ mod tests {
         let sh = Shell::new().expect("shell");
         let conf = generate_limine_config(&sh, &[], &[], None, None, false, false);
 
-        assert!(conf.contains("kernel_cmdline: loglevel=info locale=syc"));
-        assert!(conf.contains("kernel_cmdline: loglevel=info locale=syc display=bootfb"));
-        assert!(conf.contains("kernel_cmdline: loglevel=4 locale=syc"));
-        assert!(conf.contains("kernel_cmdline: loglevel=5 locale=syc"));
+        assert!(conf.contains("kernel_cmdline: loglevel=info language=la"));
+        assert!(conf.contains("kernel_cmdline: loglevel=info language=la display=bootfb"));
+        assert!(conf.contains("kernel_cmdline: loglevel=4 language=la"));
+        assert!(conf.contains("kernel_cmdline: loglevel=5 language=la"));
     }
 }

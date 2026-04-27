@@ -63,9 +63,8 @@ fn cycle_locale() {
     stem::info!("bristle: F1 pressed - locale set to {}", locale.as_str());
 }
 
-fn locale_from_token(token: &str) -> Option<&'static str> {
-    let value = token.strip_prefix("locale=").or_else(|| token.strip_prefix("language="))?.trim();
-    match value {
+fn locale_from_value(value: &str) -> Option<&'static str> {
+    match value.trim_matches('"').trim() {
         "en" | "en_US" | "en-US" => Some("en"),
         "eo" => Some("eo"),
         "la" => Some("la"),
@@ -74,8 +73,25 @@ fn locale_from_token(token: &str) -> Option<&'static str> {
     }
 }
 
+fn locale_from_token(token: &str) -> Option<&'static str> {
+    let value = token.strip_prefix("language=")?.trim();
+    locale_from_value(value)
+}
+
 fn boot_locale() -> &'static str {
     let mut buf = [0u8; 1024];
+
+    if let Ok(fd) = vfs_open("/dev/locale", abi::syscall::vfs_flags::O_RDONLY) {
+        if let Ok(n) = vfs_read(fd, &mut buf) {
+            if let Ok(locale) = core::str::from_utf8(&buf[..n]) {
+                if let Some(locale) = locale_from_value(locale.trim()) {
+                    let _ = vfs_close(fd);
+                    return locale;
+                }
+            }
+        }
+        let _ = vfs_close(fd);
+    }
 
     if let Ok(needed) = argv_get(&mut buf) {
         let limit = needed.min(buf.len());
@@ -104,7 +120,7 @@ fn boot_locale() -> &'static str {
         let _ = vfs_close(fd);
     }
 
-    "syc"
+    "la"
 }
 
 /// Publish bristle's PID to `/run/bristle/pid` so consumers can find us.
@@ -134,7 +150,8 @@ fn publish_device_handle(path: &str, handle: u32) {
 fn main(_arg: usize) -> ! {
     stem::i18n::init();
     ensure_session_roots();
-    update_active_ui("bloom");
+    update_active_ui("terminal");
+    info!("bristle: active UI defaulted to terminal until bloom registers");
     let initial_locale = boot_locale();
     stem::i18n::set_locale(stem::i18n::LocaleId::new(initial_locale));
     update_locale(initial_locale);
@@ -318,6 +335,8 @@ fn handle_register_sink(payload: &[u8], bloom_fd: &mut Option<u32>, echo_fd: &mu
                 let _ = vfs_close(old);
             }
             info!("bristle: bloom sink registered (fd={})", fd);
+            update_active_ui("bloom");
+            info!("bristle: active UI switched to bloom after sink registration");
         }
         BRISTLE_SINK_TAG_ECHO => {
             if let Some(old) = echo_fd.replace(fd) {

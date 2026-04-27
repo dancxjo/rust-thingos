@@ -193,23 +193,14 @@ impl Supervisor {
         self.tick_supervisor();
 
         // Drive supervision through the canonical Layer 3 `ServiceLoop`
-        // (inbox-backed actor) instead of a hand-rolled `sleep_ms(100)` loop.
-        // The 100ms `Timeout` event preserves the previous periodic cadence;
-        // future device-watch / typed control messages can be added as
-        // secondary readiness sources without growing another local poll
-        // loop.
-        //
-        // If the inbox cannot be opened (e.g. procfs unavailable during very
-        // early boot bring-up), fall back to the legacy `sleep_ms(100)` loop
-        // so existing behavior is preserved end-to-end.
+        // (inbox-backed actor). The 100ms `Timeout` event preserves the
+        // supervisor cadence; future device-watch / typed control messages can
+        // be added as secondary readiness sources without growing another local
+        // poll loop.
         match ServiceLoop::new(INBOX_MAX_PAYLOAD) {
             Ok(svc) => self.run_service_loop(svc),
             Err(err) => {
-                warn!(
-                    "SPROUT: failed to construct ServiceLoop ({:?}); falling back to legacy supervisor loop",
-                    err
-                );
-                self.run_legacy_supervisor_loop();
+                panic!("SPROUT: failed to construct ServiceLoop: {:?}", err);
             }
         }
     }
@@ -220,8 +211,8 @@ impl Supervisor {
     /// - typed inbox `Message`s — `DRIVER_READY` marks the corresponding
     ///   `ManagedTask` as ready; unknown kinds are logged and dropped;
     /// - secondary `Ready` events (none registered yet);
-    /// - `InboxClosed`, which falls back to the legacy `sleep_ms` loop so
-    ///   supervision continues even if the inbox is revoked.
+    /// - `InboxClosed`, which is fatal because the inbox is the supervisor's
+    ///   control plane.
     fn run_service_loop(&mut self, mut svc: ServiceLoop) -> ! {
         if let Some(read_handle) = self.supervisor_port_read {
             if let Ok(fd) = stem::syscall::vfs::vfs_handle_from_port(read_handle) {
@@ -272,8 +263,7 @@ impl Supervisor {
                     self.tick_supervisor();
                 }
                 Ok(ServiceEvent::InboxClosed) => {
-                    warn!("SPROUT: inbox closed; falling back to legacy supervisor loop");
-                    self.run_legacy_supervisor_loop();
+                    panic!("SPROUT: supervisor inbox closed");
                 }
                 Err(err) => {
                     warn!("SPROUT: ServiceLoop next_event error: {:?}; running tick", err);
@@ -428,16 +418,6 @@ impl Supervisor {
         }
     }
 
-    /// Legacy `sleep_ms(100)`-driven supervisor loop, retained as a
-    /// degraded fallback for the (essentially impossible) case where
-    /// `ServiceLoop::new` fails or the inbox is closed mid-flight.
-    fn run_legacy_supervisor_loop(&mut self) -> ! {
-        loop {
-            self.tick_supervisor();
-            stem::sleep_ms(SUPERVISOR_TICK_MS);
-        }
-    }
-
     /// One iteration of the periodic supervisor work that previously ran
     /// inside the hand-rolled `loop { ...; sleep_ms(100); }` body.
     fn tick_supervisor(&mut self) {
@@ -446,10 +426,10 @@ impl Supervisor {
         self.spawn_netd_if_ready();
         stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
         self.verify_netd_liveness();
-        stem::trace!("SPROUT: Loop iteration: spawn_bristle_if_needed");
-        self.spawn_bristle_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_display_if_needed");
         self.spawn_display_if_needed();
+        stem::trace!("SPROUT: Loop iteration: spawn_bristle_if_needed");
+        self.spawn_bristle_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
         self.spawn_bloom_if_ready();
         stem::trace!("SPROUT: Loop iteration: spawn_audio_if_ready");
@@ -737,7 +717,7 @@ fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 }
 
 fn spawn_netd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    // Spawn netd via VFS-loaded spawn_process_ex (not the legacy boot-modules
+    // Spawn netd via VFS-loaded spawn_process_ex (not the boot-modules
     // path) so the initial spawn uses the same code path the supervisor uses
     // when restarting netd.  Using two different paths produced two different
     // ProcessInfo / handle-table layouts and the boot-modules variant left

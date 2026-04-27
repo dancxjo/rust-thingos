@@ -276,10 +276,13 @@ pub fn setup_display_pipeline(
 ) -> Option<DisplayHandles> {
     let (width, height, stride, format) = probe_bootfb_vfs()?;
 
-    let driver_path = if force_bootfb || !file_exists("/drivers/display_virtio_gpu") {
+    let driver_path = {
+        if force_bootfb {
+            info!("SPROUT: display=bootfb requested; using boot framebuffer driver");
+        } else {
+            info!("SPROUT: using boot framebuffer driver for first paint");
+        }
         "/drivers/display_bootfb"
-    } else {
-        "/drivers/display_virtio_gpu"
     };
     info!("SPROUT: Selected display driver '{}'", driver_path);
 
@@ -474,7 +477,6 @@ pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHa
         Ok(resp) => {
             let pid = resp.child_tid;
             info!("SPROUT: Spawned bristle (PID={})", pid);
-            let _ = stem::thread::set_priority(pid, 3);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
                 name: "bristle".to_string(),

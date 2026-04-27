@@ -29,7 +29,22 @@ Feature: Boot progress milestone text reporting
 
   @smoke
   @timeout-30s
-  Scenario: Terminal hint is reported during initialization
+  Scenario: Platform device milestone uses current system naming
     Given the machine is started
     When I wait for the system to boot
-    Then the serial output should contain "Press F12 for a terminal"
+    Then the serial output should contain "Platform Devices"
+    And the serial output should not contain "Legacy Devices"
+
+  @smoke
+  @timeout-30s
+  Scenario: Terminal hint follows the kernel boot locale
+    Given the machine is started
+    When I wait for the system to boot
+    Then the serial output should contain "Preme F12 prō terminālī"
+
+  @smoke
+  @timeout-30s
+  Scenario: Kernel boot milestones use the language-selected XLIFF catalog
+    Given the machine is started
+    When I wait for the system to boot
+    Then the serial output should contain "localized=\"Tabula memoriae bona\""

@@ -2,7 +2,6 @@
 #![no_main]
 extern crate alloc;
 
-mod binding;
 mod catalog;
 mod spawn;
 mod sysfs;
@@ -10,14 +9,12 @@ mod sysfs;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-
 use core::ops::ControlFlow;
 
 use abi::driver_interface::DriverClass;
 use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_RDONLY, O_WRONLY};
 use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
-use binding::{match_binding, mount_hint};
 use catalog::Catalog;
 use spawn::ManagedDriver;
 use stem::kinds::KIND_ID_THINGOS_JOB_EXIT;
@@ -217,27 +214,24 @@ fn run_daemon_mode() -> ! {
         }
     };
 
-    let devices_watch_token = match vfs_watch_path(
-        "/sys/devices",
-        watch_mask::ALL_EVENTS,
-        watch_flags::NONBLOCK,
-    ) {
-        Ok(fd) => match svc.add_vfs_watch(fd) {
-            Ok(token) => Some((token, fd)),
+    let devices_watch_token =
+        match vfs_watch_path("/sys/devices", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
+            Ok(fd) => match svc.add_vfs_watch(fd) {
+                Ok(token) => Some((token, fd)),
+                Err(err) => {
+                    warn!(
+                        "CAMBIUM: failed to register /sys/devices watch with ServiceLoop: {:?}",
+                        err
+                    );
+                    let _ = vfs_close(fd);
+                    None
+                }
+            },
             Err(err) => {
-                warn!(
-                    "CAMBIUM: failed to register /sys/devices watch with ServiceLoop: {:?}",
-                    err
-                );
-                let _ = vfs_close(fd);
+                warn!("CAMBIUM: failed to watch /sys/devices: {:?}", err);
                 None
             }
-        },
-        Err(err) => {
-            warn!("CAMBIUM: failed to watch /sys/devices: {:?}", err);
-            None
-        }
-    };
+        };
 
     let timeout = Some(Duration::from_millis(RECONCILE_TIMEOUT_MS));
 
@@ -253,10 +247,7 @@ fn run_daemon_mode() -> ! {
             }
             Ok(ServiceEvent::Ready { token, event }) => {
                 if event.is_error() || event.is_hangup() {
-                    warn!(
-                        "CAMBIUM: ServiceLoop secondary source error/hangup (token={:?})",
-                        token
-                    );
+                    warn!("CAMBIUM: ServiceLoop secondary source error/hangup (token={:?})", token);
                     reconcile_due = true;
                 }
                 if let Some((dev_token, dev_fd)) = devices_watch_token {
@@ -274,9 +265,7 @@ fn run_daemon_mode() -> ! {
                 reconcile_due = true;
             }
             Ok(ServiceEvent::InboxClosed) => {
-                warn!(
-                    "CAMBIUM: inbox closed; falling back to degraded monitor-only loop"
-                );
+                warn!("CAMBIUM: inbox closed; falling back to degraded monitor-only loop");
                 run_degraded_monitor_loop(&mut drivers);
             }
             Err(err) => {
@@ -413,8 +402,15 @@ fn reconcile_devices(
     let mut seen = BTreeMap::new();
 
     for device in devices {
-        stem::debug!("CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}", 
-            device.slot, device.kind, device.vendor_id, device.device_id, device.class_code, device.present);
+        stem::debug!(
+            "CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
+            device.slot,
+            device.kind,
+            device.vendor_id,
+            device.device_id,
+            device.class_code,
+            device.present
+        );
         seen.insert(device.slot.clone(), ());
         if !device.present {
             continue;
@@ -438,9 +434,7 @@ fn reconcile_devices(
                 },
             )
         }) {
-            if entry.driver_class == DriverClass::Audio
-                && path_exists(SPROUT_EARLY_AUDIO_MARKER)
-            {
+            if entry.driver_class == DriverClass::Audio && path_exists(SPROUT_EARLY_AUDIO_MARKER) {
                 stem::debug!(
                     "CAMBIUM: skipping audio driver '{}' for {}; Sprout owns early audio",
                     entry.path,
@@ -460,15 +454,7 @@ fn reconcile_devices(
             continue;
         }
 
-        // Fall back to the legacy static binding table.
-        let Some(binding) = match_binding(&device) else {
-            continue;
-        };
-        let mount_path = mount_hint(binding, &device);
-        let managed = drivers
-            .entry(device.slot.clone())
-            .or_insert_with(|| ManagedDriver::new(&device, binding, mount_path));
-        managed.ensure_running();
+        debug!("CAMBIUM: no catalog driver matched {}", device.slot);
     }
 
     let stale_slots: Vec<_> =

@@ -10,7 +10,6 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-use crate::errors::Errno;
 use crate::wait_set::{WaitSet, WaitToken};
 
 /// A global pointer to the currently running reactor.
@@ -36,22 +35,6 @@ impl Reactor {
     pub fn current() -> Option<&'static Reactor> {
         let ptr = CURRENT_REACTOR.load(Ordering::SeqCst);
         if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
-    }
-
-    /// Register a read interest on a port, saving the waker.
-    ///
-    /// # Deprecated
-    ///
-    /// Port-handle waits are superseded by FD-based readiness.  Bridge the
-    /// port to a VFS file descriptor with `vfs_fd_from_handle` and then use
-    /// `add_fd_readable` instead.
-    #[deprecated(note = "Use vfs_fd_from_handle to bridge the port then add_fd_readable instead")]
-    pub fn add_port_readable(&self, handle: u64, waker: Waker) -> Result<WaitToken, Errno> {
-        let mut ws = self.wait_set.borrow_mut();
-        #[allow(deprecated)]
-        let token = ws.add_port_readable(handle)?;
-        self.wakers.borrow_mut().insert(token, waker);
-        Ok(token)
     }
 
     pub fn remove(&self, token: WaitToken) {
@@ -127,90 +110,6 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
                     waker.wake();
                 }
                 ws.remove(ev.token());
-            }
-        }
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Async Implementations
-
-use crate::syscall;
-
-/// Equivalent to a standard Port handle, optimized for async usage.
-///
-/// # Deprecated
-///
-/// `AsyncPort` is superseded by FD-based async I/O.  Bridge the port handle
-/// via `vfs_fd_from_handle` and use an async FD reader instead.
-#[deprecated(note = "Use vfs_fd_from_handle to bridge the port then read from a VFS FD instead")]
-pub struct AsyncPort {
-    handle: u64,
-}
-
-#[allow(deprecated)]
-impl AsyncPort {
-    pub fn new(handle: u64) -> Self {
-        Self { handle }
-    }
-
-    pub fn handle(&self) -> u64 {
-        self.handle
-    }
-
-    /// Read asynchronously from the port.
-    /// If empty, it registers into the active `Reactor` to await readiness.
-    ///
-    /// # Deprecated
-    ///
-    /// `AsyncPort` is superseded by FD-based async I/O.  Bridge the port handle
-    /// via `vfs_fd_from_handle` and use an async FD reader instead.
-    pub fn recv<'a>(&'a self, buf: &'a mut [u8]) -> RecvFuture<'a> {
-        RecvFuture { port: self, buf, registered_token: None }
-    }
-}
-
-#[allow(deprecated)]
-pub struct RecvFuture<'a> {
-    port: &'a AsyncPort,
-    buf: &'a mut [u8],
-    registered_token: Option<WaitToken>,
-}
-
-#[allow(deprecated)]
-impl<'a> Future for RecvFuture<'a> {
-    type Output = Result<usize, Errno>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match syscall::port_recv(self.port.handle as syscall::PortHandle, self.buf) {
-            Ok(n) => Poll::Ready(Ok(n)),
-            Err(Errno::EAGAIN) => {
-                if let Some(reactor) = Reactor::current() {
-                    if self.registered_token.is_none() {
-                        #[allow(deprecated)]
-                        if let Ok(token) =
-                            reactor.add_port_readable(self.port.handle, cx.waker().clone())
-                        {
-                            self.registered_token = Some(token);
-                        }
-                    } else {
-                        // We could update the waker, but usually it's the same in simple select! loops
-                    }
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Err(Errno::EAGAIN))
-                }
-            }
-            Err(e) => Poll::Ready(Err(e)),
-        }
-    }
-}
-
-impl<'a> Drop for RecvFuture<'a> {
-    fn drop(&mut self) {
-        if let Some(token) = self.registered_token.take() {
-            if let Some(reactor) = Reactor::current() {
-                reactor.remove(token);
             }
         }
     }

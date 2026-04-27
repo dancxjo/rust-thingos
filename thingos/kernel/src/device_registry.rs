@@ -20,7 +20,7 @@ const MAX_DMA_BUFFERS_PER_CLAIM: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IrqMode {
-    Legacy = 0,
+    LineBased = 0,
     Msi = 1,
     Msix = 2,
 }
@@ -67,7 +67,7 @@ pub struct DeviceEntry {
 }
 
 impl DeviceEntry {
-    pub const fn new_legacy(
+    pub const fn new_platform_io(
         kind: &'static str,
         ioport_ranges: &'static [(u16, u16)],
         resource_id: u64,
@@ -86,7 +86,7 @@ impl DeviceEntry {
             pci_location: None,
             msi_cap: None,
             msix_cap: None,
-            irq_mode: IrqMode::Legacy,
+            irq_mode: IrqMode::LineBased,
             irq_vector: 0,
         }
     }
@@ -111,7 +111,7 @@ impl DeviceEntry {
             pci_location: None,
             msi_cap: None,
             msix_cap: None,
-            irq_mode: IrqMode::Legacy,
+            irq_mode: IrqMode::LineBased,
             irq_vector: 0,
         }
     }
@@ -483,12 +483,12 @@ impl DeviceRegistry {
     }
 }
 
-// Static device definitions for legacy devices
+// Static platform I/O device definitions.
 pub static CMOS_IOPORT_RANGES: &[(u16, u16)] = &[(0x70, 0x71)];
 pub static PS2_IOPORT_RANGES: &[(u16, u16)] = &[(0x60, 0x64)];
-/// Legacy ISA IDE controller covering both primary (0x1F0–0x1F7, 0x3F6) and
+/// ISA IDE controller covering both primary (0x1F0–0x1F7, 0x3F6) and
 /// secondary (0x170–0x177, 0x376) channels.  Slot name will be `isa-01f0`.
-pub static ATA_LEGACY_IOPORT_RANGES: &[(u16, u16)] =
+pub static ATA_PLATFORM_IOPORT_RANGES: &[(u16, u16)] =
     &[(0x1F0, 0x1F7), (0x3F6, 0x3F6), (0x170, 0x177), (0x376, 0x376)];
 
 #[cfg(test)]
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn test_device_claiming_ownership() {
         let mut reg = DeviceRegistry::new();
-        let dev_idx = reg.register(DeviceEntry::new_legacy("test_dev", &[], 123)).unwrap();
+        let dev_idx = reg.register(DeviceEntry::new_platform_io("test_dev", &[], 123)).unwrap();
 
         // Task A claims device
         let claim_a = reg.claim(dev_idx, 10).expect("Task A should be able to claim");
@@ -520,8 +520,8 @@ mod tests {
     #[test]
     fn test_multiple_devices_per_task() {
         let mut reg = DeviceRegistry::new();
-        let dev1 = reg.register(DeviceEntry::new_legacy("dev1", &[], 1)).unwrap();
-        let dev2 = reg.register(DeviceEntry::new_legacy("dev2", &[], 2)).unwrap();
+        let dev1 = reg.register(DeviceEntry::new_platform_io("dev1", &[], 1)).unwrap();
+        let dev2 = reg.register(DeviceEntry::new_platform_io("dev2", &[], 2)).unwrap();
 
         reg.claim(dev1, 100).unwrap();
         reg.claim(dev2, 100).unwrap();

@@ -37,14 +37,6 @@ pub struct EventHeader {
     pub stream_id: StreamId,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RootWatchEvent {
-    pub target: u64,
-    pub key: u64,
-    pub value: u64,
-}
-
 #[repr(u64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
@@ -108,44 +100,6 @@ pub struct SpawnThreadReq {
 pub enum WatchMode {
     QueryThenStream = 0,
     StreamOnly = 1,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WatchSpec {
-    pub query_ptr: u64,
-    pub query_len: u64,
-    pub mode: u32,
-    pub _padding: u32, // Alignment padding
-    pub start_seq: u64,
-    /// Pointer to RootWatchFilter (0 = no filter, match all)
-    pub filter_ptr: u64,
-    /// Size of filter struct (for versioning, should be RootWatchFilter::SIZE)
-    pub filter_len: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WatchEvent {
-    pub kind: u32, // 1=Found, 2=Lost
-    pub node_id: u64,
-    pub handle: u64,
-    pub size: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GraphEdge {
-    pub rel: u64,
-    pub target: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GraphProp {
-    pub key: u32,
-    pub _pad: u32,
-    pub value: u64,
 }
 
 // ============================================================================

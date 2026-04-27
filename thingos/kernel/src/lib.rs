@@ -8,10 +8,12 @@ pub mod device_registry;
 pub mod entropy;
 pub mod group;
 pub mod handle;
+pub mod hotkey;
 pub mod inbox;
 pub mod ipc;
 pub mod irq;
 pub mod job;
+pub mod locale;
 pub mod logging;
 pub mod memory;
 pub mod message;
@@ -1006,6 +1008,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
     init_runtime(runtime);
     boot_trace(runtime, b"[kernel:start] init_runtime ok\r\n");
+    crate::locale::set_from_cmdline(runtime.get_kernel_cmdline());
 
     let early_fb = runtime.framebuffer();
     if let Some(fb) = early_fb {
@@ -1172,6 +1175,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     );
     boot_trace(runtime, b"[kernel:start] vfs init ok\r\n");
     crate::boot_progress::push(crate::boot_progress::BootPhase::Vfs, "VFS Root Ready");
+    crate::hotkey::spawn_worker::<R>();
 
     boot_trace(runtime, b"[kernel:start] kdebug(pci) begin\r\n");
     kdebug!("Scanning PCI bus...");
@@ -1188,29 +1192,29 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] pci scan ok\r\n");
     crate::boot_progress::push(crate::boot_progress::BootPhase::Pci, "PCI Bus Scanned");
 
-    // Register legacy ISA devices
-    boot_trace(runtime, b"[kernel:start] legacy device register begin\r\n");
-    let register_legacy_devices_start = runtime.mono_ticks();
+    // Register platform I/O devices.
+    boot_trace(runtime, b"[kernel:start] platform device register begin\r\n");
+    let register_platform_devices_start = runtime.mono_ticks();
     {
         let mut reg = crate::device_registry::REGISTRY.lock();
         // RTC CMOS (0x70, 0x71)
-        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+        reg.register(crate::device_registry::DeviceEntry::new_platform_io(
             "rtc_cmos",
             crate::device_registry::CMOS_IOPORT_RANGES,
             0x70, // Port base as unique-ish ID
         ));
         // PS/2 Controller (0x60, 0x64)
-        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+        reg.register(crate::device_registry::DeviceEntry::new_platform_io(
             "ps2_controller",
             crate::device_registry::PS2_IOPORT_RANGES,
             0x60,
         ));
-        // Legacy ISA IDE controller: primary (0x1F0) + secondary (0x170) channels.
+        // ISA IDE controller: primary (0x1F0) + secondary (0x170) channels.
         // Exposed as `isa-01f0` in sysfs with kind="dev.storage.ata" so cambium
         // can auto-discover and spawn the ata_disk userland driver.
-        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+        reg.register(crate::device_registry::DeviceEntry::new_platform_io(
             "dev.storage.ata",
-            crate::device_registry::ATA_LEGACY_IOPORT_RANGES,
+            crate::device_registry::ATA_PLATFORM_IOPORT_RANGES,
             0x1F0,
         ));
     }
@@ -1218,11 +1222,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         runtime,
         boot_timing_hz,
         scheduler_entry_window_start,
-        "register_legacy_devices",
-        register_legacy_devices_start,
+        "register_platform_devices",
+        register_platform_devices_start,
     );
-    boot_trace(runtime, b"[kernel:start] legacy device register ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices, "Legacy Devices");
+    boot_trace(runtime, b"[kernel:start] platform device register ok\r\n");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices, "Platform Devices");
 
     // CRITICAL: Calibrate the BSP preemption timer BEFORE starting secondary CPUs.
     // Secondary CPUs read timer_vector/timer_init_cnt in init_secondary_cpu().
@@ -1775,7 +1779,7 @@ pub fn scan_pci() {
                     pci_location: Some(crate::device_registry::PciLocation { bus, dev, func }),
                     msi_cap: None,
                     msix_cap: None,
-                    irq_mode: crate::device_registry::IrqMode::Legacy,
+                    irq_mode: crate::device_registry::IrqMode::LineBased,
                     irq_vector: 0,
                 };
 

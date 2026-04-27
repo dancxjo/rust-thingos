@@ -403,7 +403,7 @@ fn sys_pci_call(call: &DeviceCall) -> SysResult<usize> {
             let irq_mode = match res.mode {
                 crate::device_registry::IrqMode::Msi => PCI_IRQ_MODE_MSI,
                 crate::device_registry::IrqMode::Msix => PCI_IRQ_MODE_MSIX,
-                crate::device_registry::IrqMode::Legacy => 0,
+                crate::device_registry::IrqMode::LineBased => 0,
             };
             let out = PciEnableMsiResponse { vector: res.vector, irq_mode, _reserved: [0; 2] };
             let out_slice = unsafe {

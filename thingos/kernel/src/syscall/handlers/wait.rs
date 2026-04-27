@@ -8,10 +8,7 @@ use crate::syscall::validate::validate_user_range;
 
 #[derive(Clone)]
 enum Registration {
-    PortRead(Arc<crate::ipc::Port>),
-    PortWrite(Arc<crate::ipc::Port>),
     Fd(Arc<dyn crate::vfs::VfsNode>),
-    GraphOp(u64),
     TaskExit(u64),
 }
 
@@ -150,18 +147,14 @@ fn collect_ready(
     Ok(count)
 }
 
-#[allow(deprecated)] // handle legacy WaitKind variants that map to ENOSYS
 fn poll_spec(
     pinfo_arc: &Arc<spin::Mutex<crate::task::ProcessInfo>>,
     spec: &WaitSpec,
 ) -> SysResult<Option<WaitResult>> {
     match WaitKind::from_u32(spec.kind).ok_or(Errno::EINVAL)? {
-        WaitKind::Port => poll_port(pinfo_arc, spec),
         WaitKind::Fd => poll_fd(pinfo_arc, spec),
-        WaitKind::GraphOp => poll_graph_op(spec),
         WaitKind::TaskExit => poll_task_exit(spec),
         WaitKind::Irq => Ok(poll_irq(spec)),
-        WaitKind::RootWatch => Err(Errno::ENOSYS),
         WaitKind::Timeout => Err(Errno::EINVAL),
     }
 }
@@ -174,66 +167,6 @@ fn error_result(spec: &WaitSpec, errno: Errno) -> WaitResult {
         token: spec.token,
         value: errno as i64,
         reserved: 0,
-    }
-}
-
-fn poll_port(
-    pinfo_arc: &Arc<spin::Mutex<crate::task::ProcessInfo>>,
-    spec: &WaitSpec,
-) -> SysResult<Option<WaitResult>> {
-    let handle = crate::ipc::IpcHandle(spec.object as u32);
-    let mut ready_flags = 0u32;
-    let mut value = 0i64;
-
-    if (spec.flags & wait::interest::READABLE) != 0 {
-        let port = {
-            let pinfo = pinfo_arc.lock();
-            let table = &pinfo.ipc_table;
-            match table.get(handle, crate::ipc::IpcHandleMode::Read) {
-                Some(entry) => Arc::clone(&entry.port),
-                None => return Ok(Some(error_result(spec, Errno::EBADF))),
-            }
-        };
-
-        let is_empty = port.is_empty();
-        let has_writers = port.has_writers();
-        if !is_empty {
-            ready_flags |= wait::ready::READABLE;
-            value = port.len() as i64;
-        } else if !has_writers {
-            ready_flags |= wait::ready::HANGUP;
-        }
-    }
-
-    if (spec.flags & wait::interest::WRITABLE) != 0 {
-        let port = {
-            let pinfo = pinfo_arc.lock();
-            let table = &pinfo.ipc_table;
-            match table.get(handle, crate::ipc::IpcHandleMode::Write) {
-                Some(entry) => Arc::clone(&entry.port),
-                None => return Ok(Some(error_result(spec, Errno::EBADF))),
-            }
-        };
-
-        if !port.is_full() {
-            ready_flags |= wait::ready::WRITABLE;
-            value = port.available() as i64;
-        } else if !port.has_readers() {
-            ready_flags |= wait::ready::HANGUP;
-        }
-    }
-
-    if ready_flags == 0 {
-        Ok(None)
-    } else {
-        Ok(Some(WaitResult {
-            kind: spec.kind,
-            flags: ready_flags,
-            object: spec.object,
-            token: spec.token,
-            value,
-            reserved: 0,
-        }))
     }
 }
 
@@ -285,10 +218,6 @@ fn poll_fd(
     }
 }
 
-fn poll_graph_op(_spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
-    Err(Errno::ENOSYS)
-}
-
 fn poll_task_exit(spec: &WaitSpec) -> SysResult<Option<WaitResult>> {
     match unsafe { crate::sched::poll_task_exit_current(spec.object) } {
         Ok(Some(code)) => Ok(Some(WaitResult {
@@ -322,7 +251,6 @@ fn poll_irq(spec: &WaitSpec) -> Option<WaitResult> {
     }
 }
 
-#[allow(deprecated)] // handle legacy WaitKind variants that map to ENOSYS
 fn register_all(
     pinfo: &crate::task::ProcessInfo,
     specs: &[WaitSpec],
@@ -331,22 +259,6 @@ fn register_all(
     let mut regs = alloc::vec::Vec::with_capacity(specs.len());
     for spec in specs {
         match WaitKind::from_u32(spec.kind).ok_or(Errno::EINVAL)? {
-            WaitKind::Port => {
-                let handle = crate::ipc::IpcHandle(spec.object as u32);
-                let table = &pinfo.ipc_table;
-                if (spec.flags & wait::interest::READABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcHandleMode::Read) {
-                        entry.port.add_waiter_read(tid);
-                        regs.push(Registration::PortRead(Arc::clone(&entry.port)));
-                    }
-                }
-                if (spec.flags & wait::interest::WRITABLE) != 0 {
-                    if let Some(entry) = table.get(handle, crate::ipc::IpcHandleMode::Write) {
-                        entry.port.add_waiter_write(tid);
-                        regs.push(Registration::PortWrite(Arc::clone(&entry.port)));
-                    }
-                }
-            }
             WaitKind::Fd => {
                 let node = {
                     let file =
@@ -356,9 +268,6 @@ fn register_all(
                 node.add_waiter(tid);
                 regs.push(Registration::Fd(node));
             }
-            WaitKind::GraphOp => {
-                return Err(Errno::ENOSYS);
-            }
             WaitKind::TaskExit => {
                 match unsafe { crate::sched::register_task_exit_waiter_current(spec.object, tid) } {
                     Ok(Some(_)) | Ok(None) => regs.push(Registration::TaskExit(spec.object)),
@@ -366,7 +275,6 @@ fn register_all(
                 }
             }
             WaitKind::Irq => {}
-            WaitKind::RootWatch => return Err(Errno::ENOSYS),
             WaitKind::Timeout => return Err(Errno::EINVAL),
         }
     }
@@ -376,16 +284,9 @@ fn register_all(
 fn cleanup_all(regs: &[Registration], tid: u64, timeout_wake_tick: Option<u64>) -> SysResult<()> {
     for reg in regs {
         match reg {
-            Registration::PortRead(port) => {
-                port.remove_waiter_read(tid);
-            }
-            Registration::PortWrite(port) => {
-                port.remove_waiter_write(tid);
-            }
             Registration::Fd(node) => {
                 node.remove_waiter(tid);
             }
-            Registration::GraphOp(_id) => {}
             Registration::TaskExit(target) => {
                 let _ = unsafe { crate::sched::unregister_task_exit_waiter_current(*target, tid) };
             }
@@ -398,7 +299,6 @@ fn cleanup_all(regs: &[Registration], tid: u64, timeout_wake_tick: Option<u64>) 
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // WaitKind::Port is deprecated but its handler is kept for backward compat
 mod tests {
     use alloc::sync::Arc;
     use core::sync::atomic::Ordering;
@@ -407,22 +307,6 @@ mod tests {
 
     use super::*;
     use crate::vfs::devfs::NullNode;
-
-    fn alloc_port_pair(
-        pinfo: &Arc<Mutex<crate::task::ProcessInfo>>,
-        capacity: usize,
-    ) -> (u32, u32) {
-        let port_id = crate::ipc::create_port(capacity);
-        let port = crate::ipc::get_port(port_id).expect("port");
-        let mut lock = pinfo.lock();
-        let write = lock
-            .ipc_table
-            .alloc(port.clone(), crate::ipc::IpcHandleMode::Write)
-            .expect("write handle");
-        let read =
-            lock.ipc_table.alloc(port, crate::ipc::IpcHandleMode::Read).expect("read handle");
-        (write.0, read.0)
-    }
 
     // ── FD-semantics test helpers ─────────────────────────────────────────────
     //
@@ -487,282 +371,12 @@ mod tests {
     }
 
     #[test]
-    fn poll_port_reports_readable_and_hangup() {
+    fn removed_wait_kind_numbers_are_invalid() {
         let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
-        let (write_handle, read_handle) = alloc_port_pair(&pinfo, 64);
-        let port = {
-            let lock = pinfo.lock();
-            let entry = lock
-                .ipc_table
-                .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
-                .expect("entry");
-            Arc::clone(&entry.port)
-        };
-
-        assert!(port.send_all(b"abc"));
-        let readable = poll_spec_with_pinfo(
-            pinfo.clone(),
-            &WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::READABLE,
-                object: read_handle as u64,
-                token: 11,
-            },
-        )
-        .expect("poll")
-        .expect("ready");
-        assert_ne!(readable.flags & wait::ready::READABLE, 0);
-        assert_eq!(readable.token, 11);
-
-        assert!(!port.close_writer());
-        let hangup = poll_spec_with_pinfo(
-            pinfo.clone(),
-            &WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::READABLE,
-                object: read_handle as u64,
-                token: 12,
-            },
-        )
-        .expect("poll")
-        .expect("ready");
-        assert_ne!(hangup.flags & wait::ready::READABLE, 0);
-
-        let mut drain = [0u8; 8];
-        assert_eq!(port.try_recv(&mut drain), 3);
-
-        let hangup_only = poll_spec_with_pinfo(
-            pinfo.clone(),
-            &WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::READABLE,
-                object: read_handle as u64,
-                token: 13,
-            },
-        )
-        .expect("poll")
-        .expect("ready");
-        assert_eq!(hangup_only.flags, wait::ready::HANGUP);
-    }
-
-    #[test]
-    fn poll_port_reports_writable_capacity_and_write_hangup() {
-        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
-        let (write_handle, _read_handle) = alloc_port_pair(&pinfo, 4);
-        let port = {
-            let lock = pinfo.lock();
-            let entry = lock
-                .ipc_table
-                .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
-                .expect("entry");
-            Arc::clone(&entry.port)
-        };
-
-        let writable = poll_spec_with_pinfo(
-            pinfo.clone(),
-            &WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::WRITABLE,
-                object: write_handle as u64,
-                token: 21,
-            },
-        )
-        .expect("poll")
-        .expect("ready");
-        assert_eq!(writable.flags, wait::ready::WRITABLE);
-        assert_eq!(writable.value, 16);
-
-        assert!(port.send_all(&[0u8; 16]));
-        let not_writable = poll_spec_with_pinfo(
-            pinfo.clone(),
-            &WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::WRITABLE,
-                object: write_handle as u64,
-                token: 22,
-            },
-        )
-        .expect("poll");
-        assert!(not_writable.is_none());
-
-        assert!(!port.close_reader());
-        let hangup = poll_spec_with_pinfo(
-            pinfo.clone(),
-            &WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::WRITABLE,
-                object: write_handle as u64,
-                token: 23,
-            },
-        )
-        .expect("poll")
-        .expect("ready");
-        assert_eq!(hangup.flags, wait::ready::HANGUP);
-    }
-
-    #[test]
-    fn collect_ready_returns_multiple_ports() {
-        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
-        let (write_a, read_a) = alloc_port_pair(&pinfo, 64);
-        let (write_b, read_b) = alloc_port_pair(&pinfo, 64);
-
-        let port_a = {
-            let lock = pinfo.lock();
-            let entry = lock
-                .ipc_table
-                .get(crate::ipc::IpcHandle(write_a), crate::ipc::IpcHandleMode::Write)
-                .expect("entry a");
-            Arc::clone(&entry.port)
-        };
-        let port_b = {
-            let lock = pinfo.lock();
-            let entry = lock
-                .ipc_table
-                .get(crate::ipc::IpcHandle(write_b), crate::ipc::IpcHandleMode::Write)
-                .expect("entry b");
-            Arc::clone(&entry.port)
-        };
-
-        assert!(port_a.send_all(b"a"));
-        assert!(port_b.send_all(b"bb"));
-
-        let specs = [
-            WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::READABLE,
-                object: read_a as u64,
-                token: 1,
-            },
-            WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::READABLE,
-                object: read_b as u64,
-                token: 2,
-            },
-        ];
-        let mut results = [WaitResult::default(); 2];
-        let ready = {
-            let lock = pinfo.lock();
-            collect_ready(pinfo, &specs, &mut results).expect("collect")
-        };
-        assert_eq!(ready, 2);
-        assert_eq!(results[0].token, 1);
-        assert_eq!(results[1].token, 2);
-    }
-
-    #[test]
-    fn collect_ready_respects_output_capacity() {
-        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
-        let (write_a, read_a) = alloc_port_pair(&pinfo, 64);
-        let (write_b, read_b) = alloc_port_pair(&pinfo, 64);
-
-        let port_a = {
-            let lock = pinfo.lock();
-            let entry = lock
-                .ipc_table
-                .get(crate::ipc::IpcHandle(write_a), crate::ipc::IpcHandleMode::Write)
-                .expect("entry a");
-            Arc::clone(&entry.port)
-        };
-        let port_b = {
-            let lock = pinfo.lock();
-            let entry = lock
-                .ipc_table
-                .get(crate::ipc::IpcHandle(write_b), crate::ipc::IpcHandleMode::Write)
-                .expect("entry b");
-            Arc::clone(&entry.port)
-        };
-
-        assert!(port_a.send_all(b"a"));
-        assert!(port_b.send_all(b"b"));
-
-        let specs = [
-            WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::READABLE,
-                object: read_a as u64,
-                token: 101,
-            },
-            WaitSpec {
-                kind: WaitKind::Port as u32,
-                flags: wait::interest::READABLE,
-                object: read_b as u64,
-                token: 102,
-            },
-        ];
-        let mut results = [WaitResult::default(); 1];
-        let ready = {
-            let lock = pinfo.lock();
-            collect_ready(pinfo, &specs, &mut results).expect("collect")
-        };
-        assert_eq!(ready, 1);
-        assert_eq!(results[0].token, 101);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn poll_graph_op_returns_enosys() {
-        // GraphOp is deprecated and returns ENOSYS.  This test verifies the
-        // backward-compatibility shim remains in place so existing binaries that
-        // pass WaitKind::GraphOp = 6 receive a clean error rather than EINVAL.
-        let spec = WaitSpec { kind: WaitKind::GraphOp as u32, flags: 0, object: 1, token: 41 };
-        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
-        assert!(matches!(poll_spec_with_pinfo(pinfo, &spec), Err(Errno::ENOSYS)));
-    }
-
-    #[test]
-    fn collect_ready_returns_mixed_port_and_fd() {
-        let pinfo = make_pinfo_with_node(0, Arc::new(NullNode));
-        let (write_handle, read_handle) = alloc_port_pair(&pinfo, 64);
-        let port = {
-            let lock = pinfo.lock();
-            let entry = lock
-                .ipc_table
-                .get(crate::ipc::IpcHandle(write_handle), crate::ipc::IpcHandleMode::Write)
-                .expect("entry");
-            Arc::clone(&entry.port)
-        };
-        assert!(port.send_all(b"hello"));
-
-        // Build a pipe and push one byte so the read end is POLLIN-ready.
-        // Keep `write_node` alive for the duration of the test so the write
-        // end is not closed prematurely — otherwise the read end would show
-        // POLLHUP in addition to POLLIN, which is correct but not what the
-        // assertion below tests.
-        let (read_node, write_node) = crate::ipc::pipe::create_fd_pair(0, false);
-        write_node.write(0, b"x").expect("pipe write");
-
-        // Stash the pipe read node in a temporary HandleTable so we can look it
-        // up through the Fd WaitKind path.
-        use crate::vfs::OpenFlags;
-        use crate::vfs::handle_table::HandleTable;
-        let mut table = HandleTable::new();
-        table
-            .insert_at(0, read_node, OpenFlags::read_only(), "/pipe/read".into())
-            .expect("insert pipe");
-
-        // Poll the Port spec directly (does not need a process context).
-        let port_spec = WaitSpec {
-            kind: WaitKind::Port as u32,
-            flags: wait::interest::READABLE,
-            object: read_handle as u64,
-            token: 10,
-        };
-        let port_result =
-            poll_spec_with_pinfo(pinfo.clone(), &port_spec).expect("port poll").expect("ready");
-        assert_ne!(port_result.flags & wait::ready::READABLE, 0);
-        assert_eq!(port_result.token, 10);
-
-        // Poll the Fd spec directly against the node from the table.
-        let node = table.get(0).expect("get fd").node.clone();
-        let fd_ready_flags = node.poll();
-        assert_ne!(
-            fd_ready_flags & abi::syscall::poll_flags::POLLIN,
-            0,
-            "pipe read-end should be POLLIN-ready after write"
-        );
-        // Keep write_node alive until after the assertion so POLLHUP is not set.
-        let _ = write_node;
+        for kind in [1u32, 2, 6] {
+            let spec = WaitSpec { kind, flags: wait::interest::READABLE, object: 1, token: 41 };
+            assert_eq!(poll_spec_with_pinfo(pinfo.clone(), &spec), Err(Errno::EINVAL));
+        }
     }
 
     #[test]

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+  <file original="thingos-kernel" source-language="en" target-language="la" datatype="plaintext">
+    <body>
+      <trans-unit id="kernel.boot.hint.terminal">
+        <source>Press F12 for a terminal</source>
+        <target>Preme F12 prō terminālī</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.complete">
+        <source>BOOT READY</source>
+        <target>INITIUM PARĀTUM</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.booting">
+        <source>BOOTING...</source>
+        <target>INITIUM AGITUR...</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.framebuffer">
+        <source>Framebuffer Initialized</source>
+        <target>Framebuffer parātum</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.memory">
+        <source>Memory Map OK</source>
+        <target>Tabula memoriae bona</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.allocator">
+        <source>Global Allocator</source>
+        <target>Allocator globalis</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.display_registry">
+        <source>Display Registry</source>
+        <target>Index ostentūs</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.simd">
+        <source>SIMD Ready</source>
+        <target>SIMD parātum</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.tasking">
+        <source>Tasking Initialized</source>
+        <target>Opera parāta</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.vfs">
+        <source>VFS Root Ready</source>
+        <target>Radix VFS parāta</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.pci">
+        <source>PCI Bus Scanned</source>
+        <target>Magistrala PCI lustrāta</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.platform_devices">
+        <source>Platform Devices</source>
+        <target>Instrumenta suggestūs</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.bsp_timer">
+        <source>BSP Timer OK</source>
+        <target>Horologium BSP bonum</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.smp">
+        <source>SMP Bring-up</source>
+        <target>SMP excitātum</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.boot_info">
+        <source>Boot Info OK</source>
+        <target>Nuntius initiī bonus</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.modules">
+        <source>Modules Scanned</source>
+        <target>Modulī lustrātī</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.sprout">
+        <source>Spawning Sprout</source>
+        <target>Sprout creātur</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.scheduler">
+        <source>Entering Scheduler</source>
+        <target>Ordinātor initur</target>
+      </trans-unit>
+    </body>
+  </file>
+</xliff>

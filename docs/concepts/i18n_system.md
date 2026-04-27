@@ -30,10 +30,17 @@ fall back through English, then the source/fallback string in code.
 
 ## Catalogs
 
-Catalogs live in:
+Userland catalogs live in:
 
 ```text
 thingos/stem/i18n/catalogs/
+```
+
+Kernel catalogs live in the same XLIFF 1.2 shape, but are compiled by the
+kernel build script so early boot text is available before VFS and userland:
+
+```text
+thingos/kernel/i18n/catalogs/
 ```
 
 Each locale is an XLIFF 1.2 file named with its ISO locale, for example:
@@ -46,8 +53,9 @@ syc.xlf
 ```
 
 Adding a language should be just adding another file such as `fr.xlf` with
-`target-language="fr"`. `thingos/stem/build.rs` discovers `*.xlf`, compiles
-static no_std lookup tables, and registers the locale automatically.
+`target-language="fr"`. `thingos/stem/build.rs` and
+`thingos/kernel/build.rs` discover `*.xlf`, compile static no_std lookup
+tables, and register the locale automatically.
 
 The build also writes an extracted English template to:
 
@@ -71,8 +79,11 @@ writes the active ISO code to:
 the i18n generation counter. UI code that caches rendered text should compare
 `stem::i18n::generation()` and redraw when it changes.
 
-The boot default is set by `locale=syc` in generated `limine.conf`. Bristle
-reads that kernel command-line value during startup and seeds `/session/locale`.
+The boot default is set by `language=la` in generated `limine.conf`.
+The kernel parses that value before first framebuffer paint,
+uses it for early boot text, and exposes the selected locale at `/dev/locale`.
+Bristle mirrors `/dev/locale` into `/session/locale` during startup so
+userland inherits the same kernel-selected locale.
 
 ## Notes
 

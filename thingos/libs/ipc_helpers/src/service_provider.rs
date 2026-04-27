@@ -68,17 +68,19 @@
 //! - Does **not** add new syscalls.
 //! - Does **not** introduce an async runtime.
 
-use abi::wire::KindId;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::ControlFlow;
 
-use crate::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
+use abi::wire::KindId;
 use stem::errors::Errno;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
-use stem::syscall::vfs::{vfs_close, vfs_umount};
+use stem::syscall::port::port_close;
+use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_umount};
 use stem::time::Duration;
 use stem::wait_set::{WaitEvent, WaitToken};
+
+use crate::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 
 // ─── ServiceProviderEvent ────────────────────────────────────────────────────
 
@@ -141,6 +143,8 @@ pub struct ServiceProviderLoop {
     /// The `WaitToken` assigned to the provider port inside the
     /// `ServiceLoop`'s `WaitSet`.
     provider_token: WaitToken,
+    /// VFS fd bridged from the provider port and registered with ServiceLoop.
+    provider_fd: u32,
     /// VFS mount paths registered for cleanup during graceful shutdown.
     mount_paths: Vec<String>,
     /// Idempotency guard: set to `true` once `shutdown_sequence` has run.
@@ -163,12 +167,22 @@ impl ServiceProviderLoop {
     /// because there are only two sources at construction time).
     pub fn new(provider: ProviderLoop, max_payload: usize) -> Result<Self, Errno> {
         let mut svc = ServiceLoop::new(max_payload)?;
-        // `add_port_readable` accepts a `u64` to match the wide `WaitSpec::object`
-        // field used internally by the kernel.  The widening cast from the `u32`
-        // port handle is always safe (zero-extends, no data loss).
-        #[allow(deprecated)]
-        let provider_token = svc.add_port_readable(provider.port_handle() as u64)?;
-        Ok(Self { svc, provider, provider_token, mount_paths: Vec::new(), shutdown_done: false })
+        let provider_fd = vfs_handle_from_port(provider.port_handle())?;
+        let provider_token = match svc.add_fd_readable(provider_fd) {
+            Ok(token) => token,
+            Err(err) => {
+                let _ = vfs_close(provider_fd);
+                return Err(err);
+            }
+        };
+        Ok(Self {
+            svc,
+            provider,
+            provider_token,
+            provider_fd,
+            mount_paths: Vec::new(),
+            shutdown_done: false,
+        })
     }
 
     /// The [`WaitToken`] assigned to the provider port inside the
@@ -233,8 +247,9 @@ impl ServiceProviderLoop {
             }
         }
 
-        // Step 3: Close the provider port read handle.
-        let _ = vfs_close(self.provider.port_handle());
+        // Step 3: Close the bridged provider fd and the underlying port read handle.
+        let _ = vfs_close(self.provider_fd);
+        let _ = port_close(self.provider.port_handle());
 
         stem::info!("ServiceProviderLoop: shutdown complete");
     }
@@ -269,17 +284,13 @@ impl ServiceProviderLoop {
         loop {
             match self.next_event(timeout) {
                 Ok(ServiceProviderEvent::InboxClosed) => {
-                    stem::info!(
-                        "ServiceProviderLoop: inbox closed — initiating graceful shutdown"
-                    );
+                    stem::info!("ServiceProviderLoop: inbox closed — initiating graceful shutdown");
                     self.shutdown_sequence();
                     return;
                 }
                 Ok(event) => {
                     if let ControlFlow::Break(()) = handler(event) {
-                        stem::info!(
-                            "ServiceProviderLoop: handler requested shutdown"
-                        );
+                        stem::info!("ServiceProviderLoop: handler requested shutdown");
                         self.shutdown_sequence();
                         return;
                     }
@@ -377,8 +388,6 @@ impl ServiceProviderLoop {
             }
         }
     }
-
-
 
     /// Send `response` back to the kernel for the given `req`.
     ///

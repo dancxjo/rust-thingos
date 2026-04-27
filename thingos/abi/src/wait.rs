@@ -6,26 +6,12 @@ pub const WAIT_MANY_MAX_ITEMS: usize = 32;
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitKind {
-    /// Legacy port-handle wait kind. Still functional; use `WaitKind::Fd` for new code.
-    ///
-    /// Bridge a port to a VFS file descriptor with `SYS_FD_FROM_HANDLE` and then
-    /// use `WaitKind::Fd` (stem: `WaitSet::add_fd_readable` / `add_fd_writable`).
-    #[deprecated(
-        note = "Port handles are superseded by FD-based readiness; use SYS_FD_FROM_HANDLE then WaitKind::Fd"
-    )]
-    Port = 1,
-    /// Legacy graph-watch kind. Returns `ENOSYS`; use `WaitKind::Fd` instead.
-    #[deprecated(note = "Graph watches are removed; open an FD and use WaitKind::Fd")]
-    RootWatch = 2,
     /// Wait for a task (thread) to exit.
     TaskExit = 3,
     /// Wait for an interrupt to fire.
     Irq = 4,
     /// Internal: the `wait_many` global timeout expired.
     Timeout = 5,
-    /// Legacy async graph-op kind. Returns `ENOSYS`; use `WaitKind::Fd` instead.
-    #[deprecated(note = "Graph ops are removed; use file-descriptor–based I/O instead")]
-    GraphOp = 6,
     /// Wait for a VFS file descriptor to become readable or writable.
     ///
     /// This is the primary readiness kind for all VFS-backed resources:
@@ -37,15 +23,9 @@ pub enum WaitKind {
 impl WaitKind {
     pub fn from_u32(v: u32) -> Option<Self> {
         match v {
-            #[allow(deprecated)]
-            1 => Some(Self::Port),
-            #[allow(deprecated)]
-            2 => Some(Self::RootWatch),
             3 => Some(Self::TaskExit),
             4 => Some(Self::Irq),
             5 => Some(Self::Timeout),
-            #[allow(deprecated)]
-            6 => Some(Self::GraphOp),
             7 => Some(Self::Fd),
             _ => None,
         }

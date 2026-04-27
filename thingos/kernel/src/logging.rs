@@ -611,6 +611,9 @@ macro_rules! log_event {
 
 #[macro_export]
 macro_rules! ki18n_tr {
+    ($source:literal) => {
+        $source
+    };
     ($key:expr, $fallback:expr) => {
         $fallback
     };

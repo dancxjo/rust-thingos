@@ -11,6 +11,7 @@
 //! | `/dev/console`  | char     | Writes go to the boot console; reads from the per-process console input queue |
 //! | `/dev/null`     | char     | Discards writes; returns EOF on reads    |
 //! | `/dev/zero`     | char     | Returns zero bytes; discards writes      |
+//! | `/dev/locale`   | file     | Kernel-selected boot locale              |
 //!
 //! # Extensibility
 //! Additional device nodes can be registered at runtime via the global
@@ -158,6 +159,7 @@ impl VfsDriver for DevFs {
             "urandom" => Ok(Arc::new(UrandomNode)),
             "kmsg" => Ok(Arc::new(KmsgNode)),
             "cmdline" => Ok(Arc::new(CmdlineNode)),
+            "locale" => Ok(Arc::new(LocaleNode)),
             "tty0" => Ok(Arc::new(FbTerminalNode)),
             _ => Err(Errno::ENOENT),
         }
@@ -256,13 +258,24 @@ impl VfsNode for DevDirNode {
         names.push("random".to_string());
         names.push("urandom".to_string());
         names.push("kmsg".to_string());
+        names.push("cmdline".to_string());
+        names.push("locale".to_string());
         names.push("tty0".to_string());
         {
             let reg = DEVICE_REGISTRY.lock();
             for name in reg.keys() {
                 if !matches!(
                     name.as_str(),
-                    "console" | "null" | "zero" | "fb0" | "rtc" | "random" | "urandom"
+                    "console"
+                        | "null"
+                        | "zero"
+                        | "fb0"
+                        | "rtc"
+                        | "random"
+                        | "urandom"
+                        | "kmsg"
+                        | "cmdline"
+                        | "locale"
                 ) {
                     names.push(name.clone());
                 }
@@ -540,6 +553,38 @@ impl VfsNode for CmdlineNode {
             uid: 0,
             gid: 0,
             rdev: VfsStat::makedev(1, 10), // arbitrary major/minor
+            ..Default::default()
+        })
+    }
+}
+
+// ── LocaleNode ──────────────────────────────────────────────────────────────
+
+struct LocaleNode;
+
+impl VfsNode for LocaleNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let locale = crate::locale::current().as_bytes();
+        if offset >= locale.len() as u64 {
+            return Ok(0);
+        }
+        let n = core::cmp::min(buf.len(), locale.len() - offset as usize);
+        buf[..n].copy_from_slice(&locale[offset as usize..offset as usize + n]);
+        Ok(n)
+    }
+
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EPERM)
+    }
+
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFREG | 0o444,
+            size: crate::locale::current().len() as u64,
+            ino: 103,
+            nlink: 1,
+            uid: 0,
+            gid: 0,
             ..Default::default()
         })
     }

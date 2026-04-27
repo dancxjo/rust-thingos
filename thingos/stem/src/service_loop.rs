@@ -404,24 +404,6 @@ impl ServiceLoop {
         self.waitset.add_irq(irq_handle)
     }
 
-    /// Register a legacy port read end.
-    ///
-    /// New code should bridge ports to FDs via `vfs_fd_from_handle` and use
-    /// [`add_fd_readable`][Self::add_fd_readable] instead; this exists for
-    /// the migration path described in `docs/ipc/service_loop.md` §4.
-    #[allow(deprecated)]
-    pub fn add_port_readable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
-        self.waitset.add_port_readable(handle)
-    }
-
-    /// Register a legacy port write end.  See
-    /// [`add_port_readable`][Self::add_port_readable] for the migration
-    /// caveat.
-    #[allow(deprecated)]
-    pub fn add_port_writable(&mut self, handle: u64) -> Result<WaitToken, Errno> {
-        self.waitset.add_port_writable(handle)
-    }
-
     /// Remove a previously registered secondary source.
     ///
     /// Returns `true` if the token was found and removed.  Attempting to

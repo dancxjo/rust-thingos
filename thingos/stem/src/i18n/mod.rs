@@ -528,7 +528,7 @@ mod tests {
         let translator = Translator::new();
         translator.init();
 
-        assert_eq!(translator.current_locale(), LocaleId::EN);
+        assert_eq!(translator.current_locale(), LocaleId::LA);
 
         translator.set_locale(LocaleId::LA);
         assert_eq!(translator.current_locale(), LocaleId::LA);
@@ -545,13 +545,13 @@ mod tests {
         let translator = Translator::new();
         translator.init();
 
-        assert_eq!(translator.current_locale(), LocaleId::EN);
-
-        translator.cycle_locale();
-        assert_eq!(translator.current_locale(), LocaleId::EO);
-
-        translator.cycle_locale();
         assert_eq!(translator.current_locale(), LocaleId::LA);
+
+        translator.cycle_locale();
+        assert_eq!(translator.current_locale(), LocaleId::SYC);
+
+        translator.cycle_locale();
+        assert_eq!(translator.current_locale(), LocaleId::EN);
     }
 
     #[test]
@@ -574,9 +574,9 @@ mod tests {
         let translator = Translator::new();
         translator.init();
 
-        assert_eq!(translator.current_locale(), LocaleId::EN);
-        assert_eq!(translator.translate(TextKey::new("ui.fonts.title")), Some("Fonts"));
-        assert_eq!(translator.translate(TextKey::new("Fonts")), Some("Fonts"));
+        assert_eq!(translator.current_locale(), LocaleId::LA);
+        assert_eq!(translator.translate(TextKey::new("ui.fonts.title")), Some("Typī"));
+        assert_eq!(translator.translate(TextKey::new("Fonts")), Some("Typī"));
         translator.set_locale(LocaleId::EO);
         assert_eq!(translator.translate(TextKey::new("ui.fonts.title")), Some("Tiparoj"));
         assert_eq!(translator.translate(TextKey::new("Fonts")), Some("Tiparoj"));

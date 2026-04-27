@@ -7,7 +7,7 @@
 //! paths.  For each candidate binary the catalog:
 //!
 //! 1. Checks for the `THINGOS_SEED` ELF symbol and confirms `DriverV1`.
-//! 2. Reads descriptor metadata and optional legacy hints.
+//! 2. Reads descriptor metadata and optional v1 match hints.
 //! 3. Caches a [`DriverEntry`] record keyed by binary path.
 //!
 //! In daemon mode the catalog is built at startup and reused for periodic
@@ -23,8 +23,8 @@ use alloc::vec::Vec;
 
 use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_DESCRIPTOR_SYMBOL, DRIVER_ENTRY_SYMBOL,
-    DRIVER_INTERFACE_ABI_VERSION, DRIVER_MARKER_SYMBOL, DRIVER_MATCH_ANY_CLASS,
-    DRIVER_MATCH_ANY_ID, DriverClass, DriverDescriptor, DriverInterfaceV1,
+    DRIVER_MARKER_SYMBOL, DRIVER_MATCH_ANY_CLASS, DRIVER_MATCH_ANY_ID, DriverClass,
+    DriverDescriptor, DriverInterfaceV1,
 };
 use abi::seed::{INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
 use abi::syscall::vfs_flags::O_RDONLY;
@@ -50,13 +50,13 @@ pub struct DriverEntry {
     pub driver_name: String,
     /// Driver class declared in the descriptor.
     pub driver_class: DriverClass,
-    /// PCI vendor ID to match (legacy hint, 0 = any).
+    /// PCI vendor ID to match (v1 hint, 0 = any).
     pub vendor_id: u16,
-    /// PCI device ID to match (legacy hint, 0 = any).
+    /// PCI device ID to match (v1 hint, 0 = any).
     pub device_id: u16,
-    /// PCI class code to match (legacy hint, 0 = any).
+    /// PCI class code to match (v1 hint, 0 = any).
     pub class_code: u32,
-    /// Class code bitmask (legacy hint, 0 = exact match or no-mask).
+    /// Class code bitmask (v1 hint, 0 = exact match or no-mask).
     pub class_mask: u32,
     /// Name of the driver start symbol.
     pub start_symbol: String,
@@ -68,7 +68,7 @@ impl DriverEntry {
     /// Return match score for this driver against a discovered PCI device.
     /// Zero means no match.
     pub fn pci_match_score(&self, vendor: u16, device: u16, class: u32) -> u32 {
-        // Prefer explicit legacy match hints when available.
+        // Prefer explicit v1 match hints when available.
         if self.vendor_id != 0 || self.device_id != 0 || self.class_code != 0 {
             let mut score = 0u32;
             if self.vendor_id != DRIVER_MATCH_ANY_ID && self.vendor_id != vendor {
@@ -221,9 +221,9 @@ impl Catalog {
         let seed_descriptor = resolve_elf64_symbol_from_bytes(&bytes, SEED_SYMBOL)
             .and_then(|sym_vaddr| read_seed_descriptor(&bytes, sym_vaddr));
 
-        let mut iface_legacy: Option<DriverInterfaceV1> = None;
+        let mut iface_v1: Option<DriverInterfaceV1> = None;
         if let Some(sym_vaddr) = resolve_elf64_symbol_from_bytes(&bytes, DRIVER_MARKER_SYMBOL) {
-            iface_legacy = read_driver_interface_v1(&bytes, sym_vaddr);
+            iface_v1 = read_driver_interface_v1(&bytes, sym_vaddr);
         }
 
         // Canonical path: Seed descriptor declares DriverV1 interface.
@@ -245,42 +245,12 @@ impl Catalog {
         {
             Some(d) => d,
             None => {
-                // Transitional compatibility path: legacy marker-only drivers.
                 if seed_descriptor.is_some() {
                     debug!(
-                        "DEVD CATALOG: {} declares DriverV1 in its Seed but lacks legacy THINGOS_DRIVER descriptor; skipping",
+                        "DEVD CATALOG: {} declares DriverV1 in its Seed but lacks THINGOS_DRIVER descriptor; skipping",
                         path
                     );
-                    return;
                 }
-                let Some(iface) = iface_legacy else {
-                    return;
-                };
-                if iface.abi_version != DRIVER_INTERFACE_ABI_VERSION {
-                    debug!(
-                        "DEVD CATALOG: {} has unknown legacy abi_version {} (expected {}), skipping",
-                        path, iface.abi_version, DRIVER_INTERFACE_ABI_VERSION
-                    );
-                    return;
-                }
-                let start_symbol = iface.entry_symbol_name().to_string();
-                debug!(
-                    "DEVD CATALOG: registered legacy driver '{}' vendor=0x{:04x} device=0x{:04x} \
-                     class=0x{:06x} entry='{}'",
-                    path, iface.vendor_id, iface.device_id, iface.class_code, start_symbol
-                );
-                self.entries.push(DriverEntry {
-                    path: path.to_string(),
-                    abi_version: iface.abi_version,
-                    driver_name: path.to_string(),
-                    driver_class: DriverClass::Unknown,
-                    vendor_id: iface.vendor_id,
-                    device_id: iface.device_id,
-                    class_code: iface.class_code,
-                    class_mask: iface.class_mask,
-                    start_symbol,
-                    device_kind: "unknown".into(),
-                });
                 return;
             }
         };
@@ -299,7 +269,7 @@ impl Catalog {
         let start_symbol =
             resolve_elf64_symbol_name_by_value(&bytes, descriptor.start as usize as u64)
                 .unwrap_or_else(|| DRIVER_ENTRY_SYMBOL.to_string());
-        let legacy = iface_legacy.unwrap_or(DriverInterfaceV1 {
+        let match_hints = iface_v1.unwrap_or(DriverInterfaceV1 {
             abi_version: 0,
             flags: 0,
             vendor_id: 0,
@@ -329,10 +299,10 @@ impl Catalog {
             abi_version: descriptor.abi_version,
             driver_name,
             driver_class: descriptor.driver_class,
-            vendor_id: legacy.vendor_id,
-            device_id: legacy.device_id,
-            class_code: legacy.class_code,
-            class_mask: legacy.class_mask,
+            vendor_id: match_hints.vendor_id,
+            device_id: match_hints.device_id,
+            class_code: match_hints.class_code,
+            class_mask: match_hints.class_mask,
             start_symbol,
             device_kind,
         });

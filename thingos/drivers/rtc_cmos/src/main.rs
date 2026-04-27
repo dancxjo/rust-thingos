@@ -45,8 +45,8 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     // For now, if cambium matched us via device_kind, it will spawn us.
     // If we are here via a probe scan, we check if the device looks like an RTC.
 
-    // Match if class is Other (0x00) and it's a legacy/platform device.
-    // (In our current system, legacy devices have vendor=0, device=0 on bus 0)
+    // Match if class is Other (0x00) and it's a platform I/O device.
+    // (In our current system, platform I/O devices have vendor=0, device=0 on bus 0)
     if dev.vendor_id == 0 && dev.device_id == 0 {
         out.matched = 1;
         out.score = 100;

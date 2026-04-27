@@ -9,24 +9,15 @@ use stem::syscall::{task_poll, vfs_umount};
 use stem::time::monotonic_ns;
 use stem::{debug, warn};
 
-use crate::binding::Binding;
 use crate::sysfs::{SysDevice, device_present};
 
 const INITIAL_BACKOFF_MS: u64 = 100;
 const MAX_BACKOFF_MS: u64 = 5_000;
 
-/// Whether a `ManagedDriver` was created from the symbol-based catalog or from
-/// the legacy static binding table.
-enum SpawnMode {
-    /// Legacy mode: spawn via `main`, use `binding.driver` path.
-    Legacy { driver: &'static str },
-    /// Catalog mode: spawn via driver entrypoint symbol.
-    Catalog { driver_path: String, start_symbol: String },
-}
-
 pub struct ManagedDriver {
     pub slot: String,
-    mode: SpawnMode,
+    driver_path: String,
+    start_symbol: String,
     pub mount_path: Option<String>,
     pub pid: Option<u64>,
     /// PCI identifiers, carried for building the DriverEntryCtx.
@@ -42,21 +33,6 @@ impl ManagedDriver {
         self.pid
     }
 
-    /// Create from the legacy static binding table (pre-catalog path).
-    pub fn new(device: &SysDevice, binding: Binding, mount_path: Option<String>) -> Self {
-        Self {
-            slot: device.slot.clone(),
-            mode: SpawnMode::Legacy { driver: binding.driver },
-            mount_path,
-            pid: None,
-            vendor_id: device.vendor_id,
-            device_id: device.device_id,
-            class_code: device.class_code,
-            restarts: 0,
-            restart_after_ns: 0,
-        }
-    }
-
     /// Create from the symbol-based driver catalog.
     ///
     /// `driver_path` is the absolute VFS path to the binary; `start_symbol`
@@ -69,7 +45,8 @@ impl ManagedDriver {
     ) -> Self {
         Self {
             slot: device.slot.clone(),
-            mode: SpawnMode::Catalog { driver_path, start_symbol },
+            driver_path,
+            start_symbol,
             mount_path,
             pid: None,
             vendor_id: device.vendor_id,
@@ -91,66 +68,10 @@ impl ManagedDriver {
             return;
         }
 
-        match &self.mode {
-            SpawnMode::Legacy { driver } => self.spawn_legacy(driver),
-            SpawnMode::Catalog { driver_path, start_symbol } => {
-                // Clone to satisfy borrow checker before calling &mut self method.
-                let path = driver_path.clone();
-                let sym = start_symbol.clone();
-                self.spawn_via_entrypoint(&path, &sym);
-            }
-        }
-    }
-
-    /// Legacy spawn: write device path into a memfd and exec via `main`.
-    fn spawn_legacy(&mut self, driver: &str) {
-        let full_path = alloc::format!("/sys/devices/{}", self.slot);
-        let boot_fd = stem::syscall::memfd_create("driver.boot", 4096).unwrap_or(0);
-
-        if boot_fd != 0 {
-            use stem::syscall::vfs::{vfs_seek, vfs_write};
-            let _ = vfs_write(boot_fd, full_path.as_bytes());
-            let _ = vfs_write(boot_fd, &[0]);
-            let _ = vfs_seek(boot_fd, 0, 0);
-        }
-
-        let driver_path = if driver.starts_with('/') {
-            driver.to_string()
-        } else {
-            alloc::format!("/drivers/{}", driver)
-        };
-
-        let boot_fd_str = alloc::format!("{}", boot_fd);
-        let argv: &[&[u8]] = &[driver_path.as_bytes(), boot_fd_str.as_bytes()];
-
-        let spawn_res = stem::syscall::spawn_process_ex(
-            &driver_path,
-            argv,
-            &alloc::collections::BTreeMap::new(),
-            stem::abi::types::stdio_mode::INHERIT,
-            stem::abi::types::stdio_mode::INHERIT,
-            stem::abi::types::stdio_mode::INHERIT,
-            boot_fd as u64,
-            &[],
-        );
-
-        match spawn_res {
-            Ok(resp) => {
-                debug!(
-                    "CAMBIUM: launched driver {} for {} (legacy, boot_fd={}, pid={})",
-                    driver, self.slot, boot_fd, resp.child_tid
-                );
-                self.pid = Some(resp.child_tid);
-                send_driver_ready(resp.child_tid);
-            }
-            Err(err) => {
-                warn!("CAMBIUM: failed to launch {} for {}: {:?}", driver, self.slot, err);
-                self.schedule_restart();
-                if boot_fd != 0 {
-                    let _ = stem::syscall::vfs::vfs_close(boot_fd);
-                }
-            }
-        }
+        // Clone to satisfy borrow checker before calling &mut self method.
+        let path = self.driver_path.clone();
+        let sym = self.start_symbol.clone();
+        self.spawn_via_entrypoint(&path, &sym);
     }
 
     /// Catalog spawn: build a `DriverEntryCtx`, write it into a memfd, and

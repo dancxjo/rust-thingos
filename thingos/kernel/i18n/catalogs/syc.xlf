@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+  <file original="thingos-kernel" source-language="en" target-language="syc" datatype="plaintext">
+    <body>
+      <trans-unit id="kernel.boot.hint.terminal">
+        <source>Press F12 for a terminal</source>
+        <target>ܕܘܫ F12 ܠܬܪܡܝܢܠ</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.complete">
+        <source>BOOT READY</source>
+        <target>ܫܘܪܝܐ ܡܛܝܒ</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.booting">
+        <source>BOOTING...</source>
+        <target>ܫܪܐ...</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.framebuffer">
+        <source>Framebuffer Initialized</source>
+        <target>Framebuffer Initialized</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.memory">
+        <source>Memory Map OK</source>
+        <target>Memory Map OK</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.allocator">
+        <source>Global Allocator</source>
+        <target>Global Allocator</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.display_registry">
+        <source>Display Registry</source>
+        <target>Display Registry</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.simd">
+        <source>SIMD Ready</source>
+        <target>SIMD Ready</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.tasking">
+        <source>Tasking Initialized</source>
+        <target>Tasking Initialized</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.vfs">
+        <source>VFS Root Ready</source>
+        <target>VFS Root Ready</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.pci">
+        <source>PCI Bus Scanned</source>
+        <target>PCI Bus Scanned</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.platform_devices">
+        <source>Platform Devices</source>
+        <target>Platform Devices</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.bsp_timer">
+        <source>BSP Timer OK</source>
+        <target>BSP Timer OK</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.smp">
+        <source>SMP Bring-up</source>
+        <target>SMP Bring-up</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.boot_info">
+        <source>Boot Info OK</source>
+        <target>Boot Info OK</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.modules">
+        <source>Modules Scanned</source>
+        <target>Modules Scanned</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.sprout">
+        <source>Spawning Sprout</source>
+        <target>Spawning Sprout</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.milestone.scheduler">
+        <source>Entering Scheduler</source>
+        <target>Entering Scheduler</target>
+      </trans-unit>
+    </body>
+  </file>
+</xliff>

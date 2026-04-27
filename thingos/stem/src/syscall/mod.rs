@@ -160,7 +160,6 @@ pub fn sleep_ns(ns: u64) {
 }
 
 pub fn sleep_ms(ms: u64) {
-    // Legacy support, or use ns
     sleep_ns(ms * 1_000_000);
 }
 
@@ -1191,16 +1190,4 @@ pub fn vm_unmap(addr: usize, len: usize) -> Result<(), Errno> {
         )
     };
     abi::errors::errno(ret).map(|_| ())
-}
-
-pub fn root_watch_open(_spec: &abi::types::WatchSpec) -> Result<u32, Errno> {
-    Err(Errno::ENOSYS)
-}
-
-pub fn root_watch_try_next(_handle: u32, _seq: &mut u64, _buf: &mut [u8]) -> Result<usize, Errno> {
-    Err(Errno::ENOSYS)
-}
-
-pub fn root_watch_close(_handle: u32) -> Result<(), Errno> {
-    Err(Errno::ENOSYS)
 }

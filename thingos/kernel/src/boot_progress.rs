@@ -41,7 +41,7 @@ const TASK_PHASES: [BootPhase; TOTAL_TASKS] = [
     BootPhase::Cpu,         // 06 – Tasking Initialized
     BootPhase::Vfs,         // 07 – VFS Root Ready
     BootPhase::Pci,         // 08 – PCI Bus Scanned
-    BootPhase::Devices,     // 09 – Legacy Devices
+    BootPhase::Devices,     // 09 – Platform Devices
     BootPhase::Cpu,         // 10 – BSP Timer OK
     BootPhase::Cpu,         // 11 – SMP Bring-up
     BootPhase::Modules,     // 12 – Boot Info OK
@@ -75,7 +75,10 @@ const DOT_SIZE: usize = 8;
 const MSG_H: usize = 16;
 const HINT_H: usize = 16;
 const HINT_FG: u32 = 0x888888;
-const HINT_TEXT: &str = crate::ki18n_tr!("kernel.boot.hint.terminal", "Premu F12 por terminalo");
+
+fn hint_text() -> &'static str {
+    crate::locale::translate("kernel.boot.hint.terminal", "Press F12 for a terminal")
+}
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -178,7 +181,7 @@ pub fn set_unifont_data(data: &'static [u8]) {
         // Font is now available; redraw the hint so it appears as soon as possible.
         state.draw_hint();
         // LOG TO SERIAL NOW that logger is initialized.
-        crate::kinfo!("boot_progress: hint=\"{}\"", HINT_TEXT);
+        crate::kinfo!("boot_progress: hint=\"{}\"", hint_text());
     }
 }
 
@@ -190,10 +193,12 @@ pub fn set_unifont_data(data: &'static [u8]) {
 /// - Emits a kernel INFO log line so the milestone is visible on the serial
 ///   console and can be captured by BDD tests.
 pub fn push(phase: BootPhase, message: &str) {
+    let localized_message = crate::locale::translate(message, message);
+
     // ── Milestone text → serial / kernel log ────────────────────────────────
     // Safe to call even before logging::init() — the logger silently no-ops
     // when the global logger has not yet been installed.
-    crate::kinfo!("boot_progress: milestone=\"{}\"", message);
+    crate::kinfo!("boot_progress: milestone=\"{}\" localized=\"{}\"", message, localized_message);
 
     // ── Visual update (lock held) ────────────────────────────────────────────
     {
@@ -223,7 +228,7 @@ pub fn push(phase: BootPhase, message: &str) {
         let pushed = (idx + 1).min(TOTAL_TASKS);
         state.draw_progress_bar(pushed);
         state.draw_phase_dots(pushed);
-        state.update_message(message);
+        state.update_message(localized_message);
 
         state.next_index += 1;
         // Lock dropped here.
@@ -244,7 +249,7 @@ pub fn finish() {
     }
     state.draw_progress_bar(TOTAL_TASKS);
     state.draw_phase_dots(TOTAL_TASKS);
-    state.update_message(crate::ki18n_tr!("kernel.boot.complete", "STARTO PRETA"));
+    state.update_message(crate::locale::translate("kernel.boot.complete", "BOOT READY"));
 }
 
 // ── Helper: icon bitmap lookup ────────────────────────────────────────────────
@@ -282,7 +287,7 @@ impl BootProgressState {
         }
         self.draw_progress_bar(0);
         self.draw_phase_dots(0);
-        self.update_message(crate::ki18n_tr!("kernel.boot.booting", "STARTANTE..."));
+        self.update_message(crate::locale::translate("kernel.boot.booting", "BOOTING..."));
         self.draw_hint();
     }
 
@@ -397,8 +402,7 @@ impl BootProgressState {
         // Clear 18 pixels to ensure no artifacts remain from 16-pixel Unifont.
         self.fill_rect(self.layout.panel_x, self.layout.msg_y, self.layout.panel_side, 18, 0);
         if self.unifont_data.is_some() {
-            let char_w = 8;
-            let text_w = msg.len() * char_w;
+            let text_w = self.text_width(msg);
             let text_x = if text_w < self.layout.panel_side {
                 self.layout.panel_x + (self.layout.panel_side - text_w) / 2
             } else {
@@ -411,14 +415,14 @@ impl BootProgressState {
     /// Draw the "Press F12 for a terminal" hint at the bottom of the panel.
     fn draw_hint(&mut self) {
         if self.unifont_data.is_some() {
-            let char_w = 8;
-            let text_w = HINT_TEXT.len() * char_w;
+            let text = hint_text();
+            let text_w = self.text_width(text);
             let text_x = if text_w < self.layout.panel_side {
                 self.layout.panel_x + (self.layout.panel_side - text_w) / 2
             } else {
                 self.layout.panel_x
             };
-            self.draw_string(text_x, self.layout.hint_y, HINT_TEXT, HINT_FG);
+            self.draw_string(text_x, self.layout.hint_y, text, HINT_FG);
         }
     }
 
@@ -494,19 +498,33 @@ impl BootProgressState {
         }
     }
 
+    fn char_width(&self, c: char) -> usize {
+        if let Some((_, is_wide)) = self.unifont_data.and_then(|d| lookup_unifont_glyph(d, c)) {
+            if is_wide { 16 } else { 8 }
+        } else {
+            8
+        }
+    }
+
+    fn text_width(&self, s: &str) -> usize {
+        s.chars().map(|c| self.char_width(c)).sum()
+    }
+
     fn draw_string(&mut self, x: usize, y: usize, s: &str, color: u32) {
-        let mut cur_x = x;
-        for c in s.chars() {
-            // Find char width to advance cur_x correctly
-            let width = if let Some((_, is_wide)) =
-                self.unifont_data.and_then(|d| lookup_unifont_glyph(d, c))
-            {
-                if is_wide { 16 } else { 8 }
-            } else {
-                8
-            };
-            self.draw_char(cur_x, y, c, color);
-            cur_x += width;
+        if is_rtl_text(s) {
+            let mut cur_x = x + self.text_width(s);
+            for c in s.chars() {
+                let width = self.char_width(c);
+                cur_x = cur_x.saturating_sub(width);
+                self.draw_char(cur_x, y, c, color);
+            }
+        } else {
+            let mut cur_x = x;
+            for c in s.chars() {
+                let width = self.char_width(c);
+                self.draw_char(cur_x, y, c, color);
+                cur_x += width;
+            }
         }
     }
 
@@ -573,6 +591,15 @@ fn lookup_unifont_glyph(data: &[u8], c: char) -> Option<([u16; 32], bool)> {
         }
     }
     None
+}
+
+fn is_rtl_text(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c as u32,
+            0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF
+        )
+    })
 }
 
 fn parse_hex(hex: &[u8]) -> Option<u32> {
