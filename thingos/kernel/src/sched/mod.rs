@@ -61,7 +61,7 @@ pub use lifecycle::*;
 pub mod policy;
 pub mod profiling;
 pub use profiling::*;
-pub(crate) use profiling::{is_task_on_any_cpu, set_cpu_current_task};
+pub(crate) use profiling::{is_task_on_other_cpu, set_cpu_current_task};
 mod sleep;
 mod spawn;
 mod stack;
@@ -234,6 +234,10 @@ const STEAL_MIN_VICTIM_DEPTH: usize = 2;
 /// often on the same package or share last-level cache, so stealing from them
 /// tends to have lower cache-miss overhead than stealing from distant CPUs.
 const STEAL_NEARBY_RADIUS: usize = 4;
+#[inline]
+pub(crate) fn cross_cpu_runq_migration_enabled() -> bool {
+    false
+}
 // Allow local wake routing for Any-affinity tasks when the previous CPU is
 // meaningfully busier, while still preserving cache locality under similar load.
 const ANY_WAKE_LOCAL_DEPTH_BIAS: usize = 1;
@@ -679,6 +683,15 @@ pub(crate) fn choose_wake_cpu<R: BootRuntime>(
     sched: &types::Scheduler<R>,
     last_cpu: Option<usize>,
 ) -> usize {
+    if !cross_cpu_runq_migration_enabled() {
+        let per_cpu_len = sched.state.per_cpu.len();
+        if per_cpu_len == 0 {
+            return 0;
+        }
+        let current_cpu = current_cpu_index::<R>().min(per_cpu_len - 1);
+        return last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(current_cpu);
+    }
+
     let preferred = select_preferred_any_affinity_wake_cpu::<R>(sched, last_cpu);
 
     let overload_gap = ANY_WAKE_OVERLOAD_GAP.load(Ordering::Acquire);
@@ -711,6 +724,15 @@ fn choose_wake_cpu_from_snapshot<R: BootRuntime>(
     last_cpu: Option<usize>,
     load_snapshot: &WakeBatchLoadSnapshot,
 ) -> usize {
+    if !cross_cpu_runq_migration_enabled() {
+        let per_cpu_len = sched.state.per_cpu.len();
+        if per_cpu_len == 0 {
+            return 0;
+        }
+        let current_cpu = current_cpu_index::<R>().min(per_cpu_len - 1);
+        return last_cpu.filter(|&cpu| cpu < per_cpu_len).unwrap_or(current_cpu);
+    }
+
     let preferred =
         select_preferred_any_affinity_wake_cpu_from_snapshot::<R>(sched, last_cpu, load_snapshot);
 
@@ -1479,7 +1501,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
                 // window where a remote CPU is between its own pre-switch
                 // update and switch_with_tls.
                 let mut _spins = 0u32;
-                while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+                while crate::sched::is_task_on_other_cpu(switch.to_tid, cpu_idx) {
                     _spins += 1;
                     if _spins > 10_000 {
                         break;
@@ -2492,9 +2514,27 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     }
                     crate::task::Affinity::Restricted(ref aff) => {
                         let cpu_count = self.state.per_cpu.len().max(1);
-                        let target = aff.pick_cpu(cpu_count).unwrap_or_else(|| {
-                            choose_wake_cpu_from_snapshot::<R>(self, sf.last_cpu, &wake_batch_loads)
-                        });
+                        let target = if !cross_cpu_runq_migration_enabled() {
+                            let current_cpu = current_cpu.min(cpu_count - 1);
+                            if let Some(last_cpu) = sf
+                                .last_cpu
+                                .filter(|&cpu| cpu < cpu_count && aff.allows(cpu, cpu_count))
+                            {
+                                last_cpu
+                            } else if aff.allows(current_cpu, cpu_count) {
+                                current_cpu
+                            } else {
+                                aff.pick_cpu(cpu_count).unwrap_or(current_cpu)
+                            }
+                        } else {
+                            aff.pick_cpu(cpu_count).unwrap_or_else(|| {
+                                choose_wake_cpu_from_snapshot::<R>(
+                                    self,
+                                    sf.last_cpu,
+                                    &wake_batch_loads,
+                                )
+                            })
+                        };
                         wake_batch_loads.note_enqueue(target);
                         target
                     }
@@ -3434,6 +3474,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// it.  This prevents repeatedly passing a single task back and forth
     /// between CPUs when the system is nearly idle.
     fn idle_steal(&mut self, local_cpu: usize) -> Option<TaskId> {
+        if !cross_cpu_runq_migration_enabled() {
+            let _ = local_cpu;
+            return None;
+        }
+
         let per_cpu_len = self.state.per_cpu.len();
 
         // Partition online peer CPUs into nearby and far groups, collecting
@@ -3504,6 +3549,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
     ///   when all CPUs have at least some work) to address sustained severe
     ///   imbalances that do not trigger idle-steal.
     fn periodic_load_balance(&mut self) {
+        if !cross_cpu_runq_migration_enabled() {
+            return;
+        }
+
         let now = TICK_COUNT.load(Ordering::Relaxed);
 
         // Rate limit: skip if we balanced recently.

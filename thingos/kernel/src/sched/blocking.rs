@@ -185,7 +185,7 @@ pub fn block_current<R: BootRuntime>() {
         crate::sched::set_cpu_current_task(cpu_idx, switch.to_tid);
 
         let mut _spins = 0u32;
-        while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+        while crate::sched::is_task_on_other_cpu(switch.to_tid, cpu_idx) {
             _spins += 1;
             if _spins > 10_000 {
                 break;
@@ -250,10 +250,23 @@ pub fn wake_task_locked<R: BootRuntime>(
                 crate::task::Affinity::Any => super::choose_wake_cpu::<R>(sched, sf.last_cpu),
                 crate::task::Affinity::Restricted(ref aff) => {
                     let cpu_count = sched.state.per_cpu.len().max(1);
-                    // Prefer last_cpu within the allowed set; fall back to
-                    // the affinity's own pick which respects preferred + last_cpu.
-                    aff.pick_cpu(cpu_count)
-                        .unwrap_or_else(|| super::choose_wake_cpu::<R>(sched, sf.last_cpu))
+                    if !super::cross_cpu_runq_migration_enabled() {
+                        let current_cpu = super::current_cpu_index::<R>().min(cpu_count - 1);
+                        if let Some(last_cpu) =
+                            sf.last_cpu.filter(|&cpu| cpu < cpu_count && aff.allows(cpu, cpu_count))
+                        {
+                            last_cpu
+                        } else if aff.allows(current_cpu, cpu_count) {
+                            current_cpu
+                        } else {
+                            aff.pick_cpu(cpu_count).unwrap_or(current_cpu)
+                        }
+                    } else {
+                        // Prefer last_cpu within the allowed set; fall back to
+                        // the affinity's own pick which respects preferred + last_cpu.
+                        aff.pick_cpu(cpu_count)
+                            .unwrap_or_else(|| super::choose_wake_cpu::<R>(sched, sf.last_cpu))
+                    }
                 }
             };
             wake_info = Some((target_cpu, task_priority));
@@ -409,6 +422,10 @@ pub fn wake_task_locked<R: BootRuntime>(
 }
 
 fn try_remote_wake_via_mailbox<R: BootRuntime>(id: u64) -> bool {
+    if !super::cross_cpu_runq_migration_enabled() {
+        return false;
+    }
+
     let rt = crate::runtime::<R>();
     let current_cpu = rt.current_cpu_index();
     let now_tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);

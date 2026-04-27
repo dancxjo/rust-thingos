@@ -646,7 +646,7 @@ pub fn exit<R: BootRuntime>(code: i32) {
     crate::sched::set_cpu_current_task(exit_cpu, switch.to_tid);
 
     let mut _spins = 0u32;
-    while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+    while crate::sched::is_task_on_other_cpu(switch.to_tid, exit_cpu) {
         _spins += 1;
         if _spins > 10_000 {
             break;

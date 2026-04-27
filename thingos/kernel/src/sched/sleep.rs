@@ -59,7 +59,7 @@ pub fn yield_now<R: BootRuntime>() -> bool {
         crate::sched::set_cpu_current_task(cpu_idx, switch.to_tid);
 
         let mut _spins = 0u32;
-        while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+        while crate::sched::is_task_on_other_cpu(switch.to_tid, cpu_idx) {
             _spins += 1;
             if _spins > 10_000 {
                 break;
@@ -212,7 +212,7 @@ pub fn sleep_ticks<R: BootRuntime>(ticks: u64) {
         crate::sched::set_cpu_current_task(sleep_cpu, switch.to_tid);
 
         let mut _spins = 0u32;
-        while crate::sched::is_task_on_any_cpu(switch.to_tid) {
+        while crate::sched::is_task_on_other_cpu(switch.to_tid, sleep_cpu) {
             _spins += 1;
             if _spins > 10_000 {
                 break;

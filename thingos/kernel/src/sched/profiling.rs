@@ -151,6 +151,19 @@ pub(crate) fn is_task_on_any_cpu(tid: crate::task::TaskId) -> bool {
 }
 
 #[inline]
+pub(crate) fn is_task_on_other_cpu(tid: crate::task::TaskId, local_cpu: usize) -> bool {
+    for cpu in 0..types::MAX_CPUS {
+        if cpu == local_cpu {
+            continue;
+        }
+        if CPU_CURRENT_TASK[cpu].load(core::sync::atomic::Ordering::Acquire) == tid as u64 {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline]
 pub(crate) fn set_cpu_current_task(cpu_idx: usize, tid: crate::task::TaskId) {
     if cpu_idx < types::MAX_CPUS {
         CPU_CURRENT_TASK[cpu_idx].store(tid as u64, core::sync::atomic::Ordering::Release);
