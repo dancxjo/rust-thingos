@@ -508,10 +508,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                     let src_px = core::ptr::read_unaligned(src_ptr as *const u32);
                                     let dst_px = core::ptr::read_unaligned(dst_ptr as *const u32);
                                     let out_px = alpha_over_argb(src_px, dst_px, plane.alpha);
-                                    core::ptr::write_unaligned(
-                                        dst_ptr as *mut u32,
-                                        out_px,
-                                    );
+                                    core::ptr::write_unaligned(dst_ptr as *mut u32, out_px);
                                     if !driver.cursor_commit_logged
                                         && cursor_copy_sample.is_none()
                                         && plane.z_order == i32::MAX
@@ -924,6 +921,7 @@ fn main(boot_arg: usize) -> ! {
     let frame_pool_count = 1;
     let mut frame_pool_buffers = alloc::vec::Vec::new();
     for i in 0..frame_pool_count {
+        debug!("display_virtio_gpu: frame pool {} creating memfd size={}", i, disp_size);
         let fd = match stem::syscall::memfd_create("frame_pool", disp_size) {
             Ok(id) => id,
             Err(e) => {
@@ -933,7 +931,9 @@ fn main(boot_arg: usize) -> ! {
                 }
             }
         };
+        debug!("display_virtio_gpu: frame pool {} memfd fd={}", i, fd);
 
+        debug!("display_virtio_gpu: frame pool {} resolving phys", i);
         let phys = match stem::syscall::shared_memory_phys(fd) {
             Ok(phys) => phys,
             Err(e) => {
@@ -943,12 +943,14 @@ fn main(boot_arg: usize) -> ! {
                 }
             }
         };
+        debug!("display_virtio_gpu: frame pool {} phys=0x{:x}", i, phys);
 
         // Explicitly map it locally so it stays pinned/resident
         let mut req: abi::vm::VmMapReq = unsafe { core::mem::zeroed() };
         req.backing = abi::vm::VmBacking::File { thing: fd, offset: 0 };
         req.len = disp_size;
         req.prot = abi::vm::VmProt::READ | abi::vm::VmProt::WRITE | abi::vm::VmProt::USER;
+        debug!("display_virtio_gpu: frame pool {} mapping memfd", i);
         let map_resp = match stem::syscall::vm_map(&req) {
             Ok(resp) => resp,
             Err(e) => {
@@ -958,21 +960,25 @@ fn main(boot_arg: usize) -> ! {
                 }
             }
         };
+        debug!("display_virtio_gpu: frame pool {} mapped at 0x{:x}", i, map_resp.addr);
 
         let res_id = (i + 1) as u32;
         gpu.set_dimensions(disp_width, disp_height);
+        debug!("display_virtio_gpu: frame pool {} creating resource {}", i, res_id);
         if let Err(e) = gpu.create_resource_2d(res_id) {
             error!("display_virtio_gpu: create_resource_2d failed: {}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
         }
+        debug!("display_virtio_gpu: frame pool {} attaching backing", i);
         if let Err(e) = gpu.attach_backing(res_id, phys, disp_size, disp_stride) {
             error!("display_virtio_gpu: attach_backing failed: {}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
         }
+        debug!("display_virtio_gpu: frame pool {} backing attached", i);
 
         frame_pool_buffers.push(Buffer {
             fd,
