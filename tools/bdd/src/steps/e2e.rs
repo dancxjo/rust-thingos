@@ -225,23 +225,29 @@ async fn cursor_centered_impl(world: &mut ThingOsWorld) -> Result<(), StepError>
 }
 
 #[then(regex = r#"^I should see the text "(.+)" in the top-left corner of the screen$"#)]
-async fn text_top_left_impl(world: &mut ThingOsWorld, text: String) {
+async fn text_top_left_impl(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    if log.to_lowercase().contains(&text.to_lowercase()) {
+    if serial_log_contains_case_insensitive(&log, &text) {
         eprintln!("│  │  │      ✅ Found '{}' in log", text);
+        Ok(())
     } else {
-        eprintln!("│  │  │      ⚠️ Text '{}' not found in log - visual check needed", text);
+        Err(StepError(format!(
+            "Expected text '{}' in the top-left check, but no matching serial evidence was found",
+            text
+        )))
     }
 }
 
 #[then("I should see frame count information in the top-left corner of the screen")]
-async fn frame_count_impl(world: &mut ThingOsWorld) {
+async fn frame_count_impl(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    if log.contains("fps") || log.contains("FPS") || log.contains("frame") || log.contains("bloom:")
-    {
+    if has_frame_count_evidence(&log) {
         eprintln!("│  │  │      ✅ Frame/bloom output detected");
+        Ok(())
     } else {
-        eprintln!("│  │  │      ⚠️ No frame count info in logs");
+        Err(StepError(
+            "Expected frame count evidence in serial output, but none was found".to_string(),
+        ))
     }
 }
 
@@ -521,6 +527,17 @@ fn latest_command_output(world: &ThingOsWorld, log: &str) -> String {
     output.join("\n")
 }
 
+fn serial_log_contains_case_insensitive(log: &str, expected: &str) -> bool {
+    log.to_lowercase().contains(&expected.to_lowercase())
+}
+
+fn has_frame_count_evidence(log: &str) -> bool {
+    log.lines().any(|line| {
+        let line_lower = line.to_lowercase();
+        line_lower.contains("fps") || line_lower.contains("frame") || line_lower.contains("bloom:")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +567,34 @@ mod tests {
 
         assert!(!output.contains("echo shell-ready"));
         assert!(output.contains("shell-ready"));
+    }
+
+    #[test]
+    fn visual_text_evidence_matching_is_case_insensitive() {
+        assert!(serial_log_contains_case_insensitive(
+            "[INFO] BLOOM: drew label Thing-OS",
+            "thing-os"
+        ));
+    }
+
+    #[test]
+    fn visual_text_evidence_matching_rejects_missing_text() {
+        assert!(!serial_log_contains_case_insensitive(
+            "[INFO] BLOOM: drew label Thing-OS",
+            "kernel panic"
+        ));
+    }
+
+    #[test]
+    fn frame_count_evidence_accepts_frame_fps_or_bloom_logs() {
+        assert!(has_frame_count_evidence("render frame 12"));
+        assert!(has_frame_count_evidence("FPS: 60"));
+        assert!(has_frame_count_evidence("bloom: output0"));
+    }
+
+    #[test]
+    fn frame_count_evidence_rejects_unrelated_logs() {
+        assert!(!has_frame_count_evidence("[INFO] shell ready\n[INFO] vfs mounted"));
     }
 }
 
@@ -690,12 +735,16 @@ async fn when_move_mouse(world: &mut ThingOsWorld) {
 }
 
 #[then(regex = r#"^the serial log should contain '(.+)'$"#)]
-async fn serial_log_contains(world: &mut ThingOsWorld, pattern: String) {
+async fn serial_log_contains(world: &mut ThingOsWorld, pattern: String) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
     if log.contains(&pattern) {
         eprintln!("│  │  │      ✅ Found: {}", pattern);
+        Ok(())
     } else {
-        eprintln!("│  │  │      ⚠️ Pattern not found: {} (non-fatal)", pattern);
+        Err(StepError(format!(
+            "Expected serial log to contain '{}', but it was not found",
+            pattern
+        )))
     }
 }
 
@@ -712,8 +761,7 @@ async fn cursor_moved(_world: &mut ThingOsWorld) {
 #[then("the pointer debug overlay should update after mouse movement")]
 async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
-        eprintln!("│  │  │      ⚠️ No QMP connection for pointer debug screenshot check");
-        return Ok(());
+        return Err(StepError("No QMP connection for pointer debug screenshot check".to_string()));
     }
 
     if !world.wait_for_serial("bloom: pointer debug overlay ready", 60.0).await {

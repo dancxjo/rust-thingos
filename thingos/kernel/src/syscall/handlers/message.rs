@@ -107,6 +107,7 @@ pub fn sys_msg_send(
     deliver_typed_to_process(pid, &message).map_err(|e| match e {
         DeliveryFailureReason::RecipientExited => Errno::ESRCH,
         DeliveryFailureReason::InboxFull => Errno::EAGAIN,
+        DeliveryFailureReason::InvalidCapability => Errno::EBADF,
     })?;
 
     Ok(0)

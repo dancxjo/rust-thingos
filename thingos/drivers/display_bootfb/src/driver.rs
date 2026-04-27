@@ -64,7 +64,10 @@ impl BootFbDriver {
             addr_hint: 0,
             len: size,
             prot: VmProt::READ | VmProt::USER,
-            flags: VmMapFlags::PRIVATE,
+            // Bloom updates compositor-owned planes such as the pointer debug
+            // overlay in place after import. The display driver must observe
+            // those writes on every commit.
+            flags: VmMapFlags::SHARED,
             backing: VmBacking::File { thing: handle.handle, offset: handle.offset },
         };
 

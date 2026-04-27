@@ -24,6 +24,9 @@ pub enum DeliveryFailureReason {
     RecipientExited,
     /// Recipient inbox is full.
     InboxFull,
+    /// Message referenced a sender-owned capability that could not be
+    /// duplicated into the recipient.
+    InvalidCapability,
 }
 
 /// One failed recipient result inside a group broadcast report.
@@ -129,12 +132,14 @@ fn sender_context() -> SenderContext {
 
 fn enqueue_to_process(
     pid: u32,
-    message: Message,
+    mut message: Message,
     metadata: ProcessMessageMetadata,
 ) -> Result<(), DeliveryFailureReason> {
     let Some(pinfo) = crate::sched::process_info_for_tid_current(pid as u64) else {
         return Err(DeliveryFailureReason::RecipientExited);
     };
+
+    translate_embedded_capabilities(&mut message, metadata.sender_job, &pinfo)?;
 
     let mut process = pinfo.lock();
     process.unix_compat.enqueue_message(ProcessMessage { message, metadata }).map_err(|err| {
@@ -143,6 +148,48 @@ fn enqueue_to_process(
         }
     })?;
 
+    Ok(())
+}
+
+fn translate_embedded_capabilities(
+    message: &mut Message,
+    sender_pid: Option<u32>,
+    recipient: &alloc::sync::Arc<spin::Mutex<crate::task::ProcessInfo>>,
+) -> Result<(), DeliveryFailureReason> {
+    if message.kind.0 != abi::hid::KIND_BRISTLE_REGISTER_SINK || message.payload.len() < 5 {
+        return Ok(());
+    }
+
+    let Some(sender_pid) = sender_pid else {
+        return Err(DeliveryFailureReason::InvalidCapability);
+    };
+    let Some(sender) = crate::sched::process_info_for_tid_current(sender_pid as u64) else {
+        return Err(DeliveryFailureReason::InvalidCapability);
+    };
+
+    let sender_handle = u32::from_le_bytes([
+        message.payload[1],
+        message.payload[2],
+        message.payload[3],
+        message.payload[4],
+    ]);
+    let sender_entry = {
+        let sender = sender.lock();
+        sender
+            .ipc_table
+            .get(crate::ipc::IpcHandle(sender_handle), crate::ipc::IpcHandleMode::Write)
+            .cloned()
+            .ok_or(DeliveryFailureReason::InvalidCapability)?
+    };
+
+    let recipient_handle = {
+        let mut recipient = recipient.lock();
+        recipient
+            .ipc_table
+            .alloc(sender_entry.port.clone(), sender_entry.mode)
+            .ok_or(DeliveryFailureReason::InvalidCapability)?
+    };
+    message.payload[1..5].copy_from_slice(&recipient_handle.0.to_le_bytes());
     Ok(())
 }
 

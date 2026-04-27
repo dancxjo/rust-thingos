@@ -21,15 +21,16 @@
 extern crate alloc;
 
 use abi::hid::{
-    BristleEventHeader, EventType, Key, KeyEventPayload,
-    KIND_BRISTLE_REGISTER_SINK, BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO,
-    decode_register_sink,
+    BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO, BristleEventHeader, EventType,
+    KIND_BRISTLE_REGISTER_SINK, Key, KeyEventPayload, decode_register_sink,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::wire::KindId;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::port_create;
-use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write};
+use stem::syscall::vfs::{
+    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write,
+};
 use stem::wait_set::WaitToken;
 use stem::{debug, info, warn};
 
@@ -100,10 +101,7 @@ fn main(_arg: usize) -> ! {
     let _ = vfs_mkdir("/run/bristle");
     publish_device_handle("/run/bristle/kbd_in", kbd_write);
     publish_device_handle("/run/bristle/mouse_in", mouse_write);
-    info!(
-        "bristle: published device handles kbd_in={} mouse_in={}",
-        kbd_write, mouse_write
-    );
+    info!("bristle: published device handles kbd_in={} mouse_in={}", kbd_write, mouse_write);
 
     // ── Open ServiceLoop ──────────────────────────────────────────────────
     let mut svc = match ServiceLoop::new(64) {
@@ -145,10 +143,7 @@ fn main(_arg: usize) -> ! {
     };
     let mouse_tok: Option<WaitToken> = mouse_fd.and_then(|fd| svc.add_fd_readable(fd).ok());
 
-    info!(
-        "bristle: online (kbd_tok={:?}, mouse_tok={:?})",
-        kbd_tok, mouse_tok
-    );
+    info!("bristle: online (kbd_tok={:?}, mouse_tok={:?})", kbd_tok, mouse_tok);
 
     // ── Event-dispatch state ──────────────────────────────────────────────
     // Registered event sinks — registered via inbox RegisterSink messages.
@@ -156,8 +151,10 @@ fn main(_arg: usize) -> ! {
     let mut echo_fd: Option<u32> = None;
 
     let mut recv_buf = [0u8; 128];
-    let mut event_accum = [0u8; 64];
-    let mut accum_len = 0usize;
+    let mut kbd_event_accum = [0u8; 64];
+    let mut kbd_accum_len = 0usize;
+    let mut mouse_event_accum = [0u8; 64];
+    let mut mouse_accum_len = 0usize;
     let mut drop_counter: u32 = 0;
 
     // ── Main service loop ─────────────────────────────────────────────────
@@ -182,13 +179,15 @@ fn main(_arg: usize) -> ! {
 
             // ── Data plane: device input ───────────────────────────────
             ServiceEvent::Ready { token, event: ev } if ev.is_readable() => {
-                let n_result = if Some(token) == kbd_tok {
+                let is_kbd = Some(token) == kbd_tok;
+                let is_mouse = Some(token) == mouse_tok;
+                let n_result = if is_kbd {
                     if let Some(fd) = kbd_fd {
                         vfs_read(fd, &mut recv_buf)
                     } else {
                         continue;
                     }
-                } else if Some(token) == mouse_tok {
+                } else if is_mouse {
                     if let Some(fd) = mouse_fd {
                         vfs_read(fd, &mut recv_buf)
                     } else {
@@ -200,10 +199,15 @@ fn main(_arg: usize) -> ! {
 
                 if let Ok(n) = n_result {
                     if n > 0 {
+                        let (event_accum, accum_len) = if is_mouse {
+                            (&mut mouse_event_accum, &mut mouse_accum_len)
+                        } else {
+                            (&mut kbd_event_accum, &mut kbd_accum_len)
+                        };
                         accumulate_and_dispatch(
                             &recv_buf[..n],
-                            &mut event_accum,
-                            &mut accum_len,
+                            event_accum,
+                            accum_len,
                             bloom_fd,
                             echo_fd,
                             &mut drop_counter,
@@ -231,11 +235,7 @@ fn main(_arg: usize) -> ! {
 }
 
 /// Handle a `RegisterSink` inbox message.
-fn handle_register_sink(
-    payload: &[u8],
-    bloom_fd: &mut Option<u32>,
-    echo_fd: &mut Option<u32>,
-) {
+fn handle_register_sink(payload: &[u8], bloom_fd: &mut Option<u32>, echo_fd: &mut Option<u32>) {
     let Some((tag, handle)) = decode_register_sink(payload) else {
         warn!("bristle: RegisterSink payload too short ({} bytes)", payload.len());
         return;
@@ -244,10 +244,7 @@ fn handle_register_sink(
     let fd = match vfs_handle_from_port(handle) {
         Ok(f) => f,
         Err(e) => {
-            warn!(
-                "bristle: RegisterSink handle {} FD bridge failed: {:?}",
-                handle, e
-            );
+            warn!("bristle: RegisterSink handle {} FD bridge failed: {:?}", handle, e);
             return;
         }
     };
@@ -300,9 +297,7 @@ fn accumulate_and_dispatch(
                     let event_bytes = &event_accum[..total_len];
 
                     // Hotkey handling
-                    if header.event_type == EventType::KeyDown as u16
-                        && header.payload_len >= 4
-                    {
+                    if header.event_type == EventType::KeyDown as u16 && header.payload_len >= 4 {
                         let mut p = [0u8; 4];
                         p.copy_from_slice(&event_bytes[20..24]);
                         let payload = KeyEventPayload::from_bytes(&p);
@@ -313,8 +308,7 @@ fn accumulate_and_dispatch(
                                 stem::syscall::task_dump();
                             }
                             Key::Delete
-                                if payload.mods().has_ctrl()
-                                    && payload.mods().has_alt() =>
+                                if payload.mods().has_ctrl() && payload.mods().has_alt() =>
                             {
                                 stem::info!("bristle: Ctrl+Alt+Del - rebooting...");
                                 stem::syscall::reboot();
