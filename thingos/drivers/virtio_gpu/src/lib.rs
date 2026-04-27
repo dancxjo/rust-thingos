@@ -160,6 +160,16 @@ impl VirtioGpu {
             if self.virgl_supported { 1 << virtio::VIRTIO_GPU_F_VIRGL } else { 0 };
         self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE, driver_features);
 
+        // This driver uses the modern PCI common configuration layout, so it
+        // must acknowledge VIRTIO_F_VERSION_1 from feature bank 1 when present.
+        self.write_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE_SELECT, 1);
+        let common_features = self.read_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE);
+        self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE_SELECT, 1);
+        self.write_common(
+            virtio::VIRTIO_COMMON_DRIVER_FEATURE,
+            common_features & ((virtio::VIRTIO_F_VERSION_1 >> 32) as u32),
+        );
+
         // 6. Set FEATURES_OK
         let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
         self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_FEATURES_OK);

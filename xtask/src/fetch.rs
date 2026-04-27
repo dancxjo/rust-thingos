@@ -421,6 +421,8 @@ fn fetch_cursors(assets: &Path) -> Result<()> {
     let cursors_dir = assets.join("cursors");
     fs::create_dir_all(&cursors_dir)?;
 
+    fetch_default_svg_cursor(&cursors_dir)?;
+
     let plain_dir = cursors_dir.join("plain");
     if !plain_dir.exists() {
         println!("    Fetching Plain Cursors (.cur/.ani)...");
@@ -441,6 +443,20 @@ fn fetch_cursors(assets: &Path) -> Result<()> {
     } else {
         println!("    Plain Cursors already exist.");
     }
+
+    Ok(())
+}
+
+fn fetch_default_svg_cursor(cursors_dir: &Path) -> Result<()> {
+    require_tool("curl")?;
+
+    let default_svg = cursors_dir.join("default.svg");
+    println!("    Fetching default SVG cursor...");
+    download_file(
+        "https://raw.githubusercontent.com/yeyushengfan258/Future-cursors/587c14d2f5bd2dc34095a4efbb1a729eb72a1d36/src/svg/default.svg",
+        &default_svg,
+    )
+    .context("Failed to download default SVG cursor")?;
 
     Ok(())
 }

@@ -414,6 +414,7 @@ fn generate_limine_config(
         let clean_path = path_str.replace('\\', "/");
 
         let allowed = clean_path.ends_with("NotoSans-Regular.ttf")
+            || clean_path.ends_with("cursors/default.svg")
             || clean_path.ends_with("future/default.svg")
             || clean_path.ends_with("wallpapers/flower.bmp")
             || clean_path.ends_with("wallpapers/flower.png")
