@@ -421,18 +421,25 @@ fn main(boot_fd: usize) -> ! {
         let provider = Arc::new(StorageProvider { device });
         let path = format!("/dev/storage/{}", name);
         let (v_w, v_r) = port_create(65536).unwrap();
-        vfs_mount(v_w, &path).unwrap();
+        if let Err(e) = vfs_mount(v_w, &path) {
+            warn!("AHCI: failed to mount {} at {}: {:?}", name, path, e);
+            continue;
+        }
         info!("AHCI: Mounted {} at {}", name, path);
 
-        info!("AHCI: Provider loop online at {}", path);
-        let mut ploop = ProviderLoop::new(v_r);
-        loop {
-            if let Ok(Some(req)) = ploop.try_next_request() {
-                let resp = provider.handle_rpc(&req);
-                let _ = ploop.send_response(&req, resp);
+        let provider_path = path.clone();
+        stem::thread::spawn_task_detached(move || {
+            info!("AHCI: Provider loop online at {}", provider_path);
+            let mut ploop = ProviderLoop::new(v_r);
+            loop {
+                if let Ok(Some(req)) = ploop.try_next_request() {
+                    let resp = provider.handle_rpc(&req);
+                    let _ = ploop.send_response(&req, resp);
+                }
+                yield_now();
             }
-            yield_now();
-        }
+        })
+        .expect("AHCI: provider thread spawn failed");
     }
 
     loop {
