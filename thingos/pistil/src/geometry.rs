@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
-
 pub use pistil_types::{Color, Point, Rect, Size};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Transform2D {
