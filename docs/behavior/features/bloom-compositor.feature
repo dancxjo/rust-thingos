@@ -23,7 +23,7 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
-    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    And I type "echo /share/wallpapers/flower.png > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
 
   Scenario: bloom service loop starts
@@ -37,7 +37,7 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
-    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    And I type "echo /share/wallpapers/flower.png > /session/desktop/wallpaper" on the serial console
     And I type "echo /share/wallpapers/clouds.bmp > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
     And the serial output should contain "/share/wallpapers/clouds.bmp" within 60s
@@ -49,7 +49,7 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
-    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    And I type "echo /share/wallpapers/flower.png > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
 
   Scenario: bloom display driver presents a unified device interface

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::geometry::{Color, LineCap, LineJoin, PointF};
+use crate::geometry::{LineCap, LineJoin, PointF};
 
 /// Flatten a quadratic bezier curve into line segments using adaptive subdivision.
 pub fn flatten_quad(p0: PointF, cp: PointF, p1: PointF, tolerance: f32, output: &mut Vec<PointF>) {

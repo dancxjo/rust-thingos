@@ -13,7 +13,7 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat, vfs_write};
 use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
 use crate::world::BloomWorld;
 
-pub const DEFAULT_WALLPAPER_PATH: &str = "/share/wallpapers/flower.bmp";
+pub const DEFAULT_WALLPAPER_PATH: &str = "/share/wallpapers/flower.png";
 const WALLPAPER_POLL_TIMER: u64 = 1;
 const WALLPAPER_INITIAL_LOAD_TIMER: u64 = 2;
 const WALLPAPER_POLL_MS: u64 = 250;

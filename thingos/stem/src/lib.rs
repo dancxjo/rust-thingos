@@ -1,11 +1,11 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 
 #[cfg(all(target_os = "thingos", panic = "unwind"))]
 compile_error!("Thing-OS does not support panic=unwind. Use panic=abort (target contract).");
 
 pub use abi;
-#[cfg(feature = "rt")]
+#[cfg(all(feature = "rt", not(feature = "std")))]
 pub use stem_macros::main;
 
 pub mod arch;
@@ -16,16 +16,16 @@ pub mod device;
 pub mod errors;
 pub mod fs;
 
-#[cfg(feature = "global-alloc")]
+#[cfg(all(feature = "global-alloc", not(feature = "std")))]
 pub mod heap;
 pub mod i18n;
 pub mod kinds;
-#[cfg(feature = "rt")]
+#[cfg(all(feature = "rt", not(feature = "std")))]
 pub mod memory;
 
 /// Platform Abstraction Layer - explicit platform contract
 pub mod pal;
-#[cfg(feature = "rt")]
+#[cfg(all(feature = "rt", not(feature = "std")))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     crate::error!("PANIC: {}", info);
@@ -33,7 +33,9 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 pub mod pci;
 pub mod perf;
+#[cfg(not(feature = "std"))]
 pub mod pthread;
+#[cfg(not(feature = "std"))]
 pub mod rt;
 pub mod service_loop;
 pub mod simd;
@@ -146,5 +148,5 @@ pub use syscall::{reboot, shutdown};
 
 pub mod thing;
 
-#[cfg(feature = "global-alloc")]
+#[cfg(all(feature = "global-alloc", not(feature = "std")))]
 pub mod allocator;

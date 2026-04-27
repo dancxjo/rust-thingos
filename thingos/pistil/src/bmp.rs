@@ -1,5 +1,4 @@
 use alloc::vec;
-use alloc::vec::Vec;
 
 use abi::syscall::vfs_flags::O_RDONLY;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};

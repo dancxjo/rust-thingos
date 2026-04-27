@@ -20,6 +20,7 @@ pciids = { path = "../../tools/pciids" }
 [features]
 default = ["global-alloc"]
 rt = ["stem-macros"]
+std = []
 alloc = []
 global-alloc = []
 simd = []

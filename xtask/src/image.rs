@@ -29,8 +29,9 @@ struct WallpaperSpec {
     variant: u8,
 }
 
-const DEFAULT_WALLPAPERS: [WallpaperSpec; 4] = [
+const DEFAULT_WALLPAPERS: [WallpaperSpec; 5] = [
     WallpaperSpec { file_name: "flower.bmp", variant: 0 },
+    WallpaperSpec { file_name: "flower.png", variant: 0 },
     WallpaperSpec { file_name: "clouds.bmp", variant: 1 },
     WallpaperSpec { file_name: "leather.bmp", variant: 2 },
     WallpaperSpec { file_name: "linen.bmp", variant: 3 },
@@ -83,6 +84,10 @@ fn stage_default_wallpapers_hdd(sh: &Shell, hdd: &str, arch: &str) -> Result<()>
 }
 
 fn write_generated_wallpaper(path: &Path, variant: u8) -> Result<()> {
+    if path.extension().is_some_and(|ext| ext == "png") {
+        return write_generated_wallpaper_png(path, variant);
+    }
+
     let width = 320u32;
     let height = 180u32;
     let row_bytes = ((width * 3 + 3) / 4) * 4;
@@ -120,6 +125,29 @@ fn write_generated_wallpaper(path: &Path, variant: u8) -> Result<()> {
         file.write_all(&row)?;
     }
 
+    Ok(())
+}
+
+fn write_generated_wallpaper_png(path: &Path, variant: u8) -> Result<()> {
+    let width = 320u32;
+    let height = 180u32;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| anyhow::anyhow!("failed to allocate wallpaper pixmap"))?;
+
+    let data = pixmap.data_mut();
+    for y in 0..height {
+        for x in 0..width {
+            let (r, g, b) = wallpaper_pixel(variant, x, y, width, height);
+            let off = ((y * width + x) * 4) as usize;
+            data[off] = r;
+            data[off + 1] = g;
+            data[off + 2] = b;
+            data[off + 3] = 255;
+        }
+    }
+
+    let encoded = pixmap.encode_png()?;
+    std::fs::write(path, encoded)?;
     Ok(())
 }
 
@@ -388,6 +416,7 @@ fn generate_limine_config(
         let allowed = clean_path.ends_with("NotoSans-Regular.ttf")
             || clean_path.ends_with("future/default.svg")
             || clean_path.ends_with("wallpapers/flower.bmp")
+            || clean_path.ends_with("wallpapers/flower.png")
             || clean_path.ends_with("wallpapers/clouds.bmp")
             || clean_path.ends_with("wallpapers/leather.bmp")
             || clean_path.ends_with("wallpapers/linen.bmp")
@@ -565,7 +594,7 @@ pub fn build_iso_with_config(
 
         let a_priority = if a_str.ends_with(".cur") || a_str.ends_with(".ani") {
             0
-        } else if a_str.ends_with(".bmp") {
+        } else if a_str.ends_with(".bmp") || a_str.ends_with(".png") {
             1
         } else if a_str.ends_with(".ttf") {
             2
@@ -577,7 +606,7 @@ pub fn build_iso_with_config(
 
         let b_priority = if b_str.ends_with(".cur") || b_str.ends_with(".ani") {
             0
-        } else if b_str.ends_with(".bmp") {
+        } else if b_str.ends_with(".bmp") || b_str.ends_with(".png") {
             1
         } else if b_str.ends_with(".ttf") {
             2

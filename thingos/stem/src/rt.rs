@@ -1,9 +1,9 @@
-#[cfg(feature = "rt")]
+#[cfg(all(feature = "rt", not(feature = "std")))]
 extern "C" {
     fn stem_user_main(arg: usize) -> !;
 }
 
-#[cfg(feature = "rt")]
+#[cfg(all(feature = "rt", not(feature = "std")))]
 #[no_mangle]
 pub unsafe extern "C" fn thingos_runtime_setup() {
     if let Some(info) = crate::tls::read_tls_info() {
@@ -11,7 +11,7 @@ pub unsafe extern "C" fn thingos_runtime_setup() {
     }
 }
 
-#[cfg(feature = "rt")]
+#[cfg(all(feature = "rt", not(feature = "std")))]
 #[no_mangle]
 pub unsafe extern "C" fn entry_impl(arg: usize) -> ! {
     thingos_runtime_setup();

@@ -1,12 +1,6 @@
-#![no_std]
-
 extern crate alloc;
 
-use alloc::vec::Vec;
-
 use abi::seed::{SEED_ABI_VERSION, Seed, SeedInterface};
-use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-use stem::syscall::{memfd_create, vm_map, vm_unmap};
 
 pub mod blit;
 pub mod bmp;
@@ -39,32 +33,6 @@ pub static THINGOS_SEED: Seed = Seed {
         SeedInterface::zero(),
     ],
 };
-
-fn blend(dst: u32, src: u32) -> u32 {
-    let alpha = (src >> 24) as u32;
-    if alpha == 0 {
-        return dst;
-    }
-    if alpha == 255 {
-        return src;
-    }
-
-    let inv_alpha = 255 - alpha;
-
-    let sr = (src >> 16) & 0xFF;
-    let sg = (src >> 8) & 0xFF;
-    let sb = src & 0xFF;
-
-    let dr = (dst >> 16) & 0xFF;
-    let dg = (dst >> 8) & 0xFF;
-    let db = dst & 0xFF;
-
-    let r = (sr * alpha + dr * inv_alpha) / 255;
-    let g = (sg * alpha + dg * inv_alpha) / 255;
-    let b = (sb * alpha + db * inv_alpha) / 255;
-
-    (0xFF << 24) | (r << 16) | (g << 8) | b
-}
 
 pub struct Atlas {
     pub texture: Texture,

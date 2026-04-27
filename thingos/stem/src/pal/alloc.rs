@@ -50,10 +50,10 @@ pub fn grow_heap(min_bytes: usize) -> Result<(), Errno> {
     }
 
     if state.initialized {
-        #[cfg(feature = "global-alloc")]
+        #[cfg(all(feature = "global-alloc", not(feature = "std")))]
         crate::allocator::extend_heap(grow_bytes);
     } else {
-        #[cfg(feature = "global-alloc")]
+        #[cfg(all(feature = "global-alloc", not(feature = "std")))]
         crate::allocator::init_heap(map_addr, grow_bytes);
         state.initialized = true;
     }

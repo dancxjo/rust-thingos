@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 
 use abi::syscall::vfs_flags::O_RDONLY;
 use pistil_types::Canvas;
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat};
+use tiny_skia::Pixmap;
 
 use crate::font::TextRenderer;
 
@@ -176,7 +177,7 @@ pub extern "C" fn pistil_prepare_background(
     // Paint periwinkle first as diagnostic baseline
     dst.fill(0xFFCCCCFF);
 
-    let result = draw_bmp_cover_into(
+    let result = draw_image_cover_into(
         path_str,
         dst,
         dst_stride_pixels as usize,
@@ -246,6 +247,120 @@ fn draw_debug_background(dst: &mut [u32], stride: usize, width: usize, height: u
             dst[row + x] = base;
         }
     }
+}
+
+fn draw_image_cover_into(
+    path: &str,
+    dst: &mut [u32],
+    dst_stride_pixels: usize,
+    dst_w: usize,
+    dst_h: usize,
+) -> Result<(), i32> {
+    if path.ends_with(".png") {
+        draw_png_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h)
+    } else {
+        draw_bmp_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h)
+    }
+}
+
+fn draw_png_cover_into(
+    path: &str,
+    dst: &mut [u32],
+    dst_stride_pixels: usize,
+    dst_w: usize,
+    dst_h: usize,
+) -> Result<(), i32> {
+    let data = read_vfs_file(path)?;
+    let pixmap = Pixmap::decode_png(&data).map_err(|_| -3)?;
+    let src_w = pixmap.width() as usize;
+    let src_h = pixmap.height() as usize;
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return Err(-3);
+    }
+
+    blit_cover_tiny_skia(dst, dst_stride_pixels, dst_w, dst_h, &pixmap);
+    Ok(())
+}
+
+fn read_vfs_file(path: &str) -> Result<Vec<u8>, i32> {
+    const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+
+    let fd = vfs_open(path, O_RDONLY).map_err(|_| -3)?;
+    let result = (|| {
+        let stat = vfs_stat(fd).map_err(|_| -3)?;
+        if stat.size == 0 || stat.size > MAX_IMAGE_BYTES {
+            return Err(-3);
+        }
+
+        let mut data = Vec::new();
+        data.resize(stat.size as usize, 0);
+        let mut filled = 0usize;
+        while filled < data.len() {
+            let n = vfs_read(fd, &mut data[filled..]).map_err(|_| -3)?;
+            if n == 0 {
+                return Err(-3);
+            }
+            filled += n;
+        }
+        Ok(data)
+    })();
+
+    let _ = vfs_close(fd);
+    result
+}
+
+fn blit_cover_tiny_skia(
+    dst: &mut [u32],
+    dst_stride_pixels: usize,
+    dst_w: usize,
+    dst_h: usize,
+    src: &Pixmap,
+) {
+    let src_w = src.width() as usize;
+    let src_h = src.height() as usize;
+    let scale_x_fp = (dst_w as u64 * 1_000_000) / src_w as u64;
+    let scale_y_fp = (dst_h as u64 * 1_000_000) / src_h as u64;
+    let scale_fp = scale_x_fp.max(scale_y_fp).max(1);
+
+    let scaled_w = (src_w as u64 * scale_fp) / 1_000_000;
+    let scaled_h = (src_h as u64 * scale_fp) / 1_000_000;
+    let ox = (dst_w as i64 - scaled_w as i64) / 2;
+    let oy = (dst_h as i64 - scaled_h as i64) / 2;
+    let pixels = src.pixels();
+
+    for dy in 0..dst_h {
+        let sy_fp = ((dy as i64 - oy) * 1_000_000) / scale_fp as i64;
+        let sy = if sy_fp < 0 { 0 } else { (sy_fp as usize).min(src_h - 1) };
+        let dst_row = dy * dst_stride_pixels;
+        let src_row = sy * src_w;
+
+        for dx in 0..dst_w {
+            let sx_fp = ((dx as i64 - ox) * 1_000_000) / scale_fp as i64;
+            let sx = if sx_fp < 0 { 0 } else { (sx_fp as usize).min(src_w - 1) };
+            let c = pixels[src_row + sx];
+            dst[dst_row + dx] = premultiplied_rgba_to_argb(c.red(), c.green(), c.blue(), c.alpha());
+        }
+    }
+}
+
+fn premultiplied_rgba_to_argb(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    let a = a as u32;
+    if a == 0 {
+        return 0xFFCCCCFF;
+    }
+
+    let r = r as u32;
+    let g = g as u32;
+    let b = b as u32;
+    let inv_a = 255 - a;
+    let bg_r = 0xCC;
+    let bg_g = 0xCC;
+    let bg_b = 0xFF;
+
+    let out_r = r + (bg_r * inv_a + 127) / 255;
+    let out_g = g + (bg_g * inv_a + 127) / 255;
+    let out_b = b + (bg_b * inv_a + 127) / 255;
+    0xFF00_0000 | (out_r.min(255) << 16) | (out_g.min(255) << 8) | out_b.min(255)
 }
 
 fn draw_bmp_cover_into(

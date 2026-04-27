@@ -7,8 +7,10 @@
 # configure your local ignore list.
 
 *.log
-/assets/
-!/assets/wallpapers
+/assets/*
+!/assets/wallpapers/
+/assets/wallpapers/*
+!/assets/wallpapers/flower.png
 
 /iso_root*/
 thing-os*.iso
