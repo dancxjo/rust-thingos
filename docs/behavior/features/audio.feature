@@ -14,6 +14,7 @@ Feature: Audio Subsystem
     When I wait for the serial output to contain "SPROUT: Early audio device"
     Then the serial output should contain "SPROUT: Early audio device"
     And the serial output should contain "chime: Opened /dev/audio/card0/out0"
+    And the serial output should not contain "KERNEL PAGE FAULT"
 
   Scenario: Beeper service is available
     Given the machine is booted

@@ -1606,6 +1606,15 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
                 default_load_base
             };
             let resolved_pc = sym_vaddr.wrapping_add(load_bias) as usize;
+            if resolved_pc < 0x1000 {
+                crate::kerror!(
+                    "SPAWN: entry symbol '{}' in '{}' resolved to invalid PC 0x{:x}",
+                    sym_name,
+                    path,
+                    resolved_pc
+                );
+                return Err(abi::errors::Errno::ENOEXEC);
+            }
             crate::kdebug!(
                 "SPAWN: driver entrypoint override '{}' => VA 0x{:x} + bias 0x{:x} = PC 0x{:x}",
                 sym_name,
@@ -1617,11 +1626,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
             // Ensure user stack is 16-byte aligned.
             entry.user_sp = entry.user_sp & !0xF;
         } else {
-            crate::kerror!(
-                "SPAWN: entry symbol '{}' not found in '{}'; using default entry",
-                sym_name,
-                path
-            );
+            crate::kerror!("SPAWN: entry symbol '{}' not found in '{}'", sym_name, path);
+            return Err(abi::errors::Errno::ENOEXEC);
         }
     }
 

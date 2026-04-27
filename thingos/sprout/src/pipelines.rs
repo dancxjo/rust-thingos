@@ -596,6 +596,7 @@ const AUDIO_DEVICE_TIMEOUT_NS: u64 = 5_000_000_000; // 5 seconds
 /// Poll interval while waiting for an audio device to appear in sysfs.
 const AUDIO_POLL_INTERVAL_MS: u64 = 100;
 const EARLY_AUDIO_MARKER: &str = "/run/sprout/audio-early";
+const AUDIO_OUTPUT_PATH: &str = "/dev/audio/card0/out0";
 
 /// Probe for an audio device, spawn the right driver, wait for the VFS node
 /// to appear, then launch the chime to play the start-up chime.
@@ -642,6 +643,10 @@ fn setup_audio_stack_worker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         device_path, service, driver_path
     );
 
+    let _ = stem::syscall::vfs::vfs_mkdir("/run");
+    let _ = stem::syscall::vfs::vfs_mkdir("/run/sprout");
+    let _ = stem::syscall::vfs::vfs_mkdir(EARLY_AUDIO_MARKER);
+
     let driver_pid = match stem::syscall::spawn_process(driver_path, 0) {
         Ok(pid) => pid,
         Err(e) => {
@@ -662,9 +667,14 @@ fn setup_audio_stack_worker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
         });
     }
 
-    let _ = stem::syscall::vfs::vfs_mkdir("/run");
-    let _ = stem::syscall::vfs::vfs_mkdir("/run/sprout");
-    let _ = stem::syscall::vfs::vfs_mkdir(EARLY_AUDIO_MARKER);
+    let output_start_ns = stem::time::monotonic_ns();
+    while !file_exists(AUDIO_OUTPUT_PATH) {
+        if stem::time::monotonic_ns().saturating_sub(output_start_ns) >= AUDIO_DEVICE_TIMEOUT_NS {
+            warn!("SPROUT: Early audio driver started, but {} did not appear", AUDIO_OUTPUT_PATH);
+            return;
+        }
+        stem::sleep_ms(AUDIO_POLL_INTERVAL_MS);
+    }
 
     if !file_exists("/drivers/chime") {
         warn!("SPROUT: Early audio driver started, but /drivers/chime is missing");
