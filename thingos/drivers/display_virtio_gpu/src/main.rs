@@ -236,6 +236,7 @@ struct VirtioGpuDriver {
     current_fd: Option<u32>,
     /// Current GPU resource ID for the active scanout.
     current_res_id: u32,
+    first_commit_logged: bool,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -350,7 +351,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 addr_hint: 0,
                 len: size,
                 prot: abi::vm::VmProt::READ | abi::vm::VmProt::USER,
-                flags: abi::vm::VmMapFlags::PRIVATE,
+                flags: abi::vm::VmMapFlags::SHARED,
                 backing: abi::vm::VmBacking::File { thing: bh.handle, offset: bh.offset },
             };
             match stem::syscall::vm_map(&req) {
@@ -368,7 +369,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                             stride: bh.stride,
                         },
                     );
-                    ProviderResponse::ok_device_call(id.0, &[])
+                    ProviderResponse::ok_device_call(id.0, &id.0.to_le_bytes())
                 }
                 Err(e) => {
                     stem::error!("DISP: Failed to vm_map imported buffer: {:?}", e);
@@ -431,6 +432,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 let mut damage: Option<Rect> = None;
 
                 // Blit each plane's imported buffer into the DMA frame pool buffer.
+                let mut first_copy_sample: Option<(u32, u32, u32, u32, u32)> = None;
                 for plane in &planes {
                     let src = match driver.imported_buffers.get(&plane.buffer_id) {
                         Some(s) => s,
@@ -475,6 +477,21 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         }
                     }
 
+                    if first_copy_sample.is_none() {
+                        let src_off =
+                            src_y.saturating_mul(src.stride as usize) + src_x.saturating_mul(bpp);
+                        let dst_off = dst_y.saturating_mul(driver.disp_stride as usize)
+                            + dst_x.saturating_mul(bpp);
+                        let src_px = unsafe {
+                            core::ptr::read_unaligned(src.ptr.add(src_off) as *const u32)
+                        };
+                        let dst_px = unsafe {
+                            core::ptr::read_unaligned(target_ptr.add(dst_off) as *const u32)
+                        };
+                        first_copy_sample =
+                            Some((plane.buffer_id.0, src_px, dst_px, copy_w as u32, copy_h as u32));
+                    }
+
                     let rect = Rect {
                         x: dst_x as u32,
                         y: dst_y as u32,
@@ -490,21 +507,51 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 // Transfer blitted pixels to the GPU and flush to the display.
                 if let Some(dmg) = damage {
                     let res_id = driver.frame_pool[idx].res_id;
+                    let mut command_ok = true;
                     if let Err(e) = driver.gpu.transfer_to_host(res_id, dmg) {
                         stem::error!("DISP: transfer_to_host failed: {}", e);
+                        command_ok = false;
                     }
                     if let Err(e) = driver.gpu.flush_resource(res_id, dmg) {
                         stem::error!("DISP: flush_resource failed: {}", e);
+                        command_ok = false;
                     }
                     if let Err(e) =
                         driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height)
                     {
                         stem::error!("DISP: set_scanout failed: {}", e);
+                        command_ok = false;
+                    }
+                    if !command_ok {
+                        return ProviderResponse::err(Errno::EIO);
                     }
                     driver.present_seq += 1;
                     driver.frame_pool[idx].last_present_seq = driver.present_seq;
                     driver.last_presented_idx = Some(idx);
                     driver.current_res_id = res_id;
+                    if !driver.first_commit_logged {
+                        if let Some((buffer_id, src_px, dst_px, copy_w, copy_h)) = first_copy_sample
+                        {
+                            stem::info!(
+                                "display_virtio_gpu: first commit copied buffer={} rect={}x{} src_px=0x{:08x} dst_px=0x{:08x} damage={}x{}+{},{} res_id={}",
+                                buffer_id,
+                                copy_w,
+                                copy_h,
+                                src_px,
+                                dst_px,
+                                dmg.w,
+                                dmg.h,
+                                dmg.x,
+                                dmg.y,
+                                res_id
+                            );
+                        } else {
+                            stem::warn!(
+                                "display_virtio_gpu: first commit had damage but no copied sample"
+                            );
+                        }
+                        driver.first_commit_logged = true;
+                    }
                     stem::debug!("DISP: COMMIT complete (seq={})", driver.present_seq);
                     driver.current_fd = Some(driver.frame_pool[idx].fd);
                 }
@@ -998,6 +1045,7 @@ fn main(boot_arg: usize) -> ! {
         next_import_id: 1,
         current_fd: None,
         current_res_id: 1,
+        first_commit_logged: false,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every

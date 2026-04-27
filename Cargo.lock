@@ -642,7 +642,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "blossom",
- "pistil",
+ "libdl",
  "pistil-types",
  "spin",
  "stem",

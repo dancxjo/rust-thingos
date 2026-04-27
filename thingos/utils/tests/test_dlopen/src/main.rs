@@ -14,9 +14,8 @@
 //! - After a successful `dlopen` + `dlclose` round-trip the handle is freed
 //!   (confirmed by `dlclose` returning -1 on a second call).
 //!
-//! Full end-to-end tests (loading an actual `.so` file, calling a symbol)
-//! require a populated `/lib` directory at runtime and are exercised by the
-//! BDD suite.
+//! Full end-to-end tests that load and call `libpistil.so` require a populated
+//! `/lib` directory at runtime and are exercised by the BDD suite.
 #![no_std]
 #![no_main]
 use alloc::string::ToString;
@@ -194,6 +193,12 @@ fn test_dlopen_pistil_shared_library() {
         !prepare_sym.is_null(),
         "expected exported symbol pistil_prepare_background in libpistil.so"
     );
+    let prepare_fn: extern "C" fn(*const u8, *mut u32, u32, u32, u32) -> i32 =
+        unsafe { core::mem::transmute(prepare_sym) };
+    let mut pixels = [0u32; 16];
+    let rc = prepare_fn(b"/share/wallpapers/flower.bmp\0".as_ptr(), pixels.as_mut_ptr(), 4, 4, 4);
+    assert_eq!(rc, 0, "pistil_prepare_background call through libpistil.so failed");
+    assert!(pixels.iter().any(|&p| p != 0), "pistil_prepare_background did not write any pixels");
 
     let rc = dlclose(handle);
     assert_eq!(rc, 0, "dlclose should succeed for valid pistil handle");

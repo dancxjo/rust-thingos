@@ -137,7 +137,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             let buffer_handle: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
             match driver.import_buffer(&buffer_handle) {
-                Ok(id) => ProviderResponse::ok_device_call(id.0, &[]),
+                Ok(id) => ProviderResponse::ok_device_call(id.0, &id.0.to_le_bytes()),
                 Err(e) => ProviderResponse::err(e),
             }
         }

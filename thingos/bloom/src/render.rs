@@ -1,8 +1,11 @@
 use abi::pixel::PixelFormat;
-use pistil::compositor::pistil_prepare_background;
+use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use pistil_types::Texture;
 
 use crate::display::DisplayBackend;
+
+const PISTIL_PATH: &str = "/lib/libpistil.so";
+const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -18,6 +21,7 @@ pub struct CompositorVisuals {
 }
 
 struct PistilLib {
+    _handle: *mut core::ffi::c_void,
     prepare_bg: PrepareBackgroundFn,
 }
 
@@ -28,8 +32,7 @@ struct ServerBuffer {
 
 impl CompositorVisuals {
     pub fn new() -> Self {
-        stem::info!("bloom: pistil background renderer ready");
-        let pistil = Some(PistilLib { prepare_bg: pistil_prepare_background });
+        let pistil = load_pistil();
 
         Self { background: None, pistil }
     }
@@ -135,6 +138,44 @@ impl CompositorVisuals {
 
     pub fn fallback_buffer_id(&self) -> Option<u32> {
         self.background.as_ref().map(|b| b.buffer_id)
+    }
+}
+
+fn load_pistil() -> Option<PistilLib> {
+    let handle = dlopen_str(PISTIL_PATH, RTLD_NOW);
+    if handle.is_null() {
+        log_dlerror("bloom: failed to load /lib/libpistil.so");
+        return None;
+    }
+
+    let sym = dlsym_bytes(handle, PREPARE_BACKGROUND_SYMBOL);
+    if sym.is_null() {
+        log_dlerror("bloom: failed to resolve pistil_prepare_background");
+        return None;
+    }
+
+    let prepare_bg: PrepareBackgroundFn = unsafe { core::mem::transmute(sym) };
+    stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
+    Some(PistilLib { _handle: handle, prepare_bg })
+}
+
+fn log_dlerror(prefix: &str) {
+    let err = dlerror();
+    if err.is_null() {
+        stem::warn!("{}", prefix);
+        return;
+    }
+
+    let mut len = 0usize;
+    unsafe {
+        while *err.add(len) != 0 && len < 256 {
+            len += 1;
+        }
+        let bytes = core::slice::from_raw_parts(err, len);
+        match core::str::from_utf8(bytes) {
+            Ok(msg) => stem::warn!("{}: {}", prefix, msg),
+            Err(_) => stem::warn!("{}", prefix),
+        }
     }
 }
 

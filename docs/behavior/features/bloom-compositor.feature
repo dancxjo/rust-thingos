@@ -12,7 +12,7 @@ Feature: Bloom compositor service loop and responsiveness
 
   Scenario: bloom links the pistil wallpaper renderer
     Given the machine is booted
-    Then the serial output should contain "bloom: pistil background renderer ready" within 60s
+    Then the serial output should contain "bloom: pistil background renderer loaded from /lib/libpistil.so" within 60s
 
   Scenario: bloom compositor remains observable after startup
     Given the machine is booted

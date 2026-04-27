@@ -570,7 +570,7 @@ impl VirtioGpu {
                     u32::from_le_bytes(type_bytes)
                 };
 
-                if resp_type >= VIRTIO_GPU_RESP_OK_NODATA {
+                if is_ok_response(resp_type) {
                     return Ok(());
                 } else {
                     stem::error!(
@@ -811,7 +811,7 @@ impl VirtioGpu {
                     u32::from_le_bytes(type_bytes)
                 };
 
-                if resp_type >= VIRTIO_GPU_RESP_OK_NODATA {
+                if is_ok_response(resp_type) {
                     return Ok(());
                 } else {
                     stem::error!(
@@ -855,4 +855,8 @@ fn read_sys_u32(path: &str) -> Option<u32> {
     } else {
         trimmed.parse::<u32>().ok()
     }
+}
+
+fn is_ok_response(resp_type: u32) -> bool {
+    matches!(resp_type, VIRTIO_GPU_RESP_OK_NODATA | VIRTIO_GPU_RESP_OK_DISPLAY_INFO)
 }
