@@ -545,7 +545,7 @@ impl ThingOsWorld {
                         needle,
                         log.len()
                     );
-                    let tail = if log.len() > 200 { &log[log.len() - 200..] } else { &log[..] };
+                    let tail = if log.len() > DEBUG_TAIL_LENGTH { &log[log.len() - DEBUG_TAIL_LENGTH..] } else { &log[..] };
                     eprintln!("│  │  │      debug: tail: {:?}", tail);
                     last_print = std::time::Instant::now();
                 }
@@ -591,7 +591,7 @@ impl ThingOsWorld {
                         pattern,
                         log.len()
                     );
-                    let tail = if clean.len() > 200 { &clean[clean.len() - 200..] } else { &clean[..] };
+                    let tail = if clean.len() > DEBUG_TAIL_LENGTH { &clean[clean.len() - DEBUG_TAIL_LENGTH..] } else { &clean[..] };
                     eprintln!("│  │  │      debug: tail: {:?}", tail);
                     last_print = std::time::Instant::now();
                 }
@@ -655,6 +655,9 @@ impl ThingOsWorld {
 pub fn diag_enabled() -> bool {
     std::env::var("THINGOS_DIAG").is_ok()
 }
+
+/// Maximum number of characters to show in debug tail output when polling.
+const DEBUG_TAIL_LENGTH: usize = 200;
 
 /// Required boot signals that must ALL appear (order irrelevant).
 /// Each entry is a list of substrings that must all be present.

@@ -31,7 +31,7 @@ async fn log_matches_pattern(world: &mut ThingOsWorld, pattern: String) -> Resul
 }
 
 #[then(regex = r#"^the log should not match pattern "(.+)"$"#)]
-async fn log_not_match_pattern(
+async fn log_does_not_match_pattern(
     world: &mut ThingOsWorld,
     pattern: String,
 ) -> Result<(), StepError> {
