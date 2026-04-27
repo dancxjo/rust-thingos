@@ -1,13 +1,70 @@
 use cucumber::then;
 
-use crate::world::{ThingOsWorld, strip_ansi};
-
 use super::helpers::{
     StepError, capture_failure_diagnostics, check_window_bg_color, color_close,
     default_timeout_secs, verify_clock_center_pixels,
 };
+use crate::world::{ThingOsWorld, strip_ansi};
 
 // ===== Creative Workflow Steps =====
+
+fn command_output_lines(world: &ThingOsWorld, clean_log: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut echo_cursor = 0usize;
+    let typed_command =
+        world.last_typed_command.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    for line in clean_log.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.contains('>') {
+            continue;
+        }
+
+        let output = strip_embedded_log_suffix(trimmed);
+        if output.is_empty() || is_serial_log_line(&output) {
+            continue;
+        }
+
+        if let Some(command) = typed_command {
+            if let Some(next_cursor) = consume_echo_fragment(command, echo_cursor, &output) {
+                echo_cursor = next_cursor;
+                continue;
+            }
+        }
+
+        lines.push(output);
+    }
+
+    lines
+}
+
+fn is_serial_log_line(line: &str) -> bool {
+    line.starts_with('[')
+        || line.contains("[INFO ]")
+        || line.contains("[WARN ]")
+        || line.contains("[ERROR]")
+        || line.contains("[DEBUG]")
+        || line.contains("[TRACE]")
+        || line.contains("boot_progress:")
+        || line.contains("SPROUT:")
+}
+
+fn strip_embedded_log_suffix(line: &str) -> String {
+    for marker in ["[INFO ", "[WARN ", "[ERROR", "[DEBUG", "[TRACE"] {
+        if let Some(marker_pos) = line.find(marker) {
+            let prefix_end = line[..marker_pos].rfind('[').unwrap_or(marker_pos);
+            return line[..prefix_end].trim().to_string();
+        }
+    }
+    line.to_string()
+}
+
+fn consume_echo_fragment(command: &str, cursor: usize, fragment: &str) -> Option<usize> {
+    let rest = command.get(cursor..)?;
+    let leading_ws = rest.len() - rest.trim_start().len();
+    let rest = &rest[leading_ws..];
+    rest.starts_with(fragment).then_some(cursor + leading_ws + fragment.len())
+}
 
 #[then(regex = r#"^I should see the "Photosynthesis" application window$"#)]
 async fn see_photosynthesis_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
@@ -229,7 +286,10 @@ async fn see_network_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
     }
 }
 #[then(regex = r#"^the command output should contain "(.+)"$"#)]
-async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+async fn command_output_contains(
+    world: &mut ThingOsWorld,
+    expected: String,
+) -> Result<(), StepError> {
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world));
 
@@ -242,44 +302,10 @@ async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> 
         let start = world.serial_checkpoint.min(log.len());
         let recent = &log[start..];
         let clean_log = strip_ansi(recent);
-        let mut found = false;
-
-        for line in clean_log.lines() {
-            let trimmed = line.trim();
-            let is_log = trimmed.starts_with('[') 
-                || trimmed.contains("[INFO ]") 
-                || trimmed.contains("[WARN ]") 
-                || trimmed.contains("[ERROR]") 
-                || trimmed.contains("[DEBUG]") 
-                || trimmed.contains("[TRACE]")
-                || trimmed.contains("boot_progress:")
-                || trimmed.contains("SPROUT:");
-
-            if !is_log && !trimmed.contains(">") && trimmed.contains(&expected) {
-                found = true;
-                break;
-            }
-        }
+        let cmd_output = command_output_lines(world, &clean_log);
+        let found = cmd_output.iter().any(|line| line.contains(&expected));
 
         if found {
-            // Collect filtered command output lines so the step log reflects the
-            // data that satisfied the assertion (not just the raw serial delta).
-            let cmd_output: Vec<&str> = clean_log
-                .lines()
-                .filter(|l| {
-                    let t = l.trim();
-                    !t.starts_with('[')
-                        && !t.contains("[INFO ]")
-                        && !t.contains("[WARN ]")
-                        && !t.contains("[ERROR]")
-                        && !t.contains("[DEBUG]")
-                        && !t.contains("[TRACE]")
-                        && !t.contains("boot_progress:")
-                        && !t.contains("SPROUT:")
-                        && !t.contains('>')
-                        && !t.is_empty()
-                })
-                .collect();
             eprintln!("│  │  │      ✅ Command output contains '{}':", expected);
             for l in &cmd_output {
                 eprintln!("│  │  │         {}", l);
@@ -292,63 +318,34 @@ async fn command_output_contains(world: &mut ThingOsWorld, expected: String) -> 
             return Ok(());
         }
 
-        
         if start_time.elapsed() > timeout {
             capture_failure_diagnostics(world, &expected).await;
-            return Err(StepError(format!("Command output did not contain '{}' within timeout", expected)));
+            return Err(StepError(format!(
+                "Command output did not contain '{}' within timeout",
+                expected
+            )));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
 
 #[then(regex = r#"^the latest command output should contain "(.+)"$"#)]
-async fn latest_command_output_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+async fn latest_command_output_contains(
+    world: &mut ThingOsWorld,
+    expected: String,
+) -> Result<(), StepError> {
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world));
-    
+
     loop {
         let log = world.get_serial_log().await;
         let start = world.serial_checkpoint.min(log.len());
         let recent = &log[start..];
         let clean_log = strip_ansi(recent);
-        let mut found = false;
-        
-        for line in clean_log.lines() {
-            let trimmed = line.trim();
-            let is_log = trimmed.starts_with('[') 
-                || trimmed.contains("[INFO ]") 
-                || trimmed.contains("[WARN ]") 
-                || trimmed.contains("[ERROR]") 
-                || trimmed.contains("[DEBUG]") 
-                || trimmed.contains("[TRACE]")
-                || trimmed.contains("boot_progress:")
-                || trimmed.contains("SPROUT:");
+        let cmd_output = command_output_lines(world, &clean_log);
+        let found = cmd_output.iter().any(|line| line.contains(&expected));
 
-            if !is_log && !trimmed.contains(">") && trimmed.contains(&expected) {
-                found = true;
-                break;
-            }
-        }
-        
         if found {
-            // Collect filtered command output lines so the step log reflects the
-            // data that satisfied the assertion (not just the raw serial delta).
-            let cmd_output: Vec<&str> = clean_log
-                .lines()
-                .filter(|l| {
-                    let t = l.trim();
-                    !t.starts_with('[')
-                        && !t.contains("[INFO ]")
-                        && !t.contains("[WARN ]")
-                        && !t.contains("[ERROR]")
-                        && !t.contains("[DEBUG]")
-                        && !t.contains("[TRACE]")
-                        && !t.contains("boot_progress:")
-                        && !t.contains("SPROUT:")
-                        && !t.contains('>')
-                        && !t.is_empty()
-                })
-                .collect();
             eprintln!("│  │  │      ✅ Latest command output contains '{}':", expected);
             for l in &cmd_output {
                 eprintln!("│  │  │         {}", l);
@@ -360,65 +357,35 @@ async fn latest_command_output_contains(world: &mut ThingOsWorld, expected: Stri
                 .set_step_assertion_buffer("Command Output", &buffer);
             return Ok(());
         }
-        
+
         if start_time.elapsed() > timeout {
             capture_failure_diagnostics(world, &expected).await;
-            return Err(StepError(format!("Latest command output did not contain '{}' within timeout", expected)));
+            return Err(StepError(format!(
+                "Latest command output did not contain '{}' within timeout",
+                expected
+            )));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
 
 #[then(regex = r#"^the command output should strictly be "(.+)"$"#)]
-async fn command_output_strictly_be(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
+async fn command_output_strictly_be(
+    world: &mut ThingOsWorld,
+    expected: String,
+) -> Result<(), StepError> {
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world));
-    
+
     loop {
         let log = world.get_serial_log().await;
         let start = world.serial_checkpoint.min(log.len());
         let recent = &log[start..];
         let clean_log = strip_ansi(recent);
-        let mut found = false;
-        
-        for line in clean_log.lines() {
-            let trimmed = line.trim();
-            // A line is a log line if it starts with '[' or contains '] [INFO ' etc.
-            // Be broad to avoid false positives in command output.
-            let is_log = trimmed.starts_with('[') 
-                || trimmed.contains("[INFO ]") 
-                || trimmed.contains("[WARN ]") 
-                || trimmed.contains("[ERROR]") 
-                || trimmed.contains("[DEBUG]") 
-                || trimmed.contains("[TRACE]")
-                || trimmed.contains("boot_progress:")
-                || trimmed.contains("SPROUT:");
-            
-            if !is_log && !trimmed.contains(">") && !trimmed.is_empty() && trimmed == expected.trim() {
-                found = true;
-                break;
-            }
-        }
-        
+        let cmd_output = command_output_lines(world, &clean_log);
+        let found = cmd_output.iter().any(|line| line.trim() == expected.trim());
+
         if found {
-            // Collect filtered command output lines so the step log reflects the
-            // data that satisfied the assertion (not just the raw serial delta).
-            let cmd_output: Vec<&str> = clean_log
-                .lines()
-                .filter(|l| {
-                    let t = l.trim();
-                    !t.starts_with('[')
-                        && !t.contains("[INFO ]")
-                        && !t.contains("[WARN ]")
-                        && !t.contains("[ERROR]")
-                        && !t.contains("[DEBUG]")
-                        && !t.contains("[TRACE]")
-                        && !t.contains("boot_progress:")
-                        && !t.contains("SPROUT:")
-                        && !t.contains('>')
-                        && !t.is_empty()
-                })
-                .collect();
             eprintln!("│  │  │      ✅ Command output strictly matches '{}':", expected);
             for l in &cmd_output {
                 eprintln!("│  │  │         {}", l);
@@ -430,17 +397,23 @@ async fn command_output_strictly_be(world: &mut ThingOsWorld, expected: String) 
                 .set_step_assertion_buffer("Command Output", &buffer);
             return Ok(());
         }
-        
+
         if start_time.elapsed() > timeout {
             capture_failure_diagnostics(world, &expected).await;
-            return Err(StepError(format!("Command output was not strictly '{}' within timeout", expected)));
+            return Err(StepError(format!(
+                "Command output was not strictly '{}' within timeout",
+                expected
+            )));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
 
 #[then(regex = r#"^the command output should not contain "(.+)"$"#)]
-async fn command_output_not_contains(world: &mut ThingOsWorld, unexpected: String) -> Result<(), StepError> {
+async fn command_output_not_contains(
+    world: &mut ThingOsWorld,
+    unexpected: String,
+) -> Result<(), StepError> {
     // Wait a short time for output to settle
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -448,49 +421,21 @@ async fn command_output_not_contains(world: &mut ThingOsWorld, unexpected: Strin
     let start = world.serial_checkpoint.min(log.len());
     let recent = &log[start..];
     let clean_log = strip_ansi(recent);
+    let cmd_output = command_output_lines(world, &clean_log);
 
-    // The command echo appears in the serial window since the checkpoint is set
-    // before the command bytes are sent.  Normalize the last typed command once
-    // so we can skip lines that are merely the echoed input.
-    let last_cmd_trimmed: Option<String> =
-        world.last_typed_command.as_deref().map(|c| c.trim().to_string());
-
-    for line in clean_log.lines() {
-        let trimmed = line.trim();
-        // Skip kernel/service log lines and prompt lines
-        let is_log = trimmed.starts_with('[') 
-            || trimmed.contains("[INFO ]") 
-            || trimmed.contains("[WARN ]") 
-            || trimmed.contains("[ERROR]") 
-            || trimmed.contains("[DEBUG]") 
-            || trimmed.contains("[TRACE]")
-            || trimmed.contains("boot_progress:")
-            || trimmed.contains("SPROUT:");
-
-        if is_log || trimmed.contains(">") || trimmed.is_empty() {
-            continue;
-        }
-        // Skip the echoed command line itself so that patterns that appear in
-        // the command text (e.g. the pattern fed to grep -v) do not cause a
-        // spurious failure.
-        if last_cmd_trimmed.as_deref() == Some(trimmed) {
-            continue;
-        }
-        if trimmed.contains(&unexpected) {
+    for line in &cmd_output {
+        if line.contains(&unexpected) {
             eprintln!("\n=== Unexpected pattern found in command output ===");
             eprintln!("Pattern: {}", unexpected);
-            eprintln!("Matching line: {}", trimmed);
+            eprintln!("Matching line: {}", line);
             eprintln!("\n=== Recent Command Output ===");
-            for l in clean_log.lines() {
-                let lt = l.trim();
-                if !lt.starts_with('[') && !lt.contains(">") && !lt.is_empty() {
-                    eprintln!(">>> {}", lt);
-                }
+            for l in &cmd_output {
+                eprintln!(">>> {}", l);
             }
             eprintln!("=== End Command Output ===\n");
             return Err(StepError(format!(
                 "Expected command output to not contain '{}', but found it in: {}",
-                unexpected, trimmed
+                unexpected, line
             )));
         }
     }
@@ -498,4 +443,37 @@ async fn command_output_not_contains(world: &mut ThingOsWorld, unexpected: Strin
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn command_output_lines_drop_interleaved_echo_fragments() {
+        let mut world = ThingOsWorld::default();
+        world.last_typed_command = Some("echo -e 'a\\nb\\nc' | grep -v b".to_string());
+
+        let lines = command_output_lines(
+            &world,
+            "e[29794560081] [INFO ] [virtio_gpu] log\n\
+             cho [30003334779] [INFO ] [catalog] log\n\
+             -e [30186732807] [INFO ] [catalog] log\n\
+             'a\\n[30361155825] [INFO ] [catalog] log\n\
+             b\\nc' | grep -v b\n\
+             [31572134088] [INFO ] [grep] args\n\
+             a\n\
+             c\n",
+        );
+
+        assert_eq!(lines, vec!["a".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn command_output_lines_keep_output_that_appears_in_command() {
+        let mut world = ThingOsWorld::default();
+        world.last_typed_command = Some("echo hello".to_string());
+
+        let lines = command_output_lines(&world, "] / > echo hello\nhello\n] / > ");
+
+        assert_eq!(lines, vec!["hello".to_string()]);
+    }
+}

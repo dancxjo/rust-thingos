@@ -450,7 +450,7 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
     // faster than a fixed sleep for short commands and avoids racing the next
     // assertion when the guest is momentarily busy.
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(10);
+    let timeout = std::time::Duration::from_secs(30);
     loop {
         let log = world.get_serial_log().await;
         let start_offset = world.serial_checkpoint.min(log.len());
@@ -459,7 +459,10 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
             break;
         }
         if start.elapsed() >= timeout {
-            break;
+            return Err(StepError(format!(
+                "Timeout waiting for command '{}' to complete (prompt not found)",
+                world.last_typed_command.as_deref().unwrap_or("<unknown>")
+            )));
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }

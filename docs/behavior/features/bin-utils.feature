@@ -18,21 +18,21 @@ Feature: Bin Utils Traditional Functionality
     And I type "printf 'a\nb\nc\n' | cat | wc -l" on the serial console
     Then the command output should strictly be "3"
 
-  Scenario: POSIX behavior - grep -v for inverted match (expected to fail if not implemented)
+  Scenario: POSIX behavior - grep -v for inverted match
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo -e 'a\nb\nc' | grep -v b" on the serial console
-    Then the serial output should contain "a" within 5s
-    And the serial output should contain "c" within 5s
+    Then the command output should contain "a"
+    And the command output should contain "c"
     And the command output should not contain "b"
 
-  Scenario: POSIX behavior - cat -n for line numbers (expected to fail if not implemented)
+  Scenario: POSIX behavior - cat -n for line numbers
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo hello | cat -n" on the serial console
     Then the command output should contain "1  hello"
 
-  Scenario: POSIX behavior - head -n and tail -n (expected to fail if not fully POSIX)
+  Scenario: POSIX behavior - head -n and tail -n
     Given the machine is booted
     When I wait for the shell prompt
     And I type "echo -e '1\n2\n3' | head -n 2 | tail -n 1" on the serial console
