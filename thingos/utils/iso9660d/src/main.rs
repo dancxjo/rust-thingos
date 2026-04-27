@@ -222,9 +222,10 @@ fn try_scan_and_mount() -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
                 let path = format!("/dev/storage/{}", name);
                 let dev = VfsBlockDevice { path: path.clone() };
                 if let Some(fs) = IsoFs::probe(&dev) {
-                    info!("ISO9660D: Found ISO on {}", path);
+                    info!("iso9660d: found ISO9660 on device {}", name);
                     let (w, r) = port_create(65536).ok()?;
                     if vfs_mount(w, DEFAULT_MOUNT_POINT).is_ok() {
+                        info!("iso9660d: mounted at {}", DEFAULT_MOUNT_POINT);
                         return Some((fs, dev, r));
                     }
                 }
