@@ -203,7 +203,6 @@ impl Translator {
         }
 
         // Unknown locales collapse to Esperanto while it is the only option.
-        self.generation.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Cycle to the next locale. No-op while Esperanto is the only locale.
@@ -353,7 +352,7 @@ mod tests {
         translator.set_locale(LocaleId::new("en-US"));
         let gen2 = translator.generation();
 
-        assert!(gen2 > gen1);
+        assert_eq!(gen2, gen1);
     }
 
     #[test]
