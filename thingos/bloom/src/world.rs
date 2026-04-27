@@ -27,6 +27,7 @@ pub struct BloomWorld {
     pub visuals: CompositorVisuals,
     pub display: DisplayBackend,
     pub primary: OutputInfo,
+    cursor_present_logged: bool,
     /// Port write handle to the Wayland server thread's event port, if running.
     pub wayland_evt_write: Option<u32>,
 }
@@ -40,7 +41,16 @@ impl BloomWorld {
         display: DisplayBackend,
         primary: OutputInfo,
     ) -> Self {
-        Self { scene, damage, input, visuals, display, primary, wayland_evt_write: None }
+        Self {
+            scene,
+            damage,
+            input,
+            visuals,
+            display,
+            primary,
+            cursor_present_logged: false,
+            wayland_evt_write: None,
+        }
     }
 
     /// Process one raw Wayland client message.
@@ -240,6 +250,21 @@ impl BloomWorld {
             cursor,
         );
         if result.success {
+            if !self.cursor_present_logged {
+                if let Some(cursor) = cursor {
+                    stem::info!(
+                        "bloom: presented cursor buffer={} at {},{} size={}x{}",
+                        cursor.buffer_id,
+                        cursor.x,
+                        cursor.y,
+                        cursor.width,
+                        cursor.height
+                    );
+                } else {
+                    stem::warn!("bloom: presented without a cursor buffer");
+                }
+                self.cursor_present_logged = true;
+            }
             Some(composition)
         } else {
             self.damage.restore(pending_damage);

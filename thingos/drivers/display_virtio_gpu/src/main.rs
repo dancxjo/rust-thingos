@@ -239,6 +239,7 @@ struct VirtioGpuDriver {
     /// Current GPU resource ID for the active scanout.
     current_res_id: u32,
     first_commit_logged: bool,
+    cursor_commit_logged: bool,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -458,11 +459,16 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
                 // Blit each plane's imported buffer into the DMA frame pool buffer.
                 let mut first_copy_sample: Option<(u32, u32, u32, u32, u32)> = None;
+                let mut saw_cursor_plane = false;
+                let mut cursor_copy_sample: Option<(u32, u32, u32, u32, u32, u32)> = None;
                 for plane in &planes {
                     let src = match driver.imported_buffers.get(&plane.buffer_id) {
                         Some(s) => s,
                         None => continue,
                     };
+                    if plane.z_order == i32::MAX {
+                        saw_cursor_plane = true;
+                    }
 
                     let src_x = plane.src_rect.x.min(src.width) as usize;
                     let src_y = plane.src_rect.y.min(src.height) as usize;
@@ -501,10 +507,25 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                     );
                                     let src_px = core::ptr::read_unaligned(src_ptr as *const u32);
                                     let dst_px = core::ptr::read_unaligned(dst_ptr as *const u32);
+                                    let out_px = alpha_over_argb(src_px, dst_px, plane.alpha);
                                     core::ptr::write_unaligned(
                                         dst_ptr as *mut u32,
-                                        alpha_over_argb(src_px, dst_px, plane.alpha),
+                                        out_px,
                                     );
+                                    if !driver.cursor_commit_logged
+                                        && cursor_copy_sample.is_none()
+                                        && plane.z_order == i32::MAX
+                                        && ((src_px >> 24) & 0xff) != 0
+                                    {
+                                        cursor_copy_sample = Some((
+                                            plane.buffer_id.0,
+                                            src_px,
+                                            dst_px,
+                                            out_px,
+                                            (dst_x + col) as u32,
+                                            (dst_y + row) as u32,
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -601,6 +622,26 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                             );
                         }
                         driver.first_commit_logged = true;
+                    }
+                    if !driver.cursor_commit_logged && saw_cursor_plane {
+                        if let Some((buffer_id, src_px, dst_before, dst_after, x, y)) =
+                            cursor_copy_sample
+                        {
+                            stem::info!(
+                                "display_virtio_gpu: cursor plane blended buffer={} at {},{} src_px=0x{:08x} dst_before=0x{:08x} dst_after=0x{:08x}",
+                                buffer_id,
+                                x,
+                                y,
+                                src_px,
+                                dst_before,
+                                dst_after
+                            );
+                        } else {
+                            stem::warn!(
+                                "display_virtio_gpu: cursor plane had no non-transparent sampled pixels"
+                            );
+                        }
+                        driver.cursor_commit_logged = true;
                     }
                     stem::debug!("DISP: COMMIT complete (seq={})", driver.present_seq);
                     driver.current_fd = Some(driver.frame_pool[idx].fd);
@@ -1096,6 +1137,7 @@ fn main(boot_arg: usize) -> ! {
         current_fd: None,
         current_res_id: 1,
         first_commit_logged: false,
+        cursor_commit_logged: false,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every

@@ -45,6 +45,7 @@ const JOB_EXIT_CODE_PRESENT_OFFSET: usize = 5;
 const JOB_EXIT_CODE_OFFSET: usize = 6;
 const JOB_EXIT_CODE_BYTES: usize = 4;
 const JOB_EXIT_STATE_EXITED: u8 = 2;
+const SPROUT_EARLY_AUDIO_MARKER: &str = "/run/sprout/audio-early";
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -437,6 +438,16 @@ fn reconcile_devices(
                 },
             )
         }) {
+            if entry.driver_class == DriverClass::Audio
+                && path_exists(SPROUT_EARLY_AUDIO_MARKER)
+            {
+                stem::debug!(
+                    "CAMBIUM: skipping audio driver '{}' for {}; Sprout owns early audio",
+                    entry.path,
+                    device.slot
+                );
+                continue;
+            }
             let managed = drivers.entry(device.slot.clone()).or_insert_with(|| {
                 ManagedDriver::new_from_catalog(
                     &device,

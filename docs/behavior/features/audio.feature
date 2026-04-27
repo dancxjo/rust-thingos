@@ -2,17 +2,18 @@ Feature: Audio Subsystem
   The audio subsystem provides early-boot diagnostic chimes, beeper support,
   and full PCM audio via VirtIO Sound.
 
-  Scenario: Early boot chime is emitted
+  Scenario: Early boot audio starts without blocking supervisor bring-up
     Given the machine is started
-    When I wait for the system to initialize audio
-    Then the serial output should contain "AUDIO: Emitting boot chime"
-    And the serial output should contain "CHIME: A-Major chord generated"
+    When I wait for the serial output to contain "SPROUT: Starting early audio stack"
+    Then the serial output should contain "SPROUT: Audio stack worker running"
+    And the serial output should contain "SPROUT: Audio stack launched chime"
+    And the serial log shows "SPROUT: Continuing supervisor startup" after "SPROUT: Starting early audio stack"
 
   Scenario: VirtIO Sound driver initializes successfully
     Given the machine is started
-    When the PCI bus is scanned
-    Then the serial output should contain "VIRTIO_SOUND: Found VirtIO sound device"
-    And the serial output should contain "VIRTIO_SOUND: Mounted at /dev/audio/pcm0"
+    When I wait for the serial output to contain "SPROUT: Early audio device"
+    Then the serial output should contain "SPROUT: Early audio device"
+    And the serial output should contain "chime: Opened /dev/audio/card0/out0"
 
   Scenario: Beeper service is available
     Given the machine is booted

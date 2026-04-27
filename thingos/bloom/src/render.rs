@@ -176,7 +176,10 @@ impl CompositorVisuals {
         let mut texture = match Texture::new("bloom.compositor.cursor", CURSOR_SIZE, CURSOR_SIZE, 4)
         {
             Some(t) => t,
-            None => return,
+            None => {
+                stem::warn!("bloom: failed to allocate cursor texture");
+                return;
+            }
         };
 
         let mut hotspot = [3u32, 2u32];
@@ -209,6 +212,7 @@ impl CompositorVisuals {
             PixelFormat::Bgra8888,
             0,
         ) else {
+            stem::warn!("bloom: failed to import cursor texture");
             return;
         };
 
@@ -224,6 +228,14 @@ impl CompositorVisuals {
             hotspot_x: hotspot[0],
             hotspot_y: hotspot[1],
         });
+        stem::info!(
+            "bloom: cursor ready buffer={} size={}x{} hotspot={},{}",
+            buffer_id,
+            CURSOR_SIZE,
+            CURSOR_SIZE,
+            hotspot[0],
+            hotspot[1]
+        );
     }
 
     pub fn cursor_plane(&self, pointer_x: i32, pointer_y: i32) -> Option<CursorPlane> {

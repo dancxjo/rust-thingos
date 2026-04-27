@@ -590,11 +590,12 @@ fn spawn_ui_service(
     }
 }
 
-/// Maximum time to wait for the audio VFS node to appear after spawning the driver.
+/// Maximum time to keep probing for an early audio device.
 const AUDIO_DEVICE_TIMEOUT_NS: u64 = 5_000_000_000; // 5 seconds
 
-/// Poll interval while waiting for `/dev/audio/card0/out0` to appear.
+/// Poll interval while waiting for an audio device to appear in sysfs.
 const AUDIO_POLL_INTERVAL_MS: u64 = 100;
+const EARLY_AUDIO_MARKER: &str = "/run/sprout/audio-early";
 
 /// Probe for an audio device, spawn the right driver, wait for the VFS node
 /// to appear, then launch the chime to play the start-up chime.
@@ -603,8 +604,84 @@ const AUDIO_POLL_INTERVAL_MS: u64 = 100;
 ///   1. VirtIO sound — PCI class 0x0401xx **and** vendor 0x1af4
 ///   2. Intel HDA    — PCI class 0x0403xx
 pub fn setup_audio_stack(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    let _ = shared_tasks;
-    info!("SPROUT: Audio driver startup is disabled (network-only mode)");
+    info!("SPROUT: Starting early audio stack");
+    if let Err(e) = stem::thread::spawn_task_detached(move || {
+        setup_audio_stack_worker(shared_tasks);
+    }) {
+        warn!("SPROUT: Failed to start early audio worker: {:?}", e);
+    }
+}
+
+fn setup_audio_stack_worker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    info!("SPROUT: Audio stack worker running");
+    let _ = stem::syscall::vfs::vfs_mkdir("/dev/audio");
+
+    let start_ns = stem::time::monotonic_ns();
+    let (name, driver_path, service, device_path) = loop {
+        if let Some(path) = find_sys_device_with_vendor("0x0401", "0x1af4") {
+            break ("virtio_sound", "/drivers/virtio_sound", "dev.sound.Virtio", path);
+        }
+        if let Some(path) = find_sys_device("0x0403") {
+            break ("hdaudio", "/drivers/hdaudio", "dev.sound.Hda", path);
+        }
+
+        if stem::time::monotonic_ns().saturating_sub(start_ns) >= AUDIO_DEVICE_TIMEOUT_NS {
+            info!("SPROUT: No early audio device found; skipping startup chime");
+            return;
+        }
+        stem::sleep_ms(AUDIO_POLL_INTERVAL_MS);
+    };
+
+    if !file_exists(driver_path) {
+        warn!("SPROUT: Early audio driver '{}' is missing; skipping chime", driver_path);
+        return;
+    }
+
+    info!(
+        "SPROUT: Early audio device '{}' matched {}; spawning {}",
+        device_path, service, driver_path
+    );
+
+    let driver_pid = match stem::syscall::spawn_process(driver_path, 0) {
+        Ok(pid) => pid,
+        Err(e) => {
+            warn!("SPROUT: Failed to spawn early audio driver '{}': {:?}", driver_path, e);
+            return;
+        }
+    };
+
+    let _ = stem::thread::set_priority(driver_pid, 3);
+    {
+        let mut tasks = shared_tasks.lock();
+        tasks.push(ManagedTask {
+            name: name.to_string(),
+            kind: TaskKind::Driver(service.to_string()),
+            module_path: driver_path.to_string(),
+            pid: Some(driver_pid),
+            ..Default::default()
+        });
+    }
+
+    let _ = stem::syscall::vfs::vfs_mkdir("/run");
+    let _ = stem::syscall::vfs::vfs_mkdir("/run/sprout");
+    let _ = stem::syscall::vfs::vfs_mkdir(EARLY_AUDIO_MARKER);
+
+    if !file_exists("/drivers/chime") {
+        warn!("SPROUT: Early audio driver started, but /drivers/chime is missing");
+        return;
+    }
+
+    match stem::syscall::spawn_process("/drivers/chime", 0) {
+        Ok(pid) => {
+            info!("SPROUT: Audio stack launched chime (PID={})", pid);
+            let _ = stem::thread::set_priority(pid, 2);
+            let _ = stem::syscall::waitpid(pid as i64, 0);
+            info!("SPROUT: Startup chime task completed");
+        }
+        Err(e) => {
+            warn!("SPROUT: Failed to spawn startup chime: {:?}", e);
+        }
+    }
 }
 
 pub fn setup_graphics_stack(

@@ -24,7 +24,8 @@ use stem::{debug, info, trace, warn};
 
 use crate::ledger::DeviceLedger;
 use crate::pipelines::{
-    mount_hosts_cache, setup_display_pipeline, setup_input_broker, setup_serial_shell,
+    mount_hosts_cache, setup_audio_stack, setup_display_pipeline, setup_input_broker,
+    setup_serial_shell,
 };
 use crate::task::{ManagedTask, TaskKind};
 
@@ -65,6 +66,8 @@ pub struct Supervisor {
     bristle_spawned: bool,
     /// Whether bloom has been spawned (guarded so we only launch once).
     bloom_spawned: bool,
+    /// Whether early audio/chime bring-up has been started.
+    audio_spawned: bool,
     /// Whether `/dev/display/card0` has been mounted by the display driver.
     display_card_ready: bool,
     /// Whether the display driver has been spawned.
@@ -96,6 +99,7 @@ impl Supervisor {
             netd_last_probe_ns: 0,
             bristle_spawned: false,
             bloom_spawned: false,
+            audio_spawned: false,
             display_card_ready: false,
             display_spawned: false,
             supervisor_port_read: if read != 0 { Some(read) } else { None },
@@ -444,6 +448,8 @@ impl Supervisor {
         self.spawn_bristle_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
         self.spawn_bloom_if_ready();
+        stem::trace!("SPROUT: Loop iteration: spawn_audio_if_ready");
+        self.spawn_audio_if_ready();
         stem::trace!("SPROUT: Loop iteration: run_health_vine");
         run_health_vine(&self.tasks);
         /*
@@ -679,6 +685,14 @@ impl Supervisor {
             }
         }
         self.bloom_spawned = true;
+    }
+
+    fn spawn_audio_if_ready(&mut self) {
+        if self.audio_spawned || !self.bloom_spawned {
+            return;
+        }
+        setup_audio_stack(self.tasks.clone());
+        self.audio_spawned = true;
     }
 }
 

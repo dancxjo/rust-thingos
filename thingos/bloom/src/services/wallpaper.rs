@@ -121,6 +121,7 @@ impl WallpaperService {
         let wallpaper_path = wallpaper_target_or_default(self.config_path);
         stem::info!("bloom: reacting to wallpaper change: {}", wallpaper_path);
         world.visuals.start_background_load(&world.display, &wallpaper_path);
+        world.damage.mark_full(world.primary.width, world.primary.height);
     }
 
     fn load_initial_background(&mut self, world: &mut BloomWorld) {
@@ -132,6 +133,7 @@ impl WallpaperService {
         let wallpaper_path = wallpaper_target_or_default(self.config_path);
         stem::info!("bloom: preparing background {}", wallpaper_path);
         world.visuals.start_background_load(&world.display, &wallpaper_path);
+        world.damage.mark_full(world.primary.width, world.primary.height);
     }
 
     fn poll_config(&mut self, world: &mut BloomWorld) {
@@ -165,7 +167,7 @@ impl BloomService for WallpaperService {
                     let _ = vfs_read(fd, &mut drain);
                 }
                 self.reload_background(world);
-                Self::arm_poll_timer()
+                LoopAction::RequestRepaint
             }
             LoopEvent::Timer(WALLPAPER_POLL_TIMER) => {
                 self.poll_config(world);

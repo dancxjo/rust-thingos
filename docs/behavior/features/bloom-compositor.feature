@@ -88,6 +88,12 @@ Feature: Bloom compositor service loop and responsiveness
     And the serial output should not contain "Freed node"
     And the bloom first frame should contain visible pixels
 
+  Scenario: bloom first frame includes the cached cursor plane
+    Given the machine is booted
+    Then the serial output should contain "bloom: cursor ready" within 60s
+    And the serial output should contain "First frame rendered" within 60s
+    And the bloom cursor should be visible
+
   Scenario: failed wallpaper decode leaves previous wallpaper active
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
