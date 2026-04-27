@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
 use alloc::string::String;
@@ -36,13 +34,13 @@ fn print(msg: &str) {
 
 fn copy_file(src: &str, dst: &str) -> Result<(), ()> {
     let in_fd = vfs_open(src, vfs_flags::O_RDONLY).map_err(|_| {
-        print(&alloc::format!("cp: cannot open '{}'\n", src));
+        print(&stem::tf!("cp.error.open", "cp: ne povas malfermi '{}'\n", src));
     })?;
 
     let out_fd = vfs_open(dst, vfs_flags::O_WRONLY | vfs_flags::O_CREAT | vfs_flags::O_TRUNC)
         .map_err(|_| {
             let _ = vfs_close(in_fd);
-            print(&alloc::format!("cp: cannot create '{}'\n", dst));
+            print(&stem::tf!("cp.error.create", "cp: ne povas krei '{}'\n", dst));
         })?;
 
     let mut buf = alloc::vec![0u8; 32768];
@@ -54,19 +52,19 @@ fn copy_file(src: &str, dst: &str) -> Result<(), ()> {
                 while written < n {
                     match vfs_write(out_fd, &buf[written..n]) {
                         Ok(0) => {
-                            print(&alloc::format!("cp: write error on '{}'\n", dst));
+                            print(&stem::tf!("cp.error.write", "cp: skriberaro ĉe '{}'\n", dst));
                             break 'copy Err(());
                         }
                         Ok(nw) => written += nw,
                         Err(_) => {
-                            print(&alloc::format!("cp: write error on '{}'\n", dst));
+                            print(&stem::tf!("cp.error.write", "cp: skriberaro ĉe '{}'\n", dst));
                             break 'copy Err(());
                         }
                     }
                 }
             }
             Err(_) => {
-                print(&alloc::format!("cp: read error on '{}'\n", src));
+                print(&stem::tf!("cp.error.read", "cp: legeraro ĉe '{}'\n", src));
                 break Err(());
             }
         }
@@ -81,7 +79,7 @@ fn copy_file(src: &str, dst: &str) -> Result<(), ()> {
 fn main(_arg: usize) -> ! {
     let args = get_args();
     if args.len() < 2 {
-        print("usage: cp <src> <dst>\n");
+        print(stem::tr!("cp.usage", "uzo: cp <fonto> <celo>\n"));
         exit(1)
     }
     let src = &args[0];

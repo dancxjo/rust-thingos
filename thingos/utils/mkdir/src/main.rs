@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
 use alloc::string::String;
@@ -37,13 +35,18 @@ fn print(msg: &str) {
 fn main(_arg: usize) -> ! {
     let args = get_args();
     if args.is_empty() {
-        print("usage: mkdir <path>...\n");
+        print(stem::tr!("mkdir.usage", "uzo: mkdir <vojo>...\n"));
         exit(1)
     }
     let mut had_error = false;
     for path in &args {
         if let Err(e) = vfs_mkdir(path) {
-            print(&alloc::format!("mkdir: cannot create directory '{}': {:?}\n", path, e));
+            print(&stem::tf!(
+                "mkdir.error.create",
+                "mkdir: ne povas krei dosierujon '{}': {:?}\n",
+                path,
+                e,
+            ));
             had_error = true;
         }
     }

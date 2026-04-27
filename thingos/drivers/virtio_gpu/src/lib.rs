@@ -133,18 +133,21 @@ impl VirtioGpu {
     /// Initialize the virtio device
     pub fn init_virtio(&mut self) -> Result<(), &'static str> {
         // 1. Reset device
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, 0);
+        self.write_common_u8(virtio::VIRTIO_COMMON_STATUS, 0);
 
         // 2. Set ACKNOWLEDGE status
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, virtio::VIRTIO_STATUS_ACKNOWLEDGE);
+        self.write_common_u8(virtio::VIRTIO_COMMON_STATUS, virtio::VIRTIO_STATUS_ACKNOWLEDGE as u8);
 
         // 3. Set DRIVER status
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_DRIVER);
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        self.write_common_u8(
+            virtio::VIRTIO_COMMON_STATUS,
+            status | virtio::VIRTIO_STATUS_DRIVER as u8,
+        );
 
         // 4. Read device features (feature bank 0 for GPU-specific features)
-        self.write_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE_SELECT, 0);
-        let device_features = self.read_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE);
+        self.write_common_u32(virtio::VIRTIO_COMMON_DEVICE_FEATURE_SELECT, 0);
+        let device_features = self.read_common_u32(virtio::VIRTIO_COMMON_DEVICE_FEATURE);
 
         // Check for virgl 3D support
         self.virgl_supported = (device_features & (1 << virtio::VIRTIO_GPU_F_VIRGL)) != 0;
@@ -155,28 +158,31 @@ impl VirtioGpu {
         );
 
         // 5. Write driver features - request virgl if available
-        self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE_SELECT, 0);
+        self.write_common_u32(virtio::VIRTIO_COMMON_DRIVER_FEATURE_SELECT, 0);
         let driver_features =
             if self.virgl_supported { 1 << virtio::VIRTIO_GPU_F_VIRGL } else { 0 };
-        self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE, driver_features);
+        self.write_common_u32(virtio::VIRTIO_COMMON_DRIVER_FEATURE, driver_features);
 
         // This driver uses the modern PCI common configuration layout, so it
         // must acknowledge VIRTIO_F_VERSION_1 from feature bank 1 when present.
-        self.write_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE_SELECT, 1);
-        let common_features = self.read_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE);
-        self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE_SELECT, 1);
-        self.write_common(
+        self.write_common_u32(virtio::VIRTIO_COMMON_DEVICE_FEATURE_SELECT, 1);
+        let common_features = self.read_common_u32(virtio::VIRTIO_COMMON_DEVICE_FEATURE);
+        self.write_common_u32(virtio::VIRTIO_COMMON_DRIVER_FEATURE_SELECT, 1);
+        self.write_common_u32(
             virtio::VIRTIO_COMMON_DRIVER_FEATURE,
             common_features & ((virtio::VIRTIO_F_VERSION_1 >> 32) as u32),
         );
 
         // 6. Set FEATURES_OK
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_FEATURES_OK);
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        self.write_common_u8(
+            virtio::VIRTIO_COMMON_STATUS,
+            status | virtio::VIRTIO_STATUS_FEATURES_OK as u8,
+        );
 
         // 7. Verify FEATURES_OK
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        if (status & virtio::VIRTIO_STATUS_FEATURES_OK) == 0 {
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        if (status & virtio::VIRTIO_STATUS_FEATURES_OK as u8) == 0 {
             return Err("Features not accepted");
         }
 
@@ -184,8 +190,11 @@ impl VirtioGpu {
         self.setup_controlq()?;
 
         // 9. Set DRIVER_OK
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_DRIVER_OK);
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        self.write_common_u8(
+            virtio::VIRTIO_COMMON_STATUS,
+            status | virtio::VIRTIO_STATUS_DRIVER_OK as u8,
+        );
 
         Ok(())
     }
@@ -736,44 +745,63 @@ impl VirtioGpu {
         let vq = Virtqueue::new(vq_virt, vq_phys, 128);
 
         // Configure the queue in device
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_SELECT, 0);
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_SIZE, 128);
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_SELECT, 0);
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_SIZE, 128);
 
         // Write queue addresses
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_LO, (vq_phys & 0xFFFFFFFF) as u32);
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_HI, (vq_phys >> 32) as u32);
+        self.write_common_u32(virtio::VIRTIO_COMMON_QUEUE_DESC_LO, (vq_phys & 0xFFFFFFFF) as u32);
+        self.write_common_u32(virtio::VIRTIO_COMMON_QUEUE_DESC_HI, (vq_phys >> 32) as u32);
 
         let avail_offset = 128 * 16;
         let avail_phys = vq_phys + avail_offset as u64;
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO, (avail_phys & 0xFFFFFFFF) as u32);
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
+        self.write_common_u32(
+            virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO,
+            (avail_phys & 0xFFFFFFFF) as u32,
+        );
+        self.write_common_u32(virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
 
         let used_unaligned = avail_offset + 6 + 128 * 2;
         let used_offset = (used_unaligned + 3) & !3;
         let used_phys = vq_phys + used_offset as u64;
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_LO, (used_phys & 0xFFFFFFFF) as u32);
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_HI, (used_phys >> 32) as u32);
+        self.write_common_u32(virtio::VIRTIO_COMMON_QUEUE_USED_LO, (used_phys & 0xFFFFFFFF) as u32);
+        self.write_common_u32(virtio::VIRTIO_COMMON_QUEUE_USED_HI, (used_phys >> 32) as u32);
 
         // Enable the queue
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_ENABLE, 1);
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_ENABLE, 1);
 
         self.controlq = Some(vq);
         Ok(())
     }
 
-    fn read_common(&self, offset: u32) -> u32 {
+    fn read_common_u8(&self, offset: u32) -> u8 {
+        unsafe { read_volatile((self.common_cfg + offset as u64) as *const u8) }
+    }
+
+    fn write_common_u8(&self, offset: u32, value: u8) {
+        unsafe { write_volatile((self.common_cfg + offset as u64) as *mut u8, value) }
+    }
+
+    fn read_common_u16(&self, offset: u32) -> u16 {
+        unsafe { read_volatile((self.common_cfg + offset as u64) as *const u16) }
+    }
+
+    fn write_common_u16(&self, offset: u32, value: u16) {
+        unsafe { write_volatile((self.common_cfg + offset as u64) as *mut u16, value) }
+    }
+
+    fn read_common_u32(&self, offset: u32) -> u32 {
         unsafe { read_volatile((self.common_cfg + offset as u64) as *const u32) }
     }
 
-    fn write_common(&self, offset: u32, value: u32) {
+    fn write_common_u32(&self, offset: u32, value: u32) {
         unsafe { write_volatile((self.common_cfg + offset as u64) as *mut u32, value) }
     }
 
     fn notify_queue(&self, queue_idx: u16) {
         // Modern VirtIO uses the selected queue's notify offset, not the queue
         // index itself, to locate the notify register within the notify BAR.
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_SELECT, queue_idx as u32);
-        let queue_notify_off = self.read_common(virtio::VIRTIO_COMMON_QUEUE_NOTIFY_OFF) as u64;
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_SELECT, queue_idx);
+        let queue_notify_off = self.read_common_u16(virtio::VIRTIO_COMMON_QUEUE_NOTIFY_OFF) as u64;
         let notify_addr = self.notify_cfg + queue_notify_off * self.notify_off_multiplier as u64;
         unsafe { write_volatile(notify_addr as *mut u16, queue_idx) }
     }

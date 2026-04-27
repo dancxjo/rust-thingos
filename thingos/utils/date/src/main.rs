@@ -2,12 +2,11 @@
 #![no_main]
 extern crate alloc;
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 
 use stem::syscall::{argv_get, exit, vfs_close, vfs_open, vfs_read, vfs_write};
-use stem::utils::parse_argv;
 
 #[derive(Debug, Clone, Copy)]
 struct DateTime {
@@ -20,13 +19,40 @@ struct DateTime {
     weekday: u8, // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
 }
 
-const MONTH_NAMES: [&str; 12] =
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_NAMES: [stem::i18n::LocalizedText; 12] = [
+    stem::t!("date.month.jan.short", "jan"),
+    stem::t!("date.month.feb.short", "feb"),
+    stem::t!("date.month.mar.short", "mar"),
+    stem::t!("date.month.apr.short", "apr"),
+    stem::t!("date.month.may.short", "maj"),
+    stem::t!("date.month.jun.short", "jun"),
+    stem::t!("date.month.jul.short", "jul"),
+    stem::t!("date.month.aug.short", "aŭg"),
+    stem::t!("date.month.sep.short", "sep"),
+    stem::t!("date.month.oct.short", "okt"),
+    stem::t!("date.month.nov.short", "nov"),
+    stem::t!("date.month.dec.short", "dec"),
+];
 
-const WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAY_NAMES: [stem::i18n::LocalizedText; 7] = [
+    stem::t!("date.weekday.sun.short", "dim"),
+    stem::t!("date.weekday.mon.short", "lun"),
+    stem::t!("date.weekday.tue.short", "mar"),
+    stem::t!("date.weekday.wed.short", "mer"),
+    stem::t!("date.weekday.thu.short", "ĵaŭ"),
+    stem::t!("date.weekday.fri.short", "ven"),
+    stem::t!("date.weekday.sat.short", "sab"),
+];
 
-const WEEKDAY_NAMES_LONG: [&str; 7] =
-    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const WEEKDAY_NAMES_LONG: [stem::i18n::LocalizedText; 7] = [
+    stem::t!("date.weekday.sun.long", "dimanĉo"),
+    stem::t!("date.weekday.mon.long", "lundo"),
+    stem::t!("date.weekday.tue.long", "mardo"),
+    stem::t!("date.weekday.wed.long", "merkredo"),
+    stem::t!("date.weekday.thu.long", "ĵaŭdo"),
+    stem::t!("date.weekday.fri.long", "vendredo"),
+    stem::t!("date.weekday.sat.long", "sabato"),
+];
 
 fn is_leap_year(year: u16) -> bool {
     (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0))
@@ -172,8 +198,8 @@ fn main(_arg: usize) -> ! {
         let abs_offset = tz_offset.abs();
         let out = alloc::format!(
             "{} {} {:02} {:02}:{:02}:{:02} {}{:02}00 {:04}\n",
-            WEEKDAY_NAMES[dt.weekday as usize],
-            MONTH_NAMES[dt.month as usize - 1],
+            WEEKDAY_NAMES[dt.weekday as usize].get(),
+            MONTH_NAMES[dt.month as usize - 1].get(),
             dt.day,
             dt.hour,
             dt.minute,
@@ -184,7 +210,7 @@ fn main(_arg: usize) -> ! {
         );
         print(&out);
     } else {
-        let _ = vfs_write(1, b"usage: date [+FORMAT]\n");
+        print(stem::tr!("date.usage", "uzo: date [+FORMO]\n"));
         exit(1);
     }
 
@@ -219,13 +245,13 @@ fn format_date(dt: DateTime, format: &str, tz_offset: i32) -> String {
                         let _ = write!(result, "{:02}", dt.second);
                     }
                     'A' => {
-                        let _ = write!(result, "{}", WEEKDAY_NAMES_LONG[dt.weekday as usize]);
+                        let _ = write!(result, "{}", WEEKDAY_NAMES_LONG[dt.weekday as usize].get());
                     }
                     'a' => {
-                        let _ = write!(result, "{}", WEEKDAY_NAMES[dt.weekday as usize]);
+                        let _ = write!(result, "{}", WEEKDAY_NAMES[dt.weekday as usize].get());
                     }
                     'b' | 'h' => {
-                        let _ = write!(result, "{}", MONTH_NAMES[dt.month as usize - 1]);
+                        let _ = write!(result, "{}", MONTH_NAMES[dt.month as usize - 1].get());
                     }
                     'z' => {
                         let sign = if tz_offset >= 0 { '+' } else { '-' };

@@ -7,7 +7,7 @@
 //!
 //! - `TextKey`: Stable identifier for translatable strings
 //! - `LocalizedText`: Combines a key with a fallback string
-//! - `LocaleId`: Identifies a locale (e.g., en-US, la)
+//! - `LocaleId`: Identifies a locale (currently only eo)
 //! - `Catalog`: Maps text keys to translated strings for a locale
 //! - `Translator`: Provides translation services with fallback chain
 //!
@@ -17,14 +17,14 @@
 //! use stem::i18n::LocalizedText;
 //!
 //! // Define a text key with fallback using the t! macro
-//! const WINDOW_TITLE: LocalizedText = stem::t!("ui.fonts.title", "Font Explorer");
+//! const WINDOW_TITLE: LocalizedText = stem::t!("ui.fonts.title", "Tipara Esplorilo");
 //!
 //! // Get translated string for current locale
 //! let title = WINDOW_TITLE.get();
 //! ```
 
 use alloc::collections::BTreeMap;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use spin::Mutex;
 
@@ -47,7 +47,7 @@ impl TextKey {
     }
 }
 
-/// A locale identifier (e.g., "en-US", "la", "syc").
+/// A locale identifier (currently only "eo").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocaleId(&'static str);
 
@@ -62,21 +62,16 @@ impl LocaleId {
         self.0
     }
 
-    /// English (US) locale
-    pub const EN_US: LocaleId = LocaleId("en-US");
-
-    /// Latin locale
-    pub const LA: LocaleId = LocaleId("la");
-
-    /// Syriac locale
-    pub const SYC: LocaleId = LocaleId("syc");
+    /// Esperanto locale
+    pub const EO: LocaleId = LocaleId("eo");
 }
 
 /// A localizable text with a key and fallback string.
 ///
 /// This is the primary type used throughout the UI code.
 /// It combines a stable text key with a fallback string that is used
-/// when no translation is available.
+/// when no translation is available. Fallbacks are Esperanto in the current
+/// single-locale system.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalizedText {
     /// The translation key
@@ -122,6 +117,26 @@ macro_rules! t {
     };
 }
 
+/// Return translated text for a key, using an Esperanto fallback.
+#[macro_export]
+macro_rules! tr {
+    ($key:expr, $fallback:expr) => {
+        $fallback
+    };
+}
+
+/// Format translated text for a key, using an Esperanto format string.
+///
+/// This is intentionally a marker macro while Esperanto is the only supported
+/// language. It keeps format strings literal-friendly and gives future catalog
+/// extraction a single syntactic form to target.
+#[macro_export]
+macro_rules! tf {
+    ($key:expr, $fallback:expr $(, $arg:expr)* $(,)?) => {
+        alloc::format!($fallback $(, $arg)*)
+    };
+}
+
 /// A translation catalog for a specific locale.
 ///
 /// Maps text keys to translated strings.
@@ -158,7 +173,6 @@ impl Catalog {
 
 /// Global translator that manages locale switching and translation lookups.
 pub struct Translator {
-    current_locale: AtomicU32,
     /// Increments each time locale changes (for UI cache invalidation)
     generation: AtomicU64,
     catalogs: Mutex<BTreeMap<LocaleId, Catalog>>,
@@ -167,63 +181,33 @@ pub struct Translator {
 impl Translator {
     /// Create a new translator.
     const fn new() -> Self {
-        Self {
-            current_locale: AtomicU32::new(0), // 0 = EN_US
-            generation: AtomicU64::new(0),
-            catalogs: Mutex::new(BTreeMap::new()),
-        }
+        Self { generation: AtomicU64::new(0), catalogs: Mutex::new(BTreeMap::new()) }
     }
 
     /// Initialize the translator with default catalogs.
     pub fn init(&self) {
         let mut catalogs = self.catalogs.lock();
 
-        // English catalog (mostly empty, uses fallbacks)
-        catalogs.insert(LocaleId::EN_US, Catalog::from_table(LocaleId::EN_US, &[]));
-
-        // Latin catalog
-        catalogs.insert(LocaleId::LA, Catalog::from_table(LocaleId::LA, &LATIN_CATALOG));
-
-        // Syriac catalog (placeholder for future)
-        catalogs.insert(LocaleId::SYC, Catalog::from_table(LocaleId::SYC, &[]));
+        catalogs.insert(LocaleId::EO, Catalog::from_table(LocaleId::EO, &ESPERANTO_CATALOG));
     }
 
     /// Get the current locale.
     pub fn current_locale(&self) -> LocaleId {
-        match self.current_locale.load(Ordering::Relaxed) {
-            0 => LocaleId::EN_US,
-            1 => LocaleId::LA,
-            2 => LocaleId::SYC,
-            _ => LocaleId::EN_US,
-        }
+        LocaleId::EO
     }
 
     /// Set the current locale.
     pub fn set_locale(&self, locale: LocaleId) {
-        let index = if locale.as_str() == LocaleId::EN_US.as_str() {
-            0
-        } else if locale.as_str() == LocaleId::LA.as_str() {
-            1
-        } else if locale.as_str() == LocaleId::SYC.as_str() {
-            2
-        } else {
-            // Unknown locale - default to EN_US
-            0
-        };
-
-        if self.current_locale.load(Ordering::Relaxed) != index {
-            self.current_locale.store(index, Ordering::Relaxed);
-            self.generation.fetch_add(1, Ordering::Relaxed);
+        if locale.as_str() == LocaleId::EO.as_str() {
+            return;
         }
-    }
 
-    /// Cycle to the next locale.
-    pub fn cycle_locale(&self) {
-        let current = self.current_locale.load(Ordering::Relaxed);
-        let next = (current + 1) % 3; // 3 locales: EN_US, LA, SYC
-        self.current_locale.store(next, Ordering::Relaxed);
+        // Unknown locales collapse to Esperanto while it is the only option.
         self.generation.fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Cycle to the next locale. No-op while Esperanto is the only locale.
+    pub fn cycle_locale(&self) {}
 
     /// Get the current generation counter.
     ///
@@ -244,15 +228,6 @@ impl Translator {
         if let Some(catalog) = catalogs.get(&locale) {
             if let Some(translation) = catalog.get(key) {
                 return Some(translation);
-            }
-        }
-
-        // Try default locale (EN_US)
-        if locale != LocaleId::EN_US {
-            if let Some(catalog) = catalogs.get(&LocaleId::EN_US) {
-                if let Some(translation) = catalog.get(key) {
-                    return Some(translation);
-                }
             }
         }
 
@@ -299,20 +274,20 @@ pub fn translate(key: TextKey) -> Option<&'static str> {
 // Locale Catalogs
 // ============================================================================
 
-/// Latin translation catalog
-const LATIN_CATALOG: &[(&str, &str)] = &[
+/// Esperanto translation catalog
+const ESPERANTO_CATALOG: &[(&str, &str)] = &[
     // Font Explorer
-    ("ui.fonts.title", "Litterae"),
-    ("ui.fonts.explorer", "Explorator Litterarum"),
-    ("ui.fonts.count", "Litterae"),
+    ("ui.fonts.title", "Tiparoj"),
+    ("ui.fonts.explorer", "Tipara Esplorilo"),
+    ("ui.fonts.count", "Tiparoj"),
     // Photosynthesis
-    ("ui.photosynthesis.title", "Photosynthesis"),
+    ("ui.photosynthesis.title", "Fotosintezo"),
     // Common UI
-    ("ui.window.close", "Claudere"),
-    ("ui.window.minimize", "Minuere"),
-    ("ui.window.maximize", "Augere"),
+    ("ui.window.close", "Fermi"),
+    ("ui.window.minimize", "Minimumigi"),
+    ("ui.window.maximize", "Maksimumigi"),
     // Sample text for font display
-    ("ui.fonts.sample", "Sphinx Iovis dura lex sed lex. 0123456789"),
+    ("ui.fonts.sample", "La rapida vulpo saltas super la maldiligentan hundon. 0123456789"),
 ];
 
 #[cfg(test)]
@@ -327,9 +302,7 @@ mod tests {
 
     #[test]
     fn test_locale_id() {
-        assert_eq!(LocaleId::EN_US.as_str(), "en-US");
-        assert_eq!(LocaleId::LA.as_str(), "la");
-        assert_eq!(LocaleId::SYC.as_str(), "syc");
+        assert_eq!(LocaleId::EO.as_str(), "eo");
     }
 
     #[test]
@@ -342,7 +315,7 @@ mod tests {
     #[test]
     fn test_catalog() {
         let table = [("key1", "Translation 1"), ("key2", "Translation 2")];
-        let catalog = Catalog::from_table(LocaleId::LA, &table);
+        let catalog = Catalog::from_table(LocaleId::EO, &table);
 
         assert_eq!(catalog.get(TextKey::new("key1")), Some("Translation 1"));
         assert_eq!(catalog.get(TextKey::new("key2")), Some("Translation 2"));
@@ -354,13 +327,10 @@ mod tests {
         let translator = Translator::new();
         translator.init();
 
-        assert_eq!(translator.current_locale(), LocaleId::EN_US);
+        assert_eq!(translator.current_locale(), LocaleId::EO);
 
-        translator.set_locale(LocaleId::LA);
-        assert_eq!(translator.current_locale(), LocaleId::LA);
-
-        translator.set_locale(LocaleId::SYC);
-        assert_eq!(translator.current_locale(), LocaleId::SYC);
+        translator.set_locale(LocaleId::new("en-US"));
+        assert_eq!(translator.current_locale(), LocaleId::EO);
     }
 
     #[test]
@@ -368,16 +338,10 @@ mod tests {
         let translator = Translator::new();
         translator.init();
 
-        assert_eq!(translator.current_locale(), LocaleId::EN_US);
+        assert_eq!(translator.current_locale(), LocaleId::EO);
 
         translator.cycle_locale();
-        assert_eq!(translator.current_locale(), LocaleId::LA);
-
-        translator.cycle_locale();
-        assert_eq!(translator.current_locale(), LocaleId::SYC);
-
-        translator.cycle_locale();
-        assert_eq!(translator.current_locale(), LocaleId::EN_US);
+        assert_eq!(translator.current_locale(), LocaleId::EO);
     }
 
     #[test]
@@ -386,7 +350,7 @@ mod tests {
         translator.init();
 
         let gen1 = translator.generation();
-        translator.set_locale(LocaleId::LA);
+        translator.set_locale(LocaleId::new("en-US"));
         let gen2 = translator.generation();
 
         assert!(gen2 > gen1);
@@ -397,12 +361,7 @@ mod tests {
         let translator = Translator::new();
         translator.init();
 
-        // English (no translation, returns None)
-        translator.set_locale(LocaleId::EN_US);
-        assert_eq!(translator.translate(TextKey::new("ui.fonts.title")), None);
-
-        // Latin (has translation)
-        translator.set_locale(LocaleId::LA);
-        assert_eq!(translator.translate(TextKey::new("ui.fonts.title")), Some("Litterae"));
+        assert_eq!(translator.current_locale(), LocaleId::EO);
+        assert_eq!(translator.translate(TextKey::new("ui.fonts.title")), Some("Tiparoj"));
     }
 }

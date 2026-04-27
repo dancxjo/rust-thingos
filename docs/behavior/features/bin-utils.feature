@@ -37,3 +37,9 @@ Feature: Bin Utils Traditional Functionality
     When I wait for the shell prompt
     And I type "echo -e '1\n2\n3' | head -n 2 | tail -n 1" on the serial console
     Then the command output should strictly be "2"
+
+  Scenario: user-visible utility text defaults to Esperanto
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "file /does-not-exist" on the serial console
+    Then the command output should contain "/does-not-exist: ne povas malfermi"

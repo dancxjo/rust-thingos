@@ -8,7 +8,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use abi::display_driver_protocol::{BindPayload, FB_INFO_PAYLOAD_SIZE, FbInfoPayload};
@@ -656,8 +655,8 @@ fn main(arg: usize) -> ! {
 
     // Build the shared state and perform initial render.
     let mut model = TermModel::new(cols, rows);
-    model.write_str("Thing-OS Terminal v1.0\n", &font);
-    model.write_str("Unicode test: こんにち世界! 🚀\n", &font);
+    model.write_str(stem::tr!("terminal.banner", "Thing-OS Terminalo v1.0\n"), &font);
+    model.write_str(stem::tr!("terminal.unicode_test", "Unikoda testo: こんにち世界! 🚀\n"), &font);
     // Mark all rows dirty so the first renderer pass blits the welcome text.
     for d in &mut model.dirty_rows {
         *d = true;
@@ -711,14 +710,7 @@ fn main(arg: usize) -> ! {
         let fb = FbPtr(fb_ptr);
 
         let _ = stem::thread::spawn_task_detached(move || {
-            renderer_loop(
-                shared_r,
-                font_r,
-                fb,
-                fb_info.width,
-                fb_info.height,
-                fb_info.stride,
-            );
+            renderer_loop(shared_r, font_r, fb, fb_info.width, fb_info.height, fb_info.stride);
         });
     }
 
@@ -740,12 +732,11 @@ fn main(arg: usize) -> ! {
                 let mut m = shared.model.lock();
                 m.write_str(".", &font);
                 if frame_count % (60 * 40) == 0 {
-                    let mut status = String::new();
-                    let _ = write!(
-                        status,
-                        "\n[Terminal Liveness] Frame {} - Focus: {}\n",
+                    let status = stem::tf!(
+                        "terminal.liveness",
+                        "\n[Terminala Viveco] Kadro {} - Fokuso: {}\n",
                         frame_count,
-                        shared.has_focus.load(Ordering::Relaxed)
+                        shared.has_focus.load(Ordering::Relaxed),
                     );
                     m.write_str(&status, &font);
                 }

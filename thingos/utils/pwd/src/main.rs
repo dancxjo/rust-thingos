@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
 use stem::syscall::{vfs_getcwd, vfs_write};
@@ -15,7 +13,11 @@ fn main(_arg: usize) -> ! {
             let _ = vfs_write(1, b"\n");
         }
         Err(_) => {
-            let _ = vfs_write(2, b"pwd: error retrieving current directory\n");
+            let _ = vfs_write(
+                2,
+                stem::tr!("pwd.error.getcwd", "pwd: eraro dum akiro de nuna dosierujo\n")
+                    .as_bytes(),
+            );
         }
     }
     stem::syscall::exit(0)

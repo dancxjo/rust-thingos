@@ -51,7 +51,7 @@ fn main(_arg: usize) -> ! {
     let (flags, args) = get_args();
 
     if args.len() != 2 {
-        print("usage: ln [-s] <target> <link_name>\n");
+        print(stem::tr!("ln.usage", "uzo: ln [-s] <celo> <ligila_nomo>\n"));
         exit(1)
     }
 
@@ -65,12 +65,13 @@ fn main(_arg: usize) -> ! {
     };
 
     if let Err(e) = result {
-        print(&alloc::format!(
-            "ln: failed to create {}link '{}' -> '{}': {:?}\n",
-            if flags.symbolic { "symbolic " } else { "" },
+        print(&stem::tf!(
+            "ln.error.create",
+            "ln: malsukcesis krei {}ligilon '{}' -> '{}': {:?}\n",
+            if flags.symbolic { stem::tr!("ln.symbolic_prefix", "simbolan ") } else { "" },
             link_name,
             target,
-            e
+            e,
         ));
         exit(1)
     }

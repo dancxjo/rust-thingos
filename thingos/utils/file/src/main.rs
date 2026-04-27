@@ -46,26 +46,26 @@ fn get_args() -> Vec<String> {
 fn detect_type(path: &str) -> String {
     let fd = match vfs_open(path, 0) {
         Ok(fd) => fd,
-        Err(_) => return "cannot open".to_string(),
+        Err(_) => return stem::tr!("file.type.cannot_open", "ne povas malfermi").to_string(),
     };
 
     let stat = match vfs_stat(fd as u32) {
         Ok(s) => s,
         Err(_) => {
             let _ = vfs_close(fd as u32);
-            return "cannot stat".to_string();
+            return stem::tr!("file.type.cannot_stat", "ne povas stat-i").to_string();
         }
     };
 
     let base_type = match stat.mode & S_IFMT {
-        S_IFDIR => "directory".to_string(),
-        S_IFCHR => "character device".to_string(),
-        S_IFBLK => "block device".to_string(),
-        S_IFIFO => "fifo".to_string(),
-        S_IFLNK => "symbolic link".to_string(),
-        S_IFSOCK => "socket".to_string(),
+        S_IFDIR => stem::tr!("file.type.directory", "dosierujo").to_string(),
+        S_IFCHR => stem::tr!("file.type.char_device", "signa aparato").to_string(),
+        S_IFBLK => stem::tr!("file.type.block_device", "bloka aparato").to_string(),
+        S_IFIFO => stem::tr!("file.type.fifo", "fifo").to_string(),
+        S_IFLNK => stem::tr!("file.type.symlink", "simbola ligilo").to_string(),
+        S_IFSOCK => stem::tr!("file.type.socket", "soketo").to_string(),
         S_IFREG => detect_regular_file(fd as u32, &stat),
-        _ => "unknown".to_string(),
+        _ => stem::tr!("file.type.unknown", "nekonata").to_string(),
     };
 
     let _ = vfs_close(fd as u32);
@@ -74,24 +74,28 @@ fn detect_type(path: &str) -> String {
 
 fn detect_regular_file(fd: u32, stat: &FileStat) -> String {
     if stat.size == 0 {
-        return "empty".to_string();
+        return stem::tr!("file.type.empty", "malplena").to_string();
     }
 
     let mut buffer = [0u8; 512];
     let n = match vfs_read(fd, &mut buffer) {
         Ok(n) => n,
-        Err(_) => return "regular file (read error)".to_string(),
+        Err(_) => {
+            return stem::tr!("file.type.regular_read_error", "ordinara dosiero (legeraro)")
+                .to_string();
+        }
     };
 
     if n >= 4 && &buffer[0..4] == b"\x7fELF" {
-        return "ELF executable".to_string();
+        return stem::tr!("file.type.elf", "ELF ruleblaĵo").to_string();
     }
 
     if n >= 2 && &buffer[0..2] == b"#!" {
         // Try to find the interpreter
         let line = buffer[0..n].split(|&b| b == b'\n').next().unwrap_or(&buffer[0..n]);
-        let script_info = core::str::from_utf8(line).unwrap_or("script");
-        return alloc::format!("{} script", script_info);
+        let script_info =
+            core::str::from_utf8(line).unwrap_or(stem::tr!("file.type.script", "skripto"));
+        return stem::tf!("file.type.script_with_interpreter", "{} skripto", script_info);
     }
 
     // Heuristic for text
@@ -105,20 +109,20 @@ fn detect_regular_file(fd: u32, stat: &FileStat) -> String {
 
     if is_text {
         if core::str::from_utf8(&buffer[0..n]).is_ok() {
-            return "text".to_string();
+            return stem::tr!("file.type.text", "teksto").to_string();
         } else {
-            return "binary data".to_string();
+            return stem::tr!("file.type.binary", "duuma datumo").to_string();
         }
     }
 
-    "data".to_string()
+    stem::tr!("file.type.data", "datumo").to_string()
 }
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let args = get_args();
     if args.is_empty() {
-        print("usage: file <path>...\n");
+        print(stem::tr!("file.usage", "uzo: file <vojo>...\n"));
         exit(1);
     }
 
@@ -126,7 +130,7 @@ fn main(_arg: usize) -> ! {
     for path in args {
         let file_type = detect_type(&path);
         print(&alloc::format!("{}: {}\n", path, file_type));
-        if file_type.contains("cannot") {
+        if file_type.contains(stem::tr!("file.error_marker", "ne povas")) {
             had_error = true;
         }
     }
