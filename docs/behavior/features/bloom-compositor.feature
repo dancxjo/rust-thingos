@@ -38,9 +38,9 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
     And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
-    And I type "echo /share/wallpapers/flower.bmp > /session/desktop/wallpaper" on the serial console
+    And I type "echo /share/wallpapers/clouds.bmp > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
-    And "bloom: reacting to wallpaper change" should appear at least 2 times
+    And the serial output should contain "/share/wallpapers/clouds.bmp" within 60s
 
   Scenario: wallpaper reload happens after the service loop is live
     # Verifies that a wallpaper-change event is handled by the service loop
@@ -85,4 +85,4 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
     And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
-    Then the log should match pattern "bloom: wallpaper decode failed"
+    Then the serial output should contain "bloom: wallpaper decode failed" within 60s

@@ -10,8 +10,7 @@ use crate::common::Result;
 const ALLOWED_STD_CRATES: &[&str] =
     &["xtask", "pciids", "bdd", "unifont-gen", "display_proto_tests", "abi-macros", "stem-macros"];
 
-const REQUIRED_NOSTD_CRATES: &[&str] =
-    &["kernel", "stem", "stem-macros", "abi", "abi-macros", "bran"];
+const REQUIRED_NOSTD_CRATES: &[&str] = &["kernel", "stem", "abi", "bran", "thingos"];
 const ROOT_USERSPACE_CRATES: &[&str] = &["bloom", "bristle", "pistil", "sprout"];
 
 pub fn audit() -> Result<()> {
@@ -34,7 +33,7 @@ pub fn audit() -> Result<()> {
         let name = package.name.as_str();
 
         if allowed_std.contains(name) {
-            println!("ok   {:30} [std allowed - build tool]", name);
+            println!("ok   {:30} [std allowed]", name);
             continue;
         }
 
@@ -44,20 +43,22 @@ pub fn audit() -> Result<()> {
                 || ROOT_USERSPACE_CRATES.contains(&name);
         let is_kernel_or_core = required_nostd.contains(name);
 
-        if is_userspace || is_kernel_or_core {
+        if is_kernel_or_core {
             count += 1;
             let crate_root = manifest_path.parent().unwrap();
             if is_nostd_crate(crate_root) {
-                println!("ok   {:30} [no_std compliant]", name);
+                println!("ok   {:30} [no_std required]", name);
             } else {
                 println!("fail {:30} [missing #![no_std]]", name);
                 errors.push(format!("{name} is missing #![no_std] declaration"));
             }
+        } else if is_userspace {
+            println!("ok   {:30} [std/no_std allowed - userspace]", name);
         }
     }
 
     println!("============================================================");
-    println!("Checked {count} crates for no_std compliance");
+    println!("Checked {count} crates with required no_std boundaries");
 
     if !errors.is_empty() {
         println!("\nErrors:");

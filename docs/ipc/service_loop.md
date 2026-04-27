@@ -107,7 +107,7 @@ Each migration:
 
 - Adds/updates the relevant `.feature` file under
   `docs/behavior/features/`.
-- Runs `just behave` and `python3 scripts/audit_platform_boundary.py`.
+- Runs `just behave` and `just audit-platform`.
 - Touches no kernel syscalls — this whole thing rides on existing
   primitives.
 

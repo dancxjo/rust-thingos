@@ -12,7 +12,7 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 - Run QEMU: `just run`
 - Run BDD tests: `just behave` (see `tools/bdd`)
 - Clean: `just clean`
-- Audit platform boundary: `python3 scripts/audit_platform_boundary.py`
+- Audit platform boundary: `just audit-platform`
 
 ## BDD expectations for agents
 - When adding a feature, add new BDD coverage and ensure the new BDD tests pass.

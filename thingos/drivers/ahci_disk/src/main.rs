@@ -17,8 +17,8 @@ use abi::driver_interface::{
     DriverEntryCtx, ProbeResult, Status,
 };
 use abi::errors::{Errno, SysResult};
-use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use abi::vfs_rpc::VfsRpcOp;
+use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
@@ -61,11 +61,7 @@ unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut Prob
     out.score = if is_match { 900 } else { 0 };
     out.claimed_class = DriverClass::Block;
     out.flags = 0;
-    if is_match {
-        Status::Ok
-    } else {
-        Status::NoMatch
-    }
+    if is_match { Status::Ok } else { Status::NoMatch }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -311,7 +307,11 @@ impl StorageProvider {
                 debug!("AHCI: Read RPC offset={} len={}", offset, len);
                 let sector_size = self.device.sector_size();
                 let start_lba = offset / sector_size;
-                let end_lba = if len > 0 { (offset + len as u64 - 1) / sector_size } else { start_lba.saturating_sub(1) };
+                let end_lba = if len > 0 {
+                    (offset + len as u64 - 1) / sector_size
+                } else {
+                    start_lba.saturating_sub(1)
+                };
                 let count = if len > 0 { end_lba - start_lba + 1 } else { 0 };
                 let mut bounce = Vec::with_capacity((count * sector_size) as usize);
                 bounce.resize((count * sector_size) as usize, 0);
@@ -394,7 +394,8 @@ fn main(boot_fd: usize) -> ! {
 
         let sig = mmio_read32(pb, PORT_SIG);
         let is_atapi = sig == SATA_SIG_ATAPI;
-        let name = if is_atapi { format!("atapi{}", port_num) } else { format!("ahci{}", port_num) };
+        let name =
+            if is_atapi { format!("atapi{}", port_num) } else { format!("ahci{}", port_num) };
 
         // Allocate unique DMA buffer for this device
         let dma_virt = match device_alloc_dma(claim, 1) {
@@ -415,28 +416,26 @@ fn main(boot_fd: usize) -> ! {
         mmio_write32(pb, PORT_FBU, (fb >> 32) as u32);
         mmio_write32(pb, PORT_CMD, mmio_read32(pb, PORT_CMD) | PORT_CMD_FRE | PORT_CMD_ST);
 
-        let device = Arc::new(AhciDevice { mmio_base: mmio, port: port_num, dma_virt, dma_phys, is_atapi });
+        let device =
+            Arc::new(AhciDevice { mmio_base: mmio, port: port_num, dma_virt, dma_phys, is_atapi });
         let provider = Arc::new(StorageProvider { device });
         let path = format!("/dev/storage/{}", name);
         let (v_w, v_r) = port_create(65536).unwrap();
         vfs_mount(v_w, &path).unwrap();
         info!("AHCI: Mounted {} at {}", name, path);
 
-        stem::thread::spawn_task_detached(move || {
-            let mut ploop = ProviderLoop::new(v_r);
-            loop {
-                if let Ok(Some(req)) = ploop.try_next_request() {
-                    let resp = provider.handle_rpc(&req);
-                    let _ = ploop.send_response(&req, resp);
-                }
-                yield_now();
+        info!("AHCI: Provider loop online at {}", path);
+        let mut ploop = ProviderLoop::new(v_r);
+        loop {
+            if let Ok(Some(req)) = ploop.try_next_request() {
+                let resp = provider.handle_rpc(&req);
+                let _ = ploop.send_response(&req, resp);
             }
-        })
-        .unwrap();
+            yield_now();
+        }
     }
 
     loop {
         stem::syscall::sleep_ms(60000);
     }
 }
-

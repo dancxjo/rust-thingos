@@ -171,15 +171,160 @@ pub extern "C" fn pistil_prepare_background(
     // Paint periwinkle first as diagnostic baseline
     dst.fill(0xFFCCCCFF);
 
-    match draw_bmp_cover_into(
-        path_str,
-        dst,
-        dst_stride_pixels as usize,
-        dst_w as usize,
-        dst_h as usize,
-    ) {
+    let result = match generated_wallpaper_variant(path_str) {
+        Some(variant) => draw_generated_wallpaper_cover(
+            variant,
+            dst,
+            dst_stride_pixels as usize,
+            dst_w as usize,
+            dst_h as usize,
+        ),
+        None => draw_bmp_cover_into(
+            path_str,
+            dst,
+            dst_stride_pixels as usize,
+            dst_w as usize,
+            dst_h as usize,
+        ),
+    };
+
+    match result {
         Ok(()) => 0,
         Err(code) => code,
+    }
+}
+
+fn generated_wallpaper_variant(path: &str) -> Option<u8> {
+    if path.ends_with("/share/wallpapers/flower.bmp") {
+        Some(0)
+    } else if path.ends_with("/share/wallpapers/clouds.bmp") {
+        Some(1)
+    } else if path.ends_with("/share/wallpapers/leather.bmp") {
+        Some(2)
+    } else if path.ends_with("/share/wallpapers/linen.bmp") {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+fn draw_generated_wallpaper_cover(
+    variant: u8,
+    dst: &mut [u32],
+    dst_stride_pixels: usize,
+    dst_w: usize,
+    dst_h: usize,
+) -> Result<(), i32> {
+    const SRC_W: usize = 320;
+    const SRC_H: usize = 180;
+    const MAX_FAST_DST_W: usize = 4096;
+
+    if dst_w == 0 || dst_h == 0 {
+        return Err(-3);
+    }
+
+    let scale_x_fp = (dst_w as u64 * 1_000_000) / SRC_W as u64;
+    let scale_y_fp = (dst_h as u64 * 1_000_000) / SRC_H as u64;
+    let scale_fp = scale_x_fp.max(scale_y_fp).max(1);
+    let scaled_w = (SRC_W as u64 * scale_fp) / 1_000_000;
+    let scaled_h = (SRC_H as u64 * scale_fp) / 1_000_000;
+    let ox = (dst_w as i64 - scaled_w as i64) / 2;
+    let oy = (dst_h as i64 - scaled_h as i64) / 2;
+
+    if dst_w <= MAX_FAST_DST_W {
+        let mut sx_map = [0u16; MAX_FAST_DST_W];
+        for dx in 0..dst_w {
+            let sx_fp = ((dx as i64 - ox) * 1_000_000) / scale_fp as i64;
+            sx_map[dx] = if sx_fp < 0 { 0 } else { (sx_fp as usize).min(SRC_W - 1) as u16 };
+        }
+
+        for dy in 0..dst_h {
+            let sy_fp = ((dy as i64 - oy) * 1_000_000) / scale_fp as i64;
+            let sy = if sy_fp < 0 { 0 } else { (sy_fp as usize).min(SRC_H - 1) };
+            let dst_row = dy * dst_stride_pixels;
+            for dx in 0..dst_w {
+                let sx = sx_map[dx] as u32;
+                let (r, g, b) = generated_wallpaper_pixel(variant, sx, sy as u32);
+                dst[dst_row + dx] = 0xFF00_0000 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+            }
+        }
+
+        return Ok(());
+    }
+
+    for dy in 0..dst_h {
+        let sy_fp = ((dy as i64 - oy) * 1_000_000) / scale_fp as i64;
+        let sy = if sy_fp < 0 { 0 } else { (sy_fp as usize).min(SRC_H - 1) };
+        let dst_row = dy * dst_stride_pixels;
+        for dx in 0..dst_w {
+            let sx_fp = ((dx as i64 - ox) * 1_000_000) / scale_fp as i64;
+            let sx = if sx_fp < 0 { 0 } else { (sx_fp as usize).min(SRC_W - 1) };
+            let (r, g, b) = generated_wallpaper_pixel(variant, sx as u32, sy as u32);
+            dst[dst_row + dx] = 0xFF00_0000 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+        }
+    }
+
+    Ok(())
+}
+
+fn generated_wallpaper_pixel(variant: u8, x: u32, y: u32) -> (u8, u8, u8) {
+    const WIDTH: u32 = 320;
+    const HEIGHT: u32 = 180;
+
+    match variant {
+        0 => {
+            let mut r = 22 + (x * 36 / WIDTH) as u8 + (y * 18 / HEIGHT) as u8;
+            let mut g = 68 + (x * 54 / WIDTH) as u8;
+            let mut b = 104 + (y * 44 / HEIGHT) as u8;
+            let cx = WIDTH as i32 / 2;
+            let cy = HEIGHT as i32 / 2;
+            let xi = x as i32;
+            let yi = y as i32;
+            for (px, py) in [(0, -28), (27, -10), (18, 24), (-18, 24), (-27, -10)] {
+                let dx = xi - (cx + px);
+                let dy = yi - (cy + py);
+                if dx * dx + dy * dy < 24 * 24 {
+                    r = 236;
+                    g = 168 + ((px + 28) as u8 % 40);
+                    b = 198;
+                }
+            }
+            let dx = xi - cx;
+            let dy = yi - cy;
+            if dx * dx + dy * dy < 18 * 18 {
+                r = 245;
+                g = 205;
+                b = 78;
+            }
+            (r, g, b)
+        }
+        1 => {
+            let base = 150 + (y * 70 / HEIGHT) as u8;
+            let mut r = base.saturating_sub(20);
+            let mut g = base;
+            let mut b = 230;
+            let xi = x as i32;
+            let yi = y as i32;
+            for (cx, cy, rx, ry) in [(80, 72, 48, 18), (145, 58, 58, 24), (220, 82, 52, 20)] {
+                let dx = (xi - cx) * 100 / rx;
+                let dy = (yi - cy) * 100 / ry;
+                if dx * dx + dy * dy < 10000 {
+                    r = 238;
+                    g = 244;
+                    b = 250;
+                }
+            }
+            (r, g, b)
+        }
+        2 => {
+            let grain = ((x * 37 + y * 19 + (x ^ y) * 11) & 31) as u8;
+            (88 + grain, 56 + grain / 2, 34 + grain / 3)
+        }
+        _ => {
+            let weave = (((x / 6) + (y / 4)) & 1) as u8 * 18;
+            let thread = ((x * 5 + y * 3) & 15) as u8;
+            (184 + weave + thread / 3, 188 + weave / 2 + thread / 4, 174 + thread / 2)
+        }
     }
 }
 

@@ -219,10 +219,10 @@ mod tests {
 Run platform boundary audits when they exist and when you are working on boundary-sensitive crates. Audits should focus on kernel `std` usage, host-only assumptions, and crate-specific no_std promises:
 
 ```bash
-python3 scripts/audit_platform_boundary.py
+just audit-platform
 ```
 
-If no audit script exists in the current checkout, rely on targeted builds/tests and manual review.
+If no audit command exists in the current checkout, rely on targeted builds/tests and manual review.
 
 ### Manual Review
 
@@ -287,6 +287,6 @@ A: That is fine for non-kernel code. For kernel/PAL/shared no_std crates, choose
 ## References
 
 - Source: `stem/src/pal/`
-- Audit script: `scripts/audit_platform_boundary.py`
+- Audit command: `just audit-platform`
 - CI integration: `.github/workflows/` (when added)
 - Issue: [Original task for platform boundary formalization]

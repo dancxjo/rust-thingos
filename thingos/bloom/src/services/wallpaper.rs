@@ -17,7 +17,7 @@ pub const DEFAULT_WALLPAPER_PATH: &str = "/share/wallpapers/flower.bmp";
 const WALLPAPER_POLL_TIMER: u64 = 1;
 const WALLPAPER_INITIAL_LOAD_TIMER: u64 = 2;
 const WALLPAPER_POLL_MS: u64 = 250;
-const WALLPAPER_INITIAL_LOAD_MS: u64 = 0;
+const WALLPAPER_INITIAL_LOAD_MS: u64 = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WallpaperStamp {

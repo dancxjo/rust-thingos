@@ -29,7 +29,7 @@ default: iso
 check-ui-split:
     ./scripts/ci_check_ui_split.sh
 
-# Audit platform boundary (verify no_std compliance).
+# Audit platform boundary.
 audit-platform:
     {{xtask}} audit
 

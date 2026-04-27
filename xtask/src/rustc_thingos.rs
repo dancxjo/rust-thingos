@@ -1,9 +1,9 @@
-//! Build and package a stage-1 `rustc` cross-compiler for `x86_64-unknown-thingos`.
+//! Build and package a stage-1 `rustc` cross-compiler for Thing-OS targets.
 //!
 //! The primary artifact is produced from `x.py build --stage 1`:
 //!
 //! 1. Linux-hosted cross-compiler (`target/rustc-thingos/rustc`): runs on
-//!    `x86_64-unknown-linux-gnu`, targets `x86_64-unknown-thingos`.
+//!    `x86_64-unknown-linux-gnu`, targets Thing-OS target JSONs.
 //! 2. ThingOS-native compiler (`target/rustc-thingos/thingos-rustc`): an
 //!    optional stage-1 `rustc` binary cross-compiled for
 //!    `x86_64-unknown-thingos`.
@@ -382,11 +382,7 @@ fn try_build_thingos_native_rustc(sh: &Shell, cwd: &Path) -> Result<bool> {
     }
 }
 
-pub fn build_rustc_thingos(sh: &Shell, arch: &str) -> Result<Option<PathBuf>> {
-    if arch != "x86_64" {
-        return Ok(None);
-    }
-
+pub fn build_rustc_thingos(sh: &Shell, _arch: &str) -> Result<Option<PathBuf>> {
     if std::env::var("SKIP_RUSTC_THINGOS").as_deref() == Ok("1") {
         return Ok(None);
     }

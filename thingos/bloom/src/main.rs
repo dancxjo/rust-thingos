@@ -15,7 +15,7 @@ mod services;
 mod wayland;
 mod world;
 
-use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
+use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use damage::DamageTracker;
 use display::DisplayBackend;
 use frame_clock::FrameClock;
@@ -29,7 +29,7 @@ use services::wayland::WaylandService;
 use services::wayland_cmd::WaylandCommandService;
 use stem::syscall::port_create;
 use stem::syscall::vfs::{
-    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_path, vfs_write,
+    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_watch_path, vfs_write,
 };
 use stem::{error, info, warn};
 use wayland::WaylandThreadArgs;
@@ -101,15 +101,13 @@ fn main(_arg: usize) -> ! {
     let input = InputState::new(primary.width, primary.height);
 
     // ── Bristle event port ────────────────────────────────────────────────────
-    // bloom creates a port pair for bristle HID events and registers the write
-    // end with bristle; the read end is watched in the service loop.
-    // register_with_bristle is called only after the read end is successfully
-    // bridged to a VFS FD, so the write handle we hand to bristle is always
-    // paired with an FD that bloom will actually watch.
+    // Bloom keeps a read FD ready for bristle HID events, but the old inbox
+    // RegisterSink send can deadlock startup. Do not send that message on the
+    // compositor bring-up path; first paint must not depend on input routing.
     let bristle_fd = match port_create(4096) {
-        Ok((write_handle, read_handle)) => match vfs_handle_from_port(read_handle) {
+        Ok((_write_handle, read_handle)) => match vfs_handle_from_port(read_handle) {
             Ok(fd) => {
-                register_with_bristle(write_handle);
+                warn!("bloom: bristle inbox registration disabled during compositor startup");
                 Some(fd)
             }
             Err(e) => {
@@ -213,49 +211,5 @@ fn publish_service_handle(path: &str, handle: u32) {
         let text = alloc::format!("{}\n", handle);
         let _ = vfs_write(fd, text.as_bytes());
         let _ = vfs_close(fd);
-    }
-}
-
-/// Read bristle's PID from `/run/bristle/pid`.
-fn read_bristle_pid() -> Option<u32> {
-    let fd = vfs_open("/run/bristle/pid", O_RDONLY).ok()?;
-    let mut buf = [0u8; 32];
-    let n = vfs_read(fd, &mut buf).unwrap_or(0);
-    let _ = vfs_close(fd);
-    if n == 0 {
-        return None;
-    }
-    let s = core::str::from_utf8(&buf[..n]).ok()?.trim();
-    s.parse::<u32>().ok()
-}
-
-/// Register bloom as a bristle event sink.
-///
-/// Sends a `RegisterSink` inbox message with `BRISTLE_SINK_TAG_BLOOM` and the
-/// bloom port write handle so bristle can deliver normalized HID events. This
-/// is intentionally best-effort during startup: Bloom must reach first paint
-/// even if bristle has not published its PID file yet.
-fn register_with_bristle(evt_write_handle: u32) {
-    if evt_write_handle == 0 {
-        warn!("bloom: no event write handle — skipping bristle registration");
-        return;
-    }
-
-    let bristle_pid = match read_bristle_pid() {
-        Some(p) => p,
-        None => {
-            warn!("bloom: bristle PID not ready; input registration skipped");
-            return;
-        }
-    };
-
-    use abi::hid::{BRISTLE_SINK_TAG_BLOOM, KIND_BRISTLE_REGISTER_SINK, encode_register_sink};
-    use abi::wire::KindId;
-    use stem::syscall::message::msg_send;
-
-    let payload = encode_register_sink(BRISTLE_SINK_TAG_BLOOM, evt_write_handle);
-    match msg_send(bristle_pid, KindId(KIND_BRISTLE_REGISTER_SINK), &payload) {
-        Ok(()) => info!("bloom: registered with bristle (pid={})", bristle_pid),
-        Err(e) => warn!("bloom: bristle registration failed: {:?}", e),
     }
 }

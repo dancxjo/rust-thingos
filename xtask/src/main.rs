@@ -187,7 +187,7 @@ enum Commands {
         #[arg(long, default_value = "8080")]
         port: u16,
     },
-    /// Audit platform boundary (no_std compliance)
+    /// Audit platform boundary
     Audit,
     /// Scan or verify images
     Scan(scan::ScanArgs),
@@ -249,7 +249,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let iso = build_iso(&sh, "x86_64", &programs)?;
             run_bios(&sh, &qemu_flags, &iso, interactive, monitor)?;
         }
-        Commands::RunHdd { env, profile, init, qemu_flags, interactive, monitor, loglevel } => {
+        Commands::RunHdd { env, profile, init, qemu_flags, interactive, monitor, loglevel: _ } => {
             fetch()?;
             limine(&sh)?;
             build(&sh, &env, &profile)?;

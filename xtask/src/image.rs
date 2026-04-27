@@ -827,13 +827,11 @@ fn build_userspace_app_with_features(
     let skip_rustc_thingos = std::env::var("SKIP_RUSTC_THINGOS").as_deref() == Ok("1");
     let use_fork_rustc = target.ends_with(".json")
         && target.contains("thingos")
-        && target.contains("x86_64-unknown-thingos")
         && stage1_rustc.exists()
         && stage1_rustc_wrapper.exists()
         && !skip_rustc_thingos;
 
-    let build_std_crates =
-        if use_fork_rustc { "core,alloc,std,panic_abort" } else { "core,alloc,panic_abort" };
+    let build_std_crates = "core,alloc,std,panic_abort";
 
     let rustflags = String::from("-Awarnings");
     let mut cmd_obj = cmd!(
@@ -842,12 +840,15 @@ fn build_userspace_app_with_features(
     )
     .env("RUSTFLAGS", &rustflags);
 
+    if target.ends_with(".json") && target.contains("thingos") {
+        cmd_obj = cmd_obj.env("__CARGO_TESTS_ONLY_SRC_ROOT", std_src.to_str().unwrap());
+    }
+
     if use_fork_rustc {
         let target_path = cwd.join("targets");
         cmd_obj = cmd_obj
             .env("RUSTC", &stage1_rustc_wrapper)
             .env("RUSTFLAGS", &rustflags)
-            .env("__CARGO_TESTS_ONLY_SRC_ROOT", std_src.to_str().unwrap())
             .env("RUST_TARGET_PATH", target_path);
     }
 
