@@ -1,5 +1,5 @@
 //! Task lifecycle management: exit, wait, kill, signal, CPU management.
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 use crate::task::{Affinity, TaskId, TaskPriority, TaskState};

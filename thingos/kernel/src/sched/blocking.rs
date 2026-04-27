@@ -1,7 +1,18 @@
 //! Blocking primitives for task synchronization.
 
-use super::SCHEDULER;
-use super::state::WaitReason;
+use super::{SCHEDULER, metrics};
+use super::balancing::{WakeBatchLoadSnapshot, choose_wake_cpu_from_snapshot};
+use super::mailbox::enqueue_remote_wake_mailbox;
+use super::metrics::{
+    PROF_SCHED_LOCK_WAKE_SLEEPERS_CALLS,
+    PROF_SCHED_LOCK_WAKE_SLEEPERS_HOLD_HIST, PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX,
+    PROF_SCHED_LOCK_WAKE_SLEEPERS_US_TOTAL,
+};
+use super::profiling::{
+    DIAG_IPI_SENT, DIAG_IPI_SENT_WAKE_TASK, PROF_IPI_SUPPRESSED,
+    PROF_RUNNABLE_TRANSITIONS, TICK_COUNT,
+};
+use super::state::{MigrationState, WaitReason};
 use super::types::Scheduler;
 use crate::task::TaskState;
 use crate::{BootRuntime, BootTasking};
@@ -26,6 +37,166 @@ pub(crate) struct DeferredWakeUpdate {
     pub new_enqueued_at_tick: Option<u64>,
     /// If `true`, set `Thread::wake_pending = true` in REGISTRY.
     pub set_wake_pending: bool,
+}
+
+impl<R: BootRuntime> Scheduler<R> {
+    /// Wake any sleeping tasks whose sleep time has expired.
+    pub(crate) fn wake_sleepers(&mut self) {
+        let now = TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        let current_cpu = super::current_cpu_index::<R>();
+        let lock_start = crate::runtime::<R>().mono_ticks();
+        let mut wake_budget = self
+            .wake_sleepers_budget_carry
+            .saturating_add(super::types::WAKE_SLEEPERS_BUDGET_PER_TICK)
+            .min(super::types::WAKE_SLEEPERS_BUDGET_CARRY_CAP);
+
+        let mut pending_ipi_bitmap = 0u64;
+        let mut to_wake: alloc::vec::Vec<(u64, usize, usize)> = alloc::vec::Vec::new();
+        let mut wake_batch_loads = WakeBatchLoadSnapshot::new(&self.state);
+
+        let due_tids = self.state.take_due_sleepers(now, wake_budget);
+        let taken = due_tids.len();
+
+        for tid in due_tids {
+            if let Some(sf) = self.state.get_thread(tid) {
+                let priority = sf.priority as usize;
+                let target_cpu = match sf.affinity {
+                    crate::task::Affinity::Pinned(cpu) => {
+                        wake_batch_loads.note_enqueue(cpu);
+                        cpu
+                    }
+                    crate::task::Affinity::Any => {
+                        let target =
+                            choose_wake_cpu_from_snapshot::<R>(self, sf.last_cpu, &wake_batch_loads);
+                        wake_batch_loads.note_enqueue(target);
+                        target
+                    }
+                    crate::task::Affinity::Restricted(ref aff) => {
+                        let cpu_count = self.state.per_cpu.len().max(1);
+                        let target = if !super::cross_cpu_runq_migration_enabled() {
+                            let current_cpu = current_cpu.min(cpu_count - 1);
+                            if let Some(last_cpu) = sf
+                                .last_cpu
+                                .filter(|&cpu| cpu < cpu_count && aff.allows(cpu, cpu_count))
+                            {
+                                last_cpu
+                            } else if aff.allows(current_cpu, cpu_count) {
+                                current_cpu
+                            } else {
+                                aff.pick_cpu(cpu_count).unwrap_or(current_cpu)
+                            }
+                        } else {
+                            aff.pick_cpu(cpu_count).unwrap_or_else(|| {
+                                choose_wake_cpu_from_snapshot::<R>(
+                                    self,
+                                    sf.last_cpu,
+                                    &wake_batch_loads,
+                                )
+                            })
+                        };
+                        wake_batch_loads.note_enqueue(target);
+                        target
+                    }
+                };
+                to_wake.push((tid, priority, target_cpu));
+            }
+        }
+
+        wake_budget = wake_budget.saturating_sub(taken);
+        self.wake_sleepers_budget_carry = wake_budget;
+
+        let wake_mono = crate::runtime::<R>().mono_ticks();
+        for (tid, priority, target_cpu) in to_wake {
+            if let Some(sf) = self.state.get_thread_mut(tid) {
+                if sf.last_cpu.is_some_and(|c| c != target_cpu) {
+                    if sf.migration_state == MigrationState::Local {
+                        let _ = sf
+                            .migration_state
+                            .try_transition(MigrationState::Requested { target: target_cpu });
+                    }
+                    if let MigrationState::Requested { .. } = sf.migration_state {
+                        let _ = sf.migration_state.try_transition(MigrationState::InTransit);
+                    }
+                }
+                sf.state = TaskState::Runnable;
+                sf.enqueued_at_tick = now;
+                sf.wake_cpu = Some(target_cpu);
+            } else {
+                continue;
+            }
+
+            self.pending_registry_syncs.push(super::types::DeferredRegistrySync {
+                tid,
+                new_state: Some(TaskState::Runnable),
+                new_enqueued_at_tick: Some(now),
+                new_last_cpu: None,
+            });
+            self.state.wake_enqueued_at_mono.insert(tid, wake_mono);
+            self.state.note_enqueue_cause(tid, crate::sched::state::EnqueueCause::Wake);
+
+            let actual_cpu = if target_cpu < self.state.per_cpu.len() { target_cpu } else { 0 };
+            if actual_cpu == current_cpu {
+                self.state.enqueue_task(actual_cpu, priority, tid);
+            } else {
+                enqueue_remote_wake_mailbox(
+                    actual_cpu,
+                    super::types::RemoteWakeMailboxEntry {
+                        tid,
+                        priority,
+                        enqueued_at_tick: now,
+                        wake_mono,
+                    },
+                );
+            }
+            if let Some(pc) = self.state.per_cpu.get_mut(actual_cpu) {
+                pc.stats.wakeups = pc.stats.wakeups.saturating_add(1);
+            }
+
+            let current_prio = self
+                .state
+                .per_cpu
+                .get(actual_cpu)
+                .and_then(|pc| pc.current)
+                .and_then(|cid| self.state.get_thread(cid))
+                .map(|sf| sf.priority as usize)
+                .unwrap_or(0);
+            if priority > current_prio && actual_cpu == current_cpu {
+                self.state.per_cpu[current_cpu].need_resched = true;
+                super::set_global_need_resched(current_cpu);
+            }
+
+            if actual_cpu != current_cpu {
+                if actual_cpu < super::types::MAX_CPUS
+                    && (pending_ipi_bitmap & (1u64 << actual_cpu)) != 0
+                {
+                    PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+                let already_pending = super::set_global_need_resched(actual_cpu);
+                if !already_pending {
+                    if actual_cpu < super::types::MAX_CPUS {
+                        pending_ipi_bitmap |= 1u64 << actual_cpu;
+                    }
+                } else {
+                    PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+
+        super::record_sched_lock_hold::<R>(
+            &PROF_SCHED_LOCK_WAKE_SLEEPERS_CALLS,
+            &PROF_SCHED_LOCK_WAKE_SLEEPERS_US_TOTAL,
+            &PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX,
+            &PROF_SCHED_LOCK_WAKE_SLEEPERS_HOLD_HIST,
+            lock_start,
+        );
+
+        for cpu in 0..self.state.per_cpu.len().min(super::types::MAX_CPUS) {
+            if (pending_ipi_bitmap & (1u64 << cpu)) != 0 {
+                self.pending_wake_ipis.push(cpu);
+            }
+        }
+    }
 }
 
 fn recover_failed_block_current<R: BootRuntime>(tid: u64) {
@@ -71,33 +242,33 @@ pub fn block_current<R: BootRuntime>() {
         let lock = SCHEDULER.lock();
         super::set_sched_lock_tracking::<R>(rt.current_cpu_index());
         super::record_sched_lock_wait::<R>(
-            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_CALLS,
-            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_US_TOTAL,
-            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_US_MAX,
-            &super::PROF_SCHED_WAIT_BLOCK_CURRENT_HIST,
+            &metrics::PROF_SCHED_WAIT_BLOCK_CURRENT_CALLS,
+            &metrics::PROF_SCHED_WAIT_BLOCK_CURRENT_US_TOTAL,
+            &metrics::PROF_SCHED_WAIT_BLOCK_CURRENT_US_MAX,
+            &metrics::PROF_SCHED_WAIT_BLOCK_CURRENT_HIST,
             wait_start,
         );
         let lock_start = rt.mono_ticks();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
-
+ 
         let cpu = super::current_cpu_index::<R>();
         let current_id = match sched.state.per_cpu.get(cpu).and_then(|pc| pc.current) {
             Some(id) => id,
             None => {
                 super::clear_sched_lock_tracking::<R>();
                 super::record_sched_lock_hold::<R>(
-                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
-                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
-                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
-                    &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
+                    &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
+                    &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
+                    &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+                    &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                     lock_start,
                 );
                 rt.irq_restore(_irq);
                 return;
             }
         };
-
+ 
         // Check and update wake_pending from the hot-field cache.
         // This avoids a nested REGISTRY lock on the check-and-early-return path
         // (the primary source of SCHEDULER↔REGISTRY lock contention under SMP).
@@ -111,13 +282,13 @@ pub fn block_current<R: BootRuntime>() {
                 sf.state = TaskState::Blocked;
             }
         }
-
+ 
         if was_wake_pending {
             super::record_sched_lock_hold::<R>(
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                 lock_start,
             );
             super::clear_sched_lock_tracking::<R>();
@@ -132,10 +303,10 @@ pub fn block_current<R: BootRuntime>() {
             let deferred_prepare_ipis = sched.drain_pending_prepare_schedule_ipis();
             let deferred_registry_syncs = core::mem::take(&mut sched.pending_registry_syncs);
             super::record_sched_lock_hold::<R>(
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
-                &super::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_US_TOTAL,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_US_MAX,
+                &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_HOLD_HIST,
                 lock_start,
             );
             super::clear_sched_lock_tracking::<R>();
@@ -274,14 +445,14 @@ pub fn wake_task_locked<R: BootRuntime>(
     }
 
     let deferred = if wake_info.is_some() {
-        let tick = super::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        let tick = TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed);
         let wake_mono = crate::runtime::<R>().mono_ticks();
         // Increment the profiling counter before updating the hot-field cache.
         // The counter tracks Runnable transitions regardless of whether the
         // cache update succeeds, so ordering relative to the cache write does
         // not affect correctness.  The tick snapshot and the cache write use
         // the same `tick` value to keep both consistent.
-        super::PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
         // Keep the scheduler-side cache in sync without touching REGISTRY.
         if let Some(sf) = sched.state.get_thread_mut(id) {
@@ -467,7 +638,7 @@ fn try_remote_wake_via_mailbox<R: BootRuntime>(id: u64) -> bool {
         return false;
     };
 
-    super::PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    PROF_RUNNABLE_TRANSITIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let mailbox_cpu = super::enqueue_remote_wake_mailbox(
         safe_cpu,
         crate::sched::types::RemoteWakeMailboxEntry {
@@ -479,13 +650,13 @@ fn try_remote_wake_via_mailbox<R: BootRuntime>(id: u64) -> bool {
     );
     let already_pending = super::set_global_need_resched(mailbox_cpu);
     if super::claim_remote_wake_mailbox_ipi_epoch(mailbox_cpu) {
-        super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         rt.send_ipi(mailbox_cpu, 0x30);
     } else {
         // Track suppressions attributable to an already-pending resched signal.
         if already_pending {
-            super::PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            PROF_IPI_SUPPRESSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
     }
     true
@@ -565,8 +736,8 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
             rt.irq_restore(_irq);
             return;
         }
-        super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         crate::ktrace!("WAKE_TASK: Sending IPI 0x30 to CPU {}", cpu);
         rt.send_ipi(cpu, 0x30);
     }

@@ -40,6 +40,8 @@ pub enum ThreadSchedClass {
 pub type TaskSchedClass = ThreadSchedClass;
 
 impl ThreadPriority {
+    pub const COUNT: usize = 5;
+
     /// Current default class mapping for the existing priority lattice.
     ///
     /// This preserves current behavior while providing an explicit class seam

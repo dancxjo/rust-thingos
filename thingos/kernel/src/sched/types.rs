@@ -367,6 +367,16 @@ impl<R: BootRuntime> Scheduler<R> {
         }
         deferred
     }
+
+    pub(crate) fn take_pending_wake_ipis(&mut self) -> alloc::vec::Vec<usize> {
+        core::mem::take(&mut self.pending_wake_ipis)
+    }
+
+    pub(crate) fn take_deferred_registry_syncs(
+        &mut self,
+    ) -> alloc::vec::Vec<DeferredRegistrySync> {
+        core::mem::take(&mut self.pending_registry_syncs)
+    }
 }
 
 #[cfg(test)]
