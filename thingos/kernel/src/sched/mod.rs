@@ -3341,6 +3341,13 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         sf.state != TaskState::Dead
                             // Never migrate a currently running task.
                             && sf.state != TaskState::Running
+                            // A voluntarily-yielded task is enqueued before
+                            // the low-level context switch has saved and left
+                            // its kernel stack.  Keep that entry local so a
+                            // second CPU cannot run the same task during that
+                            // switch-out window.
+                            && self.state.last_enqueue_cause(tid)
+                                != crate::sched::state::EnqueueCause::YieldRequeue
                             // Validate canonical placement before steal.
                             && sf.runq_location == Some((victim_cpu, p))
                             // Only steal tasks that are allowed to run on the local CPU.
