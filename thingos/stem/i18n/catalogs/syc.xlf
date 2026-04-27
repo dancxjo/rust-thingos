@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+  <file original="thingos" source-language="en" target-language="syc" datatype="plaintext">
+    <body>
+      <trans-unit id="ui.fonts.title">
+        <source>Fonts</source>
+        <target>ܓܘ̈ܦܐ</target>
+      </trans-unit>
+      <trans-unit id="ui.fonts.explorer">
+        <source>Font Explorer</source>
+        <target>ܒܨܝܐ ܕܓܘ̈ܦܐ</target>
+      </trans-unit>
+      <trans-unit id="ui.fonts.count">
+        <source>Fonts</source>
+        <target>ܓܘ̈ܦܐ</target>
+      </trans-unit>
+      <trans-unit id="ui.photosynthesis.title">
+        <source>Photosynthesis</source>
+        <target>ܥܒܕܐ ܕܢܘܗܪܐ</target>
+      </trans-unit>
+      <trans-unit id="ui.window.close">
+        <source>Close</source>
+        <target>ܐܚܘܕ</target>
+      </trans-unit>
+      <trans-unit id="ui.window.minimize">
+        <source>Minimize</source>
+        <target>ܙܥܪ</target>
+      </trans-unit>
+      <trans-unit id="ui.window.maximize">
+        <source>Maximize</source>
+        <target>ܪܒܐ</target>
+      </trans-unit>
+      <trans-unit id="ui.fonts.sample">
+        <source>The quick brown fox jumps over the lazy dog. 0123456789</source>
+        <target>ܬܥܠܐ ܚܪܝܦܐ ܫܘܪ ܥܠ ܟܠܒܐ ܥܨܠܐ. 0123456789</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.hint.terminal">
+        <source>Press F12 for a terminal</source>
+        <target>ܕܘܫ F12 ܠܬܪܡܝܢܠ</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.complete">
+        <source>BOOT READY</source>
+        <target>ܫܘܪܝܐ ܡܛܝܒ</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.booting">
+        <source>BOOTING...</source>
+        <target>ܫܪܐ...</target>
+      </trans-unit>
+    </body>
+  </file>
+</xliff>

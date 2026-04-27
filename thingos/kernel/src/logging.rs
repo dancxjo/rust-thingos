@@ -610,7 +610,25 @@ macro_rules! log_event {
 }
 
 #[macro_export]
+macro_rules! ki18n_tr {
+    ($key:expr, $fallback:expr) => {
+        $fallback
+    };
+}
+
+#[macro_export]
 macro_rules! kinfo {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::logging::_log(
+            $crate::logging::LogMetadata {
+                level: $crate::logging::LogLevel::Info,
+                file: file!(),
+                line: line!(),
+                module: module_path!(),
+            },
+            format_args!($crate::ki18n_tr!(concat!("kernel.log.", file!(), ".", line!()), $fmt) $(, $arg)*)
+        )
+    };
     ($($arg:tt)*) => {
         $crate::logging::_log(
             $crate::logging::LogMetadata {
@@ -626,6 +644,17 @@ macro_rules! kinfo {
 
 #[macro_export]
 macro_rules! kerror {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::logging::_log(
+            $crate::logging::LogMetadata {
+                level: $crate::logging::LogLevel::Error,
+                file: file!(),
+                line: line!(),
+                module: module_path!(),
+            },
+            format_args!($crate::ki18n_tr!(concat!("kernel.log.", file!(), ".", line!()), $fmt) $(, $arg)*)
+        )
+    };
     ($($arg:tt)*) => {
         $crate::logging::_log(
             $crate::logging::LogMetadata {
@@ -641,6 +670,17 @@ macro_rules! kerror {
 
 #[macro_export]
 macro_rules! kwarn {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::logging::_log(
+            $crate::logging::LogMetadata {
+                level: $crate::logging::LogLevel::Warn,
+                file: file!(),
+                line: line!(),
+                module: module_path!(),
+            },
+            format_args!($crate::ki18n_tr!(concat!("kernel.log.", file!(), ".", line!()), $fmt) $(, $arg)*)
+        )
+    };
     ($($arg:tt)*) => {
         $crate::logging::_log(
             $crate::logging::LogMetadata {
@@ -656,6 +696,17 @@ macro_rules! kwarn {
 
 #[macro_export]
 macro_rules! kdebug {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::logging::_log(
+            $crate::logging::LogMetadata {
+                level: $crate::logging::LogLevel::Debug,
+                file: file!(),
+                line: line!(),
+                module: module_path!(),
+            },
+            format_args!($crate::ki18n_tr!(concat!("kernel.log.", file!(), ".", line!()), $fmt) $(, $arg)*)
+        )
+    };
     ($($arg:tt)*) => {
         $crate::logging::_log(
             $crate::logging::LogMetadata {
@@ -671,6 +722,17 @@ macro_rules! kdebug {
 
 #[macro_export]
 macro_rules! ktrace {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::logging::_log(
+            $crate::logging::LogMetadata {
+                level: $crate::logging::LogLevel::Trace,
+                file: file!(),
+                line: line!(),
+                module: module_path!(),
+            },
+            format_args!($crate::ki18n_tr!(concat!("kernel.log.", file!(), ".", line!()), $fmt) $(, $arg)*)
+        )
+    };
     ($($arg:tt)*) => {
         $crate::logging::_log(
             $crate::logging::LogMetadata {
@@ -686,6 +748,11 @@ macro_rules! ktrace {
 
 #[macro_export]
 macro_rules! kprint {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::logging::_log_raw(
+            format_args!($crate::ki18n_tr!(concat!("kernel.print.", file!(), ".", line!()), $fmt) $(, $arg)*)
+        )
+    };
     ($($arg:tt)*) => {
         $crate::logging::_log_raw(format_args!($($arg)*))
     };
@@ -695,6 +762,11 @@ macro_rules! kprint {
 /// USE EXTREMELY SPARINGLY. Intended for fatal panic paths or low-level bring-up debugging.
 #[macro_export]
 macro_rules! kprint_sync {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::logging::_log_raw_sync(
+            format_args!($crate::ki18n_tr!(concat!("kernel.print.", file!(), ".", line!()), $fmt) $(, $arg)*)
+        )
+    };
     ($($arg:tt)*) => {
         $crate::logging::_log_raw_sync(format_args!($($arg)*))
     };

@@ -54,7 +54,7 @@ const TASK_PHASES: [BootPhase; TOTAL_TASKS] = [
 const DOT_THRESHOLDS: [usize; NUM_DOTS] = [1, 3, 5, 7, 9, 11, 13, 16];
 
 /// Short phase labels rendered below each milestone dot when a font is available.
-const DOT_LABELS: [&str; NUM_DOTS] = ["FB", "MEM", "CPU", "BUS", "DEV", "CLK", "MOD", "INIT"];
+const DOT_LABELS: [&str; NUM_DOTS] = ["FB", "MEM", "CPU", "BUS", "DEV", "CLK", "MOD", "EK"];
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 const PANEL_BG: u32 = 0x111111;
@@ -75,7 +75,7 @@ const DOT_SIZE: usize = 8;
 const MSG_H: usize = 16;
 const HINT_H: usize = 16;
 const HINT_FG: u32 = 0x888888;
-const HINT_TEXT: &str = "Press F12 for a terminal";
+const HINT_TEXT: &str = crate::ki18n_tr!("kernel.boot.hint.terminal", "Premu F12 por terminalo");
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -244,7 +244,7 @@ pub fn finish() {
     }
     state.draw_progress_bar(TOTAL_TASKS);
     state.draw_phase_dots(TOTAL_TASKS);
-    state.update_message("BOOT COMPLETE");
+    state.update_message(crate::ki18n_tr!("kernel.boot.complete", "STARTO PRETA"));
 }
 
 // ── Helper: icon bitmap lookup ────────────────────────────────────────────────
@@ -282,7 +282,7 @@ impl BootProgressState {
         }
         self.draw_progress_bar(0);
         self.draw_phase_dots(0);
-        self.update_message("BOOTING...");
+        self.update_message(crate::ki18n_tr!("kernel.boot.booting", "STARTANTE..."));
         self.draw_hint();
     }
 

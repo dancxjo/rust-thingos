@@ -35,7 +35,7 @@ const NETD_READY_PATH: &str = "/run/netd.ready";
 const NETD_LIVENESS_PATH: &str = "/net/icmp/new";
 const NETD_PROBE_INTERVAL_NS: u64 = 1_000_000_000;
 const NETD_MAX_PROBE_FAILURES: u32 = 3;
-const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
+const SERIAL_SHELL_HEADSTART_MS: u64 = 0;
 /// Periodic supervisor cadence — preserves the previous 100 ms `sleep_ms`
 /// rhythm that drove netd liveness probing and the health-vine restart loop.
 const SUPERVISOR_TICK_MS: u64 = 100;
@@ -161,11 +161,15 @@ impl Supervisor {
         // Stage 1: Launch Serial Shell
         stem::info!("SPROUT: Launching serial shell...");
         setup_serial_shell(self.tasks.clone());
-        stem::info!(
-            "SPROUT: Serial shell launched; yielding {}ms so the prompt can take the foreground",
-            SERIAL_SHELL_HEADSTART_MS
-        );
-        stem::sleep_ms(SERIAL_SHELL_HEADSTART_MS);
+        if SERIAL_SHELL_HEADSTART_MS > 0 {
+            stem::info!(
+                "SPROUT: Serial shell launched; yielding {}ms so the prompt can take the foreground",
+                SERIAL_SHELL_HEADSTART_MS
+            );
+            stem::sleep_ms(SERIAL_SHELL_HEADSTART_MS);
+        } else {
+            stem::info!("SPROUT: Serial shell launched; continuing supervisor startup immediately");
+        }
         stem::info!("SPROUT: Continuing supervisor startup");
 
         // Stage 2: Start cambium for driver discovery.
@@ -710,14 +714,20 @@ fn path_exists(path: &str) -> bool {
 }
 
 fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    match stem::syscall::spawn_process("/bin/cambium", 0) {
-        Ok(pid) => {
+    let path = "/bin/cambium";
+    let argv: &[&[u8]] = &[path.as_bytes()];
+    let env = alloc::collections::BTreeMap::new();
+    let inherit = stem::abi::types::stdio_mode::INHERIT;
+    let null = stem::abi::types::stdio_mode::NULL;
+    match stem::syscall::spawn_process_ex(path, argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
             stem::debug!("SPROUT: Spawned cambium (PID={})", pid);
             let mut tasks = tasks.lock();
             tasks.push(ManagedTask {
                 name: "cambium".to_string(),
                 kind: TaskKind::Service("svc.cambium".to_string()),
-                module_path: "/bin/cambium".to_string(),
+                module_path: path.to_string(),
                 pid: Some(pid),
                 ..Default::default()
             });

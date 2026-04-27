@@ -41,6 +41,11 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
     And I type "echo test" on the serial console
     Then the log should match pattern "bristle: bloom sink registered"
 
+  Scenario: F1 cycles the session locale
+    Given the machine is booted
+    When I press f1
+    Then the log should match pattern "bristle: F1 pressed - locale set to (eo|la|syc|en)"
+
   Scenario: ps2_kbd driver reads handle from VFS path
     # ps2_kbd no longer uses a packed spawn arg; it reads the handle from VFS.
     Then the log should match pattern "ps2_kbd: bristle handle=[1-9][0-9]*"

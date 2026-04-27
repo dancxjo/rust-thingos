@@ -28,8 +28,8 @@ use abi::driver_interface::{
 };
 use abi::seed::{INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
 use abi::syscall::vfs_flags::O_RDONLY;
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_stat};
 use stem::{debug, info};
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek};
 
 /// Maximum ELF binary size the catalog will read into memory for symbol
 /// inspection.  Binaries larger than this are silently skipped.
@@ -658,13 +658,16 @@ fn read_driver_name(bytes: &[u8], vaddr: u64, len: usize) -> Option<String> {
 
 fn read_file(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
     let fd = vfs_open(path, O_RDONLY).ok()?;
+    let stat_size = vfs_stat(fd).ok().map(|stat| stat.size as usize).unwrap_or(max_bytes);
+    let read_limit = stat_size.min(max_bytes);
 
-    // Read up to max_bytes in chunks.
-    let mut buf = alloc::vec![0u8; max_bytes.min(1024 * 1024)];
+    // Read only the advertised file length. Some early-boot VFS nodes do not
+    // reliably signal EOF, so catalog scans must not depend on a final 0-byte read.
+    let mut buf = alloc::vec![0u8; read_limit.min(1024 * 1024)];
     let mut total = 0usize;
     let mut out = Vec::new();
-    loop {
-        let room = buf.len().min(max_bytes.saturating_sub(total));
+    while total < read_limit {
+        let room = buf.len().min(read_limit.saturating_sub(total));
         if room == 0 {
             break;
         }

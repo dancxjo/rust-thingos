@@ -49,6 +49,20 @@ fn update_active_ui(target: &str) {
     }
 }
 
+fn update_locale(locale: &str) {
+    if let Ok(fd) = vfs_open("/session/locale", O_RDWR | O_CREAT | O_TRUNC) {
+        let _ = vfs_write(fd, locale.as_bytes());
+        let _ = vfs_close(fd);
+        stem::debug!("bristle: locale set to '{}'", locale);
+    }
+}
+
+fn cycle_locale() {
+    let locale = stem::i18n::cycle_locale();
+    update_locale(locale.as_str());
+    stem::info!("bristle: F1 pressed - locale set to {}", locale.as_str());
+}
+
 /// Publish bristle's PID to `/run/bristle/pid` so consumers can find us.
 fn publish_pid() {
     let _ = vfs_mkdir("/run");
@@ -74,8 +88,10 @@ fn publish_device_handle(path: &str, handle: u32) {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    stem::i18n::init();
     ensure_session_roots();
     update_active_ui("bloom");
+    update_locale(stem::i18n::current_locale().as_str());
 
     // ── Publish PID so consumers can register via inbox ───────────────────
     publish_pid();
@@ -314,7 +330,7 @@ fn accumulate_and_dispatch(
                                 stem::syscall::reboot();
                             }
                             Key::F1 => {
-                                update_active_ui("bloom");
+                                cycle_locale();
                             }
                             Key::F12 => {
                                 update_active_ui("terminal");

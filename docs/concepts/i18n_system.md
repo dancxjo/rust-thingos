@@ -1,205 +1,80 @@
 # Internationalization (i18n) System
 
-## Overview
+Thing-OS UI text is localized through lightweight `stem` macros and XLIFF
+catalogs. New code should keep English source text in Rust and use the macros
+only as tags for extraction and runtime lookup.
 
-Thing-OS includes a first-class i18n system that treats every UI-visible string as a translatable resource. This enables runtime locale switching without application restart.
+## Authoring Text
 
-## Architecture
-
-### Core Types
-
-#### `TextKey`
-A stable identifier for translatable strings. Keys should be hierarchical and descriptive:
-```rust
-TextKey::new("ui.fonts.title")        // Font Explorer title
-TextKey::new("ui.window.close")       // Close button
-TextKey::new("ui.fonts.sample")       // Sample text
-```
-
-#### `LocaleId`
-Identifies a locale (e.g., `en-US`, `la`, `syc`):
-```rust
-LocaleId::EN_US    // English (US)
-LocaleId::LA       // Latin
-LocaleId::SYC      // Syriac
-```
-
-#### `LocalizedText`
-Combines a translation key with a fallback string:
-```rust
-const TITLE: LocalizedText = stem::t!("ui.fonts.title", "Fonts");
-
-// Later, get the translated string:
-let title_str = TITLE.get();  // Returns "Fonts" or "Litterae" depending on locale
-```
-
-#### `Catalog`
-Maps text keys to translated strings for a specific locale:
-```rust
-const LATIN_CATALOG: &[(&str, &str)] = &[
-    ("ui.fonts.title", "Litterae"),
-    ("ui.fonts.explorer", "Explorator Litterarum"),
-];
-```
-
-#### `Translator`
-Global translation service that:
-- Manages current locale state
-- Provides translation lookups with fallback chain
-- Tracks generation counter for UI cache invalidation
-
-## Usage
-
-### Defining Localized Text
-
-Use the `t!` macro to define localized text constants:
+Use source-string macros for new UI:
 
 ```rust
-use stem::i18n::LocalizedText;
+const TITLE: stem::i18n::LocalizedText = stem::t!("Font Explorer");
+const CLOSE: stem::i18n::LocalizedText =
+    stem::t!("Close", note: "Window close button label");
 
-const WINDOW_TITLE: LocalizedText = stem::t!("ui.window.title", "Window");
-const BUTTON_LABEL: LocalizedText = stem::t!("ui.button.ok", "OK");
+let label = stem::tr!("Close");
+let status = stem::tf!("Copied {} files", count);
 ```
 
-### Getting Translations
-
-Call `.get()` to obtain the translated string:
+Legacy key/fallback forms remain supported while older code is migrated:
 
 ```rust
-let title = WINDOW_TITLE.get();  // Returns current locale's translation or fallback
+const TITLE: stem::i18n::LocalizedText = stem::t!("ui.fonts.title", "Fonts");
+let label = stem::tr!("ui.window.close", "Close");
+let status = stem::tf!("copy.status", "Copied {} files", count);
 ```
 
-### Runtime Locale Switching
+`LocalizedText::get()`, `tr!`, and `tf!` resolve against the current locale and
+fall back through English, then the source/fallback string in code.
 
-Users can switch locales by pressing **F8** in Photosynthesis. This triggers:
-1. `stem::i18n::cycle_locale()` - switches to next locale
-2. Generation counter increment - signals UIs to redraw
-3. UI applications detect the change and refresh with new translations
+## Catalogs
 
-### Detecting Locale Changes
+Catalogs live in:
 
-Applications can detect locale changes using the generation counter:
-
-```rust
-let mut last_i18n_gen = 0u64;
-
-loop {
-    let current_gen = stem::i18n::generation();
-    if current_gen != last_i18n_gen {
-        // Locale changed - redraw UI with new translations
-        last_i18n_gen = current_gen;
-        dirty = true;
-    }
-    
-    // ... rest of render loop
-}
+```text
+thingos/stem/i18n/catalogs/
 ```
 
-## Translation Fallback Chain
+Each locale is an XLIFF 1.2 file named with its ISO locale, for example:
 
-When looking up a translation, the system follows this chain:
-1. Current locale catalog
-2. Default locale (en-US) catalog
-3. Fallback string provided in `LocalizedText`
-
-This ensures text is always displayed, even for untranslated strings.
-
-## Adding New Locales
-
-To add a new locale:
-
-1. Define the locale constant in `stem/src/i18n/mod.rs`:
-```rust
-impl LocaleId {
-    // ... existing locales
-    pub const NEW_LOCALE: LocaleId = LocaleId("new-locale");
-}
+```text
+en.xlf
+eo.xlf
+la.xlf
+syc.xlf
 ```
 
-2. Create a translation catalog:
-```rust
-const NEW_LOCALE_CATALOG: &[(&str, &str)] = &[
-    ("ui.fonts.title", "Translation"),
-    // ... more translations
-];
+Adding a language should be just adding another file such as `fr.xlf` with
+`target-language="fr"`. `thingos/stem/build.rs` discovers `*.xlf`, compiles
+static no_std lookup tables, and registers the locale automatically.
+
+The build also writes an extracted English template to:
+
+```text
+$OUT_DIR/i18n_extracted.en.xlf
 ```
 
-3. Register the catalog in `Translator::init()`:
-```rust
-catalogs.insert(LocaleId::NEW_LOCALE, Catalog::from_table(LocaleId::NEW_LOCALE, &NEW_LOCALE_CATALOG));
+That generated file is intended for tooling and translators; checked-in
+translation catalogs are the source of truth for runtime translations.
+
+## Runtime Switching
+
+Bristle handles the global F1 hotkey. Pressing F1 cycles the session locale and
+writes the active ISO code to:
+
+```text
+/session/locale
 ```
 
-4. Update locale cycling logic in `set_locale()` and `cycle_locale()`
+`stem::i18n` syncs from that file on Thing-OS when translating text or checking
+the i18n generation counter. UI code that caches rendered text should compare
+`stem::i18n::generation()` and redraw when it changes.
 
-## Current Translation Coverage
+## Notes
 
-### Latin Locale (`la`)
-- Font Explorer UI strings (title, explorer, count labels)
-- Sample text for font display
-- Common window actions (close, minimize, maximize)
-
-### Planned Locales
-- **Syriac (`syc`)**: Placeholder defined, translations pending
-- Additional locales can be added following the pattern above
-
-## Example: Font Explorer
-
-Font Explorer demonstrates i18n integration:
-
-```rust
-// Initialize i18n at startup
-stem::i18n::init();
-
-// Define localized text
-const EXPLORER: LocalizedText = stem::t!("ui.fonts.explorer", "Font Explorer");
-const COUNT_LABEL: LocalizedText = stem::t!("ui.fonts.count", "Fonts");
-const SAMPLE: LocalizedText = stem::t!("ui.fonts.sample", "Sample text...");
-
-// Use in UI
-let header_text = alloc::format!("{} ({})", COUNT_LABEL.get(), fonts.len());
-let scene = Scene::new().window(
-    Window::new(win)
-        .title(EXPLORER.get())  // Uses current locale
-        .root(/* ... */)
-);
-
-// Detect locale changes
-let current_i18n_gen = stem::i18n::generation();
-if current_i18n_gen != last_i18n_gen {
-    dirty = true;
-    last_i18n_gen = current_i18n_gen;
-}
-```
-
-## Testing
-
-The i18n system includes comprehensive unit tests in `stem/src/i18n/mod.rs`:
-- Text key creation and comparison
-- Locale identifier validation
-- Catalog lookups
-- Translator locale switching
-- Generation counter increments
-- Translation fallback chain
-
-Run tests with:
-```bash
-cargo test -p stem --lib i18n
-```
-
-## Design Principles
-
-1. **First-Class**: i18n is built into the type system, not bolted on
-2. **Zero Overhead**: Static catalogs, no filesystem or runtime overhead
-3. **Type-Safe**: Keys are strings but wrapped in `TextKey` for clarity
-4. **Always Valid**: Fallback chain ensures text is never missing
-5. **Cache-Friendly**: Generation counter enables efficient UI invalidation
-6. **No Strings in Code**: All UI text goes through the i18n system
-
-## Future Enhancements
-
-- [ ] Right-to-left (RTL) layout support for Syriac and other RTL scripts
-- [ ] Plural forms handling (e.g., "1 font" vs "2 fonts")
-- [ ] Date/time localization
-- [ ] Number formatting per locale
-- [ ] External translation file loading (when filesystem is available)
-- [ ] Translation coverage reporting tools
+- Keep kernel code `no_std`; this i18n path is for `stem` userspace/runtime
+  text and no_std-compatible libraries.
+- Prefer source-string macros in new UI code.
+- Use `note: "..."` when translators need context, especially for short labels
+  or words that can be verbs or nouns.

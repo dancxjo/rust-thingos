@@ -48,8 +48,14 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     } else {
         vfs::mount::lookup(&abs_path)?
     };
+    if path == "/sys/devices" {
+        crate::kdebug!("sys_fs_open: /sys/devices lookup ok");
+    }
 
     enforce_open_access(&node, open_flags)?;
+    if path == "/sys/devices" {
+        crate::kdebug!("sys_fs_open: /sys/devices access ok");
+    }
 
     if path == "/dev/fb0" {
         match node.stat() {
@@ -83,6 +89,9 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
         crate::kdebug!("sys_fs_open: process info present for /dev/fb0");
     }
     let fd = pinfo_arc.lock().handle_table.open(node, open_flags, abs_path)?;
+    if path == "/sys/devices" {
+        crate::kdebug!("sys_fs_open: /sys/devices fd={}", fd);
+    }
 
     if path == "/dev/fb0" {
         crate::kdebug!("sys_fs_open: handle_table.open('/dev/fb0') -> {}", fd);

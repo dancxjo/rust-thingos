@@ -6,7 +6,9 @@ Feature: Sprout graphics pipeline orchestration
 
   Scenario: sprout launches the full graphics pipeline
     Given the machine is booted
-    Then the serial output should contain "SPROUT: Starting full pipeline (graphics + input)" within 60s
+    Then the serial output should contain "SPROUT: Continuing supervisor startup" within 60s
+    And the serial output should contain "CAMBIUM: main started" within 60s
+    And the serial output should contain "SPROUT: Starting full pipeline (graphics + input)" within 60s
     And the serial output should contain "SPROUT: Spawned bristle" within 60s
     And the serial output should contain "display_virtio_gpu: frame pool ready" within 120s
     And the serial output should contain "SPROUT: Mounted /dev/display/card0 successfully" within 120s

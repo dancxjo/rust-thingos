@@ -52,11 +52,13 @@ fn enforce_open_access(node: &Arc<dyn vfs::VfsNode>, open_flags: OpenFlags) -> S
     if !open_flags.is_readable() && !open_flags.is_writable() {
         return Ok(());
     }
-    let authority = crate::authority::bridge::authority_for_current();
+
     // Root remains the privileged principal and bypasses file mode checks.
-    if authority.uid == 0 {
+    if crate::sched::process_info_current().map(|p| p.lock().authority.uid).unwrap_or(0) == 0 {
         return Ok(());
     }
+
+    let authority = crate::authority::bridge::authority_for_current();
     let stat = node.stat()?;
     if mode_allows_requested_access(stat.mode, open_flags.is_readable(), open_flags.is_writable()) {
         Ok(())

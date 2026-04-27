@@ -54,12 +54,18 @@ pub use time::{Duration, Instant};
 
 #[macro_export]
 macro_rules! print {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::console::print(format_args!($fmt $(, $arg)*));
+    };
     ($($arg:tt)*) => ($crate::console::print(format_args!($($arg)*)));
 }
 
 #[macro_export]
 macro_rules! println {
     () => ($crate::print!("\n"));
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::print!(concat!($fmt, "\n") $(, $arg)*);
+    };
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
 }
 
@@ -69,6 +75,13 @@ pub fn log(s: &str) {
 
 #[macro_export]
 macro_rules! error {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {{
+        $crate::console::log_with_provenance(
+            $crate::abi::logging::Level::Error as usize,
+            module_path!(),
+            format_args!($fmt $(, $arg)*),
+        );
+    }};
     ($($arg:tt)*) => {{
         $crate::console::log_with_provenance(
             $crate::abi::logging::Level::Error as usize,
@@ -80,6 +93,13 @@ macro_rules! error {
 
 #[macro_export]
 macro_rules! warn {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {{
+        $crate::console::log_with_provenance(
+            $crate::abi::logging::Level::Warn as usize,
+            module_path!(),
+            format_args!($fmt $(, $arg)*),
+        );
+    }};
     ($($arg:tt)*) => {{
         $crate::console::log_with_provenance(
             $crate::abi::logging::Level::Warn as usize,
@@ -91,6 +111,13 @@ macro_rules! warn {
 
 #[macro_export]
 macro_rules! info {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {{
+        $crate::console::log_with_provenance(
+            $crate::abi::logging::Level::Info as usize,
+            module_path!(),
+            format_args!($fmt $(, $arg)*),
+        );
+    }};
     ($($arg:tt)*) => {{
         $crate::console::log_with_provenance(
             $crate::abi::logging::Level::Info as usize,
@@ -102,6 +129,13 @@ macro_rules! info {
 
 #[macro_export]
 macro_rules! debug {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {{
+        $crate::console::log_with_provenance(
+            $crate::abi::logging::Level::Debug as usize,
+            module_path!(),
+            format_args!($fmt $(, $arg)*),
+        );
+    }};
     ($($arg:tt)*) => {{
         $crate::console::log_with_provenance(
             $crate::abi::logging::Level::Debug as usize,
@@ -113,6 +147,13 @@ macro_rules! debug {
 
 #[macro_export]
 macro_rules! trace {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {{
+        $crate::console::log_with_provenance(
+            $crate::abi::logging::Level::Trace as usize,
+            module_path!(),
+            format_args!($fmt $(, $arg)*),
+        );
+    }};
     ($($arg:tt)*) => {{
         $crate::console::log_with_provenance(
             $crate::abi::logging::Level::Trace as usize,

@@ -13,6 +13,7 @@ spin = "0.9"
 xml-no-std = "0.8"
 htmlparser = { version = "0.2", default-features = false }
 libm = "0.2"
+trivial_i18n = "0.0.1"
 
 [build-dependencies]
 pciids = { path = "../../tools/pciids" }

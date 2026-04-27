@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+  <file original="thingos" source-language="en" target-language="en" datatype="plaintext">
+    <body>
+      <trans-unit id="ui.fonts.title">
+        <source>Fonts</source>
+        <target>Fonts</target>
+      </trans-unit>
+      <trans-unit id="ui.fonts.explorer">
+        <source>Font Explorer</source>
+        <target>Font Explorer</target>
+      </trans-unit>
+      <trans-unit id="ui.fonts.count">
+        <source>Fonts</source>
+        <target>Fonts</target>
+      </trans-unit>
+      <trans-unit id="ui.photosynthesis.title">
+        <source>Photosynthesis</source>
+        <target>Photosynthesis</target>
+      </trans-unit>
+      <trans-unit id="ui.window.close">
+        <source>Close</source>
+        <target>Close</target>
+      </trans-unit>
+      <trans-unit id="ui.window.minimize">
+        <source>Minimize</source>
+        <target>Minimize</target>
+      </trans-unit>
+      <trans-unit id="ui.window.maximize">
+        <source>Maximize</source>
+        <target>Maximize</target>
+      </trans-unit>
+      <trans-unit id="ui.fonts.sample">
+        <source>The quick brown fox jumps over the lazy dog. 0123456789</source>
+        <target>The quick brown fox jumps over the lazy dog. 0123456789</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.hint.terminal">
+        <source>Press F12 for a terminal</source>
+        <target>Press F12 for a terminal</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.complete">
+        <source>BOOT READY</source>
+        <target>BOOT READY</target>
+      </trans-unit>
+      <trans-unit id="kernel.boot.booting">
+        <source>BOOTING...</source>
+        <target>BOOTING...</target>
+      </trans-unit>
+    </body>
+  </file>
+</xliff>

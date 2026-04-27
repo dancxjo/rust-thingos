@@ -3744,6 +3744,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jprop"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a474b99e291049e0ae36c8f658d7efa7f7ffecb5de27566dfa20db7237a70e7a"
+
+[[package]]
 name = "js-sys"
 version = "0.3.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8029,6 +8035,7 @@ dependencies = [
  "pciids",
  "spin",
  "stem-macros",
+ "trivial_i18n",
  "xml-no-std",
 ]
 
@@ -8893,6 +8900,17 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "trivial_i18n"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7d0cf748b876bba62917758f7f2682dc73b7f6c7cbfbe8e78ecfb4cacacfaa0"
+dependencies = [
+ "jprop",
+ "linked-hash-map",
+ "unicode-xid",
 ]
 
 [[package]]
