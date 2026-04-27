@@ -94,6 +94,11 @@ Feature: Bloom compositor service loop and responsiveness
     And the serial output should contain "First frame rendered" within 60s
     And the bloom cursor should be visible
 
+  Scenario: bloom first frame includes the pointer debug overlay
+    Given the machine is booted
+    Then the serial output should contain "bloom: pointer debug overlay ready" within 60s
+    And the serial output should contain "First frame rendered" within 60s
+
   Scenario: failed wallpaper decode leaves previous wallpaper active
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s

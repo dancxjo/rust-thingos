@@ -173,7 +173,7 @@ pub fn sys_sigaction(sig_raw: usize, act_ptr: usize, oldact_ptr: usize) -> SysRe
             copyin(dst, act_ptr)?;
         }
         new_action.mask = SigSet(new_action.mask.0 & !crate::signal::UNCATCHABLE.0);
-        
+
         p.unix_compat.signals.set_action(sig, new_action);
         if new_action.handler == abi::signal::SIG_IGN {
             p.unix_compat.signals.pending.remove(sig);

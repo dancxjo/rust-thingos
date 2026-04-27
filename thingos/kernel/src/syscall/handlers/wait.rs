@@ -30,7 +30,10 @@ pub fn sys_wait_many(
         let cpu_idx = crate::runtime_base().current_cpu_index();
         let real_cpu_id = crate::runtime_base().current_cpu_id().0 as usize;
         if cpu_idx != real_cpu_id {
-            panic!("GS CORRUPTION DETECTED in sys_wait_many: Core {} thinks it is index {} via GS!", real_cpu_id, cpu_idx);
+            panic!(
+                "GS CORRUPTION DETECTED in sys_wait_many: Core {} thinks it is index {} via GS!",
+                real_cpu_id, cpu_idx
+            );
         }
     }
 

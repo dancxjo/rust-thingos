@@ -31,8 +31,12 @@ pub fn sys_reboot(cmd: usize) -> SysResult<usize> {
         reboot_cmd::RESTART => {
             crate::kinfo!("SYSCALL REBOOT: system reboot requested");
             if !crate::shutdown::begin_shutdown() {
-                crate::kinfo!("SYSCALL REBOOT: shutdown already in progress, duplicate caller exiting");
-                unsafe { crate::sched::exit_current(0); }
+                crate::kinfo!(
+                    "SYSCALL REBOOT: shutdown already in progress, duplicate caller exiting"
+                );
+                unsafe {
+                    crate::sched::exit_current(0);
+                }
                 return Ok(0);
             }
             crate::runtime_base().reboot();
@@ -40,8 +44,12 @@ pub fn sys_reboot(cmd: usize) -> SysResult<usize> {
         reboot_cmd::HALT | reboot_cmd::POWER_OFF => {
             crate::kinfo!("SYSCALL SHUTDOWN: system shutdown requested");
             if !crate::shutdown::begin_shutdown() {
-                crate::kinfo!("SYSCALL SHUTDOWN: shutdown already in progress, duplicate caller exiting");
-                unsafe { crate::sched::exit_current(0); }
+                crate::kinfo!(
+                    "SYSCALL SHUTDOWN: shutdown already in progress, duplicate caller exiting"
+                );
+                unsafe {
+                    crate::sched::exit_current(0);
+                }
                 return Ok(0);
             }
             crate::runtime_base().shutdown();

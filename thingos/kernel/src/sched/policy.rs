@@ -51,12 +51,7 @@ pub trait SchedPolicy {
     /// `preferred_cpu` hint is the CPU on which the task last ran (its
     /// locality preference).  The `local_cpu` is the CPU making the
     /// scheduling decision.
-    fn choose_cpu(
-        &self,
-        state: &SchedState,
-        preferred_cpu: usize,
-        local_cpu: usize,
-    ) -> usize;
+    fn choose_cpu(&self, state: &SchedState, preferred_cpu: usize, local_cpu: usize) -> usize;
 
     /// Decide whether the currently running task on `cpu` should be
     /// preempted by an incoming task of `incoming_priority`.
@@ -184,8 +179,7 @@ impl SchedPolicy for DefaultPolicy {
                 let mut eff = p;
                 if p < 4 {
                     let wait = now_tick.saturating_sub(sf.enqueued_at_tick);
-                    let boost =
-                        (wait / crate::sched::types::AGING_THRESHOLD_TICKS) as usize;
+                    let boost = (wait / crate::sched::types::AGING_THRESHOLD_TICKS) as usize;
                     let boost = boost.min(crate::sched::types::MAX_PRIORITY_BOOST);
                     eff = (p + boost).min(4);
                 }
@@ -206,22 +200,16 @@ impl SchedPolicy for DefaultPolicy {
         }
     }
 
-    fn choose_cpu(
-        &self,
-        state: &SchedState,
-        preferred_cpu: usize,
-        local_cpu: usize,
-    ) -> usize {
+    fn choose_cpu(&self, state: &SchedState, preferred_cpu: usize, local_cpu: usize) -> usize {
         // Resolve preferred to a valid online CPU.
-        let preferred = if preferred_cpu < state.per_cpu.len()
-            && state.online_cpus.contains(&preferred_cpu)
-        {
-            preferred_cpu
-        } else if local_cpu < state.per_cpu.len() {
-            local_cpu
-        } else {
-            0
-        };
+        let preferred =
+            if preferred_cpu < state.per_cpu.len() && state.online_cpus.contains(&preferred_cpu) {
+                preferred_cpu
+            } else if local_cpu < state.per_cpu.len() {
+                local_cpu
+            } else {
+                0
+            };
 
         // If only one CPU is online (or preferred has spare capacity), stay local.
         if state.online_cpus.len() <= 1 {
@@ -319,10 +307,7 @@ mod tests {
         }
     }
 
-    fn make_state_with_tasks(
-        tasks: &[(u64, usize, TaskState)],
-        cpu: usize,
-    ) -> SchedState {
+    fn make_state_with_tasks(tasks: &[(u64, usize, TaskState)], cpu: usize) -> SchedState {
         let mut state = SchedState::new();
         while state.per_cpu.len() <= cpu {
             state.per_cpu.push(CpuScheduler::new_for_cpu(state.per_cpu.len()));

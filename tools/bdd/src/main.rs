@@ -42,6 +42,14 @@ fn main() {
     };
     eprintln!("[bdd] Features path: {:?}", features_path);
 
+    if !features_path.exists() {
+        eprintln!(
+            "[bdd] ERROR: requested feature path does not exist: {}",
+            features_path.display()
+        );
+        std::process::exit(2);
+    }
+
     // Create custom reporter with artifact collection
     let reporter = ThingOsReporter::new(&arch);
 

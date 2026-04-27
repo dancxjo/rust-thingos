@@ -242,11 +242,14 @@ impl BloomWorld {
         let composition = self.scene.collect_composition();
         let pending_damage = self.damage.take();
         let (pointer_x, pointer_y) = self.input.pointer_position();
+        let pointer_overlay =
+            self.visuals.pointer_overlay_plane(&self.display, pointer_x, pointer_y);
         let cursor = self.visuals.cursor_plane(pointer_x, pointer_y);
         let result = self.display.present(
             &composition,
             &pending_damage,
             self.visuals.fallback_buffer_id(),
+            pointer_overlay,
             cursor,
         );
         if result.success {

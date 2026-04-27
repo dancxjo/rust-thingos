@@ -1,7 +1,7 @@
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec::Vec;
-
 use core::sync::atomic::{AtomicBool, Ordering};
+
 use spin::{Mutex, Once};
 
 /// Unique identifier for a kernel thread (scheduler task).
@@ -68,11 +68,7 @@ impl CpuSet {
 
     /// A set containing **only** `cpu`.  Returns an empty set if `cpu >= 64`.
     pub const fn only(cpu: CpuId) -> Self {
-        if cpu < 64 {
-            CpuSet(1u64 << cpu)
-        } else {
-            CpuSet(0)
-        }
+        if cpu < 64 { CpuSet(1u64 << cpu) } else { CpuSet(0) }
     }
 
     /// Returns `true` if `cpu` is in this set.
@@ -107,7 +103,12 @@ impl CpuSet {
     /// 3. Lowest-indexed CPU in the set that is `< cpu_count`.
     ///
     /// Returns `None` if no allowed CPU is within `cpu_count`.
-    pub fn pick(self, preferred: Option<CpuId>, last_cpu: Option<CpuId>, cpu_count: usize) -> Option<CpuId> {
+    pub fn pick(
+        self,
+        preferred: Option<CpuId>,
+        last_cpu: Option<CpuId>,
+        cpu_count: usize,
+    ) -> Option<CpuId> {
         if let Some(p) = preferred {
             if p < cpu_count && self.contains(p) {
                 return Some(p);
@@ -320,11 +321,7 @@ impl MigrationState {
             (MigrationState::Pinned, MigrationState::Local) => true,
             _ => false,
         };
-        if allowed {
-            Ok(next)
-        } else {
-            Err(self)
-        }
+        if allowed { Ok(next) } else { Err(self) }
     }
 }
 
@@ -698,10 +695,7 @@ impl WakeMailbox {
     ///
     /// This is a `const fn` so it can be used in static initializers.
     pub const fn new() -> Self {
-        WakeMailbox {
-            inner: Mutex::new(VecDeque::new()),
-            pending: AtomicBool::new(false),
-        }
+        WakeMailbox { inner: Mutex::new(VecDeque::new()), pending: AtomicBool::new(false) }
     }
 
     /// Push a [`WakeMailboxEntry`] from a remote CPU.
@@ -831,7 +825,6 @@ impl CpuScheduler {
         );
     }
 }
-
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PerCpuSchedStats {
@@ -1701,7 +1694,8 @@ mod tests {
 
         state.enqueue_thread(0, TaskPriority::Idle as usize, 61);
         assert_eq!(
-            state.per_cpu[0].runq.nonempty_runnable_mask(), 0,
+            state.per_cpu[0].runq.nonempty_runnable_mask(),
+            0,
             "idle queue should not be marked as non-idle runnable work"
         );
     }
@@ -1734,7 +1728,11 @@ mod tests {
         assert!(cs.current.is_none(), "new CpuScheduler should have no current task");
         assert!(cs.idle_task.is_none(), "new CpuScheduler should have no idle task");
         assert!(!cs.need_resched, "new CpuScheduler should not need rescheduling");
-        assert_eq!(cs.runq.nonempty_runnable_mask(), 0, "new CpuScheduler should have empty run queues");
+        assert_eq!(
+            cs.runq.nonempty_runnable_mask(),
+            0,
+            "new CpuScheduler should have empty run queues"
+        );
         assert_eq!(cs.runq.total_len(), 0, "all priority run queues should start empty");
     }
 
@@ -1754,8 +1752,11 @@ mod tests {
         let mut cs0 = CpuScheduler::new_for_cpu(0);
         let mut cs1 = CpuScheduler::new_for_cpu(1);
         cs0.runq[TaskPriority::Normal as usize].push_back(1);
-        assert_eq!(cs1.runq[TaskPriority::Normal as usize].len(), 0,
-            "cpu1 run queue must not be affected by enqueue on cpu0");
+        assert_eq!(
+            cs1.runq[TaskPriority::Normal as usize].len(),
+            0,
+            "cpu1 run queue must not be affected by enqueue on cpu0"
+        );
         assert_eq!(cs0.cpu_id, 0);
         assert_eq!(cs1.cpu_id, 1);
     }
@@ -1779,7 +1780,8 @@ mod tests {
         let mut rq = RunQueue::new();
         rq.enqueue(TaskPriority::Idle as usize, 1);
         assert_eq!(
-            rq.nonempty_runnable_mask(), 0,
+            rq.nonempty_runnable_mask(),
+            0,
             "idle-priority enqueue must not affect nonempty_runnable_mask"
         );
     }
@@ -1803,7 +1805,8 @@ mod tests {
         rq.enqueue(TaskPriority::Normal as usize, 2);
         rq.enqueue(TaskPriority::High as usize, 3);
         assert_eq!(
-            rq.runnable_count(), 2,
+            rq.runnable_count(),
+            2,
             "runnable_count should count only non-idle (prio >= 1) entries"
         );
     }
@@ -1852,7 +1855,8 @@ mod tests {
         let mut rq = RunQueue::new();
         rq.enqueue(TaskPriority::Idle as usize, 99);
         assert_eq!(
-            rq.pick_next(), None,
+            rq.pick_next(),
+            None,
             "pick_next should return None when only the idle queue is non-empty"
         );
     }
@@ -1877,11 +1881,17 @@ mod tests {
         rq.enqueue(TaskPriority::Normal as usize, 7);
         rq.enqueue(TaskPriority::Normal as usize, 8);
         assert_eq!(rq.remove_at(TaskPriority::Normal as usize, 0), Some(7));
-        assert_ne!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
-            "mask should remain set while queue still has entries");
+        assert_ne!(
+            rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize),
+            0,
+            "mask should remain set while queue still has entries"
+        );
         assert_eq!(rq.remove_at(TaskPriority::Normal as usize, 0), Some(8));
-        assert_eq!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
-            "mask should be cleared when queue is fully drained via remove_at");
+        assert_eq!(
+            rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize),
+            0,
+            "mask should be cleared when queue is fully drained via remove_at"
+        );
     }
 
     #[test]
@@ -1890,11 +1900,17 @@ mod tests {
         rq.enqueue(TaskPriority::Normal as usize, 1);
         rq.enqueue(TaskPriority::Normal as usize, 2);
         rq.retain_at(TaskPriority::Normal as usize, |tid| *tid == 2);
-        assert_ne!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
-            "mask should remain set if retain leaves entries");
+        assert_ne!(
+            rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize),
+            0,
+            "mask should remain set if retain leaves entries"
+        );
         rq.retain_at(TaskPriority::Normal as usize, |_| false);
-        assert_eq!(rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize), 0,
-            "mask should be cleared when retain removes all entries");
+        assert_eq!(
+            rq.nonempty_runnable_mask() & (1u8 << TaskPriority::Normal as usize),
+            0,
+            "mask should be cleared when retain removes all entries"
+        );
     }
 
     // ── WakeMailbox tests ─────────────────────────────────────────────────────
@@ -1950,10 +1966,14 @@ mod tests {
     fn cpu_scheduler_has_wake_mailbox_field() {
         // Confirm that CpuScheduler exposes a wake_mailbox field that starts empty.
         let cs = CpuScheduler::new_for_cpu(2);
-        assert!(!cs.wake_mailbox.is_pending(),
-            "new CpuScheduler's wake_mailbox should start with no pending entries");
-        assert!(cs.wake_mailbox.drain().is_empty(),
-            "draining a fresh mailbox should yield no entries");
+        assert!(
+            !cs.wake_mailbox.is_pending(),
+            "new CpuScheduler's wake_mailbox should start with no pending entries"
+        );
+        assert!(
+            cs.wake_mailbox.drain().is_empty(),
+            "draining a fresh mailbox should yield no entries"
+        );
     }
 
     #[test]
@@ -2208,7 +2228,11 @@ mod tests {
     #[test]
     fn cpu_affinity_effective_parallelism_zero_online_returns_one() {
         let aff = CpuAffinity::any();
-        assert_eq!(aff.effective_parallelism(0), 1, "must return at least 1 even with 0 online CPUs");
+        assert_eq!(
+            aff.effective_parallelism(0),
+            1,
+            "must return at least 1 even with 0 online CPUs"
+        );
     }
 
     // ── Affinity::allows_cpu tests ────────────────────────────────────────────

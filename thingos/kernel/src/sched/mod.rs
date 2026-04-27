@@ -86,14 +86,13 @@ pub use hooks::{
     handle_user_stack_fault_current, interrupt_task_current, kill_by_tid_current,
     list_process_ids_by_pgid_current, list_processes_current, poll_task_exit_current,
     process_info_current, process_info_for_pid_current, process_info_for_tid_current,
-    register_task_exit_waiter_current, register_timeout_wake_current,
-    remove_user_mappings_current, set_current_task_name_current,
-    set_current_user_fs_base_current, set_priority_current, set_signal_mask_current,
-    set_thread_pending_current, sleep_ticks_current, spawn_process_current,
-    spawn_process_ex_current, spawn_process_from_path_current, spawn_user_thread_current,
-    take_pending_interrupt_current, task_exec_current, task_status_current, task_wait_current,
-    unregister_task_exit_waiter_current, unregister_timeout_wake_current, waitpid_current,
-    yield_now_current,
+    register_task_exit_waiter_current, register_timeout_wake_current, remove_user_mappings_current,
+    set_current_task_name_current, set_current_user_fs_base_current, set_priority_current,
+    set_signal_mask_current, set_thread_pending_current, sleep_ticks_current,
+    spawn_process_current, spawn_process_ex_current, spawn_process_from_path_current,
+    spawn_user_thread_current, take_pending_interrupt_current, task_exec_current,
+    task_status_current, task_wait_current, unregister_task_exit_waiter_current,
+    unregister_timeout_wake_current, waitpid_current, yield_now_current,
 };
 pub use policy::{DefaultPolicy, SchedPolicy};
 pub use sleep::{sleep_ms, sleep_ticks, sleep_until, yield_now};
@@ -103,7 +102,9 @@ pub use spawn::{
 };
 use spin::Mutex;
 pub use stack::{alloc_user_stack, handle_stack_fault, map_user_page, map_user_page_perms};
-pub use state::{CpuSchedStats, CpuScheduler, MigrationState, RunQueue, WakeMailbox, WakeMailboxEntry};
+pub use state::{
+    CpuSchedStats, CpuScheduler, MigrationState, RunQueue, WakeMailbox, WakeMailboxEntry,
+};
 pub use types::{
     DEFAULT_TIMESLICE, ScheduleReason, Scheduler, StackFaultResult, SwitchDecision, SwitchParams,
 };
@@ -1281,7 +1282,9 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         let sched = unsafe { &*(ptr as *const types::Scheduler<R>) };
         cpus_online = sched.state.online_cpu_count;
         for &i in &sched.state.online_cpus {
-            if num_stats >= stats_buf.len() { break; }
+            if num_stats >= stats_buf.len() {
+                break;
+            }
             let pc = &sched.state.per_cpu[i];
             let runq: usize = pc.runq.total_len();
             let runq_avg = if pc.stats.runq_sample_count == 0 {
@@ -1421,12 +1424,8 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
             }
             let current = sched.state.per_cpu.get(cpu_idx).and_then(|pc| pc.current);
             let idle = sched.state.per_cpu.get(cpu_idx).and_then(|pc| pc.idle_task);
-            let runq_total = sched
-                .state
-                .per_cpu
-                .get(cpu_idx)
-                .map(|pc| pc.runq.total_len())
-                .unwrap_or(0);
+            let runq_total =
+                sched.state.per_cpu.get(cpu_idx).map(|pc| pc.runq.total_len()).unwrap_or(0);
             // Capture the current task's priority from the hot-field cache to
             // avoid a nested REGISTRY lock.
             let current_prio = current
@@ -1581,8 +1580,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
         let acquired_at = SCHEDULER_LOCK_ACQUIRED_AT.load(Ordering::Acquire);
 
         // TICK_COUNT increments at 100Hz. 200 ticks = 2 seconds.
-        if owner != -1 && acquired_at != 0 && now.saturating_sub(acquired_at) > 200
-        {
+        if owner != -1 && acquired_at != 0 && now.saturating_sub(acquired_at) > 200 {
             panic!(
                 "SCHEDULER LOCK WATCHDOG: Lock held by CPU {} for {} ticks ({} ms) - potential DEADLOCK",
                 owner,
@@ -2153,11 +2151,7 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
     // state.
     for cpu_id in 0..cpu_total {
         let cpu_sched = crate::sched::state::CpuScheduler::new_for_cpu(cpu_id);
-        crate::kdebug!(
-            "SCHED: allocating CpuScheduler for cpu{} (total={})",
-            cpu_id,
-            cpu_total
-        );
+        crate::kdebug!("SCHED: allocating CpuScheduler for cpu{} (total={})", cpu_id, cpu_total);
         sched.state.per_cpu.push(cpu_sched);
     }
     crate::kinfo!("SCHED: {} per-CPU scheduler(s) allocated", cpu_total);
@@ -2392,9 +2386,17 @@ impl<R: BootRuntime> types::Scheduler<R> {
             let _ = self.state.remove_task_from_sleep_queue(tid);
 
             if let Some(sf) = self.state.get_thread_mut(tid) {
+                if sf.state == TaskState::Dead
+                    || sf.state == TaskState::Running
+                    || sf.runq_location.is_some()
+                {
+                    continue;
+                }
                 if sf.last_cpu.is_some_and(|c| c != cpu_idx) {
                     if sf.migration_state == MigrationState::Local {
-                        let _ = sf.migration_state.try_transition(MigrationState::Requested { target: cpu_idx });
+                        let _ = sf
+                            .migration_state
+                            .try_transition(MigrationState::Requested { target: cpu_idx });
                     }
                     if let MigrationState::Requested { .. } = sf.migration_state {
                         let _ = sf.migration_state.try_transition(MigrationState::InTransit);
@@ -2490,13 +2492,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     }
                     crate::task::Affinity::Restricted(ref aff) => {
                         let cpu_count = self.state.per_cpu.len().max(1);
-                        let target = aff
-                            .pick_cpu(cpu_count)
-                            .unwrap_or_else(|| choose_wake_cpu_from_snapshot::<R>(
-                                self,
-                                sf.last_cpu,
-                                &wake_batch_loads,
-                            ));
+                        let target = aff.pick_cpu(cpu_count).unwrap_or_else(|| {
+                            choose_wake_cpu_from_snapshot::<R>(self, sf.last_cpu, &wake_batch_loads)
+                        });
                         wake_batch_loads.note_enqueue(target);
                         target
                     }
@@ -2519,7 +2517,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             if let Some(sf) = self.state.get_thread_mut(tid) {
                 if sf.last_cpu.is_some_and(|c| c != target_cpu) {
                     if sf.migration_state == MigrationState::Local {
-                        let _ = sf.migration_state.try_transition(MigrationState::Requested { target: target_cpu });
+                        let _ = sf
+                            .migration_state
+                            .try_transition(MigrationState::Requested { target: target_cpu });
                     }
                     if let MigrationState::Requested { .. } = sf.migration_state {
                         let _ = sf.migration_state.try_transition(MigrationState::InTransit);
@@ -2966,7 +2966,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // Uses the hot-field cache to avoid a nested REGISTRY lock on every dequeue.
             match self.state.get_thread(id) {
                 None => continue, // stale runq entry — skip
-                Some(sf) if sf.state == TaskState::Dead || sf.state == TaskState::Blocked => {
+                Some(sf)
+                    if sf.state == TaskState::Dead
+                        || sf.state == TaskState::Blocked
+                        || sf.state == TaskState::Running =>
+                {
                     // Skip non-runnable tasks.
                     continue;
                 }
@@ -2982,15 +2986,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             // Fall back to the queued CPU (clamped) when no
                             // allowed CPU is currently online, rather than
                             // hard-coding CPU 0 which may itself be offline.
-                            let target = aff
-                                .pick_cpu(per_cpu_len)
-                                .unwrap_or_else(|| sf.last_cpu
+                            let target = aff.pick_cpu(per_cpu_len).unwrap_or_else(|| {
+                                sf.last_cpu
                                     .filter(|&c| c < per_cpu_len)
-                                    .unwrap_or_else(|| self.state.pick_online_cpu_excluding_bsp(0)));
+                                    .unwrap_or_else(|| self.state.pick_online_cpu_excluding_bsp(0))
+                            });
                             crate::kdebug!(
                                 "SCHED[affinity]: tid={} misrouted to cpu{}, re-routing to cpu{} \
                                  (allowed={:#x})",
-                                id, cpu_idx, target, aff.allowed.0
+                                id,
+                                cpu_idx,
+                                target,
+                                aff.allowed.0
                             );
                             self.defer_or_repair_misroute(sf.priority as usize, target, id);
                             continue;
@@ -3017,7 +3024,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     match self.state.get_thread(id) {
                         None => continue, // stale runq entry — skip
                         Some(sf)
-                            if sf.state == TaskState::Dead || sf.state == TaskState::Blocked =>
+                            if sf.state == TaskState::Dead
+                                || sf.state == TaskState::Blocked
+                                || sf.state == TaskState::Running =>
                         {
                             continue;
                         }
@@ -3031,15 +3040,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
                                 if !aff.allows(cpu_idx, per_cpu_len) {
                                     // Same safe fallback as the normal picker path.
-                                    let target = aff
-                                        .pick_cpu(per_cpu_len)
-                                        .unwrap_or_else(|| sf.last_cpu
-                                            .filter(|&c| c < per_cpu_len)
-                                            .unwrap_or_else(|| self.state.pick_online_cpu_excluding_bsp(0)));
+                                    let target = aff.pick_cpu(per_cpu_len).unwrap_or_else(|| {
+                                        sf.last_cpu.filter(|&c| c < per_cpu_len).unwrap_or_else(
+                                            || self.state.pick_online_cpu_excluding_bsp(0),
+                                        )
+                                    });
                                     crate::kdebug!(
                                         "SCHED[affinity]: tid={} (idle-q) misrouted to cpu{}, \
                                          re-routing to cpu{} (allowed={:#x})",
-                                        id, cpu_idx, target, aff.allowed.0
+                                        id,
+                                        cpu_idx,
+                                        target,
+                                        aff.allowed.0
                                     );
                                     self.defer_or_repair_misroute(sf.priority as usize, target, id);
                                     continue;
@@ -3177,9 +3189,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
             // Finalise migration: arriving task transitions back to Local.
             if migrated {
-                match new_sched.migration_state.try_transition(
-                    crate::sched::state::MigrationState::Local,
-                ) {
+                match new_sched
+                    .migration_state
+                    .try_transition(crate::sched::state::MigrationState::Local)
+                {
                     Ok(new_state) => {
                         crate::kdebug!(
                             "MIGRATE[tid={}]: {:?} → Local (arrived on cpu{})",
@@ -3292,7 +3305,12 @@ impl<R: BootRuntime> types::Scheduler<R> {
     /// Returns the stolen `TaskId` (removed from the victim's run queue and
     /// ready to be dispatched on `local_cpu`), or `None` if no suitable task
     /// was found.
-    fn try_steal_one(&mut self, local_cpu: usize, victim_cpu: usize, min_depth: usize) -> Option<TaskId> {
+    fn try_steal_one(
+        &mut self,
+        local_cpu: usize,
+        victim_cpu: usize,
+        min_depth: usize,
+    ) -> Option<TaskId> {
         if victim_cpu == local_cpu {
             return None;
         }
@@ -3354,9 +3372,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
                     if let Some(sf) = self.state.get_task_mut(stolen_id) {
                         sf.wake_cpu = Some(local_cpu);
                         // Transition migration state: Local/Requested → InTransit.
-                        match sf.migration_state.try_transition(
-                            crate::sched::state::MigrationState::InTransit,
-                        ) {
+                        match sf
+                            .migration_state
+                            .try_transition(crate::sched::state::MigrationState::InTransit)
+                        {
                             Ok(new_state) => {
                                 crate::kdebug!(
                                     "MIGRATE[tid={}]: {:?} → InTransit (steal cpu{} → cpu{})",
@@ -3416,8 +3435,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let mut nearby: alloc::vec::Vec<(usize, usize)> =
             alloc::vec::Vec::with_capacity(max_nearby);
         let max_far = per_cpu_len.saturating_sub(max_nearby);
-        let mut far: alloc::vec::Vec<(usize, usize)> =
-            alloc::vec::Vec::with_capacity(max_far);
+        let mut far: alloc::vec::Vec<(usize, usize)> = alloc::vec::Vec::with_capacity(max_far);
 
         for &cpu in &self.state.online_cpus {
             if cpu == local_cpu || cpu >= per_cpu_len {
@@ -3425,11 +3443,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
             let depth = runq_depth_for_cpu(&self.state, cpu);
             // Clamp subtraction to avoid wrapping on usize arithmetic.
-            let dist = if cpu >= local_cpu {
-                cpu - local_cpu
-            } else {
-                local_cpu - cpu
-            };
+            let dist = if cpu >= local_cpu { cpu - local_cpu } else { local_cpu - cpu };
             if dist <= STEAL_NEARBY_RADIUS {
                 nearby.push((cpu, depth));
             } else {
@@ -3443,7 +3457,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
         // Try nearby CPUs first, then fall back to distant ones.
         for (victim_cpu, _) in nearby.iter().chain(far.iter()).copied() {
-            if let Some(stolen) = self.try_steal_one(local_cpu, victim_cpu, STEAL_MIN_VICTIM_DEPTH) {
+            if let Some(stolen) = self.try_steal_one(local_cpu, victim_cpu, STEAL_MIN_VICTIM_DEPTH)
+            {
                 return Some(stolen);
             }
         }
@@ -3535,7 +3550,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // over-migrating when the situation improves mid-pass.
             let cur_busiest = runq_depth_for_cpu(&self.state, busiest_cpu);
             let cur_least = runq_depth_for_cpu(&self.state, least_cpu);
-            if cur_busiest.saturating_sub(cur_least) < types::PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF
+            if cur_busiest.saturating_sub(cur_least)
+                < types::PERIODIC_BALANCE_IMBALANCE_MIN_DEPTH_DIFF
                 || cur_busiest < STEAL_MIN_VICTIM_DEPTH
             {
                 break;
@@ -3544,7 +3560,8 @@ impl<R: BootRuntime> types::Scheduler<R> {
             // Steal one task from the busiest CPU.  try_steal_one removes it
             // from the victim's run queue, sets wake_cpu = least_cpu, and
             // records the enqueue cause as Steal.
-            let Some(stolen_id) = self.try_steal_one(least_cpu, busiest_cpu, STEAL_MIN_VICTIM_DEPTH)
+            let Some(stolen_id) =
+                self.try_steal_one(least_cpu, busiest_cpu, STEAL_MIN_VICTIM_DEPTH)
             else {
                 break;
             };
@@ -3587,7 +3604,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
             self.queue_pending_prepare_schedule_ipi(least_cpu);
         }
     }
-
 
     pub fn terminate_current(
         &mut self,

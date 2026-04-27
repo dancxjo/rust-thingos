@@ -145,10 +145,8 @@ fn main(_arg: usize) -> ! {
     if let Some((bristle_write, bristle_read)) = bristle_pair {
         match vfs_handle_from_port(bristle_read) {
             Ok(fd) => {
-                bloom_loop.add_service(alloc::boxed::Box::new(InputService::new(
-                    fd,
-                    bristle_write,
-                )));
+                bloom_loop
+                    .add_service(alloc::boxed::Box::new(InputService::new(fd, bristle_write)));
             }
             Err(e) => warn!("bloom: failed to bridge bristle input port to FD: {:?}", e),
         }

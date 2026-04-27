@@ -1010,7 +1010,10 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     let early_fb = runtime.framebuffer();
     if let Some(fb) = early_fb {
         crate::boot_progress::init(fb);
-        crate::boot_progress::push(crate::boot_progress::BootPhase::Framebuffer, "Framebuffer Initialized");
+        crate::boot_progress::push(
+            crate::boot_progress::BootPhase::Framebuffer,
+            "Framebuffer Initialized",
+        );
     }
 
     if let Some(level) = parse_cmdline_loglevel(runtime.get_kernel_cmdline()) {

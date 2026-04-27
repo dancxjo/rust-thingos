@@ -188,8 +188,6 @@ async fn system_clock_tick_impl(world: &mut ThingOsWorld) -> Result<(), StepErro
     Ok(())
 }
 
-
-
 #[then("I should see a cursor centered on the screen")]
 async fn cursor_centered_impl(world: &mut ThingOsWorld) -> Result<(), StepError> {
     eprintln!("│  │  │      📍 Checking for cursor at center...");
@@ -437,7 +435,9 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
     world.last_typed_command = Some(text.clone());
 
     let mut data = text.into_bytes();
-    data.push(b'\n');
+    if !data.ends_with(b"\n") {
+        data.push(b'\n');
+    }
 
     for b in data {
         world
@@ -473,7 +473,7 @@ async fn when_shell_command_succeeds(
     command: String,
 ) -> Result<(), StepError> {
     // Type the command followed by Enter
-    when_type_on_serial(world, format!("{}\n", command)).await?;
+    when_type_on_serial(world, command.clone()).await?;
 
     // Wait for the prompt to return (indicating command completion)
     // sh prompt usually contains " > "
@@ -497,15 +497,68 @@ async fn when_shell_command_succeeds(
     Ok(())
 }
 
+fn latest_command_output(world: &ThingOsWorld, log: &str) -> String {
+    let start = world.serial_checkpoint.min(log.len());
+    let recent = strip_ansi(&log[start..]);
+    let Some(command) =
+        world.last_typed_command.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
+    else {
+        return recent;
+    };
+
+    let mut skipped_echo = false;
+    let mut output = Vec::new();
+    for line in recent.lines() {
+        if !skipped_echo && line.contains(command) {
+            skipped_echo = true;
+            continue;
+        }
+        output.push(line);
+    }
+
+    output.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latest_command_output_drops_prompt_echo_line() {
+        let mut world = ThingOsWorld::default();
+        world.serial_checkpoint = "boot\n".len();
+        world.last_typed_command = Some("cat /proc/sched/stat".to_string());
+
+        let output = latest_command_output(
+            &world,
+            "boot\n] / > cat /proc/sched/stat\nonline_cpus: 4\ncontext_switches: 12\n] / > ",
+        );
+
+        assert!(!output.contains("cat /proc/sched/stat"));
+        assert!(output.contains("online_cpus: 4"));
+        assert!(output.contains("context_switches: 12"));
+    }
+
+    #[test]
+    fn latest_command_output_keeps_echo_command_result() {
+        let mut world = ThingOsWorld::default();
+        world.last_typed_command = Some("echo shell-ready".to_string());
+
+        let output = latest_command_output(&world, "] / > echo shell-ready\nshell-ready\n] / > ");
+
+        assert!(!output.contains("echo shell-ready"));
+        assert!(output.contains("shell-ready"));
+    }
+}
+
 #[then(regex = r#"^the latest serial output should not contain "(.+)"$"#)]
 async fn latest_serial_not_contains(
     world: &mut ThingOsWorld,
     unexpected: String,
 ) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    let start = world.serial_checkpoint.min(log.len());
-    let recent = &log[start..];
-    let recent_norm = strip_ansi(recent).to_lowercase();
+    let recent = latest_command_output(world, &log);
+    let recent_norm = recent.to_lowercase();
     let needle_norm = strip_ansi(&unexpected).to_lowercase();
 
     if recent_norm.contains(&needle_norm) {
@@ -531,9 +584,8 @@ async fn latest_serial_contains(
     expected: String,
 ) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    let start = world.serial_checkpoint.min(log.len());
-    let recent = &log[start..];
-    let recent_norm = strip_ansi(recent).to_lowercase();
+    let recent = latest_command_output(world, &log);
+    let recent_norm = recent.to_lowercase();
     let needle_norm = strip_ansi(&expected).to_lowercase();
 
     if !recent_norm.contains(&needle_norm) {
@@ -549,6 +601,9 @@ async fn latest_serial_contains(
             expected
         )));
     }
+
+    let mut collector = crate::artifacts::global().lock().await;
+    collector.set_step_assertion_buffer("Command Output", &recent);
 
     Ok(())
 }
@@ -651,5 +706,3 @@ async fn symbol_rendered(_world: &mut ThingOsWorld) {
 async fn cursor_moved(_world: &mut ThingOsWorld) {
     eprintln!("│  │  │      ℹ️ Cursor movement requires visual verification");
 }
-
-

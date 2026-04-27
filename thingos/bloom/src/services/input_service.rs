@@ -45,7 +45,10 @@ impl BloomService for InputService {
     }
 
     fn on_added(&mut self) -> LoopAction {
-        LoopAction::ArmTimer { delay: core::time::Duration::from_millis(250), id: REGISTER_TIMER_ID }
+        LoopAction::ArmTimer {
+            delay: core::time::Duration::from_millis(250),
+            id: REGISTER_TIMER_ID,
+        }
     }
 
     fn dispatch(&mut self, event: LoopEvent, world: &mut BloomWorld) -> LoopAction {

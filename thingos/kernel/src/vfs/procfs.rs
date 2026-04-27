@@ -48,8 +48,7 @@
 //! | `/proc/<pid>/serviceloop/current_event_kind`    | Current event kind sentinel or KindId high bytes |
 //! | `/proc/self/serviceloop/stats`   | Write-only: publish ServiceLoop metrics from userspace |
 
-use alloc::collections::BTreeMap;
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -126,8 +125,7 @@ impl ServiceLoopStats {
 ///
 /// Written by userspace via `/proc/self/serviceloop/stats`, read via
 /// `/proc/<pid>/serviceloop/*`.
-static SERVICE_LOOP_STATS: Mutex<BTreeMap<u32, ServiceLoopStats>> =
-    Mutex::new(BTreeMap::new());
+static SERVICE_LOOP_STATS: Mutex<BTreeMap<u32, ServiceLoopStats>> = Mutex::new(BTreeMap::new());
 
 /// Store (or update) service loop stats for the given PID.
 pub fn publish_service_loop_stats(pid: u32, stats: ServiceLoopStats) {
@@ -515,7 +513,6 @@ fn lookup_pid(pid: u32, rest: &str) -> SysResult<Arc<dyn VfsNode>> {
         _ => Err(Errno::ENOENT),
     }
 }
-
 
 /// `tid_and_rest` is everything after `"task/"`, e.g. `""` (the directory
 /// itself), `"100"` (per-thread directory), or `"100/name"` (thread name).
@@ -907,7 +904,6 @@ impl VfsNode for ProcSelfServiceLoopStatsNode {
 }
 
 // ── /proc/<pid>/fd/ directory ─────────────────────────────────────────────────
-
 
 struct ProcPidFdDirNode {
     #[allow(dead_code)]

@@ -27,7 +27,11 @@ static SERIAL_LOG: OnceLock<Mutex<String>> = OnceLock::new();
 /// Initialize the global artifact collector for the given architecture.
 pub fn init_global(arch: &str) {
     let collector = ArtifactCollector::new(arch);
-    let _ = collector.init();
+    let _ = if std::env::var_os("BDD_FEATURE").is_none() {
+        collector.init_clean()
+    } else {
+        collector.init()
+    };
     let _ = COLLECTOR.set(Mutex::new(collector));
     let _ = SERIAL_LOG.set(Mutex::new(String::new()));
     let _ = QMP_STREAM.set(Mutex::new(None));
@@ -43,6 +47,14 @@ pub async fn set_latest_serial(log: &str) {
     if let Some(cache) = SERIAL_LOG.get() {
         let mut serial = cache.lock().await;
         *serial = log.to_string();
+    }
+}
+
+/// Clear the global serial log cache at scenario boundaries.
+pub async fn clear_latest_serial() {
+    if let Some(cache) = SERIAL_LOG.get() {
+        let mut serial = cache.lock().await;
+        serial.clear();
     }
 }
 

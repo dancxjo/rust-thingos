@@ -9,6 +9,10 @@ Feature: netd concurrent TCP and DNS/RPC stability
     When I wait for the shell prompt
     And I wait for the serial output to contain "NETD: Network ready"
 
+  Scenario: Network bring-up does not fault during cross-CPU wake delivery
+    Then the serial output should not contain "KERNEL PAGE FAULT"
+    And the serial output should not contain "panicked at"
+
   Scenario: DNS lookup completes while TCP fetch is in-progress
     # Mount the HTTPS provider so a TCP connection is actively held open
     # while a separate DNS lookup is triggered concurrently.

@@ -1,8 +1,9 @@
 //! Task lifecycle management: exit, wait, kill, signal, CPU management.
+use core::sync::atomic::Ordering;
+
 use super::*;
 use crate::task::{Affinity, TaskId, TaskPriority, TaskState};
 use crate::{BootRuntime, BootTasking};
-use core::sync::atomic::Ordering;
 
 /// Transition the scheduler out of early-boot mode.
 ///
@@ -555,7 +556,10 @@ fn mark_task_exited<R: BootRuntime>(
     termination.waiters
 }
 
-pub(super) fn purge_task_from_scheduler_queues<R: BootRuntime>(sched: &mut types::Scheduler<R>, tid: TaskId) {
+pub(super) fn purge_task_from_scheduler_queues<R: BootRuntime>(
+    sched: &mut types::Scheduler<R>,
+    tid: TaskId,
+) {
     sched.state.remove_task_from_runq(tid);
     sched.state.unregister_waiter(tid);
 
@@ -1406,4 +1410,3 @@ pub unsafe fn enter_secondary(cpu_index: usize) -> ! {
         crate::runtime_base().wait_for_interrupt();
     }
 }
-

@@ -100,14 +100,9 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
 
         SYS_GETRANDOM => handlers::sys_getrandom(args[0], args[1]),
         SYS_ENTROPY_SEED => handlers::sys_entropy_seed(args[0], args[1]),
-        SYS_SERVICE_LOOP_REPORT => handlers::sys_service_loop_report(
-            args[0],
-            args[1],
-            args[2],
-            args[3],
-            args[4],
-            args[5],
-        ),
+        SYS_SERVICE_LOOP_REPORT => {
+            handlers::sys_service_loop_report(args[0], args[1], args[2], args[3], args[4], args[5])
+        }
         SYS_LOG_SET_LEVEL => {
             let authority = crate::authority::bridge::authority_for_current();
             if let Err(e) = crate::authority::bridge::check_privilege(&authority, "log_level") {

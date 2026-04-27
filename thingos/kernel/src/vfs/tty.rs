@@ -217,7 +217,12 @@ impl TtyNode {
             }
             let mut presence = self.ld.presence.lock();
             if presence.controlling_sid.is_none() {
-                crate::ktrace!("tty: process PID={} SID={} PGID={} ACQUIRING controlling tty", c.pid, c.sid, c.pgid);
+                crate::ktrace!(
+                    "tty: process PID={} SID={} PGID={} ACQUIRING controlling tty",
+                    c.pid,
+                    c.sid,
+                    c.pgid
+                );
                 presence.controlling_sid = Some(c.sid);
                 presence.foreground_pgid = Some(c.pgid);
             }
@@ -252,10 +257,7 @@ impl TtyNode {
         };
         self.maybe_acquire_controlling_tty(Some(caller));
         if self.is_background_caller(caller) {
-            crate::ktrace!(
-                "TTY: sending SIGTTIN to background group pgid={}",
-                caller.pgid
-            );
+            crate::ktrace!("TTY: sending SIGTTIN to background group pgid={}", caller.pgid);
             crate::signal::send_signal_to_group(caller.pgid, abi::signal::SIGTTIN);
             return Err(Errno::EINTR);
         }
@@ -270,10 +272,7 @@ impl TtyNode {
         self.maybe_acquire_controlling_tty(Some(caller));
         let tostop = (self.ld.termios.lock().c_lflag & TOSTOP) != 0;
         if tostop && self.is_background_caller(caller) {
-            crate::ktrace!(
-                "TTY: sending SIGTTOU to background group pgid={}",
-                caller.pgid
-            );
+            crate::ktrace!("TTY: sending SIGTTOU to background group pgid={}", caller.pgid);
             crate::signal::send_signal_to_group(caller.pgid, abi::signal::SIGTTOU);
             return Err(Errno::EINTR);
         }

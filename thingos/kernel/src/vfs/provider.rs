@@ -43,13 +43,13 @@ use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
-
 use core::sync::atomic::{AtomicU16, Ordering};
-use abi::errors::{Errno, SysResult};
-use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp, VfsRpcReqHeader};
+
 use abi::device::DeviceKind;
 use abi::display::ioctl::DISPLAY_OP_IMPORT_BUFFER;
 use abi::display::types::BufferHandle;
+use abi::errors::{Errno, SysResult};
+use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp, VfsRpcReqHeader};
 use spin::Mutex;
 
 use super::{OpenFlags, VfsDriver, VfsNode, VfsStat};
@@ -185,10 +185,20 @@ impl ProviderRpc {
 
                     let status = resp[0];
                     if status != 0 {
-                        crate::kdebug!("VFS_RPC: response op={:?} id={} -> ERR({})", op, req_id, status);
+                        crate::kdebug!(
+                            "VFS_RPC: response op={:?} id={} -> ERR({})",
+                            op,
+                            req_id,
+                            status
+                        );
                         return Err(errno_from_u8(status));
                     }
-                    crate::kdebug!("VFS_RPC: response op={:?} id={} -> OK({})", op, req_id, resp.len() - 1);
+                    crate::kdebug!(
+                        "VFS_RPC: response op={:?} id={} -> OK({})",
+                        op,
+                        req_id,
+                        resp.len() - 1
+                    );
                     return Ok(resp[1..].to_vec());
                 }
 
@@ -214,7 +224,8 @@ impl ProviderRpc {
 
                         let payload_len = if status == 0 {
                             if let Some(&req_op) = state.ops.get(&resp_req_id) {
-                                if let Some(len) = get_resp_payload_len(req_op, &state.pending[3..]) {
+                                if let Some(len) = get_resp_payload_len(req_op, &state.pending[3..])
+                                {
                                     len
                                 } else {
                                     break;
@@ -462,8 +473,7 @@ impl ProviderNode {
 
         // Locate the provider's process info.
         let provider_pinfo =
-            crate::sched::process_info_for_pid_current(provider_pid as u32)
-                .ok_or(Errno::ESRCH)?;
+            crate::sched::process_info_for_pid_current(provider_pid as u32).ok_or(Errno::ESRCH)?;
 
         // Allocate a MemFdNode sized for the whole file.
         let memfd = Arc::new(MemFdNode::new("elf-bulk-read", size)?);
@@ -483,9 +493,9 @@ impl ProviderNode {
         // [handle: u64][offset: u64][len: u32][dest_fd: u32]
         let mut payload = [0u8; 24];
         payload[0..8].copy_from_slice(&self.handle.to_le_bytes());
-        payload[8..16].copy_from_slice(&0u64.to_le_bytes());          // offset = 0
+        payload[8..16].copy_from_slice(&0u64.to_le_bytes()); // offset = 0
         payload[16..20].copy_from_slice(&(size as u32).to_le_bytes()); // len
-        payload[20..24].copy_from_slice(&dest_fd.to_le_bytes());       // dest_fd
+        payload[20..24].copy_from_slice(&dest_fd.to_le_bytes()); // dest_fd
 
         let rpc_result = self.rpc.rpc(VfsRpcOp::ReadIntoFd, &payload);
 
@@ -499,8 +509,7 @@ impl ProviderNode {
         if resp.len() < 4 {
             return Err(Errno::EIO);
         }
-        let bytes_written =
-            u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]) as usize;
+        let bytes_written = u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]) as usize;
 
         // Copy from the memfd physical pages into the caller's buffer.
         // This is a plain memcpy inside the kernel — no IPC ring-buffer involved.
@@ -724,9 +733,8 @@ impl VfsNode for ProviderNode {
         if call.kind == DeviceKind::Display && call.op == DISPLAY_OP_IMPORT_BUFFER {
             if in_len >= core::mem::size_of::<BufferHandle>() {
                 let bh_offset = 8 + core::mem::size_of::<abi::device::DeviceCall>();
-                let mut bh: BufferHandle = unsafe {
-                    core::ptr::read_unaligned(payload[bh_offset..].as_ptr() as *const _)
-                };
+                let mut bh: BufferHandle =
+                    unsafe { core::ptr::read_unaligned(payload[bh_offset..].as_ptr() as *const _) };
 
                 // 1. Resolve node in caller
                 let node = {
@@ -738,12 +746,14 @@ impl VfsNode for ProviderNode {
                 // 2. Find provider process and install node
                 let provider_pid = self.rpc.req.port().primary_reader_pid();
                 if provider_pid != 0 {
-                    if let Some(provider_pinfo) = crate::sched::process_info_for_pid_current(provider_pid as u32) {
+                    if let Some(provider_pinfo) =
+                        crate::sched::process_info_for_pid_current(provider_pid as u32)
+                    {
                         let mut lock = provider_pinfo.lock();
                         let new_handle = lock.handle_table.open(
                             node,
                             OpenFlags::read_write(),
-                            alloc::format!("imported-buffer-{}", bh.handle)
+                            alloc::format!("imported-buffer-{}", bh.handle),
                         )?;
                         bh.handle = new_handle;
 
@@ -751,7 +761,7 @@ impl VfsNode for ProviderNode {
                         unsafe {
                             core::ptr::write_unaligned(
                                 payload[bh_offset..].as_mut_ptr() as *mut BufferHandle,
-                                bh
+                                bh,
                             );
                         }
                     }

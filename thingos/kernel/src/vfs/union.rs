@@ -130,9 +130,7 @@ fn append_readdir_entry(
     buf: &mut [u8],
     written: &mut usize,
 ) -> bool {
-    let entry_len = u64::try_from(name.len())
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
+    let entry_len = u64::try_from(name.len()).unwrap_or(u64::MAX).saturating_add(1);
     if *virtual_pos + entry_len > offset {
         let start_in_entry = if offset > *virtual_pos {
             usize::try_from(offset - *virtual_pos).unwrap_or(usize::MAX)
@@ -243,7 +241,9 @@ impl super::VfsNode for UnionDirNode {
 
                 if start < n {
                     let part = core::str::from_utf8(&scratch[start..n]).map_err(|_| {
-                        crate::kwarn!("UnionDirNode::readdir: invalid UTF-8 in trailing layer bytes");
+                        crate::kwarn!(
+                            "UnionDirNode::readdir: invalid UTF-8 in trailing layer bytes"
+                        );
                         Errno::EIO
                     })?;
                     pending_name.push_str(part);
@@ -259,10 +259,9 @@ impl super::VfsNode for UnionDirNode {
 
 #[cfg(test)]
 mod tests {
-    use core::sync::atomic::{AtomicUsize, Ordering};
-
     use alloc::sync::Arc;
     use alloc::vec::Vec;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use abi::errors::Errno;
 
@@ -338,7 +337,12 @@ mod tests {
         }
 
         fn stat(&self) -> SysResult<VfsStat> {
-            Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: self.ino, ..Default::default() })
+            Ok(VfsStat {
+                mode: VfsStat::S_IFDIR | 0o555,
+                size: 0,
+                ino: self.ino,
+                ..Default::default()
+            })
         }
 
         fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {

@@ -1,5 +1,6 @@
 //! Scheduler profiling counters and telemetry atomics.
 use core::sync::atomic::AtomicU64;
+
 use super::{state, types};
 
 /// Global tick counter for debugging scheduler health

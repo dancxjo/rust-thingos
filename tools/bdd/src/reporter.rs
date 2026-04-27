@@ -96,6 +96,7 @@ where
                             event::Scenario::Started => {
                                 self.scenario_failed = false;
                                 self.in_scenario = true;
+                                artifacts::clear_latest_serial().await;
                                 eprintln!("│  ├─ Scenario: {}", scenario.name);
                                 let mut collector = artifacts::global().lock().await;
                                 collector.on_scenario_start(&scenario.name);
@@ -127,6 +128,7 @@ where
                             event::Scenario::Started => {
                                 self.scenario_failed = false;
                                 self.in_scenario = true;
+                                artifacts::clear_latest_serial().await;
                                 eprintln!("│  │  ├─ Scenario: {}", scenario.name);
                                 let mut collector = artifacts::global().lock().await;
                                 collector.on_scenario_start(&scenario.name);

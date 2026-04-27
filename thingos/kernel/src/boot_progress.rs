@@ -1,4 +1,5 @@
 use spin::Mutex;
+
 use crate::{FramebufferInfo, PixelFormat};
 
 const ICON_SIDE: usize = 80;
@@ -11,7 +12,6 @@ const GRID_COLS: usize = 4;
 const NUM_DOTS: usize = 8;
 
 include!("boot_progress_icons.rs");
-
 
 #[derive(Clone, Copy)]
 pub enum BootPhase {
@@ -54,20 +54,18 @@ const TASK_PHASES: [BootPhase; TOTAL_TASKS] = [
 const DOT_THRESHOLDS: [usize; NUM_DOTS] = [1, 3, 5, 7, 9, 11, 13, 16];
 
 /// Short phase labels rendered below each milestone dot when a font is available.
-const DOT_LABELS: [&str; NUM_DOTS] = [
-    "FB", "MEM", "CPU", "BUS", "DEV", "CLK", "MOD", "INIT",
-];
+const DOT_LABELS: [&str; NUM_DOTS] = ["FB", "MEM", "CPU", "BUS", "DEV", "CLK", "MOD", "INIT"];
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 const PANEL_BG: u32 = 0x111111;
-const PENDING_FG: u32 = 0x2A2A2A;   // very dim – task not yet reached
-const ACTIVE_FG: u32 = 0x00AADD;    // cyan  – task just pushed (in progress)
-const COMPLETE_FG: u32 = 0x55AACC;  // light cyan – task finished
-const CHECK_COLOR: u32 = 0x00CC55;  // green corner marker for complete cells
-const TEXT_FG: u32 = 0xCCCCCC;      // milestone label text
-const LABEL_FG: u32 = 0x666666;     // dot phase labels
-const BAR_BG: u32 = 0x222222;       // unfilled bar
-const BAR_FG: u32 = 0x00AA44;       // filled bar (green)
+const PENDING_FG: u32 = 0x2A2A2A; // very dim – task not yet reached
+const ACTIVE_FG: u32 = 0x00AADD; // cyan  – task just pushed (in progress)
+const COMPLETE_FG: u32 = 0x55AACC; // light cyan – task finished
+const CHECK_COLOR: u32 = 0x00CC55; // green corner marker for complete cells
+const TEXT_FG: u32 = 0xCCCCCC; // milestone label text
+const LABEL_FG: u32 = 0x666666; // dot phase labels
+const BAR_BG: u32 = 0x222222; // unfilled bar
+const BAR_FG: u32 = 0x00AA44; // filled bar (green)
 const DOT_PENDING_COLOR: u32 = 0x2D2D2D;
 const DOT_COMPLETE_COLOR: u32 = 0x00AA44;
 const DOT_ACTIVE_COLOR: u32 = 0x00AADD;
@@ -149,7 +147,18 @@ pub fn init(fb: FramebufferInfo) {
     let dot_label_y = dot_y + DOT_SIZE + 3;
     let hint_y = dot_label_y + 16 + 8;
 
-    let layout = Layout { panel_x, panel_y, panel_side, icon_px, gap_px, msg_y, bar_y, dot_y, dot_label_y, hint_y };
+    let layout = Layout {
+        panel_x,
+        panel_y,
+        panel_side,
+        icon_px,
+        gap_px,
+        msg_y,
+        bar_y,
+        dot_y,
+        dot_label_y,
+        hint_y,
+    };
 
     let mut state = BootProgressState {
         fb,
@@ -261,7 +270,13 @@ fn icon_bits_for_phase(phase: BootPhase) -> &'static [[u128; 2]; 80] {
 impl BootProgressState {
     /// Draw the full initial panel: background + all 16 cells as Pending + bar + dots.
     fn draw_initial_panel(&mut self) {
-        self.fill_rect(self.layout.panel_x, self.layout.panel_y, self.layout.panel_side, self.layout.panel_side, PANEL_BG);
+        self.fill_rect(
+            self.layout.panel_x,
+            self.layout.panel_y,
+            self.layout.panel_side,
+            self.layout.panel_side,
+            PANEL_BG,
+        );
         for i in 0..TOTAL_TASKS {
             self.redraw_cell(i, TASK_PHASES[i], false, false);
         }
@@ -287,7 +302,9 @@ impl BootProgressState {
     /// * `complete` – light cyan with a small green corner marker; done
     /// * neither    – pending; very dim gray
     fn redraw_cell(&mut self, idx: usize, phase: BootPhase, active: bool, complete: bool) {
-        if idx >= TOTAL_TASKS { return; }
+        if idx >= TOTAL_TASKS {
+            return;
+        }
         let (x, y) = self.cell_xy(idx);
         let size = self.layout.icon_px;
 
@@ -311,9 +328,15 @@ impl BootProgressState {
         } else {
             PENDING_FG
         };
-        
+
         // Draw icon slightly inset within the bezel
-        self.blit_bit_icon_colored(x + 2, y + 2, size.saturating_sub(4), icon_bits_for_phase(phase), color);
+        self.blit_bit_icon_colored(
+            x + 2,
+            y + 2,
+            size.saturating_sub(4),
+            icon_bits_for_phase(phase),
+            color,
+        );
 
         // Small green square in the top-right corner marks completion.
         if complete {
@@ -331,11 +354,7 @@ impl BootProgressState {
         let y = self.layout.bar_y;
         let total_w = self.layout.panel_side;
 
-        let filled = if total_w > 0 {
-            (pushed_count * total_w) / TOTAL_TASKS
-        } else {
-            0
-        };
+        let filled = if total_w > 0 { (pushed_count * total_w) / TOTAL_TASKS } else { 0 };
 
         self.fill_rect(x, y, total_w, BAR_H, BAR_BG);
         if filled > 0 {
@@ -403,7 +422,14 @@ impl BootProgressState {
         }
     }
 
-    fn blit_bit_icon_colored(&mut self, x: usize, y: usize, size: usize, bits: &[[u128; 2]; ICON_SIDE], color: u32) {
+    fn blit_bit_icon_colored(
+        &mut self,
+        x: usize,
+        y: usize,
+        size: usize,
+        bits: &[[u128; 2]; ICON_SIDE],
+        color: u32,
+    ) {
         for dy in 0..size {
             let row = (dy * ICON_SIDE) / size;
             let row_hi = bits[row][0];
@@ -427,7 +453,7 @@ impl BootProgressState {
                 if (y + dy) % 2 == 1 {
                     pixel_color = self.dim(pixel_color, 210); // slightly less aggressive dimming
                 }
-                
+
                 self.put_pixel(x + dx, y + dy, pixel_color);
             }
         }
@@ -472,7 +498,9 @@ impl BootProgressState {
         let mut cur_x = x;
         for c in s.chars() {
             // Find char width to advance cur_x correctly
-            let width = if let Some((_, is_wide)) = self.unifont_data.and_then(|d| lookup_unifont_glyph(d, c)) {
+            let width = if let Some((_, is_wide)) =
+                self.unifont_data.and_then(|d| lookup_unifont_glyph(d, c))
+            {
                 if is_wide { 16 } else { 8 }
             } else {
                 8
@@ -517,7 +545,9 @@ fn lookup_unifont_glyph(data: &[u8], c: char) -> Option<([u16; 32], bool)> {
         let line = &data[offset..end];
         offset = end + 1;
 
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
 
         // Parse CODE:BITMAP
         let mut parts = line.split(|&b| b == b':');
@@ -538,7 +568,9 @@ fn lookup_unifont_glyph(data: &[u8], c: char) -> Option<([u16; 32], bool)> {
             return Some((glyph, is_wide));
         }
 
-        if code > target_code { break; }
+        if code > target_code {
+            break;
+        }
     }
     None
 }

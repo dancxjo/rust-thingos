@@ -178,6 +178,11 @@ impl ThingOsWorld {
     /// Reuses a cached ISO for the architecture/resolution when available.
     pub async fn boot(&mut self, arch: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.arch = arch.to_string();
+        {
+            let mut log = self.serial_log.lock().await;
+            log.clear();
+        }
+        crate::artifacts::clear_latest_serial().await;
 
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

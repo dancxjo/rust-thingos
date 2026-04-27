@@ -247,9 +247,7 @@ pub fn wake_task_locked<R: BootRuntime>(
             let task_priority = sf.priority as usize;
             let target_cpu = match sf.affinity {
                 crate::task::Affinity::Pinned(cpu) => cpu,
-                crate::task::Affinity::Any => {
-                    super::choose_wake_cpu::<R>(sched, sf.last_cpu)
-                }
+                crate::task::Affinity::Any => super::choose_wake_cpu::<R>(sched, sf.last_cpu),
                 crate::task::Affinity::Restricted(ref aff) => {
                     let cpu_count = sched.state.per_cpu.len().max(1);
                     // Prefer last_cpu within the allowed set; fall back to
@@ -431,8 +429,7 @@ fn try_remote_wake_via_mailbox<R: BootRuntime>(id: u64) -> bool {
             crate::task::Affinity::Any => task.last_cpu.unwrap_or(current_cpu),
             crate::task::Affinity::Restricted(ref aff) => {
                 let cpu_total = rt.cpu_total_count().max(1);
-                aff.pick_cpu(cpu_total)
-                    .unwrap_or_else(|| task.last_cpu.unwrap_or(current_cpu))
+                aff.pick_cpu(cpu_total).unwrap_or_else(|| task.last_cpu.unwrap_or(current_cpu))
             }
         };
         let cpu_total = rt.cpu_total_count().max(1);

@@ -62,6 +62,14 @@ impl ArtifactCollector {
         fs::create_dir_all(&self.base_dir)
     }
 
+    /// Start a fresh artifact tree for this architecture.
+    pub fn init_clean(&self) -> std::io::Result<()> {
+        if self.base_dir.exists() {
+            fs::remove_dir_all(&self.base_dir)?;
+        }
+        self.init()
+    }
+
     /// Get directory for current feature.
     pub fn feature_dir(&self) -> PathBuf {
         let mut path = self.base_dir.clone();
@@ -89,6 +97,9 @@ impl ArtifactCollector {
     pub fn on_feature_start(&mut self, name: &str) {
         self.current_feature = Some(name.to_string());
         let dir = self.feature_dir();
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
         let _ = fs::create_dir_all(&dir);
 
         self.features.push(FeatureArtifacts { name: name.to_string(), dir, scenarios: Vec::new() });
