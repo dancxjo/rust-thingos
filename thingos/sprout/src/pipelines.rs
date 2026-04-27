@@ -276,12 +276,19 @@ pub fn setup_display_pipeline(
 ) -> Option<DisplayHandles> {
     let (width, height, stride, format) = probe_bootfb_vfs()?;
 
-    let driver_path = {
-        if force_bootfb {
-            info!("SPROUT: display=bootfb requested; using boot framebuffer driver");
-        } else {
-            info!("SPROUT: using boot framebuffer driver for first paint");
-        }
+    let driver_path = if force_bootfb {
+        info!("SPROUT: display=bootfb requested; using boot framebuffer driver");
+        "/drivers/display_bootfb"
+    } else if !file_exists("/drivers/display_virtio_gpu") {
+        warn!(
+            "SPROUT: /drivers/display_virtio_gpu missing; falling back to boot framebuffer driver"
+        );
+        "/drivers/display_bootfb"
+    } else if let Some(gpu_path) = find_sys_device_with_vendor("0x0300", "0x1af4") {
+        info!("SPROUT: VirtIO display GPU detected at {}; using GPU display driver", gpu_path);
+        "/drivers/display_virtio_gpu"
+    } else {
+        warn!("SPROUT: no VirtIO display GPU found; falling back to boot framebuffer driver");
         "/drivers/display_bootfb"
     };
     info!("SPROUT: Selected display driver '{}'", driver_path);

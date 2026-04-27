@@ -73,7 +73,8 @@ Feature: Bloom compositor service loop and responsiveness
     # the VFS device call interface so bloom can read display dimensions and
     # proceed to import buffers and commit frames.
     Given the machine is booted
-    Then the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
+    Then the serial output should contain "SPROUT: Selected display driver '/drivers/display_virtio_gpu'" within 60s
+    And the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
     And the serial output should contain "bloom: output0" within 60s
 
   Scenario: bloom service loop paints the first frame without client connections

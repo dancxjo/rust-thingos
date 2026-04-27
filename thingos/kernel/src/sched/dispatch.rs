@@ -25,9 +25,17 @@ pub fn on_tick<R: BootRuntime>() {
 pub fn on_resched_ipi<R: BootRuntime>() {
     let cpu = super::current_cpu_index::<R>();
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
-    // Use the epoch-based check to avoid redundant schedule_point calls when
-    // multiple IPIs were coalesced by the hardware.
-    if claim_remote_wake_mailbox_ipi_epoch(cpu) {
+    // Reschedule IPIs have two producers:
+    // - remote wake mailboxes, which advance a mailbox epoch;
+    // - plain per-CPU resched requests, which only set GLOBAL_NEED_RESCHED.
+    //
+    // The IPI handler must honor either signal. Otherwise a plain resched IPI
+    // can be received and ignored, leaving runnable work stuck until some later
+    // timer path happens to recover it.
+    let resched_pending = super::need_resched_pending(cpu);
+    let mailbox_pending =
+        if resched_pending { false } else { claim_remote_wake_mailbox_ipi_epoch(cpu) };
+    if resched_pending || mailbox_pending {
         try_resched_if_needed::<R>(DispatchTrigger::Ipi);
     }
 }
