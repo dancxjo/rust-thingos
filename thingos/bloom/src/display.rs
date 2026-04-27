@@ -6,11 +6,30 @@ use abi::display::{
     DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayInfo, PlaneCommit, PlaneId,
 };
 use abi::display_protocol::Rect;
-use abi::errors::SysResult;
 use abi::pixel::PixelFormat;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open};
 
 use crate::scene::CompositionEntry;
+
+const MAX_COMMIT_PLANES: usize = 16;
+
+#[repr(C)]
+struct CommitPacket {
+    req: CommitRequest,
+    planes: [PlaneCommit; MAX_COMMIT_PLANES],
+}
+
+const fn empty_plane_commit() -> PlaneCommit {
+    PlaneCommit {
+        plane_id: PlaneId(0),
+        buffer_id: abi::display::BufferId(0),
+        dest_rect: Rect { x: 0, y: 0, w: 0, h: 0 },
+        src_rect: Rect { x: 0, y: 0, w: 0, h: 0 },
+        z_order: 0,
+        alpha: 0,
+        _reserved: [0; 7],
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct OutputInfo {
@@ -105,12 +124,13 @@ impl DisplayBackend {
         _damage: &[Rect],
         fallback_buffer: Option<u32>,
     ) -> PresentResult {
-        let mut planes = Vec::new();
+        let mut planes = [empty_plane_commit(); MAX_COMMIT_PLANES];
+        let mut plane_count = 0usize;
 
         // 1. Background plane
         if let Some(id) = fallback_buffer {
             let (w, h) = self.output_size();
-            planes.push(PlaneCommit {
+            planes[plane_count] = PlaneCommit {
                 plane_id: PlaneId(0),
                 buffer_id: abi::display::BufferId(id),
                 dest_rect: Rect { x: 0, y: 0, w, h },
@@ -118,62 +138,63 @@ impl DisplayBackend {
                 z_order: 0,
                 alpha: 255,
                 _reserved: [0; 7],
-            });
+            };
+            plane_count += 1;
         }
 
         // 2. Surface planes
         for entry in composition_list {
-            planes.push(PlaneCommit {
-                plane_id: PlaneId(planes.len() as u32),
+            if plane_count >= MAX_COMMIT_PLANES {
+                stem::warn!("bloom: dropping display plane beyond fixed commit capacity");
+                break;
+            }
+            planes[plane_count] = PlaneCommit {
+                plane_id: PlaneId(plane_count as u32),
                 buffer_id: abi::display::BufferId(entry.buffer_id),
                 dest_rect: entry.dest_rect,
                 src_rect: entry.src_rect,
                 z_order: entry.z_order,
                 alpha: entry.alpha,
                 _reserved: [0; 7],
-            });
+            };
+            plane_count += 1;
         }
 
-        if planes.is_empty() {
+        if plane_count == 0 {
             return PresentResult { success: false };
         }
 
-        PresentResult { success: self.commit_display_planes(&planes) }
+        PresentResult { success: self.commit_display_planes(&planes[..plane_count]) }
     }
 
     pub fn commit_display_planes(&self, planes: &[PlaneCommit]) -> bool {
-        let req = CommitRequest {
-            commit_count: planes.len() as u32,
-            flags: CommitFlags::VSYNC,
-            commits_ptr: 0,
-        };
-        let header_size = core::mem::size_of::<CommitRequest>();
-        let plane_size = core::mem::size_of::<PlaneCommit>();
-        let mut buf = alloc::vec![0u8; header_size + planes.len() * plane_size];
-
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                &req as *const _ as *const u8,
-                buf.as_mut_ptr(),
-                header_size,
-            );
-            core::ptr::copy_nonoverlapping(
-                planes.as_ptr() as *const u8,
-                buf.as_mut_ptr().add(header_size),
-                planes.len() * plane_size,
-            );
+        if planes.len() > MAX_COMMIT_PLANES {
+            stem::warn!("bloom: commit has too many planes ({})", planes.len());
+            return false;
         }
 
+        let mut packet = CommitPacket {
+            req: CommitRequest {
+                commit_count: planes.len() as u32,
+                flags: CommitFlags::VSYNC,
+                commits_ptr: 0,
+            },
+            planes: [empty_plane_commit(); MAX_COMMIT_PLANES],
+        };
+        packet.planes[..planes.len()].copy_from_slice(planes);
+
+        let in_len = core::mem::size_of::<CommitRequest>()
+            + planes.len() * core::mem::size_of::<PlaneCommit>();
         let call = abi::device::DeviceCall {
             kind: abi::device::DeviceKind::Display,
             op: DISPLAY_OP_COMMIT,
-            in_ptr: buf.as_ptr() as u64,
-            in_len: buf.len() as u32,
+            in_ptr: &packet as *const CommitPacket as u64,
+            in_len: in_len as u32,
             out_ptr: 0,
             out_len: 0,
         };
 
-        match unsafe { vfs_device_call_raw(self.fd, &call) } {
+        match vfs_device_call_raw(self.fd, &call) {
             Ok(_) => true,
             Err(e) => {
                 stem::error!("bloom: DISPLAY_OP_COMMIT failed: {:?}", e);
