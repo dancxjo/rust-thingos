@@ -198,11 +198,8 @@ impl Translator {
 
     /// Set the current locale.
     pub fn set_locale(&self, locale: LocaleId) {
-        if locale.as_str() == LocaleId::EO.as_str() {
-            return;
-        }
-
         // Unknown locales collapse to Esperanto while it is the only option.
+        let _ = locale;
     }
 
     /// Cycle to the next locale. No-op while Esperanto is the only locale.
