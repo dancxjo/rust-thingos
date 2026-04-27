@@ -5,7 +5,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use abi::KindId;
-use abi::hid::{BRISTLE_SINK_TAG_BLOOM, KIND_BRISTLE_REGISTER_SINK, encode_register_sink};
+use abi::hid::{
+    BRISTLE_SINK_TAG_BLOOM, BristleEventHeader, KIND_BRISTLE_REGISTER_SINK, encode_register_sink,
+};
 use abi::syscall::vfs_flags::O_RDONLY;
 use stem::syscall::message::msg_send;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
@@ -24,6 +26,8 @@ pub struct InputService {
     fd: u32,
     sink_write: u32,
     registered: bool,
+    event_accum: [u8; 64],
+    accum_len: usize,
     interests: Vec<Interest>,
 }
 
@@ -31,7 +35,7 @@ impl InputService {
     /// Create an `InputService` that reads from `fd`.
     pub fn new(fd: u32, sink_write: u32) -> Self {
         let interests = vec![Interest::FdReadable(fd)];
-        Self { fd, sink_write, registered: false, interests }
+        Self { fd, sink_write, registered: false, event_accum: [0; 64], accum_len: 0, interests }
     }
 }
 
@@ -72,8 +76,11 @@ impl BloomService for InputService {
                 let mut buf = [0u8; 512];
                 match vfs_read(self.fd, &mut buf) {
                     Ok(n) if n > 0 => {
-                        world.handle_bristle_event(&buf[..n]);
-                        LoopAction::RequestRepaint
+                        if self.drain_bristle_bytes(&buf[..n], world) {
+                            LoopAction::RequestRepaint
+                        } else {
+                            LoopAction::None
+                        }
                     }
                     _ => LoopAction::None,
                 }
@@ -90,6 +97,62 @@ impl InputService {
         };
         let payload = encode_register_sink(BRISTLE_SINK_TAG_BLOOM, self.sink_write);
         msg_send(pid, KindId(KIND_BRISTLE_REGISTER_SINK), &payload).is_ok()
+    }
+
+    fn drain_bristle_bytes(&mut self, input: &[u8], world: &mut BloomWorld) -> bool {
+        let mut cursor = 0usize;
+        let mut handled = false;
+
+        while cursor < input.len() {
+            let room = self.event_accum.len().saturating_sub(self.accum_len);
+            if room == 0 {
+                self.resync_accumulator();
+                continue;
+            }
+
+            let to_copy = (input.len() - cursor).min(room);
+            self.event_accum[self.accum_len..self.accum_len + to_copy]
+                .copy_from_slice(&input[cursor..cursor + to_copy]);
+            self.accum_len += to_copy;
+            cursor += to_copy;
+
+            while self.accum_len >= BristleEventHeader::SIZE {
+                let mut header_bytes = [0u8; BristleEventHeader::SIZE];
+                header_bytes.copy_from_slice(&self.event_accum[..BristleEventHeader::SIZE]);
+                let Ok(header) = BristleEventHeader::from_bytes(&header_bytes) else {
+                    self.resync_accumulator();
+                    continue;
+                };
+
+                let total_len = BristleEventHeader::SIZE + header.payload_len as usize;
+                if total_len > self.event_accum.len() {
+                    self.resync_accumulator();
+                    continue;
+                }
+                if self.accum_len < total_len {
+                    break;
+                }
+
+                world.handle_bristle_event(&self.event_accum[..total_len]);
+                handled = true;
+
+                self.accum_len -= total_len;
+                if self.accum_len > 0 {
+                    self.event_accum.copy_within(total_len..total_len + self.accum_len, 0);
+                }
+            }
+        }
+
+        handled
+    }
+
+    fn resync_accumulator(&mut self) {
+        if self.accum_len > 0 {
+            self.accum_len -= 1;
+            if self.accum_len > 0 {
+                self.event_accum.copy_within(1..1 + self.accum_len, 0);
+            }
+        }
     }
 }
 

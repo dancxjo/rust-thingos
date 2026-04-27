@@ -1,13 +1,12 @@
 use cucumber::{given, then, when};
 
-use crate::world::{ThingOsWorld, strip_ansi};
-
-use super::helpers::{
-    StepError, capture_failure_diagnostics, default_timeout_secs,
-    wait_for_clock_pixels, wait_for_clock_ticks, wait_for_perf_report, verify_cursor_pixels,
-};
 use super::basic::turn_on_machine;
 use super::boot::wait_for_ready_state;
+use super::helpers::{
+    StepError, capture_failure_diagnostics, default_timeout_secs, verify_cursor_pixels,
+    wait_for_clock_pixels, wait_for_clock_ticks, wait_for_perf_report,
+};
+use crate::world::{ThingOsWorld, strip_ansi};
 
 // ===== Regex Pattern Matching Steps =====
 
@@ -705,4 +704,66 @@ async fn symbol_rendered(_world: &mut ThingOsWorld) {
 #[then("the cursor should move correspondingly on the screen")]
 async fn cursor_moved(_world: &mut ThingOsWorld) {
     eprintln!("│  │  │      ℹ️ Cursor movement requires visual verification");
+}
+
+#[then("the pointer debug overlay should update after mouse movement")]
+async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for mouse input".to_string()));
+    }
+
+    let before_path =
+        crate::artifacts::global().lock().await.screenshot_path("pointer_debug_before");
+    let before_png = world
+        .take_screenshot(&before_path)
+        .await
+        .map_err(|e| StepError(format!("Failed to take before screenshot: {}", e)))?;
+
+    let cmd = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 50}}, {"type": "rel", "data": {"axis": "y", "value": 50}}]}}"#;
+    world
+        .execute_qmp_control(cmd)
+        .await
+        .map_err(|e| StepError(format!("QMP mouse movement failed: {}", e)))?;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    let after_path = crate::artifacts::global().lock().await.screenshot_path("pointer_debug_after");
+    let after_png = world
+        .take_screenshot(&after_path)
+        .await
+        .map_err(|e| StepError(format!("Failed to take after screenshot: {}", e)))?;
+
+    let before = image::open(&before_png)
+        .map_err(|e| StepError(format!("Failed to open before screenshot: {}", e)))?
+        .to_rgb8();
+    let after = image::open(&after_png)
+        .map_err(|e| StepError(format!("Failed to open after screenshot: {}", e)))?
+        .to_rgb8();
+
+    let (width, height) = before.dimensions();
+    if after.dimensions() != (width, height) {
+        return Err(StepError("Screenshot dimensions changed during pointer check".to_string()));
+    }
+
+    let x0 = 12u32.min(width);
+    let y0 = 12u32.min(height);
+    let x1 = 472u32.min(width);
+    let y1 = 108u32.min(height);
+    let mut changed = 0u32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if before.get_pixel(x, y).0 != after.get_pixel(x, y).0 {
+                changed += 1;
+            }
+        }
+    }
+
+    eprintln!("│  │  │      pointer debug overlay changed pixels: {}", changed);
+    if changed < 8 {
+        return Err(StepError(format!(
+            "Pointer debug overlay did not update after mouse movement ({} changed pixels)",
+            changed
+        )));
+    }
+
+    Ok(())
 }
