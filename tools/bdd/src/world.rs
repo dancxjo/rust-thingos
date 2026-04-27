@@ -565,6 +565,52 @@ impl ThingOsWorld {
         }
     }
 
+    /// Wait for a regex pattern to appear in the serial log.
+    ///
+    /// Polls every 100 ms up to `timeout_secs`.  Returns `true` if the
+    /// pattern is matched before the deadline, `false` otherwise.
+    pub async fn wait_for_regex_pattern(&self, pattern: &str, timeout_secs: f64) -> bool {
+        let re = match Regex::new(pattern) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("│  │  │      warn: invalid regex '{}': {}", pattern, e);
+                return false;
+            }
+        };
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs_f64(timeout_secs);
+        let mut last_print = std::time::Instant::now();
+
+        loop {
+            {
+                let log = self.serial_log.lock().await;
+                let clean = strip_ansi(&log);
+                if last_print.elapsed() > std::time::Duration::from_secs(5) {
+                    eprintln!(
+                        "│  │  │      debug: waiting for pattern /{}/ log len: {}",
+                        pattern,
+                        log.len()
+                    );
+                    let tail = if clean.len() > 200 { &clean[clean.len() - 200..] } else { &clean[..] };
+                    eprintln!("│  │  │      debug: tail: {:?}", tail);
+                    last_print = std::time::Instant::now();
+                }
+
+                if re.is_match(&clean) {
+                    eprintln!("│  │  │      debug: found pattern /{}/", pattern);
+                    return true;
+                }
+            }
+
+            if start.elapsed() > timeout {
+                eprintln!("│  │  │      debug: timed out waiting for pattern /{}/", pattern);
+                return false;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     /// Get the current serial log contents.
     pub async fn get_serial_log(&self) -> String {
         self.serial_log.lock().await.clone()
