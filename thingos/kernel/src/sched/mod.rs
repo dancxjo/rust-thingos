@@ -139,6 +139,10 @@ use crate::{BootRuntime, BootTasking};
 #[cfg(any(feature = "sched_debug", debug_assertions))]
 static SWITCH_LOG_COUNT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(test)]
+pub(crate) static TEST_LEAST_LOADED_ONLINE_CPU_CALLS: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
 pub static SCHEDULER: Mutex<Option<usize>> = Mutex::new(None);
 pub static SCHEDULER_LOCK_OWNER: AtomicIsize = AtomicIsize::new(-1);
 pub static SCHEDULER_LOCK_ACQUIRED_AT: AtomicU64 = AtomicU64::new(0);
