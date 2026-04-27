@@ -93,6 +93,8 @@ fn main(_arg: usize) -> ! {
     let mut visuals = CompositorVisuals::new();
     let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
     stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
+    visuals.prepare_solid_background(&display, 0xFFCCCCFF);
+    stem::info!("bloom: initial solid background ready");
 
     // ── Initial scene / damage / input state ─────────────────────────────────
     let scene = Scene::new();

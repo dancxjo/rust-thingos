@@ -16,6 +16,53 @@ async fn see_desktop_wallpaper(world: &mut ThingOsWorld) -> Result<(), StepError
     wallpaper_within_timeout(world, 60).await
 }
 
+#[then("the bloom first frame should contain visible pixels")]
+async fn bloom_first_frame_visible(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let screenshot_path =
+        crate::artifacts::global().lock().await.screenshot_path("bloom_first_frame_visible");
+
+    let png_path = world
+        .take_screenshot(&screenshot_path)
+        .await
+        .map_err(|e| StepError(format!("Failed to take screenshot: {}", e)))?;
+
+    let img = image::open(&png_path)
+        .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?;
+    let rgb = img.to_rgb8();
+    let (width, height) = rgb.dimensions();
+    if width == 0 || height == 0 {
+        return Err(StepError("Screenshot has invalid dimensions".to_string()));
+    }
+
+    let mut visible = 0u32;
+    let mut samples = 0u32;
+    let step_x = (width / 32).max(1);
+    let step_y = (height / 18).max(1);
+
+    let mut y = 0;
+    while y < height {
+        let mut x = 0;
+        while x < width {
+            let [r, g, b] = rgb.get_pixel(x, y).0;
+            if r > 8 || g > 8 || b > 8 {
+                visible += 1;
+            }
+            samples += 1;
+            x = x.saturating_add(step_x);
+        }
+        y = y.saturating_add(step_y);
+    }
+
+    if visible < samples / 4 {
+        return Err(StepError(format!(
+            "Bloom first frame appears blank: {}/{} sampled pixels were visible",
+            visible, samples
+        )));
+    }
+
+    Ok(())
+}
+
 #[then(regex = r#"^I should see the "Font Explorer" application$"#)]
 async fn see_font_explorer(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let timeout = std::time::Duration::from_secs(60);
@@ -389,5 +436,4 @@ async fn machine_is_booting(world: &mut ThingOsWorld) -> Result<(), StepError> {
 async fn log_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
     check_serial(world, &expected, default_timeout_secs(world)).await
 }
-
 

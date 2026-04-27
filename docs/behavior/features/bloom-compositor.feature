@@ -74,11 +74,12 @@ Feature: Bloom compositor service loop and responsiveness
     # The FrameClock starts with repaint_requested=true so the compositor
     # produces an initial frame (the fallback wallpaper) immediately on boot,
     # before any Wayland client has connected.  This verifies the loop reaches
-    # the repaint phase on its very first iteration.
+    # the repaint phase and that the display driver receives real pixels.
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
     And the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "First frame rendered" within 60s
+    And the bloom first frame should contain visible pixels
 
   Scenario: failed wallpaper decode leaves previous wallpaper active
     Given the machine is booted
