@@ -37,6 +37,10 @@ const DEFAULT_WALLPAPERS: [WallpaperSpec; 5] = [
     WallpaperSpec { file_name: "linen.bmp", variant: 3 },
 ];
 
+const DEFAULT_BOOT_LOCALE: &str = "syc";
+const DEFAULT_LOCALE_CONF: &str =
+    "LOCALE=syc\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n";
+
 /// Configuration for ISO builds.
 #[derive(Default)]
 pub struct IsoConfig<'a> {
@@ -459,22 +463,26 @@ fn generate_limine_config(
     }
 
     let default_loglevel = loglevel.unwrap_or("info");
+    let default_locale_arg = format!("locale={DEFAULT_BOOT_LOCALE}");
     let mut entries = vec![
         LimineEntry {
             title: "ThingOS".to_string(),
-            kernel_cmdline: format!("loglevel={}", default_loglevel),
+            kernel_cmdline: format!("loglevel={} {}", default_loglevel, default_locale_arg),
         },
         LimineEntry {
             title: "ThingOS (BootFB Fallback)".to_string(),
-            kernel_cmdline: format!("loglevel={} display=bootfb", default_loglevel),
+            kernel_cmdline: format!(
+                "loglevel={} {} display=bootfb",
+                default_loglevel, default_locale_arg
+            ),
         },
         LimineEntry {
             title: "ThingOS (Debug)".to_string(),
-            kernel_cmdline: "loglevel=4".to_string(),
+            kernel_cmdline: format!("loglevel=4 {}", default_locale_arg),
         },
         LimineEntry {
             title: "ThingOS (Trace)".to_string(),
-            kernel_cmdline: "loglevel=5".to_string(),
+            kernel_cmdline: format!("loglevel=5 {}", default_locale_arg),
         },
     ];
 
@@ -484,7 +492,7 @@ fn generate_limine_config(
                 0,
                 LimineEntry {
                     title: "ThingOS (Custom)".to_string(),
-                    kernel_cmdline: format!("loglevel={l}"),
+                    kernel_cmdline: format!("loglevel={l} {default_locale_arg}"),
                 },
             );
         }
@@ -629,10 +637,7 @@ pub fn build_iso_with_config(
     sh.copy_file(&kernel_src, iso_root.join("boot/kernel"))?;
     sh.copy_file("assets/fonts/unifont.hex", iso_root.join("share/fonts/unifont.hex"))?;
 
-    sh.write_file(
-        iso_root.join("etc/locale.conf"),
-        "LOCALE=en_US\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n",
-    )?;
+    sh.write_file(iso_root.join("etc/locale.conf"), DEFAULT_LOCALE_CONF)?;
 
     sh.write_file(
         iso_root.join("etc/profile"),
@@ -1043,10 +1048,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
         sh.remove_path(&staged_lib)?;
     }
 
-    sh.write_file(
-        "locale.conf",
-        "LOCALE=en_US\nTZ_OFFSET=-8\nOLLAMA_SERVER=http://10.0.2.2:11434\nOLLAMA_MODEL=tinyllama\n",
-    )?;
+    sh.write_file("locale.conf", DEFAULT_LOCALE_CONF)?;
     cmd!(sh, "mcopy -i {hdd}@@1M locale.conf ::/boot/locale.conf").run()?;
     sh.remove_path("locale.conf")?;
 
@@ -1142,5 +1144,21 @@ fn userspace_aliases(name: &str) -> &'static [&'static str] {
         // real binary in the image.
         "mesocarp" => &["mdns", "mdnsd"],
         _ => &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_limine_config_sets_default_locale() {
+        let sh = Shell::new().expect("shell");
+        let conf = generate_limine_config(&sh, &[], &[], None, None, false, false);
+
+        assert!(conf.contains("kernel_cmdline: loglevel=info locale=syc"));
+        assert!(conf.contains("kernel_cmdline: loglevel=info locale=syc display=bootfb"));
+        assert!(conf.contains("kernel_cmdline: loglevel=4 locale=syc"));
+        assert!(conf.contains("kernel_cmdline: loglevel=5 locale=syc"));
     }
 }

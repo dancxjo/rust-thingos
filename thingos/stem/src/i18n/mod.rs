@@ -405,6 +405,7 @@ fn leak_locale(locale: &str) -> &'static str {
         "en-US" => "en-US",
         "eo" => "eo",
         "la" => "la",
+        "syc" => "syc",
         _ => generated::LOCALE_IDS
             .iter()
             .copied()

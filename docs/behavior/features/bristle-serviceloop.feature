@@ -27,6 +27,9 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
     Then the log should match pattern "bristle: bloom sink registered"
     And the log should match pattern "bloom: registered with bristle"
 
+  Scenario: bristle seeds the session locale from Limine
+    Then the log should match pattern "bristle: session locale initialized to syc"
+
   Scenario: bristle no longer accepts a packed port argument
     # The packed usize spawn arg path is removed.
     # Bristle ignores the arg and proceeds with zero (ServiceLoop start).

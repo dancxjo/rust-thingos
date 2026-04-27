@@ -32,7 +32,7 @@
       </trans-unit>
       <trans-unit id="ui.fonts.sample">
         <source>The quick brown fox jumps over the lazy dog. 0123456789</source>
-        <target>La rapida vulpo saltas super la maldiligentan hundon. 0123456789</target>
+        <target>Eble ĉiu kvazaŭ-deca fuŝĥoraĵo ĝojigos homtipon. 0123456789</target>
       </trans-unit>
       <trans-unit id="kernel.boot.hint.terminal">
         <source>Press F12 for a terminal</source>

@@ -27,10 +27,10 @@ use abi::hid::{
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::wire::KindId;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
-use stem::syscall::port_create;
 use stem::syscall::vfs::{
     vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write,
 };
+use stem::syscall::{argv_get, port_create};
 use stem::wait_set::WaitToken;
 use stem::{debug, info, warn};
 
@@ -63,6 +63,50 @@ fn cycle_locale() {
     stem::info!("bristle: F1 pressed - locale set to {}", locale.as_str());
 }
 
+fn locale_from_token(token: &str) -> Option<&'static str> {
+    let value = token.strip_prefix("locale=").or_else(|| token.strip_prefix("language="))?.trim();
+    match value {
+        "en" | "en_US" | "en-US" => Some("en"),
+        "eo" => Some("eo"),
+        "la" => Some("la"),
+        "syc" => Some("syc"),
+        _ => None,
+    }
+}
+
+fn boot_locale() -> &'static str {
+    let mut buf = [0u8; 1024];
+
+    if let Ok(needed) = argv_get(&mut buf) {
+        let limit = needed.min(buf.len());
+        if limit > 0 {
+            if let Ok(cmdline) = core::str::from_utf8(&buf[..limit]) {
+                for token in cmdline.split_ascii_whitespace() {
+                    if let Some(locale) = locale_from_token(token) {
+                        return locale;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(fd) = vfs_open("/dev/cmdline", abi::syscall::vfs_flags::O_RDONLY) {
+        if let Ok(n) = vfs_read(fd, &mut buf) {
+            if let Ok(cmdline) = core::str::from_utf8(&buf[..n]) {
+                for token in cmdline.split_ascii_whitespace() {
+                    if let Some(locale) = locale_from_token(token) {
+                        let _ = vfs_close(fd);
+                        return locale;
+                    }
+                }
+            }
+        }
+        let _ = vfs_close(fd);
+    }
+
+    "syc"
+}
+
 /// Publish bristle's PID to `/run/bristle/pid` so consumers can find us.
 fn publish_pid() {
     let _ = vfs_mkdir("/run");
@@ -91,7 +135,10 @@ fn main(_arg: usize) -> ! {
     stem::i18n::init();
     ensure_session_roots();
     update_active_ui("bloom");
-    update_locale(stem::i18n::current_locale().as_str());
+    let initial_locale = boot_locale();
+    stem::i18n::set_locale(stem::i18n::LocaleId::new(initial_locale));
+    update_locale(initial_locale);
+    info!("bristle: session locale initialized to {}", initial_locale);
 
     // ── Publish PID so consumers can register via inbox ───────────────────
     publish_pid();

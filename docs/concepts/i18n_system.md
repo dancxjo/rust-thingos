@@ -71,6 +71,9 @@ writes the active ISO code to:
 the i18n generation counter. UI code that caches rendered text should compare
 `stem::i18n::generation()` and redraw when it changes.
 
+The boot default is set by `locale=syc` in generated `limine.conf`. Bristle
+reads that kernel command-line value during startup and seeds `/session/locale`.
+
 ## Notes
 
 - Keep kernel code `no_std`; this i18n path is for `stem` userspace/runtime
