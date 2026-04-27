@@ -9,6 +9,7 @@ use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open};
 
+use crate::render::CursorPlane;
 use crate::scene::CompositionEntry;
 
 const MAX_COMMIT_PLANES: usize = 16;
@@ -123,6 +124,7 @@ impl DisplayBackend {
         composition_list: &[CompositionEntry],
         _damage: &[Rect],
         fallback_buffer: Option<u32>,
+        cursor: Option<CursorPlane>,
     ) -> PresentResult {
         let mut planes = [empty_plane_commit(); MAX_COMMIT_PLANES];
         let mut plane_count = 0usize;
@@ -158,6 +160,34 @@ impl DisplayBackend {
                 _reserved: [0; 7],
             };
             plane_count += 1;
+        }
+
+        // 3. Cursor plane, composed last. Software display drivers alpha-blend
+        // this plane when hardware cursor planes are not available.
+        if let Some(cursor) = cursor {
+            if plane_count < MAX_COMMIT_PLANES {
+                let (out_w, out_h) = self.output_size();
+                let dst_x = cursor.x.max(0) as u32;
+                let dst_y = cursor.y.max(0) as u32;
+                let src_x = cursor.x.saturating_neg() as u32;
+                let src_y = cursor.y.saturating_neg() as u32;
+                let visible_w =
+                    cursor.width.saturating_sub(src_x).min(out_w.saturating_sub(dst_x));
+                let visible_h =
+                    cursor.height.saturating_sub(src_y).min(out_h.saturating_sub(dst_y));
+                if visible_w > 0 && visible_h > 0 {
+                    planes[plane_count] = PlaneCommit {
+                        plane_id: PlaneId(plane_count as u32),
+                        buffer_id: abi::display::BufferId(cursor.buffer_id),
+                        dest_rect: Rect { x: dst_x, y: dst_y, w: visible_w, h: visible_h },
+                        src_rect: Rect { x: src_x, y: src_y, w: visible_w, h: visible_h },
+                        z_order: i32::MAX,
+                        alpha: 255,
+                        _reserved: [0; 7],
+                    };
+                    plane_count += 1;
+                }
+            }
         }
 
         if plane_count == 0 {

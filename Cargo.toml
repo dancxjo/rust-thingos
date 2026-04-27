@@ -33,6 +33,7 @@ members = [
   "thingos/libs/llm_stub",
   "thingos/libs/ollama",
   "thingos/libs/pistil-types",
+  "thingos/libs/svg",
   "thingos/mesocarp",
   "src/build_helper",
   "src/rustc-std-workspace/rustc-std-workspace-alloc",

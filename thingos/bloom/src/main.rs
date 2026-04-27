@@ -93,6 +93,7 @@ fn main(_arg: usize) -> ! {
     let mut visuals = CompositorVisuals::new();
     let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
     stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
+    visuals.prepare_cursor(&display);
 
     // ── Initial scene / damage / input state ─────────────────────────────────
     let scene = Scene::new();
@@ -101,11 +102,10 @@ fn main(_arg: usize) -> ! {
     let input = InputState::new(primary.width, primary.height);
 
     // ── Bristle event port ────────────────────────────────────────────────────
-    // Bloom keeps a read FD ready for bristle HID events, but the old inbox
-    // RegisterSink send can deadlock startup. Do not send that message on the
-    // compositor bring-up path; first paint must not depend on input routing.
-    let bristle_fd = None;
-    warn!("bloom: bristle input disabled during compositor startup");
+    // Bloom keeps a read FD ready for bristle HID events and registers the
+    // sink from the service loop after startup so first paint is independent
+    // from Bristle readiness.
+    let bristle_pair = port_create(4096).ok();
 
     // ── Wallpaper watch FD ────────────────────────────────────────────────────
     let wp_watch_fd = match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
@@ -141,8 +141,16 @@ fn main(_arg: usize) -> ! {
     }
 
     // Bristle FD → InputService
-    if let Some(fd) = bristle_fd {
-        bloom_loop.add_service(alloc::boxed::Box::new(InputService::new(fd)));
+    if let Some((bristle_write, bristle_read)) = bristle_pair {
+        match vfs_handle_from_port(bristle_read) {
+            Ok(fd) => {
+                bloom_loop.add_service(alloc::boxed::Box::new(InputService::new(
+                    fd,
+                    bristle_write,
+                )));
+            }
+            Err(e) => warn!("bloom: failed to bridge bristle input port to FD: {:?}", e),
+        }
     }
 
     // Wallpaper watch → WallpaperService

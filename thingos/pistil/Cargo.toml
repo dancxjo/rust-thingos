@@ -11,6 +11,7 @@ crate-type = ["rlib", "cdylib"]
 stem = { path = "../stem", features = ["std"] }
 abi = { path = "../abi" }
 pistil-types = { path = "../libs/pistil-types" }
+svg = { path = "../libs/svg" }
 fontdue = { version = "0.7", default-features = false }
 libm = "0.2"
 serde = { version = "1.0", default-features = false, features = ["derive"] }

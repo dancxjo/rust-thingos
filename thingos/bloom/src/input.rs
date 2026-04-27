@@ -16,6 +16,9 @@ use crate::protocol::{
 };
 use crate::scene::Scene;
 
+const CURSOR_DAMAGE_W: u32 = 32;
+const CURSOR_DAMAGE_H: u32 = 32;
+
 pub struct InputState {
     pointer_x: i32,
     pointer_y: i32,
@@ -25,12 +28,20 @@ pub struct InputState {
 
 impl InputState {
     pub fn new(output_w: u32, output_h: u32) -> Self {
-        Self { pointer_x: 0, pointer_y: 0, output_w: output_w as i32, output_h: output_h as i32 }
+        let output_w = output_w as i32;
+        let output_h = output_h as i32;
+        Self { pointer_x: output_w / 2, pointer_y: output_h / 2, output_w, output_h }
     }
 
     pub fn update_dimensions(&mut self, output_w: u32, output_h: u32) {
         self.output_w = output_w as i32;
         self.output_h = output_h as i32;
+        self.pointer_x = self.pointer_x.clamp(0, self.output_w.saturating_sub(1));
+        self.pointer_y = self.pointer_y.clamp(0, self.output_h.saturating_sub(1));
+    }
+
+    pub fn pointer_position(&self) -> (i32, i32) {
+        (self.pointer_x, self.pointer_y)
     }
 
     pub fn handle_bristle_event(
@@ -54,10 +65,13 @@ impl InputState {
                 let mut p = [0u8; PointerMovePayload::SIZE];
                 p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
                 let move_ev = PointerMovePayload::from_bytes(&p);
+                let old_x = self.pointer_x;
+                let old_y = self.pointer_y;
                 self.pointer_x =
                     (self.pointer_x + move_ev.dx as i32).clamp(0, self.output_w.saturating_sub(1));
                 self.pointer_y =
                     (self.pointer_y + move_ev.dy as i32).clamp(0, self.output_h.saturating_sub(1));
+                mark_cursor_damage(damage, old_x, old_y, self.pointer_x, self.pointer_y);
                 self.update_pointer_focus(scene);
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
@@ -71,7 +85,6 @@ impl InputState {
                         send_client_event(scene, client_id, KIND_POINTER_MOTION, &to_vec(&ev));
                     }
                 }
-                damage.mark_dirty();
             }
             Ok(EventType::PointerButtonDown) if payload.len() >= PointerButtonPayload::SIZE => {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
@@ -94,7 +107,7 @@ impl InputState {
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
                     }
                 }
-                damage.mark_dirty();
+                mark_cursor_rect(damage, self.pointer_x, self.pointer_y);
             }
             Ok(EventType::PointerButtonUp) if payload.len() >= PointerButtonPayload::SIZE => {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
@@ -114,7 +127,7 @@ impl InputState {
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
                     }
                 }
-                damage.mark_dirty();
+                mark_cursor_rect(damage, self.pointer_x, self.pointer_y);
             }
             Ok(EventType::KeyDown) if payload.len() >= KeyEventPayload::SIZE => {
                 let mut p = [0u8; KeyEventPayload::SIZE];
@@ -222,6 +235,19 @@ impl InputState {
             }
         }
     }
+}
+
+fn mark_cursor_damage(damage: &mut DamageTracker, old_x: i32, old_y: i32, new_x: i32, new_y: i32) {
+    mark_cursor_rect(damage, old_x, old_y);
+    if old_x != new_x || old_y != new_y {
+        mark_cursor_rect(damage, new_x, new_y);
+    }
+}
+
+fn mark_cursor_rect(damage: &mut DamageTracker, x: i32, y: i32) {
+    let x = x.saturating_sub(3).max(0) as u32;
+    let y = y.saturating_sub(2).max(0) as u32;
+    damage.mark_rect(abi::display_protocol::Rect { x, y, w: CURSOR_DAMAGE_W, h: CURSOR_DAMAGE_H });
 }
 
 #[inline]

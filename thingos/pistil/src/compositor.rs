@@ -230,6 +230,49 @@ pub extern "C" fn pistil_draw_debug_text(
     0
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_prepare_cursor(
+    path_ptr: *const u8,
+    dst_ptr: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+    hotspot_out: *mut u32,
+) -> i32 {
+    if dst_ptr.is_null() || dst_w == 0 || dst_h == 0 || dst_stride_pixels < dst_w {
+        return -3;
+    }
+
+    let path = if path_ptr.is_null() {
+        None
+    } else {
+        let mut len = 0usize;
+        while unsafe { *path_ptr.add(len) } != 0 && len < 256 {
+            len += 1;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(path_ptr, len) };
+        core::str::from_utf8(bytes).ok()
+    };
+
+    let dst =
+        unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
+    let svg_bytes = path.and_then(|p| read_vfs_file(p).ok());
+    let bytes = svg_bytes.as_deref().unwrap_or(svg::DEFAULT_CURSOR_SVG);
+
+    match svg::rasterize_cursor(bytes, dst, dst_w, dst_h, dst_stride_pixels) {
+        Ok(hotspot) => {
+            if !hotspot_out.is_null() {
+                unsafe {
+                    *hotspot_out.add(0) = hotspot.x;
+                    *hotspot_out.add(1) = hotspot.y;
+                }
+            }
+            0
+        }
+        Err(_) => -3,
+    }
+}
+
 fn draw_debug_text_lines(renderer: &TextRenderer, canvas: &mut Canvas, text: &str) {
     let mut y = 96;
     for line in text.lines() {

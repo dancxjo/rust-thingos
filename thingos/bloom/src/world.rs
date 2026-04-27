@@ -231,8 +231,14 @@ impl BloomWorld {
     pub fn try_present(&mut self) -> Option<Vec<CompositionEntry>> {
         let composition = self.scene.collect_composition();
         let pending_damage = self.damage.take();
-        let result =
-            self.display.present(&composition, &pending_damage, self.visuals.fallback_buffer_id());
+        let (pointer_x, pointer_y) = self.input.pointer_position();
+        let cursor = self.visuals.cursor_plane(pointer_x, pointer_y);
+        let result = self.display.present(
+            &composition,
+            &pending_damage,
+            self.visuals.fallback_buffer_id(),
+            cursor,
+        );
         if result.success {
             Some(composition)
         } else {
