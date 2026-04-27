@@ -101,17 +101,13 @@ impl BootFbDriver {
     }
 
     pub fn commit(&mut self, req: &CommitRequest) -> SysResult<()> {
-        // Bootfb only supports a single primary plane.
-        // We find the first plane commit that targets the primary plane (Id 0).
         for plane in req.planes() {
-            if plane.plane_id == PlaneId(0) {
-                return self.blit_primary(plane);
-            }
+            self.blit_plane(plane)?;
         }
         Ok(())
     }
 
-    fn blit_primary(&mut self, commit: &PlaneCommit) -> SysResult<()> {
+    fn blit_plane(&mut self, commit: &PlaneCommit) -> SysResult<()> {
         let buffer = self.buffers.get(&commit.buffer_id).ok_or(Errno::ENOENT)?;
 
         // Determine bytes-per-pixel from framebuffer metadata.
@@ -146,18 +142,63 @@ impl BootFbDriver {
             return Ok(());
         }
 
-        for row in 0..copy_h {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    buffer.ptr.add((src_y + row) * buffer.stride as usize + src_x * bpp),
-                    self.fb.base.add((dst_y + row) * self.fb.stride as usize + dst_x * bpp),
-                    row_bytes,
-                );
+        let should_blend = commit.plane_id != PlaneId(0) || commit.alpha < 255;
+        if should_blend && bpp == 4 {
+            for row in 0..copy_h {
+                for col in 0..copy_w {
+                    unsafe {
+                        let src_ptr = buffer
+                            .ptr
+                            .add((src_y + row) * buffer.stride as usize + (src_x + col) * bpp);
+                        let dst_ptr = self
+                            .fb
+                            .base
+                            .add((dst_y + row) * self.fb.stride as usize + (dst_x + col) * bpp);
+                        let src = core::ptr::read_unaligned(src_ptr as *const u32);
+                        let dst = core::ptr::read_unaligned(dst_ptr as *const u32);
+                        core::ptr::write_unaligned(
+                            dst_ptr as *mut u32,
+                            alpha_over_argb(src, dst, commit.alpha),
+                        );
+                    }
+                }
+            }
+        } else {
+            for row in 0..copy_h {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        buffer.ptr.add((src_y + row) * buffer.stride as usize + src_x * bpp),
+                        self.fb.base.add((dst_y + row) * self.fb.stride as usize + dst_x * bpp),
+                        row_bytes,
+                    );
+                }
             }
         }
 
         Ok(())
     }
+}
+
+fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
+    let src_a = ((src >> 24) & 0xff) * plane_alpha as u32 / 255;
+    if src_a == 0 {
+        return dst;
+    }
+    if src_a == 255 {
+        return 0xff00_0000 | (src & 0x00ff_ffff);
+    }
+
+    let inv = 255 - src_a;
+    let sr = (src >> 16) & 0xff;
+    let sg = (src >> 8) & 0xff;
+    let sb = src & 0xff;
+    let dr = (dst >> 16) & 0xff;
+    let dg = (dst >> 8) & 0xff;
+    let db = dst & 0xff;
+    let r = (sr * src_a + dr * inv + 127) / 255;
+    let g = (sg * src_a + dg * inv + 127) / 255;
+    let b = (sb * src_a + db * inv + 127) / 255;
+    0xff00_0000 | (r << 16) | (g << 8) | b
 }
 
 fn find_framebuffer() -> Option<Framebuffer> {

@@ -15,6 +15,7 @@ use abi::driver_interface::{
     DriverEntryCtx, ProbeResult, Status,
 };
 use abi::errors::Errno;
+use abi::pixel::PixelFormat;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -141,6 +142,7 @@ struct ImportedBuffer {
     width: u32,
     height: u32,
     stride: u32,
+    format: PixelFormat,
 }
 
 struct PresentStats {
@@ -255,6 +257,28 @@ fn dispatch_vfs_rpc(driver: &mut VirtioGpuDriver, req: &ProviderRequest) -> Prov
     }
 }
 
+fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
+    let src_a = ((src >> 24) & 0xff) * plane_alpha as u32 / 255;
+    if src_a == 0 {
+        return dst;
+    }
+    if src_a == 255 {
+        return 0xff00_0000 | (src & 0x00ff_ffff);
+    }
+
+    let inv = 255 - src_a;
+    let sr = (src >> 16) & 0xff;
+    let sg = (src >> 8) & 0xff;
+    let sb = src & 0xff;
+    let dr = (dst >> 16) & 0xff;
+    let dg = (dst >> 8) & 0xff;
+    let db = dst & 0xff;
+    let r = (sr * src_a + dr * inv + 127) / 255;
+    let g = (sg * src_a + dg * inv + 127) / 255;
+    let b = (sb * src_a + db * inv + 127) / 255;
+    0xff00_0000 | (r << 16) | (g << 8) | b
+}
+
 fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
     if payload.len() < 4 {
         return ProviderResponse::err(Errno::EINVAL);
@@ -367,6 +391,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                             width: bh.width,
                             height: bh.height,
                             stride: bh.stride,
+                            format: bh.format,
                         },
                     );
                     ProviderResponse::ok_device_call(id.0, &id.0.to_le_bytes())
@@ -458,22 +483,47 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     if copy_w == 0 || copy_h == 0 {
                         continue;
                     }
-                    let row_bytes = copy_w.saturating_mul(bpp);
-
                     let target_ptr = driver.frame_pool[idx].ptr;
-                    for row in 0..copy_h {
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(
-                                src.ptr.add(
-                                    (src_y + row).saturating_mul(src.stride as usize)
-                                        + src_x.saturating_mul(bpp),
-                                ),
-                                target_ptr.add(
-                                    (dst_y + row).saturating_mul(driver.disp_stride as usize)
-                                        + dst_x.saturating_mul(bpp),
-                                ),
-                                row_bytes,
-                            );
+                    let should_blend = plane.alpha < 255
+                        || plane.z_order > 0
+                        || src.format == PixelFormat::Bgra8888;
+                    if should_blend && bpp == 4 {
+                        for row in 0..copy_h {
+                            for col in 0..copy_w {
+                                unsafe {
+                                    let src_ptr = src.ptr.add(
+                                        (src_y + row).saturating_mul(src.stride as usize)
+                                            + (src_x + col).saturating_mul(bpp),
+                                    );
+                                    let dst_ptr = target_ptr.add(
+                                        (dst_y + row).saturating_mul(driver.disp_stride as usize)
+                                            + (dst_x + col).saturating_mul(bpp),
+                                    );
+                                    let src_px = core::ptr::read_unaligned(src_ptr as *const u32);
+                                    let dst_px = core::ptr::read_unaligned(dst_ptr as *const u32);
+                                    core::ptr::write_unaligned(
+                                        dst_ptr as *mut u32,
+                                        alpha_over_argb(src_px, dst_px, plane.alpha),
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        let row_bytes = copy_w.saturating_mul(bpp);
+                        for row in 0..copy_h {
+                            unsafe {
+                                core::ptr::copy_nonoverlapping(
+                                    src.ptr.add(
+                                        (src_y + row).saturating_mul(src.stride as usize)
+                                            + src_x.saturating_mul(bpp),
+                                    ),
+                                    target_ptr.add(
+                                        (dst_y + row).saturating_mul(driver.disp_stride as usize)
+                                            + dst_x.saturating_mul(bpp),
+                                    ),
+                                    row_bytes,
+                                );
+                            }
                         }
                     }
 
