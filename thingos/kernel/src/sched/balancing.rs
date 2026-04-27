@@ -1,8 +1,9 @@
 //! Scheduler load balancing and CPU selection logic.
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use super::{types, state};
-use super::profiling::*;
+
 use super::mailbox::enqueue_remote_wake_mailbox;
+use super::profiling::*;
+use super::{state, types};
 use crate::task::{TaskId, TaskPriority};
 
 // Keep steal scans bounded to limit idle-path latency while still peeking past
@@ -32,7 +33,8 @@ pub(crate) fn cross_cpu_runq_migration_enabled() -> bool {
 pub(super) const ANY_WAKE_LOCAL_DEPTH_BIAS: usize = 1;
 
 pub(super) static ANY_WAKE_POLICY_INIT_DONE: AtomicBool = AtomicBool::new(false);
-pub(super) static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 = AtomicU8::new(AnyWakeOverloadPolicy::Steal as u8);
+pub(super) static ANY_WAKE_OVERLOAD_POLICY: AtomicU8 =
+    AtomicU8::new(AnyWakeOverloadPolicy::Steal as u8);
 pub(super) static ANY_WAKE_OVERLOAD_GAP: AtomicUsize = AtomicUsize::new(2);
 // The streak counter storage is AtomicU8, but clamp APIs operate on usize.
 pub(super) const ANY_WAKE_OVERLOAD_STREAK_MAX: usize = u8::MAX as usize;
@@ -623,7 +625,9 @@ impl<R: crate::BootRuntime> types::Scheduler<R> {
                     .map(|sf| match sf.affinity {
                         crate::task::Affinity::Any => true,
                         crate::task::Affinity::Pinned(_) => false,
-                        crate::task::Affinity::Restricted(ref aff) => aff.allows(local_cpu, cpu_count),
+                        crate::task::Affinity::Restricted(ref aff) => {
+                            aff.allows(local_cpu, cpu_count)
+                        }
                     })
                     .unwrap_or(false);
                 if allowed {
@@ -634,7 +638,7 @@ impl<R: crate::BootRuntime> types::Scheduler<R> {
                         continue;
                     }
                     if let Some(sf) = self.state.get_thread_mut(id) {
-                    // Check affinity. Restricted affinity must allow the local CPU.
+                        // Check affinity. Restricted affinity must allow the local CPU.
                         // Success: remove from victim runq.
                         sf.runq_location = None;
                         sf.wake_cpu = Some(local_cpu);

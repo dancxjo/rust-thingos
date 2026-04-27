@@ -11,6 +11,9 @@
 !/assets/wallpapers/
 /assets/wallpapers/*
 !/assets/wallpapers/flower.png
+!/assets/cursors/
+/assets/cursors/*
+!/assets/cursors/default.svg
 
 /iso_root*/
 thing-os*.iso

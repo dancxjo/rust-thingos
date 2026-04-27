@@ -95,6 +95,7 @@ fn main(_arg: usize) -> ! {
     stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
     visuals.prepare_background(&display, &initial_wallpaper);
     visuals.prepare_cursor(&display);
+    visuals.prepare_svg_debug_surface(&display);
 
     // ── Initial scene / damage / input state ─────────────────────────────────
     let scene = Scene::new();

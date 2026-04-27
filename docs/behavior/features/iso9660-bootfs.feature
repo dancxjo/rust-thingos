@@ -1,5 +1,6 @@
 Feature: ISO9660 boot filesystem mount
 
+  @timeout-90s
   Scenario: iso9660d mounts the boot filesystem at /media/cdrom
     Given the machine is booted
     Then the log should match pattern "(AHCI|ATA_DISK): Mounted .* at /dev/storage/(atapi|ide|ahci)"

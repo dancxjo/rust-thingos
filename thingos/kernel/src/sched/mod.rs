@@ -89,9 +89,12 @@ pub(crate) mod wait_queue;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
+pub(crate) use balancing::{choose_wake_cpu, cross_cpu_runq_migration_enabled};
 pub use blocking::{
     block_current, block_current_erased, init_blocking_hooks, wake_task, wake_task_erased,
 };
+pub use dispatch::{DispatchTrigger, emit_debug_summary, on_resched_ipi, on_tick};
+pub(crate) use dispatch::{resolve_switch_params, send_deferred_prepare_schedule_ipis};
 pub use hooks::{
     CpuSchedDiag, ProcessSnapshot, SchedDiag, add_user_mapping_current, alloc_user_stack_current,
     available_parallelism_current, check_user_mapping_current, collect_sched_diag_current,
@@ -109,7 +112,11 @@ pub use hooks::{
     task_status_current, task_wait_current, unregister_task_exit_waiter_current,
     unregister_timeout_wake_current, waitpid_current, yield_now_current,
 };
+pub(crate) use mailbox::claim_remote_wake_mailbox_ipi_epoch;
+pub use mailbox::enqueue_remote_wake_mailbox;
+pub use metrics::*;
 pub use policy::{DefaultPolicy, SchedPolicy};
+pub(crate) use registry_sync::{apply_deferred_registry_inserts, apply_deferred_registry_syncs};
 pub use sleep::{sleep_ms, sleep_ticks, sleep_until, yield_now};
 pub use spawn::{
     SpawnExResult, StdioSpec, boot_spawn_process, spawn, spawn_user_task_full, spawn_user_thread,
@@ -124,14 +131,6 @@ pub use types::{
     DEFAULT_TIMESLICE, ScheduleReason, Scheduler, StackFaultResult, SwitchDecision, SwitchParams,
 };
 pub use wait_queue::WaitQueue;
-
-pub use metrics::*;
-pub use dispatch::{DispatchTrigger, emit_debug_summary, on_resched_ipi, on_tick};
-pub(crate) use dispatch::{resolve_switch_params, send_deferred_prepare_schedule_ipis};
-pub use mailbox::enqueue_remote_wake_mailbox;
-pub(crate) use mailbox::claim_remote_wake_mailbox_ipi_epoch;
-pub(crate) use balancing::{choose_wake_cpu, cross_cpu_runq_migration_enabled};
-pub(crate) use registry_sync::{apply_deferred_registry_inserts, apply_deferred_registry_syncs};
 
 use crate::task::{StartupArg, Task, TaskPriority, TaskState};
 use crate::{BootRuntime, BootTasking};
@@ -325,20 +324,12 @@ pub fn clear_global_need_resched(cpu: usize, ordering: Ordering) {
 
 #[inline]
 pub fn global_need_resched_swap(cpu: usize, val: bool, ordering: Ordering) -> bool {
-    if cpu < types::MAX_CPUS {
-        GLOBAL_NEED_RESCHED[cpu].swap(val, ordering)
-    } else {
-        false
-    }
+    if cpu < types::MAX_CPUS { GLOBAL_NEED_RESCHED[cpu].swap(val, ordering) } else { false }
 }
 
 #[inline]
 pub fn global_need_resched_load(cpu: usize, ordering: Ordering) -> bool {
-    if cpu < types::MAX_CPUS {
-        GLOBAL_NEED_RESCHED[cpu].load(ordering)
-    } else {
-        false
-    }
+    if cpu < types::MAX_CPUS { GLOBAL_NEED_RESCHED[cpu].load(ordering) } else { false }
 }
 
 #[inline]
@@ -475,7 +466,10 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
         last_cpu: Some(0),
         name: {
             let mut n = [0u8; 32];
-            n[0] = b'b'; n[1] = b'o'; n[2] = b'o'; n[3] = b't';
+            n[0] = b'b';
+            n[1] = b'o';
+            n[2] = b'o';
+            n[3] = b't';
             n
         },
         name_len: 4,

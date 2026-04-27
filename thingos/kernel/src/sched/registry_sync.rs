@@ -1,8 +1,9 @@
 //! Deferred synchronization of scheduler state back to the canonical task registry.
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
-use super::types;
+
 use super::profiling::*;
+use super::types;
 use crate::BootRuntime;
 use crate::task::registry;
 

@@ -1,11 +1,12 @@
 //! Per-CPU cross-CPU wakeup mailboxes.
-use core::sync::atomic::{AtomicU64, Ordering};
 use alloc::collections::VecDeque;
-use super::{types, state};
-use super::profiling::*;
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use super::metrics::*;
 use super::policy::SchedPolicy;
-use crate::task::{TaskState, TaskPriority};
+use super::profiling::*;
+use super::{state, types};
+use crate::task::{TaskPriority, TaskState};
 
 /// Per-CPU cross-CPU wakeup mailboxes.
 ///
@@ -69,9 +70,7 @@ pub(crate) fn claim_remote_wake_mailbox_ipi_epoch(cpu: usize) -> bool {
 }
 
 #[inline]
-pub(super) fn take_remote_wake_mailbox(
-    cpu: usize,
-) -> VecDeque<types::RemoteWakeMailboxEntry> {
+pub(super) fn take_remote_wake_mailbox(cpu: usize) -> VecDeque<types::RemoteWakeMailboxEntry> {
     if cpu >= types::MAX_CPUS {
         return VecDeque::new();
     }

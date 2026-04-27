@@ -1,9 +1,9 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-27 12:09:26
+> Last run: 2026-04-27 13:46:25
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [Bloom compositor service loop and responsiveness](bloom-compositor-service-loop-and-responsiveness/README.md) | ✅ 0 / ⏭️ 0 / ❌ 1 | ❌ |
+| [Sprout graphics pipeline orchestration](sprout-graphics-pipeline-orchestration/README.md) | ✅ 0 / ⏭️ 0 / ❌ 1 | ❌ |

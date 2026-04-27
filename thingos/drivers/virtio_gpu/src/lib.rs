@@ -738,7 +738,8 @@ impl VirtioGpu {
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO, (avail_phys & 0xFFFFFFFF) as u32);
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
 
-        let used_offset = avail_offset + 6 + 128 * 2;
+        let used_unaligned = avail_offset + 6 + 128 * 2;
+        let used_offset = (used_unaligned + 3) & !3;
         let used_phys = vq_phys + used_offset as u64;
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_LO, (used_phys & 0xFFFFFFFF) as u32);
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_HI, (used_phys >> 32) as u32);
@@ -759,8 +760,11 @@ impl VirtioGpu {
     }
 
     fn notify_queue(&self, queue_idx: u16) {
-        // Write queue index to notify register
-        let notify_addr = self.notify_cfg + (queue_idx as u64 * self.notify_off_multiplier as u64);
+        // Modern VirtIO uses the selected queue's notify offset, not the queue
+        // index itself, to locate the notify register within the notify BAR.
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_SELECT, queue_idx as u32);
+        let queue_notify_off = self.read_common(virtio::VIRTIO_COMMON_QUEUE_NOTIFY_OFF) as u64;
+        let notify_addr = self.notify_cfg + queue_notify_off * self.notify_off_multiplier as u64;
         unsafe { write_volatile(notify_addr as *mut u16, queue_idx) }
     }
 

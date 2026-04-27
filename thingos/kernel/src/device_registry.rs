@@ -308,6 +308,18 @@ impl DeviceRegistry {
         None
     }
 
+    /// Return the device entry associated with a valid claim.
+    pub fn get_claimed_device(&self, claim_handle: usize) -> Option<DeviceEntry> {
+        if claim_handle >= MAX_CLAIMS {
+            return None;
+        }
+        let claim = &self.claims[claim_handle];
+        if !claim.valid {
+            return None;
+        }
+        self.get(claim.device_index).copied()
+    }
+
     /// Record a BAR mapping for a claim
     pub fn set_bar_mapping(&mut self, claim_handle: usize, bar_index: usize, virt_addr: u64) {
         if claim_handle < MAX_CLAIMS && bar_index < MAX_BARS {

@@ -71,8 +71,9 @@ impl Virtqueue {
             write_volatile(&raw mut (*avail_ptr).idx, 0);
         }
 
-        // Initialize used ring (after avail ring)
-        let used_offset = avail_offset + 6 + (size as usize) * 2;
+        // Initialize used ring (after avail ring, 4-byte aligned per VirtIO 1.0).
+        let used_unaligned = avail_offset + 6 + (size as usize) * 2;
+        let used_offset = (used_unaligned + 3) & !3;
         let used_ptr = (virt_base + used_offset as u64) as *mut VirtqUsed;
         unsafe {
             write_volatile(&raw mut (*used_ptr).flags, 0);
@@ -134,8 +135,9 @@ impl Virtqueue {
 
     /// Check for completed buffers
     pub fn poll_used(&mut self) -> Option<(u16, u32)> {
-        let used_offset =
-            (self.size as usize) * core::mem::size_of::<VirtqDesc>() + 6 + (self.size as usize) * 2;
+        let avail_offset = (self.size as usize) * core::mem::size_of::<VirtqDesc>();
+        let used_unaligned = avail_offset + 6 + (self.size as usize) * 2;
+        let used_offset = (used_unaligned + 3) & !3;
         let used_ptr = (self.virt_base + used_offset as u64) as *mut VirtqUsed;
 
         unsafe {

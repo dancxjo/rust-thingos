@@ -1,6 +1,10 @@
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use abi::pixel::PixelFormat;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use pistil_types::Texture;
+use stem::syscall::vfs::{vfs_close, vfs_lstat, vfs_open, vfs_readdir};
 
 use crate::display::DisplayBackend;
 
@@ -12,6 +16,18 @@ const CURSOR_SIZE: u32 = 32;
 const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 96;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
+const SVG_DEBUG_MAX_W: u32 = 720;
+const SVG_DEBUG_MAX_H: u32 = 360;
+const SVG_DEBUG_MARGIN: u32 = 12;
+const SVG_DEBUG_TILE: u32 = 72;
+const SVG_DEBUG_ICON: u32 = 48;
+const SVG_DEBUG_MAX_ITEMS: usize = 32;
+const SVG_DEBUG_MAX_DEPTH: u32 = 6;
+const S_IFMT: u32 = 0o170000;
+const S_IFDIR: u32 = 0o040000;
+const O_RDONLY: u32 = 0;
+const SVG_DEBUG_ROOTS: &[&str] = &["/share", "/assets", "/boot", "/session"];
+const SVG_DEBUG_KNOWN_PATHS: &[&str] = &["/share/cursors/default.svg", "/boot.svg"];
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -34,6 +50,7 @@ pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
     cursor: Option<CursorBuffer>,
     pointer_overlay: Option<PointerOverlayBuffer>,
+    svg_debug: Option<SvgDebugBuffer>,
     pistil: Option<PistilLib>,
 }
 
@@ -82,11 +99,18 @@ struct PointerOverlayBuffer {
     height: u32,
 }
 
+struct SvgDebugBuffer {
+    _texture: Texture,
+    buffer_id: u32,
+    width: u32,
+    height: u32,
+}
+
 impl CompositorVisuals {
     pub fn new() -> Self {
         let pistil = load_pistil();
 
-        Self { background: None, cursor: None, pointer_overlay: None, pistil }
+        Self { background: None, cursor: None, pointer_overlay: None, svg_debug: None, pistil }
     }
 
     /// Install a solid-colour background that can be presented immediately.
@@ -258,6 +282,73 @@ impl CompositorVisuals {
         );
     }
 
+    pub fn prepare_svg_debug_surface(&mut self, display: &DisplayBackend) {
+        let (output_w, output_h) = display.output_size();
+        if output_w <= SVG_DEBUG_MARGIN * 2 || output_h <= SVG_DEBUG_MARGIN * 2 {
+            return;
+        }
+
+        let width = SVG_DEBUG_MAX_W.min(output_w.saturating_sub(SVG_DEBUG_MARGIN * 2));
+        let height = SVG_DEBUG_MAX_H.min(output_h.saturating_sub(POINTER_OVERLAY_MAX_H + 36));
+        if width < SVG_DEBUG_TILE || height < SVG_DEBUG_TILE {
+            stem::warn!("bloom: SVG debug surface skipped; output too small");
+            return;
+        }
+
+        let mut texture = match Texture::new("bloom.compositor.svg_debug", width, height, 4) {
+            Some(t) => t,
+            None => {
+                stem::warn!("bloom: failed to allocate SVG debug surface");
+                return;
+            }
+        };
+
+        let paths = discover_svg_paths();
+        draw_svg_debug_surface(
+            texture.as_slice_mut(),
+            width,
+            height,
+            &paths,
+            self.pistil.as_ref().and_then(|lib| lib.prepare_cursor),
+        );
+
+        let Some(buffer_id) = display.import_buffer(
+            texture.fd,
+            width,
+            height,
+            texture.stride,
+            PixelFormat::Bgra8888,
+            0,
+        ) else {
+            stem::warn!("bloom: failed to import SVG debug surface");
+            return;
+        };
+
+        if let Some(old) = self.svg_debug.take() {
+            display.release_buffer(old.buffer_id);
+        }
+
+        self.svg_debug = Some(SvgDebugBuffer { _texture: texture, buffer_id, width, height });
+        stem::info!(
+            "bloom: SVG debug surface ready buffer={} size={}x{} file_svgs={}",
+            buffer_id,
+            width,
+            height,
+            paths.len()
+        );
+    }
+
+    pub fn svg_debug_plane(&self) -> Option<OverlayPlane> {
+        let debug = self.svg_debug.as_ref()?;
+        Some(OverlayPlane {
+            buffer_id: debug.buffer_id,
+            x: SVG_DEBUG_MARGIN as i32,
+            y: (POINTER_OVERLAY_MARGIN + POINTER_OVERLAY_MAX_H + SVG_DEBUG_MARGIN) as i32,
+            width: debug.width,
+            height: debug.height,
+        })
+    }
+
     pub fn cursor_plane(&self, pointer_x: i32, pointer_y: i32) -> Option<CursorPlane> {
         let cursor = self.cursor.as_ref()?;
         Some(CursorPlane {
@@ -335,6 +426,242 @@ impl CompositorVisuals {
             height
         );
         Some(())
+    }
+}
+
+fn discover_svg_paths() -> Vec<String> {
+    let mut found = Vec::new();
+    for path in SVG_DEBUG_KNOWN_PATHS {
+        push_svg_path_if_present(&mut found, path);
+    }
+    for root in SVG_DEBUG_ROOTS {
+        collect_svg_paths(root, 0, &mut found);
+        if found.len() >= SVG_DEBUG_MAX_ITEMS {
+            break;
+        }
+    }
+    found.sort();
+    found.dedup();
+    found.truncate(SVG_DEBUG_MAX_ITEMS);
+    found
+}
+
+fn push_svg_path_if_present(found: &mut Vec<String>, path: &str) {
+    if found.len() >= SVG_DEBUG_MAX_ITEMS || !path_has_svg_suffix(path) {
+        return;
+    }
+    if vfs_lstat(path).is_ok() && !found.iter().any(|p| p == path) {
+        found.push(String::from(path));
+    }
+}
+
+fn collect_svg_paths(path: &str, depth: u32, found: &mut Vec<String>) {
+    if found.len() >= SVG_DEBUG_MAX_ITEMS || depth > SVG_DEBUG_MAX_DEPTH {
+        return;
+    }
+
+    let Ok(stat) = vfs_lstat(path) else {
+        return;
+    };
+    if (stat.mode & S_IFMT) != S_IFDIR {
+        push_svg_path_if_present(found, path);
+        return;
+    }
+
+    let Ok(fd) = vfs_open(path, O_RDONLY) else {
+        return;
+    };
+    let mut children = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        match vfs_readdir(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let mut offset = 0usize;
+                while offset < n {
+                    let mut end = offset;
+                    while end < n && buf[end] != 0 {
+                        end += 1;
+                    }
+                    if end > offset {
+                        if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
+                            if name != "." && name != ".." && !name.is_empty() {
+                                children.push(path_join(path, name));
+                            }
+                        }
+                    }
+                    offset = end.saturating_add(1);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = vfs_close(fd);
+
+    children.sort();
+    for child in children {
+        collect_svg_paths(&child, depth.saturating_add(1), found);
+        if found.len() >= SVG_DEBUG_MAX_ITEMS {
+            break;
+        }
+    }
+}
+
+fn path_join(parent: &str, name: &str) -> String {
+    if parent == "/" {
+        let mut path = String::from("/");
+        path.push_str(name);
+        return path;
+    }
+    let mut path = String::from(parent);
+    if !path.ends_with('/') {
+        path.push('/');
+    }
+    path.push_str(name);
+    path
+}
+
+fn path_has_svg_suffix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.len() < 4 {
+        return false;
+    }
+    let tail = &bytes[bytes.len() - 4..];
+    (tail[0] == b'.') && lower(tail[1]) == b's' && lower(tail[2]) == b'v' && lower(tail[3]) == b'g'
+}
+
+fn lower(byte: u8) -> u8 {
+    if byte >= b'A' && byte <= b'Z' { byte + 32 } else { byte }
+}
+
+fn draw_svg_debug_surface(
+    dst: &mut [u32],
+    width: u32,
+    height: u32,
+    paths: &[String],
+    prepare_cursor: Option<PrepareCursorFn>,
+) {
+    dst.fill(0);
+    fill_rect(dst, width, 0, 0, width, height, 0xEE182026);
+    fill_rect(dst, width, 0, 0, width, 2, 0xFFFFD166);
+    draw_text(dst, width, height, 16, 14, 2, "BLOOM SVG DEBUG", 0xFFFFF4B0);
+
+    let mut tile_index = 0usize;
+    draw_svg_tile(dst, width, height, tile_index, "EMBEDDED DEFAULT", None, prepare_cursor);
+    tile_index += 1;
+
+    for path in paths {
+        draw_svg_tile(dst, width, height, tile_index, path, Some(path.as_str()), prepare_cursor);
+        stem::info!("bloom: SVG debug rendered {}", path);
+        tile_index += 1;
+        if tile_index >= max_svg_tiles(width, height) {
+            break;
+        }
+    }
+    stem::info!(
+        "bloom: SVG debug rendered embedded fallback plus {} discovered files",
+        paths.len()
+    );
+}
+
+fn max_svg_tiles(width: u32, height: u32) -> usize {
+    let cols = (width.saturating_sub(24) / SVG_DEBUG_TILE).max(1);
+    let rows = (height.saturating_sub(64) / SVG_DEBUG_TILE).max(1);
+    (cols * rows) as usize
+}
+
+fn draw_svg_tile(
+    dst: &mut [u32],
+    width: u32,
+    height: u32,
+    index: usize,
+    label: &str,
+    path: Option<&str>,
+    prepare_cursor: Option<PrepareCursorFn>,
+) {
+    let cols = (width.saturating_sub(24) / SVG_DEBUG_TILE).max(1) as usize;
+    let x = 16 + ((index % cols) as u32 * SVG_DEBUG_TILE) as i32;
+    let y = 56 + ((index / cols) as u32 * SVG_DEBUG_TILE) as i32;
+    if y >= height as i32 {
+        return;
+    }
+
+    fill_rect(dst, width, x, y, SVG_DEBUG_TILE - 8, SVG_DEBUG_TILE - 8, 0xFF26313A);
+    fill_rect(dst, width, x, y, SVG_DEBUG_TILE - 8, 1, 0xFF6EE7B7);
+
+    let mut icon = alloc::vec![0u32; (SVG_DEBUG_ICON * SVG_DEBUG_ICON) as usize];
+    let rendered = match (path, prepare_cursor) {
+        (Some(svg_path), Some(func)) => {
+            let mut hotspot = [0u32; 2];
+            call_prepare_cursor(
+                func,
+                svg_path,
+                icon.as_mut_ptr(),
+                SVG_DEBUG_ICON,
+                SVG_DEBUG_ICON,
+                &mut hotspot,
+            ) == 0
+        }
+        _ => svg::rasterize_cursor(
+            svg::DEFAULT_CURSOR_SVG,
+            &mut icon,
+            SVG_DEBUG_ICON,
+            SVG_DEBUG_ICON,
+            SVG_DEBUG_ICON,
+        )
+        .is_ok(),
+    };
+
+    if rendered {
+        blit_icon(dst, width, height, &icon, x + 8, y + 7);
+    } else {
+        draw_text(dst, width, height, x + 14, y + 20, 2, "ERR", 0xFFFF7A7A);
+        if let Some(svg_path) = path {
+            stem::warn!("bloom: SVG debug failed to render {}", svg_path);
+        }
+    }
+    draw_label(dst, width, height, x + 4, y + 58, label);
+}
+
+fn blit_icon(dst: &mut [u32], stride: u32, height: u32, src: &[u32], x: i32, y: i32) {
+    for sy in 0..SVG_DEBUG_ICON {
+        let dy = y + sy as i32;
+        if dy < 0 || dy >= height as i32 {
+            continue;
+        }
+        for sx in 0..SVG_DEBUG_ICON {
+            let dx = x + sx as i32;
+            if dx < 0 || dx >= stride as i32 {
+                continue;
+            }
+            let px = src[(sy * SVG_DEBUG_ICON + sx) as usize];
+            if px >> 24 != 0 {
+                dst[(dy as u32 * stride + dx as u32) as usize] = px;
+            }
+        }
+    }
+}
+
+fn draw_label(dst: &mut [u32], stride: u32, height: u32, x: i32, y: i32, label: &str) {
+    let mut chars = 0usize;
+    let mut text = [b' '; 10];
+    for byte in label.as_bytes().iter().rev() {
+        if chars >= text.len() {
+            break;
+        }
+        let b = if *byte == b'/' || *byte == b'.' || *byte == b':' {
+            b' '
+        } else if *byte >= b'a' && *byte <= b'z' {
+            *byte - 32
+        } else {
+            *byte
+        };
+        text[text.len() - 1 - chars] = b;
+        chars += 1;
+    }
+    let start = text.len().saturating_sub(chars);
+    if let Ok(s) = core::str::from_utf8(&text[start..]) {
+        draw_text(dst, stride, height, x, y, 1, s, 0xFFE6F7FF);
     }
 }
 

@@ -8,6 +8,8 @@ Feature: Sprout graphics pipeline orchestration
     Given the machine is booted
     Then the serial output should contain "SPROUT: Starting full pipeline (graphics + input)" within 60s
     And the serial output should contain "SPROUT: Spawned bristle" within 60s
+    And the serial output should contain "display_virtio_gpu: frame pool ready" within 120s
+    And the serial output should contain "SPROUT: Mounted /dev/display/card0 successfully" within 120s
     And the serial output should contain "SPROUT: Spawned bloom" within 120s
     And the serial output should contain "bloom: compositor service starting" within 120s
     And the serial output should contain "bloom: service loop started" within 180s

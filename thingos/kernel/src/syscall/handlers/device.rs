@@ -136,7 +136,9 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         if !reg.verify_claim(claim_handle, task_id) {
             Err(Errno::EPERM)
         } else {
-            reg.get_bar_info(claim_handle, bar_index).ok_or(Errno::ENODEV)
+            let (phys, size) = reg.get_bar_info(claim_handle, bar_index).ok_or(Errno::ENODEV)?;
+            let entry = reg.get_claimed_device(claim_handle).ok_or(Errno::ENODEV)?;
+            Ok((phys, expand_virtio_bar_size(entry, bar_index, size)))
         }
     };
 
@@ -165,11 +167,17 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         return Err(Errno::ENODEV);
     }
 
+    // Some VirtIO PCI devices report compact BAR sizes even though their
+    // capabilities point at separate pages inside the same BAR, e.g. common
+    // config at 0x1000 and notify config at 0x3000. Map a small minimum
+    // window so userspace drivers can reach the advertised capability pages.
+    let map_size = core::cmp::max(size, 0x4000);
+
     // Safety check: don't allow mapping more than 1GB in one go to prevent DOS/hangs
-    if size > 1024 * 1024 * 1024 {
+    if map_size > 1024 * 1024 * 1024 {
         crate::kdebug!(
             "DEVICE: map_mmio failed - requested size 0x{:x} exceeds 1GB safety limit",
-            size
+            map_size
         );
         return Err(Errno::EINVAL);
     }
@@ -178,11 +186,11 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         "DEVICE: mapping BAR{} (phys=0x{:x}, size=0x{:x}) for task {}",
         bar_index,
         phys_addr,
-        size,
+        map_size,
         task_id
     );
 
-    let page_count = (size + 4095) / 4096;
+    let page_count = (map_size + 4095) / 4096;
     let user_va = crate::memory::alloc_user_va((page_count * 4096) as usize);
 
     // Map pages WITHOUT holding the registry lock
@@ -214,11 +222,70 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         "DEVICE: Mapped BAR{} phys=0x{:x} size=0x{:x} -> virt=0x{:x}",
         bar_index,
         phys_addr,
-        size,
+        map_size,
         user_va
     );
 
     Ok(user_va as usize)
+}
+
+fn expand_virtio_bar_size(
+    entry: crate::device_registry::DeviceEntry,
+    bar_index: usize,
+    size: u64,
+) -> u64 {
+    use crate::virtio::pci::VirtioCapabilityType;
+
+    if entry.vendor_id != 0x1af4 {
+        return size;
+    }
+    let Some(loc) = entry.pci_location else {
+        return size;
+    };
+
+    let runtime = crate::runtime_base();
+    let status = runtime.pci_cfg_read32(loc.bus, loc.dev, loc.func, 0x04).unwrap_or(0) >> 16;
+    if (status & 0x10) == 0 {
+        return size;
+    }
+
+    let mut required = size;
+    let mut cap_ptr =
+        (runtime.pci_cfg_read32(loc.bus, loc.dev, loc.func, 0x34).unwrap_or(0) & 0xFF) as u8;
+    while cap_ptr != 0 {
+        let cap_header = runtime.pci_cfg_read32(loc.bus, loc.dev, loc.func, cap_ptr).unwrap_or(0);
+        let cap_id = (cap_header & 0xFF) as u8;
+        let next_ptr = ((cap_header >> 8) & 0xFF) as u8;
+        let cap_type = ((cap_header >> 24) & 0xFF) as u8;
+        if cap_id == 0x09 {
+            let cap_info =
+                runtime.pci_cfg_read32(loc.bus, loc.dev, loc.func, cap_ptr + 4).unwrap_or(0);
+            let bar = (cap_info & 0xFF) as usize;
+            if bar == bar_index {
+                let offset =
+                    runtime.pci_cfg_read32(loc.bus, loc.dev, loc.func, cap_ptr + 8).unwrap_or(0);
+                let length =
+                    runtime.pci_cfg_read32(loc.bus, loc.dev, loc.func, cap_ptr + 12).unwrap_or(0);
+                let min_len = if cap_type == VirtioCapabilityType::NotifyCfg as u8 {
+                    2
+                } else {
+                    length.max(1)
+                };
+                required = required.max(offset as u64 + min_len as u64);
+            }
+        }
+        cap_ptr = next_ptr;
+    }
+
+    if required > size {
+        crate::kdebug!(
+            "DEVICE: expanding VirtIO BAR{} map size from 0x{:x} to cover caps at 0x{:x}",
+            bar_index,
+            size,
+            required
+        );
+    }
+    required
 }
 
 /// Subscribe to device interrupts

@@ -1,7 +1,8 @@
 //! Scheduler telemetry, metrics and histogram utilities.
 use core::sync::atomic::{AtomicU64, Ordering};
-use super::{state, types};
+
 use super::profiling::*;
+use super::{state, types};
 
 /// Number of histogram buckets used for hold/wait time distributions.
 /// Boundaries (µs): <1, 1–10, 10–100, 100–1000, ≥1000

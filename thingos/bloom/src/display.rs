@@ -124,6 +124,7 @@ impl DisplayBackend {
         composition_list: &[CompositionEntry],
         _damage: &[Rect],
         fallback_buffer: Option<u32>,
+        svg_debug: Option<OverlayPlane>,
         pointer_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
     ) -> PresentResult {
@@ -163,7 +164,29 @@ impl DisplayBackend {
             plane_count += 1;
         }
 
-        // 3. Diagnostic overlay. This is intentionally above the wallpaper and
+        // 3. SVG diagnostic surface. This sits above ordinary surfaces so it
+        // can prove SVG rasterization without depending on client windows.
+        if let Some(overlay) = svg_debug {
+            if plane_count < MAX_COMMIT_PLANES {
+                planes[plane_count] = PlaneCommit {
+                    plane_id: PlaneId(plane_count as u32),
+                    buffer_id: abi::display::BufferId(overlay.buffer_id),
+                    dest_rect: Rect {
+                        x: overlay.x.max(0) as u32,
+                        y: overlay.y.max(0) as u32,
+                        w: overlay.width,
+                        h: overlay.height,
+                    },
+                    src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
+                    z_order: i32::MAX - 2,
+                    alpha: 255,
+                    _reserved: [0; 7],
+                };
+                plane_count += 1;
+            }
+        }
+
+        // 4. Diagnostic overlay. This is intentionally above the wallpaper and
         // client surfaces so pointer coordinates stay visible while debugging.
         if let Some(overlay) = pointer_overlay {
             if plane_count < MAX_COMMIT_PLANES {
@@ -185,7 +208,7 @@ impl DisplayBackend {
             }
         }
 
-        // 4. Cursor plane, composed last. Software display drivers alpha-blend
+        // 5. Cursor plane, composed last. Software display drivers alpha-blend
         // this plane when hardware cursor planes are not available.
         if let Some(cursor) = cursor {
             if plane_count < MAX_COMMIT_PLANES {

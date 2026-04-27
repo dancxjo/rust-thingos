@@ -1,14 +1,15 @@
 //! Main entry points for the scheduler dispatch and context-switching.
-use core::sync::atomic::Ordering;
 use alloc::vec::Vec;
-use super::{types, state, lifecycle};
-use super::profiling::*;
-use super::metrics::*;
-use super::registry_sync::*;
+use core::sync::atomic::Ordering;
+
 use super::mailbox::{claim_remote_wake_mailbox_ipi_epoch, enqueue_remote_wake_mailbox};
+use super::metrics::*;
 use super::policy::SchedPolicy;
+use super::profiling::*;
+use super::registry_sync::*;
+use super::{lifecycle, state, types};
+use crate::task::{StartupArg, TaskId, TaskPriority, TaskState};
 use crate::{BootRuntime, BootTasking};
-use crate::task::{StartupArg, TaskState, TaskPriority, TaskId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DispatchTrigger {
@@ -349,7 +350,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
         self.schedule_point(types::ScheduleReason::SafePoint)
     }
 
-    pub fn schedule_point(&mut self, reason: types::ScheduleReason) -> Option<types::SwitchDecision> {
+    pub fn schedule_point(
+        &mut self,
+        reason: types::ScheduleReason,
+    ) -> Option<types::SwitchDecision> {
         let cpu_idx = super::current_cpu_index::<R>();
         let _ = super::global_need_resched_swap(cpu_idx, false, Ordering::Acquire);
         self.drain_remote_wake_mailbox(cpu_idx);
@@ -676,10 +680,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             }
             if let Some(requeue_prio) = requeue_prio {
                 self.state.enqueue_task(cpu_idx, requeue_prio, current_id);
-                self.state.note_enqueue_cause(
-                    current_id,
-                    state::EnqueueCause::YieldRequeue,
-                );
+                self.state.note_enqueue_cause(current_id, state::EnqueueCause::YieldRequeue);
                 self.metrics.pushes += 1;
             }
         }
@@ -710,8 +711,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             };
             if target_cpu == current_cpu {
                 self.state.enqueue_task(target_cpu, prio, id);
-                self.state
-                    .note_enqueue_cause(id, state::EnqueueCause::AffinityRepair);
+                self.state.note_enqueue_cause(id, state::EnqueueCause::AffinityRepair);
             } else {
                 let wake_mono = crate::runtime::<R>().mono_ticks();
                 enqueue_remote_wake_mailbox(

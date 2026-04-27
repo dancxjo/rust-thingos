@@ -372,9 +372,7 @@ impl<R: BootRuntime> Scheduler<R> {
         core::mem::take(&mut self.pending_wake_ipis)
     }
 
-    pub(crate) fn take_deferred_registry_syncs(
-        &mut self,
-    ) -> alloc::vec::Vec<DeferredRegistrySync> {
+    pub(crate) fn take_deferred_registry_syncs(&mut self) -> alloc::vec::Vec<DeferredRegistrySync> {
         core::mem::take(&mut self.pending_registry_syncs)
     }
 }

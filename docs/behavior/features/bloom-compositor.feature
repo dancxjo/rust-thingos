@@ -99,6 +99,13 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: pointer debug overlay ready" within 60s
     And the serial output should contain "First frame rendered" within 60s
 
+  Scenario: bloom first frame includes the SVG debug surface
+    Given the machine is booted
+    Then the serial output should contain "bloom: SVG debug surface ready" within 60s
+    And the serial output should contain "bloom: SVG debug rendered embedded fallback" within 60s
+    And the serial output should contain "bloom: SVG debug rendered /share/cursors/default.svg" within 60s
+    And the serial output should contain "First frame rendered" within 60s
+
   @pointer-debug
   Scenario: pointer debug overlay updates after mouse movement
     Given the machine is booted

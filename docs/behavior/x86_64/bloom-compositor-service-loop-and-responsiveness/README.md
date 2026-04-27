@@ -1,9 +1,9 @@
 # Feature: Bloom compositor service loop and responsiveness
 
-> Last run: 2026-04-27 12:09:26
+> Last run: 2026-04-27 13:46:13
 
 ## Scenarios
 
 | Scenario | Steps | Status | Link |
 |----------|-------|--------|------|
-| pointer debug overlay updates after mouse movement | 1/2 | ❌ | [View Details](pointer-debug-overlay-updates-after-mouse-movement/README.md) |
+| bloom first frame includes the SVG debug surface | 1/2 | ❌ | [View Details](bloom-first-frame-includes-the-svg-debug-surface/README.md) |

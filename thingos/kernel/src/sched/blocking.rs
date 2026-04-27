@@ -1,19 +1,18 @@
 //! Blocking primitives for task synchronization.
 
-use super::{SCHEDULER, metrics};
 use super::balancing::{WakeBatchLoadSnapshot, choose_wake_cpu_from_snapshot};
 use super::mailbox::enqueue_remote_wake_mailbox;
 use super::metrics::{
-    PROF_SCHED_LOCK_WAKE_SLEEPERS_CALLS,
-    PROF_SCHED_LOCK_WAKE_SLEEPERS_HOLD_HIST, PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX,
-    PROF_SCHED_LOCK_WAKE_SLEEPERS_US_TOTAL,
+    PROF_SCHED_LOCK_WAKE_SLEEPERS_CALLS, PROF_SCHED_LOCK_WAKE_SLEEPERS_HOLD_HIST,
+    PROF_SCHED_LOCK_WAKE_SLEEPERS_US_MAX, PROF_SCHED_LOCK_WAKE_SLEEPERS_US_TOTAL,
 };
 use super::profiling::{
-    DIAG_IPI_SENT, DIAG_IPI_SENT_WAKE_TASK, PROF_IPI_SUPPRESSED,
-    PROF_RUNNABLE_TRANSITIONS, TICK_COUNT,
+    DIAG_IPI_SENT, DIAG_IPI_SENT_WAKE_TASK, PROF_IPI_SUPPRESSED, PROF_RUNNABLE_TRANSITIONS,
+    TICK_COUNT,
 };
 use super::state::{MigrationState, WaitReason};
 use super::types::Scheduler;
+use super::{SCHEDULER, metrics};
 use crate::task::TaskState;
 use crate::{BootRuntime, BootTasking};
 
@@ -66,8 +65,11 @@ impl<R: BootRuntime> Scheduler<R> {
                         cpu
                     }
                     crate::task::Affinity::Any => {
-                        let target =
-                            choose_wake_cpu_from_snapshot::<R>(self, sf.last_cpu, &wake_batch_loads);
+                        let target = choose_wake_cpu_from_snapshot::<R>(
+                            self,
+                            sf.last_cpu,
+                            &wake_batch_loads,
+                        );
                         wake_batch_loads.note_enqueue(target);
                         target
                     }
@@ -251,7 +253,7 @@ pub fn block_current<R: BootRuntime>() {
         let lock_start = rt.mono_ticks();
         let ptr = lock.expect("Scheduler not initialized");
         let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
- 
+
         let cpu = super::current_cpu_index::<R>();
         let current_id = match sched.state.per_cpu.get(cpu).and_then(|pc| pc.current) {
             Some(id) => id,
@@ -268,7 +270,7 @@ pub fn block_current<R: BootRuntime>() {
                 return;
             }
         };
- 
+
         // Check and update wake_pending from the hot-field cache.
         // This avoids a nested REGISTRY lock on the check-and-early-return path
         // (the primary source of SCHEDULER↔REGISTRY lock contention under SMP).
@@ -282,7 +284,7 @@ pub fn block_current<R: BootRuntime>() {
                 sf.state = TaskState::Blocked;
             }
         }
- 
+
         if was_wake_pending {
             super::record_sched_lock_hold::<R>(
                 &metrics::PROF_SCHED_LOCK_BLOCK_CURRENT_CALLS,
