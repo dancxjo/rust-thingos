@@ -17,14 +17,12 @@ pub enum DispatchTrigger {
 }
 
 pub fn on_tick<R: BootRuntime>() {
-    let _tracking = super::sched_lock_tracking_guard::<R>(super::current_cpu_index::<R>());
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
     try_resched_if_needed::<R>(DispatchTrigger::Timer);
 }
 
 pub fn on_resched_ipi<R: BootRuntime>() {
     let cpu = super::current_cpu_index::<R>();
-    let _tracking = super::sched_lock_tracking_guard::<R>(cpu);
     DIAG_IPI_HANDLER.fetch_add(1, Ordering::Relaxed);
     // Use the epoch-based check to avoid redundant schedule_point calls when
     // multiple IPIs were coalesced by the hardware.
@@ -38,7 +36,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     let rt = crate::runtime::<R>();
 
     let wait_start = rt.mono_ticks();
-    let mut sched_opt = super::SCHEDULER.try_lock();
+    let sched_opt = super::SCHEDULER.try_lock();
 
     if sched_opt.is_none() {
         PROF_RESCHED_TRYLOCK_MISS.fetch_add(1, Ordering::Relaxed);
@@ -120,6 +118,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     );
 
     let lock_start = rt.mono_ticks();
+    let lock_tracking = super::sched_lock_tracking_guard::<R>(cpu_idx);
     let decision = match trigger {
         DispatchTrigger::Timer => {
             sched.check_preempt_watchdog();
@@ -131,6 +130,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     if let Some(switch) = decision {
         let deferred_syncs = sched.take_deferred_registry_syncs();
         let deferred_ipis = sched.take_pending_wake_ipis();
+        drop(lock_tracking);
         drop(sched_opt);
 
         record_sched_lock_hold::<R>(
@@ -152,6 +152,7 @@ fn try_resched_if_needed<R: BootRuntime>(trigger: DispatchTrigger) {
     } else {
         let deferred_syncs = sched.take_deferred_registry_syncs();
         let deferred_ipis = sched.take_pending_wake_ipis();
+        drop(lock_tracking);
         drop(sched_opt);
 
         record_sched_lock_hold::<R>(

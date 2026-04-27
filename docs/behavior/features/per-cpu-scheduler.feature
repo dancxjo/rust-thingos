@@ -27,3 +27,11 @@ Feature: Per-CPU scheduler allocation and ownership
     Given the machine is started
     When I wait for the system to boot
     Then the serial output should contain "per-CPU preemption initialized"
+
+  @smoke
+  @timeout-30s
+  Scenario: Scheduler dispatch does not leave stale lock tracking
+    Given the machine is started
+    When I wait for the system to boot
+    Then the log should not contain "scheduler lock-order violation"
+    And the log should not contain "resolve_switch_params attempted while SCHEDULER is held"
