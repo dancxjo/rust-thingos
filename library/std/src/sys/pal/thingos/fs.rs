@@ -412,6 +412,21 @@ impl File {
         self.0.raw()
     }
 
+    /// Construct a file from a raw ThingOS fd, taking ownership of it.
+    ///
+    /// # Safety
+    /// The caller must ensure `fd` is valid, open, and uniquely owned.
+    pub(crate) unsafe fn from_raw_fd(fd: u32) -> Self {
+        File(FileDesc::from_raw(fd))
+    }
+
+    /// Return the raw fd without closing it.
+    pub(crate) fn into_raw_fd(self) -> u32 {
+        let fd = self.0.raw();
+        crate::mem::forget(self);
+        fd
+    }
+
     pub fn open(path: &Path, opts: &OpenOptions) -> crate::io::Result<File> {
         let path = path_to_bytes(path);
         let mut flags = opts.get_access_mode()?;

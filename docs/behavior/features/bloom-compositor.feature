@@ -14,6 +14,12 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: pistil background renderer loaded from /lib/libpistil.so" within 60s
 
+  Scenario: libpistil exports the vector renderer
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "test_dlopen" on the serial console
+    Then the serial output should contain "[test_dlopen] pistil_draw_vector_smoke: PASS" within 60s
+
   Scenario: bloom compositor remains observable after startup
     Given the machine is booted
     Then the serial output should contain "bloom: output0" within 60s

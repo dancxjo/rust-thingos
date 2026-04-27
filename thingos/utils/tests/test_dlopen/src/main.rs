@@ -188,6 +188,16 @@ fn test_dlopen_pistil_shared_library() {
     let area_fn: extern "C" fn(u32, u32) -> u64 = unsafe { core::mem::transmute(area_sym) };
     assert_eq!(area_fn(9, 7), 63, "unexpected rectangle area result");
 
+    let vector_sym = dlsym_bytes(handle, b"pistil_draw_vector_smoke");
+    assert!(!vector_sym.is_null(), "expected exported symbol pistil_draw_vector_smoke");
+    let vector_fn: extern "C" fn(*mut u32, u32, u32, u32) -> i32 =
+        unsafe { core::mem::transmute(vector_sym) };
+    let mut pixels = [0u32; 16];
+    let rc = vector_fn(pixels.as_mut_ptr(), 4, 4, 4);
+    assert_eq!(rc, 0, "pistil_draw_vector_smoke call through libpistil.so failed");
+    assert!(pixels.iter().any(|&p| p != 0), "pistil_draw_vector_smoke did not write any pixels");
+    println!("[test_dlopen] pistil_draw_vector_smoke: PASS");
+
     let prepare_sym = dlsym_bytes(handle, b"pistil_prepare_background");
     assert!(
         !prepare_sym.is_null(),
@@ -195,7 +205,7 @@ fn test_dlopen_pistil_shared_library() {
     );
     let prepare_fn: extern "C" fn(*const u8, *mut u32, u32, u32, u32) -> i32 =
         unsafe { core::mem::transmute(prepare_sym) };
-    let mut pixels = [0u32; 16];
+    pixels.fill(0);
     let rc = prepare_fn(b"/share/wallpapers/flower.png\0".as_ptr(), pixels.as_mut_ptr(), 4, 4, 4);
     assert_eq!(rc, 0, "pistil_prepare_background call through libpistil.so failed");
     assert!(pixels.iter().any(|&p| p != 0), "pistil_prepare_background did not write any pixels");

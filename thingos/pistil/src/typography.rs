@@ -287,3 +287,67 @@ pub extern "C" fn pistil_pack_rgba8(r: u8, g: u8, b: u8, a: u8) -> u32 {
 pub extern "C" fn pistil_rect_area(width: u32, height: u32) -> u64 {
     (width as u64) * (height as u64)
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_draw_vector_smoke(
+    dst_ptr: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+) -> i32 {
+    if dst_ptr.is_null() || dst_w == 0 || dst_h == 0 || dst_stride_pixels < dst_w {
+        return -1;
+    }
+
+    let Some(len) = (dst_h as usize).checked_mul(dst_stride_pixels as usize) else {
+        return -1;
+    };
+    let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, len) };
+    let mut canvas = pistil_types::Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
+    canvas.clear(0);
+
+    let primitives = alloc::vec![
+        Primitive::Rect {
+            shape: RectI::new(0, 0, dst_w as i32, dst_h as i32),
+            paint: Paint {
+                fill: Some(FillStyle::LinearGradient(LinearGradient {
+                    start: PointF { x: 0.0, y: 0.0 },
+                    end: PointF { x: dst_w as f32, y: dst_h as f32 },
+                    stops: alloc::vec![
+                        GradientStop {
+                            offset: 0.0,
+                            color: ColorRgba8 { r: 16, g: 32, b: 64, a: 255 },
+                        },
+                        GradientStop {
+                            offset: 1.0,
+                            color: ColorRgba8 { r: 64, g: 176, b: 144, a: 255 },
+                        },
+                    ],
+                })),
+                stroke: None,
+                blend: BlendMode::Src,
+            },
+        },
+        Primitive::Circle {
+            shape: Circle {
+                center: PointF { x: dst_w as f32 * 0.5, y: dst_h as f32 * 0.5 },
+                radius: (dst_w.min(dst_h) as f32 * 0.3).max(1.0),
+            },
+            paint: Paint {
+                fill: Some(FillStyle::Solid(ColorRgba8 { r: 240, g: 220, b: 96, a: 224 })),
+                stroke: Some(StrokeStyle {
+                    width: 2.0,
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    miter_limit: 4.0,
+                }),
+                blend: BlendMode::SrcOver,
+            },
+        },
+    ];
+
+    match crate::skia::render_primitives(&mut canvas, &primitives) {
+        Ok(()) => 0,
+        Err(_) => -2,
+    }
+}

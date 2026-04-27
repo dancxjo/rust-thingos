@@ -16,7 +16,7 @@ pub mod raw;
 /// still using the standard Rust entry point.
 #[stable(feature = "os_thingos", since = "1.0.0")]
 pub fn boot_arg() -> usize {
-    crate::sys::pal::boot_arg()
+    crate::sys::boot_arg()
 }
 
 /// A prelude for conveniently writing platform-specific code.
