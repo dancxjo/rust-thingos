@@ -1,9 +1,0 @@
-# ✅ Scenario: an IRQ-registered service wakes from add_irq
-
-> Last run: 2026-04-25 13:10:40
-
-## Steps
-
-| # | Step | Result | Duration | Artifacts |
-|---|------|--------|----------|-----------|
-

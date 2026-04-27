@@ -100,6 +100,22 @@ impl ThingOsWorld {
             .join(format!("thing-os-bdd-{}-{}-{}.iso", arch, safe_resolution, safe_loglevel))
     }
 
+    fn bdd_audiodev_arg() -> Option<String> {
+        let backend = std::env::var("BDD_AUDIODEV").unwrap_or_else(|_| "none".to_string());
+        let backend = backend.trim();
+        if backend.is_empty()
+            || backend.eq_ignore_ascii_case("off")
+            || backend.eq_ignore_ascii_case("false")
+            || backend.eq_ignore_ascii_case("0")
+        {
+            None
+        } else if backend.split(',').any(|part| part.trim_start().starts_with("id=")) {
+            Some(backend.to_string())
+        } else {
+            Some(format!("{backend},id=audio0"))
+        }
+    }
+
     fn fetch_cache_marker_path(arch: &str) -> PathBuf {
         Self::bdd_cache_dir().join(format!("fetch-{}.stamp", arch))
     }
@@ -308,6 +324,10 @@ impl ThingOsWorld {
 
                 cmd.args(["-device", "virtio-net-pci,netdev=n0"]);
                 cmd.args(["-netdev", "user,id=n0"]);
+                if let Some(audiodev) = Self::bdd_audiodev_arg() {
+                    cmd.args(["-audiodev", &audiodev]);
+                    cmd.args(["-device", "virtio-sound-pci,audiodev=audio0"]);
+                }
             }
             "aarch64" => {
                 cmd.args(["-M", "virt"]);
