@@ -13,15 +13,11 @@ use super::boot::wait_for_ready_state;
 
 #[then(regex = r#"^the log should match pattern "(.+)"$"#)]
 async fn log_matches_pattern(world: &mut ThingOsWorld, pattern: String) -> Result<(), StepError> {
-    let log = world.get_serial_log().await;
-    let re = match regex::Regex::new(&pattern) {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(StepError(format!("Invalid regex pattern '{}': {}", pattern, e)));
-        }
-    };
+    let timeout = default_timeout_secs(world);
+    let found = world.wait_for_regex_pattern(&pattern, timeout).await;
 
-    if !re.is_match(&log) {
+    if !found {
+        let log = world.get_serial_log().await;
         eprintln!("\n=== Pattern Match Failed ===");
         eprintln!("Pattern: {}", pattern);
         eprintln!("\n=== Serial Log (last 100 lines) ===");
@@ -30,6 +26,33 @@ async fn log_matches_pattern(world: &mut ThingOsWorld, pattern: String) -> Resul
         }
         eprintln!("=== End Serial Log ===\n");
         return Err(StepError(format!("Log does not match pattern '{}'", pattern)));
+    }
+    Ok(())
+}
+
+#[then(regex = r#"^the log should not match pattern "(.+)"$"#)]
+async fn log_does_not_match_pattern(
+    world: &mut ThingOsWorld,
+    pattern: String,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    let re = match regex::Regex::new(&pattern) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(StepError(format!("Invalid regex pattern '{}': {}", pattern, e)));
+        }
+    };
+
+    let clean = strip_ansi(&log);
+    if re.is_match(&clean) {
+        eprintln!("\n=== Unexpected Pattern Found ===");
+        eprintln!("Pattern: {}", pattern);
+        eprintln!("\n=== Serial Log (matching lines) ===");
+        for line in clean.lines().filter(|l| re.is_match(l)) {
+            eprintln!(">>> {}", line);
+        }
+        eprintln!("=== End Context ===\n");
+        return Err(StepError(format!("Log unexpectedly matches pattern '{}'", pattern)));
     }
     Ok(())
 }
