@@ -40,12 +40,22 @@ pub(crate) fn extend_heap(by: usize) {
     }
 }
 
+#[inline]
+fn heap_layout(layout: Layout) -> Layout {
+    let align = layout.align().max(32);
+    let mask = align - 1;
+    let size = (layout.size() + mask) & !mask;
+
+    unsafe { Layout::from_size_align_unchecked(size, align) }
+}
+
 unsafe impl GlobalAlloc for VmHeapAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if layout.size() == 0 {
             return layout.dangling().as_ptr();
         }
 
+        let layout = heap_layout(layout);
         let ptr = GlobalAlloc::alloc(&self.heap, layout);
         if !ptr.is_null() {
             return ptr;
@@ -62,6 +72,7 @@ unsafe impl GlobalAlloc for VmHeapAllocator {
         if layout.size() == 0 {
             return;
         }
+        let layout = heap_layout(layout);
         GlobalAlloc::dealloc(&self.heap, ptr, layout);
     }
 

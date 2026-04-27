@@ -513,9 +513,7 @@ impl DriverReadyV1 {
         // no padding requirements beyond natural alignment.  The pointer is
         // byte-aligned so we use `read_unaligned` to avoid UB on misaligned
         // payloads.
-        let v: Self = unsafe {
-            core::ptr::read_unaligned(bytes.as_ptr() as *const Self)
-        };
+        let v: Self = unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) };
         if v.version != 1 {
             return None;
         }

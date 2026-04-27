@@ -571,9 +571,7 @@ impl ServiceLoop {
         // Reachable only if the kernel returned events that were all the
         // inbox token with neither readability nor hangup set — treat as a
         // spurious wake and ask the caller to retry.
-        self.metrics
-            .last_dispatch_start_ns
-            .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+        self.metrics.last_dispatch_start_ns.store(crate::time::monotonic_ns(), Ordering::Relaxed);
         self.metrics.current_event_kind.store(EVENT_KIND_TIMEOUT, Ordering::Relaxed);
         self.report_state(LoopState::Idle, b"spurious");
         Ok(ServiceEvent::Timeout)

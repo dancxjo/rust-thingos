@@ -79,6 +79,7 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: service loop started" within 60s
     And the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "First frame rendered" within 60s
+    And the serial output should not contain "Freed node"
     And the bloom first frame should contain visible pixels
 
   Scenario: failed wallpaper decode leaves previous wallpaper active
