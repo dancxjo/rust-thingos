@@ -1,7 +1,12 @@
 use alloc::vec::Vec;
 
 use abi::syscall::vfs_flags::O_RDONLY;
+use pistil_types::Canvas;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
+
+use crate::font::TextRenderer;
+
+const DEBUG_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BlitRect {
@@ -182,6 +187,64 @@ pub extern "C" fn pistil_prepare_background(
     match result {
         Ok(()) => 0,
         Err(code) => code,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_draw_debug_text(
+    text_ptr: *const u8,
+    dst_ptr: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+) -> i32 {
+    if text_ptr.is_null() || dst_ptr.is_null() || dst_w == 0 || dst_h == 0 {
+        return -3;
+    }
+
+    let mut len = 0usize;
+    while unsafe { *text_ptr.add(len) } != 0 && len < 512 {
+        len += 1;
+    }
+    let text = unsafe { core::slice::from_raw_parts(text_ptr, len) };
+    let dst =
+        unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
+
+    draw_debug_background(dst, dst_stride_pixels as usize, dst_w as usize, dst_h as usize);
+    let Ok(text) = core::str::from_utf8(text) else {
+        return -2;
+    };
+
+    let Some(renderer) = TextRenderer::load_from_boot(DEBUG_FONT_PATH) else {
+        stem::error!("pistil: failed to load debug font {}", DEBUG_FONT_PATH);
+        return -5;
+    };
+
+    stem::info!("pistil: drawing debug text with {}", DEBUG_FONT_PATH);
+    let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
+    draw_debug_text_lines(&renderer, &mut canvas, text);
+    // The target allocator currently trips when fontdue's owned font data is
+    // dropped from this dlopen path. Keep the diagnostic focused on rendering.
+    core::mem::forget(renderer);
+    0
+}
+
+fn draw_debug_text_lines(renderer: &TextRenderer, canvas: &mut Canvas, text: &str) {
+    let mut y = 96;
+    for line in text.lines() {
+        renderer.draw_text(canvas, line, 48, y, 42.0, 0xFFFFF4B0);
+        y += 56;
+    }
+}
+
+fn draw_debug_background(dst: &mut [u32], stride: usize, width: usize, height: usize) {
+    for y in 0..height {
+        let row = y * stride;
+        for x in 0..width {
+            let band = ((x / 48) + (y / 48)) & 1;
+            let base = if band == 0 { 0xFF102030 } else { 0xFF17324A };
+            dst[row + x] = base;
+        }
     }
 }
 

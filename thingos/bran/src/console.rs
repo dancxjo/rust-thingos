@@ -31,6 +31,11 @@ pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
 /// This prevents chunk-level reordering of logs from different CPUs.
 static SERIAL_FLUSH_LOCK: Mutex<()> = Mutex::new(());
 
+/// Lock to ensure only one CPU flushes the framebuffer ring buffer at a time.
+/// Rendering uses the console lock, but draining happens first; this keeps
+/// dequeued chunks from being rendered out of order by competing CPUs.
+static FB_FLUSH_LOCK: Mutex<()> = Mutex::new(());
+
 // ---------------------------------------------------------------------------
 // Deferred output ring buffer
 //
@@ -798,6 +803,11 @@ pub fn flush_deferred() {
         return;
     }
 
+    let _flush_guard = match FB_FLUSH_LOCK.try_lock() {
+        Some(g) => g,
+        None => return,
+    };
+
     let mut local = [0u8; FLUSH_BATCH];
 
     // Drain from the ring buffer (very short lock).
@@ -844,6 +854,11 @@ pub fn flush_deferred_idle() {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
+
+    let _flush_guard = match FB_FLUSH_LOCK.try_lock() {
+        Some(g) => g,
+        None => return,
+    };
 
     let mut local = [0u8; FLUSH_BATCH_IDLE];
 
@@ -944,6 +959,14 @@ pub fn serial_drain_irq() {
         return;
     }
 
+    // Share the same drain gate as timer/idle flushes.  Without this, two CPUs
+    // can dequeue different FIFO-sized chunks and write them to the UART in the
+    // opposite order.
+    let _flush_guard = match SERIAL_FLUSH_LOCK.try_lock() {
+        Some(g) => g,
+        None => return,
+    };
+
     // Check TX-ready first (should be set since THRE fired, but be safe).
     if !crate::RUNTIME.arch.serial_tx_ready() {
         return;
@@ -1023,6 +1046,8 @@ pub unsafe fn force_unlock() {
         CONSOLE.force_unlock();
         DEFERRED.force_unlock();
         SERIAL_DEFERRED.force_unlock();
+        SERIAL_FLUSH_LOCK.force_unlock();
+        FB_FLUSH_LOCK.force_unlock();
     }
 }
 

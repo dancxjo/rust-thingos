@@ -200,6 +200,15 @@ fn test_dlopen_pistil_shared_library() {
     assert_eq!(rc, 0, "pistil_prepare_background call through libpistil.so failed");
     assert!(pixels.iter().any(|&p| p != 0), "pistil_prepare_background did not write any pixels");
 
+    let text_sym = dlsym_bytes(handle, b"pistil_draw_debug_text");
+    assert!(!text_sym.is_null(), "expected exported symbol pistil_draw_debug_text");
+    let text_fn: extern "C" fn(*const u8, *mut u32, u32, u32, u32) -> i32 =
+        unsafe { core::mem::transmute(text_sym) };
+    pixels.fill(0);
+    let rc = text_fn(b"PISTIL TEXT\0".as_ptr(), pixels.as_mut_ptr(), 4, 4, 4);
+    assert_eq!(rc, 0, "pistil_draw_debug_text call through libpistil.so failed");
+    assert!(pixels.iter().any(|&p| p != 0), "pistil_draw_debug_text did not write any pixels");
+
     let rc = dlclose(handle);
     assert_eq!(rc, 0, "dlclose should succeed for valid pistil handle");
 

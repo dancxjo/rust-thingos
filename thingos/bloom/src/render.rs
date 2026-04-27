@@ -6,9 +6,19 @@ use crate::display::DisplayBackend;
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
+const DRAW_DEBUG_TEXT_SYMBOL: &[u8] = b"pistil_draw_debug_text";
+const PISTIL_DEBUG_TEXT: &str = "PISTIL FONT RENDERER\nBLOOM DLOPEN PATH OK";
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
+    dst: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+) -> i32;
+
+type DrawDebugTextFn = extern "C" fn(
+    text: *const u8,
     dst: *mut u32,
     dst_w: u32,
     dst_h: u32,
@@ -23,6 +33,7 @@ pub struct CompositorVisuals {
 struct PistilLib {
     _handle: *mut core::ffi::c_void,
     prepare_bg: PrepareBackgroundFn,
+    draw_debug_text: Option<DrawDebugTextFn>,
 }
 
 struct ServerBuffer {
@@ -76,16 +87,27 @@ impl CompositorVisuals {
             };
 
         let success = if let Some(ref lib) = self.pistil {
-            let res = call_prepare_bg(
-                lib.prepare_bg,
-                wallpaper_path,
-                texture.as_slice_mut().as_mut_ptr(),
-                width,
-                height,
-            );
+            let res = if let Some(draw_debug_text) = lib.draw_debug_text {
+                stem::info!("bloom: asking pistil to draw font diagnostic text");
+                call_draw_debug_text(
+                    draw_debug_text,
+                    PISTIL_DEBUG_TEXT,
+                    texture.as_slice_mut().as_mut_ptr(),
+                    width,
+                    height,
+                )
+            } else {
+                call_prepare_bg(
+                    lib.prepare_bg,
+                    wallpaper_path,
+                    texture.as_slice_mut().as_mut_ptr(),
+                    width,
+                    height,
+                )
+            };
             if res != 0 {
                 stem::error!(
-                    "bloom: wallpaper decode failed (code {}); keeping previous wallpaper",
+                    "bloom: pistil background render failed (code {}); keeping previous wallpaper",
                     res
                 );
             }
@@ -155,8 +177,17 @@ fn load_pistil() -> Option<PistilLib> {
     }
 
     let prepare_bg: PrepareBackgroundFn = unsafe { core::mem::transmute(sym) };
+    let draw_debug_text = {
+        let sym = dlsym_bytes(handle, DRAW_DEBUG_TEXT_SYMBOL);
+        if sym.is_null() {
+            log_dlerror("bloom: failed to resolve pistil_draw_debug_text");
+            None
+        } else {
+            Some(unsafe { core::mem::transmute(sym) })
+        }
+    };
     stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
-    Some(PistilLib { _handle: handle, prepare_bg })
+    Some(PistilLib { _handle: handle, prepare_bg, draw_debug_text })
 }
 
 fn log_dlerror(prefix: &str) {
@@ -194,4 +225,21 @@ fn call_prepare_bg(
     let mut path_c = [0u8; 256];
     path_c[..bytes.len()].copy_from_slice(bytes);
     prepare_bg(path_c.as_ptr(), dst, width, height, width)
+}
+
+fn call_draw_debug_text(
+    draw_debug_text: DrawDebugTextFn,
+    text: &str,
+    dst: *mut u32,
+    width: u32,
+    height: u32,
+) -> i32 {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 256 {
+        return -4;
+    }
+
+    let mut text_c = [0u8; 256];
+    text_c[..bytes.len()].copy_from_slice(bytes);
+    draw_debug_text(text_c.as_ptr(), dst, width, height, width)
 }
