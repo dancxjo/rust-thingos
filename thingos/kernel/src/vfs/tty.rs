@@ -39,6 +39,8 @@ pub struct LineDiscipline {
     pub buf: Mutex<VecDeque<u8>>,
     /// Current terminal settings.
     pub termios: Mutex<Termios>,
+    /// Tasks blocked in a read waiting for processed input.
+    pub read_waiters: crate::sched::WaitQueue,
     /// Controlling session and foreground group.
     pub presence: Arc<Mutex<crate::presence::ConsolePresenceState>>,
     /// Serializes access to the hardware-to-discipline transfer to prevent
@@ -51,6 +53,7 @@ impl LineDiscipline {
         Self {
             buf: Mutex::new(VecDeque::with_capacity(1024)),
             termios: Mutex::new(DEFAULT_TERMIOS),
+            read_waiters: crate::sched::WaitQueue::new(),
             presence: Arc::new(Mutex::new(crate::presence::ConsolePresenceState::default())),
             input_lock: Mutex::new(()),
         }
@@ -60,123 +63,154 @@ impl LineDiscipline {
         Self {
             buf: Mutex::new(VecDeque::with_capacity(1024)),
             termios: Mutex::new(DEFAULT_TERMIOS),
+            read_waiters: crate::sched::WaitQueue::new(),
             presence,
             input_lock: Mutex::new(()),
         }
+    }
+
+    fn read_ready_with(termios: Termios, buf: &VecDeque<u8>, read_len: usize) -> bool {
+        let canonical = termios.c_lflag & ICANON != 0;
+        if canonical {
+            buf.iter().any(|&b| b == b'\n' || b == 0x04) || buf.len() >= read_len
+        } else {
+            let vmin_eff = (termios.c_cc[VMIN] as usize).max(1);
+            buf.len() >= vmin_eff || buf.len() >= read_len
+        }
+    }
+
+    pub fn has_readable_input(&self) -> bool {
+        let termios = *self.termios.lock();
+        let cb = self.buf.lock();
+        Self::read_ready_with(termios, &cb, usize::MAX)
     }
 
     /// Process raw input bytes from the hardware.
     pub fn drain_input(&self, hw: &dyn TtyHardware) -> bool {
         let rt = crate::runtime_base();
         let irq_state = rt.irq_disable();
-        let _input_guard = self.input_lock.lock();
-
-        let termios = *self.termios.lock();
-        let canonical = termios.c_lflag & ICANON != 0;
-        let do_echo = termios.c_lflag & ECHO != 0;
-        let do_echo_erase = termios.c_lflag & ECHOE != 0;
-        let icrnl = termios.c_iflag & ICRNL != 0;
-        let isig = termios.c_lflag & ISIG != 0;
-
         let mut interrupted = false;
+        let mut buffered_input = false;
 
-        while let Some(c) = hw.read_byte() {
-            if isig {
-                let vintr = termios.c_cc[VINTR];
-                let vquit = termios.c_cc[VQUIT];
-                let vsusp = termios.c_cc[VSUSP];
+        {
+            let _input_guard = self.input_lock.lock();
 
-                let (sig, caret) = if c == vintr {
-                    (abi::signal::SIGINT, b'C')
-                } else if c == vquit {
-                    (abi::signal::SIGQUIT, b'\\')
-                } else if c == vsusp {
-                    (abi::signal::SIGTSTP, b'Z')
-                } else {
-                    (0, 0)
-                };
+            let termios = *self.termios.lock();
+            let canonical = termios.c_lflag & ICANON != 0;
+            let do_echo = termios.c_lflag & ECHO != 0;
+            let do_echo_erase = termios.c_lflag & ECHOE != 0;
+            let icrnl = termios.c_iflag & ICRNL != 0;
+            let isig = termios.c_lflag & ISIG != 0;
 
-                if sig != 0 {
-                    if do_echo {
-                        hw.write_byte(b'^');
-                        hw.write_byte(caret);
-                        hw.write_byte(b'\r');
-                        hw.write_byte(b'\n');
+            while let Some(c) = hw.read_byte() {
+                if isig {
+                    let vintr = termios.c_cc[VINTR];
+                    let vquit = termios.c_cc[VQUIT];
+                    let vsusp = termios.c_cc[VSUSP];
+
+                    let (sig, caret) = if c == vintr {
+                        (abi::signal::SIGINT, b'C')
+                    } else if c == vquit {
+                        (abi::signal::SIGQUIT, b'\\')
+                    } else if c == vsusp {
+                        (abi::signal::SIGTSTP, b'Z')
+                    } else {
+                        (0, 0)
+                    };
+
+                    if sig != 0 {
+                        if do_echo {
+                            hw.write_byte(b'^');
+                            hw.write_byte(caret);
+                            hw.write_byte(b'\r');
+                            hw.write_byte(b'\n');
+                        }
+                        self.buf.lock().clear();
+                        if let Some(pgid) = self.presence.lock().foreground_pgid {
+                            crate::signal::send_signal_to_group(pgid, sig);
+                        }
+                        interrupted = true;
+                        continue;
                     }
-                    self.buf.lock().clear();
-                    if let Some(pgid) = self.presence.lock().foreground_pgid {
-                        crate::signal::send_signal_to_group(pgid, sig);
-                    }
-                    interrupted = true;
-                    continue;
                 }
-            }
 
-            match c {
-                b'\r' | b'\n' => {
-                    let mapped = if icrnl { b'\n' } else { c };
-                    if do_echo {
-                        hw.write_byte(b'\r');
-                        hw.write_byte(b'\n');
+                match c {
+                    b'\r' | b'\n' => {
+                        let mapped = if icrnl { b'\n' } else { c };
+                        if do_echo {
+                            hw.write_byte(b'\r');
+                            hw.write_byte(b'\n');
+                        }
+                        self.buf.lock().push_back(mapped);
+                        buffered_input = true;
                     }
-                    self.buf.lock().push_back(mapped);
-                }
-                0x08 | 0x7f => {
-                    if canonical {
-                        let mut cb = self.buf.lock();
-                        if let Some(&last) = cb.back() {
-                            if last != b'\n' {
-                                // Pop one complete UTF-8 character from the buffer.
-                                cb.pop_back();
-                                if last & 0xC0 == 0x80 {
-                                    // We removed a continuation byte; keep popping
-                                    // until we hit (and remove) the lead byte.
-                                    while let Some(&prev) = cb.back() {
-                                        if prev & 0xC0 == 0x80 {
-                                            cb.pop_back();
-                                        } else if prev >= 0x80 {
-                                            cb.pop_back();
-                                            break;
-                                        } else {
-                                            break;
+                    0x08 | 0x7f => {
+                        if canonical {
+                            let mut cb = self.buf.lock();
+                            if let Some(&last) = cb.back() {
+                                if last != b'\n' {
+                                    // Pop one complete UTF-8 character from the buffer.
+                                    cb.pop_back();
+                                    buffered_input = true;
+                                    if last & 0xC0 == 0x80 {
+                                        // We removed a continuation byte; keep popping
+                                        // until we hit (and remove) the lead byte.
+                                        while let Some(&prev) = cb.back() {
+                                            if prev & 0xC0 == 0x80 {
+                                                cb.pop_back();
+                                            } else if prev >= 0x80 {
+                                                cb.pop_back();
+                                                break;
+                                            } else {
+                                                break;
+                                            }
                                         }
                                     }
-                                }
-                                if do_echo && do_echo_erase {
-                                    hw.write_byte(0x08);
-                                    hw.write_byte(b' ');
-                                    hw.write_byte(0x08);
+                                    if do_echo && do_echo_erase {
+                                        hw.write_byte(0x08);
+                                        hw.write_byte(b' ');
+                                        hw.write_byte(0x08);
+                                    }
                                 }
                             }
+                        } else {
+                            self.buf.lock().push_back(c);
+                            buffered_input = true;
                         }
-                    } else {
-                        self.buf.lock().push_back(c);
                     }
-                }
-                0x04 => {
-                    if canonical {
-                        self.buf.lock().push_back(0x04);
-                    } else {
-                        self.buf.lock().push_back(c);
-                    }
-                }
-                _ => {
-                    // Accept printable ASCII (0x20–0x7E) and high bytes
-                    // (0x80–0xFF for UTF-8 lead/continuation) in all modes.
-                    // Control characters below 0x20 not handled above are
-                    // passed through only in non-canonical (raw) mode.
-                    if c >= 0x20 {
-                        if do_echo {
-                            hw.write_byte(c);
+                    0x04 => {
+                        if canonical {
+                            self.buf.lock().push_back(0x04);
+                        } else {
+                            self.buf.lock().push_back(c);
                         }
-                        self.buf.lock().push_back(c);
-                    } else if !canonical {
-                        self.buf.lock().push_back(c);
+                        buffered_input = true;
+                    }
+                    _ => {
+                        // Accept printable ASCII (0x20–0x7E) and high bytes
+                        // (0x80–0xFF for UTF-8 lead/continuation) in all modes.
+                        // Control characters below 0x20 not handled above are
+                        // passed through only in non-canonical (raw) mode.
+                        if c >= 0x20 {
+                            if do_echo {
+                                hw.write_byte(c);
+                            }
+                            self.buf.lock().push_back(c);
+                            buffered_input = true;
+                        } else if !canonical {
+                            self.buf.lock().push_back(c);
+                            buffered_input = true;
+                        }
                     }
                 }
             }
         }
         rt.irq_restore(irq_state);
+
+        if interrupted || (buffered_input && self.has_readable_input()) {
+            self.read_waiters.wake_all();
+        }
+
         interrupted
     }
 }
@@ -302,11 +336,7 @@ impl VfsNode for TtyNode {
             let vmin_eff = vmin.max(1);
 
             let mut cb = self.ld.buf.lock();
-            let ready = if canonical {
-                cb.iter().any(|&b| b == b'\n' || b == 0x04) || cb.len() >= buf.len()
-            } else {
-                cb.len() >= vmin_eff || cb.len() >= buf.len()
-            };
+            let ready = LineDiscipline::read_ready_with(termios, &cb, buf.len());
 
             if ready {
                 let mut read_bytes = 0;
@@ -332,7 +362,25 @@ impl VfsNode for TtyNode {
             }
             drop(cb);
 
-            unsafe { crate::sched::yield_now_current() };
+            let tid = unsafe { crate::sched::current_tid_current() };
+            self.ld.read_waiters.push_back(tid);
+
+            if self.ld.drain_input(&*self.hw) {
+                self.ld.read_waiters.remove(tid);
+                return Err(Errno::EINTR);
+            }
+
+            let termios = *self.ld.termios.lock();
+            let cb = self.ld.buf.lock();
+            let ready = LineDiscipline::read_ready_with(termios, &cb, buf.len());
+            drop(cb);
+            if ready {
+                self.ld.read_waiters.remove(tid);
+                continue;
+            }
+
+            unsafe { crate::sched::block_current_erased() };
+            self.ld.read_waiters.remove(tid);
         }
     }
 
@@ -355,6 +403,22 @@ impl VfsNode for TtyNode {
 
     fn is_tty(&self) -> bool {
         true
+    }
+
+    fn poll(&self) -> u16 {
+        let mut events = abi::syscall::poll_flags::POLLOUT;
+        if self.ld.has_readable_input() {
+            events |= abi::syscall::poll_flags::POLLIN;
+        }
+        events
+    }
+
+    fn add_waiter(&self, tid: u64) {
+        self.ld.read_waiters.push_back(tid);
+    }
+
+    fn remove_waiter(&self, tid: u64) {
+        self.ld.read_waiters.remove(tid);
     }
 
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {

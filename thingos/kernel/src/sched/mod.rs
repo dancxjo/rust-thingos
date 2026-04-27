@@ -2919,6 +2919,10 @@ impl<R: BootRuntime> types::Scheduler<R> {
         // consistent across this pick and free of repeated tick loads.
         let now = TICK_COUNT.load(Ordering::Relaxed);
 
+        let current_id = self.state.per_cpu[cpu_idx]
+            .current
+            .expect("prepare_schedule called without current task");
+
         let mut next_id = None;
         let mut pick_attempts = 0usize;
         let mut dequeue_failures = 0usize;
@@ -2969,7 +2973,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 Some(sf)
                     if sf.state == TaskState::Dead
                         || sf.state == TaskState::Blocked
-                        || sf.state == TaskState::Running =>
+                        || (sf.state == TaskState::Running && id != current_id) =>
                 {
                     // Skip non-runnable tasks.
                     continue;
@@ -3026,7 +3030,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
                         Some(sf)
                             if sf.state == TaskState::Dead
                                 || sf.state == TaskState::Blocked
-                                || sf.state == TaskState::Running =>
+                                || (sf.state == TaskState::Running && id != current_id) =>
                         {
                             continue;
                         }
@@ -3086,10 +3090,6 @@ impl<R: BootRuntime> types::Scheduler<R> {
         };
 
         let next_id = next_id?;
-
-        let current_id = self.state.per_cpu[cpu_idx]
-            .current
-            .expect("prepare_schedule called without current task");
 
         if next_id == current_id {
             let Some(current_sched) = self.state.get_task_mut(current_id) else {

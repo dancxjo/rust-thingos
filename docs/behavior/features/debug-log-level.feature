@@ -70,3 +70,11 @@ Feature: Debug-level log output during boot
     Given the machine is started
     When I wait for the system to boot
     Then the latest serial output should not contain "SYSCALL SPAWN_PROCESS_EX:"
+
+  @smoke
+  @timeout-30s
+  Scenario: F11 cycles the kernel log level from the low-level keyboard path
+    Given the machine is started
+    When I wait for the system to boot
+    And I press f11
+    Then the serial output should contain "F11 hotkey: log level set to 4 (DEBUG)"

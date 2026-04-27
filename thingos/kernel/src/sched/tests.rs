@@ -857,6 +857,44 @@ fn test_reset_priority_aging_on_schedule() {
 }
 
 #[test]
+fn test_prepare_yield_keeps_current_runnable_when_no_peer_exists() {
+    let _g = init_test_env();
+    let mut sched = types::Scheduler::<MockRuntime>::new();
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7001,
+        TaskState::Running,
+        TaskPriority::Normal,
+    )));
+
+    sched.state.per_cpu[0].current = Some(7001);
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7001,
+        runq_location: None,
+        state: TaskState::Running,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: Some(0),
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+
+    let switch = sched.prepare_yield();
+
+    assert!(switch.is_none(), "yield with no runnable peer should keep running current task");
+    let sf = sched.state.get_task(7001).expect("current task should remain in scheduler state");
+    assert_eq!(sf.state, TaskState::Running);
+    assert_eq!(sf.runq_location, None);
+    assert_eq!(sched.state.per_cpu[0].current, Some(7001));
+}
+
+#[test]
 fn test_prepare_yield_penalizes_spin_yield_requeue_band() {
     let _g = init_test_env();
     let mut sched = types::Scheduler::<MockRuntime>::new();

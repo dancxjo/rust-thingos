@@ -839,9 +839,10 @@ fn raw_inb(port: u16) -> u8 {
     value
 }
 
-fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, usize) {
+fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, Option<u8>, usize) {
     let mut pause_dump = false;
     let mut f12_press = false;
+    let mut log_level = None;
     let mut captured = 0usize;
 
     for _ in 0..max_reads {
@@ -861,9 +862,12 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, usize) {
         if kernel::irq::ps2::take_terminal_hotkey() {
             f12_press = true;
         }
+        if let Some(level) = kernel::irq::ps2::take_log_level_hotkey() {
+            log_level = Some(level);
+        }
     }
 
-    (pause_dump, f12_press, captured)
+    (pause_dump, f12_press, log_level, captured)
 }
 
 fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
@@ -891,12 +895,18 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
 }
 
 fn capture_ps2_keyboard_irq() -> (bool, bool) {
-    let (pause, f12, _) = capture_ps2_keyboard(32);
+    let (pause, f12, log_level, _) = capture_ps2_keyboard(32);
+    if let Some(level) = log_level {
+        announce_log_level_hotkey(level);
+    }
     (pause, f12)
 }
 
 fn poll_ps2_keyboard_fallback() -> bool {
-    let (pause_dump, f12_press, captured) = capture_ps2_keyboard(8);
+    let (pause_dump, f12_press, log_level, captured) = capture_ps2_keyboard(8);
+    if let Some(level) = log_level {
+        announce_log_level_hotkey(level);
+    }
     if f12_press {
         activate_terminal_and_spawn_shell();
     }
@@ -904,6 +914,14 @@ fn poll_ps2_keyboard_fallback() -> bool {
         kernel::irq::dispatch_irq(0x21);
     }
     pause_dump
+}
+
+fn announce_log_level_hotkey(level: u8) {
+    kernel::kprintln!(
+        "F11 hotkey: log level set to {} ({})",
+        level,
+        kernel::logging::log_level_name(level)
+    );
 }
 
 fn try_spawn_shell(path: &str) -> Option<u64> {
@@ -1333,7 +1351,10 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
     }
 
     let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let (pause_dump, f12_press, captured) = capture_ps2_keyboard(32);
+    let (pause_dump, f12_press, log_level, captured) = capture_ps2_keyboard(32);
+    if let Some(level) = log_level {
+        announce_log_level_hotkey(level);
+    }
     if f12_press {
         activate_terminal_and_spawn_shell();
     }
@@ -1438,7 +1459,9 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
         // Serial interrupt (COM1 IRQ4) — handles both RX and TX:
         // 1. Poll received bytes into the serial RX buffer
         crate::RUNTIME.arch.poll_serial();
-        // 2. Drain the deferred TX ring into the UART FIFO (THRE interrupt)
+        // 2. Transfer RX bytes into the console TTY and wake readers.
+        kernel::vfs::devfs::ConsoleNode::poll_input();
+        // 3. Drain the deferred TX ring into the UART FIFO (THRE interrupt)
         crate::console::serial_drain_irq();
     } else if resolved == IRQ_RESCHED_VECTOR {
         kernel::sched::on_resched_ipi::<crate::arch::CurrentRuntime>();

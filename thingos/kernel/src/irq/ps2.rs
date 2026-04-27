@@ -57,7 +57,9 @@ static PS2_QUEUE: Ps2Queue = Ps2Queue::new();
 
 static EXTENDED_PREFIX: AtomicBool = AtomicBool::new(false);
 static ALT_DOWN: AtomicBool = AtomicBool::new(false);
+static F11_DOWN: AtomicBool = AtomicBool::new(false);
 static F12_DOWN: AtomicBool = AtomicBool::new(false);
+static LOG_LEVEL_HOTKEY_PENDING: AtomicUsize = AtomicUsize::new(0);
 static TERMINAL_HOTKEY_PENDING: AtomicBool = AtomicBool::new(false);
 static FB_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -91,6 +93,13 @@ pub fn take_scancode() -> Option<u8> {
 
 pub fn take_terminal_hotkey() -> bool {
     TERMINAL_HOTKEY_PENDING.swap(false, Ordering::AcqRel)
+}
+
+pub fn take_log_level_hotkey() -> Option<u8> {
+    match LOG_LEVEL_HOTKEY_PENDING.swap(0, Ordering::AcqRel) {
+        0 => None,
+        level => Some((level - 1) as u8),
+    }
 }
 
 pub fn overlay_status(status: u8) -> u8 {
@@ -133,6 +142,15 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
     match (extended, scancode) {
         (false, 0x38) | (true, 0x38) => {
             ALT_DOWN.store(!released, Ordering::Release);
+            false
+        }
+        (false, 0x57) => {
+            if released {
+                F11_DOWN.store(false, Ordering::Release);
+            } else if !F11_DOWN.swap(true, Ordering::AcqRel) {
+                let level = crate::logging::cycle_log_level();
+                LOG_LEVEL_HOTKEY_PENDING.store(level as usize + 1, Ordering::Release);
+            }
             false
         }
         (false, 0x58) => {
@@ -189,8 +207,11 @@ mod tests {
         while take_scancode().is_some() {}
         EXTENDED_PREFIX.store(false, Ordering::Release);
         ALT_DOWN.store(false, Ordering::Release);
+        F11_DOWN.store(false, Ordering::Release);
         F12_DOWN.store(false, Ordering::Release);
+        LOG_LEVEL_HOTKEY_PENDING.store(0, Ordering::Release);
         TERMINAL_HOTKEY_PENDING.store(false, Ordering::Release);
+        crate::logging::set_log_level(3);
     }
 
     #[test]
@@ -241,5 +262,40 @@ mod tests {
         assert!(!take_terminal_hotkey());
         assert!(!buffer_scancode(0x58));
         assert!(take_terminal_hotkey());
+    }
+
+    #[test]
+    fn plain_f11_cycles_log_level_once_per_press() {
+        reset_state();
+
+        assert_eq!(crate::logging::get_log_level(), 3);
+        assert!(!buffer_scancode(0x57));
+        assert_eq!(take_log_level_hotkey(), Some(4));
+        assert_eq!(crate::logging::get_log_level(), 4);
+
+        // Typematic repeat while held should not cycle.
+        assert!(!buffer_scancode(0x57));
+        assert_eq!(take_log_level_hotkey(), None);
+        assert_eq!(crate::logging::get_log_level(), 4);
+
+        assert!(!buffer_scancode(0xD7));
+        assert!(!buffer_scancode(0x57));
+        assert_eq!(take_log_level_hotkey(), Some(5));
+        assert_eq!(crate::logging::get_log_level(), 5);
+    }
+
+    #[test]
+    fn f11_cycle_wraps_through_off() {
+        reset_state();
+        crate::logging::set_log_level(5);
+
+        assert!(!buffer_scancode(0x57));
+        assert_eq!(take_log_level_hotkey(), Some(0));
+        assert_eq!(crate::logging::get_log_level(), 0);
+
+        assert!(!buffer_scancode(0xD7));
+        assert!(!buffer_scancode(0x57));
+        assert_eq!(take_log_level_hotkey(), Some(1));
+        assert_eq!(crate::logging::get_log_level(), 1);
     }
 }

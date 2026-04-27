@@ -412,6 +412,19 @@ impl VfsNode for ConsoleNode {
         true
     }
 
+    fn poll(&self) -> u16 {
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(SerialHardware), ld: get_console_ld() };
+        tty.poll()
+    }
+
+    fn add_waiter(&self, tid: u64) {
+        get_console_ld().read_waiters.push_back(tid);
+    }
+
+    fn remove_waiter(&self, tid: u64) {
+        get_console_ld().read_waiters.remove(tid);
+    }
+
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode { hw: Arc::new(SerialHardware), ld: get_console_ld() };
         tty.device_call(call)
@@ -444,6 +457,19 @@ impl VfsNode for FbTerminalNode {
 
     fn is_tty(&self) -> bool {
         true
+    }
+
+    fn poll(&self) -> u16 {
+        let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };
+        tty.poll()
+    }
+
+    fn add_waiter(&self, tid: u64) {
+        get_fb_tty_ld().read_waiters.push_back(tid);
+    }
+
+    fn remove_waiter(&self, tid: u64) {
+        get_fb_tty_ld().read_waiters.remove(tid);
     }
 
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {

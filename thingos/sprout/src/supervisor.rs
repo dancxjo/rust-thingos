@@ -442,10 +442,10 @@ impl Supervisor {
         self.spawn_netd_if_ready();
         stem::trace!("SPROUT: Loop iteration: verify_netd_liveness");
         self.verify_netd_liveness();
-        stem::trace!("SPROUT: Loop iteration: spawn_display_if_needed");
-        self.spawn_display_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bristle_if_needed");
         self.spawn_bristle_if_needed();
+        stem::trace!("SPROUT: Loop iteration: spawn_display_if_needed");
+        self.spawn_display_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
         self.spawn_bloom_if_ready();
         stem::trace!("SPROUT: Loop iteration: spawn_audio_if_ready");
@@ -472,6 +472,7 @@ impl Supervisor {
 
         let bind_instance_id = 0x1337_0001;
 
+        info!("SPROUT: Starting display pipeline setup");
         if let Some(handles) = setup_display_pipeline(
             self.tasks.clone(),
             supervisor_port_write,
@@ -480,6 +481,8 @@ impl Supervisor {
         ) {
             info!("SPROUT: Display pipeline initialized (backend={})", handles.backend_name);
             self.display_spawned = true;
+        } else {
+            warn!("SPROUT: Display pipeline setup did not complete");
         }
     }
 
@@ -734,8 +737,9 @@ fn spawn_netd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
     let argv: &[&[u8]] = &[path.as_bytes()];
     let env = alloc::collections::BTreeMap::new();
     let inherit = stem::abi::types::stdio_mode::INHERIT;
+    let null = stem::abi::types::stdio_mode::NULL;
     let spawn_res =
-        stem::syscall::spawn_process_ex(path, argv, &env, inherit, inherit, inherit, 0, &[]);
+        stem::syscall::spawn_process_ex(path, argv, &env, null, inherit, inherit, 0, &[]);
     match spawn_res {
         Ok(resp) => {
             let pid = resp.child_tid;
@@ -754,14 +758,20 @@ fn spawn_netd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
 }
 
 fn spawn_iso9660d_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
-    match stem::syscall::spawn_process("/bin/iso9660d", 0) {
-        Ok(pid) => {
+    let path = "/bin/iso9660d";
+    let argv: &[&[u8]] = &[path.as_bytes()];
+    let env = alloc::collections::BTreeMap::new();
+    let inherit = stem::abi::types::stdio_mode::INHERIT;
+    let null = stem::abi::types::stdio_mode::NULL;
+    match stem::syscall::spawn_process_ex(path, argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
             stem::debug!("SPROUT: Spawned iso9660d (PID={})", pid);
             let mut tasks = tasks.lock();
             tasks.push(ManagedTask {
                 name: "iso9660d".to_string(),
                 kind: TaskKind::Service("svc.iso9660d".to_string()),
-                module_path: "/bin/iso9660d".to_string(),
+                module_path: path.to_string(),
                 pid: Some(pid),
                 ..Default::default()
             });
@@ -872,7 +882,7 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
                 task.module_path.as_str()
             };
 
-            let mut stdin_mode = stem::abi::types::stdio_mode::INHERIT;
+            let mut stdin_mode = stem::abi::types::stdio_mode::NULL;
             let mut stdout_mode = stem::abi::types::stdio_mode::INHERIT;
             let mut stderr_mode = stem::abi::types::stdio_mode::INHERIT;
             let mut console_fd_to_close: Option<u32> = None;

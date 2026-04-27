@@ -222,6 +222,7 @@ fn find_sys_device_with_vendor(
 }
 
 fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
+    info!("SPROUT: Probing /dev/fb0 for boot framebuffer metadata");
     let fd = match vfs_open("/dev/fb0", O_RDONLY) {
         Ok(fd) => fd,
         Err(e) => {
@@ -258,6 +259,10 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
         );
         return None;
     }
+    info!(
+        "SPROUT: /dev/fb0 ready width={} height={} stride={} format={}",
+        payload.width, payload.height, payload.stride, payload.format
+    );
     Some((payload.width, payload.height, payload.stride, payload.format))
 }
 
@@ -276,8 +281,10 @@ pub fn setup_display_pipeline(
     } else {
         "/drivers/display_virtio_gpu"
     };
+    info!("SPROUT: Selected display driver '{}'", driver_path);
 
     // Supervisor -> driver requests (kept for the display driver bootstrap protocol).
+    info!("SPROUT: Creating display request port");
     let (req_write, req_read) = match port_create(4096) {
         Ok(p) => p,
         Err(e) => {
@@ -287,6 +294,7 @@ pub fn setup_display_pipeline(
     };
 
     // Driver -> supervisor responses (kept for the display driver bootstrap protocol).
+    info!("SPROUT: Creating display response port");
     let (resp_write, _resp_read) = match port_create(4096) {
         Ok(p) => p,
         Err(e) => {
@@ -296,6 +304,7 @@ pub fn setup_display_pipeline(
     };
 
     let boot_size = 4096;
+    info!("SPROUT: Creating display bootstrap memfd");
     let boot_fd = match stem::syscall::memfd_create("display.boot", boot_size) {
         Ok(fd) => fd,
         Err(e) => {
@@ -312,6 +321,7 @@ pub fn setup_display_pipeline(
         flags: VmMapFlags::empty(),
         backing: VmBacking::File { thing: boot_fd, offset: 0 },
     };
+    info!("SPROUT: Mapping display bootstrap memfd");
     let map = match stem::syscall::vm_map(&req) {
         Ok(m) => m,
         Err(e) => {
@@ -331,8 +341,21 @@ pub fn setup_display_pipeline(
         "SPROUT: Launching display driver '{}' (boot_fd={}, bind_id={})",
         driver_path, boot_fd, bind_instance_id
     );
-    let pid = match stem::syscall::spawn_process(driver_path, boot_fd as usize) {
-        Ok(pid) => pid,
+    let argv: [&[u8]; 1] = [driver_path.as_bytes()];
+    let env = alloc::collections::BTreeMap::new();
+    let inherit = stem::abi::types::stdio_mode::INHERIT;
+    let null = stem::abi::types::stdio_mode::NULL;
+    let pid = match stem::syscall::spawn_process_ex(
+        driver_path,
+        &argv,
+        &env,
+        null,
+        inherit,
+        inherit,
+        boot_fd as u64,
+        &[],
+    ) {
+        Ok(resp) => resp.child_tid,
         Err(e) => {
             warn!("SPROUT: Failed to spawn display driver '{}': {:?}", driver_path, e);
             return None;
@@ -442,15 +465,21 @@ pub struct InputHandles {
 /// drivers can write events.  Bloom and echo register as event sinks by
 /// sending inbox messages once bristle is running.
 pub fn setup_input_broker(shared_tasks: Arc<Mutex<Vec<ManagedTask>>>) -> InputHandles {
-    match stem::syscall::spawn_process("/bin/bristle", 0) {
-        Ok(pid) => {
+    let path = "/bin/bristle";
+    let argv: [&[u8]; 1] = [path.as_bytes()];
+    let env = alloc::collections::BTreeMap::new();
+    let inherit = stem::abi::types::stdio_mode::INHERIT;
+    let null = stem::abi::types::stdio_mode::NULL;
+    match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
             info!("SPROUT: Spawned bristle (PID={})", pid);
             let _ = stem::thread::set_priority(pid, 3);
             let mut tasks = shared_tasks.lock();
             tasks.push(ManagedTask {
                 name: "bristle".to_string(),
                 kind: TaskKind::Service("svc.bristle".to_string()),
-                module_path: "/bin/bristle".to_string(),
+                module_path: path.to_string(),
                 pid: Some(pid),
                 ..Default::default()
             });
@@ -469,7 +498,7 @@ fn apply_fstab_mounts() {
         "/bin/mount",
         &argv,
         &alloc::collections::BTreeMap::new(),
-        abi::types::stdio_mode::INHERIT,
+        abi::types::stdio_mode::NULL,
         abi::types::stdio_mode::INHERIT,
         abi::types::stdio_mode::INHERIT,
         0,

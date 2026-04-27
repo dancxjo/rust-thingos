@@ -375,7 +375,11 @@ impl WaitSet {
             return Err(Errno::EIO);
         }
 
-        let events = results[..n].iter().map(|r| WaitEvent { result: *r }).collect();
+        let events = results[..n]
+            .iter()
+            .filter(|r| r.flags & abi::wait::ready::TIMEOUT == 0)
+            .map(|r| WaitEvent { result: *r })
+            .collect();
         Ok(WaitEvents(events))
     }
 }

@@ -48,6 +48,45 @@ pub fn get_log_level() -> u8 {
     MIN_LOG_LEVEL.load(Ordering::Relaxed)
 }
 
+/// Cycle the minimum log level for low-level hotkey handling.
+///
+/// The cycle includes `Off` so repeated F11 presses can quiet a noisy system
+/// without requiring a userspace shell or privileged syscall.
+pub fn cycle_log_level() -> u8 {
+    let mut current = MIN_LOG_LEVEL.load(Ordering::Relaxed);
+    loop {
+        let next = match current {
+            0 => 1,
+            1 => 2,
+            2 => 3,
+            3 => 4,
+            4 => 5,
+            _ => 0,
+        };
+        match MIN_LOG_LEVEL.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return next,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+pub fn log_level_name(level: u8) -> &'static str {
+    match level {
+        0 => "OFF",
+        1 => "ERROR",
+        2 => "WARN",
+        3 => "INFO",
+        4 => "DEBUG",
+        5 => "TRACE",
+        _ => "UNKNOWN",
+    }
+}
+
 /// Global sequence counter for log ordering
 static GLOBAL_SEQ: AtomicU64 = AtomicU64::new(1);
 

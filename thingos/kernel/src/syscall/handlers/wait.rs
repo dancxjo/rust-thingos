@@ -57,17 +57,18 @@ pub fn sys_wait_many(
     let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
     let results_cap = results_cap.min(wait::WAIT_MANY_MAX_ITEMS);
 
-    let timeout_tick = if timeout_ns == u64::MAX {
+    let timeout_deadline_ns = if timeout_ns == u64::MAX {
         None
     } else {
         Some(crate::time::monotonic_now_ns().saturating_add(timeout_ns))
     };
+    let timeout_wake_tick = timeout_wake_tick(timeout_ns);
 
     let regs = {
         let lock = pinfo_arc.lock();
         let r = register_all(&lock, specs, tid)?;
-        if let Some(deadline) = timeout_tick {
-            crate::sched::register_timeout_wake_current(tid, deadline);
+        if let Some(wake_tick) = timeout_wake_tick {
+            crate::sched::register_timeout_wake_current(tid, wake_tick);
         }
         r
     };
@@ -75,12 +76,12 @@ pub fn sys_wait_many(
     let mut ready = 0;
     loop {
         ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
-        if ready > 0 || timeout_expired(timeout_tick) {
+        if ready > 0 || timeout_expired(timeout_deadline_ns) {
             break;
         }
 
         if crate::sched::take_pending_interrupt_current() {
-            cleanup_all(&regs, tid, timeout_tick)?;
+            cleanup_all(&regs, tid, timeout_wake_tick)?;
             return Err(Errno::EINTR);
         }
 
@@ -89,7 +90,7 @@ pub fn sys_wait_many(
         }
     }
 
-    cleanup_all(&regs, tid, timeout_tick)?;
+    cleanup_all(&regs, tid, timeout_wake_tick)?;
 
     let count = if ready > 0 {
         ready
@@ -115,11 +116,23 @@ pub fn sys_wait_many(
     Ok(count)
 }
 
-fn timeout_expired(timeout_tick: Option<u64>) -> bool {
-    match timeout_tick {
+fn timeout_expired(timeout_deadline_ns: Option<u64>) -> bool {
+    match timeout_deadline_ns {
         Some(deadline) => crate::time::monotonic_now_ns() >= deadline,
         None => false,
     }
+}
+
+fn timeout_wake_tick(timeout_ns: u64) -> Option<u64> {
+    if timeout_ns == u64::MAX {
+        return None;
+    }
+    let ticks = crate::time::duration_to_sleep_ticks(timeout_ns);
+    Some(
+        crate::sched::TICK_COUNT
+            .load(core::sync::atomic::Ordering::Relaxed)
+            .saturating_add(ticks),
+    )
 }
 
 fn collect_ready(
@@ -364,7 +377,7 @@ fn register_all(
     Ok(regs)
 }
 
-fn cleanup_all(regs: &[Registration], tid: u64, timeout_tick: Option<u64>) -> SysResult<()> {
+fn cleanup_all(regs: &[Registration], tid: u64, timeout_wake_tick: Option<u64>) -> SysResult<()> {
     for reg in regs {
         match reg {
             Registration::PortRead(port) => {
@@ -382,7 +395,7 @@ fn cleanup_all(regs: &[Registration], tid: u64, timeout_tick: Option<u64>) -> Sy
             }
         }
     }
-    if timeout_tick.is_some() {
+    if timeout_wake_tick.is_some() {
         crate::sched::unregister_timeout_wake_current(tid);
     }
     Ok(())
@@ -758,11 +771,20 @@ mod tests {
 
     #[test]
     fn timeout_expired_handles_none_and_deadline_boundaries() {
-        crate::sched::TICK_COUNT.store(50, Ordering::Relaxed);
         assert!(!timeout_expired(None));
-        assert!(!timeout_expired(Some(51)));
-        assert!(timeout_expired(Some(50)));
-        assert!(timeout_expired(Some(49)));
+        let now = crate::time::monotonic_now_ns();
+        assert!(timeout_expired(Some(now)));
+        assert!(timeout_expired(Some(now.saturating_sub(1))));
+        assert!(!timeout_expired(Some(now.saturating_add(1))));
+    }
+
+    #[test]
+    fn timeout_wake_tick_converts_duration_to_scheduler_ticks() {
+        crate::sched::TICK_COUNT.store(50, Ordering::Relaxed);
+        assert_eq!(timeout_wake_tick(u64::MAX), None);
+        assert_eq!(timeout_wake_tick(0), Some(50));
+        assert_eq!(timeout_wake_tick(crate::time::SCHED_TICK_NANOS), Some(51));
+        assert_eq!(timeout_wake_tick(crate::time::SCHED_TICK_NANOS + 1), Some(52));
     }
 
     #[test]
