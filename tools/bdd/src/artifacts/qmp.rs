@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
@@ -19,12 +19,12 @@ pub async fn set_qmp_stream(path: Option<PathBuf>) {
 
 /// Execute a QMP command on a specific stream.
 pub async fn execute_on_stream(
-    stream: &mut UnixStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     command: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Helper to read a QMP line with a total timeout
     async fn read_line(
-        stream: &mut UnixStream,
+        stream: &mut (impl AsyncRead + Unpin),
         deadline: tokio::time::Instant,
     ) -> std::io::Result<String> {
         let mut buf = [0u8; 1];

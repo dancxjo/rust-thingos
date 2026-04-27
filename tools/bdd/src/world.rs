@@ -6,8 +6,8 @@ use std::sync::{Arc, OnceLock};
 
 use cucumber::World;
 use regex::Regex;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::net::{TcpStream, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -30,7 +30,7 @@ pub struct ThingOsWorld {
     pub qmp_socket: Option<PathBuf>,
     /// QMP connection for step logic (separate from reporter)
     #[world(skip)]
-    pub qmp_control: Option<PathBuf>,
+    pub qmp_control: Option<QmpEndpoint>,
     /// VNC display number (for screenshot capture)
     #[world(skip)]
     pub vnc_display: Option<u16>,
@@ -54,6 +54,16 @@ pub struct ThingOsWorld {
     #[world(skip)]
     pub scenario_timeout_secs: Option<f64>,
 }
+
+#[derive(Clone, Debug)]
+pub enum QmpEndpoint {
+    Unix(PathBuf),
+    Tcp(std::net::SocketAddr),
+}
+
+trait QmpStream: AsyncRead + AsyncWrite {}
+
+impl<T: AsyncRead + AsyncWrite + ?Sized> QmpStream for T {}
 
 impl ThingOsWorld {
     pub fn default_step_timeout_secs() -> f64 {
@@ -285,11 +295,17 @@ impl ThingOsWorld {
         let ovmf_code = format!("vendor/ovmf/ovmf-code-{}.fd", arch);
         let ovmf_vars = format!("vendor/ovmf/ovmf-vars-{}.fd", arch);
 
-        // QMP uses UNIX sockets, which are denied in the restricted environments where BDD commonly
-        // runs in CI and under the agent sandbox. The current `just behave` suite only depends on
-        // serial-driven assertions, so keep QMP disabled instead of failing boot outright.
+        // Use localhost TCP for QMP. Unix sockets are denied in some restricted
+        // environments, but several BDD scenarios need QMP for input injection
+        // and screenshots, so leaving QMP disabled makes them false-pass.
+        let qmp_addr = {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+            let addr = listener.local_addr()?;
+            drop(listener);
+            addr
+        };
         self.qmp_socket = None;
-        self.qmp_control = None;
+        self.qmp_control = Some(QmpEndpoint::Tcp(qmp_addr));
 
         // Use a random VNC display to avoid conflicts with potential zombies
         let vnc_nanos = std::time::SystemTime::now()
@@ -402,6 +418,7 @@ impl ThingOsWorld {
             "-serial",
             "stdio",
         ]);
+        cmd.args(["-qmp", &format!("tcp:{},server=on,wait=off", qmp_addr)]);
 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped()); // Capture stderr too to see QEMU errors
@@ -481,8 +498,6 @@ impl ThingOsWorld {
         &mut self,
         output_path: &std::path::Path,
     ) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
-        use crate::artifacts::qmp::execute_on_stream;
-
         // Ensure output directory exists
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -498,8 +513,8 @@ impl ThingOsWorld {
             ppm_abs.display()
         );
 
-        let path = self.qmp_control.as_ref().ok_or("No world QMP connection")?;
-        let mut stream = Self::connect_qmp(path).await.map_err(|e| e.to_string())?;
+        let endpoint = self.qmp_control.as_ref().ok_or("No world QMP connection")?;
+        let mut stream = Self::connect_qmp(endpoint).await.map_err(|e| e.to_string())?;
 
         let resp = crate::artifacts::qmp::execute_on_stream(&mut stream, &cmd).await?;
         if resp.contains("error") {
@@ -526,21 +541,27 @@ impl ThingOsWorld {
         &self,
         cmd: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let path = self.qmp_control.as_ref().ok_or("No world QMP connection")?;
-        let mut stream = Self::connect_qmp(path).await?;
+        let endpoint = self.qmp_control.as_ref().ok_or("No world QMP connection")?;
+        let mut stream = Self::connect_qmp(endpoint).await?;
         crate::artifacts::qmp::execute_on_stream(&mut stream, cmd).await
     }
 
     /// Connect to a QMP socket and perform handshake.
     async fn connect_qmp(
-        socket_path: &std::path::Path,
-    ) -> Result<UnixStream, Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = UnixStream::connect(socket_path).await?;
+        endpoint: &QmpEndpoint,
+    ) -> Result<Box<dyn QmpStream + Unpin + Send>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut stream: Box<dyn QmpStream + Unpin + Send> = match endpoint {
+            QmpEndpoint::Unix(socket_path) => Box::new(UnixStream::connect(socket_path).await?),
+            QmpEndpoint::Tcp(addr) => Box::new(TcpStream::connect(addr).await?),
+        };
 
         // Read greeting
         let mut buf = vec![0u8; 4096];
-        let _ = stream.readable().await;
-        let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await?;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+        )
+        .await??;
 
         // Send qmp_capabilities to enter command mode
         let caps_cmd = r#"{"execute": "qmp_capabilities"}"#;
@@ -548,8 +569,11 @@ impl ThingOsWorld {
         stream.write_all(b"\n").await?;
 
         // Read capability response
-        let _ = stream.readable().await;
-        let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await?;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+        )
+        .await??;
 
         Ok(stream)
     }
