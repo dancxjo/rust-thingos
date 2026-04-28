@@ -1443,6 +1443,8 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
             trigger_pause_dump(snapshot);
         }
         kernel::sched::on_tick::<crate::arch::CurrentRuntime>();
+        kernel::vfs::devfs::ConsoleNode::poll_input();
+        kernel::vfs::devfs::FbTerminalNode::poll_input();
         crate::console::flush_deferred();
         crate::console::serial_flush_deferred();
         crate::console::blink_cursor();
@@ -1459,9 +1461,10 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
         // Serial interrupt (COM1 IRQ4) — handles both RX and TX:
         // 1. Poll received bytes into the serial RX buffer
         crate::RUNTIME.arch.poll_serial();
-        // 2. Drain the deferred TX ring into the UART FIFO (THRE interrupt).
-        // Console RX is transferred into the TTY from the scheduler tick path;
-        // doing scheduler wakeups from the UART interrupt path is not safe.
+        // 2. Transfer RX bytes into the console TTY line discipline so a shell
+        // blocked in read(0) is woken as soon as input arrives.
+        kernel::vfs::devfs::ConsoleNode::poll_input();
+        // 3. Drain the deferred TX ring into the UART FIFO (THRE interrupt).
         crate::console::serial_drain_irq();
     } else if resolved == IRQ_RESCHED_VECTOR {
         kernel::sched::on_resched_ipi::<crate::arch::CurrentRuntime>();

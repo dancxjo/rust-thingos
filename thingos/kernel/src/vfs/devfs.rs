@@ -446,6 +446,12 @@ impl VfsNode for ConsoleNode {
 
 pub struct FbTerminalNode;
 
+impl FbTerminalNode {
+    pub fn poll_input() {
+        get_fb_tty_ld().drain_input(&FbHardware);
+    }
+}
+
 impl VfsNode for FbTerminalNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };

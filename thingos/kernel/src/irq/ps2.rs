@@ -191,6 +191,7 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
                         }
                     }
                     INPUT_QUEUE.push(c);
+                    crate::vfs::devfs::FbTerminalNode::poll_input();
                 }
             }
             false

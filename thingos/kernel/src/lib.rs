@@ -1175,7 +1175,6 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     );
     boot_trace(runtime, b"[kernel:start] vfs init ok\r\n");
     crate::boot_progress::push(crate::boot_progress::BootPhase::Vfs, "VFS Root Ready");
-    crate::hotkey::spawn_worker::<R>();
 
     boot_trace(runtime, b"[kernel:start] kdebug(pci) begin\r\n");
     kdebug!("Scanning PCI bus...");
