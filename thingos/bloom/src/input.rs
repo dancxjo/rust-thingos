@@ -431,6 +431,7 @@ impl InputState {
                 let mut p = [0u8; KeyEventPayload::SIZE];
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
+                stem::info!("bloom: KeyDown received: {:?}", key.key());
                 self.keyboard_modifiers = key.mods;
                 if is_pointer_overlay_toggle(key) {
                     if !key.is_repeat() {
