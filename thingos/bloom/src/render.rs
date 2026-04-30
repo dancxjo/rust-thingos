@@ -902,7 +902,7 @@ fn draw_chrome_button_symbol(
     }
     scratch.resize(scratch_len, 0);
 
-    let px_size = ((rect.h.min(rect.w) as f32) * 0.62).clamp(14.0, 28.0);
+    let px_size = ((rect.h.min(rect.w) as f32) * 0.52).clamp(12.0, 24.0);
     let draw_x = scratch_w as i32 / 2 - (px_size * 0.36) as i32;
     let draw_y = scratch_h as i32 / 2 + (px_size * 0.38) as i32;
     if draw_text_fn(
@@ -1315,19 +1315,7 @@ fn draw_overlay_text_bold(
     text: &str,
     color: u32,
 ) -> i32 {
-    let end = draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, px_size, text, color);
-    draw_overlay_text(
-        pistil_draw_text,
-        dst,
-        stride,
-        height,
-        x.saturating_add(1),
-        y,
-        px_size,
-        text,
-        color,
-    );
-    end
+    draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, px_size, text, color)
 }
 
 fn draw_signed_number(

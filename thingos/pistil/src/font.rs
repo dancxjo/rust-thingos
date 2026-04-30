@@ -124,15 +124,22 @@ pub fn symbol_text_renderer() -> Option<&'static TextRenderer> {
 }
 
 fn blend(dst: u32, src: u32) -> u32 {
-    let alpha = (src >> 24) as u32;
-    if alpha == 0 {
+    let sa = (src >> 24) as u32;
+    if sa == 0 {
         return dst;
     }
-    if alpha == 255 {
+    if sa == 255 {
         return src;
     }
 
-    let inv_alpha = 255 - alpha;
+    let da = (dst >> 24) as u32;
+    let inv_sa = 255 - sa;
+
+    // out_a = sa + da * (255 - sa) / 255
+    let out_a = sa + (da * inv_sa + 127) / 255;
+    if out_a == 0 {
+        return 0;
+    }
 
     let sr = (src >> 16) & 0xFF;
     let sg = (src >> 8) & 0xFF;
@@ -142,9 +149,11 @@ fn blend(dst: u32, src: u32) -> u32 {
     let dg = (dst >> 8) & 0xFF;
     let db = dst & 0xFF;
 
-    let r = (sr * alpha + dr * inv_alpha) / 255;
-    let g = (sg * alpha + dg * inv_alpha) / 255;
-    let b = (sb * alpha + db * inv_alpha) / 255;
+    // Standard Porter-Duff "Over" (non-premultiplied src, non-premultiplied dst)
+    // C_out = (C_src * a_src + C_dst * a_dst * (1 - a_src)) / a_out
+    let r = (sr * sa + (dr * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let g = (sg * sa + (dg * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let b = (sb * sa + (db * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
 
-    (0xFF << 24) | (r << 16) | (g << 8) | b
+    (out_a << 24) | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
 }

@@ -15,11 +15,32 @@ LOG_LEVEL = os.environ.get("HUNTER_LOGLEVEL", "5") # 5 = Trace
 
 def build_once():
     print("[*] Performing initial build...")
-    # Build and run once to ensure everything is ready.
-    # We use -display none to avoid opening a window during the build-and-test-run.
-    env = os.environ.copy()
-    env["QEMUFLAGS"] = env.get("QEMUFLAGS", "-m 2G -smp 4") + " -display none"
-    subprocess.run(["just", "run", ARCH, "--loglevel", LOG_LEVEL], env=env, check=True)
+    subprocess.run(["just", "iso", ARCH], check=True)
+
+def stop_process_group(process, *, sig=signal.SIGTERM, grace=2.0):
+    if process.poll() is not None:
+        return
+
+    try:
+        pgid = os.getpgid(process.pid)
+    except ProcessLookupError:
+        return
+
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return
+
+    deadline = time.time() + grace
+    while time.time() < deadline:
+        if process.poll() is not None:
+            return
+        time.sleep(0.05)
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 def run_session(session_id):
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -44,29 +65,32 @@ def run_session(session_id):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
             env=env,
             preexec_fn=os.setsid 
         )
+        os.set_blocking(process.stdout.fileno(), False)
         
         last_output_time = time.time()
         start_time = time.time()
-        line_count = 0
+        byte_count = 0
         
         try:
             while True:
-                # Poll for output
                 rlist, _, _ = select.select([process.stdout], [], [], 0.1)
                 
                 if rlist:
-                    line = process.stdout.readline()
-                    if not line:
+                    try:
+                        chunk = os.read(process.stdout.fileno(), 65536)
+                    except BlockingIOError:
+                        chunk = b""
+
+                    if not chunk:
                         break
                     
-                    log_file.write(line)
+                    text = chunk.decode(errors="replace")
+                    log_file.write(text)
                     log_file.flush()
-                    line_count += 1
+                    byte_count += len(chunk)
                     last_output_time = time.time()
                 
                 # Silence check
@@ -81,19 +105,15 @@ def run_session(session_id):
                     break
                     
         except KeyboardInterrupt:
-            # Re-raise to be caught in main
+            print(f"\n[*] Interrupt received; stopping session {session_id}.")
+            stop_process_group(process, sig=signal.SIGTERM, grace=1.0)
             raise
         finally:
-            # Kill the whole process group (xtask + QEMU)
-            if process.poll() is None:
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            stop_process_group(process, sig=signal.SIGTERM)
             
     runtime = time.time() - start_time
     # If it died very quickly with almost no output, it might be a build error or config issue
-    if line_count < 5 and runtime < 1.0:
+    if byte_count < 200 and runtime < 1.0:
         print(f"\n[!] Session {session_id} failed to produce output. Check build or QEMU logs.")
         return False
         

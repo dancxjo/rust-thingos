@@ -680,14 +680,15 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
     let titlebar_height = chrome.titlebar_height.min(rect.h);
-    let button_height = titlebar_height;
-    let button_width = button_height.min(44);
-    if button_height < 12 || button_width < 12 {
+    let v_padding = (titlebar_height / 8).max(2);
+    let button_height = titlebar_height.saturating_sub(v_padding * 2);
+    let button_width = button_height.saturating_add(v_padding * 2).min(44);
+    if button_height < 8 || button_width < 12 {
         return None;
     }
 
     let right = rect.x.saturating_add(rect.w).saturating_sub(frame);
-    let y = rect.y;
+    let y = rect.y.saturating_add(v_padding);
     let total_w = button_width.saturating_mul(3);
     if total_w.saturating_add(frame) > rect.w {
         return None;
