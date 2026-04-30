@@ -4,7 +4,7 @@ use alloc::string::ToString;
 extern crate alloc;
 
 use abi::display::{
-    BufferHandle, BufferId, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
+    BufferHandle, BufferId, CommitFlags, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
     DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps, DisplayInfo, DisplayMode,
     PlaneCommit,
 };
@@ -249,6 +249,9 @@ struct VirtioGpuDriver {
     current_res_id: u32,
     first_commit_logged: bool,
     cursor_commit_logged: bool,
+    /// Monotonic nanosecond timestamp of the last successful present.
+    /// Used to implement software vsync pacing when `CommitFlags::VSYNC` is set.
+    last_present_ns: u64,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -287,6 +290,29 @@ fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
     let g = (sg * src_a + dg * inv + 127) / 255;
     let b = (sb * src_a + db * inv + 127) / 255;
     0xff00_0000 | (r << 16) | (g << 8) | b
+}
+
+/// Software vsync pacing helper.
+///
+/// Sleeps until the next frame boundary derived from the display refresh rate,
+/// then records the current monotonic time as the new present timestamp.
+/// This ensures that callers requesting `CommitFlags::VSYNC` are blocked for
+/// approximately one frame interval relative to the previous present, matching
+/// the semantics of a real hardware vblank wait.
+///
+/// `refresh_mhz` is in milli-Hertz (e.g. 60 000 = 60 Hz).
+fn vsync_wait(last_present_ns: &mut u64, refresh_mhz: u32) {
+    let frame_ns = if refresh_mhz > 0 {
+        1_000_000_000_000u64 / refresh_mhz as u64
+    } else {
+        16_666_667 // default 60 Hz
+    };
+    let now = stem::time::monotonic_ns();
+    let next = last_present_ns.saturating_add(frame_ns);
+    if now < next {
+        stem::time::sleep_ns(next - now);
+    }
+    *last_present_ns = stem::time::monotonic_ns();
 }
 
 fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
@@ -357,7 +383,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 plane_count: 1,
                 max_buffers: 32,
                 supported_formats: 1 << 1,
-                caps: DisplayCaps::ATOMIC,
+                caps: DisplayCaps::ATOMIC | DisplayCaps::VBLANK,
             };
             stem::debug!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
@@ -725,6 +751,12 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     }
                     stem::debug!("DISP: COMMIT complete (seq={})", driver.present_seq);
                     driver.current_fd = Some(driver.frame_pool[idx].fd);
+
+                    // Software vsync: pace frame delivery to the display refresh
+                    // interval when the caller requests synchronisation.
+                    if req.flags.contains(CommitFlags::VSYNC) {
+                        vsync_wait(&mut driver.last_present_ns, 60_000);
+                    }
                 }
             }
 
@@ -1218,6 +1250,7 @@ fn main(boot_arg: usize) -> ! {
         current_res_id: 1,
         first_commit_logged: false,
         cursor_commit_logged: false,
+        last_present_ns: 0,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every

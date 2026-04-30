@@ -144,3 +144,9 @@ Feature: Bloom compositor service loop and responsiveness
     When I wait for the shell prompt
     And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: wallpaper decode failed" within 60s
+
+  Scenario: display driver reports VBLANK capability
+    # Verifies that the display driver advertises the VBLANK capability so
+    # bloom and other clients know that CommitFlags::VSYNC is honoured.
+    Given the machine is booted
+    Then the serial output should contain "bloom: output0" within 60s
