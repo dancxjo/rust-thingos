@@ -207,6 +207,16 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
     And the serial output should contain "wl_data_device_manager" within 60s
 
+  Scenario: linux dmabuf global is advertised for GPU-backed display import
+    # Verifies that bloom exposes zwp_linux_dmabuf_v1 when the display driver
+    # can import linear FD-backed buffers, and that the default Wayland smoke
+    # client can create and commit wl_buffers through the dmabuf path.
+    Given the machine is booted
+    Then the serial output should contain "bloom: display driver supports linear dmabuf import" within 60s
+    And the serial output should contain "zwp_linux_dmabuf_v1" within 60s
+    And the serial output should contain "wayland_hello: using zwp_linux_dmabuf_v1 buffers" within 60s
+    And the serial output should contain "wayland-server: imported dmabuf wl_buffer=" within 60s
+
   Scenario: clipboard selection is broadcast to other clients
     # Verifies that wl_data_device.set_selection causes bloom to log the
     # clipboard ownership change and relay the offer to other clients.

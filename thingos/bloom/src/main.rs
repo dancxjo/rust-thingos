@@ -78,6 +78,9 @@ fn main(_arg: usize) -> ! {
     } else {
         info!("bloom: display driver does not support VBLANK");
     }
+    if primary.supports_dmabuf {
+        info!("bloom: display driver supports linear dmabuf import");
+    }
 
     // ── Create and publish the service port ───────────────────────────────────
     info!("bloom: creating service port...");

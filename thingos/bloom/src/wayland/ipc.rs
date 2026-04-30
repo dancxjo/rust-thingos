@@ -99,7 +99,10 @@ pub struct WCmdImportAttach {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
+    /// Canonical abi::pixel::PixelFormat discriminant.
     pub format: u32,
+    pub offset: u64,
+    pub modifier: u64,
 }
 
 /// [`WCMD_DAMAGE`] — add a damage rectangle to a surface.
@@ -314,7 +317,9 @@ pub fn encode_import_attach(
     height: u32,
     stride: u32,
     format: u32,
-) -> [u8; 32] {
+    offset: u64,
+    modifier: u64,
+) -> [u8; 48] {
     let msg = WCmdImportAttach {
         msg_type: WCMD_IMPORT_ATTACH,
         _pad: [0; 3],
@@ -325,8 +330,10 @@ pub fn encode_import_attach(
         height,
         stride,
         format,
+        offset,
+        modifier,
     };
-    let mut out = [0u8; 32];
+    let mut out = [0u8; 48];
     out.copy_from_slice(as_bytes!(msg, WCmdImportAttach));
     out
 }

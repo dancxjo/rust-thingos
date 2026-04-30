@@ -402,11 +402,12 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 },
                 plane_count: 1,
                 max_buffers: 32,
-                supported_formats: 1 << 1,
+                supported_formats: (1 << (PixelFormat::Bgra8888 as u8))
+                    | (1 << (PixelFormat::Bgrx8888 as u8)),
                 // This provider replies to DISPLAY_OP_COMMIT synchronously.
                 // Advertising VBLANK would make clients sleep inside the VFS
                 // RPC response path instead of returning to their event loops.
-                caps: DisplayCaps::ATOMIC,
+                caps: DisplayCaps::ATOMIC | DisplayCaps::DMABUF_IMPORT,
             };
             stem::trace!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
@@ -429,7 +430,24 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 bh.width,
                 bh.height
             );
-            let size = (bh.height as usize).saturating_mul(bh.stride as usize);
+            if bh.modifier != 0 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            if !matches!(bh.format, PixelFormat::Bgra8888 | PixelFormat::Bgrx8888) {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let bpp = bh.format.bytes_per_pixel();
+            let min_stride = match (bh.width as usize).checked_mul(bpp) {
+                Some(v) => v,
+                None => return ProviderResponse::err(Errno::EINVAL),
+            };
+            if bh.width == 0 || bh.height == 0 || (bh.stride as usize) < min_stride {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let size = match (bh.height as usize).checked_mul(bh.stride as usize) {
+                Some(v) => v,
+                None => return ProviderResponse::err(Errno::EINVAL),
+            };
             let req = abi::vm::VmMapReq {
                 addr_hint: 0,
                 len: size,

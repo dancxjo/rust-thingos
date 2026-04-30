@@ -182,9 +182,15 @@ impl WaylandServer {
         };
 
         info!("wayland-server: listening on {}", WAYLAND_SOCKET_PATH);
-        info!(
-            "wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor"
-        );
+        if args.output.supports_dmabuf {
+            info!(
+                "wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager zwp_linux_dmabuf_v1"
+            );
+        } else {
+            info!(
+                "wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager"
+            );
+        }
 
         let mut server = WaylandServer {
             svc,

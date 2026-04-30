@@ -128,7 +128,7 @@ impl WaylandCommandService {
     }
 
     fn handle_import_attach(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
-        if data.len() < 32 {
+        if data.len() < 48 {
             return false;
         }
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
@@ -138,21 +138,26 @@ impl WaylandCommandService {
         let height = u32::from_ne_bytes(data[20..24].try_into().unwrap_or([0; 4]));
         let stride = u32::from_ne_bytes(data[24..28].try_into().unwrap_or([0; 4]));
         let format = u32::from_ne_bytes(data[28..32].try_into().unwrap_or([0; 4]));
+        let offset = u64::from_ne_bytes(data[32..40].try_into().unwrap_or([0; 8]));
+        let modifier = u64::from_ne_bytes(data[40..48].try_into().unwrap_or([0; 8]));
 
         let pixel_fmt = match format {
-            0 => PixelFormat::Bgra8888, // Wayland ARGB8888
-            1 => PixelFormat::Bgrx8888, // Wayland XRGB8888
+            1 => PixelFormat::Bgra8888,
+            2 => PixelFormat::Bgrx8888,
+            3 => PixelFormat::Rgb565,
             _ => PixelFormat::Bgra8888,
         };
 
-        let buffer_id =
-            match world.display.import_buffer(handle, width, height, stride, pixel_fmt, 0) {
-                Some(id) => id,
-                None => {
-                    warn!("wayland-cmd: import_buffer failed for surface {}", bloom_surface_id);
-                    return false;
-                }
-            };
+        let buffer_id = match world
+            .display
+            .import_buffer(handle, width, height, stride, pixel_fmt, offset, modifier)
+        {
+            Some(id) => id,
+            None => {
+                warn!("wayland-cmd: import_buffer failed for surface {}", bloom_surface_id);
+                return false;
+            }
+        };
 
         // Track key → bloom_id mapping for later release.
         self.buf_key_to_bloom.insert(wl_buf_key, buffer_id);
@@ -354,7 +359,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
     let len = match msg_type {
         ipc::WCMD_CREATE_SURFACE => 8,
         ipc::WCMD_DESTROY_SURFACE => 8,
-        ipc::WCMD_IMPORT_ATTACH => 32,
+        ipc::WCMD_IMPORT_ATTACH => 48,
         ipc::WCMD_DAMAGE => 24,
         ipc::WCMD_COMMIT => 12,
         ipc::WCMD_SET_CHROME => 16,

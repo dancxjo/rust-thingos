@@ -161,6 +161,7 @@ impl CompositorVisuals {
             texture.stride,
             PixelFormat::Bgra8888,
             0,
+            0,
         ) else {
             return;
         };
@@ -215,6 +216,7 @@ impl CompositorVisuals {
             height,
             texture.stride,
             PixelFormat::Bgra8888,
+            0,
             0,
         ) else {
             return;
@@ -286,6 +288,7 @@ impl CompositorVisuals {
             texture.height,
             texture.stride,
             PixelFormat::Bgra8888,
+            0,
             0,
         ) else {
             stem::warn!("bloom: failed to import cursor texture");
@@ -409,6 +412,7 @@ impl CompositorVisuals {
             texture.stride,
             PixelFormat::Bgra8888,
             0,
+            0,
         ) else {
             stem::warn!("bloom: failed to import cursor variant texture");
             return None;
@@ -443,6 +447,7 @@ impl CompositorVisuals {
             height,
             texture.stride,
             PixelFormat::Bgra8888,
+            0,
             0,
         )?;
         if let Some(old) = self.chrome_overlay.take() {
@@ -512,6 +517,7 @@ impl CompositorVisuals {
             height,
             texture.stride,
             PixelFormat::Bgra8888,
+            0,
             0,
         )?;
 

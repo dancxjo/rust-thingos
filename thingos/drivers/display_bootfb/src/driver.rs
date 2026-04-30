@@ -56,7 +56,8 @@ impl BootFbDriver {
             },
             plane_count: 1,
             max_buffers: 32,
-            supported_formats: 1 << (PixelFormat::Bgra8888 as u8),
+            supported_formats: (1 << (PixelFormat::Bgra8888 as u8))
+                | (1 << (PixelFormat::Bgrx8888 as u8)),
             // This provider replies to DISPLAY_OP_COMMIT synchronously.
             // Advertising VBLANK would make clients sleep inside the VFS RPC
             // response path instead of returning to their event loops.
@@ -65,7 +66,19 @@ impl BootFbDriver {
     }
 
     pub fn import_buffer(&mut self, handle: &abi::display::BufferHandle) -> SysResult<BufferId> {
-        let size = (handle.height as usize) * (handle.stride as usize);
+        if handle.modifier != 0 {
+            return Err(Errno::EINVAL);
+        }
+        if !matches!(handle.format, PixelFormat::Bgra8888 | PixelFormat::Bgrx8888) {
+            return Err(Errno::EINVAL);
+        }
+        let bpp = handle.format.bytes_per_pixel();
+        let min_stride = (handle.width as usize).checked_mul(bpp).ok_or(Errno::EINVAL)?;
+        if handle.width == 0 || handle.height == 0 || (handle.stride as usize) < min_stride {
+            return Err(Errno::EINVAL);
+        }
+        let size =
+            (handle.height as usize).checked_mul(handle.stride as usize).ok_or(Errno::EINVAL)?;
         let req = VmMapReq {
             addr_hint: 0,
             len: size,

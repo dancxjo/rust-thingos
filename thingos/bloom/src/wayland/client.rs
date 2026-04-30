@@ -4,6 +4,15 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
+#[derive(Debug, Clone, Copy)]
+pub struct DmabufPlane {
+    pub fd: u32,
+    pub plane_idx: u32,
+    pub offset: u32,
+    pub stride: u32,
+    pub modifier: u64,
+}
+
 // ── Object entries ────────────────────────────────────────────────────────────
 
 /// The type of a live Wayland object in a client's object table.
@@ -19,10 +28,22 @@ pub enum ObjectEntry {
     Subcompositor,
     /// wl_shm global.
     Shm,
+    /// zwp_linux_dmabuf_v1 global.
+    Dmabuf,
+    /// zwp_linux_buffer_params_v1.
+    DmabufParams { used: bool, planes: Vec<DmabufPlane> },
     /// wl_shm_pool.
     ShmPool { handle: u32, size: u32 },
-    /// wl_buffer — created from a shm_pool.
-    Buffer { handle: u32, offset: u32, width: u32, height: u32, stride: u32, format: u32 },
+    /// wl_buffer — created from wl_shm or zwp_linux_dmabuf_v1.
+    Buffer {
+        handle: u32,
+        offset: u32,
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: u32,
+        modifier: u64,
+    },
     /// wl_surface.
     Surface {
         /// Bloom scene surface ID (assigned by the main thread).

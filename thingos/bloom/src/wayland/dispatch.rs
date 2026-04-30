@@ -16,15 +16,17 @@
 //! | 5    | wl_output        | 2       |
 //! | 6    | wl_subcompositor | 1       |
 //! | 7    | wl_data_device_manager   | 3       |
+//! | 8    | zwp_linux_dmabuf_v1      | 3       |
 
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use abi::pixel::PixelFormat;
 use blossom::{BlossomCommand, BlossomError};
 use stem::{debug as blossom_debug, warn as blossom_warn};
 
-use crate::wayland::client::{ObjectEntry, WaylandClient};
+use crate::wayland::client::{DmabufPlane, ObjectEntry, WaylandClient};
 use crate::wayland::ipc;
 use crate::wayland::wire::{WireMsg, read_i32, read_string, read_u32};
 
@@ -37,6 +39,11 @@ pub const GLOBAL_WL_SEAT: u32 = 4;
 pub const GLOBAL_WL_OUTPUT: u32 = 5;
 pub const GLOBAL_WL_SUBCOMPOSITOR: u32 = 6;
 pub const GLOBAL_WL_DATA_DEVICE_MANAGER: u32 = 7;
+pub const GLOBAL_ZWP_LINUX_DMABUF: u32 = 8;
+
+const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
+const DRM_FORMAT_XRGB8888: u32 = 0x3432_5258; // "XR24"
+const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
 // ── Top-level dispatcher ─────────────────────────────────────────────────────
 
@@ -66,10 +73,12 @@ pub fn dispatch(
     };
 
     match obj_kind {
-        ObjKind::Display => dispatch_display(msg, client, next_surface_key, cmd_write),
+        ObjKind::Display => dispatch_display(msg, client, next_surface_key, cmd_write, output),
         ObjKind::Registry => dispatch_registry(msg, client, output),
         ObjKind::Compositor => dispatch_compositor(msg, client, next_surface_key, cmd_write),
         ObjKind::Shm => dispatch_shm(msg, client),
+        ObjKind::Dmabuf => dispatch_dmabuf(msg, client),
+        ObjKind::DmabufParams => dispatch_dmabuf_params(msg, client, obj_id, output),
         ObjKind::ShmPool => dispatch_shm_pool(msg, client, obj_id),
         ObjKind::Buffer => dispatch_buffer(msg, client, obj_id),
         ObjKind::Surface => dispatch_surface(msg, client, obj_id, blossom, cmd_write),
@@ -101,6 +110,8 @@ enum ObjKind {
     Registry,
     Compositor,
     Shm,
+    Dmabuf,
+    DmabufParams,
     ShmPool,
     Buffer,
     Surface,
@@ -130,6 +141,8 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::Registry => ObjKind::Registry,
         ObjectEntry::Compositor => ObjKind::Compositor,
         ObjectEntry::Shm => ObjKind::Shm,
+        ObjectEntry::Dmabuf => ObjKind::Dmabuf,
+        ObjectEntry::DmabufParams { .. } => ObjKind::DmabufParams,
         ObjectEntry::ShmPool { .. } => ObjKind::ShmPool,
         ObjectEntry::Buffer { .. } => ObjKind::Buffer,
         ObjectEntry::Surface { .. } => ObjKind::Surface,
@@ -164,6 +177,7 @@ fn dispatch_display(
     client: &mut WaylandClient,
     _next_surface_key: &mut u32,
     _cmd_write: u32,
+    output: &crate::display::OutputInfo,
 ) -> Vec<Vec<u8>> {
     use crate::wayland::wire::encode_string;
     match msg.opcode {
@@ -202,6 +216,13 @@ fn dispatch_display(
                 p.extend_from_slice(&version.to_ne_bytes());
                 client.send(new_id, 0, &p);
             }
+            if output.supports_dmabuf {
+                let mut p = Vec::new();
+                p.extend_from_slice(&GLOBAL_ZWP_LINUX_DMABUF.to_ne_bytes());
+                p.extend_from_slice(&encode_string("zwp_linux_dmabuf_v1"));
+                p.extend_from_slice(&3u32.to_ne_bytes());
+                client.send(new_id, 0, &p);
+            }
             // No wl_registry.global_done in the Wayland protocol;
             // clients learn all globals when the initial global list is done
             // (they stop waiting after bind).
@@ -216,7 +237,11 @@ fn dispatch_display(
 /// wl_registry.bind opcode = 0
 const WL_REGISTRY_BIND: u16 = 0;
 
-fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient, output: &crate::display::OutputInfo) -> Vec<Vec<u8>> {
+fn dispatch_registry(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    output: &crate::display::OutputInfo,
+) -> Vec<Vec<u8>> {
     if msg.opcode != WL_REGISTRY_BIND {
         return vec![];
     }
@@ -260,8 +285,13 @@ fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient, output: &crate::
         }
         GLOBAL_WL_SUBCOMPOSITOR => {
             client.insert(new_id, ObjectEntry::Subcompositor);
+        }
         GLOBAL_WL_DATA_DEVICE_MANAGER => {
             client.insert(new_id, ObjectEntry::DataDeviceManager);
+        }
+        GLOBAL_ZWP_LINUX_DMABUF if output.supports_dmabuf => {
+            client.insert(new_id, ObjectEntry::Dmabuf);
+            send_dmabuf_formats(client, new_id, output);
         }
         _ => {
             client.send_protocol_error(new_id, 0, "unknown global");
@@ -484,6 +514,219 @@ fn dispatch_shm(msg: &WireMsg, client: &mut WaylandClient) -> Vec<Vec<u8>> {
     vec![]
 }
 
+fn wl_shm_format_to_pixel(format: u32) -> Option<PixelFormat> {
+    match format {
+        0 => Some(PixelFormat::Bgra8888), // WL_SHM_FORMAT_ARGB8888
+        1 => Some(PixelFormat::Bgrx8888), // WL_SHM_FORMAT_XRGB8888
+        _ => None,
+    }
+}
+
+fn drm_format_to_pixel(format: u32) -> Option<PixelFormat> {
+    match format {
+        DRM_FORMAT_ARGB8888 => Some(PixelFormat::Bgra8888),
+        DRM_FORMAT_XRGB8888 => Some(PixelFormat::Bgrx8888),
+        _ => None,
+    }
+}
+
+fn pixel_to_drm_format(format: PixelFormat) -> Option<u32> {
+    match format {
+        PixelFormat::Bgra8888 => Some(DRM_FORMAT_ARGB8888),
+        PixelFormat::Bgrx8888 => Some(DRM_FORMAT_XRGB8888),
+        _ => None,
+    }
+}
+
+fn output_supports_pixel(output: &crate::display::OutputInfo, format: PixelFormat) -> bool {
+    output.supported_formats & (1u64 << (format as u8)) != 0
+}
+
+// ── zwp_linux_dmabuf_v1 ──────────────────────────────────────────────────────
+
+const ZWP_LINUX_DMABUF_DESTROY: u16 = 0;
+const ZWP_LINUX_DMABUF_CREATE_PARAMS: u16 = 1;
+
+fn dispatch_dmabuf(msg: &WireMsg, client: &mut WaylandClient) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        ZWP_LINUX_DMABUF_DESTROY => {
+            client.destroy(msg.object_id);
+        }
+        ZWP_LINUX_DMABUF_CREATE_PARAMS => {
+            if let Some(new_id) = read_u32(&msg.data, 0) {
+                client
+                    .insert(new_id, ObjectEntry::DmabufParams { used: false, planes: Vec::new() });
+            }
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+fn send_dmabuf_formats(
+    client: &WaylandClient,
+    dmabuf_obj: u32,
+    output: &crate::display::OutputInfo,
+) {
+    for format in [PixelFormat::Bgra8888, PixelFormat::Bgrx8888] {
+        if !output_supports_pixel(output, format) {
+            continue;
+        }
+        let Some(drm_format) = pixel_to_drm_format(format) else {
+            continue;
+        };
+        client.send(dmabuf_obj, 0, &drm_format.to_ne_bytes());
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&drm_format.to_ne_bytes());
+        payload.extend_from_slice(&((DRM_FORMAT_MOD_LINEAR >> 32) as u32).to_ne_bytes());
+        payload.extend_from_slice(&(DRM_FORMAT_MOD_LINEAR as u32).to_ne_bytes());
+        client.send(dmabuf_obj, 1, &payload);
+    }
+}
+
+const ZWP_LINUX_BUFFER_PARAMS_DESTROY: u16 = 0;
+const ZWP_LINUX_BUFFER_PARAMS_ADD: u16 = 1;
+const ZWP_LINUX_BUFFER_PARAMS_CREATE: u16 = 2;
+const ZWP_LINUX_BUFFER_PARAMS_CREATE_IMMED: u16 = 3;
+
+fn dispatch_dmabuf_params(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+    output: &crate::display::OutputInfo,
+) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        ZWP_LINUX_BUFFER_PARAMS_DESTROY => {
+            client.destroy(obj_id);
+        }
+        ZWP_LINUX_BUFFER_PARAMS_ADD => {
+            let fd = match client.pending_fds.pop_front() {
+                Some(fd) => fd,
+                None => {
+                    client.send_protocol_error(obj_id, 6, "dmabuf add missing fd");
+                    return vec![];
+                }
+            };
+            let plane_idx = read_u32(&msg.data, 0).unwrap_or(0);
+            let offset = read_u32(&msg.data, 4).unwrap_or(0);
+            let stride = read_u32(&msg.data, 8).unwrap_or(0);
+            let modifier_hi = read_u32(&msg.data, 12).unwrap_or(0);
+            let modifier_lo = read_u32(&msg.data, 16).unwrap_or(0);
+            let modifier = ((modifier_hi as u64) << 32) | modifier_lo as u64;
+
+            let error = match client.objects.get_mut(&obj_id) {
+                Some(ObjectEntry::DmabufParams { used, planes }) => {
+                    if *used {
+                        Some((0, "dmabuf params already used"))
+                    } else if plane_idx >= 4 {
+                        Some((1, "dmabuf plane index out of range"))
+                    } else if planes.iter().any(|plane| plane.plane_idx == plane_idx) {
+                        Some((2, "dmabuf plane already set"))
+                    } else {
+                        planes.push(DmabufPlane { fd, plane_idx, offset, stride, modifier });
+                        None
+                    }
+                }
+                _ => return vec![],
+            };
+            if let Some((code, message)) = error {
+                client.send_protocol_error(obj_id, code, message);
+                return vec![];
+            }
+        }
+        ZWP_LINUX_BUFFER_PARAMS_CREATE | ZWP_LINUX_BUFFER_PARAMS_CREATE_IMMED => {
+            let new_id = read_u32(&msg.data, 0).unwrap_or(0);
+            let width = read_i32(&msg.data, 4).unwrap_or(0);
+            let height = read_i32(&msg.data, 8).unwrap_or(0);
+            let drm_format = read_u32(&msg.data, 12).unwrap_or(0);
+            let _flags = read_u32(&msg.data, 16).unwrap_or(0);
+            let immediate = msg.opcode == ZWP_LINUX_BUFFER_PARAMS_CREATE_IMMED;
+
+            match create_dmabuf_buffer(client, obj_id, new_id, width, height, drm_format, output) {
+                Ok(()) => {
+                    if !immediate {
+                        client.send(obj_id, 0, &new_id.to_ne_bytes());
+                    }
+                    stem::info!(
+                        "wayland-server: imported dmabuf wl_buffer={} {}x{} format=0x{:08x}",
+                        new_id,
+                        width,
+                        height,
+                        drm_format
+                    );
+                }
+                Err(msg_text) => {
+                    if immediate {
+                        client.send_protocol_error(obj_id, 4, msg_text);
+                    } else {
+                        client.send(obj_id, 1, &[]);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+fn create_dmabuf_buffer(
+    client: &mut WaylandClient,
+    params_obj: u32,
+    new_id: u32,
+    width: i32,
+    height: i32,
+    drm_format: u32,
+    output: &crate::display::OutputInfo,
+) -> Result<(), &'static str> {
+    if new_id == 0 || width <= 0 || height <= 0 {
+        return Err("invalid dmabuf dimensions");
+    }
+    let pixel_format = drm_format_to_pixel(drm_format).ok_or("unsupported dmabuf format")?;
+    if !output_supports_pixel(output, pixel_format) {
+        return Err("dmabuf format not supported by display");
+    }
+
+    let (plane, modifier) = {
+        let Some(ObjectEntry::DmabufParams { used, planes }) = client.objects.get_mut(&params_obj)
+        else {
+            return Err("invalid dmabuf params object");
+        };
+        if *used {
+            return Err("dmabuf params already used");
+        }
+        *used = true;
+        if planes.len() != 1 || planes[0].plane_idx != 0 {
+            return Err("only single-plane dmabuf buffers are supported");
+        }
+        let plane = planes[0];
+        if plane.modifier != DRM_FORMAT_MOD_LINEAR {
+            return Err("only linear dmabuf modifiers are supported");
+        }
+        (plane, plane.modifier)
+    };
+
+    let bpp = pixel_format.bytes_per_pixel() as u32;
+    let min_stride = (width as u32).saturating_mul(bpp);
+    if plane.stride < min_stride {
+        return Err("dmabuf stride is too small");
+    }
+
+    client.insert(
+        new_id,
+        ObjectEntry::Buffer {
+            handle: plane.fd,
+            offset: plane.offset,
+            width: width as u32,
+            height: height as u32,
+            stride: plane.stride,
+            format: pixel_format as u32,
+            modifier,
+        },
+    );
+    Ok(())
+}
+
 // ── wl_shm_pool ───────────────────────────────────────────────────────────────
 
 const WL_SHM_POOL_CREATE_BUFFER: u16 = 0;
@@ -506,10 +749,14 @@ fn dispatch_shm_pool(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> 
             let width = read_u32(&msg.data, 8).unwrap_or(0);
             let height = read_u32(&msg.data, 12).unwrap_or(0);
             let stride = read_u32(&msg.data, 16).unwrap_or(0);
-            let format = read_u32(&msg.data, 20).unwrap_or(0);
+            let shm_format = read_u32(&msg.data, 20).unwrap_or(0);
+            let Some(format) = wl_shm_format_to_pixel(shm_format).map(|fmt| fmt as u32) else {
+                client.send_protocol_error(obj_id, 1, "unsupported wl_shm format");
+                return vec![];
+            };
             client.insert(
                 new_id,
-                ObjectEntry::Buffer { handle, offset, width, height, stride, format },
+                ObjectEntry::Buffer { handle, offset, width, height, stride, format, modifier: 0 },
             );
         }
         WL_SHM_POOL_DESTROY => {
@@ -679,8 +926,15 @@ fn handle_surface_commit(
 
     // Import and attach pending buffer.
     if let Some(buf_obj) = pending_buffer {
-        if let Some(ObjectEntry::Buffer { handle, width, height, stride, format, .. }) =
-            client.objects.get(&buf_obj).cloned()
+        if let Some(ObjectEntry::Buffer {
+            handle,
+            offset,
+            width,
+            height,
+            stride,
+            format,
+            modifier,
+        }) = client.objects.get(&buf_obj).cloned()
         {
             let key = client.alloc_buf_key();
             client.buf_key_to_obj.insert(key, buf_obj);
@@ -693,6 +947,8 @@ fn handle_surface_commit(
                     height,
                     stride,
                     format,
+                    offset as u64,
+                    modifier,
                 )
                 .to_vec(),
             );
@@ -1053,11 +1309,7 @@ const WL_SUBCOMPOSITOR_GET_SUBSURFACE: u16 = 1;
 /// Error code values from `wl_subcompositor.error`.
 const WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE: u32 = 0;
 
-fn dispatch_subcompositor(
-    msg: &WireMsg,
-    client: &mut WaylandClient,
-    obj_id: u32,
-) -> Vec<Vec<u8>> {
+fn dispatch_subcompositor(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
     match msg.opcode {
         WL_SUBCOMPOSITOR_DESTROY => {
             client.destroy(obj_id);
@@ -1095,11 +1347,7 @@ fn dispatch_subcompositor(
                 };
             let parent_is_surface =
                 matches!(client.objects.get(&parent_obj), Some(ObjectEntry::Surface { .. }));
-            if !child_is_surface
-                || !parent_is_surface
-                || child_already_sub
-                || child_already_xdg
-            {
+            if !child_is_surface || !parent_is_surface || child_already_sub || child_already_xdg {
                 client.send_protocol_error(
                     obj_id,
                     WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
@@ -1326,8 +1574,7 @@ fn apply_subsurface_place(
         }
         _ => return false,
     };
-    let Some(ObjectEntry::Surface { subsurface_children, .. }) =
-        client.objects.get_mut(&parent)
+    let Some(ObjectEntry::Surface { subsurface_children, .. }) = client.objects.get_mut(&parent)
     else {
         return false;
     };
@@ -1563,7 +1810,8 @@ fn dispatch_data_device_manager(msg: &WireMsg, client: &mut WaylandClient) -> Ve
     match msg.opcode {
         WL_DATA_DEVICE_MANAGER_CREATE_DATA_SOURCE => {
             if let Some(new_id) = read_u32(&msg.data, 0) {
-                client.insert(new_id, ObjectEntry::DataSource { mime_types: alloc::vec::Vec::new() });
+                client
+                    .insert(new_id, ObjectEntry::DataSource { mime_types: alloc::vec::Vec::new() });
                 blossom_debug!("wayland-server: data_source obj={} created", new_id);
             }
         }
@@ -1576,7 +1824,11 @@ fn dispatch_data_device_manager(msg: &WireMsg, client: &mut WaylandClient) -> Ve
             let seat_obj = read_u32(&msg.data, 4).unwrap_or(0);
             client.insert(new_id, ObjectEntry::DataDevice { seat_obj });
             client.data_device_obj = Some(new_id);
-            blossom_debug!("wayland-server: data_device obj={} created for seat={}", new_id, seat_obj);
+            blossom_debug!(
+                "wayland-server: data_device obj={} created for seat={}",
+                new_id,
+                seat_obj
+            );
         }
         _ => {}
     }

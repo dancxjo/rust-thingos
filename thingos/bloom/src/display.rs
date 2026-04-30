@@ -39,6 +39,8 @@ pub struct OutputInfo {
     pub width: u32,
     pub height: u32,
     pub refresh_mhz: u32,
+    pub supported_formats: u64,
+    pub supports_dmabuf: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,6 +94,8 @@ impl DisplayBackend {
             width: self.info.preferred_mode.width,
             height: self.info.preferred_mode.height,
             refresh_mhz: self.info.preferred_mode.refresh_mhz,
+            supported_formats: self.info.supported_formats,
+            supports_dmabuf: self.info.caps.contains(abi::display::DisplayCaps::DMABUF_IMPORT),
         }]
     }
 
@@ -107,8 +111,17 @@ impl DisplayBackend {
         stride: u32,
         format: PixelFormat,
         offset: u64,
+        modifier: u64,
     ) -> Option<u32> {
-        let bh = BufferHandle { handle: thing, width, height, stride, format, offset, modifier: 0 };
+        if !self.supports_format(format) {
+            stem::warn!("bloom: rejecting unsupported display buffer format {:?}", format);
+            return None;
+        }
+        if modifier != 0 {
+            stem::warn!("bloom: rejecting unsupported display buffer modifier {}", modifier);
+            return None;
+        }
+        let bh = BufferHandle { handle: thing, width, height, stride, format, offset, modifier };
         let mut id = 0u32;
         match device_call(self.fd, DISPLAY_OP_IMPORT_BUFFER, &bh, Some(&mut id)) {
             Some(_) => {
@@ -120,6 +133,11 @@ impl DisplayBackend {
                 None
             }
         }
+    }
+
+    pub fn supports_format(&self, format: PixelFormat) -> bool {
+        let bit = 1u64 << (format as u8);
+        self.info.supported_formats & bit != 0
     }
 
     pub fn release_buffer(&self, buffer_id: u32) {

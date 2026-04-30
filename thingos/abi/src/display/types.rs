@@ -139,6 +139,8 @@ bitflags::bitflags! {
         const ATOMIC = 1 << 2;
         /// Driver supports VBlank events.
         const VBLANK = 1 << 3;
+        /// Driver can import linear dma-buf/FD-backed client buffers.
+        const DMABUF_IMPORT = 1 << 4;
     }
 }
 

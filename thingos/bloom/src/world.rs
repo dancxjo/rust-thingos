@@ -122,6 +122,7 @@ impl BloomWorld {
                     req.height,
                     req.stride,
                     req.format,
+                    0,
                     req.modifier,
                 ) else {
                     send_ack(req.reply_port, 2, 0, 0);

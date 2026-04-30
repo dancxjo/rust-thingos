@@ -21,6 +21,7 @@ const WM_BASE_ID: u32 = 5;
 const SEAT_ID: u32 = 6;
 const POINTER_ID: u32 = 7;
 const KEYBOARD_ID: u32 = 8;
+const DMABUF_ID: u32 = 9;
 
 const TOP_SURFACE_ID: u32 = 10;
 const TOP_XDG_SURFACE_ID: u32 = 11;
@@ -30,6 +31,8 @@ const POPUP_SURFACE_ID: u32 = 20;
 const POPUP_XDG_SURFACE_ID: u32 = 21;
 const POSITIONER_ID: u32 = 22;
 const POPUP_ID: u32 = 23;
+
+const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
@@ -55,6 +58,11 @@ struct BufferState {
     stride: u32,
 }
 
+#[derive(Clone, Copy, Default)]
+struct InitialGlobals {
+    dmabuf_name: Option<u32>,
+}
+
 struct PendingSurface {
     serial: Option<u32>,
     width: u32,
@@ -68,12 +76,20 @@ fn main(_arg: usize) -> ! {
     let text_renderer = load_text_renderer();
 
     send_get_registry(fd, REGISTRY_ID);
-    read_initial_globals(fd);
+    let globals = read_initial_globals(fd);
 
     bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
     bind_global(fd, 2, "wl_shm", 1, SHM_ID);
     bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
     bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
+    let dmabuf_id = if let Some(name) = globals.dmabuf_name {
+        bind_global(fd, name, "zwp_linux_dmabuf_v1", 3, DMABUF_ID);
+        info!("wayland_hello: using zwp_linux_dmabuf_v1 buffers");
+        Some(DMABUF_ID)
+    } else {
+        info!("wayland_hello: zwp_linux_dmabuf_v1 unavailable; using wl_shm buffers");
+        None
+    };
     seat_get_pointer(fd, SEAT_ID, POINTER_ID);
     seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
@@ -210,6 +226,7 @@ fn main(_arg: usize) -> ! {
             let buffer = ensure_buffer(
                 fd,
                 SHM_ID,
+                dmabuf_id,
                 &mut top_buffer,
                 TOP_SURFACE_ID + 100,
                 top_pending.width,
@@ -242,6 +259,7 @@ fn main(_arg: usize) -> ! {
             let buffer = ensure_buffer(
                 fd,
                 SHM_ID,
+                dmabuf_id,
                 &mut popup_buffer,
                 POPUP_SURFACE_ID + 100,
                 popup_pending.width,
@@ -284,14 +302,55 @@ fn connect_wayland() -> u32 {
     }
 }
 
-fn read_initial_globals(fd: u32) {
+fn read_initial_globals(fd: u32) -> InitialGlobals {
+    let mut globals = InitialGlobals::default();
     let mut buf = [0u8; 512];
-    let _ = vfs_read(fd, &mut buf);
+    let mut rx: Vec<u8> = Vec::new();
+
+    for _ in 0..32 {
+        match vfs_read(fd, &mut buf) {
+            Ok(n) if n > 0 => {
+                rx.extend_from_slice(&buf[..n]);
+                let mut offset = 0usize;
+                while offset + 8 <= rx.len() {
+                    let (object_id, opcode, size) = decode_header(&rx[offset..]);
+                    if size < 8 || offset + size as usize > rx.len() {
+                        break;
+                    }
+                    let payload = &rx[offset + 8..offset + size as usize];
+                    if object_id == REGISTRY_ID && opcode == 0 && payload.len() >= 12 {
+                        let name = read_u32(payload, 0);
+                        if let Some((iface, consumed)) = read_wayland_string(payload, 4) {
+                            let version_off = 4 + consumed;
+                            if version_off + 4 <= payload.len()
+                                && iface == b"zwp_linux_dmabuf_v1"
+                                && read_u32(payload, version_off) >= 3
+                            {
+                                globals.dmabuf_name = Some(name);
+                            }
+                        }
+                    }
+                    offset += size as usize;
+                }
+                if offset > 0 {
+                    rx.drain(..offset);
+                }
+                if globals.dmabuf_name.is_some() {
+                    break;
+                }
+            }
+            _ => {
+                sleep_ms(5);
+            }
+        }
+    }
+    globals
 }
 
 fn ensure_buffer(
     fd: u32,
     shm_id: u32,
+    dmabuf_id: Option<u32>,
     current: &mut Option<BufferState>,
     base_id: u32,
     width: u32,
@@ -320,8 +379,12 @@ fn ensure_buffer(
 
     let pool_id = base_id;
     let buffer_id = base_id + 1;
-    create_pool(fd, shm_id, pool_id, fd_buf, size);
-    create_buffer(fd, pool_id, buffer_id, width, height, stride);
+    if let Some(dmabuf) = dmabuf_id {
+        create_dmabuf_buffer(fd, dmabuf, pool_id, buffer_id, fd_buf, width, height, stride);
+    } else {
+        create_pool(fd, shm_id, pool_id, fd_buf, size);
+        create_buffer(fd, pool_id, buffer_id, width, height, stride);
+    }
 
     let out = BufferState { pool_id, buffer_id, handle: fd_buf, ptr, width, height, stride };
     *current = Some(out);
@@ -640,6 +703,44 @@ fn create_pool(fd: u32, shm_id: u32, pool_id: u32, bs_raw: u32, size: u32) {
     send_request_with_fds(fd, &buf, &[bs_raw]);
 }
 
+fn create_dmabuf_buffer(
+    fd: u32,
+    dmabuf_id: u32,
+    params_id: u32,
+    buffer_id: u32,
+    dma_fd: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+) {
+    let mut buf = Vec::new();
+    encode_header(dmabuf_id, 1, 12, &mut buf);
+    buf.extend_from_slice(&params_id.to_ne_bytes());
+    send_request(fd, &buf);
+
+    let mut add = Vec::new();
+    encode_header(params_id, 1, 28, &mut add);
+    add.extend_from_slice(&0u32.to_ne_bytes()); // plane_idx
+    add.extend_from_slice(&0u32.to_ne_bytes()); // offset
+    add.extend_from_slice(&stride.to_ne_bytes());
+    add.extend_from_slice(&0u32.to_ne_bytes()); // modifier_hi: linear
+    add.extend_from_slice(&0u32.to_ne_bytes()); // modifier_lo: linear
+    send_request_with_fds(fd, &add, &[dma_fd]);
+
+    let mut create = Vec::new();
+    encode_header(params_id, 3, 28, &mut create);
+    create.extend_from_slice(&buffer_id.to_ne_bytes());
+    create.extend_from_slice(&(width as i32).to_ne_bytes());
+    create.extend_from_slice(&(height as i32).to_ne_bytes());
+    create.extend_from_slice(&DRM_FORMAT_ARGB8888.to_ne_bytes());
+    create.extend_from_slice(&0u32.to_ne_bytes()); // flags
+    send_request(fd, &create);
+
+    let mut destroy = Vec::new();
+    encode_header(params_id, 0, 8, &mut destroy);
+    send_request(fd, &destroy);
+}
+
 fn create_buffer(fd: u32, pool_id: u32, buffer_id: u32, width: u32, height: u32, stride: u32) {
     let mut buf = Vec::new();
     encode_header(pool_id, 0, 32, &mut buf);
@@ -738,6 +839,21 @@ fn read_u32(buf: &[u8], offset: usize) -> u32 {
 
 fn read_i32(buf: &[u8], offset: usize) -> i32 {
     i32::from_ne_bytes(buf[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_wayland_string(buf: &[u8], offset: usize) -> Option<(&[u8], usize)> {
+    if offset + 4 > buf.len() {
+        return None;
+    }
+    let len = read_u32(buf, offset) as usize;
+    let start = offset + 4;
+    let end = start + len;
+    if end > buf.len() || len == 0 {
+        return None;
+    }
+    let padded = (len + 3) & !3;
+    let str_end = if buf[end - 1] == 0 { end - 1 } else { end };
+    Some((&buf[start..str_end], 4 + padded))
 }
 
 fn wl_fixed_to_i32(value: i32) -> i32 {
