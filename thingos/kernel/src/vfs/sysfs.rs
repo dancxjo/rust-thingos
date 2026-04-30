@@ -31,8 +31,13 @@ impl VfsDriver for SysFs {
     fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
         crate::kdebug!("sysfs: lookup path='{}'", path);
         match SysPath::parse(path)? {
-            SysPath::Root => Ok(Arc::new(StaticDirNode::new(300, &["devices", "firmware"]))),
+            SysPath::Root => {
+                Ok(Arc::new(StaticDirNode::new(300, &["devices", "device_snapshot", "firmware"])))
+            }
             SysPath::Devices => Ok(Arc::new(DevicesDirNode)),
+            SysPath::DeviceSnapshot => {
+                Ok(Arc::new(StaticTextNode::new(device_snapshot_text(), 307)))
+            }
             SysPath::DeviceDir(name) => {
                 let (idx, entry) = find_device_by_slot(name)?;
                 crate::kdebug!("sysfs: matched device dir '{}' (idx={})", name, idx);
@@ -105,6 +110,7 @@ impl VfsDriver for SysFs {
 enum SysPath<'a> {
     Root,
     Devices,
+    DeviceSnapshot,
     DeviceDir(&'a str),
     DeviceFile(&'a str, &'a str),
     VirtioDir(&'a str),
@@ -122,6 +128,7 @@ impl<'a> SysPath<'a> {
         let mut parts = path.split('/').filter(|part| !part.is_empty());
         match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("devices"), None, None, None) => Ok(Self::Devices),
+            (Some("device_snapshot"), None, None, None) => Ok(Self::DeviceSnapshot),
             (Some("devices"), Some(dev), None, None) => Ok(Self::DeviceDir(dev)),
             (Some("devices"), Some(dev), Some("virtio"), None) => Ok(Self::VirtioDir(dev)),
             (Some("devices"), Some(dev), Some("virtio"), Some(file)) => {
@@ -281,6 +288,30 @@ fn device_slot_names() -> Vec<alloc::string::String> {
         out.push(slot_name(entry));
     }
     out
+}
+
+fn device_snapshot_text() -> Vec<u8> {
+    use core::fmt::Write;
+
+    let reg = REGISTRY.lock();
+    let mut out = alloc::string::String::new();
+    for index in 0..reg.len() {
+        let Some(entry) = reg.entry_copy(index) else {
+            continue;
+        };
+        let _ = writeln!(
+            out,
+            "{}\t{}\t0x{:04x}\t0x{:04x}\t0x{:02x}{:02x}{:02x}\tpresent",
+            slot_name(entry),
+            entry.kind,
+            entry.vendor_id,
+            entry.device_id,
+            entry.class_code,
+            entry.subclass,
+            entry.prog_if
+        );
+    }
+    out.into_bytes()
 }
 
 fn find_device_by_slot(slot: &str) -> SysResult<(usize, DeviceEntry)> {

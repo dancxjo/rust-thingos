@@ -12,3 +12,10 @@ Feature: PCI Bus and Discovery
     Given the machine is booted
     Then the directory "/dev/pci" should contain device nodes
     And each node should have "vendor_id" and "device_id" attributes
+
+  Scenario: Sysfs publishes an atomic device discovery snapshot
+    Given the machine is booted
+    When I wait for the shell prompt
+    And the shell command "cat /sys/device_snapshot" succeeds
+    Then the latest command output should contain "pci-0000:"
+    And the latest command output should contain "present"

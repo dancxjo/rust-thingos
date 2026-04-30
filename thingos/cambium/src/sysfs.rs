@@ -19,6 +19,10 @@ pub struct SysDevice {
 }
 
 pub fn scan_devices() -> Result<Vec<SysDevice>, Errno> {
+    if let Ok(devices) = read_device_snapshot() {
+        return Ok(devices);
+    }
+
     let slots = read_dir("/sys/devices")?;
     let mut devices = Vec::new();
     for slot in slots {
@@ -43,6 +47,49 @@ pub fn scan_devices() -> Result<Vec<SysDevice>, Errno> {
             class_code: class_triplet,
             present: status == "present",
         });
+    }
+    Ok(devices)
+}
+
+fn read_device_snapshot() -> Result<Vec<SysDevice>, Errno> {
+    let text = read_string_with_limit("/sys/device_snapshot", 4096)?;
+    let mut devices = Vec::new();
+
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(slot) = parts.next() else {
+            continue;
+        };
+        let Some(kind) = parts.next() else {
+            continue;
+        };
+        let Some(vendor) = parts.next() else {
+            continue;
+        };
+        let Some(device) = parts.next() else {
+            continue;
+        };
+        let Some(class) = parts.next() else {
+            continue;
+        };
+        let status = parts.next().unwrap_or("present");
+
+        if !slot.starts_with("pci-") && !slot.starts_with("isa-") {
+            continue;
+        }
+
+        devices.push(SysDevice {
+            slot: slot.into(),
+            kind: kind.into(),
+            vendor_id: parse_hex(vendor).map(|value| value as u16).unwrap_or(0),
+            device_id: parse_hex(device).map(|value| value as u16).unwrap_or(0),
+            class_code: parse_hex(class).map(|value| value as u32).unwrap_or(0),
+            present: status == "present",
+        });
+    }
+
+    if devices.is_empty() {
+        return Err(Errno::ENOENT);
     }
     Ok(devices)
 }
@@ -76,9 +123,20 @@ fn read_dir(path: &str) -> Result<Vec<String>, Errno> {
 }
 
 fn read_string(path: &str) -> Result<String, Errno> {
+    read_string_with_limit(path, 128)
+}
+
+fn read_string_with_limit(path: &str, limit: usize) -> Result<String, Errno> {
     let fd = vfs_open(path, O_RDONLY)?;
-    let mut buf = [0u8; 128];
-    let n = vfs_read(fd, &mut buf)?;
+    let mut buf = [0u8; 4096];
+    let limit = limit.min(buf.len());
+    let n = match vfs_read(fd, &mut buf[..limit]) {
+        Ok(n) => n,
+        Err(err) => {
+            let _ = vfs_close(fd);
+            return Err(err);
+        }
+    };
     let _ = vfs_close(fd);
     let text = core::str::from_utf8(&buf[..n]).map_err(|_| Errno::EINVAL)?;
     Ok(text.trim().into())
