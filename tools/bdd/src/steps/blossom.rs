@@ -44,25 +44,18 @@ async fn wayland_client_connected(world: &mut ThingOsWorld) -> Result<(), StepEr
         return Ok(());
     }
 
-    // Launch wayland_hello from the serial shell so it connects and exercises
-    // the full xdg-shell protocol lifecycle.
-    world.serial_checkpoint = world.get_serial_log().await.len();
-    let data = b"wayland_hello &\n".to_vec();
-    for b in data {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("Serial write failed: {}", e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-    }
-    // Wait for the client to connect.
-    let found = world.wait_for_serial("wayland_hello: connected to /run/wayland-0", 15.0).await;
+    // Sprout autolaunches wayland_hello after bloom publishes /run/wayland-0.
+    // This keeps the BDD coverage on the boot-time pipeline instead of using
+    // the serial shell as an out-of-band launcher.
+    let _ = world.wait_for_serial("SPROUT: Spawned wayland_hello", 60.0).await;
+    let found = world.wait_for_serial("wayland_hello: connected to /run/wayland-0", 30.0).await;
     if !found {
-        let alt = world.wait_for_serial("wayland-server: new client", 5.0).await;
+        let alt = world.wait_for_serial("wayland-server: new client", 10.0).await;
         if !alt {
             capture_failure_diagnostics(world, "wayland client connect").await;
             return Err(StepError(
-                "Wayland client (wayland_hello) failed to connect to /run/wayland-0".to_string(),
+                "Autolaunched Wayland client (wayland_hello) failed to connect to /run/wayland-0"
+                    .to_string(),
             ));
         }
     }

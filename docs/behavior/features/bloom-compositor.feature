@@ -115,6 +115,12 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the pointer debug overlay should update after mouse movement
 
+  @pointer-debug
+  Scenario: pointer movement commits bounded damage
+    Given the machine is booted
+    Then the pointer debug overlay should update after mouse movement
+    And the serial output should contain "bloom: committing bounded damage rects=" within 60s
+
   Scenario: failed wallpaper decode leaves previous wallpaper active
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s

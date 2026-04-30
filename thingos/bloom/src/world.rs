@@ -17,7 +17,7 @@ use crate::protocol::{
     to_vec,
 };
 use crate::render::CompositorVisuals;
-use crate::scene::{CompositionEntry, Scene, SurfaceBuffer};
+use crate::scene::{CommitResult, CompositionEntry, Scene, SurfaceBuffer};
 
 /// All mutable compositor state owned by the main loop.
 pub struct BloomWorld {
@@ -144,9 +144,8 @@ impl BloomWorld {
             }
             ClientRequest::Damage(req) => {
                 if self.scene.damage_pending(req.client_id, req.surface_id, req.rect) {
-                    self.damage.mark_rect(req.rect);
                     send_ack(req.reply_port, 0, 0, 0);
-                    true
+                    false
                 } else {
                     send_ack(req.reply_port, 1, 0, 0);
                     false
@@ -193,15 +192,26 @@ impl BloomWorld {
                     send_ack(req.reply_port, 1, 0, 0);
                     return false;
                 };
-                for id in result.released_buffer_ids {
-                    self.display.release_buffer(id);
+                for id in &result.released_buffer_ids {
+                    self.display.release_buffer(*id);
                 }
                 send_ack(req.reply_port, 0, req.surface_id, result.frame_serial);
-                if result.changed {
-                    self.damage.mark_dirty();
-                }
+                self.apply_commit_damage(&result);
                 result.changed
             }
+        }
+    }
+
+    pub fn apply_commit_damage(&mut self, result: &CommitResult) {
+        if !result.changed {
+            return;
+        }
+        if result.needs_full_repaint || result.damage_rects.is_empty() {
+            self.damage.mark_full(self.primary.width, self.primary.height);
+            return;
+        }
+        for rect in &result.damage_rects {
+            self.damage.mark_rect(*rect);
         }
     }
 

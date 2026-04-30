@@ -6,6 +6,7 @@ use alloc::collections::BTreeMap;
 
 use abi::display::{BufferId, CommitRequest, DisplayInfo, PlaneCommit, PlaneId};
 use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
+use abi::display_protocol::Rect;
 use abi::errors::{Errno, SysResult};
 use abi::pixel::PixelFormat;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
@@ -104,13 +105,29 @@ impl BootFbDriver {
     }
 
     pub fn commit(&mut self, req: &CommitRequest) -> SysResult<()> {
+        let damage = req.damage_rects();
+        if damage.is_empty() {
+            for plane in req.planes() {
+                self.blit_plane(plane)?;
+            }
+            return Ok(());
+        }
+
         for plane in req.planes() {
-            self.blit_plane(plane)?;
+            for rect in damage {
+                if let Some(clip) = rect_intersect(plane.dest_rect, *rect) {
+                    self.blit_plane_clipped(plane, clip)?;
+                }
+            }
         }
         Ok(())
     }
 
     fn blit_plane(&mut self, commit: &PlaneCommit) -> SysResult<()> {
+        self.blit_plane_clipped(commit, commit.dest_rect)
+    }
+
+    fn blit_plane_clipped(&mut self, commit: &PlaneCommit, clip: Rect) -> SysResult<()> {
         let buffer = self.buffers.get(&commit.buffer_id).ok_or(Errno::ENOENT)?;
 
         // Determine bytes-per-pixel from framebuffer metadata.
@@ -127,13 +144,18 @@ impl BootFbDriver {
         let src_w = commit.src_rect.w.min(buffer.width.saturating_sub(commit.src_rect.x)) as usize;
         let src_h = commit.src_rect.h.min(buffer.height.saturating_sub(commit.src_rect.y)) as usize;
 
-        // Clip dest_rect to framebuffer bounds.
-        let dst_x = commit.dest_rect.x.min(self.fb.width) as usize;
-        let dst_y = commit.dest_rect.y.min(self.fb.height) as usize;
-        let dst_w =
-            commit.dest_rect.w.min(self.fb.width.saturating_sub(commit.dest_rect.x)) as usize;
-        let dst_h =
-            commit.dest_rect.h.min(self.fb.height.saturating_sub(commit.dest_rect.y)) as usize;
+        let rel_x = clip.x.saturating_sub(commit.dest_rect.x);
+        let rel_y = clip.y.saturating_sub(commit.dest_rect.y);
+        let src_x = src_x.saturating_add(rel_x as usize).min(buffer.width as usize);
+        let src_y = src_y.saturating_add(rel_y as usize).min(buffer.height as usize);
+        let src_w = src_w.saturating_sub(rel_x as usize);
+        let src_h = src_h.saturating_sub(rel_y as usize);
+
+        // Clip destination to the framebuffer and requested damage bounds.
+        let dst_x = clip.x.min(self.fb.width) as usize;
+        let dst_y = clip.y.min(self.fb.height) as usize;
+        let dst_w = clip.w.min(self.fb.width.saturating_sub(clip.x)) as usize;
+        let dst_h = clip.h.min(self.fb.height.saturating_sub(clip.y)) as usize;
 
         // Copy extent is the intersection of the clipped src and dst dimensions.
         // Scaling is not supported; a 1:1 pixel mapping is performed.
@@ -180,6 +202,14 @@ impl BootFbDriver {
 
         Ok(())
     }
+}
+
+fn rect_intersect(a: Rect, b: Rect) -> Option<Rect> {
+    let x1 = a.x.max(b.x);
+    let y1 = a.y.max(b.y);
+    let x2 = a.x.saturating_add(a.w).min(b.x.saturating_add(b.w));
+    let y2 = a.y.saturating_add(a.h).min(b.y.saturating_add(b.h));
+    if x2 <= x1 || y2 <= y1 { None } else { Some(Rect { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }) }
 }
 
 fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {

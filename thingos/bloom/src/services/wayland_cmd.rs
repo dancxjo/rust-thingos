@@ -182,10 +182,7 @@ impl WaylandCommandService {
             }
         }
 
-        // Mark full damage.
-        if result.changed {
-            world.damage.mark_full(world.primary.width, world.primary.height);
-        }
+        world.apply_commit_damage(&result);
 
         result.changed
     }

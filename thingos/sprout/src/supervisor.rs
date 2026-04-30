@@ -734,13 +734,7 @@ impl Supervisor {
 }
 
 fn path_exists(path: &str) -> bool {
-    match stem::syscall::vfs::vfs_open(path, abi::syscall::vfs_flags::O_RDONLY) {
-        Ok(fd) => {
-            let _ = stem::syscall::vfs::vfs_close(fd);
-            true
-        }
-        Err(_) => false,
-    }
+    stem::syscall::vfs::vfs_lstat(path).is_ok()
 }
 
 fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {

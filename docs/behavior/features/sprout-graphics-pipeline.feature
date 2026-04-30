@@ -18,3 +18,8 @@ Feature: Sprout graphics pipeline orchestration
     Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 180s
     And the serial output should contain "SPROUT: Spawned wayland_hello" within 180s
     And the serial output should contain "wayland_hello: connected to /run/wayland-0" within 180s
+    And the serial output should contain "wayland-server: xdg_surface obj=" within 180s
+    And the serial output should contain "wayland-server: xdg_toplevel obj=" within 180s
+    And the serial output should contain "wayland-server: surface " within 180s
+    And the serial output should contain "wayland-server: frame callback done" within 180s
+    And the serial output should contain "wayland_hello: frame callback done" within 180s

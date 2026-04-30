@@ -236,6 +236,10 @@ impl Scene {
 
         let mut released = Vec::new();
         let mut changed = false;
+        let mut visual_full_damage = false;
+        let mut damage_rects = Vec::new();
+        let old_dest = surface.current.dest_rect;
+        let old_mapped = surface.visible && surface.mapped && surface.current.buffer.is_some();
         let pending_dest = surface.pending.dest_rect.take();
 
         if let Some(pending_buf) = surface.pending.buffer.take() {
@@ -252,15 +256,21 @@ impl Scene {
             surface.current.buffer = Some(pending_buf);
             surface.mapped = true;
             changed = true;
+            visual_full_damage = true;
         }
 
         if let Some(dest) = pending_dest {
+            if old_mapped {
+                damage_rects.push(old_dest);
+            }
             surface.current.dest_rect = dest;
+            damage_rects.push(dest);
             changed = true;
         }
         if let Some(z) = surface.pending.z_order.take() {
             surface.current.z_order = z;
             changed = true;
+            visual_full_damage = true;
         }
         if let Some(region) = surface.pending.input_region.take() {
             surface.current.input_region = Some(region);
@@ -271,8 +281,21 @@ impl Scene {
             changed = true;
         }
         if !surface.pending.damage.is_empty() {
-            surface.current.damage.extend(surface.pending.damage.drain(..));
+            if let Some(buf) = surface.current.buffer {
+                let dest = surface.current.dest_rect;
+                for rect in surface.pending.damage.drain(..) {
+                    if let Some(rect) = translate_surface_damage(rect, buf.width, buf.height, dest)
+                    {
+                        damage_rects.push(rect);
+                    }
+                }
+            } else {
+                surface.pending.damage.clear();
+            }
             changed = true;
+        }
+        if visual_full_damage {
+            damage_rects.push(surface.current.dest_rect);
         }
 
         surface.frame_serial = surface.frame_serial.saturating_add(1);
@@ -280,6 +303,8 @@ impl Scene {
             changed,
             released_buffer_ids: released,
             frame_serial: surface.frame_serial,
+            damage_rects,
+            needs_full_repaint: visual_full_damage && old_mapped,
         })
     }
 
@@ -335,4 +360,35 @@ pub struct CommitResult {
     pub changed: bool,
     pub released_buffer_ids: Vec<u32>,
     pub frame_serial: u64,
+    pub damage_rects: Vec<Rect>,
+    pub needs_full_repaint: bool,
+}
+
+fn translate_surface_damage(local: Rect, src_w: u32, src_h: u32, dest: Rect) -> Option<Rect> {
+    if src_w == 0 || src_h == 0 || dest.w == 0 || dest.h == 0 || local.w == 0 || local.h == 0 {
+        return None;
+    }
+
+    let x0 = local.x.min(src_w);
+    let y0 = local.y.min(src_h);
+    let x1 = local.x.saturating_add(local.w).min(src_w);
+    let y1 = local.y.saturating_add(local.h).min(src_h);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+
+    let dx0 = dest.x.saturating_add(((x0 as u64 * dest.w as u64) / src_w as u64) as u32);
+    let dy0 = dest.y.saturating_add(((y0 as u64 * dest.h as u64) / src_h as u64) as u32);
+    let dx1 = dest
+        .x
+        .saturating_add((((x1 as u64 * dest.w as u64) + src_w as u64 - 1) / src_w as u64) as u32);
+    let dy1 = dest
+        .y
+        .saturating_add((((y1 as u64 * dest.h as u64) + src_h as u64 - 1) / src_h as u64) as u32);
+
+    if dx1 <= dx0 || dy1 <= dy0 {
+        None
+    } else {
+        Some(Rect { x: dx0, y: dy0, w: dx1 - dx0, h: dy1 - dy0 })
+    }
 }

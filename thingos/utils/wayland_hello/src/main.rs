@@ -67,6 +67,8 @@ fn main(_arg: usize) -> ! {
     let mut top_buffer: Option<BufferState> = None;
     let mut popup_buffer: Option<BufferState> = None;
     let mut popup_created = false;
+    let mut next_callback_id = 1000u32;
+    let mut pending_frame_callbacks: Vec<u32> = Vec::new();
 
     loop {
         let mut in_buf = [0u8; 4096];
@@ -125,6 +127,14 @@ fn main(_arg: usize) -> ! {
                     popup_created = false;
                     popup_pending.serial = None;
                 }
+                (_, 0) if pending_frame_callbacks.iter().any(|&id| id == object_id) => {
+                    let callback_data = if payload.len() >= 4 { read_u32(payload, 0) } else { 0 };
+                    info!(
+                        "wayland_hello: frame callback done object={} data={}",
+                        object_id, callback_data
+                    );
+                    pending_frame_callbacks.retain(|&id| id != object_id);
+                }
                 _ => {}
             }
             offset += size as usize;
@@ -143,6 +153,10 @@ fn main(_arg: usize) -> ! {
             render_window(buffer, title);
             ack_configure(fd, TOP_XDG_SURFACE_ID, top_pending.serial.unwrap_or(0));
             attach_buffer(fd, TOP_SURFACE_ID, buffer.buffer_id);
+            damage_surface(fd, TOP_SURFACE_ID, 0, 0, top_pending.width, top_pending.height);
+            let cb_id = alloc_callback_id(&mut next_callback_id);
+            request_frame(fd, TOP_SURFACE_ID, cb_id);
+            pending_frame_callbacks.push(cb_id);
             commit_surface(fd, TOP_SURFACE_ID);
             top_pending.dirty = false;
 
@@ -171,6 +185,10 @@ fn main(_arg: usize) -> ! {
             render_popup(buffer, "POPUP");
             ack_configure(fd, POPUP_XDG_SURFACE_ID, popup_pending.serial.unwrap_or(0));
             attach_buffer(fd, POPUP_SURFACE_ID, buffer.buffer_id);
+            damage_surface(fd, POPUP_SURFACE_ID, 0, 0, popup_pending.width, popup_pending.height);
+            let cb_id = alloc_callback_id(&mut next_callback_id);
+            request_frame(fd, POPUP_SURFACE_ID, cb_id);
+            pending_frame_callbacks.push(cb_id);
             commit_surface(fd, POPUP_SURFACE_ID);
             popup_pending.dirty = false;
         }
@@ -528,10 +546,33 @@ fn attach_buffer(fd: u32, surface_id: u32, buffer_id: u32) {
     send_request(fd, &buf);
 }
 
+fn damage_surface(fd: u32, surface_id: u32, x: i32, y: i32, width: u32, height: u32) {
+    let mut buf = Vec::new();
+    encode_header(surface_id, 2, 24, &mut buf);
+    buf.extend_from_slice(&x.to_ne_bytes());
+    buf.extend_from_slice(&y.to_ne_bytes());
+    buf.extend_from_slice(&(width as i32).to_ne_bytes());
+    buf.extend_from_slice(&(height as i32).to_ne_bytes());
+    send_request(fd, &buf);
+}
+
+fn request_frame(fd: u32, surface_id: u32, callback_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(surface_id, 3, 12, &mut buf);
+    buf.extend_from_slice(&callback_id.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
 fn commit_surface(fd: u32, surface_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 6, 8, &mut buf);
     send_request(fd, &buf);
+}
+
+fn alloc_callback_id(next_callback_id: &mut u32) -> u32 {
+    let id = *next_callback_id;
+    *next_callback_id = next_callback_id.saturating_add(1);
+    id
 }
 
 fn send_string_request(fd: u32, object_id: u32, opcode: u16, value: &str) {

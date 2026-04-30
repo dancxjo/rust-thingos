@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
@@ -13,11 +14,14 @@ use crate::render::{CursorPlane, OverlayPlane};
 use crate::scene::CompositionEntry;
 
 const MAX_COMMIT_PLANES: usize = 16;
+const MAX_DAMAGE_RECTS: usize = 32;
+static BOUNDED_DAMAGE_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C)]
 struct CommitPacket {
     req: CommitRequest,
     planes: [PlaneCommit; MAX_COMMIT_PLANES],
+    damage: [Rect; MAX_DAMAGE_RECTS],
 }
 
 const fn empty_plane_commit() -> PlaneCommit {
@@ -122,7 +126,7 @@ impl DisplayBackend {
     pub fn present(
         &self,
         composition_list: &[CompositionEntry],
-        _damage: &[Rect],
+        damage: &[Rect],
         fallback_buffer: Option<u32>,
         pointer_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
@@ -218,13 +222,33 @@ impl DisplayBackend {
 
         planes[..plane_count].sort_unstable_by_key(|plane| plane.z_order);
 
-        PresentResult { success: self.commit_display_planes(&planes[..plane_count]) }
+        PresentResult { success: self.commit_display_planes(&planes[..plane_count], damage) }
     }
 
-    pub fn commit_display_planes(&self, planes: &[PlaneCommit]) -> bool {
+    pub fn commit_display_planes(&self, planes: &[PlaneCommit], damage: &[Rect]) -> bool {
         if planes.len() > MAX_COMMIT_PLANES {
             stem::warn!("bloom: commit has too many planes ({})", planes.len());
             return false;
+        }
+
+        let mut damage_count = damage.len().min(MAX_DAMAGE_RECTS);
+        let mut damage_rects = [Rect { x: 0, y: 0, w: 0, h: 0 }; MAX_DAMAGE_RECTS];
+        if damage_count == 0 || damage.len() > MAX_DAMAGE_RECTS {
+            let (w, h) = self.output_size();
+            damage_rects[0] = Rect { x: 0, y: 0, w, h };
+            damage_count = 1;
+        } else {
+            damage_rects[..damage_count].copy_from_slice(&damage[..damage_count]);
+        }
+        if damage_count > 0
+            && !is_full_output_damage(
+                damage_rects[0],
+                self.info.preferred_mode.width,
+                self.info.preferred_mode.height,
+            )
+            && BOUNDED_DAMAGE_LOGS.fetch_add(1, Ordering::Relaxed) < 4
+        {
+            stem::info!("bloom: committing bounded damage rects={}", damage_count);
         }
 
         let mut packet = CommitPacket {
@@ -232,13 +256,18 @@ impl DisplayBackend {
                 commit_count: planes.len() as u32,
                 flags: CommitFlags::VSYNC,
                 commits_ptr: 0,
+                damage_count: damage_count as u32,
+                _reserved: 0,
+                damage_ptr: 0,
             },
             planes: [empty_plane_commit(); MAX_COMMIT_PLANES],
+            damage: damage_rects,
         };
         packet.planes[..planes.len()].copy_from_slice(planes);
 
         let in_len = core::mem::size_of::<CommitRequest>()
             + planes.len() * core::mem::size_of::<PlaneCommit>();
+        let in_len = in_len + damage_count * core::mem::size_of::<Rect>();
         let call = abi::device::DeviceCall {
             kind: abi::device::DeviceKind::Display,
             op: DISPLAY_OP_COMMIT,
@@ -256,6 +285,10 @@ impl DisplayBackend {
             }
         }
     }
+}
+
+fn is_full_output_damage(rect: Rect, width: u32, height: u32) -> bool {
+    rect.x == 0 && rect.y == 0 && rect.w >= width && rect.h >= height
 }
 
 fn get_display_info(fd: u32) -> Option<DisplayInfo> {

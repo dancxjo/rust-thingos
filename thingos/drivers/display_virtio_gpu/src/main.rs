@@ -123,6 +123,15 @@ fn rect_clamp_to_bounds(r: Rect, w: u32, h: u32) -> Rect {
     Rect { x, y, w: r.w.min(max_w), h: r.h.min(max_h) }
 }
 
+#[inline]
+fn rect_intersect(a: Rect, b: Rect) -> Option<Rect> {
+    let x1 = a.x.max(b.x);
+    let y1 = a.y.max(b.y);
+    let x2 = a.x.saturating_add(a.w).min(b.x.saturating_add(b.w));
+    let y2 = a.y.saturating_add(a.h).min(b.y.saturating_add(b.h));
+    if x2 <= x1 || y2 <= y1 { None } else { Some(Rect { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }) }
+}
+
 // ============================================================================
 // Instrumentation counters for verification
 // ============================================================================
@@ -444,11 +453,61 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     planes.push(plane);
                 }
             }
+            let rect_size = core::mem::size_of::<abi::display_protocol::Rect>();
+            let damage_count = req.damage_count as usize;
+            let damage_offset = needed;
+            let damage_needed =
+                damage_offset.saturating_add(damage_count.saturating_mul(rect_size));
+            if damage_count > 0 && call_payload.len() < damage_needed {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let mut damage_rects = alloc::vec::Vec::with_capacity(damage_count.max(1));
+            if damage_count > 0 {
+                let raw_damage = &call_payload[damage_offset..damage_needed];
+                for i in 0..damage_count {
+                    let off = i * rect_size;
+                    let rect: abi::display_protocol::Rect = unsafe {
+                        core::ptr::read_unaligned(
+                            raw_damage[off..off + rect_size].as_ptr() as *const _
+                        )
+                    };
+                    let rect = rect_clamp_to_bounds(
+                        Rect { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
+                        driver.disp_width,
+                        driver.disp_height,
+                    );
+                    if !rect_is_empty(rect) {
+                        damage_rects.push(rect);
+                    }
+                }
+            }
+            if damage_rects.is_empty() {
+                damage_rects.push(Rect { x: 0, y: 0, w: driver.disp_width, h: driver.disp_height });
+            }
+            if driver.last_presented_idx.is_none() {
+                damage_rects.clear();
+                damage_rects.push(Rect { x: 0, y: 0, w: driver.disp_width, h: driver.disp_height });
+            }
             planes.sort_unstable_by_key(|plane| plane.z_order);
 
             if !planes.is_empty() {
-                let idx = driver.next_buffer_idx;
-                driver.next_buffer_idx = (driver.next_buffer_idx + 1) % driver.frame_pool.len();
+                let full_damage = damage_rects.len() == 1
+                    && damage_rects[0].x == 0
+                    && damage_rects[0].y == 0
+                    && damage_rects[0].w >= driver.disp_width
+                    && damage_rects[0].h >= driver.disp_height;
+                let idx = if full_damage {
+                    let idx = driver.next_buffer_idx;
+                    driver.next_buffer_idx = (driver.next_buffer_idx + 1) % driver.frame_pool.len();
+                    idx
+                } else {
+                    driver.last_presented_idx.unwrap_or_else(|| {
+                        let idx = driver.next_buffer_idx;
+                        driver.next_buffer_idx =
+                            (driver.next_buffer_idx + 1) % driver.frame_pool.len();
+                        idx
+                    })
+                };
 
                 let bpp = if driver.disp_width > 0 {
                     (driver.disp_stride / driver.disp_width).max(1) as usize
@@ -490,90 +549,110 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     if copy_w == 0 || copy_h == 0 {
                         continue;
                     }
-                    let target_ptr = driver.frame_pool[idx].ptr;
-                    let should_blend = plane.alpha < 255
-                        || plane.z_order > 0
-                        || src.format == PixelFormat::Bgra8888;
-                    if should_blend && bpp == 4 {
-                        for row in 0..copy_h {
-                            for col in 0..copy_w {
-                                unsafe {
-                                    let src_ptr = src.ptr.add(
-                                        (src_y + row).saturating_mul(src.stride as usize)
-                                            + (src_x + col).saturating_mul(bpp),
-                                    );
-                                    let dst_ptr = target_ptr.add(
-                                        (dst_y + row).saturating_mul(driver.disp_stride as usize)
-                                            + (dst_x + col).saturating_mul(bpp),
-                                    );
-                                    let src_px = core::ptr::read_unaligned(src_ptr as *const u32);
-                                    let dst_px = core::ptr::read_unaligned(dst_ptr as *const u32);
-                                    let out_px = alpha_over_argb(src_px, dst_px, plane.alpha);
-                                    core::ptr::write_unaligned(
-                                        dst_ptr as *mut u32,
-                                        out_px,
-                                    );
-                                    if !driver.cursor_commit_logged
-                                        && cursor_copy_sample.is_none()
-                                        && plane.z_order == i32::MAX
-                                        && ((src_px >> 24) & 0xff) != 0
-                                    {
-                                        cursor_copy_sample = Some((
-                                            plane.buffer_id.0,
-                                            src_px,
-                                            dst_px,
-                                            out_px,
-                                            (dst_x + col) as u32,
-                                            (dst_y + row) as u32,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        let row_bytes = copy_w.saturating_mul(bpp);
-                        for row in 0..copy_h {
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    src.ptr.add(
-                                        (src_y + row).saturating_mul(src.stride as usize)
-                                            + src_x.saturating_mul(bpp),
-                                    ),
-                                    target_ptr.add(
-                                        (dst_y + row).saturating_mul(driver.disp_stride as usize)
-                                            + dst_x.saturating_mul(bpp),
-                                    ),
-                                    row_bytes,
-                                );
-                            }
-                        }
-                    }
-
-                    if first_copy_sample.is_none() {
-                        let src_off =
-                            src_y.saturating_mul(src.stride as usize) + src_x.saturating_mul(bpp);
-                        let dst_off = dst_y.saturating_mul(driver.disp_stride as usize)
-                            + dst_x.saturating_mul(bpp);
-                        let src_px = unsafe {
-                            core::ptr::read_unaligned(src.ptr.add(src_off) as *const u32)
-                        };
-                        let dst_px = unsafe {
-                            core::ptr::read_unaligned(target_ptr.add(dst_off) as *const u32)
-                        };
-                        first_copy_sample =
-                            Some((plane.buffer_id.0, src_px, dst_px, copy_w as u32, copy_h as u32));
-                    }
-
-                    let rect = Rect {
+                    let plane_rect = Rect {
                         x: dst_x as u32,
                         y: dst_y as u32,
                         w: copy_w as u32,
                         h: copy_h as u32,
                     };
-                    damage = Some(match damage {
-                        Some(old) => rect_union(old, rect),
-                        None => rect,
-                    });
+                    let target_ptr = driver.frame_pool[idx].ptr;
+                    let should_blend = plane.alpha < 255
+                        || plane.z_order > 0
+                        || src.format == PixelFormat::Bgra8888;
+                    for dirty in &damage_rects {
+                        let Some(rect) = rect_intersect(plane_rect, *dirty) else {
+                            continue;
+                        };
+                        let rel_x = rect.x.saturating_sub(plane_rect.x) as usize;
+                        let rel_y = rect.y.saturating_sub(plane_rect.y) as usize;
+                        let clip_src_x = src_x.saturating_add(rel_x);
+                        let clip_src_y = src_y.saturating_add(rel_y);
+                        let clip_dst_x = rect.x as usize;
+                        let clip_dst_y = rect.y as usize;
+                        let clip_w = rect.w as usize;
+                        let clip_h = rect.h as usize;
+
+                        if should_blend && bpp == 4 {
+                            for row in 0..clip_h {
+                                for col in 0..clip_w {
+                                    unsafe {
+                                        let src_ptr = src.ptr.add(
+                                            (clip_src_y + row).saturating_mul(src.stride as usize)
+                                                + (clip_src_x + col).saturating_mul(bpp),
+                                        );
+                                        let dst_ptr = target_ptr.add(
+                                            (clip_dst_y + row)
+                                                .saturating_mul(driver.disp_stride as usize)
+                                                + (clip_dst_x + col).saturating_mul(bpp),
+                                        );
+                                        let src_px =
+                                            core::ptr::read_unaligned(src_ptr as *const u32);
+                                        let dst_px =
+                                            core::ptr::read_unaligned(dst_ptr as *const u32);
+                                        let out_px = alpha_over_argb(src_px, dst_px, plane.alpha);
+                                        core::ptr::write_unaligned(dst_ptr as *mut u32, out_px);
+                                        if !driver.cursor_commit_logged
+                                            && cursor_copy_sample.is_none()
+                                            && plane.z_order == i32::MAX
+                                            && ((src_px >> 24) & 0xff) != 0
+                                        {
+                                            cursor_copy_sample = Some((
+                                                plane.buffer_id.0,
+                                                src_px,
+                                                dst_px,
+                                                out_px,
+                                                (clip_dst_x + col) as u32,
+                                                (clip_dst_y + row) as u32,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            let row_bytes = clip_w.saturating_mul(bpp);
+                            for row in 0..clip_h {
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(
+                                        src.ptr.add(
+                                            (clip_src_y + row).saturating_mul(src.stride as usize)
+                                                + clip_src_x.saturating_mul(bpp),
+                                        ),
+                                        target_ptr.add(
+                                            (clip_dst_y + row)
+                                                .saturating_mul(driver.disp_stride as usize)
+                                                + clip_dst_x.saturating_mul(bpp),
+                                        ),
+                                        row_bytes,
+                                    );
+                                }
+                            }
+                        }
+
+                        if first_copy_sample.is_none() {
+                            let src_off = clip_src_y.saturating_mul(src.stride as usize)
+                                + clip_src_x.saturating_mul(bpp);
+                            let dst_off = clip_dst_y.saturating_mul(driver.disp_stride as usize)
+                                + clip_dst_x.saturating_mul(bpp);
+                            let src_px = unsafe {
+                                core::ptr::read_unaligned(src.ptr.add(src_off) as *const u32)
+                            };
+                            let dst_px = unsafe {
+                                core::ptr::read_unaligned(target_ptr.add(dst_off) as *const u32)
+                            };
+                            first_copy_sample = Some((
+                                plane.buffer_id.0,
+                                src_px,
+                                dst_px,
+                                clip_w as u32,
+                                clip_h as u32,
+                            ));
+                        }
+
+                        damage = Some(match damage {
+                            Some(old) => rect_union(old, rect),
+                            None => rect,
+                        });
+                    }
                 }
 
                 // Transfer blitted pixels to the GPU and flush to the display.

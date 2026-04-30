@@ -72,6 +72,14 @@ pub struct CommitRequest {
     pub flags: CommitFlags,
     /// Pointer to an array of PlaneCommit structures.
     pub commits_ptr: u64,
+    /// Number of damaged output rectangles in the following array.
+    ///
+    /// A value of zero means the damage is unknown and the driver should treat
+    /// the commit as full-output damage.
+    pub damage_count: u32,
+    pub _reserved: u32,
+    /// Pointer to an array of output-space Rect structures.
+    pub damage_ptr: u64,
 }
 
 bitflags::bitflags! {
@@ -126,6 +134,19 @@ impl CommitRequest {
                 core::slice::from_raw_parts(
                     self.commits_ptr as *const PlaneCommit,
                     self.commit_count as usize,
+                )
+            }
+        }
+    }
+
+    pub fn damage_rects(&self) -> &[Rect] {
+        if self.damage_count == 0 || self.damage_ptr == 0 {
+            &[]
+        } else {
+            unsafe {
+                core::slice::from_raw_parts(
+                    self.damage_ptr as *const Rect,
+                    self.damage_count as usize,
                 )
             }
         }

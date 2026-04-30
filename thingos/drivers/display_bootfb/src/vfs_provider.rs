@@ -162,9 +162,11 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
 
             // For provider RPC calls, plane commits are serialized inline after
             // CommitRequest because raw pointers are not valid cross-process.
+            // Damage rects follow the plane array.
             let mut inline_planes = Vec::new();
+            let mut inline_damage = Vec::new();
+            let plane_size = core::mem::size_of::<PlaneCommit>();
             if req.commit_count > 0 {
-                let plane_size = core::mem::size_of::<PlaneCommit>();
                 let count = req.commit_count as usize;
                 let needed = header_size.saturating_add(count.saturating_mul(plane_size));
                 if call_payload.len() >= needed {
@@ -181,13 +183,36 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
                     }
                 }
             }
+            let damage_offset =
+                header_size.saturating_add((req.commit_count as usize).saturating_mul(plane_size));
+            if req.damage_count > 0 && call_payload.len() >= damage_offset {
+                let rect_size = core::mem::size_of::<abi::display_protocol::Rect>();
+                let count = req.damage_count as usize;
+                let needed = damage_offset.saturating_add(count.saturating_mul(rect_size));
+                if call_payload.len() >= needed {
+                    let base = &call_payload[damage_offset..needed];
+                    inline_damage.reserve(count);
+                    for i in 0..count {
+                        let off = i * rect_size;
+                        let rect: abi::display_protocol::Rect = unsafe {
+                            core::ptr::read_unaligned(
+                                base[off..off + rect_size].as_ptr() as *const _
+                            )
+                        };
+                        inline_damage.push(rect);
+                    }
+                }
+            }
 
             let req_owned;
-            let req_ref = if !inline_planes.is_empty() {
+            let req_ref = if !inline_planes.is_empty() || !inline_damage.is_empty() {
                 req_owned = CommitRequest {
                     commit_count: inline_planes.len() as u32,
                     flags: req.flags,
                     commits_ptr: inline_planes.as_ptr() as u64,
+                    damage_count: inline_damage.len() as u32,
+                    _reserved: 0,
+                    damage_ptr: inline_damage.as_ptr() as u64,
                 };
                 &req_owned
             } else {
