@@ -14,7 +14,7 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
-use stem::syscall::message::msg_send;
+use stem::syscall::port::port_send_all;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe, irq_wait};
 use stem::{debug, error, info, warn};
@@ -272,8 +272,8 @@ fn init_mouse() {
     debug!("ps2_mouse: init done");
 }
 
-/// Path where bristle publishes its inbox-owning PID.
-const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
+/// Path where bristle publishes its mouse input port write handle.
+const BRISTLE_MOUSE_IN_PATH: &str = "/run/bristle/mouse_in";
 
 fn read_u32_file(path: &str) -> Option<u32> {
     let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
@@ -289,26 +289,32 @@ fn read_u32_file(path: &str) -> Option<u32> {
 
 #[stem::main]
 fn main(_raw_arg: usize) -> ! {
-    stem::debug!("ps2_mouse: online — waiting for bristle pid");
+    stem::debug!("ps2_mouse: online — waiting for bristle mouse_in port");
 
-    if let Err(e) = stem::fs::wait_until_exists(BRISTLE_PID_PATH) {
-        stem::error!("ps2_mouse: failed waiting for {}: {:?}", BRISTLE_PID_PATH, e);
+    if let Err(e) = stem::fs::wait_until_exists(BRISTLE_MOUSE_IN_PATH) {
+        stem::error!("ps2_mouse: failed waiting for {}: {:?}", BRISTLE_MOUSE_IN_PATH, e);
         loop {
             stem::time::sleep_ms(1000);
         }
     }
 
-    let bristle_pid = match read_u32_file(BRISTLE_PID_PATH) {
-        Some(pid) if pid != 0 => pid,
+    let mouse_port = match read_u32_file(BRISTLE_MOUSE_IN_PATH) {
+        Some(h) if h != 0 => h,
         _ => {
-            stem::error!("ps2_mouse: failed to read bristle pid from {}", BRISTLE_PID_PATH);
+            stem::error!(
+                "ps2_mouse: failed to read mouse port handle from {}",
+                BRISTLE_MOUSE_IN_PATH
+            );
             loop {
                 stem::time::sleep_ms(1000);
             }
         }
     };
 
-    stem::info!("ps2_mouse: bristle pid={}", bristle_pid);
+    stem::info!(
+        "ps2_mouse: routing events via /run/bristle/mouse_in (port handle={})",
+        mouse_port
+    );
 
     init_mouse();
 
@@ -316,11 +322,11 @@ fn main(_raw_arg: usize) -> ! {
     match irq_subscribe(MOUSE_VECTOR) {
         Ok(()) => {
             debug!("ps2_mouse: subscribed to IRQ12 (vector 0x{:02x})", MOUSE_VECTOR);
-            interrupt_loop(bristle_pid);
+            interrupt_loop(mouse_port);
         }
         Err(e) => {
             debug!("ps2_mouse: IRQ subscribe failed ({:?}), falling back to polling", e);
-            polling_loop(bristle_pid);
+            polling_loop(mouse_port);
         }
     }
 }
@@ -329,15 +335,16 @@ mod mouse;
 
 use abi::hid::{
     BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, BristleEventHeader, EventType,
-    KIND_BRISTLE_DEVICE_EVENT, PointerButtonPayload, PointerMovePayload,
+    PointerButtonPayload, PointerMovePayload,
 };
 use mouse::{MouseState, PointerEvent};
 
 fn send_mouse_events(
-    bristle_pid: u32,
+    mouse_port: u32,
     state: &mut MouseState,
     packet: &[u8; 3],
     drop_counter: &mut u32,
+    send_counter: &mut u64,
 ) {
     let (events, count) = state.process_packet(packet);
     for i in 0..count {
@@ -387,20 +394,27 @@ fn send_mouse_events(
                     len = 22;
                 }
             }
-            let send_ok = len > 0
-                && msg_send(
-                    bristle_pid,
-                    abi::KindId(KIND_BRISTLE_DEVICE_EVENT),
-                    &buf[..len],
-                )
-                .is_ok();
-            if !send_ok && len > 0 {
-                *drop_counter = drop_counter.wrapping_add(1);
-                if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-                    debug!(
-                        "ps2_mouse: dropped {} mouse events (send pid={} failed)",
-                        *drop_counter, bristle_pid
-                    );
+            if len > 0 {
+                match port_send_all(mouse_port, &buf[..len]) {
+                    Ok(_) => {
+                        *send_counter = send_counter.wrapping_add(1);
+                        // Periodic log (every 256 events) to confirm port usage.
+                        if *send_counter % 256 == 0 {
+                            debug!(
+                                "ps2_mouse: {} events sent via /run/bristle/mouse_in (port={})",
+                                *send_counter, mouse_port
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        *drop_counter = drop_counter.wrapping_add(1);
+                        if *drop_counter <= 4 || *drop_counter % 100 == 0 {
+                            debug!(
+                                "ps2_mouse: dropped {} mouse events (port_send port={} failed)",
+                                *drop_counter, mouse_port
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -411,11 +425,12 @@ fn send_mouse_events(
 ///
 /// Returns the number of raw bytes consumed from the PS/2 FIFO.
 fn drain_mouse_data(
-    bristle_pid: u32,
+    mouse_port: u32,
     state: &mut MouseState,
     packet: &mut [u8; 3],
     idx: &mut usize,
     drop_counter: &mut u32,
+    send_counter: &mut u64,
 ) -> usize {
     let mut bytes_read = 0usize;
     for _ in 0..16 {
@@ -438,7 +453,7 @@ fn drain_mouse_data(
             *idx += 1;
 
             if *idx == 3 {
-                send_mouse_events(bristle_pid, state, packet, drop_counter);
+                send_mouse_events(mouse_port, state, packet, drop_counter, send_counter);
                 *idx = 0;
             }
         } else {
@@ -457,7 +472,7 @@ fn drain_mouse_data(
 /// sleep per iteration) and removes pointer jitter during normal operation.
 /// If `irq_wait` returns an error the driver falls back to the bounded polling
 /// loop so the cursor never becomes completely unresponsive.
-fn interrupt_loop(bristle_pid: u32) -> ! {
+fn interrupt_loop(mouse_port: u32) -> ! {
     debug!(
         "ps2_mouse: using interrupt-driven loop (IRQ vector 0x{:02x})",
         MOUSE_VECTOR
@@ -466,6 +481,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     let mut idx = 0usize;
     let mut mouse_state = MouseState::new();
     let mut drop_counter = 0u32;
+    let mut send_counter = 0u64;
     let mut irq_wake_count = 0u64;
 
     loop {
@@ -473,17 +489,18 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
             Ok(pending) => {
                 irq_wake_count += 1;
                 let drained = drain_mouse_data(
-                    bristle_pid,
+                    mouse_port,
                     &mut mouse_state,
                     &mut packet,
                     &mut idx,
                     &mut drop_counter,
+                    &mut send_counter,
                 );
                 // Periodic diagnostic log (every 256 wakes) to confirm IRQ delivery.
                 if irq_wake_count % 256 == 0 {
                     debug!(
-                        "ps2_mouse: irq_wakes={} pending={} last_drain_bytes={}",
-                        irq_wake_count, pending, drained
+                        "ps2_mouse: irq_wakes={} pending={} last_drain_bytes={} port_sends={}",
+                        irq_wake_count, pending, drained, send_counter
                     );
                 }
             }
@@ -498,11 +515,11 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
             }
         }
     }
-    polling_loop(bristle_pid)
+    polling_loop(mouse_port)
 }
 
 /// Fallback polling loop – used only when IRQ subscription or wait fails.
-fn polling_loop(bristle_pid: u32) -> ! {
+fn polling_loop(mouse_port: u32) -> ! {
     debug!(
         "ps2_mouse: using fallback polling loop ({}ms interval)",
         POLLING_INTERVAL_MS
@@ -512,6 +529,7 @@ fn polling_loop(bristle_pid: u32) -> ! {
     let mut idx = 0usize;
     let mut mouse_state = MouseState::new();
     let mut drop_counter = 0u32;
+    let mut send_counter = 0u64;
 
     loop {
         let status = ioport_read(PS2_STATUS, 1);
@@ -519,11 +537,12 @@ fn polling_loop(bristle_pid: u32) -> ! {
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA != 0 {
                 drain_mouse_data(
-                    bristle_pid,
+                    mouse_port,
                     &mut mouse_state,
                     &mut packet,
                     &mut idx,
                     &mut drop_counter,
+                    &mut send_counter,
                 );
             } else {
                 // Leave keyboard bytes queued for ps2_kbd.
