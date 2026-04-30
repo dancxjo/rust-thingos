@@ -943,8 +943,28 @@ pub struct SurfaceToggle {
     pub active: bool,
 }
 
-pub fn surface_visual_rect(rect: Rect, _chrome: SurfaceChrome) -> Rect {
-    rect
+pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
+    if chrome.is_empty() {
+        return rect;
+    }
+    // The shadow extends down-right.  The widest active layer uses
+    // offset (7, 9) with expand=10, so the shadow can reach:
+    //   left:   x + 7 - 10 = x - 3   (3 px left of window)
+    //   top:    y + 9 - 10 = y - 1   (1 px above window)
+    //   right:  x + w + 7 + 10 = x + w + 17
+    //   bottom: y + h + 9 + 10 = y + h + 19
+    // We add a generous margin to avoid clipping artifacts.
+    const SHADOW_PAD_LEFT: u32 = 4;
+    const SHADOW_PAD_TOP: u32 = 2;
+    const SHADOW_PAD_RIGHT: u32 = 20;
+    const SHADOW_PAD_BOTTOM: u32 = 22;
+
+    Rect {
+        x: rect.x.saturating_sub(SHADOW_PAD_LEFT),
+        y: rect.y.saturating_sub(SHADOW_PAD_TOP),
+        w: rect.w.saturating_add(SHADOW_PAD_LEFT).saturating_add(SHADOW_PAD_RIGHT),
+        h: rect.h.saturating_add(SHADOW_PAD_TOP).saturating_add(SHADOW_PAD_BOTTOM),
+    }
 }
 
 fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {

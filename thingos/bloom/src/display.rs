@@ -16,7 +16,7 @@ use crate::scene::CompositionEntry;
 const MAX_COMMIT_PLANES: usize = 16;
 const MAX_DAMAGE_RECTS: usize = 32;
 const BACKGROUND_Z_ORDER: i32 = i32::MIN;
-const WINDOW_CLIP_RADIUS: u8 = 7;
+
 const MAX_COMMIT_PAYLOAD_BYTES: usize = core::mem::size_of::<CommitRequest>()
     + MAX_COMMIT_PLANES * core::mem::size_of::<PlaneCommit>()
     + MAX_DAMAGE_RECTS * core::mem::size_of::<Rect>();
@@ -154,6 +154,7 @@ impl DisplayBackend {
         pointer_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
         flags: CommitFlags,
+        corner_radius: u8,
     ) -> PresentResult {
         let mut planes = [empty_plane_commit(); MAX_COMMIT_PLANES];
         let mut plane_count = 0usize;
@@ -189,7 +190,7 @@ impl DisplayBackend {
                 _reserved: [0; 7],
             };
             if !entry.is_fullscreen && !entry.chrome.is_empty() {
-                plane = plane.with_rounded_clip(WINDOW_CLIP_RADIUS);
+                plane = plane.with_rounded_clip(corner_radius);
             }
             planes[plane_count] = plane;
             plane_count += 1;

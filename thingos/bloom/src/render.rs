@@ -28,8 +28,10 @@ const RESIZE_SE_CURSOR_PATH: &str = "/share/cursors/future/bottom_right_corner.s
 const RESIZE_SW_CURSOR_PATH: &str = "/share/cursors/future/bottom_left_corner.svg";
 const WINDOW_ICON_MINIMIZE_PATH: &str = "/share/icons/lucide/minus.svg";
 const WINDOW_ICON_SHADE_PATH: &str = "/share/icons/lucide/chevron-up.svg";
+const WINDOW_ICON_UNSHADE_PATH: &str = "/share/icons/lucide/chevron-down.svg";
 const WINDOW_ICON_MAXIMIZE_PATH: &str = "/share/icons/lucide/square.svg";
 const WINDOW_ICON_FULLSCREEN_PATH: &str = "/share/icons/lucide/fullscreen.svg";
+const WINDOW_ICON_RESTORE_PATH: &str = "/share/icons/lucide/minimize-2.svg";
 const WINDOW_ICON_CLOSE_PATH: &str = "/share/icons/lucide/x.svg";
 const DEFAULT_FONT_PATH: &str = "/share/fonts/Inter-Regular.ttf";
 const SYMBOL_FONT_PATH: &str = "/share/fonts/NotoSansSymbol2-Regular.ttf";
@@ -146,6 +148,11 @@ impl CompositorVisuals {
     pub fn set_theme_by_name(&mut self, name: &str) -> &'static str {
         self.theme = theme_by_name(name);
         self.theme.name
+    }
+
+    /// Returns the current theme's window corner radius for display clipping.
+    pub fn corner_radius(&self) -> u8 {
+        self.theme.corner_radius.min(255) as u8
     }
 
     /// Install a solid-colour background that can be presented immediately.
@@ -749,8 +756,9 @@ fn draw_chrome_overlay(
         let icon_color =
             if entry.active { theme.control_icon } else { theme.control_icon_inactive };
         let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height).min(h);
+        let cr = theme.corner_radius;
 
-        draw_window_shadow(dst, stride, height, x, y, w, h, entry.active);
+        draw_window_shadow(dst, stride, height, x, y, w, h, entry.active, cr);
         if titlebar_height > 0 {
             fill_top_rounded_vertical_gradient(
                 dst,
@@ -763,9 +771,9 @@ fn draw_chrome_overlay(
                 state.title_top,
                 state.title_mid,
                 state.title_bottom,
-                7,
+                cr,
             );
-            fill_rect(dst, stride, x + 7, y + 1, w.saturating_sub(14), 1, 0x73FFFFFF);
+            fill_rect(dst, stride, x + cr as i32, y + 1, w.saturating_sub(cr * 2), 1, 0x73FFFFFF);
             draw_chrome_buttons(
                 dst,
                 stride,
@@ -773,6 +781,8 @@ fn draw_chrome_overlay(
                 rect,
                 chrome,
                 entry.active,
+                entry.is_shaded,
+                entry.is_fullscreen,
                 pistil_draw_svg_icon,
                 pistil_draw_symbol_text.or(pistil_draw_text),
                 icon_color,
@@ -806,7 +816,7 @@ fn draw_chrome_overlay(
                 );
             }
         } else {
-            stroke_rounded_rect(dst, stride, height, x, y, w, h, 7, state.border, 1);
+            stroke_rounded_rect(dst, stride, height, x, y, w, h, cr, state.border, 1);
         }
         draw_frame_outline(dst, stride, height, rect, frame, theme, entry.active);
         if titlebar_height > 0 && titlebar_height < h.saturating_sub(frame) {
@@ -824,7 +834,7 @@ fn draw_chrome_overlay(
                 y + 1,
                 w.saturating_sub(2),
                 h.saturating_sub(2),
-                6,
+                cr.saturating_sub(1),
                 theme.focus_border,
                 1,
             );
@@ -848,52 +858,67 @@ fn draw_window_shadow(
     w: u32,
     h: u32,
     active: bool,
+    corner_radius: u32,
 ) {
     if w == 0 || h == 0 {
         return;
     }
-    let (soft, mid, core) = if active {
-        (0x142B1B03, 0x2B2B1B03, 0x4D2B1B03)
+
+    // Shadow layers fall down-right, simulating an upper-left light source.
+    // Each successive layer is farther offset, larger (expand), softer (lower
+    // alpha), and uses a warm brown tint to harmonize with the golden theme.
+    //
+    // Active windows appear slightly more elevated with larger, darker shadows.
+    // Inactive windows use smaller, lighter shadows.
+
+    struct ShadowLayer {
+        offset_x: i32,
+        offset_y: i32,
+        expand: u32,
+        radius_add: u32,
+        color: u32,
+    }
+
+    let layers: &[ShadowLayer] = if active {
+        &[
+            // Layer 1: wide ambient glow (barely visible, large spread)
+            ShadowLayer { offset_x: 7, offset_y: 9, expand: 10, radius_add: 5, color: 0x0F6F5226 },
+            // Layer 2: soft cast shadow
+            ShadowLayer { offset_x: 5, offset_y: 7, expand: 5, radius_add: 2, color: 0x1E5C3D14 },
+            // Layer 3: medium cast shadow
+            ShadowLayer { offset_x: 3, offset_y: 4, expand: 2, radius_add: 0, color: 0x2D4A2E0C },
+            // Layer 4: contact shadow (tightest, warmest)
+            ShadowLayer { offset_x: 2, offset_y: 2, expand: 0, radius_add: 0, color: 0x384A2E0C },
+        ]
     } else {
-        (0x102B1B03, 0x242B1B03, 0x3D2B1B03)
+        &[
+            // Inactive: gentler, smaller shadows
+            ShadowLayer { offset_x: 5, offset_y: 7, expand: 7, radius_add: 3, color: 0x0A6F5226 },
+            ShadowLayer { offset_x: 3, offset_y: 5, expand: 3, radius_add: 1, color: 0x145C3D14 },
+            ShadowLayer { offset_x: 2, offset_y: 3, expand: 1, radius_add: 0, color: 0x1E4A2E0C },
+            ShadowLayer { offset_x: 1, offset_y: 1, expand: 0, radius_add: 0, color: 0x244A2E0C },
+        ]
     };
-    fill_rounded_vertical_gradient_blend(
-        dst,
-        stride,
-        height,
-        x.saturating_sub(14),
-        y.saturating_add(6),
-        w.saturating_add(28),
-        h.saturating_add(18),
-        18,
-        soft,
-        0x002B1B03,
-    );
-    fill_rounded_vertical_gradient_blend(
-        dst,
-        stride,
-        height,
-        x.saturating_sub(8),
-        y.saturating_add(6),
-        w.saturating_add(16),
-        h.saturating_add(12),
-        14,
-        mid,
-        0x062B1B03,
-    );
-    fill_rounded_vertical_gradient_blend(
-        dst,
-        stride,
-        height,
-        x.saturating_sub(3),
-        y.saturating_add(6),
-        w.saturating_add(6),
-        h.saturating_add(5),
-        10,
-        core,
-        0x142B1B03,
-    );
-    fill_rounded_vertical_gradient(dst, stride, height, x, y, w, h, 7, 0, 0);
+
+    for layer in layers {
+        let sx = x.saturating_add(layer.offset_x).saturating_sub(layer.expand as i32);
+        let sy = y.saturating_add(layer.offset_y).saturating_sub(layer.expand as i32);
+        let sw = w.saturating_add(layer.expand.saturating_mul(2));
+        let sh = h.saturating_add(layer.expand.saturating_mul(2));
+        let shadow_radius = corner_radius.saturating_add(layer.radius_add);
+        fill_rounded_vertical_gradient_blend(
+            dst,
+            stride,
+            height,
+            sx,
+            sy,
+            sw,
+            sh,
+            shadow_radius,
+            layer.color,
+            layer.color,
+        );
+    }
 }
 
 fn title_prefix(title: &str, max_chars: usize) -> &str {
@@ -924,7 +949,8 @@ fn draw_frame_outline(
     }
 
     let border = if active { theme.active.border } else { theme.inactive.border };
-    stroke_rounded_rect(dst, stride, height, x, y, w, h, 7, border, theme.visual_border);
+    let cr = theme.corner_radius;
+    stroke_rounded_rect(dst, stride, height, x, y, w, h, cr, border, theme.visual_border);
 
     if w > 2 && h > 2 {
         stroke_rounded_rect(
@@ -935,7 +961,7 @@ fn draw_frame_outline(
             y + 1,
             w.saturating_sub(2),
             h.saturating_sub(2),
-            6,
+            cr.saturating_sub(1),
             theme.inner_highlight,
             1,
         );
@@ -949,6 +975,8 @@ fn draw_chrome_buttons(
     surface_rect: abi::display_protocol::Rect,
     chrome: SurfaceChrome,
     active: bool,
+    is_shaded: bool,
+    is_fullscreen: bool,
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
     pistil_draw_symbol_text: Option<DrawTextFn>,
     icon_color: u32,
@@ -966,6 +994,8 @@ fn draw_chrome_buttons(
             rect,
             button,
             active,
+            is_shaded,
+            is_fullscreen,
             pistil_draw_svg_icon,
             pistil_draw_symbol_text,
             icon_color,
@@ -981,6 +1011,8 @@ fn draw_chrome_button(
     rect: abi::display_protocol::Rect,
     button: ChromeButton,
     _active: bool,
+    is_shaded: bool,
+    is_fullscreen: bool,
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
     _pistil_draw_symbol_text: Option<DrawTextFn>,
     icon_color: u32,
@@ -993,11 +1025,11 @@ fn draw_chrome_button(
     draw_chrome_button_well(dst, stride, height, rect);
 
     let color = if matches!(button, ChromeButton::Close) { close_icon } else { icon_color };
-    if draw_chrome_button_lucide(pistil_draw_svg_icon, dst, stride, height, rect, button, color) {
+    if draw_chrome_button_lucide(pistil_draw_svg_icon, dst, stride, height, rect, button, is_shaded, is_fullscreen, color) {
         return;
     }
 
-    draw_chrome_button_fallback_glyph(dst, stride, height, rect, button, color);
+    draw_chrome_button_fallback_glyph(dst, stride, height, rect, button, is_shaded, is_fullscreen, color);
 }
 
 fn draw_chrome_button_well(
@@ -1025,12 +1057,14 @@ fn draw_chrome_button_lucide(
     height: u32,
     rect: abi::display_protocol::Rect,
     button: ChromeButton,
+    is_shaded: bool,
+    is_fullscreen: bool,
     color: u32,
 ) -> bool {
     let Some(draw_svg_icon) = pistil_draw_svg_icon else {
         return false;
     };
-    let Some(path) = lucide_icon_path(button) else {
+    let Some(path) = lucide_icon_path(button, is_shaded, is_fullscreen) else {
         return false;
     };
 
@@ -1051,12 +1085,24 @@ fn draw_chrome_button_lucide(
     ) == 0
 }
 
-fn lucide_icon_path(button: ChromeButton) -> Option<&'static str> {
+fn lucide_icon_path(button: ChromeButton, is_shaded: bool, is_fullscreen: bool) -> Option<&'static str> {
     match button {
         ChromeButton::Minimize => Some(WINDOW_ICON_MINIMIZE_PATH),
-        ChromeButton::Shade => Some(WINDOW_ICON_SHADE_PATH),
+        ChromeButton::Shade => {
+            if is_shaded {
+                Some(WINDOW_ICON_UNSHADE_PATH)
+            } else {
+                Some(WINDOW_ICON_SHADE_PATH)
+            }
+        }
         ChromeButton::Maximize => Some(WINDOW_ICON_MAXIMIZE_PATH),
-        ChromeButton::Fullscreen => Some(WINDOW_ICON_FULLSCREEN_PATH),
+        ChromeButton::Fullscreen => {
+            if is_fullscreen {
+                Some(WINDOW_ICON_RESTORE_PATH)
+            } else {
+                Some(WINDOW_ICON_FULLSCREEN_PATH)
+            }
+        }
         ChromeButton::Close => Some(WINDOW_ICON_CLOSE_PATH),
     }
 }
@@ -1067,6 +1113,8 @@ fn draw_chrome_button_fallback_glyph(
     height: u32,
     rect: abi::display_protocol::Rect,
     button: ChromeButton,
+    is_shaded: bool,
+    is_fullscreen: bool,
     color: u32,
 ) {
     let x = rect.x as i32;
@@ -1077,7 +1125,7 @@ fn draw_chrome_button_fallback_glyph(
     let cy = y + h / 2 + CHROME_ICON_Y_BIAS;
 
     match button {
-        ChromeButton::Minimize | ChromeButton::Shade => {
+        ChromeButton::Minimize => {
             let glyph_w = (w - 10).max(6);
             let glyph_h = 2;
             fill_rect_i32(
@@ -1090,6 +1138,23 @@ fn draw_chrome_button_fallback_glyph(
                 glyph_h,
                 color,
             );
+        }
+        ChromeButton::Shade => {
+            // Draw a chevron: up if unshaded, down if shaded
+            let arm = ((w - 10).max(6)) / 2;
+            if is_shaded {
+                // Chevron-down (V shape)
+                for d in 0..=arm {
+                    plot_thick_pixel(dst, stride, height, cx - arm + d, cy - arm / 2 + d, color, 1);
+                    plot_thick_pixel(dst, stride, height, cx + arm - d, cy - arm / 2 + d, color, 1);
+                }
+            } else {
+                // Chevron-up (^ shape)
+                for d in 0..=arm {
+                    plot_thick_pixel(dst, stride, height, cx - arm + d, cy + arm / 2 - d, color, 1);
+                    plot_thick_pixel(dst, stride, height, cx + arm - d, cy + arm / 2 - d, color, 1);
+                }
+            }
         }
         ChromeButton::Maximize => {
             let box_w = (w - 10).max(7);
@@ -1110,18 +1175,33 @@ fn draw_chrome_button_fallback_glyph(
             let bx = cx - box_w / 2;
             let by = cy - box_h / 2;
             let clen = 3;
-            // Corners
-            fill_rect_i32(dst, stride, height, bx, by, clen, 1, color);
-            fill_rect_i32(dst, stride, height, bx, by, 1, clen, color);
+            if is_fullscreen {
+                // Restore glyph: inward-pointing corners (minimize-2 style)
+                fill_rect_i32(dst, stride, height, bx, by, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx, by + 1, 1, clen - 1, color);
 
-            fill_rect_i32(dst, stride, height, bx + box_w - clen, by, clen, 1, color);
-            fill_rect_i32(dst, stride, height, bx + box_w - 1, by, 1, clen, color);
+                fill_rect_i32(dst, stride, height, bx + box_w - clen, by, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx + box_w - 1, by + 1, 1, clen - 1, color);
 
-            fill_rect_i32(dst, stride, height, bx, by + box_h - 1, clen, 1, color);
-            fill_rect_i32(dst, stride, height, bx, by + box_h - clen, 1, clen, color);
+                fill_rect_i32(dst, stride, height, bx, by + box_h - 1, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx, by + box_h - clen, 1, clen - 1, color);
 
-            fill_rect_i32(dst, stride, height, bx + box_w - clen, by + box_h - 1, clen, 1, color);
-            fill_rect_i32(dst, stride, height, bx + box_w - 1, by + box_h - clen, 1, clen, color);
+                fill_rect_i32(dst, stride, height, bx + box_w - clen, by + box_h - 1, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx + box_w - 1, by + box_h - clen, 1, clen - 1, color);
+            } else {
+                // Expand glyph: outward-pointing corners
+                fill_rect_i32(dst, stride, height, bx, by, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx, by, 1, clen, color);
+
+                fill_rect_i32(dst, stride, height, bx + box_w - clen, by, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx + box_w - 1, by, 1, clen, color);
+
+                fill_rect_i32(dst, stride, height, bx, by + box_h - 1, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx, by + box_h - clen, 1, clen, color);
+
+                fill_rect_i32(dst, stride, height, bx + box_w - clen, by + box_h - 1, clen, 1, color);
+                fill_rect_i32(dst, stride, height, bx + box_w - 1, by + box_h - clen, 1, clen, color);
+            }
         }
         ChromeButton::Close => {
             let radius = ((w.min(h) - 8) / 2).max(3);

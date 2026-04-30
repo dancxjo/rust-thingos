@@ -346,6 +346,7 @@ impl BloomWorld {
             pointer_overlay,
             cursor,
             flags,
+            self.visuals.corner_radius(),
         );
         if result.success {
             if !self.cursor_present_logged {
