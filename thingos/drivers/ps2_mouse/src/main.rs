@@ -114,6 +114,11 @@ const MOUSE_ENABLE: u8 = 0xF4;
 const MOUSE_VECTOR: u8 = 0x2C;
 const POLLING_INTERVAL_MS: u64 = 8;
 
+/// Preferred PS/2 mouse sample rate (Hz). Higher rates give smoother pointer motion.
+const PREFERRED_SAMPLE_RATE: u8 = 200;
+/// Fallback sample rate used when the device rejects `PREFERRED_SAMPLE_RATE`.
+const FALLBACK_SAMPLE_RATE: u8 = 100;
+
 fn wait_input_empty() {
     for _ in 0..10000 {
         if ioport_read(PS2_STATUS, 1) & 0x02 == 0 {
@@ -189,6 +194,26 @@ fn send_aux_byte(byte: u8) {
     ioport_write(PS2_DATA, byte as usize, 1);
 }
 
+/// Send the Set Sample Rate command (0xF3) followed by `rate`.
+///
+/// Returns `true` if the device acknowledged both bytes with 0xFA, `false`
+/// otherwise. Callers should fall back to a lower rate on failure.
+fn set_sample_rate(rate: u8) -> bool {
+    send_aux_byte(0xF3);
+    let cmd_ack = read_data_filtered(true, "sample rate cmd ACK").unwrap_or(0);
+    if cmd_ack != 0xFA {
+        debug!("ps2_mouse: sample rate cmd NACK (0x{:02x}) for rate={}", cmd_ack, rate);
+        return false;
+    }
+    send_aux_byte(rate);
+    let rate_ack = read_data_filtered(true, "sample rate set ACK").unwrap_or(0);
+    if rate_ack != 0xFA {
+        debug!("ps2_mouse: sample rate set NACK (0x{:02x}) for rate={}", rate_ack, rate);
+        return false;
+    }
+    true
+}
+
 fn init_mouse() {
     debug!("ps2_mouse: enabling aux port");
 
@@ -227,11 +252,22 @@ fn init_mouse() {
         debug!("ps2_mouse: BAT passed (0x{:02x}), ID 0x{:02x} confirmed", bat, id);
     }
 
-    debug!("ps2_mouse: setting sample rate (100)");
-    send_aux_byte(0xF3);
-    read_data_filtered(true, "sample rate ACK");
-    send_aux_byte(100);
-    read_data_filtered(true, "sample rate set ACK");
+    debug!("ps2_mouse: requesting sample rate {} Hz", PREFERRED_SAMPLE_RATE);
+    let _ = if set_sample_rate(PREFERRED_SAMPLE_RATE) {
+        info!("ps2_mouse: sample rate set to {} Hz", PREFERRED_SAMPLE_RATE);
+        PREFERRED_SAMPLE_RATE
+    } else {
+        debug!(
+            "ps2_mouse: {} Hz rejected, falling back to {} Hz",
+            PREFERRED_SAMPLE_RATE, FALLBACK_SAMPLE_RATE
+        );
+        if set_sample_rate(FALLBACK_SAMPLE_RATE) {
+            info!("ps2_mouse: sample rate set to {} Hz (fallback)", FALLBACK_SAMPLE_RATE);
+        } else {
+            warn!("ps2_mouse: fallback sample rate {} Hz also failed; continuing with device default", FALLBACK_SAMPLE_RATE);
+        }
+        FALLBACK_SAMPLE_RATE
+    };
 
     debug!("ps2_mouse: setting resolution (3)");
     send_aux_byte(0xE8);
