@@ -173,7 +173,7 @@ fn main(_arg: usize) -> ! {
                     world.wayland_evt_write = Some(evt_write);
 
                     // Spawn the Wayland server (runs its own ServiceLoop).
-                    let args = alloc::boxed::Box::new(WaylandThreadArgs { cmd_write, evt_read_fd });
+                    let args = alloc::boxed::Box::new(WaylandThreadArgs { cmd_write, evt_read_fd, output: primary });
                     let arg_ptr = alloc::boxed::Box::into_raw(args) as usize;
                     match stem::thread::spawn_with_arg(wayland::wayland_thread_entry, arg_ptr) {
                         Ok(_) => {

@@ -183,3 +183,10 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the pointer debug overlay should update after mouse movement
     And the serial output should contain "bloom: motion coalesce pre=" within 60s
+
+  Scenario: wl_output global is advertised in wl_registry
+    # Verifies that bloom advertises wl_output so clients can discover display
+    # properties such as resolution, scale, and refresh rate.
+    Given the machine is booted
+    Then the serial output should contain "bloom: output0" within 60s
+    And the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s

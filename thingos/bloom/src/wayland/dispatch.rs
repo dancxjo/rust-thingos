@@ -13,6 +13,7 @@
 //! | 2    | wl_shm           | 1       |
 //! | 3    | xdg_wm_base      | 1       |
 //! | 4    | wl_seat          | 5       |
+//! | 5    | wl_output        | 2       |
 
 use alloc::string::String;
 use alloc::vec;
@@ -31,6 +32,7 @@ pub const GLOBAL_WL_COMPOSITOR: u32 = 1;
 pub const GLOBAL_WL_SHM: u32 = 2;
 pub const GLOBAL_XDG_WM_BASE: u32 = 3;
 pub const GLOBAL_WL_SEAT: u32 = 4;
+pub const GLOBAL_WL_OUTPUT: u32 = 5;
 
 // ── Top-level dispatcher ─────────────────────────────────────────────────────
 
@@ -44,6 +46,7 @@ pub fn dispatch(
     blossom: &mut blossom::Blossom,
     cmd_write: u32,
     next_surface_key: &mut u32,
+    output: &crate::display::OutputInfo,
 ) -> Vec<Vec<u8>> {
     let obj_id = msg.object_id;
 
@@ -60,7 +63,7 @@ pub fn dispatch(
 
     match obj_kind {
         ObjKind::Display => dispatch_display(msg, client, next_surface_key, cmd_write),
-        ObjKind::Registry => dispatch_registry(msg, client),
+        ObjKind::Registry => dispatch_registry(msg, client, output),
         ObjKind::Compositor => dispatch_compositor(msg, client, next_surface_key, cmd_write),
         ObjKind::Shm => dispatch_shm(msg, client),
         ObjKind::ShmPool => dispatch_shm_pool(msg, client, obj_id),
@@ -75,6 +78,7 @@ pub fn dispatch(
         ObjKind::Seat => dispatch_seat(msg, client, obj_id),
         ObjKind::Pointer => dispatch_pointer(msg, client, obj_id),
         ObjKind::Keyboard => dispatch_keyboard(msg, client, obj_id),
+        ObjKind::Output => dispatch_output(msg, client, obj_id),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -99,6 +103,7 @@ enum ObjKind {
     Seat,
     Pointer,
     Keyboard,
+    Output,
     Destroyed,
     Unknown,
 }
@@ -121,6 +126,7 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::Seat => ObjKind::Seat,
         ObjectEntry::Pointer => ObjKind::Pointer,
         ObjectEntry::Keyboard => ObjKind::Keyboard,
+        ObjectEntry::Output => ObjKind::Output,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -164,6 +170,7 @@ fn dispatch_display(
                 (GLOBAL_WL_SHM, "wl_shm", 1u32),
                 (GLOBAL_XDG_WM_BASE, "xdg_wm_base", 1u32),
                 (GLOBAL_WL_SEAT, "wl_seat", 5u32),
+                (GLOBAL_WL_OUTPUT, "wl_output", 2u32),
             ] {
                 let mut p = Vec::new();
                 p.extend_from_slice(&name.to_ne_bytes());
@@ -185,7 +192,7 @@ fn dispatch_display(
 /// wl_registry.bind opcode = 0
 const WL_REGISTRY_BIND: u16 = 0;
 
-fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient) -> Vec<Vec<u8>> {
+fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient, output: &crate::display::OutputInfo) -> Vec<Vec<u8>> {
     if msg.opcode != WL_REGISTRY_BIND {
         return vec![];
     }
@@ -222,6 +229,10 @@ fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient) -> Vec<Vec<u8>> 
         GLOBAL_WL_SEAT => {
             client.insert(new_id, ObjectEntry::Seat);
             send_seat_capabilities(client, new_id);
+        }
+        GLOBAL_WL_OUTPUT => {
+            client.insert(new_id, ObjectEntry::Output);
+            send_output_events(client, new_id, output);
         }
         _ => {
             client.send_protocol_error(new_id, 0, "unknown global");
@@ -297,6 +308,57 @@ fn send_keyboard_repeat_info(client: &WaylandClient, keyboard_obj: u32) {
     payload.extend_from_slice(&25i32.to_ne_bytes());
     payload.extend_from_slice(&600i32.to_ne_bytes());
     client.send(keyboard_obj, 5, &payload);
+}
+
+// ── wl_output ────────────────────────────────────────────────────────────────
+
+/// `wl_output.release` request opcode (version 3+).
+const WL_OUTPUT_RELEASE: u16 = 0;
+
+fn dispatch_output(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    // wl_output.release is a version-3 destructor; accept it gracefully even
+    // though we only advertise version 2 (some clients send it anyway).
+    if msg.opcode == WL_OUTPUT_RELEASE {
+        client.destroy(obj_id);
+    }
+    vec![]
+}
+
+/// Send the initial burst of `wl_output` events to a newly-bound output object.
+///
+/// Sends (in order): `geometry`, `mode`, `scale` (v2), `done` (v2).
+fn send_output_events(client: &WaylandClient, output_obj: u32, info: &crate::display::OutputInfo) {
+    use crate::wayland::wire::encode_string;
+
+    // wl_output.geometry (opcode 0)
+    // x, y, physical_width_mm, physical_height_mm, subpixel, make, model, transform
+    let mut geom = Vec::new();
+    geom.extend_from_slice(&0i32.to_ne_bytes()); // x = 0
+    geom.extend_from_slice(&0i32.to_ne_bytes()); // y = 0
+    geom.extend_from_slice(&0i32.to_ne_bytes()); // physical_width_mm = 0 (unknown)
+    geom.extend_from_slice(&0i32.to_ne_bytes()); // physical_height_mm = 0 (unknown)
+    geom.extend_from_slice(&0i32.to_ne_bytes()); // subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN
+    geom.extend_from_slice(&encode_string("ThingOS"));
+    geom.extend_from_slice(&encode_string("Virtual"));
+    geom.extend_from_slice(&0i32.to_ne_bytes()); // transform = WL_OUTPUT_TRANSFORM_NORMAL
+    client.send(output_obj, 0, &geom);
+
+    // wl_output.mode (opcode 1)
+    // flags, width, height, refresh_mHz
+    let mut mode = Vec::new();
+    mode.extend_from_slice(&3u32.to_ne_bytes()); // WL_OUTPUT_MODE_CURRENT(1) | WL_OUTPUT_MODE_PREFERRED(2)
+    mode.extend_from_slice(&(info.width as i32).to_ne_bytes());
+    mode.extend_from_slice(&(info.height as i32).to_ne_bytes());
+    mode.extend_from_slice(&(info.refresh_mhz as i32).to_ne_bytes());
+    client.send(output_obj, 1, &mode);
+
+    // wl_output.scale (opcode 3, version 2+)
+    // factor: int = 1 (no HiDPI scaling)
+    client.send(output_obj, 3, &1i32.to_ne_bytes());
+
+    // wl_output.done (opcode 2, version 2+)
+    // Signals that all output properties have been sent.
+    client.send(output_obj, 2, &[]);
 }
 
 // ── wl_compositor ─────────────────────────────────────────────────────────────
