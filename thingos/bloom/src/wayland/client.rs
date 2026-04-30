@@ -416,7 +416,7 @@ impl WaylandClient {
     pub fn next_presentation_seq(&mut self) -> (u32, u32) {
         let seq = self.presentation_seq;
         self.presentation_seq = self.presentation_seq.wrapping_add(1);
-        ((seq >> 32) as u32, (seq & 0xffff_ffff) as u32)
+        ((seq >> 32) as u32, (seq & 0xffff_ffff_u64) as u32)
     }
 
     /// Fire `wp_presentation_feedback.presented` for all in-flight feedbacks
@@ -444,7 +444,7 @@ impl WaylandClient {
         let tv_sec = timestamp_ns / 1_000_000_000;
         let tv_nsec = (timestamp_ns % 1_000_000_000) as u32;
         let tv_sec_hi = (tv_sec >> 32) as u32;
-        let tv_sec_lo = (tv_sec & 0xffff_ffff) as u32;
+        let tv_sec_lo = (tv_sec & 0xffff_ffff_u64) as u32;
         // Software best-effort: no VSYNC / HW_CLOCK / HW_COMPLETION / ZERO_COPY
         // bits are claimed yet.  This keeps clients honest about the limited
         // timing precision until real vblank reporting is wired up.
