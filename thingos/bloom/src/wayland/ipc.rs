@@ -17,6 +17,7 @@
 //! | `WCMD_SET_CHROME`    | Mark compositor-known shell chrome geometry   |
 //! | `WCMD_SET_TITLE`     | Update compositor-owned shell chrome title    |
 //! | `WCMD_SET_SUBSURFACE`| Update parent/position/stacking for a subsurface |
+//! | `WCMD_SET_LAYER_SURFACE`| Update wlr-layer-shell state for a surface |
 //!
 //! # Main → Wayland (events)
 //!
@@ -39,6 +40,7 @@ pub const WCMD_COMMIT: u8 = 5;
 pub const WCMD_SET_CHROME: u8 = 6;
 pub const WCMD_SET_TITLE: u8 = 7;
 pub const WCMD_SET_SUBSURFACE: u8 = 8;
+pub const WCMD_SET_LAYER_SURFACE: u8 = 9;
 pub const MAX_TITLE_BYTES: usize = 64;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
@@ -170,6 +172,33 @@ pub struct WCmdSetSubsurface {
     pub x: i32,
     pub y: i32,
     pub z_above: i32,
+}
+
+/// [`WCMD_SET_LAYER_SURFACE`] — declare or update wlr-layer-shell state for a
+/// surface.  The main thread combines the carried fields with the current
+/// output dimensions to compute the absolute placement and z-order.
+///
+/// `active = 0` means the layer surface has been destroyed; the main thread
+/// should clear any layer-shell side state and let the surface drop back
+/// into the regular toplevel stacking band.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WCmdSetLayerSurface {
+    pub msg_type: u8, // = WCMD_SET_LAYER_SURFACE
+    pub active: u8,
+    pub _pad: [u8; 2],
+    pub bloom_surface_id: u32,
+    /// `blossom::LayerShellLayer` discriminant (0..=3).
+    pub layer: u32,
+    /// `zwlr_layer_surface_v1.anchor` bitfield.
+    pub anchor: u32,
+    pub exclusive_zone: i32,
+    pub margin_top: i32,
+    pub margin_right: i32,
+    pub margin_bottom: i32,
+    pub margin_left: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// [`WEVT_BUFFER_RELEASE`] — the compositor no longer references a buffer.
@@ -412,6 +441,40 @@ pub fn encode_set_subsurface(
     };
     let mut out = [0u8; 24];
     out.copy_from_slice(as_bytes!(msg, WCmdSetSubsurface));
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_set_layer_surface(
+    bloom_surface_id: u32,
+    layer: u32,
+    anchor: u32,
+    exclusive_zone: i32,
+    margin_top: i32,
+    margin_right: i32,
+    margin_bottom: i32,
+    margin_left: i32,
+    width: u32,
+    height: u32,
+    active: u8,
+) -> [u8; 44] {
+    let msg = WCmdSetLayerSurface {
+        msg_type: WCMD_SET_LAYER_SURFACE,
+        active,
+        _pad: [0; 2],
+        bloom_surface_id,
+        layer,
+        anchor,
+        exclusive_zone,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left,
+        width,
+        height,
+    };
+    let mut out = [0u8; 44];
+    out.copy_from_slice(as_bytes!(msg, WCmdSetLayerSurface));
     out
 }
 

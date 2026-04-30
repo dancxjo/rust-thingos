@@ -33,6 +33,13 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+pub mod layer_shell;
+
+pub use layer_shell::{
+    LayerShellLayer, LayerSurfaceConfig, LayerSurfacePlacement, LayerSurfaceState,
+    anchor as layer_anchor, compute_layer_placement, layer_surface_error,
+};
+
 // ── Public type aliases ───────────────────────────────────────────────────────
 
 /// Per-client Wayland object identifier (within a single client's namespace).
