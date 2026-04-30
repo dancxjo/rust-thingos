@@ -60,8 +60,8 @@ def compose_qemu_flags(base_flags, qmp_path=None):
         flags += f" -qmp unix:{qmp_path},server=on,wait=off"
     return flags
 
-def build_once():
-    print("[*] Performing initial build...")
+def build_iteration(session_id):
+    print(f"[*] Building ISO for session {session_id:04d}...")
     subprocess.run(["just", "iso", ARCH], check=True)
 
 class QmpInputDriver:
@@ -289,9 +289,9 @@ def main():
     print("[*] Ctrl+C to stop.")
 
     try:
-        build_once()
         session_id = 0
         while True:
+            build_iteration(session_id)
             if not run_session(session_id):
                 print("[*] Cooling down before retry (5s)...")
                 time.sleep(5)
