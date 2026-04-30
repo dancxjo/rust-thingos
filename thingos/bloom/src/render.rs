@@ -857,7 +857,7 @@ fn draw_window_shadow(
     } else {
         (0x102B1B03, 0x242B1B03, 0x3D2B1B03)
     };
-    fill_rounded_vertical_gradient(
+    fill_rounded_vertical_gradient_blend(
         dst,
         stride,
         height,
@@ -869,7 +869,7 @@ fn draw_window_shadow(
         soft,
         0x002B1B03,
     );
-    fill_rounded_vertical_gradient(
+    fill_rounded_vertical_gradient_blend(
         dst,
         stride,
         height,
@@ -881,7 +881,7 @@ fn draw_window_shadow(
         mid,
         0x062B1B03,
     );
-    fill_rounded_vertical_gradient(
+    fill_rounded_vertical_gradient_blend(
         dst,
         stride,
         height,
@@ -1156,23 +1156,32 @@ fn plot_thick_pixel(
 }
 
 fn blend_argb(base: u32, overlay: u32) -> u32 {
-    let oa = (overlay >> 24) & 0xFF;
-    if oa == 0 {
+    let sa = (overlay >> 24) & 0xFF;
+    if sa == 0 {
         return base;
     }
+    if sa == 255 {
+        return overlay;
+    }
 
-    let br = (base >> 16) & 0xFF;
-    let bg = (base >> 8) & 0xFF;
-    let bb = base & 0xFF;
+    let da = (base >> 24) & 0xFF;
+    let inv_sa = 255 - sa;
+    let out_a = sa + (da * inv_sa + 127) / 255;
+    if out_a == 0 {
+        return 0;
+    }
 
-    let or = (overlay >> 16) & 0xFF;
-    let og = (overlay >> 8) & 0xFF;
-    let ob = overlay & 0xFF;
+    let sr = (overlay >> 16) & 0xFF;
+    let sg = (overlay >> 8) & 0xFF;
+    let sb = overlay & 0xFF;
+    let dr = (base >> 16) & 0xFF;
+    let dg = (base >> 8) & 0xFF;
+    let db = base & 0xFF;
 
-    let r = (br * (255 - oa) + or * oa) / 255;
-    let g = (bg * (255 - oa) + og * oa) / 255;
-    let b = (bb * (255 - oa) + ob * oa) / 255;
-    (0xFF << 24) | (r << 16) | (g << 8) | b
+    let r = (sr * sa + (dr * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let g = (sg * sa + (dg * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let b = (sb * sa + (db * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    (out_a << 24) | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
 }
 
 fn draw_pointer_overlay(
@@ -1434,6 +1443,69 @@ fn fill_rounded_vertical_gradient(
                 1,
                 color,
             );
+        }
+    }
+}
+
+fn fill_rounded_vertical_gradient_blend(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    radius: u32,
+    top: u32,
+    bottom: u32,
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let radius = radius.min(w / 2).min(h / 2);
+    let denom = h.saturating_sub(1).max(1);
+    for row in 0..h {
+        let color = lerp_argb(top, bottom, row.saturating_mul(255) / denom);
+        let inset = rounded_rect_row_inset(radius, row, h);
+        if inset.saturating_mul(2) < w {
+            blend_rect_i32(
+                dst,
+                stride,
+                height,
+                x.saturating_add(inset as i32),
+                y.saturating_add(row as i32),
+                w.saturating_sub(inset.saturating_mul(2)) as i32,
+                1,
+                color,
+            );
+        }
+    }
+}
+
+fn blend_rect_i32(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: u32,
+) {
+    if stride == 0 || w <= 0 || h <= 0 || color >> 24 == 0 {
+        return;
+    }
+    let x0 = x.max(0) as u32;
+    let y0 = y.max(0) as u32;
+    let x1 = x.saturating_add(w).max(0) as u32;
+    let y1 = y.saturating_add(h).max(0) as u32;
+    let x1 = x1.min(stride);
+    let y1 = y1.min(height);
+    for yy in y0..y1 {
+        let row = (yy * stride) as usize;
+        for xx in x0..x1 {
+            let idx = row + xx as usize;
+            dst[idx] = blend_argb(dst[idx], color);
         }
     }
 }

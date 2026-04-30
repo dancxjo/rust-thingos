@@ -80,6 +80,32 @@ pub struct PlaneCommit {
     pub _reserved: [u8; 7],
 }
 
+/// Plane `_reserved[0]` bit: clip the plane to a rounded rectangle before
+/// compositing. The radius is stored in `_reserved[1]` in destination pixels.
+pub const PLANE_FLAG_CLIP_ROUNDED: u8 = 1 << 0;
+pub const PLANE_RESERVED_FLAGS: usize = 0;
+pub const PLANE_RESERVED_RADIUS: usize = 1;
+
+impl PlaneCommit {
+    pub const fn with_rounded_clip(mut self, radius: u8) -> Self {
+        if radius > 0 {
+            self._reserved[PLANE_RESERVED_FLAGS] |= PLANE_FLAG_CLIP_ROUNDED;
+            self._reserved[PLANE_RESERVED_RADIUS] = radius;
+        }
+        self
+    }
+
+    pub const fn rounded_clip_radius(&self) -> Option<u8> {
+        if self._reserved[PLANE_RESERVED_FLAGS] & PLANE_FLAG_CLIP_ROUNDED != 0
+            && self._reserved[PLANE_RESERVED_RADIUS] > 0
+        {
+            Some(self._reserved[PLANE_RESERVED_RADIUS])
+        } else {
+            None
+        }
+    }
+}
+
 /// Atomic commit request containing multiple plane updates.
 #[repr(C)]
 pub struct CommitRequest {
@@ -169,5 +195,28 @@ impl CommitRequest {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rounded_clip_hint_uses_reserved_plane_bytes() {
+        let plane = PlaneCommit {
+            plane_id: PlaneId(1),
+            buffer_id: BufferId(2),
+            dest_rect: Rect { x: 0, y: 0, w: 100, h: 80 },
+            src_rect: Rect { x: 0, y: 0, w: 100, h: 80 },
+            z_order: 0,
+            alpha: 255,
+            _reserved: [0; 7],
+        }
+        .with_rounded_clip(7);
+
+        assert_eq!(plane.rounded_clip_radius(), Some(7));
+        assert_eq!(plane._reserved[PLANE_RESERVED_FLAGS] & PLANE_FLAG_CLIP_ROUNDED, 1);
+        assert_eq!(plane._reserved[PLANE_RESERVED_RADIUS], 7);
     }
 }

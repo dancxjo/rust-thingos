@@ -226,7 +226,13 @@ fn blend(dst: u32, src: u32) -> u32 {
         return dst;
     }
 
+    let da = (dst >> 24) & 0xFF;
     let inv_sa = 255 - sa;
+    let out_a = sa + (da * inv_sa + 127) / 255;
+    if out_a == 0 {
+        return 0;
+    }
+
     let sr = (src >> 16) & 0xFF;
     let sg = (src >> 8) & 0xFF;
     let sb = src & 0xFF;
@@ -235,9 +241,27 @@ fn blend(dst: u32, src: u32) -> u32 {
     let dg = (dst >> 8) & 0xFF;
     let db = dst & 0xFF;
 
-    let r = (sr * sa + dr * inv_sa) / 255;
-    let g = (sg * sa + dg * inv_sa) / 255;
-    let b = (sb * sa + db * inv_sa) / 255;
+    let r = (sr * sa + (dr * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let g = (sg * sa + (dg * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let b = (sb * sa + (db * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
 
-    (0xFF << 24) | (r << 16) | (g << 8) | b
+    (out_a << 24) | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blend;
+
+    #[test]
+    fn blend_preserves_progressive_alpha_on_transparent_dst() {
+        assert_eq!(blend(0, 0x8012_3456) >> 24, 0x80);
+    }
+
+    #[test]
+    fn blend_accumulates_alpha_between_translucent_layers() {
+        let once = blend(0, 0x4020_2020);
+        let twice = blend(once, 0x4020_2020);
+        assert!(twice >> 24 > once >> 24);
+        assert!(twice >> 24 < 0xFF);
+    }
 }

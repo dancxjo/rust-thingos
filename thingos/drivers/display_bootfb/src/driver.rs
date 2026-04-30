@@ -193,10 +193,24 @@ impl BootFbDriver {
             return Ok(());
         }
 
-        let should_blend = commit.plane_id != PlaneId(0) || commit.alpha < 255;
+        let clip_radius = commit.rounded_clip_radius().map(u32::from).unwrap_or(0);
+        let should_blend = commit.plane_id != PlaneId(0)
+            || commit.alpha < 255
+            || buffer.format.has_alpha()
+            || clip_radius > 0;
         if should_blend && bpp == 4 {
             for row in 0..copy_h {
                 for col in 0..copy_w {
+                    let coverage = rounded_clip_coverage(
+                        clip_radius,
+                        rel_x.saturating_add(col as u32),
+                        rel_y.saturating_add(row as u32),
+                        commit.dest_rect.w,
+                        commit.dest_rect.h,
+                    );
+                    if coverage == 0 {
+                        continue;
+                    }
                     unsafe {
                         let src_ptr = buffer
                             .ptr
@@ -205,11 +219,14 @@ impl BootFbDriver {
                             .fb
                             .base
                             .add((dst_y + row) * self.fb.stride as usize + (dst_x + col) * bpp);
-                        let src = core::ptr::read_unaligned(src_ptr as *const u32);
+                        let src = source_argb_for_blend(
+                            core::ptr::read_unaligned(src_ptr as *const u32),
+                            buffer.format,
+                        );
                         let dst = core::ptr::read_unaligned(dst_ptr as *const u32);
                         core::ptr::write_unaligned(
                             dst_ptr as *mut u32,
-                            alpha_over_argb(src, dst, commit.alpha),
+                            alpha_over_argb(src, dst, scale_alpha(commit.alpha, coverage)),
                         );
                     }
                 }
@@ -258,6 +275,67 @@ fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
     let g = (sg * src_a + dg * inv + 127) / 255;
     let b = (sb * src_a + db * inv + 127) / 255;
     0xff00_0000 | (r << 16) | (g << 8) | b
+}
+
+fn source_argb_for_blend(src: u32, format: PixelFormat) -> u32 {
+    if format.has_alpha() { src } else { 0xff00_0000 | (src & 0x00ff_ffff) }
+}
+
+fn scale_alpha(alpha: u8, coverage: u8) -> u8 {
+    ((alpha as u32 * coverage as u32 + 127) / 255) as u8
+}
+
+fn rounded_clip_coverage(radius: u32, x: u32, y: u32, w: u32, h: u32) -> u8 {
+    if radius == 0 {
+        return 255;
+    }
+    let radius = radius.min(w / 2).min(h / 2);
+    if radius == 0 {
+        return 255;
+    }
+    if x >= w || y >= h {
+        return 0;
+    }
+    if (x >= radius && x < w.saturating_sub(radius))
+        || (y >= radius && y < h.saturating_sub(radius))
+    {
+        return 255;
+    }
+
+    let r = radius as i64 * 8;
+    let left = r;
+    let top = r;
+    let right = w.saturating_sub(radius) as i64 * 8;
+    let bottom = h.saturating_sub(radius) as i64 * 8;
+    let mut inside = 0u32;
+
+    for sy in 0..4i64 {
+        let py = y as i64 * 8 + sy * 2 + 1;
+        let cy = if py < top {
+            top
+        } else if py >= bottom {
+            bottom
+        } else {
+            py
+        };
+        for sx in 0..4i64 {
+            let px = x as i64 * 8 + sx * 2 + 1;
+            let cx = if px < left {
+                left
+            } else if px >= right {
+                right
+            } else {
+                px
+            };
+            let dx = px - cx;
+            let dy = py - cy;
+            if dx * dx + dy * dy <= r * r {
+                inside += 1;
+            }
+        }
+    }
+
+    ((inside * 255 + 8) / 16) as u8
 }
 
 fn find_framebuffer() -> Option<Framebuffer> {

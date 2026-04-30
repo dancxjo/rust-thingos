@@ -335,6 +335,67 @@ fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
     0xff00_0000 | (r << 16) | (g << 8) | b
 }
 
+fn source_argb_for_blend(src: u32, format: PixelFormat) -> u32 {
+    if format.has_alpha() { src } else { 0xff00_0000 | (src & 0x00ff_ffff) }
+}
+
+fn scale_alpha(alpha: u8, coverage: u8) -> u8 {
+    ((alpha as u32 * coverage as u32 + 127) / 255) as u8
+}
+
+fn rounded_clip_coverage(radius: u32, x: u32, y: u32, w: u32, h: u32) -> u8 {
+    if radius == 0 {
+        return 255;
+    }
+    let radius = radius.min(w / 2).min(h / 2);
+    if radius == 0 {
+        return 255;
+    }
+    if x >= w || y >= h {
+        return 0;
+    }
+    if (x >= radius && x < w.saturating_sub(radius))
+        || (y >= radius && y < h.saturating_sub(radius))
+    {
+        return 255;
+    }
+
+    let r = radius as i64 * 8;
+    let left = r;
+    let top = r;
+    let right = w.saturating_sub(radius) as i64 * 8;
+    let bottom = h.saturating_sub(radius) as i64 * 8;
+    let mut inside = 0u32;
+
+    for sy in 0..4i64 {
+        let py = y as i64 * 8 + sy * 2 + 1;
+        let cy = if py < top {
+            top
+        } else if py >= bottom {
+            bottom
+        } else {
+            py
+        };
+        for sx in 0..4i64 {
+            let px = x as i64 * 8 + sx * 2 + 1;
+            let cx = if px < left {
+                left
+            } else if px >= right {
+                right
+            } else {
+                px
+            };
+            let dx = px - cx;
+            let dy = py - cy;
+            if dx * dx + dy * dy <= r * r {
+                inside += 1;
+            }
+        }
+    }
+
+    ((inside * 255 + 8) / 16) as u8
+}
+
 fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
     if payload.len() < 4 {
         return ProviderResponse::err(Errno::EINVAL);
@@ -629,9 +690,11 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     };
                     let target_ptr = driver.frame_pool[idx].ptr;
                     let target_size = driver.frame_pool[idx].size;
+                    let clip_radius = plane.rounded_clip_radius().map(u32::from).unwrap_or(0);
                     let should_blend = plane.alpha < 255
                         || plane.z_order > 0
-                        || src.format == PixelFormat::Bgra8888;
+                        || src.format.has_alpha()
+                        || clip_radius > 0;
                     for dirty in &damage_rects {
                         let Some(rect) = rect_intersect(plane_rect, *dirty) else {
                             continue;
@@ -660,6 +723,16 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         if should_blend && bpp == 4 {
                             for row in 0..clip_h {
                                 for col in 0..clip_w {
+                                    let coverage = rounded_clip_coverage(
+                                        clip_radius,
+                                        rel_x.saturating_add(col) as u32,
+                                        rel_y.saturating_add(row) as u32,
+                                        plane.dest_rect.w,
+                                        plane.dest_rect.h,
+                                    );
+                                    if coverage == 0 {
+                                        continue;
+                                    }
                                     unsafe {
                                         let src_ptr = src.ptr.add(
                                             (clip_src_y + row).saturating_mul(src.stride as usize)
@@ -670,11 +743,17 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                                 .saturating_mul(driver.disp_stride as usize)
                                                 + (clip_dst_x + col).saturating_mul(bpp),
                                         );
-                                        let src_px =
-                                            core::ptr::read_unaligned(src_ptr as *const u32);
+                                        let src_px = source_argb_for_blend(
+                                            core::ptr::read_unaligned(src_ptr as *const u32),
+                                            src.format,
+                                        );
                                         let dst_px =
                                             core::ptr::read_unaligned(dst_ptr as *const u32);
-                                        let out_px = alpha_over_argb(src_px, dst_px, plane.alpha);
+                                        let out_px = alpha_over_argb(
+                                            src_px,
+                                            dst_px,
+                                            scale_alpha(plane.alpha, coverage),
+                                        );
                                         core::ptr::write_unaligned(dst_ptr as *mut u32, out_px);
                                         if !driver.cursor_commit_logged
                                             && cursor_copy_sample.is_none()
