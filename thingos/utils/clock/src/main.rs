@@ -8,11 +8,12 @@ use alloc::vec::Vec;
 use core::convert::TryInto;
 
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
+use stem::abi::syscall::{PollHandle, poll_flags};
 use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::{memfd_create, sleep_ms, vfs_close, vfs_read, vfs_write, vm_map};
+use stem::syscall::{memfd_create, sleep_ms, vfs_close, vfs_poll, vfs_read, vfs_write, vm_map};
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -199,6 +200,13 @@ fn read_initial_globals(fd: u32) {
 }
 
 fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &mut Vec<u32>) {
+    let mut pollfd = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
+    if !matches!(vfs_poll(&mut pollfd, 0), Ok(n) if n > 0)
+        || (pollfd[0].revents & poll_flags::POLLIN) == 0
+    {
+        return;
+    }
+
     let mut in_buf = [0u8; 4096];
     let len = match vfs_read(fd, &mut in_buf) {
         Ok(n) if n > 0 => n,

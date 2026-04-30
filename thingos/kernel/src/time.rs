@@ -3,8 +3,10 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 pub static SYSTEM_TIME_OFFSET: AtomicU64 = AtomicU64::new(0);
 static IS_ANCHORED: AtomicBool = AtomicBool::new(false);
 static MONOTONIC_CLAMP: MonotonicClamp = MonotonicClamp::new();
+static LAST_SYSTEM_CLOCK_TICK_LOG_NS: AtomicU64 = AtomicU64::new(0);
 
 pub const NANOS_PER_SEC: u64 = 1_000_000_000;
+pub const SYSTEM_CLOCK_TICK_LOG_INTERVAL_NS: u64 = 3 * NANOS_PER_SEC;
 pub const SCHED_TICK_HZ: u64 = 100;
 pub const SCHED_TICK_NANOS: u64 = NANOS_PER_SEC / SCHED_TICK_HZ;
 
@@ -77,6 +79,101 @@ pub fn realtime_now_ns() -> Option<u64> {
     Some(get_system_time_ns(monotonic_now_ns()))
 }
 
+/// Emit the kernel-owned wall-clock heartbeat at a fixed cadence.
+///
+/// This is driven by the scheduler timer, so the serial clock continues to tick
+/// even if no userspace clock client is running or repainting.
+pub fn maybe_log_system_clock_tick(mono_ns: u64) {
+    if !is_anchored() {
+        return;
+    }
+
+    let last = LAST_SYSTEM_CLOCK_TICK_LOG_NS.load(Ordering::Relaxed);
+    if last != 0 && mono_ns.saturating_sub(last) < SYSTEM_CLOCK_TICK_LOG_INTERVAL_NS {
+        return;
+    }
+    if LAST_SYSTEM_CLOCK_TICK_LOG_NS
+        .compare_exchange(last, mono_ns, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+
+    let realtime_ns = get_system_time_ns(mono_ns);
+    let secs = realtime_ns / NANOS_PER_SEC;
+    let nanos = realtime_ns % NANOS_PER_SEC;
+    let utc = unix_to_utc_datetime(secs);
+    crate::kinfo!(
+        "System clock tick: utc={:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:09} unix_secs={}.{:09}",
+        utc.year,
+        utc.month,
+        utc.day,
+        utc.hour,
+        utc.minute,
+        utc.second,
+        nanos,
+        secs,
+        nanos
+    );
+}
+
+#[derive(Clone, Copy)]
+struct DateTime {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+}
+
+fn unix_to_utc_datetime(seconds: u64) -> DateTime {
+    let mut remaining = seconds;
+
+    let second = (remaining % 60) as u8;
+    remaining /= 60;
+    let minute = (remaining % 60) as u8;
+    remaining /= 60;
+    let hour = (remaining % 24) as u8;
+    remaining /= 24;
+
+    let mut year = 1970u16;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining < days_in_year as u64 {
+            break;
+        }
+        remaining -= days_in_year as u64;
+        year = year.saturating_add(1);
+    }
+
+    let mut month = 1u8;
+    loop {
+        let dim = days_in_month(year, month);
+        if remaining < dim as u64 {
+            break;
+        }
+        remaining -= dim as u64;
+        month += 1;
+    }
+
+    DateTime { year, month, day: (remaining + 1) as u8, hour, minute, second }
+}
+
+fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: u16) -> bool {
+    (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0))
+}
+
 pub fn duration_to_sleep_ticks(duration_ns: u64) -> u64 {
     if duration_ns == 0 {
         0
@@ -113,8 +210,8 @@ impl MonotonicClamp {
 #[cfg(test)]
 mod tests {
     use super::{
-        MonotonicClamp, NANOS_PER_SEC, SCHED_TICK_NANOS, duration_to_sleep_ticks,
-        runtime_ticks_to_nanos,
+        MonotonicClamp, NANOS_PER_SEC, SCHED_TICK_NANOS, SYSTEM_CLOCK_TICK_LOG_INTERVAL_NS,
+        duration_to_sleep_ticks, runtime_ticks_to_nanos, unix_to_utc_datetime,
     };
 
     #[test]
@@ -133,6 +230,26 @@ mod tests {
         assert_eq!(duration_to_sleep_ticks(1), 1);
         assert_eq!(duration_to_sleep_ticks(SCHED_TICK_NANOS), 1);
         assert_eq!(duration_to_sleep_ticks(SCHED_TICK_NANOS + 1), 2);
+    }
+
+    #[test]
+    fn system_clock_tick_log_interval_is_three_seconds() {
+        assert_eq!(SYSTEM_CLOCK_TICK_LOG_INTERVAL_NS, 3 * NANOS_PER_SEC);
+    }
+
+    #[test]
+    fn unix_datetime_conversion_formats_known_utc_date() {
+        let dt = unix_to_utc_datetime(0);
+        assert_eq!(
+            (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second),
+            (1970, 1, 1, 0, 0, 0)
+        );
+
+        let dt = unix_to_utc_datetime(1_582_934_400);
+        assert_eq!(
+            (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second),
+            (2020, 2, 29, 0, 0, 0)
+        );
     }
 
     #[test]

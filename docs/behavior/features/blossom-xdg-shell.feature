@@ -77,6 +77,7 @@ Feature: blossom xdg-shell lifecycle
     Then the latest serial output should contain "/session/wayland/windows/index"
     When I type "cat /session/wayland/windows/index" on the serial console
     Then the latest serial output should contain "Thing-OS Wayland Lab"
+    And the latest serial output should contain "Clock"
     And the latest serial output should contain "title="
     When I type "cat /session/wayland/components" on the serial console
     Then the latest serial output should contain "xdg_toplevel"

@@ -4,6 +4,12 @@ use alloc::vec::Vec;
 
 use abi::display_protocol::Rect;
 
+const CASCADE_START_X: u32 = 40;
+const CASCADE_START_Y: u32 = 48;
+const CASCADE_STEP_X: u32 = 36;
+const CASCADE_STEP_Y: u32 = 32;
+const CASCADE_SLOTS: u32 = 8;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Client {
     pub id: u32,
@@ -529,6 +535,25 @@ impl Scene {
     }
 
     pub fn commit_surface(&mut self, client_id: u32, surface_id: u32) -> Option<CommitResult> {
+        let existing_standalone_windows = self
+            .surfaces
+            .values()
+            .filter(|surface| {
+                surface.id != surface_id
+                    && surface.subsurface.is_none()
+                    && surface.visible
+                    && surface.mapped
+                    && surface.current.buffer.is_some()
+            })
+            .count() as u32;
+        let next_z = self
+            .surfaces
+            .values()
+            .map(|surface| surface.current.z_order)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+
         let surface = self.surfaces.get_mut(&surface_id)?;
         if surface.client_id != client_id {
             return None;
@@ -550,8 +575,23 @@ impl Scene {
                 }
             }
             if pending_dest.is_none() && !had_current {
-                surface.current.dest_rect =
-                    Rect { x: 0, y: 0, w: pending_buf.width, h: pending_buf.height };
+                surface.current.dest_rect = if surface.subsurface.is_some() {
+                    Rect {
+                        x: surface.current.dest_rect.x,
+                        y: surface.current.dest_rect.y,
+                        w: pending_buf.width,
+                        h: pending_buf.height,
+                    }
+                } else {
+                    cascaded_window_rect(
+                        existing_standalone_windows,
+                        pending_buf.width,
+                        pending_buf.height,
+                    )
+                };
+                if surface.current.z_order == 0 && surface.pending.z_order.is_none() {
+                    surface.current.z_order = next_z;
+                }
             }
             surface.current.buffer = Some(pending_buf);
             surface.mapped = true;
@@ -849,6 +889,16 @@ impl Scene {
         }
 
         (old_focus, new_focus)
+    }
+}
+
+fn cascaded_window_rect(existing_standalone_windows: u32, width: u32, height: u32) -> Rect {
+    let slot = existing_standalone_windows % CASCADE_SLOTS;
+    Rect {
+        x: CASCADE_START_X.saturating_add(slot.saturating_mul(CASCADE_STEP_X)),
+        y: CASCADE_START_Y.saturating_add(slot.saturating_mul(CASCADE_STEP_Y)),
+        w: width,
+        h: height,
     }
 }
 
