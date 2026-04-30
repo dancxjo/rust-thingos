@@ -24,8 +24,16 @@ const CURSOR_HOTSPOT_Y: i32 = 6;
 static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);
 
 pub struct InputState {
+    /// Latest logical pointer position from Bristle input. Clients and focus
+    /// tracking see this immediately so input latency stays low.
     pointer_x: i32,
     pointer_y: i32,
+    /// Position of the cursor plane from the last successful present. Raw input
+    /// can advance `pointer_*` many times between frames; this advances once in
+    /// the present path so cursor commits stay frame-paced.
+    visible_x: i32,
+    visible_y: i32,
+    pending_cursor_motion: bool,
     output_w: i32,
     output_h: i32,
 }
@@ -34,7 +42,17 @@ impl InputState {
     pub fn new(output_w: u32, output_h: u32) -> Self {
         let output_w = output_w as i32;
         let output_h = output_h as i32;
-        Self { pointer_x: output_w / 2, pointer_y: output_h / 2, output_w, output_h }
+        let pointer_x = output_w / 2;
+        let pointer_y = output_h / 2;
+        Self {
+            pointer_x,
+            pointer_y,
+            visible_x: pointer_x,
+            visible_y: pointer_y,
+            pending_cursor_motion: false,
+            output_w,
+            output_h,
+        }
     }
 
     pub fn update_dimensions(&mut self, output_w: u32, output_h: u32) {
@@ -42,10 +60,33 @@ impl InputState {
         self.output_h = output_h as i32;
         self.pointer_x = self.pointer_x.clamp(0, self.output_w.saturating_sub(1));
         self.pointer_y = self.pointer_y.clamp(0, self.output_h.saturating_sub(1));
+        self.visible_x = self.visible_x.clamp(0, self.output_w.saturating_sub(1));
+        self.visible_y = self.visible_y.clamp(0, self.output_h.saturating_sub(1));
+        self.pending_cursor_motion |=
+            self.pointer_x != self.visible_x || self.pointer_y != self.visible_y;
     }
 
-    pub fn pointer_position(&self) -> (i32, i32) {
-        (self.pointer_x, self.pointer_y)
+    pub fn visible_pointer_position(&self) -> (i32, i32) {
+        (self.visible_x, self.visible_y)
+    }
+
+    pub fn has_pending_cursor_motion(&self) -> bool {
+        self.pending_cursor_motion
+            || self.pointer_x != self.visible_x
+            || self.pointer_y != self.visible_y
+    }
+
+    pub fn flush_visible_pointer(&mut self, damage: &mut DamageTracker) {
+        if !self.has_pending_cursor_motion() {
+            return;
+        }
+
+        let old_x = self.visible_x;
+        let old_y = self.visible_y;
+        self.visible_x = self.pointer_x;
+        self.visible_y = self.pointer_y;
+        self.pending_cursor_motion = false;
+        mark_cursor_damage(damage, old_x, old_y, self.visible_x, self.visible_y);
     }
 
     pub fn handle_bristle_event(
@@ -71,13 +112,11 @@ impl InputState {
                 let move_ev = PointerMovePayload::from_bytes(&p);
                 let dx = move_ev.dx;
                 let dy = move_ev.dy;
-                let old_x = self.pointer_x;
-                let old_y = self.pointer_y;
                 self.pointer_x =
                     (self.pointer_x + dx as i32).clamp(0, self.output_w.saturating_sub(1));
                 self.pointer_y =
                     (self.pointer_y + dy as i32).clamp(0, self.output_h.saturating_sub(1));
-                mark_cursor_damage(damage, old_x, old_y, self.pointer_x, self.pointer_y);
+                self.pending_cursor_motion = true;
                 if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < 8 {
                     stem::info!(
                         "bloom: pointer moved dx={} dy={} pos={},{}",
@@ -122,7 +161,13 @@ impl InputState {
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
                     }
                 }
-                mark_cursor_rect(damage, self.pointer_x, self.pointer_y);
+                mark_cursor_damage(
+                    damage,
+                    self.visible_x,
+                    self.visible_y,
+                    self.pointer_x,
+                    self.pointer_y,
+                );
             }
             Ok(EventType::PointerButtonUp) if payload.len() >= PointerButtonPayload::SIZE => {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
@@ -142,7 +187,13 @@ impl InputState {
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
                     }
                 }
-                mark_cursor_rect(damage, self.pointer_x, self.pointer_y);
+                mark_cursor_damage(
+                    damage,
+                    self.visible_x,
+                    self.visible_y,
+                    self.pointer_x,
+                    self.pointer_y,
+                );
             }
             Ok(EventType::KeyDown) if payload.len() >= KeyEventPayload::SIZE => {
                 let mut p = [0u8; KeyEventPayload::SIZE];

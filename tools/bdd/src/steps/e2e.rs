@@ -773,6 +773,9 @@ async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), S
     if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
         return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
     }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
 
     let before_path =
         crate::artifacts::global().lock().await.screenshot_path("pointer_debug_before");
@@ -786,7 +789,7 @@ async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), S
         .execute_qmp_control(cmd)
         .await
         .map_err(|e| StepError(format!("QMP mouse movement failed: {}", e)))?;
-    if !world.wait_for_serial("bloom: pointer moved", 10.0).await {
+    if !world.wait_for_serial("bloom: pointer moved", 30.0).await {
         return Err(StepError("Bloom did not receive pointer movement".to_string()));
     }
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

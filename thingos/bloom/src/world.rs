@@ -240,8 +240,9 @@ impl BloomWorld {
     /// can be sent, or `None` on failure (damage is restored internally).
     pub fn try_present(&mut self) -> Option<Vec<CompositionEntry>> {
         let composition = self.scene.collect_composition();
+        self.input.flush_visible_pointer(&mut self.damage);
         let pending_damage = self.damage.take();
-        let (pointer_x, pointer_y) = self.input.pointer_position();
+        let (pointer_x, pointer_y) = self.input.visible_pointer_position();
         let pointer_overlay =
             self.visuals.pointer_overlay_plane(&self.display, pointer_x, pointer_y);
         let cursor = self.visuals.cursor_plane(pointer_x, pointer_y);
