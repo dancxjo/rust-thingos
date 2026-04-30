@@ -146,6 +146,60 @@ impl ProviderRpc {
         self.req.port().primary_reader_pid()
     }
 
+    fn try_collect_responses(&self) {
+        let mut buf = [0u8; 4096];
+        let Some(_dispatch_guard) = self.dispatch_lock.try_lock() else {
+            return;
+        };
+
+        let n = self.resp.try_recv(&mut buf);
+        if n == 0 {
+            return;
+        }
+
+        let mut state = self.state.lock();
+        state.pending.extend_from_slice(&buf[..n]);
+
+        // Parse all complete messages from pending buffer.
+        while state.pending.len() >= 3 {
+            let resp_req_id = u16::from_le_bytes([state.pending[0], state.pending[1]]);
+            let status = state.pending[2];
+
+            let payload_len = if status == 0 {
+                if let Some(&req_op) = state.ops.get(&resp_req_id) {
+                    if let Some(len) = get_resp_payload_len(req_op, &state.pending[3..]) {
+                        len
+                    } else {
+                        break;
+                    }
+                } else {
+                    state.pending.len() - 3
+                }
+            } else {
+                0
+            };
+
+            let frame_len = 3 + payload_len;
+            if state.pending.len() < frame_len {
+                break;
+            }
+
+            let msg_payload = state.pending[3..frame_len].to_vec();
+            let mut entry = vec![status];
+            entry.extend_from_slice(&msg_payload);
+            state.responses.insert(resp_req_id, entry);
+
+            if let Some(wq) = state.waiters.get(&resp_req_id) {
+                wq.wake_one();
+            }
+            state.pending.drain(..frame_len);
+        }
+    }
+
+    fn has_buffered_response(&self, req_id: u16) -> bool {
+        self.state.lock().responses.contains_key(&req_id)
+    }
+
     /// Perform a multiplexed, concurrent round-trip RPC with the provider.
     pub fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<Vec<u8>> {
         let tid = unsafe { crate::sched::current_tid_current() };
@@ -210,50 +264,7 @@ impl ProviderRpc {
             }
 
             // 2. Try to receive and parse all pending responses.
-            let mut buf = [0u8; 4096];
-            if let Some(_dispatch_guard) = self.dispatch_lock.try_lock() {
-                let n = self.resp.try_recv(&mut buf);
-                if n > 0 {
-                    let mut state = self.state.lock();
-                    state.pending.extend_from_slice(&buf[..n]);
-
-                    // Parse all complete messages from pending buffer
-                    while state.pending.len() >= 3 {
-                        let resp_req_id = u16::from_le_bytes([state.pending[0], state.pending[1]]);
-                        let status = state.pending[2];
-
-                        let payload_len = if status == 0 {
-                            if let Some(&req_op) = state.ops.get(&resp_req_id) {
-                                if let Some(len) = get_resp_payload_len(req_op, &state.pending[3..])
-                                {
-                                    len
-                                } else {
-                                    break;
-                                }
-                            } else {
-                                state.pending.len() - 3
-                            }
-                        } else {
-                            0
-                        };
-
-                        let frame_len = 3 + payload_len;
-                        if state.pending.len() < frame_len {
-                            break;
-                        }
-
-                        let msg_payload = state.pending[3..frame_len].to_vec();
-                        let mut entry = vec![status];
-                        entry.extend_from_slice(&msg_payload);
-                        state.responses.insert(resp_req_id, entry);
-
-                        if let Some(wq) = state.waiters.get(&resp_req_id) {
-                            wq.wake_one();
-                        }
-                        state.pending.drain(..frame_len);
-                    }
-                }
-            }
+            self.try_collect_responses();
 
             let now_ns = crate::time::monotonic_now_ns();
             if now_ns >= deadline_ns {
@@ -268,9 +279,12 @@ impl ProviderRpc {
             if let Some(wq) = self.state.lock().waiters.get(&req_id) {
                 wq.push_back(tid);
             }
-            crate::sched::register_timeout_wake_current(tid, deadline_ns);
-            unsafe {
-                crate::sched::block_current_erased();
+            self.try_collect_responses();
+            if !self.has_buffered_response(req_id) {
+                crate::sched::register_timeout_wake_current(tid, deadline_ns);
+                unsafe {
+                    crate::sched::block_current_erased();
+                }
             }
             self.resp.remove_waiter(tid);
 
