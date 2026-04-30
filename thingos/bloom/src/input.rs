@@ -69,18 +69,20 @@ impl InputState {
                 let mut p = [0u8; PointerMovePayload::SIZE];
                 p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
                 let move_ev = PointerMovePayload::from_bytes(&p);
+                let dx = move_ev.dx;
+                let dy = move_ev.dy;
                 let old_x = self.pointer_x;
                 let old_y = self.pointer_y;
                 self.pointer_x =
-                    (self.pointer_x + move_ev.dx as i32).clamp(0, self.output_w.saturating_sub(1));
+                    (self.pointer_x + dx as i32).clamp(0, self.output_w.saturating_sub(1));
                 self.pointer_y =
-                    (self.pointer_y + move_ev.dy as i32).clamp(0, self.output_h.saturating_sub(1));
+                    (self.pointer_y + dy as i32).clamp(0, self.output_h.saturating_sub(1));
                 mark_cursor_damage(damage, old_x, old_y, self.pointer_x, self.pointer_y);
                 if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < 8 {
                     stem::info!(
                         "bloom: pointer moved dx={} dy={} pos={},{}",
-                        move_ev.dx,
-                        move_ev.dy,
+                        dx,
+                        dy,
                         self.pointer_x,
                         self.pointer_y
                     );
