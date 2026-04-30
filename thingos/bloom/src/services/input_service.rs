@@ -18,7 +18,7 @@ use crate::world::BloomWorld;
 const REGISTER_TIMER_ID: u64 = 1;
 const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
 const INPUT_READ_CHUNK: usize = 64;
-const MAX_READS_PER_WAKE: usize = 1;
+const MAX_READS_PER_WAKE: usize = 4;
 
 /// Handles normalized HID events forwarded by the bristle input service.
 ///
