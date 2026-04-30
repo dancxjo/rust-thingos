@@ -331,7 +331,7 @@ fn smooth_cursor_axis(visible: i32, target: i32) -> i32 {
         return target;
     }
 
-    let distance = delta.unsigned_abs() as i32;
+    let distance = if delta > 0 { delta } else { delta.saturating_neg() };
     let step = (distance / CURSOR_SMOOTHING_DIVISOR).max(CURSOR_SMOOTHING_MIN_STEP).min(distance);
     visible.saturating_add(step * delta.signum())
 }

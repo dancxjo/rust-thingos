@@ -15,14 +15,10 @@ use crate::scene::CompositionEntry;
 
 const MAX_COMMIT_PLANES: usize = 16;
 const MAX_DAMAGE_RECTS: usize = 32;
+const MAX_COMMIT_PAYLOAD_BYTES: usize = core::mem::size_of::<CommitRequest>()
+    + MAX_COMMIT_PLANES * core::mem::size_of::<PlaneCommit>()
+    + MAX_DAMAGE_RECTS * core::mem::size_of::<Rect>();
 static BOUNDED_DAMAGE_LOGS: AtomicU32 = AtomicU32::new(0);
-
-#[repr(C)]
-struct CommitPacket {
-    req: CommitRequest,
-    planes: [PlaneCommit; MAX_COMMIT_PLANES],
-    damage: [Rect; MAX_DAMAGE_RECTS],
-}
 
 const fn empty_plane_commit() -> PlaneCommit {
     PlaneCommit {
@@ -251,28 +247,25 @@ impl DisplayBackend {
             stem::info!("bloom: committing bounded damage rects={}", damage_count);
         }
 
-        let mut packet = CommitPacket {
-            req: CommitRequest {
-                commit_count: planes.len() as u32,
-                flags: CommitFlags::VSYNC,
-                commits_ptr: 0,
-                damage_count: damage_count as u32,
-                _reserved: 0,
-                damage_ptr: 0,
-            },
-            planes: [empty_plane_commit(); MAX_COMMIT_PLANES],
-            damage: damage_rects,
+        let req = CommitRequest {
+            commit_count: planes.len() as u32,
+            flags: CommitFlags::VSYNC,
+            commits_ptr: 0,
+            damage_count: damage_count as u32,
+            _reserved: 0,
+            damage_ptr: 0,
         };
-        packet.planes[..planes.len()].copy_from_slice(planes);
 
-        let in_len = core::mem::size_of::<CommitRequest>()
-            + planes.len() * core::mem::size_of::<PlaneCommit>();
-        let in_len = in_len + damage_count * core::mem::size_of::<Rect>();
+        let mut payload = [0u8; MAX_COMMIT_PAYLOAD_BYTES];
+        let mut payload_len = 0usize;
+        push_plain_bytes(&mut payload, &mut payload_len, &req);
+        push_plain_slice(&mut payload, &mut payload_len, planes);
+        push_plain_slice(&mut payload, &mut payload_len, &damage_rects[..damage_count]);
         let call = abi::device::DeviceCall {
             kind: abi::device::DeviceKind::Display,
             op: DISPLAY_OP_COMMIT,
-            in_ptr: &packet as *const CommitPacket as u64,
-            in_len: in_len as u32,
+            in_ptr: payload.as_ptr() as u64,
+            in_len: payload_len as u32,
             out_ptr: 0,
             out_len: 0,
         };
@@ -284,6 +277,31 @@ impl DisplayBackend {
                 false
             }
         }
+    }
+}
+
+fn push_plain_bytes<T>(out: &mut [u8], len: &mut usize, value: &T) {
+    let bytes = unsafe {
+        core::slice::from_raw_parts(value as *const T as *const u8, core::mem::size_of::<T>())
+    };
+    let end = len.saturating_add(bytes.len());
+    if end <= out.len() {
+        out[*len..end].copy_from_slice(bytes);
+        *len = end;
+    }
+}
+
+fn push_plain_slice<T>(out: &mut [u8], len: &mut usize, values: &[T]) {
+    if values.is_empty() {
+        return;
+    }
+    let bytes = unsafe {
+        core::slice::from_raw_parts(values.as_ptr() as *const u8, core::mem::size_of_val(values))
+    };
+    let end = len.saturating_add(bytes.len());
+    if end <= out.len() {
+        out[*len..end].copy_from_slice(bytes);
+        *len = end;
     }
 }
 
