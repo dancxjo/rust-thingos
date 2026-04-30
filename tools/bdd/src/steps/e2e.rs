@@ -786,6 +786,9 @@ async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), S
         .execute_qmp_control(cmd)
         .await
         .map_err(|e| StepError(format!("QMP mouse movement failed: {}", e)))?;
+    if !world.wait_for_serial("bloom: pointer moved", 10.0).await {
+        return Err(StepError("Bloom did not receive pointer movement".to_string()));
+    }
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let after_path = crate::artifacts::global().lock().await.screenshot_path("pointer_debug_after");

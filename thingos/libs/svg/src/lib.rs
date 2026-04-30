@@ -1,4 +1,4 @@
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
 pub const DEFAULT_CURSOR_SVG: &[u8] = br##"<svg width="32" height="32" viewBox="0 0 32 32" data-hotspot-x="3" data-hotspot-y="2"><path d="M3 2 L3 25 L9 19 L13 29 L18 27 L14 17 L23 17 Z" fill="#ffffff" stroke="#000000"/></svg>"##;
 
@@ -22,11 +22,20 @@ struct Style {
     stroke: Option<u32>,
     stroke_width: f32,
     opacity: f32,
+    fill_opacity: f32,
+    stroke_opacity: f32,
 }
 
 impl Default for Style {
     fn default() -> Self {
-        Self { fill: Some(0xff00_0000), stroke: None, stroke_width: 1.0, opacity: 1.0 }
+        Self {
+            fill: Some(0xff00_0000),
+            stroke: None,
+            stroke_width: 1.0,
+            opacity: 1.0,
+            fill_opacity: 1.0,
+            stroke_opacity: 1.0,
+        }
     }
 }
 
@@ -131,8 +140,7 @@ fn render_path_node(
     let Some(path) = path_from_d(d) else {
         return;
     };
-    let mut pm = pixmap.as_mut();
-    fill_and_stroke(&mut pm, &path, transform, style);
+    render_path_with_optional_filter(node, pixmap, &path, transform, style);
 }
 
 fn render_rect_node(
@@ -149,12 +157,94 @@ fn render_rect_node(
         return;
     }
 
-    let Some(rect) = Rect::from_xywh(x, y, w, h) else {
+    let Some(path) = rect_path(node, x, y, w, h) else {
         return;
     };
-    let path = PathBuilder::from_rect(rect);
-    let mut pm = pixmap.as_mut();
-    fill_and_stroke(&mut pm, &path, transform, style);
+    render_path_with_optional_filter(node, pixmap, &path, transform, style);
+}
+
+fn render_path_with_optional_filter(
+    node: roxmltree::Node<'_, '_>,
+    pixmap: &mut Pixmap,
+    path: &tiny_skia::Path,
+    transform: Transform,
+    style: Style,
+) {
+    let Some(blur) = gaussian_blur_std_deviation(node) else {
+        let mut pm = pixmap.as_mut();
+        fill_and_stroke(&mut pm, path, transform, style);
+        return;
+    };
+
+    let Some(mut filtered) = Pixmap::new(pixmap.width(), pixmap.height()) else {
+        let mut pm = pixmap.as_mut();
+        fill_and_stroke(&mut pm, path, transform, style);
+        return;
+    };
+
+    {
+        let mut pm = filtered.as_mut();
+        fill_and_stroke(&mut pm, path, transform, style);
+    }
+
+    let (sx, sy) = transform.get_scale();
+    blur_pixmap(&mut filtered, blur * sx.max(sy).max(1.0));
+
+    let paint = PixmapPaint::default();
+    pixmap.as_mut().draw_pixmap(0, 0, filtered.as_ref(), &paint, Transform::identity(), None);
+}
+
+fn rect_path(
+    node: roxmltree::Node<'_, '_>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> Option<tiny_skia::Path> {
+    let mut rx = parse_f32_attr(node, "rx");
+    let mut ry = parse_f32_attr(node, "ry");
+    if rx.is_some_and(|v| v < 0.0) {
+        rx = None;
+    }
+    if ry.is_some_and(|v| v < 0.0) {
+        ry = None;
+    }
+
+    let (mut rx, mut ry) = match (rx, ry) {
+        (Some(rx), Some(ry)) => (rx, ry),
+        (Some(rx), None) => (rx, rx),
+        (None, Some(ry)) => (ry, ry),
+        (None, None) => {
+            let rect = Rect::from_xywh(x, y, w, h)?;
+            return Some(PathBuilder::from_rect(rect));
+        }
+    };
+
+    rx = rx.min(w / 2.0);
+    ry = ry.min(h / 2.0);
+    if rx <= 0.0 || ry <= 0.0 {
+        let rect = Rect::from_xywh(x, y, w, h)?;
+        return Some(PathBuilder::from_rect(rect));
+    }
+
+    const KAPPA: f32 = 0.552_284_8;
+    let ox = rx * KAPPA;
+    let oy = ry * KAPPA;
+    let r = x + w;
+    let b = y + h;
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(x + rx, y);
+    pb.line_to(r - rx, y);
+    pb.cubic_to(r - rx + ox, y, r, y + ry - oy, r, y + ry);
+    pb.line_to(r, b - ry);
+    pb.cubic_to(r, b - ry + oy, r - rx + ox, b, r - rx, b);
+    pb.line_to(x + rx, b);
+    pb.cubic_to(x + rx - ox, b, x, b - ry + oy, x, b - ry);
+    pb.line_to(x, y + ry);
+    pb.cubic_to(x, y + ry - oy, x + rx - ox, y, x + rx, y);
+    pb.close();
+    pb.finish()
 }
 
 fn fill_and_stroke(
@@ -163,11 +253,15 @@ fn fill_and_stroke(
     transform: Transform,
     style: Style,
 ) {
-    if let Some(fill) = style.fill.and_then(|color| paint_from_argb(color, style.opacity)) {
+    if let Some(fill) =
+        style.fill.and_then(|color| paint_from_argb(color, style.opacity * style.fill_opacity))
+    {
         pixmap.fill_path(path, &fill, FillRule::Winding, transform, None);
     }
     if let Some(stroke_color) = style.stroke {
-        if let Some(stroke_paint) = paint_from_argb(stroke_color, style.opacity) {
+        if let Some(stroke_paint) =
+            paint_from_argb(stroke_color, style.opacity * style.stroke_opacity)
+        {
             let stroke = Stroke { width: style.stroke_width.max(0.0), ..Stroke::default() };
             pixmap.stroke_path(path, &stroke_paint, &stroke, transform, None);
         }
@@ -308,7 +402,51 @@ fn resolve_style(node: roxmltree::Node<'_, '_>, mut style: Style) -> Style {
     if let Some(opacity) = parse_f32_attr(node, "opacity") {
         style.opacity *= opacity;
     }
+    if let Some(opacity) = parse_f32_attr(node, "fill-opacity") {
+        style.fill_opacity *= opacity;
+    }
+    if let Some(opacity) = parse_f32_attr(node, "stroke-opacity") {
+        style.stroke_opacity *= opacity;
+    }
+    if let Some(declarations) = node.attribute("style") {
+        apply_style_declarations(declarations, &mut style);
+    }
     style
+}
+
+fn apply_style_declarations(declarations: &str, style: &mut Style) {
+    for declaration in declarations.split(';') {
+        let Some((name, value)) = declaration.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        let value = value.trim();
+        match name {
+            "fill" => style.fill = parse_paint(value),
+            "stroke" => style.stroke = parse_paint(value),
+            "stroke-width" => {
+                if let Ok(width) = value.parse() {
+                    style.stroke_width = width;
+                }
+            }
+            "opacity" => {
+                if let Ok(opacity) = value.parse::<f32>() {
+                    style.opacity *= opacity;
+                }
+            }
+            "fill-opacity" => {
+                if let Ok(opacity) = value.parse::<f32>() {
+                    style.fill_opacity *= opacity;
+                }
+            }
+            "stroke-opacity" => {
+                if let Ok(opacity) = value.parse::<f32>() {
+                    style.stroke_opacity *= opacity;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_paint(value: &str) -> Option<u32> {
@@ -403,6 +541,112 @@ fn parse_f32_attr(node: roxmltree::Node<'_, '_>, name: &str) -> Option<f32> {
     node.attribute(name)?.parse().ok()
 }
 
+fn gaussian_blur_std_deviation(node: roxmltree::Node<'_, '_>) -> Option<f32> {
+    let filter = filter_value(node)?;
+    let id = filter.strip_prefix("url(#")?.strip_suffix(')')?;
+    let filter_node = node
+        .document()
+        .descendants()
+        .find(|candidate| candidate.is_element() && candidate.attribute("id") == Some(id))?;
+    let blur = filter_node.descendants().find(|candidate| {
+        candidate.is_element() && candidate.tag_name().name() == "feGaussianBlur"
+    })?;
+    parse_std_deviation(blur.attribute("stdDeviation")?)
+}
+
+fn filter_value<'a, 'input>(node: roxmltree::Node<'a, 'input>) -> Option<&'a str> {
+    if let Some(filter) = node.attribute("filter") {
+        return Some(filter.trim());
+    }
+
+    let declarations = node.attribute("style")?;
+    for declaration in declarations.split(';') {
+        let Some((name, value)) = declaration.split_once(':') else {
+            continue;
+        };
+        if name.trim() == "filter" {
+            return Some(value.trim());
+        }
+    }
+    None
+}
+
+fn parse_std_deviation(value: &str) -> Option<f32> {
+    value
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .filter(|part| !part.is_empty())
+        .next()?
+        .parse()
+        .ok()
+}
+
+fn blur_pixmap(pixmap: &mut Pixmap, radius: f32) {
+    let radius = radius.round().clamp(0.0, 16.0) as usize;
+    if radius == 0 {
+        return;
+    }
+
+    let width = pixmap.width() as usize;
+    let height = pixmap.height() as usize;
+    let mut tmp = pixmap.pixels().to_vec();
+
+    {
+        let src = pixmap.pixels();
+        for y in 0..height {
+            for x in 0..width {
+                tmp[y * width + x] = blur_sample(src, width, height, x, y, radius, true);
+            }
+        }
+    }
+
+    let dst = pixmap.pixels_mut();
+    for y in 0..height {
+        for x in 0..width {
+            dst[y * width + x] = blur_sample(&tmp, width, height, x, y, radius, false);
+        }
+    }
+}
+
+fn blur_sample(
+    pixels: &[tiny_skia::PremultipliedColorU8],
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    radius: usize,
+    horizontal: bool,
+) -> tiny_skia::PremultipliedColorU8 {
+    let mut r = 0u32;
+    let mut g = 0u32;
+    let mut b = 0u32;
+    let mut a = 0u32;
+    let mut count = 0u32;
+
+    for offset in 0..=(radius * 2) {
+        let delta = offset as isize - radius as isize;
+        let sx = if horizontal { x as isize + delta } else { x as isize };
+        let sy = if horizontal { y as isize } else { y as isize + delta };
+        if sx < 0 || sy < 0 || sx >= width as isize || sy >= height as isize {
+            continue;
+        }
+        let px = pixels[sy as usize * width + sx as usize];
+        r += px.red() as u32;
+        g += px.green() as u32;
+        b += px.blue() as u32;
+        a += px.alpha() as u32;
+        count += 1;
+    }
+
+    let count = count.max(1);
+    tiny_skia::PremultipliedColorU8::from_rgba(
+        (r / count) as u8,
+        (g / count) as u8,
+        (b / count) as u8,
+        (a / count) as u8,
+    )
+    .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT)
+}
+
 fn clear_surface(dst: &mut [u32], width: u32, height: u32, stride: u32) {
     for y in 0..height as usize {
         let row = y * stride as usize;
@@ -484,6 +728,28 @@ mod tests {
         rasterize(svg, &mut pixels, 32, 32, 32).unwrap();
         assert!(pixels.iter().any(|px| (*px & 0x00ff_ffff) == 0x00ff_ffff));
         assert!(pixels.iter().any(|px| (*px & 0x00ff_ffff) == 0x00ff_b900));
+    }
+
+    #[test]
+    fn rounded_rect_respects_ry() {
+        let svg = br##"<svg width="8" height="8" viewBox="0 0 8 8"><rect x="1" y="1" width="6" height="6" ry="3" fill="#ffb900"/></svg>"##;
+        let mut pixels = [0u32; 8 * 8];
+        rasterize(svg, &mut pixels, 8, 8, 8).unwrap();
+        let corner_alpha = pixels[1 + 1 * 8] >> 24;
+        let center_alpha = pixels[4 + 1 * 8] >> 24;
+        assert!(corner_alpha < center_alpha / 2);
+        assert_eq!(pixels[4 + 1 * 8] & 0x00ff_ffff, 0x00ff_b900);
+    }
+
+    #[test]
+    fn gaussian_blur_filter_softens_shadow() {
+        let svg = br##"<svg width="16" height="16" viewBox="0 0 16 16"><defs><filter id="shadow"><feGaussianBlur stdDeviation="2"/></filter></defs><rect x="4" y="4" width="4" height="4" fill="#000000" opacity=".5" filter="url(#shadow)"/></svg>"##;
+        let mut pixels = [0u32; 16 * 16];
+        rasterize(svg, &mut pixels, 16, 16, 16).unwrap();
+        let center_alpha = pixels[6 + 6 * 16] >> 24;
+        let edge_alpha = pixels[3 + 6 * 16] >> 24;
+        assert!(center_alpha > edge_alpha);
+        assert!(edge_alpha > 0);
     }
 
     #[test]

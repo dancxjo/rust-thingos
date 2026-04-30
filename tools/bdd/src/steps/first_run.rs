@@ -1,13 +1,12 @@
 use cucumber::{given, then, when};
 
-use crate::world::{DEFAULT_STEP_TIMEOUT_SECS, ThingOsWorld, strip_ansi};
-
-use super::helpers::{
-    StepError, capture_failure_diagnostics, check_serial, check_text_pixels,
-    check_window_bg_color, default_timeout_secs, unescape_step_text,
-    wait_for_clock_pixels, wait_for_clock_ticks, wallpaper_within_timeout,
-};
 use super::basic::turn_on_machine;
+use super::helpers::{
+    StepError, capture_failure_diagnostics, check_serial, check_text_pixels, check_window_bg_color,
+    default_timeout_secs, unescape_step_text, wait_for_clock_pixels, wait_for_clock_ticks,
+    wallpaper_within_timeout,
+};
+use crate::world::{DEFAULT_STEP_TIMEOUT_SECS, ThingOsWorld, strip_ansi};
 
 // ===== First Run Experience Steps =====
 
@@ -156,8 +155,6 @@ async fn wait_for_serial_contains(
 ) -> Result<(), StepError> {
     check_serial(world, &expected, default_timeout_secs(world)).await
 }
-
-
 
 #[given("the system is shut down")]
 async fn shutdown_system(world: &mut ThingOsWorld) {
@@ -325,35 +322,28 @@ async fn bloom_cursor_visible(world: &mut ThingOsWorld) -> Result<(), StepError>
         return Err(StepError("Screenshot has invalid dimensions".to_string()));
     }
 
-    let cx = (width / 2) as i32;
-    let cy = (height / 2) as i32;
-    let cursor_color = [0xFF, 0xFF, 0xFF];
-    let mut match_count = 0;
-
-    let radius = 6;
-    for dy in -radius..=radius {
-        for dx in -radius..=radius {
-            let x = cx + dx;
-            let y = cy + dy;
-            if x < 0 || y < 0 {
-                continue;
-            }
-            let ux = x as u32;
-            let uy = y as u32;
-            if ux >= width || uy >= height {
-                continue;
-            }
-            let pixel = rgb.get_pixel(ux, uy).0;
-            if pixel == cursor_color {
-                match_count += 1;
+    let x0 = width.saturating_div(2).saturating_sub(9);
+    let y0 = height.saturating_div(2).saturating_sub(6);
+    let mut white = 0u32;
+    let mut gold = 0u32;
+    let mut dark = 0u32;
+    for y in y0..y0.saturating_add(96).min(height) {
+        for x in x0..x0.saturating_add(96).min(width) {
+            let [r, g, b] = rgb.get_pixel(x, y).0;
+            if r > 235 && g > 235 && b > 235 {
+                white += 1;
+            } else if r > 190 && (120..=210).contains(&g) && b < 80 {
+                gold += 1;
+            } else if r < 45 && g < 45 && b < 45 {
+                dark += 1;
             }
         }
     }
 
-    if match_count < 5 {
+    if white < 300 || gold < 40 || dark < 120 {
         return Err(StepError(format!(
-            "Cursor not detected near center. Found {} cursor pixels, expected at least 5.",
-            match_count
+            "Cursor not detected near initial pointer layer. Found white={}, gold={}, dark={}.",
+            white, gold, dark
         )));
     }
     Ok(())
@@ -420,8 +410,6 @@ async fn check_ordering(
     }
 }
 
-
-
 #[then(regex = r#"^I should see "([^"]+)"$"#)]
 async fn should_see_simple(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
     check_serial(world, &expected, default_timeout_secs(world)).await
@@ -436,4 +424,3 @@ async fn machine_is_booting(world: &mut ThingOsWorld) -> Result<(), StepError> {
 async fn log_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
     check_serial(world, &expected, default_timeout_secs(world)).await
 }
-

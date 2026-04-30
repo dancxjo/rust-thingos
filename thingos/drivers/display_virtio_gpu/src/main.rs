@@ -444,6 +444,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     planes.push(plane);
                 }
             }
+            planes.sort_unstable_by_key(|plane| plane.z_order);
 
             if !planes.is_empty() {
                 let idx = driver.next_buffer_idx;

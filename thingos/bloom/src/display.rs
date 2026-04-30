@@ -192,8 +192,8 @@ impl DisplayBackend {
                 let (out_w, out_h) = self.output_size();
                 let dst_x = cursor.x.max(0) as u32;
                 let dst_y = cursor.y.max(0) as u32;
-                let src_x = cursor.x.saturating_neg() as u32;
-                let src_y = cursor.y.saturating_neg() as u32;
+                let src_x = if cursor.x < 0 { cursor.x.saturating_neg() as u32 } else { 0 };
+                let src_y = if cursor.y < 0 { cursor.y.saturating_neg() as u32 } else { 0 };
                 let visible_w = cursor.width.saturating_sub(src_x).min(out_w.saturating_sub(dst_x));
                 let visible_h =
                     cursor.height.saturating_sub(src_y).min(out_h.saturating_sub(dst_y));
@@ -215,6 +215,8 @@ impl DisplayBackend {
         if plane_count == 0 {
             return PresentResult { success: false };
         }
+
+        planes[..plane_count].sort_unstable_by_key(|plane| plane.z_order);
 
         PresentResult { success: self.commit_display_planes(&planes[..plane_count]) }
     }
