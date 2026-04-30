@@ -30,6 +30,8 @@ static CURSOR_SMOOTHING_LOGS: AtomicU32 = AtomicU32::new(0);
 static COALESCE_PRE: AtomicU32 = AtomicU32::new(0);
 /// Limits how many times coalesce-flush stats are logged.
 static COALESCE_FLUSH_LOGS: AtomicU32 = AtomicU32::new(0);
+/// Maximum number of times per-category debug stats are logged at startup.
+const MAX_STARTUP_LOGS: u32 = 8;
 
 pub struct InputState {
     /// Latest logical pointer position from Bristle input. Clients and focus
@@ -103,7 +105,7 @@ impl InputState {
             self.pointer_x != self.visible_x || self.pointer_y != self.visible_y;
         mark_cursor_damage(damage, old_x, old_y, self.visible_x, self.visible_y);
 
-        if self.pending_cursor_motion && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < 8 {
+        if self.pending_cursor_motion && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
             stem::info!(
                 "bloom: cursor smoothing visible={},{} target={},{}",
                 self.visible_x,
@@ -132,7 +134,7 @@ impl InputState {
         };
 
         let flush_count = COALESCE_FLUSH_LOGS.fetch_add(1, Ordering::Relaxed);
-        if flush_count < 8 {
+        if flush_count < MAX_STARTUP_LOGS {
             let pre = COALESCE_PRE.load(Ordering::Relaxed);
             stem::info!(
                 "bloom: motion coalesce pre={} post={} pos={},{}",
@@ -191,7 +193,7 @@ impl InputState {
                 // is called once per frame boundary.
                 self.pending_motion_ts = Some(header.timestamp_ns);
                 COALESCE_PRE.fetch_add(1, Ordering::Relaxed);
-                if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < 8 {
+                if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
                     stem::info!(
                         "bloom: pointer moved dx={} dy={} pos={},{}",
                         dx,
@@ -210,6 +212,9 @@ impl InputState {
                 // Flush any pending coalesced motion so clients see the latest
                 // position before the button event (preserves ordering).
                 self.flush_pointer_motion(scene);
+                // Still call update_pointer_focus directly: if no motion was
+                // pending (flush_pointer_motion was a no-op), focus may be
+                // stale and must be resolved before delivering the button event.
                 self.update_pointer_focus(scene);
                 let old_focus = scene.keyboard_focus;
                 scene.keyboard_focus = scene.pointer_focus;
@@ -241,6 +246,9 @@ impl InputState {
                 let btn = PointerButtonPayload::from_bytes(&p);
                 // Flush any pending coalesced motion before the button-up event.
                 self.flush_pointer_motion(scene);
+                // Still call update_pointer_focus directly: if no motion was
+                // pending (flush_pointer_motion was a no-op), focus may be
+                // stale and must be resolved before delivering the button event.
                 self.update_pointer_focus(scene);
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
