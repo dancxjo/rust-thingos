@@ -6,9 +6,13 @@
 //!      since the last commit)?
 //!
 //! The clock is *not* a timer source inside the WaitSet — the compositor loop
-//! passes the result of [`FrameClock::next_deadline_ms`] as the `timeout`
+//! passes the result of [`FrameClock::next_deadline_ns`] as the `timeout`
 //! argument to `WaitSet::wait`, so the loop wakes up naturally when the
 //! deadline arrives without any separate timer FD.
+//!
+//! Deadlines are stored and returned at **nanosecond** precision to avoid the
+//! systematic ~0.33 ms rounding error that arises when converting 16.67 ms
+//! frame intervals to whole milliseconds.
 
 use stem::time::monotonic_ns;
 
@@ -62,14 +66,16 @@ impl FrameClock {
         now >= next
     }
 
-    /// Milliseconds until the next repaint is allowed.
+    /// Nanoseconds until the next repaint is allowed.
     ///
     /// Returns `Some(0)` when a repaint is due now, and `None` only when no
     /// repaint is pending.
     ///
     /// Pass this as the `timeout` to `WaitSet::wait` so the loop wakes up
-    /// exactly when the next frame window opens.
-    pub fn next_deadline_ms(&self) -> Option<u64> {
+    /// exactly when the next frame window opens.  Returning nanoseconds
+    /// avoids the ~0.33 ms systematic rounding error that comes from
+    /// converting the 16.67 ms frame interval to a whole millisecond count.
+    pub fn next_deadline_ns(&self) -> Option<u64> {
         if !self.repaint_requested {
             return None;
         }
@@ -78,10 +84,7 @@ impl FrameClock {
         if now >= next {
             Some(0)
         } else {
-            let diff_ns = next - now;
-            // Convert nanoseconds to milliseconds, rounding up to avoid
-            // busy-waking a fraction of a millisecond early.
-            Some((diff_ns + 999_999) / 1_000_000)
+            Some(next - now)
         }
     }
 
@@ -89,8 +92,20 @@ impl FrameClock {
     ///
     /// Clears the `repaint_requested` flag and records the commit timestamp so
     /// the minimum frame interval is enforced before the next repaint.
+    ///
+    /// Logs the measured frame interval at debug level so drift and jitter are
+    /// visible without needing external tooling.
     pub fn after_commit(&mut self) {
         self.repaint_requested = false;
-        self.last_commit_ns = monotonic_ns();
+        let now = monotonic_ns();
+        if self.last_commit_ns > 0 {
+            let interval_ns = now.saturating_sub(self.last_commit_ns);
+            stem::debug!(
+                "bloom: frame interval {}ns (target {}ns)",
+                interval_ns,
+                self.frame_interval_ns
+            );
+        }
+        self.last_commit_ns = now;
     }
 }
