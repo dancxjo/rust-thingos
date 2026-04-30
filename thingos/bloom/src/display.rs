@@ -275,8 +275,10 @@ impl DisplayBackend {
                 }
             }
             if out_count == 0 {
-                damage_rects[0] = Rect { x: 0, y: 0, w, h };
-                damage_count = 1;
+                // All reported damage is outside the visible output. There is
+                // nothing to present; falling back to full damage here turns
+                // edge-only pointer motion into expensive whole-screen blits.
+                return true;
             } else {
                 damage_count = out_count;
             }
