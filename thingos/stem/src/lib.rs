@@ -13,7 +13,6 @@ pub mod bitset;
 pub mod block;
 pub mod console;
 pub mod device;
-pub mod dmabuf;
 pub mod errors;
 pub mod fs;
 

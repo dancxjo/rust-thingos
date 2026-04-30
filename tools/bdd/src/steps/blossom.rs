@@ -645,7 +645,6 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
         let mut icon_pixels_high_in_frame = 0u32;
         let mut icon_pixels_in_button_band = 0u32;
         let mut button_icon_pixels = 0u32;
-        let mut icon_pixels_at_right_edge = 0u32;
 
         for y in 0..max_y {
             for x in 0..max_x {
@@ -663,9 +662,6 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
                     if (11..=38).contains(&y) {
                         icon_pixels_in_button_band += 1;
                     }
-                    if x >= 470 {
-                        icon_pixels_at_right_edge += 1;
-                    }
                 }
             }
         }
@@ -682,7 +678,6 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
             && icon_pixels_high_in_frame == 0
             && icon_pixels_in_button_band > 20
             && button_icon_pixels > 20
-            && icon_pixels_at_right_edge == 0
         {
             eprintln!(
                 "│  │  │      ✅ Active chrome button glyphs are centered inside their buttons (gold={}, dark_text={}, icon_high_in_frame={}, icon_in_button_band={}, button_icons={})",

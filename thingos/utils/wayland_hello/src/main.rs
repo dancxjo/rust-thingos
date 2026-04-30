@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
-use stem::dmabuf::DmaBuf;
+use pistil_types::Texture;
 use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
@@ -47,11 +47,9 @@ struct TextRenderer {
     draw_text: DrawTextFn,
 }
 
-#[derive(Clone, Copy)]
 struct BufferState {
-    pool_id: u32,
     buffer_id: u32,
-    backing: DmaBuf,
+    texture: Texture,
     width: u32,
     height: u32,
     stride: u32,
@@ -354,102 +352,80 @@ fn ensure_buffer(
     base_id: u32,
     width: u32,
     height: u32,
-) -> BufferState {
-    if let Some(buf) = current {
-        if buf.width == width && buf.height == height {
-            return *buf;
-        }
+) -> &mut BufferState {
+    let reusable = match current.as_ref() {
+        Some(buf) => buf.width == width && buf.height == height,
+        None => false,
+    };
+    if reusable {
+        return current.as_mut().unwrap();
     }
 
-    let stride = width * 4;
-    let size = stride * height;
-    let backing = DmaBuf::create("wl.buffer", size as usize).expect("create wl buffer");
+    let texture = Texture::new("wl.buffer", width, height, 4).expect("create wl texture");
 
     let pool_id = base_id;
     let buffer_id = base_id + 1;
     if let Some(dmabuf) = dmabuf_id {
-        create_dmabuf_buffer(fd, dmabuf, pool_id, buffer_id, backing.fd(), width, height, stride);
+        create_dmabuf_buffer(
+            fd,
+            dmabuf,
+            pool_id,
+            buffer_id,
+            texture.fd,
+            width,
+            height,
+            texture.stride,
+        );
     } else {
-        create_pool(fd, shm_id, pool_id, backing.fd(), size);
-        create_buffer(fd, pool_id, buffer_id, width, height, stride);
+        create_pool(fd, shm_id, pool_id, texture.fd, texture.size as u32);
+        create_buffer(fd, pool_id, buffer_id, width, height, texture.stride);
     }
 
-    let out = BufferState { pool_id, buffer_id, backing, width, height, stride };
-    *current = Some(out);
-    out
+    *current = Some(BufferState { buffer_id, width, height, stride: texture.stride, texture });
+    current.as_mut().unwrap()
 }
 
-fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRenderer>) {
-    unsafe {
-        let pixels = core::slice::from_raw_parts_mut(
-            buffer.backing.as_mut_ptr() as *mut u32,
-            (buffer.width * buffer.height) as usize,
-        );
-        paint_vertical_gradient(pixels, buffer.width, buffer.height, 0xFFFFF9EC, 0xFFFDF1D2);
-        draw_text(
-            text_renderer,
-            pixels,
-            buffer.width,
-            buffer.height,
-            10,
-            23,
-            13.0,
-            title,
-            0xFF3F3A2F,
-        );
-        draw_text(
-            text_renderer,
-            pixels,
-            buffer.width,
-            buffer.height,
-            10,
-            48,
-            13.0,
-            "Resize the frame; the buffer follows.",
-            0xFF3F3A2F,
-        );
-        draw_text(
-            text_renderer,
-            pixels,
-            buffer.width,
-            buffer.height,
-            10,
-            72,
-            13.0,
-            "Compositor round-trip: shm, xdg, paint.",
-            0xFF3F3A2F,
-        );
-    }
+fn render_window(buffer: &mut BufferState, title: &str, text_renderer: Option<&TextRenderer>) {
+    let width = buffer.width;
+    let height = buffer.height;
+    let pixels = buffer.texture.as_slice_mut();
+    paint_vertical_gradient(pixels, width, height, 0xFFFFF9EC, 0xFFFDF1D2);
+    draw_text(text_renderer, pixels, width, height, 10, 23, 13.0, title, 0xFF3F3A2F);
+    draw_text(
+        text_renderer,
+        pixels,
+        width,
+        height,
+        10,
+        48,
+        13.0,
+        "Resize the frame; the buffer follows.",
+        0xFF3F3A2F,
+    );
+    draw_text(
+        text_renderer,
+        pixels,
+        width,
+        height,
+        10,
+        72,
+        13.0,
+        "Compositor round-trip: shm, xdg, paint.",
+        0xFF3F3A2F,
+    );
 }
 
-fn render_popup(buffer: BufferState, label: &str, text_renderer: Option<&TextRenderer>) {
-    unsafe {
-        let pixels = core::slice::from_raw_parts_mut(
-            buffer.backing.as_mut_ptr() as *mut u32,
-            (buffer.width * buffer.height) as usize,
-        );
-        for y in 0..buffer.height as usize {
-            for x in 0..buffer.width as usize {
-                let border = x < 2
-                    || y < 2
-                    || x + 2 >= buffer.width as usize
-                    || y + 2 >= buffer.height as usize;
-                pixels[y * buffer.width as usize + x] =
-                    if border { 0xFFB58900 } else { 0xEEFEF6E3 };
-            }
+fn render_popup(buffer: &mut BufferState, label: &str, text_renderer: Option<&TextRenderer>) {
+    let width = buffer.width;
+    let height = buffer.height;
+    let pixels = buffer.texture.as_slice_mut();
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let border = x < 2 || y < 2 || x + 2 >= width as usize || y + 2 >= height as usize;
+            pixels[y * width as usize + x] = if border { 0xFFB58900 } else { 0xEEFEF6E3 };
         }
-        draw_text(
-            text_renderer,
-            pixels,
-            buffer.width,
-            buffer.height,
-            14,
-            34,
-            18.0,
-            label,
-            0xFF3F3A2F,
-        );
     }
+    draw_text(text_renderer, pixels, width, height, 14, 34, 18.0, label, 0xFF3F3A2F);
 }
 
 fn paint_vertical_gradient(pixels: &mut [u32], width: u32, height: u32, top: u32, bottom: u32) {

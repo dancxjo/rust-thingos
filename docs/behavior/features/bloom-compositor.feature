@@ -128,6 +128,7 @@ Feature: Bloom compositor service loop and responsiveness
   Scenario: bloom first frame includes the cached cursor plane
     Given the machine is booted
     Then the serial output should contain "bloom: cursor ready" within 60s
+    And the serial output should contain "size=96x96" within 60s
     And the serial output should contain "First frame rendered" within 60s
     And the bloom cursor should be visible
 

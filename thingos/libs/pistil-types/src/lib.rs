@@ -4,7 +4,7 @@ extern crate alloc;
 
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use serde::{Deserialize, Serialize};
-use stem::syscall::{memfd_create, vm_map, vm_unmap};
+use stem::syscall::{memfd_create, vfs_close, vm_map, vm_unmap};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Point {
@@ -150,7 +150,13 @@ impl Texture {
             backing: VmBacking::File { thing: fd, offset: 0 },
         };
 
-        let resp = vm_map(&req).ok()?;
+        let resp = match vm_map(&req) {
+            Ok(resp) => resp,
+            Err(_) => {
+                let _ = vfs_close(fd);
+                return None;
+            }
+        };
 
         Some(Self { fd, ptr: resp.addr as *mut u8, width, height, stride, bpp, size })
     }

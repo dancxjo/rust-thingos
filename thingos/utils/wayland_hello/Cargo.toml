@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 stem = { path = "../../stem", features = ["rt"] }
+pistil-types = { path = "../../libs/pistil-types" }
 libdl = { path = "../libdl" }
