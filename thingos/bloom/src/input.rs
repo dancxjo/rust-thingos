@@ -2,6 +2,7 @@ use abi::KindId;
 use abi::hid::{
     BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
+use core::sync::atomic::{AtomicU32, Ordering};
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
 
@@ -20,6 +21,7 @@ const CURSOR_DAMAGE_W: u32 = 96;
 const CURSOR_DAMAGE_H: u32 = 96;
 const CURSOR_HOTSPOT_X: i32 = 9;
 const CURSOR_HOTSPOT_Y: i32 = 6;
+static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);
 
 pub struct InputState {
     pointer_x: i32,
@@ -74,6 +76,15 @@ impl InputState {
                 self.pointer_y =
                     (self.pointer_y + move_ev.dy as i32).clamp(0, self.output_h.saturating_sub(1));
                 mark_cursor_damage(damage, old_x, old_y, self.pointer_x, self.pointer_y);
+                if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < 8 {
+                    stem::info!(
+                        "bloom: pointer moved dx={} dy={} pos={},{}",
+                        move_ev.dx,
+                        move_ev.dy,
+                        self.pointer_x,
+                        self.pointer_y
+                    );
+                }
                 self.update_pointer_focus(scene);
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {

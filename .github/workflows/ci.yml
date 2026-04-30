@@ -1,13 +1,14 @@
 name: CI
 
+# on:
+#   pull_request:
+#     branches:
+#       - "**"
+#   push:
+#     branches:
+#       - main
+#       - trunk
 on:
-  pull_request:
-    branches:
-      - "**"
-  push:
-    branches:
-      - main
-      - trunk
   workflow_dispatch:
 
 permissions:

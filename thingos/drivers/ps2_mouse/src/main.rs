@@ -471,5 +471,6 @@ fn polling_loop(bristle_pid: u32) -> ! {
         } else {
             stem::sleep_ms(POLLING_INTERVAL_MS);
         }
+        stem::sleep_ms(1);
     }
 }
