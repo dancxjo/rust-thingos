@@ -291,7 +291,7 @@ rustc-thingos:
 
 # Fetch vendor assets (Limine, OVMF, fonts, icons, cursors).
 fetch:
-    {{xtask}} fetch
+    cargo run -p xtask --features svg-cursors -- fetch
 
 # Run all unit tests (host-testable crates only).
 test *args:

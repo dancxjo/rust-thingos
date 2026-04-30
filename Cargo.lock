@@ -646,7 +646,6 @@ dependencies = [
  "pistil-types",
  "spin",
  "stem",
- "svg",
 ]
 
 [[package]]
@@ -8130,7 +8129,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "svg"
 version = "0.1.0"
 dependencies = [
- "stem",
+ "roxmltree 0.20.0",
+ "svgtypes",
+ "tiny-skia",
 ]
 
 [[package]]

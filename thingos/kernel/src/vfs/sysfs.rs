@@ -300,7 +300,7 @@ fn slot_name(entry: DeviceEntry) -> alloc::string::String {
     if let Some(loc) = entry.pci_location {
         format!("pci-0000:{:02x}:{:02x}.{}", loc.bus, loc.dev, loc.func)
     } else if !entry.ioport_ranges.is_empty() {
-        format!("isa-{:04x}", entry.ioport_ranges[0].0)
+        format!("isa-{:04x}", entry.resource_id as u16)
     } else {
         format!("platform-{:08x}", entry.resource_id)
     }

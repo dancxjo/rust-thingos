@@ -8,7 +8,6 @@ stem = { path = "../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../abi" }
 libdl = { path = "../utils/libdl" }
 pistil-types = { path = "../libs/pistil-types" }
-svg = { path = "../libs/svg" }
 blossom = { path = "../blossom" }
 spin = "0.9"
 

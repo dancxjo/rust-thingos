@@ -1199,11 +1199,17 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             crate::device_registry::CMOS_IOPORT_RANGES,
             0x70, // Port base as unique-ish ID
         ));
-        // PS/2 Controller (0x60, 0x64)
+        // PS/2 keyboard and mouse share the i8042 controller ports, but userspace
+        // binds them as separate input drivers so Cambium can launch both.
         reg.register(crate::device_registry::DeviceEntry::new_legacy(
-            "ps2_controller",
+            "drv.Ps2Keyboard",
             crate::device_registry::PS2_IOPORT_RANGES,
             0x60,
+        ));
+        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+            "drv.Ps2Mouse",
+            crate::device_registry::PS2_IOPORT_RANGES,
+            0x64,
         ));
         // Legacy ISA IDE controller: primary (0x1F0) + secondary (0x170) channels.
         // Exposed as `isa-01f0` in sysfs with kind="dev.storage.ata" so cambium

@@ -1,6 +1,6 @@
 # Feature: Bloom compositor service loop and responsiveness
 
-> Last run: 2026-04-27 12:09:26
+> Last run: 2026-04-29 20:35:57
 
 ## Scenarios
 

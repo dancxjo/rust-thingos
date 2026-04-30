@@ -22,7 +22,8 @@ extern crate alloc;
 
 use abi::hid::{
     BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO, BristleEventHeader, EventType,
-    KIND_BRISTLE_REGISTER_SINK, Key, KeyEventPayload, decode_register_sink,
+    KIND_BRISTLE_DEVICE_EVENT, KIND_BRISTLE_REGISTER_SINK, Key, KeyEventPayload,
+    decode_register_sink,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::wire::KindId;
@@ -172,6 +173,20 @@ fn main(_arg: usize) -> ! {
             ServiceEvent::Message { kind, payload } => {
                 if kind == KindId(KIND_BRISTLE_REGISTER_SINK) {
                     handle_register_sink(payload, &mut bloom_fd, &mut echo_fd);
+                } else if kind == KindId(KIND_BRISTLE_DEVICE_EVENT) {
+                    let (event_accum, accum_len) = if is_pointer_event_payload(payload) {
+                        (&mut mouse_event_accum, &mut mouse_accum_len)
+                    } else {
+                        (&mut kbd_event_accum, &mut kbd_accum_len)
+                    };
+                    accumulate_and_dispatch(
+                        payload,
+                        event_accum,
+                        accum_len,
+                        bloom_fd,
+                        echo_fd,
+                        &mut drop_counter,
+                    );
                 } else {
                     debug!("bristle: unknown inbox message kind {:?}", kind.0);
                 }
@@ -232,6 +247,21 @@ fn main(_arg: usize) -> ! {
             warn!("bristle: dropped {} events (sink full)", drop_counter);
         }
     }
+}
+
+fn is_pointer_event_payload(payload: &[u8]) -> bool {
+    if payload.len() < BristleEventHeader::SIZE {
+        return false;
+    }
+    let mut hdr_bytes = [0u8; BristleEventHeader::SIZE];
+    hdr_bytes.copy_from_slice(&payload[..BristleEventHeader::SIZE]);
+    let Ok(header) = BristleEventHeader::from_bytes(&hdr_bytes) else {
+        return false;
+    };
+    matches!(
+        EventType::from_raw(header.event_type),
+        Ok(EventType::PointerMove | EventType::PointerButtonDown | EventType::PointerButtonUp)
+    )
 }
 
 /// Handle a `RegisterSink` inbox message.

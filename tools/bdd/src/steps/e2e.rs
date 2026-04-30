@@ -3,8 +3,8 @@ use cucumber::{given, then, when};
 use super::basic::turn_on_machine;
 use super::boot::wait_for_ready_state;
 use super::helpers::{
-    StepError, capture_failure_diagnostics, default_timeout_secs, verify_cursor_pixels,
-    wait_for_clock_pixels, wait_for_clock_ticks, wait_for_perf_report,
+    StepError, capture_failure_diagnostics, color_close, default_timeout_secs,
+    verify_cursor_pixels, wait_for_clock_pixels, wait_for_clock_ticks, wait_for_perf_report,
 };
 use crate::world::{ThingOsWorld, strip_ansi};
 
@@ -770,6 +770,9 @@ async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), S
     if !world.wait_for_serial("First frame rendered", 60.0).await {
         return Err(StepError("Bloom did not render first frame".to_string()));
     }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
 
     let before_path =
         crate::artifacts::global().lock().await.screenshot_path("pointer_debug_before");
@@ -821,6 +824,64 @@ async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), S
         return Err(StepError(format!(
             "Pointer debug overlay did not update after mouse movement ({} changed pixels)",
             changed
+        )));
+    }
+
+    Ok(())
+}
+
+#[then("the pointer debug overlay should include the cursor svg")]
+async fn pointer_debug_overlay_includes_cursor_svg(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for pointer debug screenshot check".to_string()));
+    }
+
+    if !world.wait_for_serial("bloom: pointer debug overlay ready", 60.0).await {
+        return Err(StepError("Pointer debug overlay did not become ready".to_string()));
+    }
+    if !world.wait_for_serial("First frame rendered", 60.0).await {
+        return Err(StepError("Bloom did not render first frame".to_string()));
+    }
+
+    let screenshot_path =
+        crate::artifacts::global().lock().await.screenshot_path("pointer_debug_cursor_svg");
+    let png_path = world
+        .take_screenshot(&screenshot_path)
+        .await
+        .map_err(|e| StepError(format!("Failed to take screenshot: {}", e)))?;
+
+    let img = image::open(&png_path)
+        .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?
+        .to_rgb8();
+    let (width, height) = img.dimensions();
+    if width < 80 || height < 80 {
+        return Err(StepError("Screenshot too small for pointer overlay check".to_string()));
+    }
+
+    let overlay_w = 460u32.min(width.saturating_sub(24));
+    let cursor_size = 96u32;
+    let icon_x0 = 12 + overlay_w.saturating_sub(cursor_size + 24);
+    let icon_y0 = 12 + 24;
+    let icon_x1 = (icon_x0 + cursor_size).min(width);
+    let icon_y1 = (icon_y0 + cursor_size).min(height);
+    let mut cursor_like = 0u32;
+
+    for y in icon_y0..icon_y1 {
+        for x in icon_x0..icon_x1 {
+            let pixel = img.get_pixel(x, y).0;
+            if !color_close(pixel, [0x10, 0x18, 0x20], 24) {
+                cursor_like += 1;
+            }
+        }
+    }
+
+    eprintln!("│  │  │      pointer debug cursor svg pixels: {}", cursor_like);
+    if cursor_like < 360 {
+        return Err(StepError(format!(
+            "Pointer debug overlay cursor SVG not detected ({} pixels)",
+            cursor_like
         )));
     }
 

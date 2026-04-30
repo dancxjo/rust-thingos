@@ -1,8 +1,7 @@
 Feature: Bristle HID broker — ServiceLoop-based fanout
 
   Bristle is the sole input authority.  After migration from packed-port
-  args it uses a ServiceLoop inbox for control messages and publishes
-  device port write handles to the VFS so that drivers can discover them.
+  args it uses a ServiceLoop inbox for control messages and device events.
   Consumers register as event sinks via KIND_BRISTLE_REGISTER_SINK inbox
   messages.
 
@@ -13,14 +12,6 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
     # Consumers (bloom, echo) discover bristle via /run/bristle/pid.
     # The file must exist and contain a non-zero decimal PID.
     Then the log should match pattern "bristle: published pid [1-9][0-9]* to /run/bristle/pid"
-
-  Scenario: bristle publishes keyboard device handle
-    # PS/2 keyboard driver reads /run/bristle/kbd_in to obtain its write handle.
-    Then the log should match pattern "bristle: published device handles kbd_in=[0-9]+"
-
-  Scenario: bristle publishes mouse device handle
-    # PS/2 mouse driver reads /run/bristle/mouse_in to obtain its write handle.
-    Then the log should match pattern "bristle: published device handles .*mouse_in=[0-9]+"
 
   Scenario: bloom registers with bristle via inbox after bristle starts
     # bloom creates a port pair and sends KIND_BRISTLE_REGISTER_SINK to bristle.
@@ -41,10 +32,10 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
     And I type "echo test" on the serial console
     Then the log should match pattern "bristle: bloom sink registered"
 
-  Scenario: ps2_kbd driver reads handle from VFS path
-    # ps2_kbd no longer uses a packed spawn arg; it reads the handle from VFS.
-    Then the log should match pattern "ps2_kbd: bristle handle=[1-9][0-9]*"
+  Scenario: ps2_kbd driver discovers bristle via VFS path
+    # ps2_kbd no longer uses a packed spawn arg; it reads bristle's PID from VFS.
+    Then the log should match pattern "ps2_kbd: bristle pid=[1-9][0-9]*"
 
-  Scenario: ps2_mouse driver reads handle from VFS path
-    # ps2_mouse no longer uses a packed spawn arg; it reads the handle from VFS.
-    Then the log should match pattern "ps2_mouse: bristle handle=[1-9][0-9]*"
+  Scenario: ps2_mouse driver discovers bristle via VFS path
+    # ps2_mouse no longer uses a packed spawn arg; it reads bristle's PID from VFS.
+    Then the log should match pattern "ps2_mouse: bristle pid=[1-9][0-9]*"

@@ -16,8 +16,10 @@ use crate::protocol::{
 };
 use crate::scene::Scene;
 
-const CURSOR_DAMAGE_W: u32 = 32;
-const CURSOR_DAMAGE_H: u32 = 32;
+const CURSOR_DAMAGE_W: u32 = 96;
+const CURSOR_DAMAGE_H: u32 = 96;
+const CURSOR_HOTSPOT_X: i32 = 9;
+const CURSOR_HOTSPOT_Y: i32 = 6;
 
 pub struct InputState {
     pointer_x: i32,
@@ -245,8 +247,8 @@ fn mark_cursor_damage(damage: &mut DamageTracker, old_x: i32, old_y: i32, new_x:
 }
 
 fn mark_cursor_rect(damage: &mut DamageTracker, x: i32, y: i32) {
-    let x = x.saturating_sub(3).max(0) as u32;
-    let y = y.saturating_sub(2).max(0) as u32;
+    let x = x.saturating_sub(CURSOR_HOTSPOT_X).max(0) as u32;
+    let y = y.saturating_sub(CURSOR_HOTSPOT_Y).max(0) as u32;
     damage.mark_rect(abi::display_protocol::Rect { x, y, w: CURSOR_DAMAGE_W, h: CURSOR_DAMAGE_H });
 }
 

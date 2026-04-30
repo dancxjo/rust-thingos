@@ -7,11 +7,13 @@ use crate::display::DisplayBackend;
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
 const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
-const DEFAULT_CURSOR_PATH: &str = "/share/cursors/default.svg";
-const CURSOR_SIZE: u32 = 32;
+const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
+const CURSOR_SIZE: u32 = 96;
+const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
 const POINTER_OVERLAY_MAX_W: u32 = 460;
-const POINTER_OVERLAY_MAX_H: u32 = 96;
+const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
+const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -221,7 +223,8 @@ impl CompositorVisuals {
         };
 
         if !success {
-            draw_fallback_cursor(texture.as_slice_mut(), CURSOR_SIZE, CURSOR_SIZE, CURSOR_SIZE);
+            stem::warn!("bloom: failed to prepare cursor via pistil");
+            return;
         }
 
         let Some(buffer_id) = display.import_buffer(
@@ -277,6 +280,12 @@ impl CompositorVisuals {
     ) -> Option<OverlayPlane> {
         self.ensure_pointer_overlay(display)?;
 
+        let mut cursor_sample = [0u32; CURSOR_PIXELS];
+        let cursor_sample = self.cursor.as_ref().and_then(|cursor| {
+            copy_cursor_sample(cursor, &mut cursor_sample)?;
+            Some(&cursor_sample[..])
+        });
+
         let overlay = self.pointer_overlay.as_mut()?;
         draw_pointer_overlay(
             overlay.texture.as_slice_mut(),
@@ -284,6 +293,7 @@ impl CompositorVisuals {
             overlay.height,
             pointer_x,
             pointer_y,
+            cursor_sample,
         );
         Some(OverlayPlane {
             buffer_id: overlay.buffer_id,
@@ -414,11 +424,35 @@ fn call_prepare_cursor(
     prepare_cursor(path_c.as_ptr(), dst, width, height, width, hotspot.as_mut_ptr())
 }
 
-fn draw_fallback_cursor(dst: &mut [u32], width: u32, height: u32, stride: u32) {
-    let _ = svg::rasterize_cursor(svg::DEFAULT_CURSOR_SVG, dst, width, height, stride);
+fn copy_cursor_sample(cursor: &CursorBuffer, dst: &mut [u32; CURSOR_PIXELS]) -> Option<()> {
+    if cursor.width != CURSOR_SIZE || cursor.height != CURSOR_SIZE {
+        return None;
+    }
+
+    let src_stride = cursor._texture.stride / 4;
+    if src_stride < CURSOR_SIZE {
+        return None;
+    }
+
+    let src_len = (cursor._texture.height * src_stride) as usize;
+    let src = unsafe { core::slice::from_raw_parts(cursor._texture.ptr as *const u32, src_len) };
+    for y in 0..CURSOR_SIZE {
+        let src_row = (y * src_stride) as usize;
+        let dst_row = (y * CURSOR_SIZE) as usize;
+        dst[dst_row..dst_row + CURSOR_SIZE as usize]
+            .copy_from_slice(&src[src_row..src_row + CURSOR_SIZE as usize]);
+    }
+    Some(())
 }
 
-fn draw_pointer_overlay(dst: &mut [u32], width: u32, height: u32, pointer_x: i32, pointer_y: i32) {
+fn draw_pointer_overlay(
+    dst: &mut [u32],
+    width: u32,
+    height: u32,
+    pointer_x: i32,
+    pointer_y: i32,
+    cursor_sample: Option<&[u32]>,
+) {
     dst.fill(0);
     fill_rect(dst, width, 0, 0, width, height, 0xAA101820);
     fill_rect(dst, width, 0, 0, width, 2, 0xFF7DD3FC);
@@ -430,6 +464,65 @@ fn draw_pointer_overlay(dst: &mut [u32], width: u32, height: u32, pointer_x: i32
     let next_x = next_x + 18;
     draw_text(dst, width, height, next_x, 48, 2, "Y=", 0xFFE6F7FF);
     draw_signed_number(dst, width, height, next_x + 24, 48, 2, pointer_y, 0xFFFFFFFF);
+
+    if let Some(cursor_sample) = cursor_sample {
+        draw_cursor_sample(dst, width, height, cursor_sample);
+    }
+}
+
+fn draw_cursor_sample(dst: &mut [u32], stride: u32, height: u32, cursor_sample: &[u32]) {
+    if stride < CURSOR_SIZE || height < CURSOR_SIZE || cursor_sample.len() < CURSOR_PIXELS {
+        return;
+    }
+
+    let x = stride as i32 - CURSOR_SIZE as i32 - POINTER_OVERLAY_CURSOR_INSET;
+    let y = POINTER_OVERLAY_CURSOR_INSET;
+    blit_nontransparent(
+        dst,
+        stride,
+        height,
+        cursor_sample,
+        CURSOR_SIZE,
+        CURSOR_SIZE,
+        CURSOR_SIZE,
+        x,
+        y,
+    );
+}
+
+fn blit_nontransparent(
+    dst: &mut [u32],
+    dst_stride: u32,
+    dst_height: u32,
+    src: &[u32],
+    src_width: u32,
+    src_height: u32,
+    src_stride: u32,
+    dst_x: i32,
+    dst_y: i32,
+) {
+    if dst_stride == 0 || src_stride < src_width {
+        return;
+    }
+
+    for sy in 0..src_height {
+        let dy = dst_y + sy as i32;
+        if dy < 0 || dy >= dst_height as i32 {
+            continue;
+        }
+        for sx in 0..src_width {
+            let dx = dst_x + sx as i32;
+            if dx < 0 || dx >= dst_stride as i32 {
+                continue;
+            }
+
+            let src_px = src[(sy * src_stride + sx) as usize];
+            if src_px >> 24 == 0 {
+                continue;
+            }
+            dst[(dy as u32 * dst_stride + dx as u32) as usize] = src_px;
+        }
+    }
 }
 
 fn fill_rect(dst: &mut [u32], stride: u32, x: i32, y: i32, w: u32, h: u32, color: u32) {

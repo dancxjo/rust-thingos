@@ -20,6 +20,15 @@ pub const KIND_BRISTLE_REGISTER_SINK: [u8; 16] = [
     0xc2, 0x58, 0x4a, 0x17, 0xd6, 0x83, 0xf0, 0x21,
 ];
 
+/// `KindId` for raw device events sent by HID drivers to bristle.
+///
+/// Payload layout is one complete bristle event: [`BristleEventHeader`]
+/// followed by the event-specific payload.
+pub const KIND_BRISTLE_DEVICE_EVENT: [u8; 16] = [
+    0x45, 0x89, 0x1a, 0x74, 0x8c, 0x2e, 0x4d, 0xa1,
+    0x97, 0x36, 0x5f, 0xc0, 0xe7, 0x18, 0xb2, 0x6d,
+];
+
 /// Sink tag identifying the bloom compositor as the target.
 pub const BRISTLE_SINK_TAG_BLOOM: u8 = 0;
 

@@ -12,7 +12,8 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
-use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_open, vfs_read, vfs_write};
+use stem::syscall::message::msg_send;
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::{debug, error, info};
 
@@ -269,14 +270,10 @@ fn init_mouse() {
     debug!("ps2_mouse: init done");
 }
 
-/// Path where bristle publishes the mouse port write handle.
-const BRISTLE_MOUSE_IN_PATH: &str = "/run/bristle/mouse_in";
+/// Path where bristle publishes its inbox-owning PID.
+const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
 
-/// Read a port write handle from a bristle device-handle file.
-///
-/// The file contains the handle as a decimal ASCII string followed by `\n`.
-/// Returns `None` if the file cannot be opened or parsed.
-fn read_bristle_handle(path: &str) -> Option<u32> {
+fn read_u32_file(path: &str) -> Option<u32> {
     let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
     let mut buf = [0u8; 32];
     let n = vfs_read(fd, &mut buf).unwrap_or(0);
@@ -290,42 +287,26 @@ fn read_bristle_handle(path: &str) -> Option<u32> {
 
 #[stem::main]
 fn main(_raw_arg: usize) -> ! {
-    stem::debug!("ps2_mouse: online — waiting for bristle device handle");
+    stem::debug!("ps2_mouse: online — waiting for bristle pid");
 
-    // Wait for bristle to publish the mouse port write handle.
-    if let Err(e) = stem::fs::wait_until_exists(BRISTLE_MOUSE_IN_PATH) {
-        stem::error!("ps2_mouse: failed waiting for {}: {:?}", BRISTLE_MOUSE_IN_PATH, e);
+    if let Err(e) = stem::fs::wait_until_exists(BRISTLE_PID_PATH) {
+        stem::error!("ps2_mouse: failed waiting for {}: {:?}", BRISTLE_PID_PATH, e);
         loop {
             stem::time::sleep_ms(1000);
         }
     }
 
-    let handle = match read_bristle_handle(BRISTLE_MOUSE_IN_PATH) {
-        Some(h) if h != 0 => h,
+    let bristle_pid = match read_u32_file(BRISTLE_PID_PATH) {
+        Some(pid) if pid != 0 => pid,
         _ => {
-            stem::error!(
-                "ps2_mouse: failed to read bristle handle from {}",
-                BRISTLE_MOUSE_IN_PATH
-            );
+            stem::error!("ps2_mouse: failed to read bristle pid from {}", BRISTLE_PID_PATH);
             loop {
                 stem::time::sleep_ms(1000);
             }
         }
     };
 
-    stem::debug!("ps2_mouse: bristle handle={}", handle);
-
-    // Bridge the write port handle to a VFS file descriptor so all I/O
-    // flows through the VFS-first message path rather than the legacy port API.
-    let fd = match vfs_handle_from_port(handle) {
-        Ok(f) => f,
-        Err(e) => {
-            stem::error!("ps2_mouse: fd bridge failed ({:?}), aborting", e);
-            loop {
-                stem::sleep_ms(1000);
-            }
-        }
-    };
+    stem::info!("ps2_mouse: bristle pid={}", bristle_pid);
 
     init_mouse();
 
@@ -334,23 +315,28 @@ fn main(_raw_arg: usize) -> ! {
         Ok(()) => debug!("ps2_mouse: subscribed to IRQ12 (vector 0x{:02x})", MOUSE_VECTOR),
         Err(e) => {
             debug!("ps2_mouse: IRQ subscribe failed ({:?}), falling back to polling", e);
-            polling_loop(fd);
+            polling_loop(bristle_pid);
         }
     }
     // Keep servicing the controller via polling even when IRQ12 subscription succeeds.
     // This avoids a dead cursor on platforms where legacy PS/2 interrupts never wake userspace.
-    polling_loop(fd);
+    polling_loop(bristle_pid);
 }
 
 mod mouse;
 
 use abi::hid::{
     BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, BristleEventHeader, EventType,
-    PointerButtonPayload, PointerMovePayload,
+    KIND_BRISTLE_DEVICE_EVENT, PointerButtonPayload, PointerMovePayload,
 };
 use mouse::{MouseState, PointerEvent};
 
-fn send_mouse_events(fd: u32, state: &mut MouseState, packet: &[u8; 3], drop_counter: &mut u32) {
+fn send_mouse_events(
+    bristle_pid: u32,
+    state: &mut MouseState,
+    packet: &[u8; 3],
+    drop_counter: &mut u32,
+) {
     let (events, count) = state.process_packet(packet);
     for i in 0..count {
         if let Some(evt) = events[i] {
@@ -399,14 +385,19 @@ fn send_mouse_events(fd: u32, state: &mut MouseState, packet: &[u8; 3], drop_cou
                     len = 22;
                 }
             }
-            // Publish the event through the VFS-first message path.
-            let send_ok = len > 0 && vfs_write(fd, &buf[..len]).map(|n| n == len).unwrap_or(false);
+            let send_ok = len > 0
+                && msg_send(
+                    bristle_pid,
+                    abi::KindId(KIND_BRISTLE_DEVICE_EVENT),
+                    &buf[..len],
+                )
+                .is_ok();
             if !send_ok && len > 0 {
                 *drop_counter = drop_counter.wrapping_add(1);
                 if *drop_counter <= 4 || *drop_counter % 100 == 0 {
                     debug!(
-                        "ps2_mouse: dropped {} mouse events (write fd={} failed)",
-                        *drop_counter, fd
+                        "ps2_mouse: dropped {} mouse events (send pid={} failed)",
+                        *drop_counter, bristle_pid
                     );
                 }
             }
@@ -416,7 +407,7 @@ fn send_mouse_events(fd: u32, state: &mut MouseState, packet: &[u8; 3], drop_cou
 
 /// Drain all pending mouse data and assemble packets
 fn drain_mouse_data(
-    fd: u32,
+    bristle_pid: u32,
     state: &mut MouseState,
     packet: &mut [u8; 3],
     idx: &mut usize,
@@ -441,7 +432,7 @@ fn drain_mouse_data(
             *idx += 1;
 
             if *idx == 3 {
-                send_mouse_events(fd, state, packet, drop_counter);
+                send_mouse_events(bristle_pid, state, packet, drop_counter);
                 *idx = 0;
             }
         } else {
@@ -453,7 +444,7 @@ fn drain_mouse_data(
 }
 
 /// Fallback polling loop
-fn polling_loop(fd: u32) -> ! {
+fn polling_loop(bristle_pid: u32) -> ! {
     stem::debug!("ps2_mouse: using cooperative polling loop ({}ms interval)", POLLING_INTERVAL_MS);
 
     let mut packet = [0u8; 3];
@@ -466,7 +457,13 @@ fn polling_loop(fd: u32) -> ! {
 
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA != 0 {
-                drain_mouse_data(fd, &mut mouse_state, &mut packet, &mut idx, &mut drop_counter);
+                drain_mouse_data(
+                    bristle_pid,
+                    &mut mouse_state,
+                    &mut packet,
+                    &mut idx,
+                    &mut drop_counter,
+                );
             } else {
                 // Leave keyboard bytes queued for ps2_kbd.
                 stem::sleep_ms(POLLING_INTERVAL_MS);

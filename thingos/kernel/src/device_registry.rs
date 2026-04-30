@@ -227,7 +227,7 @@ impl DeviceRegistry {
         if index < self.device_count { self.devices[index].as_ref() } else { None }
     }
 
-    /// Find device by PCI slot name (e.g. `"pci-0000:00:1f.2"`).
+    /// Find device by sysfs slot name (e.g. `"pci-0000:00:1f.2"` or `"isa-0060"`).
     ///
     /// The slot name is derived from the device's [`PciLocation`] in the same
     /// way that sysfs does, so callers can use a sysfs path as the primary key.
@@ -237,6 +237,16 @@ impl DeviceRegistry {
                 if let Some(loc) = entry.pci_location {
                     let name =
                         alloc::format!("pci-0000:{:02x}:{:02x}.{}", loc.bus, loc.dev, loc.func);
+                    if name == slot {
+                        return Some(i);
+                    }
+                } else if !entry.ioport_ranges.is_empty() {
+                    let name = alloc::format!("isa-{:04x}", entry.resource_id as u16);
+                    if name == slot {
+                        return Some(i);
+                    }
+                } else {
+                    let name = alloc::format!("platform-{:08x}", entry.resource_id);
                     if name == slot {
                         return Some(i);
                     }

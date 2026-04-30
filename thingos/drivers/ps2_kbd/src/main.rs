@@ -9,7 +9,8 @@ use abi::driver_interface::{
     ProbeResult, Status,
 };
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
-use stem::syscall::vfs::{vfs_close, vfs_handle_from_port, vfs_open, vfs_read, vfs_write};
+use stem::syscall::message::msg_send;
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 use stem::syscall::{ioport_read, irq_subscribe, irq_wait};
 use stem::{debug, error, info, warn};
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_kbd";
@@ -110,14 +111,10 @@ const POLLING_INTERVAL_MS: u64 = 25;
 /// Driver state node kind
 const KIND_DRV_PS2_KBD: &str = "drv.Ps2Keyboard";
 
-/// Path where bristle publishes the keyboard port write handle.
-const BRISTLE_KBD_IN_PATH: &str = "/run/bristle/kbd_in";
+/// Path where bristle publishes its inbox-owning PID.
+const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
 
-/// Read a port write handle from a bristle device-handle file.
-///
-/// The file contains the handle as a decimal ASCII string followed by `\n`.
-/// Returns `None` if the file cannot be opened or parsed.
-fn read_bristle_handle(path: &str) -> Option<u32> {
+fn read_u32_file(path: &str) -> Option<u32> {
     let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
     let mut buf = [0u8; 32];
     let n = vfs_read(fd, &mut buf).unwrap_or(0);
@@ -131,49 +128,36 @@ fn read_bristle_handle(path: &str) -> Option<u32> {
 
 #[stem::main]
 fn main(_raw_arg: usize) -> ! {
-    stem::debug!("ps2_kbd: online — waiting for bristle device handle");
+    stem::debug!("ps2_kbd: online — waiting for bristle pid");
 
-    // Wait for bristle to publish the keyboard port write handle.
-    if let Err(e) = stem::fs::wait_until_exists(BRISTLE_KBD_IN_PATH) {
-        stem::error!("ps2_kbd: failed waiting for {}: {:?}", BRISTLE_KBD_IN_PATH, e);
+    if let Err(e) = stem::fs::wait_until_exists(BRISTLE_PID_PATH) {
+        stem::error!("ps2_kbd: failed waiting for {}: {:?}", BRISTLE_PID_PATH, e);
         loop {
             stem::time::sleep_ms(1000);
         }
     }
 
-    let handle = match read_bristle_handle(BRISTLE_KBD_IN_PATH) {
-        Some(h) if h != 0 => h,
+    let bristle_pid = match read_u32_file(BRISTLE_PID_PATH) {
+        Some(pid) if pid != 0 => pid,
         _ => {
-            stem::error!("ps2_kbd: failed to read bristle handle from {}", BRISTLE_KBD_IN_PATH);
+            stem::error!("ps2_kbd: failed to read bristle pid from {}", BRISTLE_PID_PATH);
             loop {
                 stem::time::sleep_ms(1000);
             }
         }
     };
 
-    stem::debug!("ps2_kbd: bristle handle={}", handle);
-
-    // Bridge the write port handle to a VFS file descriptor so all I/O
-    // flows through the VFS-first message path rather than the legacy port API.
-    let fd = match vfs_handle_from_port(handle) {
-        Ok(f) => f,
-        Err(e) => {
-            stem::error!("ps2_kbd: fd bridge failed ({:?}), aborting", e);
-            loop {
-                stem::sleep_ms(1000);
-            }
-        }
-    };
+    stem::info!("ps2_kbd: bristle pid={}", bristle_pid);
 
     // Subscribe to keyboard interrupt
     match irq_subscribe(KBD_VECTOR) {
         Ok(()) => {
             stem::debug!("ps2_kbd: subscribed to IRQ1 (vector 0x{:02x})", KBD_VECTOR);
-            interrupt_loop(fd);
+            interrupt_loop(bristle_pid);
         }
         Err(e) => {
             debug!("ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling", e);
-            polling_loop(fd);
+            polling_loop(bristle_pid);
         }
     }
 }
@@ -182,12 +166,13 @@ mod normalizer;
 mod thigmonasty;
 
 use abi::hid::{
-    BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, BristleEventHeader, EventType, KeyEventPayload,
+    BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, BristleEventHeader, EventType,
+    KIND_BRISTLE_DEVICE_EVENT, KeyEventPayload,
 };
 use thigmonasty::{KeyEdge, KeyboardState};
 
 /// Drain all pending keyboard data from the controller
-fn drain_keyboard_data(fd: u32, state: &mut KeyboardState, drop_counter: &mut u32) {
+fn drain_keyboard_data(bristle_pid: u32, state: &mut KeyboardState, drop_counter: &mut u32) {
     // Read while data is available (handle burst of scancodes)
     for _ in 0..16 {
         let status = ioport_read(PS2_STATUS, 1);
@@ -200,7 +185,7 @@ fn drain_keyboard_data(fd: u32, state: &mut KeyboardState, drop_counter: &mut u3
             // Keyboard data - read and send
             let scancode = ioport_read(PS2_DATA, 1) as u8;
             if let Some(edge) = state.process_ps2(scancode) {
-                send_key_event(fd, edge, drop_counter);
+                send_key_event(bristle_pid, edge, drop_counter);
             }
         } else {
             // If aux data (mouse), stop draining - let ps2_mouse handle it
@@ -210,7 +195,7 @@ fn drain_keyboard_data(fd: u32, state: &mut KeyboardState, drop_counter: &mut u3
     }
 }
 
-fn send_key_event(fd: u32, edge: KeyEdge, drop_counter: &mut u32) {
+fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
     let timestamp_ns = stem::monotonic_ns();
     let mut buf = [0u8; 24]; // Max size is header + 4 byte payload
 
@@ -233,12 +218,15 @@ fn send_key_event(fd: u32, edge: KeyEdge, drop_counter: &mut u32) {
     buf[0..20].copy_from_slice(&header.to_bytes());
     buf[20..24].copy_from_slice(&payload.to_bytes());
 
-    // Publish the event through the VFS-first message path.
-    let send_ok = vfs_write(fd, &buf[..24]).map(|n| n == 24).unwrap_or(false);
+    let send_ok =
+        msg_send(bristle_pid, abi::KindId(KIND_BRISTLE_DEVICE_EVENT), &buf[..24]).is_ok();
     if !send_ok {
         *drop_counter = drop_counter.wrapping_add(1);
         if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-            warn!("ps2_kbd: dropped {} key events (write fd={} failed)", *drop_counter, fd);
+            warn!(
+                "ps2_kbd: dropped {} key events (send pid={} failed)",
+                *drop_counter, bristle_pid
+            );
         }
     }
 }
@@ -248,14 +236,14 @@ fn send_key_event(fd: u32, edge: KeyEdge, drop_counter: &mut u32) {
 /// Blocks on `irq_wait` until IRQ1 fires, then drains all pending scancodes.
 /// This avoids runnable-task churn during idle/low-input periods because the
 /// task is only scheduled when the hardware actually signals new data.
-fn interrupt_loop(fd: u32) -> ! {
+fn interrupt_loop(bristle_pid: u32) -> ! {
     stem::debug!("ps2_kbd: using interrupt-driven loop (IRQ vector 0x{:02x})", KBD_VECTOR);
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
     loop {
         match irq_wait(KBD_VECTOR) {
             Ok(_pending) => {
-                drain_keyboard_data(fd, &mut state, &mut drop_counter);
+                drain_keyboard_data(bristle_pid, &mut state, &mut drop_counter);
             }
             Err(e) => {
                 // irq_wait should not fail once subscribed; if it does, fall
@@ -265,11 +253,11 @@ fn interrupt_loop(fd: u32) -> ! {
             }
         }
     }
-    polling_loop(fd)
+    polling_loop(bristle_pid)
 }
 
 /// Fallback polling loop – used only when IRQ subscription is unavailable.
-fn polling_loop(fd: u32) -> ! {
+fn polling_loop(bristle_pid: u32) -> ! {
     stem::debug!("ps2_kbd: using fallback polling loop ({}ms interval)", POLLING_INTERVAL_MS);
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
@@ -278,7 +266,7 @@ fn polling_loop(fd: u32) -> ! {
 
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA == 0 {
-                drain_keyboard_data(fd, &mut state, &mut drop_counter);
+                drain_keyboard_data(bristle_pid, &mut state, &mut drop_counter);
             } else {
                 // Leave mouse bytes queued for ps2_mouse.
                 stem::sleep_ms(POLLING_INTERVAL_MS);
