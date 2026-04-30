@@ -180,10 +180,19 @@ impl InputState {
                 let move_ev = PointerMovePayload::from_bytes(&p);
                 let dx = move_ev.dx;
                 let dy = move_ev.dy;
-                self.pointer_x =
-                    (self.pointer_x + dx as i32).clamp(0, self.output_w.saturating_sub(1));
-                self.pointer_y =
-                    (self.pointer_y + dy as i32).clamp(0, self.output_h.saturating_sub(1));
+                let old_x = self.pointer_x;
+                let old_y = self.pointer_y;
+                self.pointer_x = self
+                    .pointer_x
+                    .saturating_add(dx as i32)
+                    .clamp(0, self.output_w.saturating_sub(1));
+                self.pointer_y = self
+                    .pointer_y
+                    .saturating_add(dy as i32)
+                    .clamp(0, self.output_h.saturating_sub(1));
+                if self.pointer_x == old_x && self.pointer_y == old_y {
+                    return;
+                }
                 self.pending_cursor_motion = true;
                 // Coalesce: keep only the latest timestamp; focus lookup and
                 // client delivery are deferred to flush_pointer_motion() which

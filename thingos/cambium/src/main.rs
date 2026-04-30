@@ -489,9 +489,8 @@ fn reconcile_devices(
 }
 
 fn should_skip_for_display_input_isolation(driver_class: DriverClass, path: &str) -> bool {
-    DISPLAY_INPUT_ISOLATION
-        && (matches!(driver_class, DriverClass::Net | DriverClass::Audio)
-            || path.ends_with("/ahci_disk"))
+    let _ = path;
+    DISPLAY_INPUT_ISOLATION && matches!(driver_class, DriverClass::Net | DriverClass::Audio)
 }
 
 // ── argv helper ──────────────────────────────────────────────────────────────

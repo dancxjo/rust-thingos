@@ -17,7 +17,8 @@ use crate::world::BloomWorld;
 
 const REGISTER_TIMER_ID: u64 = 1;
 const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
-const MAX_READS_PER_WAKE: usize = 64;
+const INPUT_READ_CHUNK: usize = 64;
+const MAX_READS_PER_WAKE: usize = 1;
 
 /// Handles normalized HID events forwarded by the bristle input service.
 ///
@@ -74,7 +75,7 @@ impl BloomService for InputService {
                 }
             }
             LoopEvent::FdReady(_) => {
-                let mut buf = [0u8; 1024];
+                let mut buf = [0u8; INPUT_READ_CHUNK];
                 let mut handled = false;
 
                 for _ in 0..MAX_READS_PER_WAKE {

@@ -116,12 +116,15 @@ const MOUSE_ENABLE: u8 = 0xF4;
 const MOUSE_VECTOR: u8 = 0x2C;
 const POLLING_INTERVAL_MS: u64 = 8;
 const IRQ_ASSIST_POLL_MS: u64 = 4;
-const POINTER_MOTION_MIN_INTERVAL_NS: u64 = 16_666_666;
+const POINTER_MOTION_MIN_INTERVAL_NS: u64 = 33_333_333;
+const POINTER_MOTION_MAX_DELTA_PER_EVENT: i32 = 96;
+const POINTER_MOTION_MAX_PENDING_DELTA: i32 = 192;
 
-/// Preferred PS/2 mouse sample rate (Hz). Higher rates give smoother pointer motion.
-const PREFERRED_SAMPLE_RATE: u8 = 200;
+/// Preferred PS/2 mouse sample rate (Hz). Keep this modest while isolating
+/// compositor freezes under fast pointer movement.
+const PREFERRED_SAMPLE_RATE: u8 = 60;
 /// Fallback sample rate used when the device rejects `PREFERRED_SAMPLE_RATE`.
-const FALLBACK_SAMPLE_RATE: u8 = 100;
+const FALLBACK_SAMPLE_RATE: u8 = 40;
 
 fn wait_input_empty() {
     for _ in 0..10000 {
@@ -385,8 +388,14 @@ struct MotionCoalescer {
 
 impl MotionCoalescer {
     fn add(&mut self, dx: i16, dy: i16) {
-        self.pending_dx = self.pending_dx.saturating_add(dx as i32);
-        self.pending_dy = self.pending_dy.saturating_add(dy as i32);
+        self.pending_dx = self
+            .pending_dx
+            .saturating_add(dx as i32)
+            .clamp(-POINTER_MOTION_MAX_PENDING_DELTA, POINTER_MOTION_MAX_PENDING_DELTA);
+        self.pending_dy = self
+            .pending_dy
+            .saturating_add(dy as i32)
+            .clamp(-POINTER_MOTION_MAX_PENDING_DELTA, POINTER_MOTION_MAX_PENDING_DELTA);
     }
 
     fn has_pending(&self) -> bool {
@@ -400,10 +409,16 @@ impl MotionCoalescer {
     }
 
     fn take(&mut self, now_ns: u64) -> (i16, i16) {
-        let dx = clamp_i16(self.pending_dx);
-        let dy = clamp_i16(self.pending_dy);
-        self.pending_dx = self.pending_dx.saturating_sub(dx as i32);
-        self.pending_dy = self.pending_dy.saturating_sub(dy as i32);
+        let dx = clamp_i16(
+            self.pending_dx
+                .clamp(-POINTER_MOTION_MAX_DELTA_PER_EVENT, POINTER_MOTION_MAX_DELTA_PER_EVENT),
+        );
+        let dy = clamp_i16(
+            self.pending_dy
+                .clamp(-POINTER_MOTION_MAX_DELTA_PER_EVENT, POINTER_MOTION_MAX_DELTA_PER_EVENT),
+        );
+        self.pending_dx = 0;
+        self.pending_dy = 0;
         self.last_sent_ns = now_ns;
         (dx, dy)
     }

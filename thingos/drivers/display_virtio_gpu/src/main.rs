@@ -24,6 +24,7 @@ use stem::syscall::{PortHandle, port_create, port_send};
 use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
+const DISPLAY_PROVIDER_POLL_ISOLATION: bool = true;
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
@@ -95,8 +96,8 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> St
 fn rect_union(a: Rect, b: Rect) -> Rect {
     let x1 = a.x.min(b.x);
     let y1 = a.y.min(b.y);
-    let x2 = (a.x + a.w).max(b.x + b.w);
-    let y2 = (a.y + a.h).max(b.y + b.h);
+    let x2 = a.x.saturating_add(a.w).max(b.x.saturating_add(b.w));
+    let y2 = a.y.saturating_add(a.h).max(b.y.saturating_add(b.h));
     Rect { x: x1, y: y1, w: x2.saturating_sub(x1), h: y2.saturating_sub(y1) }
 }
 
@@ -153,6 +154,52 @@ struct ImportedBuffer {
     height: u32,
     stride: u32,
     format: PixelFormat,
+}
+
+#[inline]
+fn bounded_copy_extent(
+    src: &ImportedBuffer,
+    dst_size: usize,
+    dst_stride: usize,
+    bpp: usize,
+    src_x: usize,
+    src_y: usize,
+    dst_x: usize,
+    dst_y: usize,
+    width: usize,
+    height: usize,
+) -> Option<(usize, usize)> {
+    if bpp == 0 || src.stride == 0 || dst_stride == 0 || width == 0 || height == 0 {
+        return None;
+    }
+
+    let src_stride = src.stride as usize;
+    let src_col = src_x.checked_mul(bpp)?;
+    let dst_col = dst_x.checked_mul(bpp)?;
+    if src_col >= src_stride || dst_col >= dst_stride {
+        return None;
+    }
+
+    let max_w = width
+        .min((src_stride - src_col) / bpp)
+        .min((dst_stride - dst_col) / bpp);
+    if max_w == 0 {
+        return None;
+    }
+    let row_bytes = max_w.checked_mul(bpp)?;
+
+    let src_start = src_y.checked_mul(src_stride)?.checked_add(src_col)?;
+    let dst_start = dst_y.checked_mul(dst_stride)?.checked_add(dst_col)?;
+    let src_first_end = src_start.checked_add(row_bytes)?;
+    let dst_first_end = dst_start.checked_add(row_bytes)?;
+    if src_first_end > src.size || dst_first_end > dst_size {
+        return None;
+    }
+
+    let src_rows = 1 + (src.size - src_first_end) / src_stride;
+    let dst_rows = 1 + (dst_size - dst_first_end) / dst_stride;
+    let max_h = height.min(src_rows).min(dst_rows);
+    if max_h == 0 { None } else { Some((max_w, max_h)) }
 }
 
 struct PresentStats {
@@ -587,6 +634,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         h: copy_h as u32,
                     };
                     let target_ptr = driver.frame_pool[idx].ptr;
+                    let target_size = driver.frame_pool[idx].size;
                     let should_blend = plane.alpha < 255
                         || plane.z_order > 0
                         || src.format == PixelFormat::Bgra8888;
@@ -600,8 +648,20 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         let clip_src_y = src_y.saturating_add(rel_y);
                         let clip_dst_x = rect.x as usize;
                         let clip_dst_y = rect.y as usize;
-                        let clip_w = rect.w as usize;
-                        let clip_h = rect.h as usize;
+                        let Some((clip_w, clip_h)) = bounded_copy_extent(
+                            src,
+                            target_size,
+                            driver.disp_stride as usize,
+                            bpp,
+                            clip_src_x,
+                            clip_src_y,
+                            clip_dst_x,
+                            clip_dst_y,
+                            rect.w as usize,
+                            rect.h as usize,
+                        ) else {
+                            continue;
+                        };
 
                         if should_blend && bpp == 4 {
                             for row in 0..clip_h {
@@ -1309,9 +1369,41 @@ fn main(boot_arg: usize) -> ! {
     info!("display_virtio_gpu: VFS provider loop online");
 
     loop {
-        stem::trace!("display_virtio_gpu: waiting on WaitSet...");
-        match ws.wait(Some(core::time::Duration::from_millis(10))) {
-            Ok(events) => {
+        let mut did_work = false;
+
+        if DISPLAY_PROVIDER_POLL_ISOLATION {
+            let mut read_total = 0;
+            loop {
+                match stem::syscall::port_try_recv(drv_req_read, &mut buf) {
+                    Ok(n) => {
+                        if n == 0 {
+                            break;
+                        }
+                        frames.push(&buf[..n]);
+                        read_total += n;
+                    }
+                    Err(abi::errors::Errno::EAGAIN) => break,
+                    Err(e) => {
+                        stem::error!("display_virtio_gpu: port_try_recv ERR: {:?}", e);
+                        break;
+                    }
+                }
+            }
+            if read_total > 0 {
+                did_work = true;
+                stem::trace!(
+                    "display_virtio_gpu: poll read {} bytes, dropped={}",
+                    read_total,
+                    frames.dropped_bytes()
+                );
+            }
+        } else {
+            stem::trace!("display_virtio_gpu: waiting on WaitSet...");
+            match ws.wait(Some(core::time::Duration::from_millis(10))) {
+                Ok(events) => {
+                    if !events.is_empty() {
+                        did_work = true;
+                    }
                 for ev in events {
                     if ev.token() == drv_req_read_tok && ev.is_readable() {
                         stem::trace!("display_virtio_gpu: drv_req readable token fired");
@@ -1341,26 +1433,30 @@ fn main(boot_arg: usize) -> ! {
                     }
                 }
                 if read_total > 0 {
+                    did_work = true;
                     stem::trace!(
                         "display_virtio_gpu: WaitSet read {} bytes, dropped={}",
                         read_total,
                         frames.dropped_bytes()
                     );
                 }
-            }
-            Err(e) => {
-                stem::trace!("display_virtio_gpu: WaitSet returned ERR: {:?}", e);
+                }
+                Err(e) => {
+                    stem::trace!("display_virtio_gpu: WaitSet returned ERR: {:?}", e);
+                }
             }
         }
 
         // Always drain VFS RPCs, even if readiness wait fails or times out.
         while let Ok(Some(req)) = vfs_loop.try_next_request() {
+            did_work = true;
             stem::debug!("display_virtio_gpu: VFS RPC op={:?}", req.op);
             let resp = dispatch_vfs_rpc(&mut driver, &req);
             vfs_loop.send_response(&req, resp).ok();
         }
 
         while let Some((header, payload)) = frames.next_message() {
+            did_work = true;
             stem::trace!(
                 "display_virtio_gpu: next_message -> msg_type={}, len={}",
                 header.msg_type,
@@ -1832,6 +1928,10 @@ fn main(boot_arg: usize) -> ! {
                 }
                 _ => {}
             }
+        }
+
+        if DISPLAY_PROVIDER_POLL_ISOLATION && !did_work {
+            stem::sleep_ms(1);
         }
     }
 }

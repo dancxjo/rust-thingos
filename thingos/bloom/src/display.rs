@@ -240,7 +240,22 @@ impl DisplayBackend {
             damage_rects[0] = Rect { x: 0, y: 0, w, h };
             damage_count = 1;
         } else {
-            damage_rects[..damage_count].copy_from_slice(&damage[..damage_count]);
+            let (w, h) = self.output_size();
+            let mut out_count = 0usize;
+            for rect in damage.iter().take(MAX_DAMAGE_RECTS) {
+                if let Some(clipped) = clip_rect_to_output(*rect, w, h) {
+                    if !damage_rects[..out_count].contains(&clipped) {
+                        damage_rects[out_count] = clipped;
+                        out_count += 1;
+                    }
+                }
+            }
+            if out_count == 0 {
+                damage_rects[0] = Rect { x: 0, y: 0, w, h };
+                damage_count = 1;
+            } else {
+                damage_count = out_count;
+            }
         }
         if damage_count > 0
             && !is_full_output_damage(
@@ -313,6 +328,14 @@ fn push_plain_slice<T>(out: &mut [u8], len: &mut usize, values: &[T]) {
 
 fn is_full_output_damage(rect: Rect, width: u32, height: u32) -> bool {
     rect.x == 0 && rect.y == 0 && rect.w >= width && rect.h >= height
+}
+
+fn clip_rect_to_output(rect: Rect, width: u32, height: u32) -> Option<Rect> {
+    let x = rect.x.min(width);
+    let y = rect.y.min(height);
+    let w = rect.w.min(width.saturating_sub(x));
+    let h = rect.h.min(height.saturating_sub(y));
+    if w == 0 || h == 0 { None } else { Some(Rect { x, y, w, h }) }
 }
 
 fn get_display_info(fd: u32) -> Option<DisplayInfo> {
