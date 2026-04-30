@@ -30,6 +30,17 @@ pub struct DisplayMode {
 /// software vsync implementations to derive the target frame interval.
 pub const DEFAULT_REFRESH_MHZ: u32 = 60_000;
 
+/// Conversion factor for computing frame intervals: nanoseconds-per-second × 1000.
+///
+/// Dividing this constant by a `refresh_mhz` value (in milli-Hertz) yields the
+/// frame period in nanoseconds.
+///
+/// ```text
+/// frame_ns = NS_PER_SECOND_PER_MILLI_HZ / refresh_mhz
+/// e.g. 60 Hz → 1_000_000_000_000 / 60_000 = 16_666_667 ns ≈ 16.67 ms
+/// ```
+pub const NS_PER_SECOND_PER_MILLI_HZ: u64 = 1_000_000_000_000;
+
 /// Explicit FD-backed pixel buffer description for importation.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

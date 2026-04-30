@@ -4,9 +4,10 @@ use alloc::string::ToString;
 extern crate alloc;
 
 use abi::display::{
-    BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_COMMIT,
-    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps,
-    DisplayInfo, DisplayMode, PlaneCommit,
+    BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ,
+    NS_PER_SECOND_PER_MILLI_HZ, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
+    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps, DisplayInfo, DisplayMode,
+    PlaneCommit,
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -304,7 +305,8 @@ fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
 /// falls back to `DEFAULT_REFRESH_MHZ`.
 fn vsync_wait(last_present_ns: &mut u64, refresh_mhz: u32) {
     let effective_mhz = if refresh_mhz > 0 { refresh_mhz } else { DEFAULT_REFRESH_MHZ };
-    let frame_ns = 1_000_000_000_000u64 / effective_mhz as u64;
+    // NS_PER_SECOND_PER_MILLI_HZ / refresh_mhz converts milli-Hertz to ns per frame.
+    let frame_ns = NS_PER_SECOND_PER_MILLI_HZ / effective_mhz as u64;
     let now = stem::time::monotonic_ns();
     let next = last_present_ns.saturating_add(frame_ns);
     if now < next {
