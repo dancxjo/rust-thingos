@@ -83,7 +83,7 @@ Feature: blossom xdg-shell lifecycle
     When I type "cat /session/wayland/events/latest" on the serial console
     Then the latest serial output should contain "surface_committed"
 
-  @pointer-debug
+  @pointer-debug @wayland-input
   Scenario: wl_seat delivers pointer and keyboard events to the focused client
     Given the client has an xdg_toplevel
     Then the Wayland hello client should be visible

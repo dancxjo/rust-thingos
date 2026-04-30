@@ -5,6 +5,7 @@ use core::default::Default;
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use stem::info;
@@ -35,6 +36,8 @@ const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
 
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
+
+static POINTER_MOTION_LOGS: AtomicU32 = AtomicU32::new(0);
 
 struct TextRenderer {
     _handle: *mut core::ffi::c_void,
@@ -140,11 +143,13 @@ fn main(_arg: usize) -> ! {
                     info!("wayland_hello: pointer leave surface={}", read_u32(payload, 4));
                 }
                 (POINTER_ID, 2) if payload.len() >= 12 => {
-                    info!(
-                        "wayland_hello: pointer motion x={} y={}",
-                        wl_fixed_to_i32(read_i32(payload, 4)),
-                        wl_fixed_to_i32(read_i32(payload, 8))
-                    );
+                    if POINTER_MOTION_LOGS.fetch_add(1, Ordering::Relaxed) < 4 {
+                        info!(
+                            "wayland_hello: pointer motion x={} y={}",
+                            wl_fixed_to_i32(read_i32(payload, 4)),
+                            wl_fixed_to_i32(read_i32(payload, 8))
+                        );
+                    }
                 }
                 (POINTER_ID, 3) if payload.len() >= 16 => {
                     info!(
