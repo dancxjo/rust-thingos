@@ -372,6 +372,56 @@ impl Scene {
         Some(SurfaceResize { old_rect, new_rect: rect, changed: true })
     }
 
+    pub fn toggle_surface_shaded(&mut self, surface_id: u32) -> Option<SurfaceToggle> {
+        let surface = self.surfaces.get_mut(&surface_id)?;
+        let old_rect = surface.current.dest_rect;
+        let mut new_rect = old_rect;
+
+        if surface.is_shaded {
+            if let Some(restored) = surface.restored_rect.take() {
+                new_rect = restored;
+            }
+            surface.is_shaded = false;
+        } else {
+            surface.restored_rect = Some(old_rect);
+            surface.is_shaded = true;
+            new_rect.h = surface.chrome.titlebar_height;
+        }
+
+        let changed = old_rect != new_rect;
+        if changed {
+            surface.current.dest_rect = new_rect;
+        }
+
+        Some(SurfaceToggle { old_rect, new_rect, changed, active: surface.is_shaded })
+    }
+
+    pub fn toggle_surface_fullscreen(
+        &mut self,
+        surface_id: u32,
+        fullscreen_rect: Rect,
+    ) -> Option<SurfaceToggle> {
+        let surface = self.surfaces.get_mut(&surface_id)?;
+        let old_rect = surface.current.dest_rect;
+        let new_rect;
+
+        if surface.is_fullscreen {
+            new_rect = surface.restored_rect.take().unwrap_or(old_rect);
+            surface.is_fullscreen = false;
+        } else {
+            surface.restored_rect = Some(old_rect);
+            surface.is_fullscreen = true;
+            new_rect = fullscreen_rect;
+        }
+
+        let changed = old_rect != new_rect;
+        if changed {
+            surface.current.dest_rect = new_rect;
+        }
+
+        Some(SurfaceToggle { old_rect, new_rect, changed, active: surface.is_fullscreen })
+    }
+
     pub fn commit_surface(&mut self, client_id: u32, surface_id: u32) -> Option<CommitResult> {
         let surface = self.surfaces.get_mut(&surface_id)?;
         if surface.client_id != client_id {
@@ -684,6 +734,13 @@ pub struct SurfaceResize {
     pub old_rect: Rect,
     pub new_rect: Rect,
     pub changed: bool,
+}
+
+pub struct SurfaceToggle {
+    pub old_rect: Rect,
+    pub new_rect: Rect,
+    pub changed: bool,
+    pub active: bool,
 }
 
 pub fn surface_visual_rect(rect: Rect, _chrome: SurfaceChrome) -> Rect {
