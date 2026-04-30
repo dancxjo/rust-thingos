@@ -149,8 +149,8 @@ fn flush_output_buffer() {
 }
 
 fn read_data_filtered(expect_aux: bool, label: &str) -> Option<u8> {
-    let discarded_aux: u32 = 0;
-    let discarded_non_aux: u32 = 0;
+    let mut discarded_aux: u32 = 0;
+    let mut discarded_non_aux: u32 = 0;
     for _ in 0..20_000 {
         let status = ioport_read(PS2_STATUS, 1);
         if status & STATUS_OUTPUT_FULL == 0 {
@@ -160,7 +160,15 @@ fn read_data_filtered(expect_aux: bool, label: &str) -> Option<u8> {
         let is_aux = (status & STATUS_AUX_DATA) != 0;
 
         if is_aux != expect_aux {
-            // Leave bytes for the matching side of the shared controller.
+            // During init we must drain the head byte, even if it belongs to the
+            // other side of the shared i8042 controller, or the response we are
+            // waiting for can remain hidden behind it indefinitely.
+            let _ = ioport_read(PS2_DATA, 1);
+            if is_aux {
+                discarded_aux = discarded_aux.wrapping_add(1);
+            } else {
+                discarded_non_aux = discarded_non_aux.wrapping_add(1);
+            }
             stem::yield_now();
             continue;
         }
@@ -448,10 +456,10 @@ fn send_pointer_event(bristle_pid: u32, event_type: EventType, payload: &[u8]) -
 fn record_drop(drop_counter: &mut u32, bristle_pid: u32) {
     *drop_counter = drop_counter.wrapping_add(1);
     if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-            trace!(
-                "ps2_mouse: dropped {} mouse events (send pid={} failed)",
-                *drop_counter, bristle_pid
-            );
+        trace!(
+            "ps2_mouse: dropped {} mouse events (send pid={} failed)",
+            *drop_counter, bristle_pid
+        );
     }
 }
 

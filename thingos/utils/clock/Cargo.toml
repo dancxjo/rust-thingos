@@ -1,0 +1,15 @@
+[package]
+name = "clock"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stem = { path = "../../stem", features = ["rt"] }
+abi = { path = "../../abi" }
+libdl = { path = "../libdl" }
+
+[[bin]]
+name = "clock"
+path = "src/main.rs"
+test = false
+bench = false

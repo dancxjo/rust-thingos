@@ -6,7 +6,8 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat};
 use tiny_skia::Pixmap;
 
 use crate::font::{
-    DEFAULT_FONT_PATH, SYMBOL_FONT_PATH, TextRenderer, default_text_renderer, symbol_text_renderer,
+    DEFAULT_FONT_PATH, DSEG7_FONT_PATH, SYMBOL_FONT_PATH, TextRenderer, default_text_renderer,
+    dseg7_text_renderer, symbol_text_renderer,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -303,6 +304,49 @@ pub extern "C" fn pistil_draw_symbol_text(
 
     let Some(renderer) = symbol_text_renderer() else {
         stem::error!("pistil: failed to load symbol font {}", SYMBOL_FONT_PATH);
+        return -5;
+    };
+
+    let dst =
+        unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
+    let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
+    renderer.draw_text(&mut canvas, text, x, y, px_size, color);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_draw_dseg7_text(
+    text_ptr: *const u8,
+    dst_ptr: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+    x: i32,
+    y: i32,
+    px_size: f32,
+    color: u32,
+) -> i32 {
+    if text_ptr.is_null()
+        || dst_ptr.is_null()
+        || dst_w == 0
+        || dst_h == 0
+        || dst_stride_pixels < dst_w
+        || px_size <= 0.0
+    {
+        return -3;
+    }
+
+    let mut len = 0usize;
+    while unsafe { *text_ptr.add(len) } != 0 && len < 512 {
+        len += 1;
+    }
+    let text = unsafe { core::slice::from_raw_parts(text_ptr, len) };
+    let Ok(text) = core::str::from_utf8(text) else {
+        return -2;
+    };
+
+    let Some(renderer) = dseg7_text_renderer() else {
+        stem::error!("pistil: failed to load DSEG7 font {}", DSEG7_FONT_PATH);
         return -5;
     };
 

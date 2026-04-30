@@ -24,3 +24,9 @@ Feature: Sprout graphics pipeline orchestration
     And the serial output should contain "wayland-server: surface " within 180s
     And the serial output should contain "wayland-server: frame callback done" within 180s
     And the serial output should contain "wayland_hello: frame callback done" within 180s
+
+  Scenario: sprout launches the Wayland clock client
+    Given the machine is booted
+    Then the serial output should contain "SPROUT: Spawned clock" within 180s
+    And the serial output should contain "clock: connected to /run/wayland-0" within 180s
+    And the serial output should contain "clock: pistil DSEG7 text renderer loaded with /share/fonts/DSEG7Classic-Regular.ttf" within 180s

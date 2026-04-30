@@ -39,3 +39,7 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
   Scenario: ps2_mouse driver discovers bristle via VFS path
     # ps2_mouse no longer uses a packed spawn arg; it reads bristle's PID from VFS.
     Then the log should match pattern "ps2_mouse: bristle pid=[1-9][0-9]*"
+
+  Scenario: ps2_mouse completes shared-controller initialization
+    # Mouse init must not spin forever behind keyboard bytes in the shared i8042 FIFO.
+    Then the log should match pattern "ps2_mouse: init done"

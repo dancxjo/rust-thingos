@@ -96,6 +96,7 @@ members = [
   "thingos/bristle",
   "thingos/utils/cat",
   "thingos/utils/clear",
+  "thingos/utils/clock",
   "thingos/utils/cp",
   "thingos/utils/cwd_test",
   "thingos/utils/date",

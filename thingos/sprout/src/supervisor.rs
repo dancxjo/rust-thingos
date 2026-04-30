@@ -73,6 +73,8 @@ pub struct Supervisor {
     bloom_spawned_at_ns: u64,
     /// Whether the default Wayland demo client has been spawned.
     wayland_hello_spawned: bool,
+    /// Whether the clock Wayland client has been spawned.
+    clock_spawned: bool,
     /// Whether early audio/chime bring-up has been started.
     audio_spawned: bool,
     /// Whether `/dev/display/card0` has been mounted by the display driver.
@@ -105,6 +107,7 @@ impl Supervisor {
             bloom_spawned: false,
             bloom_spawned_at_ns: 0,
             wayland_hello_spawned: false,
+            clock_spawned: false,
             audio_spawned: false,
             display_card_mounted: false,
             display_service_ready: false,
@@ -465,6 +468,8 @@ impl Supervisor {
         self.spawn_bloom_if_ready();
         stem::trace!("SPROUT: Loop iteration: spawn_wayland_hello_if_ready");
         self.spawn_wayland_hello_if_ready();
+        stem::trace!("SPROUT: Loop iteration: spawn_clock_if_ready");
+        self.spawn_clock_if_ready();
         if !DISPLAY_INPUT_ISOLATION {
             stem::trace!("SPROUT: Loop iteration: spawn_audio_if_ready");
             self.spawn_audio_if_ready();
@@ -746,6 +751,38 @@ impl Supervisor {
             }
             Err(e) => {
                 warn!("SPROUT: Failed to spawn wayland_hello: {:?}", e);
+            }
+        }
+    }
+
+    fn spawn_clock_if_ready(&mut self) {
+        if self.clock_spawned || !self.bloom_spawned {
+            return;
+        }
+        if stem::monotonic_ns().saturating_sub(self.bloom_spawned_at_ns)
+            < WAYLAND_HELLO_BLOOM_GRACE_NS
+        {
+            return;
+        }
+
+        // Let the client synchronize with the Wayland socket through connect().
+        let path = "/bin/clock";
+        match stem::syscall::spawn_process(path, 0) {
+            Ok(pid) => {
+                info!("SPROUT: Spawned clock (PID={})", pid);
+                let _ = stem::thread::set_priority(pid, 2);
+                let mut tasks = self.tasks.lock();
+                tasks.push(ManagedTask {
+                    name: "clock".to_string(),
+                    kind: TaskKind::App,
+                    module_path: path.to_string(),
+                    pid: Some(pid),
+                    ..Default::default()
+                });
+                self.clock_spawned = true;
+            }
+            Err(e) => {
+                warn!("SPROUT: Failed to spawn clock: {:?}", e);
             }
         }
     }

@@ -9,6 +9,7 @@ use crate::Canvas;
 
 pub const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
 pub const SYMBOL_FONT_PATH: &str = "/share/fonts/NotoSansSymbol2-Regular.ttf";
+pub const DSEG7_FONT_PATH: &str = "/share/fonts/DSEG7Classic-Regular.ttf";
 
 pub struct TextRenderer {
     pub font: Font,
@@ -117,6 +118,22 @@ pub fn symbol_text_renderer() -> Option<&'static TextRenderer> {
 
     let renderer =
         Box::leak(Box::new(TextRenderer::load_from_boot(SYMBOL_FONT_PATH)?)) as *const TextRenderer;
+    unsafe {
+        RENDERER = renderer;
+        Some(&*renderer)
+    }
+}
+
+pub fn dseg7_text_renderer() -> Option<&'static TextRenderer> {
+    static mut RENDERER: *const TextRenderer = core::ptr::null();
+
+    let renderer = unsafe { RENDERER };
+    if !renderer.is_null() {
+        return Some(unsafe { &*renderer });
+    }
+
+    let renderer =
+        Box::leak(Box::new(TextRenderer::load_from_boot(DSEG7_FONT_PATH)?)) as *const TextRenderer;
     unsafe {
         RENDERER = renderer;
         Some(&*renderer)

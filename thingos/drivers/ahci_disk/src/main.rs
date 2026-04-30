@@ -427,11 +427,15 @@ fn main(boot_fd: usize) -> ! {
         info!("AHCI: Provider loop online at {}", path);
         let mut ploop = ProviderLoop::new(v_r);
         loop {
-            if let Ok(Some(req)) = ploop.try_next_request() {
-                let resp = provider.handle_rpc(&req);
-                let _ = ploop.send_response(&req, resp);
-            }
-            yield_now();
+            let req = match ploop.next_request() {
+                Ok(req) => req,
+                Err(err) => {
+                    warn!("AHCI: provider loop closed for {}: {:?}", path, err);
+                    break;
+                }
+            };
+            let resp = provider.handle_rpc(&req);
+            let _ = ploop.send_response(&req, resp);
         }
     }
 

@@ -34,6 +34,8 @@ const POINTER_OVERLAY_MARGIN: u32 = 12;
 const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
 const ACTIVE_CHROME: u32 = 0xFFFFB900;
 const INACTIVE_CHROME: u32 = 0xFF475569;
+const ACTIVE_BORDER: u32 = 0xFF92400E;
+const INACTIVE_BORDER: u32 = 0xFF1E293B;
 const CHROME_TEXT: u32 = 0xFF32331F;
 const CHROME_OUTLINE_DARK: u32 = 0xFF000000;
 const CHROME_OUTLINE_LIGHT: u32 = 0xFF000000;
@@ -677,8 +679,9 @@ fn draw_chrome_overlay(
         let w = rect.w;
         let h = rect.h;
         let chrome_color = if entry.active { ACTIVE_CHROME } else { INACTIVE_CHROME };
-
+        let border_color = if entry.active { ACTIVE_BORDER } else { INACTIVE_BORDER };
         let titlebar_height = chrome.titlebar_height.min(h);
+
         if titlebar_height > 0 {
             fill_rect(dst, stride, x, y, w, titlebar_height, chrome_color);
             draw_chrome_buttons(
@@ -718,9 +721,9 @@ fn draw_chrome_overlay(
                 );
             }
         } else {
-            fill_rect(dst, stride, x, y, w, frame, chrome_color);
+            fill_rect(dst, stride, x, y, w, frame, border_color);
         }
-        fill_rect(dst, stride, x, y, frame, h, chrome_color);
+        fill_rect(dst, stride, x, y, frame, h, border_color);
         fill_rect(
             dst,
             stride,
@@ -728,7 +731,7 @@ fn draw_chrome_overlay(
             y.saturating_add(h.saturating_sub(frame) as i32),
             w,
             frame,
-            chrome_color,
+            border_color,
         );
         fill_rect(
             dst,
@@ -737,7 +740,7 @@ fn draw_chrome_overlay(
             y,
             frame,
             h,
-            chrome_color,
+            border_color,
         );
         draw_frame_outline(dst, stride, rect, frame);
         if chrome.titlebar_height > frame.saturating_mul(2)

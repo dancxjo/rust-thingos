@@ -452,11 +452,15 @@ fn main(boot_fd: usize) -> ! {
         stem::thread::spawn_task_detached(move || {
             let mut ploop = ProviderLoop::new(vfs_read);
             loop {
-                if let Ok(Some(req)) = ploop.try_next_request() {
-                    let resp = provider.handle_rpc(&req);
-                    let _ = ploop.send_response(&req, resp);
-                }
-                stem::yield_now();
+                let req = match ploop.next_request() {
+                    Ok(req) => req,
+                    Err(err) => {
+                        warn!("ATA_DISK: provider loop closed for {}: {:?}", name, err);
+                        break;
+                    }
+                };
+                let resp = provider.handle_rpc(&req);
+                let _ = ploop.send_response(&req, resp);
             }
         })
         .expect("ata_disk: thread spawn failed");
