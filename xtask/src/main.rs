@@ -73,6 +73,9 @@ enum Commands {
         /// Kernel log level
         #[arg(long)]
         loglevel: Option<String>,
+        /// Make the BootFB fallback entry the default boot entry
+        #[arg(long)]
+        bootfb_default: bool,
     },
     /// Create an HDD image
     Hdd {
@@ -202,19 +205,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Build { env, profile } => build(&sh, &env, &profile)?,
-        Commands::Iso { env, profile, init, resolution, output, loglevel } => {
+        Commands::Iso { env, profile, init, resolution, output, loglevel, bootfb_default } => {
             limine(&sh)?;
             build(&sh, &env, &profile)?;
             rustc_thingos::build_rustc_thingos(&sh, &env)?;
             let mut programs = default_programs();
             apply_init(&mut programs, init);
 
-            let path = if resolution.is_some() || output.is_some() || loglevel.is_some() {
+            let path = if resolution.is_some()
+                || output.is_some()
+                || loglevel.is_some()
+                || bootfb_default
+            {
                 let output_path = output.as_deref().map(std::path::Path::new);
                 let config = IsoConfig {
                     resolution: resolution.as_deref(),
                     iso_path: output_path,
                     loglevel: loglevel.as_deref(),
+                    bootfb_default,
                 };
                 build_iso_with_config(&sh, &env, &programs, &config)?
             } else {
