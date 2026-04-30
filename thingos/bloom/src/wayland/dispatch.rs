@@ -17,6 +17,7 @@
 //! | 6    | wl_subcompositor | 1       |
 //! | 7    | wl_data_device_manager   | 3       |
 //! | 8    | zwp_linux_dmabuf_v1      | 3       |
+//! | 9    | wp_presentation          | 1       |
 
 use alloc::string::String;
 use alloc::vec;
@@ -40,6 +41,7 @@ pub const GLOBAL_WL_OUTPUT: u32 = 5;
 pub const GLOBAL_WL_SUBCOMPOSITOR: u32 = 6;
 pub const GLOBAL_WL_DATA_DEVICE_MANAGER: u32 = 7;
 pub const GLOBAL_ZWP_LINUX_DMABUF: u32 = 8;
+pub const GLOBAL_WP_PRESENTATION: u32 = 9;
 
 const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 const DRM_FORMAT_XRGB8888: u32 = 0x3432_5258; // "XR24"
@@ -98,6 +100,8 @@ pub fn dispatch(
         ObjKind::DataSource => dispatch_data_source(msg, client, obj_id),
         ObjKind::DataDevice => dispatch_data_device(msg, client, obj_id),
         ObjKind::DataOffer => dispatch_data_offer(msg, client, obj_id),
+        ObjKind::Presentation => dispatch_presentation(msg, client, obj_id),
+        ObjKind::PresentationFeedback => dispatch_presentation_feedback(msg, client, obj_id),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -131,6 +135,8 @@ enum ObjKind {
     DataSource,
     DataDevice,
     DataOffer,
+    Presentation,
+    PresentationFeedback,
     Destroyed,
     Unknown,
 }
@@ -162,6 +168,8 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::DataSource { .. } => ObjKind::DataSource,
         ObjectEntry::DataDevice { .. } => ObjKind::DataDevice,
         ObjectEntry::DataOffer => ObjKind::DataOffer,
+        ObjectEntry::Presentation => ObjKind::Presentation,
+        ObjectEntry::PresentationFeedback => ObjKind::PresentationFeedback,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -209,6 +217,7 @@ fn dispatch_display(
                 (GLOBAL_WL_OUTPUT, "wl_output", 2u32),
                 (GLOBAL_WL_SUBCOMPOSITOR, "wl_subcompositor", 1u32),
                 (GLOBAL_WL_DATA_DEVICE_MANAGER, "wl_data_device_manager", 3u32),
+                (GLOBAL_WP_PRESENTATION, "wp_presentation", 1u32),
             ] {
                 let mut p = Vec::new();
                 p.extend_from_slice(&name.to_ne_bytes());
@@ -292,6 +301,18 @@ fn dispatch_registry(
         GLOBAL_ZWP_LINUX_DMABUF if output.supports_dmabuf => {
             client.insert(new_id, ObjectEntry::Dmabuf);
             send_dmabuf_formats(client, new_id, output);
+        }
+        GLOBAL_WP_PRESENTATION => {
+            client.insert(new_id, ObjectEntry::Presentation);
+            // Per the Wayland Presentation Time protocol, the server must send
+            // `clock_id` to the client right after binding so the client knows
+            // which clock the timestamps in `presented` events come from.
+            // Bloom uses the monotonic clock (CLOCK_MONOTONIC = 1 on Linux);
+            // see `stem::time::monotonic_ns` which all other Bloom timestamps
+            // are derived from.
+            const CLOCK_MONOTONIC: u32 = 1;
+            // wp_presentation.clock_id opcode = 0: (clk_id: uint)
+            client.send(new_id, 0, &CLOCK_MONOTONIC.to_ne_bytes());
         }
         _ => {
             client.send_protocol_error(new_id, 0, "unknown global");
@@ -448,6 +469,7 @@ fn dispatch_compositor(
                     pending_buffer: None,
                     pending_damage: None,
                     pending_frame_cb: None,
+                    pending_presentation_feedback: alloc::vec::Vec::new(),
                     subsurface_obj: None,
                     subsurface_children: alloc::vec::Vec::new(),
                 },
@@ -808,6 +830,16 @@ fn dispatch_surface(
     match msg.opcode {
         WL_SURFACE_DESTROY => {
             let bloom_id = client.bloom_surface_id(obj_id).unwrap_or(0);
+            // Per `wp_presentation` protocol, presentation feedback objects
+            // bound to content that will never be presented (e.g. because the
+            // surface is being destroyed) must be settled with `discarded`.
+            // Discard both pending (not-yet-committed) and in-flight feedbacks
+            // for this surface so the client never sees a leaked feedback
+            // object.
+            let _ = client.discard_pending_presentation_feedback(obj_id);
+            if bloom_id != 0 {
+                let _ = client.fire_presentation_feedbacks_discarded(bloom_id);
+            }
             client.destroy(obj_id);
             if bloom_id != 0 {
                 ipc_cmds.push(ipc::encode_destroy_surface(bloom_id).to_vec());
@@ -969,6 +1001,11 @@ fn handle_surface_commit(
     } else {
         0
     };
+
+    // Move any pending wp_presentation_feedback objects from per-surface
+    // pending state into the per-bloom_surface_id in-flight map so they will
+    // be settled when the next FRAME_DONE arrives for this surface.
+    let _flushed = client.flush_pending_presentation_feedback(wl_surface_obj, bloom_surface_id);
 
     // Commit.
     out.push(ipc::encode_commit(bloom_surface_id, has_cb, cb_key).to_vec());
@@ -1951,5 +1988,81 @@ fn dispatch_data_offer(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -
         WL_DATA_OFFER_ACCEPT | WL_DATA_OFFER_FINISH | WL_DATA_OFFER_SET_ACTIONS => {}
         _ => {}
     }
+    vec![]
+}
+
+// ── wp_presentation ─────────────────────────────────────────────────────────
+//
+// Implements the `wp_presentation` global from the Wayland Presentation Time
+// protocol (https://wayland.app/protocols/presentation-time).  Bloom uses
+// best-effort software timing here: timestamps come from the same monotonic
+// clock as `wl_callback.done`, and no `presented` flag bits are claimed (no
+// VSYNC/HW_CLOCK/HW_COMPLETION/ZERO_COPY) because true vblank reporting is
+// not yet wired through the display pipeline.  When real vsync timing lands
+// this implementation should switch to that source and start advertising the
+// appropriate flags; see the `wp_presentation` audit issue.
+
+/// wp_presentation request opcodes.
+const WP_PRESENTATION_DESTROY: u16 = 0;
+const WP_PRESENTATION_FEEDBACK: u16 = 1;
+
+/// wp_presentation_feedback request opcodes — none defined; the object has
+/// only events (`sync_output`, `presented`, `discarded`).  All requests are
+/// silently ignored.
+
+fn dispatch_presentation(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WP_PRESENTATION_DESTROY => {
+            client.destroy(obj_id);
+        }
+        WP_PRESENTATION_FEEDBACK => {
+            // feedback(surface: object<wl_surface>, callback: new_id<wp_presentation_feedback>)
+            let surface_obj = read_u32(&msg.data, 0).unwrap_or(0);
+            let fb_id = read_u32(&msg.data, 4).unwrap_or(0);
+            if fb_id == 0 {
+                return vec![];
+            }
+            // Always create the feedback object so the client's wire-side ID
+            // table stays consistent — even if the surface lookup fails we
+            // settle the feedback immediately with `discarded`.
+            client.insert(fb_id, ObjectEntry::PresentationFeedback);
+            let surface_ok = matches!(
+                client.objects.get(&surface_obj),
+                Some(ObjectEntry::Surface { .. })
+            );
+            if surface_ok {
+                client.add_pending_presentation_feedback(surface_obj, fb_id);
+                blossom_debug!(
+                    "wayland-server: wp_presentation.feedback surface_obj={} fb={}",
+                    surface_obj,
+                    fb_id
+                );
+            } else {
+                // No valid surface — the content this feedback would describe
+                // can never be presented, so discard it immediately.
+                client.send(fb_id, 2, &[]);
+                client.destroy(fb_id);
+                blossom_warn!(
+                    "wayland-server: wp_presentation.feedback for unknown surface_obj={} → discarded",
+                    surface_obj
+                );
+            }
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+fn dispatch_presentation_feedback(
+    _msg: &WireMsg,
+    _client: &mut WaylandClient,
+    _obj_id: u32,
+) -> Vec<Vec<u8>> {
+    // wp_presentation_feedback has no requests in v1; the server initiates
+    // both `presented` and `discarded` (each of which is a destructor event).
     vec![]
 }

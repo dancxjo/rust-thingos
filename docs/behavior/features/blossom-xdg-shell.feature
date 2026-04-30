@@ -169,3 +169,17 @@ Feature: blossom xdg-shell lifecycle
     When the client commits the surface with a valid shm buffer
     And the compositor presents the next frame
     Then the client receives wl_callback.done for that callback object
+
+  # ── wp_presentation (Presentation Time) ─────────────────────────────────────
+
+  Scenario: registry advertises wp_presentation
+    Given a Wayland client has connected via /run/wayland-0
+    When the client requests the wl_registry global list
+    Then wl_registry advertises wp_presentation version 1
+
+  Scenario: wp_presentation_feedback receives presented after commit
+    Given the client has a fully configured xdg_toplevel
+    And the client has requested wp_presentation.feedback for the surface
+    When the client commits the surface with a valid shm buffer
+    And the compositor presents the next frame
+    Then the client receives wp_presentation_feedback.presented for that feedback object

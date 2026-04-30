@@ -1280,3 +1280,76 @@ async fn client_receives_callback_done(world: &mut ThingOsWorld) -> Result<(), S
         ))
     }
 }
+
+// ── wp_presentation (Presentation Time) ─────────────────────────────────────
+//
+// These steps assert the `wp_presentation` global is advertised on the
+// registry and that `wp_presentation_feedback.presented` is delivered to a
+// client that requested feedback for a committed surface. The wayland_hello
+// reference client binds `wp_presentation` and requests feedback alongside
+// each `wl_surface.frame` callback, so the corresponding compositor and
+// client logs can be observed on the serial console.
+
+/// `When the client requests the wl_registry global list`
+#[when("the client requests the wl_registry global list")]
+async fn client_requests_registry(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    // wayland_hello issues `wl_display.get_registry` immediately on connect,
+    // so by the time it has connected the global list has been requested.
+    let _ = world.wait_for_serial("wayland_hello: bound wp_presentation", 15.0).await;
+    Ok(())
+}
+
+/// `Then wl_registry advertises wp_presentation version 1`
+#[then("wl_registry advertises wp_presentation version 1")]
+async fn registry_advertises_wp_presentation(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    if log.contains("wayland_hello: bound wp_presentation") {
+        eprintln!("│  │  │      ✅ wp_presentation advertised by wl_registry");
+        Ok(())
+    } else {
+        Err(StepError(
+            "Expected client to bind wp_presentation (no 'wayland_hello: bound wp_presentation' log)"
+                .to_string(),
+        ))
+    }
+}
+
+/// `And the client has requested wp_presentation.feedback for the surface`
+#[given("the client has requested wp_presentation.feedback for the surface")]
+async fn client_requested_presentation_feedback(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let _ = world
+        .wait_for_serial("wayland-server: wp_presentation.feedback surface_obj=", 15.0)
+        .await;
+    let log = world.get_serial_log().await;
+    if log.contains("wayland-server: wp_presentation.feedback") {
+        eprintln!("│  │  │      ✅ Presentation feedback registered");
+        Ok(())
+    } else {
+        // Allow as precondition — the Then step asserts the presented event.
+        eprintln!("│  │  │      ⚠️  Presentation feedback registration log not yet seen");
+        Ok(())
+    }
+}
+
+/// `Then the client receives wp_presentation_feedback.presented for that feedback object`
+#[then("the client receives wp_presentation_feedback.presented for that feedback object")]
+async fn client_receives_feedback_presented(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let found = world
+        .wait_for_serial("wayland_hello: wp_presentation_feedback.presented", 30.0)
+        .await;
+    if found {
+        eprintln!("│  │  │      ✅ wp_presentation_feedback.presented received");
+        Ok(())
+    } else {
+        Err(StepError(
+            "Expected 'wayland_hello: wp_presentation_feedback.presented' in client log"
+                .to_string(),
+        ))
+    }
+}
