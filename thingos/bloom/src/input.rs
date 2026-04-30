@@ -436,7 +436,7 @@ impl InputState {
                 offset_y: self.pointer_y.saturating_sub(rect.y as i32),
             },
         });
-        stem::info!(
+        stem::trace!(
             "bloom: window drag started surface={} pointer={},{}",
             surface_id,
             self.pointer_x,
@@ -462,7 +462,7 @@ impl InputState {
                 if moved.changed {
                     damage.mark_rect(moved.old_rect);
                     damage.mark_rect(moved.new_rect);
-                    stem::info!(
+                    stem::trace!(
                         "bloom: window drag moved surface={} to {},{}",
                         grab.surface_id,
                         moved.new_rect.x,
@@ -478,7 +478,7 @@ impl InputState {
         let Some(grab) = self.pointer_grab.take() else {
             return false;
         };
-        stem::info!("bloom: window drag ended surface={}", grab.surface_id);
+        stem::trace!("bloom: window drag ended surface={}", grab.surface_id);
         true
     }
 
