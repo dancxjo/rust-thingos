@@ -169,6 +169,16 @@ Feature: Bloom compositor service loop and responsiveness
     And the serial output should not contain "controlq faulted"
 
   @pointer-debug
+  Scenario: pointer animation releases imported display buffers cleanly
+    # The compositor replaces pointer/chrome buffers during pointer animation.
+    # display_virtio_gpu must tear down the provider-side import mapping and
+    # translated FD when Bloom releases the old buffer.
+    Given the machine is booted
+    Then the pointer debug overlay should update after mouse movement
+    And the serial output should not contain "failed to unmap released buffer"
+    And the serial output should not contain "failed to close released buffer"
+
+  @pointer-debug
   Scenario: delayed pointer samples animate the visible cursor toward the latest position
     Given the machine is booted
     Then the pointer debug overlay should update after mouse movement

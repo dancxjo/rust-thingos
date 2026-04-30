@@ -1,7 +1,7 @@
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke, Transform};
 
 pub const DEFAULT_CURSOR_SVG: &[u8] = br##"<?xml version="1.0" encoding="UTF-8"?>
-<svg width="32" height="32" version="1.1" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<svg width="32" height="32" version="1.1" viewBox="0 0 32 32" hotspot-x="7" hotspot-y="4" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
  <metadata>
   <rdf:RDF>
    <cc:Work rdf:about="">
@@ -77,8 +77,9 @@ pub fn rasterize_cursor(
     rasterize(svg, dst, width, height, stride)?;
 
     let hotspot = parse_hotspot(svg).unwrap_or_else(|| {
-        if svg == DEFAULT_CURSOR_SVG {
-            CursorHotspot { x: 3, y: 2 }
+        if svg.starts_with(b"<?xml") && svg.windows(6).any(|w| w == b"ffb900") {
+            // Fallback for the default future-style cursor tip
+            CursorHotspot { x: 7, y: 4 }
         } else {
             let (source_w, source_h) = svg_source_size_from_bytes(svg).unwrap_or((32.0, 32.0));
             CursorHotspot { x: (source_w / 2.0) as u32, y: (source_h / 2.0) as u32 }
@@ -740,7 +741,7 @@ mod tests {
     fn rasterizes_non_empty_cursor_and_hotspot() {
         let mut pixels = [0u32; 32 * 32];
         let hotspot = rasterize_cursor(DEFAULT_CURSOR_SVG, &mut pixels, 32, 32, 32).unwrap();
-        assert_eq!(hotspot, CursorHotspot { x: 3, y: 2 });
+        assert_eq!(hotspot, CursorHotspot { x: 7, y: 4 });
         assert!(pixels.iter().any(|px| (*px & 0x00ff_ffff) == 0x00ff_ffff));
         assert!(pixels.iter().any(|px| (*px & 0x00ff_ffff) == 0x00ff_b900));
         assert!(pixels.iter().any(|px| (*px & 0x00ff_ffff) == 0x0015_1515));
@@ -782,16 +783,16 @@ mod tests {
         let svg = DEFAULT_CURSOR_SVG;
         let mut dst = [0u32; 32 * 32];
         let hotspot = rasterize_cursor(svg, &mut dst, 32, 32, 32).unwrap();
-        // Should default to (3, 2)
-        assert_eq!(hotspot.x, 3);
-        assert_eq!(hotspot.y, 2);
+        // Should default to (7, 4)
+        assert_eq!(hotspot.x, 7);
+        assert_eq!(hotspot.y, 4);
     }
 
     #[test]
     fn scales_cursor_hotspot_with_output_size() {
         let mut pixels = [0u32; 96 * 96];
         let hotspot = rasterize_cursor(DEFAULT_CURSOR_SVG, &mut pixels, 96, 96, 96).unwrap();
-        assert_eq!(hotspot, CursorHotspot { x: 9, y: 6 });
+        assert_eq!(hotspot, CursorHotspot { x: 21, y: 12 });
     }
 
     #[test]
