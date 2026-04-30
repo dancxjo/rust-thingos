@@ -20,6 +20,8 @@ class FreezeHunterTests(unittest.TestCase):
         self.assertEqual(freeze_hunter.parse_modes("alt_tab"), {"alt-tab"})
         self.assertEqual(freeze_hunter.parse_modes("circle,alt-tab"), {"mouse-circle", "alt-tab"})
         self.assertEqual(freeze_hunter.parse_modes("active"), {"mouse-circle", "alt-tab"})
+        self.assertEqual(freeze_hunter.parse_modes("random"), {"random-input"})
+        self.assertEqual(freeze_hunter.parse_modes("stress"), {"mouse-circle", "alt-tab", "random-input"})
 
     def test_compose_qemu_flags_adds_display_and_optional_qmp(self):
         flags = freeze_hunter.compose_qemu_flags("-m 2G -smp 4", "/tmp/qmp.sock")
@@ -60,6 +62,21 @@ class FreezeHunterTests(unittest.TestCase):
                 self.assertIn("-qmp unix:", captured_env["QEMUFLAGS"])
                 self.assertIn("qmp.sock,server=on,wait=off", captured_env["QEMUFLAGS"])
 
+    def test_random_input_emits_qmp_events(self):
+        driver = freeze_hunter.QmpInputDriver("/tmp/qmp.sock", {"random-input"})
+        calls = []
+
+        with mock.patch.object(driver, "_execute", side_effect=lambda qmp, command: calls.append(command)), \
+             mock.patch.object(freeze_hunter.random, "choice", side_effect=["key", "ret"]):
+            driver._send_random_input(object())
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["execute"], "input-send-event")
+        self.assertEqual(calls[0]["arguments"]["events"][0]["type"], "key")
+        self.assertEqual(calls[0]["arguments"]["events"][0]["data"]["key"]["data"], "ret")
+        self.assertTrue(calls[0]["arguments"]["events"][0]["data"]["down"])
+        self.assertFalse(calls[1]["arguments"]["events"][0]["data"]["down"])
+
     def test_run_session_times_out_after_partial_line_output(self):
         script = (
             "import sys, time; "
@@ -72,7 +89,8 @@ class FreezeHunterTests(unittest.TestCase):
             with mock.patch.object(freeze_hunter, "LOG_DIR", str(Path(tmp) / "logs")), \
                  mock.patch.object(freeze_hunter, "TIMEOUT", 0.25), \
                  mock.patch.object(freeze_hunter, "ARCH", "x86_64"), \
-                 mock.patch.object(freeze_hunter, "LOG_LEVEL", "5"):
+                 mock.patch.object(freeze_hunter, "LOG_LEVEL", "5"), \
+                 mock.patch.object(freeze_hunter, "MODE", "idle"):
 
                 original_popen = subprocess.Popen
 

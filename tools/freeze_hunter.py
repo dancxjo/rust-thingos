@@ -7,6 +7,7 @@ import signal
 import select
 import json
 import math
+import random
 import socket
 import tempfile
 import threading
@@ -17,12 +18,17 @@ TIMEOUT = float(os.environ.get("HUNTER_TIMEOUT", "15.0"))
 ARCH = os.environ.get("KARCH", "x86_64")
 LOG_DIR = "freeze_logs"
 LOG_LEVEL = os.environ.get("HUNTER_LOGLEVEL", "5") # 5 = Trace
-MODE = os.environ.get("HUNTER_MODE", os.environ.get("FREEZE_HUNTER_MODE", "idle"))
+MODE = os.environ.get("HUNTER_MODE", os.environ.get("FREEZE_HUNTER_MODE", "stress"))
 MOUSE_INTERVAL = float(os.environ.get("HUNTER_MOUSE_INTERVAL", "0.20"))
 MOUSE_RADIUS = int(os.environ.get("HUNTER_MOUSE_RADIUS", "32"))
 MOUSE_STEPS = int(os.environ.get("HUNTER_MOUSE_STEPS", "32"))
 ALT_TAB_INTERVAL = float(os.environ.get("HUNTER_ALT_TAB_INTERVAL", "4.0"))
+RANDOM_INPUT_INTERVAL = float(os.environ.get("HUNTER_RANDOM_INPUT_INTERVAL", "0.35"))
+RANDOM_MOUSE_RADIUS = int(os.environ.get("HUNTER_RANDOM_MOUSE_RADIUS", "96"))
 QMP_CONNECT_TIMEOUT = float(os.environ.get("HUNTER_QMP_CONNECT_TIMEOUT", "15.0"))
+
+ACTIVE_MODES = {"mouse-circle", "alt-tab"}
+STRESS_MODES = ACTIVE_MODES | {"random-input"}
 
 MODE_ALIASES = {
     "idle": set(),
@@ -35,10 +41,23 @@ MODE_ALIASES = {
     "alt-tab": {"alt-tab"},
     "alttab": {"alt-tab"},
     "switch": {"alt-tab"},
-    "exercise": {"mouse-circle", "alt-tab"},
-    "active": {"mouse-circle", "alt-tab"},
-    "desktop": {"mouse-circle", "alt-tab"},
+    "random": {"random-input"},
+    "random-input": {"random-input"},
+    "fuzz": {"random-input"},
+    "exercise": ACTIVE_MODES,
+    "active": ACTIVE_MODES,
+    "desktop": ACTIVE_MODES,
+    "stress": STRESS_MODES,
+    "default": STRESS_MODES,
 }
+
+RANDOM_KEY_CODES = [
+    "up", "down", "left", "right",
+    "pgup", "pgdn", "home", "end",
+    "esc", "spc", "ret", "backspace",
+    "a", "b", "c", "d", "e", "f",
+    "tab",
+]
 
 def parse_modes(value):
     modes = set()
@@ -95,6 +114,7 @@ class QmpInputDriver:
     def _drive(self, qmp):
         next_mouse = time.time()
         next_alt_tab = time.time() + min(ALT_TAB_INTERVAL, 1.0)
+        next_random = time.time() + random.uniform(0.05, max(RANDOM_INPUT_INTERVAL, 0.05))
         step = 0
         prev_x = MOUSE_RADIUS
         prev_y = 0
@@ -115,6 +135,11 @@ class QmpInputDriver:
                 self._send_alt_tab(qmp)
                 next_alt_tab = now + max(ALT_TAB_INTERVAL, 0.1)
 
+            if "random-input" in self.modes and now >= next_random:
+                self._send_random_input(qmp)
+                interval = max(RANDOM_INPUT_INTERVAL, 0.05)
+                next_random = now + random.uniform(interval * 0.5, interval * 1.5)
+
             self.stop_event.wait(0.02)
 
     def _send_rel(self, qmp, dx, dy):
@@ -128,16 +153,48 @@ class QmpInputDriver:
 
     def _send_alt_tab(self, qmp):
         for key, down in (("alt", True), ("tab", True), ("tab", False), ("alt", False)):
-            self._execute(qmp, {
-                "execute": "input-send-event",
-                "arguments": {
-                    "events": [{
-                        "type": "key",
-                        "data": {"down": down, "key": {"type": "qcode", "data": key}},
-                    }],
-                },
-            })
+            self._send_key(qmp, key, down)
             time.sleep(0.03)
+
+    def _send_random_input(self, qmp):
+        action = random.choice(("move", "click", "key", "wheel"))
+        if action == "move":
+            radius = max(RANDOM_MOUSE_RADIUS, 1)
+            self._send_rel(qmp, random.randint(-radius, radius), random.randint(-radius, radius))
+        elif action == "click":
+            button = random.choice(("left", "right", "middle"))
+            self._send_button(qmp, button, True)
+            time.sleep(random.uniform(0.01, 0.05))
+            self._send_button(qmp, button, False)
+        elif action == "key":
+            key = random.choice(RANDOM_KEY_CODES)
+            self._send_key(qmp, key, True)
+            time.sleep(random.uniform(0.01, 0.05))
+            self._send_key(qmp, key, False)
+        else:
+            self._send_rel(qmp, 0, random.choice((-3, -2, 2, 3)))
+
+    def _send_key(self, qmp, key, down):
+        self._execute(qmp, {
+            "execute": "input-send-event",
+            "arguments": {
+                "events": [{
+                    "type": "key",
+                    "data": {"down": down, "key": {"type": "qcode", "data": key}},
+                }],
+            },
+        })
+
+    def _send_button(self, qmp, button, down):
+        self._execute(qmp, {
+            "execute": "input-send-event",
+            "arguments": {
+                "events": [{
+                    "type": "btn",
+                    "data": {"down": down, "button": button},
+                }],
+            },
+        })
 
     def _execute(self, qmp, command):
         qmp.sendall(json.dumps(command).encode("utf-8") + b"\n")
