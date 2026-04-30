@@ -75,6 +75,13 @@ Feature: blossom xdg-shell lifecycle
     When I drag the Wayland hello title bar
     Then the compositor should move the toplevel window
 
+  @pointer-debug
+  Scenario: dragging the frame resizes a toplevel window
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I drag the Wayland hello frame
+    Then the compositor should resize the toplevel window
+
   # ── State updates ────────────────────────────────────────────────────────────
 
   Scenario: set_title and set_app_id update toplevel state

@@ -425,7 +425,7 @@ impl WaylandServer {
                         states,
                     ) {
                         dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
-                        debug!(
+                        info!(
                             "wayland-server: configured surface={} size={}x{} resizing={}",
                             bloom_surface_id, width, height, resizing
                         );

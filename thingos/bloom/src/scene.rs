@@ -87,19 +87,27 @@ pub enum CursorKind {
     #[default]
     Default,
     Move,
-    ResizeNorthSouth,
-    ResizeEastWest,
-    ResizeNorthEastSouthWest,
-    ResizeNorthWestSouthEast,
+    ResizeNorth,
+    ResizeSouth,
+    ResizeEast,
+    ResizeWest,
+    ResizeNorthEast,
+    ResizeNorthWest,
+    ResizeSouthEast,
+    ResizeSouthWest,
 }
 
 impl CursorKind {
     pub fn for_resize_edge(edge: ResizeEdge) -> Self {
         match edge {
-            ResizeEdge::North | ResizeEdge::South => Self::ResizeNorthSouth,
-            ResizeEdge::East | ResizeEdge::West => Self::ResizeEastWest,
-            ResizeEdge::NorthEast | ResizeEdge::SouthWest => Self::ResizeNorthEastSouthWest,
-            ResizeEdge::NorthWest | ResizeEdge::SouthEast => Self::ResizeNorthWestSouthEast,
+            ResizeEdge::North => Self::ResizeNorth,
+            ResizeEdge::South => Self::ResizeSouth,
+            ResizeEdge::East => Self::ResizeEast,
+            ResizeEdge::West => Self::ResizeWest,
+            ResizeEdge::NorthEast => Self::ResizeNorthEast,
+            ResizeEdge::NorthWest => Self::ResizeNorthWest,
+            ResizeEdge::SouthEast => Self::ResizeSouthEast,
+            ResizeEdge::SouthWest => Self::ResizeSouthWest,
         }
     }
 }

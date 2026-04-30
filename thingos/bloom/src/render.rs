@@ -13,10 +13,14 @@ const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
 const MOVE_CURSOR_PATH: &str = "/share/cursors/future/fleur.svg";
-const RESIZE_NS_CURSOR_PATH: &str = "/share/cursors/future/size_ver.svg";
-const RESIZE_EW_CURSOR_PATH: &str = "/share/cursors/future/size_hor.svg";
-const RESIZE_NESW_CURSOR_PATH: &str = "/share/cursors/future/size_bdiag.svg";
-const RESIZE_NWSE_CURSOR_PATH: &str = "/share/cursors/future/size_fdiag.svg";
+const RESIZE_N_CURSOR_PATH: &str = "/share/cursors/future/top_side.svg";
+const RESIZE_S_CURSOR_PATH: &str = "/share/cursors/future/bottom_side.svg";
+const RESIZE_E_CURSOR_PATH: &str = "/share/cursors/future/right_side.svg";
+const RESIZE_W_CURSOR_PATH: &str = "/share/cursors/future/left_side.svg";
+const RESIZE_NE_CURSOR_PATH: &str = "/share/cursors/future/top_right_corner.svg";
+const RESIZE_NW_CURSOR_PATH: &str = "/share/cursors/future/top_left_corner.svg";
+const RESIZE_SE_CURSOR_PATH: &str = "/share/cursors/future/bottom_right_corner.svg";
+const RESIZE_SW_CURSOR_PATH: &str = "/share/cursors/future/bottom_left_corner.svg";
 const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
 const CURSOR_SIZE: u32 = 96;
 const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
@@ -47,7 +51,7 @@ type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f3
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
     cursor: Option<CursorBuffer>,
-    generated_cursors: Vec<(CursorKind, CursorBuffer)>,
+    cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
     chrome_overlay: Option<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
@@ -113,7 +117,7 @@ impl CompositorVisuals {
         Self {
             background: None,
             cursor: None,
-            generated_cursors: Vec::new(),
+            cursor_variants: Vec::new(),
             pointer_overlay: None,
             chrome_overlay: None,
             pistil,
@@ -340,22 +344,18 @@ impl CompositorVisuals {
         if kind == CursorKind::Default {
             return self.cursor.as_ref();
         }
-        if let Some(idx) = self.generated_cursors.iter().position(|(k, _)| *k == kind) {
-            return Some(&self.generated_cursors[idx].1);
+        if let Some(idx) = self.cursor_variants.iter().position(|(k, _)| *k == kind) {
+            return Some(&self.cursor_variants[idx].1);
         }
-        self.prepare_generated_cursor(display, kind)?;
-        self.generated_cursors
+        self.prepare_cursor_variant(display, kind)?;
+        self.cursor_variants
             .iter()
             .find_map(|(k, cursor)| if *k == kind { Some(cursor) } else { None })
     }
 
-    fn prepare_generated_cursor(
-        &mut self,
-        display: &DisplayBackend,
-        kind: CursorKind,
-    ) -> Option<()> {
+    fn prepare_cursor_variant(&mut self, display: &DisplayBackend, kind: CursorKind) -> Option<()> {
         let mut texture =
-            Texture::new("bloom.compositor.cursor.generated", CURSOR_SIZE, CURSOR_SIZE, 4)?;
+            Texture::new("bloom.compositor.cursor.variant", CURSOR_SIZE, CURSOR_SIZE, 4)?;
         let cursor_path = cursor_path(kind)?;
         let mut hotspot = [CURSOR_SIZE / 2, CURSOR_SIZE / 2];
         let success = if let Some(ref lib) = self.pistil {
@@ -386,10 +386,10 @@ impl CompositorVisuals {
             PixelFormat::Bgra8888,
             0,
         ) else {
-            stem::warn!("bloom: failed to import generated cursor texture");
+            stem::warn!("bloom: failed to import cursor variant texture");
             return None;
         };
-        self.generated_cursors.push((
+        self.cursor_variants.push((
             kind,
             CursorBuffer {
                 _texture: texture,
@@ -613,10 +613,14 @@ fn cursor_path(kind: CursorKind) -> Option<&'static str> {
     match kind {
         CursorKind::Default => Some(DEFAULT_CURSOR_PATH),
         CursorKind::Move => Some(MOVE_CURSOR_PATH),
-        CursorKind::ResizeNorthSouth => Some(RESIZE_NS_CURSOR_PATH),
-        CursorKind::ResizeEastWest => Some(RESIZE_EW_CURSOR_PATH),
-        CursorKind::ResizeNorthEastSouthWest => Some(RESIZE_NESW_CURSOR_PATH),
-        CursorKind::ResizeNorthWestSouthEast => Some(RESIZE_NWSE_CURSOR_PATH),
+        CursorKind::ResizeNorth => Some(RESIZE_N_CURSOR_PATH),
+        CursorKind::ResizeSouth => Some(RESIZE_S_CURSOR_PATH),
+        CursorKind::ResizeEast => Some(RESIZE_E_CURSOR_PATH),
+        CursorKind::ResizeWest => Some(RESIZE_W_CURSOR_PATH),
+        CursorKind::ResizeNorthEast => Some(RESIZE_NE_CURSOR_PATH),
+        CursorKind::ResizeNorthWest => Some(RESIZE_NW_CURSOR_PATH),
+        CursorKind::ResizeSouthEast => Some(RESIZE_SE_CURSOR_PATH),
+        CursorKind::ResizeSouthWest => Some(RESIZE_SW_CURSOR_PATH),
     }
 }
 

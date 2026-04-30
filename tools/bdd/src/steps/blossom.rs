@@ -657,6 +657,71 @@ async fn compositor_moves_toplevel_window(world: &mut ThingOsWorld) -> Result<()
     Ok(())
 }
 
+#[when("I drag the Wayland hello frame")]
+async fn drag_wayland_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for frame resize input".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered titlebar drag zone", 60.0).await {
+        return Err(StepError("Bloom did not register compositor chrome".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let commands = [
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": -10000}}, {"type": "rel", "data": {"axis": "y", "value": -10000}}]}}"#,
+            1_000,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 476}}, {"type": "rel", "data": {"axis": "y", "value": 316}}]}}"#,
+            500,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#,
+            200,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 64}}, {"type": "rel", "data": {"axis": "y", "value": 48}}]}}"#,
+            500,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#,
+            100,
+        ),
+    ];
+
+    for (command, settle_ms) in commands {
+        world
+            .execute_qmp_control(command)
+            .await
+            .map_err(|e| StepError(format!("QMP frame resize failed: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
+    }
+    Ok(())
+}
+
+#[then("the compositor should resize the toplevel window")]
+async fn compositor_resizes_toplevel_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if !world.wait_for_serial("bloom: window resize started", 30.0).await {
+        return Err(StepError("Bloom did not start a frame resize".to_string()));
+    }
+    if !world.wait_for_serial("bloom: window resize moved", 30.0).await {
+        return Err(StepError("Bloom did not resize the dragged window".to_string()));
+    }
+    if !world.wait_for_serial("wayland-server: configured surface=", 30.0).await {
+        return Err(StepError("Wayland server did not send a resize configure".to_string()));
+    }
+    if !world.wait_for_serial("bloom: window resize ended", 30.0).await {
+        return Err(StepError("Bloom did not end the frame resize".to_string()));
+    }
+    Ok(())
+}
+
 /// `When the client sends xdg_toplevel.set_title "..."` (regex)
 #[when(regex = r#"^the client sends xdg_toplevel\.set_title "(.+)"$"#)]
 async fn client_sends_set_title(world: &mut ThingOsWorld, title: String) -> Result<(), StepError> {
