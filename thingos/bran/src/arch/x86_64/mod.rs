@@ -1009,12 +1009,6 @@ impl ArchRuntime for X86_64Runtime {
         let count = CPU_COUNT.load(Ordering::SeqCst) as usize;
         if cpu_index < count {
             let apic_id = unsafe { CPU_IDS[cpu_index].0 };
-            kernel::ktrace!(
-                "SMP: send_ipi cpu_index={} apic_id={} vector=0x{:x}",
-                cpu_index,
-                apic_id,
-                vector
-            );
             let hhdm = self.hhdm_offset.load(Ordering::SeqCst);
             if hhdm == 0 {
                 kernel::kwarn!(

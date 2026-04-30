@@ -28,10 +28,10 @@ use abi::hid::{
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::wire::KindId;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
-use stem::syscall::port_create;
 use stem::syscall::vfs::{
     vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write,
 };
+use stem::syscall::{port_close, port_create, port_send_all};
 use stem::wait_set::WaitToken;
 use stem::{debug, info, warn};
 
@@ -148,8 +148,8 @@ fn main(_arg: usize) -> ! {
 
     // ── Event-dispatch state ──────────────────────────────────────────────
     // Registered event sinks — registered via inbox RegisterSink messages.
-    let mut bloom_fd: Option<u32> = None;
-    let mut echo_fd: Option<u32> = None;
+    let mut bloom_sink: Option<u32> = None;
+    let mut echo_sink: Option<u32> = None;
 
     let mut recv_buf = [0u8; 128];
     let mut kbd_event_accum = [0u8; 64];
@@ -172,7 +172,7 @@ fn main(_arg: usize) -> ! {
             // ── Control plane: sink registration via inbox ─────────────
             ServiceEvent::Message { kind, payload } => {
                 if kind == KindId(KIND_BRISTLE_REGISTER_SINK) {
-                    handle_register_sink(payload, &mut bloom_fd, &mut echo_fd);
+                    handle_register_sink(payload, &mut bloom_sink, &mut echo_sink);
                 } else if kind == KindId(KIND_BRISTLE_DEVICE_EVENT) {
                     let (event_accum, accum_len) = if is_pointer_event_payload(payload) {
                         (&mut mouse_event_accum, &mut mouse_accum_len)
@@ -183,8 +183,8 @@ fn main(_arg: usize) -> ! {
                         payload,
                         event_accum,
                         accum_len,
-                        bloom_fd,
-                        echo_fd,
+                        bloom_sink,
+                        echo_sink,
                         &mut drop_counter,
                     );
                 } else {
@@ -223,8 +223,8 @@ fn main(_arg: usize) -> ! {
                             &recv_buf[..n],
                             event_accum,
                             accum_len,
-                            bloom_fd,
-                            echo_fd,
+                            bloom_sink,
+                            echo_sink,
                             &mut drop_counter,
                         );
                     }
@@ -265,36 +265,32 @@ fn is_pointer_event_payload(payload: &[u8]) -> bool {
 }
 
 /// Handle a `RegisterSink` inbox message.
-fn handle_register_sink(payload: &[u8], bloom_fd: &mut Option<u32>, echo_fd: &mut Option<u32>) {
+fn handle_register_sink(payload: &[u8], bloom_sink: &mut Option<u32>, echo_sink: &mut Option<u32>) {
     let Some((tag, handle)) = decode_register_sink(payload) else {
         warn!("bristle: RegisterSink payload too short ({} bytes)", payload.len());
         return;
     };
 
-    let fd = match vfs_handle_from_port(handle) {
-        Ok(f) => f,
-        Err(e) => {
-            warn!("bristle: RegisterSink handle {} FD bridge failed: {:?}", handle, e);
-            return;
-        }
-    };
-
     match tag {
         BRISTLE_SINK_TAG_BLOOM => {
-            if let Some(old) = bloom_fd.replace(fd) {
-                let _ = vfs_close(old);
+            if let Some(old) = bloom_sink.replace(handle) {
+                if old != handle {
+                    let _ = port_close(old);
+                }
             }
-            info!("bristle: bloom sink registered (fd={})", fd);
+            info!("bristle: bloom sink registered (handle={})", handle);
         }
         BRISTLE_SINK_TAG_ECHO => {
-            if let Some(old) = echo_fd.replace(fd) {
-                let _ = vfs_close(old);
+            if let Some(old) = echo_sink.replace(handle) {
+                if old != handle {
+                    let _ = port_close(old);
+                }
             }
-            info!("bristle: echo sink registered (fd={})", fd);
+            info!("bristle: echo sink registered (handle={})", handle);
         }
         _ => {
             warn!("bristle: RegisterSink unknown tag {}", tag);
-            let _ = vfs_close(fd);
+            let _ = port_close(handle);
         }
     }
 }
@@ -305,8 +301,8 @@ fn accumulate_and_dispatch(
     input: &[u8],
     event_accum: &mut [u8; 64],
     accum_len: &mut usize,
-    bloom_fd: Option<u32>,
-    echo_fd: Option<u32>,
+    bloom_sink: Option<u32>,
+    echo_sink: Option<u32>,
     drop_counter: &mut u32,
 ) {
     let mut cursor = 0;
@@ -354,13 +350,13 @@ fn accumulate_and_dispatch(
                     }
 
                     // Forward to registered sinks.
-                    if let Some(fd) = bloom_fd {
-                        if vfs_write(fd, event_bytes).is_err() {
+                    if let Some(handle) = bloom_sink {
+                        if port_send_all(handle, event_bytes).is_err() {
                             *drop_counter += 1;
                         }
                     }
-                    if let Some(fd) = echo_fd {
-                        if vfs_write(fd, event_bytes).is_err() {
+                    if let Some(handle) = echo_sink {
+                        if port_send_all(handle, event_bytes).is_err() {
                             *drop_counter += 1;
                         }
                     }

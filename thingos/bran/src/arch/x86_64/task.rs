@@ -1,6 +1,8 @@
-use super::paging::X86_64AddressSpace;
 use core::arch::{asm, global_asm};
+
 use kernel::UserTaskSpec;
+
+use super::paging::X86_64AddressSpace;
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
@@ -103,10 +105,7 @@ pub fn init_kernel_context(
     push(0); // r14
     push(0); // r15
 
-    X86_64Context {
-        sp: sp as usize,
-        kstack_top,
-    }
+    X86_64Context { sp: sp as usize, kstack_top }
 }
 
 pub fn init_user_context(spec: UserTaskSpec<X86_64AddressSpace>, kstack_top: u64) -> X86_64Context {
@@ -124,10 +123,7 @@ pub fn init_user_context(spec: UserTaskSpec<X86_64AddressSpace>, kstack_top: u64
     push(spec.aspace.0); // r14
     push(spec.arg as u64); // r15
 
-    X86_64Context {
-        sp: sp as usize,
-        kstack_top,
-    }
+    X86_64Context { sp: sp as usize, kstack_top }
 }
 
 pub unsafe fn switch(from: &mut X86_64Context, to: &X86_64Context, to_tid: u64) {
@@ -137,7 +133,6 @@ pub unsafe fn switch(from: &mut X86_64Context, to: &X86_64Context, to_tid: u64) 
         // Offset 8 is kernel_rsp.
         // But wait, we need to know if GS is active.
         // Assuming we set up GS in mod.rs init().
-
 
         let kstack = to.kstack_top;
         // Write to GS:8 (assuming CpuLocal layout: user_rsp: u64, kernel_rsp: u64)

@@ -66,6 +66,8 @@ pub struct Supervisor {
     bristle_spawned: bool,
     /// Whether bloom has been spawned (guarded so we only launch once).
     bloom_spawned: bool,
+    /// Whether the default Wayland demo client has been spawned.
+    wayland_hello_spawned: bool,
     /// Whether early audio/chime bring-up has been started.
     audio_spawned: bool,
     /// Whether `/dev/display/card0` has been mounted by the display driver.
@@ -99,6 +101,7 @@ impl Supervisor {
             netd_last_probe_ns: 0,
             bristle_spawned: false,
             bloom_spawned: false,
+            wayland_hello_spawned: false,
             audio_spawned: false,
             display_card_ready: false,
             display_spawned: false,
@@ -448,6 +451,8 @@ impl Supervisor {
         self.spawn_display_if_needed();
         stem::trace!("SPROUT: Loop iteration: spawn_bloom_if_ready");
         self.spawn_bloom_if_ready();
+        stem::trace!("SPROUT: Loop iteration: spawn_wayland_hello_if_ready");
+        self.spawn_wayland_hello_if_ready();
         stem::trace!("SPROUT: Loop iteration: spawn_audio_if_ready");
         self.spawn_audio_if_ready();
         stem::trace!("SPROUT: Loop iteration: run_health_vine");
@@ -697,6 +702,35 @@ impl Supervisor {
         setup_audio_stack(self.tasks.clone());
         self.audio_spawned = true;
     }
+
+    fn spawn_wayland_hello_if_ready(&mut self) {
+        if self.wayland_hello_spawned || !self.bloom_spawned {
+            return;
+        }
+        if !path_exists("/run/wayland-0") {
+            return;
+        }
+
+        let path = "/bin/wayland_hello";
+        match stem::syscall::spawn_process(path, 0) {
+            Ok(pid) => {
+                info!("SPROUT: Spawned wayland_hello (PID={})", pid);
+                let _ = stem::thread::set_priority(pid, 2);
+                let mut tasks = self.tasks.lock();
+                tasks.push(ManagedTask {
+                    name: "wayland_hello".to_string(),
+                    kind: TaskKind::App,
+                    module_path: path.to_string(),
+                    pid: Some(pid),
+                    ..Default::default()
+                });
+                self.wayland_hello_spawned = true;
+            }
+            Err(e) => {
+                warn!("SPROUT: Failed to spawn wayland_hello: {:?}", e);
+            }
+        }
+    }
 }
 
 fn path_exists(path: &str) -> bool {
@@ -834,6 +868,10 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
                 // restart logic can recover the managed task slot.
                 let mut task_list = tasks.lock();
                 if let Some(task) = task_list.iter_mut().find(|t| t.pid == Some(child_pid)) {
+                    warn!(
+                        "SPROUT: waitpid({}, WNOHANG) returned ECHILD for '{}'; restarting",
+                        child_pid, task.name
+                    );
                     task.pid = None;
                     task.ready = false;
                     task.restarts += 1;
@@ -845,18 +883,16 @@ fn run_health_vine(tasks: &Arc<Mutex<Vec<ManagedTask>>>) {
         }
     }
 
-    // Step 2: init-style lifecycle — if all supervised children are gone, halt.
-    let should_shutdown = {
-        let task_list = tasks.lock();
-        !task_list.is_empty() && task_list.iter().all(|t| t.pid.is_none())
-    };
-    if should_shutdown {
-        info!("SPROUT: All supervised tasks have exited. Performing system shutdown...");
-        stem::syscall::shutdown();
+    // Step 2: restart any task whose PID slot was cleared above.  This must
+    // run even if every supervised child disappeared in one health pass; the
+    // supervisor is still alive, so powering off here converts a recoverable
+    // service failure or stale PID observation into a clean QEMU exit.
+    let mut task_list = tasks.lock();
+    let restarting_all = !task_list.is_empty() && task_list.iter().all(|t| t.pid.is_none());
+    if restarting_all {
+        warn!("SPROUT: all supervised task slots are empty; restarting managed services");
     }
 
-    // Step 3: restart any task whose PID slot was cleared above.
-    let mut task_list = tasks.lock();
     for task in task_list.iter_mut() {
         if task.pid.is_none() {
             if task.name == "shell" {

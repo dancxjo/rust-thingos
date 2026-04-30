@@ -1,6 +1,6 @@
 //! Per-client Wayland object registry and pending surface state.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -58,6 +58,9 @@ pub struct WaylandClient {
     pub objects: BTreeMap<u32, ObjectEntry>,
     /// Accumulation buffer for partial socket reads.
     pub recv_buf: Vec<u8>,
+    /// File descriptors received through socket ancillary data, consumed by
+    /// Wayland requests with `fd` arguments in wire order.
+    pub pending_fds: VecDeque<u32>,
     /// Monotonic buffer key counter (for IPC wl_buf_key).
     pub next_buf_key: u32,
     /// Map: wl_buf_key → wl_buffer object ID (for release events).
@@ -76,6 +79,7 @@ impl WaylandClient {
             fd,
             objects,
             recv_buf: Vec::new(),
+            pending_fds: VecDeque::new(),
             next_buf_key: bloom_surface_id_seed * 1000,
             buf_key_to_obj: BTreeMap::new(),
             frame_cbs: BTreeMap::new(),

@@ -1,14 +1,12 @@
-use core::mem::size_of;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-use abi::trace::TraceEvent;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{format, vec};
+use core::mem::size_of;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use kernel::kdebug;
-use kernel::kinfo;
+use abi::trace::TraceEvent;
+use kernel::{kdebug, kinfo};
 
 pub const IRQ_TIMER_VECTOR: u8 = 0x20;
 pub const IRQ_PAUSE_DUMP_VECTOR: u8 = 0x31;
@@ -1060,30 +1058,35 @@ fn print_register_snapshot(snapshot: &IrqRegisterSnapshot) {
         let rsp = *frame_ptr.add(3);
         let ss = *frame_ptr.add(4);
 
-        kernel::kprint!(
-            "  RIP=0x{:016x}  CS=0x{:016x}  RFLAGS=0x{:016x}\n",
-            rip, cs, rflags
-        );
-        kernel::kprint!(
-            "  RSP=0x{:016x}  SS=0x{:016x}\n",
-            rsp, ss
-        );
+        kernel::kprint!("  RIP=0x{:016x}  CS=0x{:016x}  RFLAGS=0x{:016x}\n", rip, cs, rflags);
+        kernel::kprint!("  RSP=0x{:016x}  SS=0x{:016x}\n", rsp, ss);
     }
     kernel::kprint!(
         "  RAX=0x{:016x}  RBX=0x{:016x}  RCX=0x{:016x}  RDX=0x{:016x}\n",
-        snapshot.rax, snapshot.rbx, snapshot.rcx, snapshot.rdx
+        snapshot.rax,
+        snapshot.rbx,
+        snapshot.rcx,
+        snapshot.rdx
     );
     kernel::kprint!(
         "  RSI=0x{:016x}  RDI=0x{:016x}  RBP=0x{:016x}\n",
-        snapshot.rsi, snapshot.rdi, snapshot.rbp
+        snapshot.rsi,
+        snapshot.rdi,
+        snapshot.rbp
     );
     kernel::kprint!(
         "  R8 =0x{:016x}  R9 =0x{:016x}  R10=0x{:016x}  R11=0x{:016x}\n",
-        snapshot.r8, snapshot.r9, snapshot.r10, snapshot.r11
+        snapshot.r8,
+        snapshot.r9,
+        snapshot.r10,
+        snapshot.r11
     );
     kernel::kprint!(
         "  R12=0x{:016x}  R13=0x{:016x}  R14=0x{:016x}  R15=0x{:016x}\n",
-        snapshot.r12, snapshot.r13, snapshot.r14, snapshot.r15
+        snapshot.r12,
+        snapshot.r13,
+        snapshot.r14,
+        snapshot.r15
     );
 }
 
@@ -1474,10 +1477,7 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rust_pf_handler(
-    frame: &InterruptStackFrame,
-    snapshot: &IrqRegisterSnapshot,
-) {
+pub extern "C" fn rust_pf_handler(frame: &InterruptStackFrame, snapshot: &IrqRegisterSnapshot) {
     let cr2: u64;
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
@@ -1505,11 +1505,40 @@ pub extern "C" fn rust_pf_handler(
         frame.rsp
     );
     kernel::kerror!("Registers:");
-    kernel::kerror!("  RAX: 0x{:016x} RBX: 0x{:016x} RCX: 0x{:016x} RDX: 0x{:016x}", snapshot.rax, snapshot.rbx, snapshot.rcx, snapshot.rdx);
-    kernel::kerror!("  RSI: 0x{:016x} RDI: 0x{:016x} RBP: 0x{:016x} RSP: 0x{:016x}", snapshot.rsi, snapshot.rdi, snapshot.rbp, frame.rsp);
-    kernel::kerror!("  R8:  0x{:016x} R9:  0x{:016x} R10: 0x{:016x} R11: 0x{:016x}", snapshot.r8, snapshot.r9, snapshot.r10, snapshot.r11);
-    kernel::kerror!("  R12: 0x{:016x} R13: 0x{:016x} R14: 0x{:016x} R15: 0x{:016x}", snapshot.r12, snapshot.r13, snapshot.r14, snapshot.r15);
-    kernel::kerror!("  RIP: 0x{:016x} CS:  0x{:016x} RFLAGS: 0x{:016x}", frame.rip, frame.cs, frame.rflags);
+    kernel::kerror!(
+        "  RAX: 0x{:016x} RBX: 0x{:016x} RCX: 0x{:016x} RDX: 0x{:016x}",
+        snapshot.rax,
+        snapshot.rbx,
+        snapshot.rcx,
+        snapshot.rdx
+    );
+    kernel::kerror!(
+        "  RSI: 0x{:016x} RDI: 0x{:016x} RBP: 0x{:016x} RSP: 0x{:016x}",
+        snapshot.rsi,
+        snapshot.rdi,
+        snapshot.rbp,
+        frame.rsp
+    );
+    kernel::kerror!(
+        "  R8:  0x{:016x} R9:  0x{:016x} R10: 0x{:016x} R11: 0x{:016x}",
+        snapshot.r8,
+        snapshot.r9,
+        snapshot.r10,
+        snapshot.r11
+    );
+    kernel::kerror!(
+        "  R12: 0x{:016x} R13: 0x{:016x} R14: 0x{:016x} R15: 0x{:016x}",
+        snapshot.r12,
+        snapshot.r13,
+        snapshot.r14,
+        snapshot.r15
+    );
+    kernel::kerror!(
+        "  RIP: 0x{:016x} CS:  0x{:016x} RFLAGS: 0x{:016x}",
+        frame.rip,
+        frame.cs,
+        frame.rflags
+    );
 
     print_stack_trace();
 
@@ -1557,7 +1586,10 @@ pub extern "C" fn rust_gp_handler(frame: &InterruptStackFrame) -> ! {
     } else {
         kernel::kerror!(
             "KERNEL GPF at RIP=0x{:x} CS=0x{:x} ERR=0x{:x} RSP=0x{:x}",
-            frame.rip, frame.cs, frame.error_code, frame.rsp
+            frame.rip,
+            frame.cs,
+            frame.error_code,
+            frame.rsp
         );
         print_stack_trace();
         panic!("KERNEL GPF");

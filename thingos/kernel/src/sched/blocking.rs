@@ -507,7 +507,6 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
 
     let wait_start = rt.mono_ticks();
 
-    crate::ktrace!("WAKE_TASK: ID={} taking SCHEDULER lock", id);
     // Collect any pending IPI target and deferred REGISTRY update inside the
     // lock, then apply both *after* the lock is dropped to avoid holding
     // SCHEDULER during IPI delivery and to eliminate the nested REGISTRY lock.
@@ -542,7 +541,6 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         result
     };
     // SCHEDULER lock released here.
-    crate::ktrace!("WAKE_TASK: ID={} wake_task_locked returned IPI_CPU={:?}", id, ipi_cpu);
 
     // Apply the deferred REGISTRY update outside the SCHEDULER lock to avoid
     // the nested SCHEDULER → REGISTRY lock ordering that caused contention.
@@ -567,7 +565,6 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
         }
         super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        crate::ktrace!("WAKE_TASK: Sending IPI 0x30 to CPU {}", cpu);
         rt.send_ipi(cpu, 0x30);
     }
 

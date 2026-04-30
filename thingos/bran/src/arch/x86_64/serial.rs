@@ -1,5 +1,6 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
 use kernel::time::MonotonicClamp;
 
 /// 16550 UART TX FIFO depth (standard).
@@ -177,24 +178,24 @@ unsafe fn calibrate_tsc_pit() -> u64 {
     // The PIT runs at 1.193182 MHz.
     // Let's measure for ~10ms.
     // 10ms = 11932 ticks.
-    
+
     // Control Word: Channel 2, Access Lo/Hi, Mode 0 (Interrupt on Terminal Count), Binary
     // 0b10_11_000_0 = 0xB0
     unsafe { outb(0x43, 0xB0) };
-    
+
     // Reload value = 11932 (0x2E9C) for ~10ms
     let count = 11932u16;
     unsafe {
         outb(0x42, (count & 0xFF) as u8);
         outb(0x42, (count >> 8) as u8);
     }
-    
+
     // Enable Channel 2 Gate (bit 0 of Port 0x61)
     let port61 = unsafe { inb(0x61) };
     unsafe { outb(0x61, port61 | 0x01) };
-    
+
     let start_tsc = unsafe { rdtsc() };
-    
+
     // Spin until bit 5 of 0x61 becomes 1.
     let mut timeout = 100_000_000;
     while (unsafe { inb(0x61) } & 0x20) == 0 {
@@ -204,14 +205,14 @@ unsafe fn calibrate_tsc_pit() -> u64 {
             return 0; // Failed
         }
     }
-    
+
     let end_tsc = unsafe { rdtsc() };
-    
+
     // Disable Gate just in case
     unsafe { outb(0x61, port61 & !0x01) };
-    
+
     let delta = end_tsc.saturating_sub(start_tsc);
-    
+
     // freq = delta * 100
     delta.saturating_mul(100)
 }

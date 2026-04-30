@@ -384,9 +384,90 @@ fn generate_limine_config(
     conf.push_str("interface_active_foreground: ffffff\n");
     conf.push_str("menu_hidden: yes\n\n");
 
-    let mut common_modules = String::new();
+    let all_graphics_modules =
+        limine_modules(programs, assets, include_busybox, include_default_shell, false);
+    let bootfb_only_modules =
+        limine_modules(programs, assets, include_busybox, include_default_shell, true);
+
+    struct LimineEntry {
+        title: String,
+        kernel_cmdline: String,
+        bootfb_only: bool,
+    }
+
+    let default_loglevel = loglevel.unwrap_or("info");
+    let mut entries = vec![
+        LimineEntry {
+            title: "ThingOS".to_string(),
+            kernel_cmdline: format!("loglevel={}", default_loglevel),
+            bootfb_only: false,
+        },
+        LimineEntry {
+            title: "ThingOS (BootFB Fallback)".to_string(),
+            kernel_cmdline: format!("loglevel={} display=bootfb", default_loglevel),
+            bootfb_only: true,
+        },
+        LimineEntry {
+            title: "ThingOS (Debug)".to_string(),
+            kernel_cmdline: "loglevel=4".to_string(),
+            bootfb_only: false,
+        },
+        LimineEntry {
+            title: "ThingOS (Trace)".to_string(),
+            kernel_cmdline: "loglevel=5".to_string(),
+            bootfb_only: false,
+        },
+    ];
+
+    if let Some(l) = loglevel {
+        if l != "info" && l != "4" && l != "5" {
+            entries.insert(
+                0,
+                LimineEntry {
+                    title: "ThingOS (Custom)".to_string(),
+                    kernel_cmdline: format!("loglevel={l}"),
+                    bootfb_only: false,
+                },
+            );
+        }
+    }
+
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            conf.push('\n');
+        }
+
+        conf.push_str(&format!("/{}\n", entry.title));
+        conf.push_str("    protocol: limine\n");
+        conf.push_str(&format!("    resolution: {res}\n"));
+        conf.push_str("    kernel_path: boot():/boot/kernel\n");
+        conf.push_str(&format!("    kernel_cmdline: {}\n", entry.kernel_cmdline));
+        if entry.bootfb_only {
+            conf.push_str(&bootfb_only_modules);
+        } else {
+            conf.push_str(&all_graphics_modules);
+        }
+    }
+
+    conf
+}
+
+fn limine_modules(
+    programs: &[ProgramConfig],
+    assets: &[PathBuf],
+    include_busybox: bool,
+    include_default_shell: bool,
+    bootfb_only: bool,
+) -> String {
+    let mut modules = String::new();
     for prog in programs {
         if !prog.boot_module {
+            continue;
+        }
+        // The BootFB fallback must not expose alternate display drivers:
+        // Cambium scans /drivers and can bind PCI display devices independently
+        // of Sprout's display=bootfb pipeline selection.
+        if bootfb_only && is_non_bootfb_graphics_driver(prog.name) {
             continue;
         }
         let bin_path = if is_driver(prog.name) {
@@ -394,19 +475,19 @@ fn generate_limine_config(
         } else {
             format!("boot():/bin/{}", prog.name)
         };
-        common_modules.push_str(&format!("    module_path: {}\n", bin_path));
+        modules.push_str(&format!("    module_path: {}\n", bin_path));
         if !is_driver(prog.name) {
             for alias in userspace_aliases(prog.name) {
-                common_modules.push_str(&format!("    module_path: boot():/bin/{alias}\n"));
+                modules.push_str(&format!("    module_path: boot():/bin/{alias}\n"));
             }
         }
         if prog.is_init {
-            common_modules.push_str("    module_cmdline: init\n");
+            modules.push_str("    module_cmdline: init\n");
         }
     }
 
     for lib in default_shared_libraries() {
-        common_modules.push_str(&format!("    module_path: boot():/lib/{}\n", lib.file_name));
+        modules.push_str(&format!("    module_path: boot():/lib/{}\n", lib.file_name));
     }
 
     for asset in assets {
@@ -425,84 +506,34 @@ fn generate_limine_config(
 
         if allowed && !clean_path.ends_with("unifont.hex") && !clean_path.ends_with("locale.conf") {
             let iso_path = clean_path.replace("assets/", "share/");
-            common_modules.push_str(&format!("    module_path: boot():/{iso_path}\n"));
+            modules.push_str(&format!("    module_path: boot():/{iso_path}\n"));
         }
     }
 
     for wallpaper in DEFAULT_WALLPAPERS {
         if !asset_list_contains_wallpaper(assets, wallpaper.file_name) {
-            common_modules.push_str(&format!(
+            modules.push_str(&format!(
                 "    module_path: boot():/share/wallpapers/{}\n",
                 wallpaper.file_name
             ));
         }
     }
 
-    common_modules.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
-    common_modules.push_str("    module_path: boot():/etc/locale.conf\n");
-    common_modules.push_str("    module_path: boot():/etc/profile\n");
-    common_modules.push_str("    module_path: boot():/etc/motd\n");
-    common_modules.push_str("    module_path: boot():/etc/fstab\n");
-    common_modules.push_str("    module_path: boot():/etc/hostname\n");
+    modules.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
+    modules.push_str("    module_path: boot():/etc/locale.conf\n");
+    modules.push_str("    module_path: boot():/etc/profile\n");
+    modules.push_str("    module_path: boot():/etc/motd\n");
+    modules.push_str("    module_path: boot():/etc/fstab\n");
+    modules.push_str("    module_path: boot():/etc/hostname\n");
     if include_default_shell {
-        common_modules.push_str("    module_path: boot():/etc/default/shell\n");
+        modules.push_str("    module_path: boot():/etc/default/shell\n");
     }
     if include_busybox {
-        common_modules.push_str("    module_path: boot():/bin/busybox\n");
-        common_modules.push_str("    module_path: boot():/bin/ash\n");
+        modules.push_str("    module_path: boot():/bin/busybox\n");
+        modules.push_str("    module_path: boot():/bin/ash\n");
     }
 
-    struct LimineEntry {
-        title: String,
-        kernel_cmdline: String,
-    }
-
-    let default_loglevel = loglevel.unwrap_or("info");
-    let mut entries = vec![
-        LimineEntry {
-            title: "ThingOS".to_string(),
-            kernel_cmdline: format!("loglevel={}", default_loglevel),
-        },
-        LimineEntry {
-            title: "ThingOS (BootFB Fallback)".to_string(),
-            kernel_cmdline: format!("loglevel={} display=bootfb", default_loglevel),
-        },
-        LimineEntry {
-            title: "ThingOS (Debug)".to_string(),
-            kernel_cmdline: "loglevel=4".to_string(),
-        },
-        LimineEntry {
-            title: "ThingOS (Trace)".to_string(),
-            kernel_cmdline: "loglevel=5".to_string(),
-        },
-    ];
-
-    if let Some(l) = loglevel {
-        if l != "info" && l != "4" && l != "5" {
-            entries.insert(
-                0,
-                LimineEntry {
-                    title: "ThingOS (Custom)".to_string(),
-                    kernel_cmdline: format!("loglevel={l}"),
-                },
-            );
-        }
-    }
-
-    for (index, entry) in entries.iter().enumerate() {
-        if index > 0 {
-            conf.push('\n');
-        }
-
-        conf.push_str(&format!("/{}\n", entry.title));
-        conf.push_str("    protocol: limine\n");
-        conf.push_str(&format!("    resolution: {res}\n"));
-        conf.push_str("    kernel_path: boot():/boot/kernel\n");
-        conf.push_str(&format!("    kernel_cmdline: {}\n", entry.kernel_cmdline));
-        conf.push_str(&common_modules);
-    }
-
-    conf
+    modules
 }
 
 fn generate_motd() -> String {
@@ -1134,6 +1165,10 @@ fn is_driver(name: &str) -> bool {
     drivers.contains(&name)
 }
 
+fn is_non_bootfb_graphics_driver(name: &str) -> bool {
+    (name.starts_with("display_") && name != "display_bootfb") || name == "virtio_gpu"
+}
+
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
     match name {
         // mesocarp is the mDNS daemon; `mount -t mdns` resolves to /bin/mdns
@@ -1141,5 +1176,53 @@ fn userspace_aliases(name: &str) -> &'static [&'static str] {
         // real binary in the image.
         "mesocarp" => &["mdns", "mdnsd"],
         _ => &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_program(name: &'static str) -> ProgramConfig {
+        ProgramConfig { name, is_init: false, boot_module: true, features: vec![] }
+    }
+
+    fn limine_entry<'a>(conf: &'a str, title: &str) -> &'a str {
+        let marker = format!("/{title}\n");
+        let start = conf.find(&marker).expect("entry marker");
+        let rest = &conf[start..];
+        let next = rest[marker.len()..]
+            .find("\n/")
+            .map(|offset| marker.len() + offset + 1)
+            .unwrap_or(rest.len());
+        &rest[..next]
+    }
+
+    #[test]
+    fn bootfb_fallback_entry_omits_other_graphics_drivers() {
+        let sh = Shell::new().expect("shell");
+        let programs = [
+            test_program("display_bootfb"),
+            test_program("display_virtio_gpu"),
+            test_program("display_fake"),
+            test_program("virtio_gpu"),
+            test_program("bloom"),
+        ];
+
+        let conf = generate_limine_config(&sh, &programs, &[], None, None, false, false);
+        let normal_entry = limine_entry(&conf, "ThingOS");
+        let bootfb_entry = limine_entry(&conf, "ThingOS (BootFB Fallback)");
+
+        assert!(normal_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/display_fake"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/virtio_gpu"));
+
+        assert!(bootfb_entry.contains("kernel_cmdline: loglevel=info display=bootfb"));
+        assert!(bootfb_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
+        assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_fake"));
+        assert!(!bootfb_entry.contains("module_path: boot():/drivers/virtio_gpu"));
+        assert!(bootfb_entry.contains("module_path: boot():/bin/bloom"));
     }
 }

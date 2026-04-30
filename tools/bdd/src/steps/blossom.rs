@@ -1,24 +1,20 @@
 use cucumber::{given, then, when};
 
-use crate::world::ThingOsWorld;
-
-use super::helpers::{StepError, capture_failure_diagnostics};
 use super::basic::turn_on_machine;
+use super::helpers::{StepError, capture_failure_diagnostics};
+use crate::world::ThingOsWorld;
 
 // ===== Blossom XDG-Shell Steps =====
 
 /// Background: `Given the bloom compositor is running with blossom support`
 #[given("the bloom compositor is running with blossom support")]
-async fn bloom_compositor_running_with_blossom(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn bloom_compositor_running_with_blossom(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // Boot if not already running.
     if world.qemu.is_none() {
         turn_on_machine(world).await?;
     }
     // Wait for bloom's wayland server to announce it is listening.
-    let found =
-        world.wait_for_serial("wayland-server: listening on /run/wayland-0", 90.0).await;
+    let found = world.wait_for_serial("wayland-server: listening on /run/wayland-0", 90.0).await;
     if !found {
         let log = world.get_serial_log().await;
         if log.contains("bloom:") || log.contains("wayland-server") {
@@ -40,10 +36,18 @@ async fn bloom_compositor_running_with_blossom(
 /// Background: `And a Wayland client has connected via /run/wayland-0`
 #[given("a Wayland client has connected via /run/wayland-0")]
 async fn wayland_client_connected(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    if log.contains("wayland_hello: connected to /run/wayland-0")
+        || log.contains("wayland-server: new client")
+    {
+        eprintln!("│  │  │      ✅ Wayland client connected via /run/wayland-0");
+        return Ok(());
+    }
+
     // Launch wayland_hello from the serial shell so it connects and exercises
     // the full xdg-shell protocol lifecycle.
     world.serial_checkpoint = world.get_serial_log().await.len();
-    let mut data = b"wayland_hello &\n".to_vec();
+    let data = b"wayland_hello &\n".to_vec();
     for b in data {
         world
             .serial_write(&[b])
@@ -52,9 +56,7 @@ async fn wayland_client_connected(world: &mut ThingOsWorld) -> Result<(), StepEr
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     // Wait for the client to connect.
-    let found = world
-        .wait_for_serial("wayland_hello: connected to /run/wayland-0", 15.0)
-        .await;
+    let found = world.wait_for_serial("wayland_hello: connected to /run/wayland-0", 15.0).await;
     if !found {
         let alt = world.wait_for_serial("wayland-server: new client", 5.0).await;
         if !alt {
@@ -70,9 +72,7 @@ async fn wayland_client_connected(world: &mut ThingOsWorld) -> Result<(), StepEr
 
 /// Background: `And the client has bound wl_compositor and xdg_wm_base`
 #[given("the client has bound wl_compositor and xdg_wm_base")]
-async fn client_bound_compositor_and_wm_base(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn client_bound_compositor_and_wm_base(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // wayland_hello binds wl_compositor, wl_shm, and xdg_wm_base immediately
     // after connecting. Verify the client is alive.
     let log = world.get_serial_log().await;
@@ -117,9 +117,7 @@ async fn client_calls_get_xdg_surface(world: &mut ThingOsWorld) -> Result<(), St
         eprintln!("│  │  │      ✅ get_xdg_surface call observed in compositor log");
         return Ok(());
     }
-    Err(StepError(
-        "get_xdg_surface was not observed in compositor log within timeout".to_string(),
-    ))
+    Err(StepError("get_xdg_surface was not observed in compositor log within timeout".to_string()))
 }
 
 /// `Then a new xdg_surface object is registered successfully`
@@ -147,9 +145,7 @@ async fn wl_surface_has_xdg_role(world: &mut ThingOsWorld) -> Result<(), StepErr
         eprintln!("│  │  │      ✅ wl_surface has xdg role (no role conflict error)");
         Ok(())
     } else if log.contains("wayland-server: xdg_surface error: role conflict") {
-        Err(StepError(
-            "Role conflict error found — wl_surface already had an xdg role".to_string(),
-        ))
+        Err(StepError("Role conflict error found — wl_surface already had an xdg role".to_string()))
     } else {
         Err(StepError("No evidence that wl_surface has the xdg role".to_string()))
     }
@@ -157,9 +153,7 @@ async fn wl_surface_has_xdg_role(world: &mut ThingOsWorld) -> Result<(), StepErr
 
 /// `And the client has already called get_xdg_surface for that surface`
 #[given("the client has already called get_xdg_surface for that surface")]
-async fn client_already_called_get_xdg_surface(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn client_already_called_get_xdg_surface(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // Verify at least one xdg_surface creation happened.
     let found = world.wait_for_serial("wayland-server: xdg_surface obj=", 10.0).await;
     if found {
@@ -172,9 +166,7 @@ async fn client_already_called_get_xdg_surface(
 
 /// `When the client calls get_xdg_surface again for the same wl_surface`
 #[when("the client calls get_xdg_surface again for the same wl_surface")]
-async fn client_calls_get_xdg_surface_again(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn client_calls_get_xdg_surface_again(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // This error path is not exercised by wayland_hello; the test will fail
     // (intentionally) unless a dedicated error-path client is used.
     // We check if the error already appeared in the log (would require a
@@ -194,9 +186,7 @@ async fn client_calls_get_xdg_surface_again(
 
 /// `Then the compositor sends a wl_display.error`
 #[then("the compositor sends a wl_display.error")]
-async fn compositor_sends_wl_display_error(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn compositor_sends_wl_display_error(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // Check for any protocol error from the compositor.
     let log = world.get_serial_log().await;
     if log.contains("wayland-server: xdg_surface error:")
@@ -206,8 +196,7 @@ async fn compositor_sends_wl_display_error(
         Ok(())
     } else {
         Err(StepError(
-            "No wl_display.error observed in compositor log — error path not triggered"
-                .to_string(),
+            "No wl_display.error observed in compositor log — error path not triggered".to_string(),
         ))
     }
 }
@@ -246,17 +235,13 @@ async fn client_calls_get_toplevel(world: &mut ThingOsWorld) -> Result<(), StepE
         eprintln!("│  │  │      ✅ get_toplevel call observed");
         Ok(())
     } else {
-        Err(StepError(
-            "xdg_toplevel assignment not observed in compositor log".to_string(),
-        ))
+        Err(StepError("xdg_toplevel assignment not observed in compositor log".to_string()))
     }
 }
 
 /// `Then the compositor emits xdg_toplevel.configure with width=0 height=0 and empty states`
 #[then("the compositor emits xdg_toplevel.configure with width=0 height=0 and empty states")]
-async fn compositor_emits_toplevel_configure(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn compositor_emits_toplevel_configure(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // get_toplevel triggers SendXdgToplevelConfigure (logged at debug level)
     // and then SendXdgSurfaceConfigure.  The configure serial line is reliable.
     let found = world.wait_for_serial("wayland-server: xdg_surface.configure serial=", 10.0).await;
@@ -264,9 +249,7 @@ async fn compositor_emits_toplevel_configure(
         eprintln!("│  │  │      ✅ xdg_toplevel.configure + xdg_surface.configure emitted");
         Ok(())
     } else {
-        Err(StepError(
-            "No configure sequence observed after get_toplevel".to_string(),
-        ))
+        Err(StepError("No configure sequence observed after get_toplevel".to_string()))
     }
 }
 
@@ -278,9 +261,7 @@ async fn compositor_emits_surface_configure(world: &mut ThingOsWorld) -> Result<
         eprintln!("│  │  │      ✅ xdg_surface.configure serial observed");
         Ok(())
     } else {
-        Err(StepError(
-            "No 'wayland-server: xdg_surface.configure serial=' in log".to_string(),
-        ))
+        Err(StepError("No 'wayland-server: xdg_surface.configure serial=' in log".to_string()))
     }
 }
 
@@ -295,15 +276,10 @@ async fn configure_serial_greater_than_zero(world: &mut ThingOsWorld) -> Result<
             eprintln!("│  │  │      ✅ Configure serial={} > 0", serial);
             Ok(())
         } else {
-            Err(StepError(format!(
-                "Configure serial is {} (expected > 0)",
-                serial
-            )))
+            Err(StepError(format!("Configure serial is {} (expected > 0)", serial)))
         }
     } else {
-        Err(StepError(
-            "No configure serial found in log to verify".to_string(),
-        ))
+        Err(StepError("No configure serial found in log to verify".to_string()))
     }
 }
 
@@ -317,9 +293,7 @@ async fn client_has_xdg_surface_with_toplevel_role(
         eprintln!("│  │  │      ✅ xdg_surface with toplevel role exists");
         Ok(())
     } else {
-        Err(StepError(
-            "No xdg_toplevel assignment observed — precondition not met".to_string(),
-        ))
+        Err(StepError("No xdg_toplevel assignment observed — precondition not met".to_string()))
     }
 }
 
@@ -348,9 +322,7 @@ async fn error_code_already_has_role(world: &mut ThingOsWorld) -> Result<(), Ste
         eprintln!("│  │  │      ✅ 'already has a role' error confirmed");
         Ok(())
     } else {
-        Err(StepError(
-            "Expected 'already has a role' error in compositor log".to_string(),
-        ))
+        Err(StepError("Expected 'already has a role' error in compositor log".to_string()))
     }
 }
 
@@ -406,9 +378,7 @@ async fn compositor_sends_unconfigured_buffer_error(
         eprintln!("│  │  │      ✅ unconfigured_buffer error confirmed");
         Ok(())
     } else {
-        Err(StepError(
-            "Expected 'unconfigured_buffer' error from compositor".to_string(),
-        ))
+        Err(StepError("Expected 'unconfigured_buffer' error from compositor".to_string()))
     }
 }
 
@@ -448,9 +418,7 @@ async fn error_indicates_invalid_serial(world: &mut ThingOsWorld) -> Result<(), 
         eprintln!("│  │  │      ✅ Invalid configure serial error confirmed");
         Ok(())
     } else {
-        Err(StepError(
-            "Expected 'invalid serial' error in compositor log".to_string(),
-        ))
+        Err(StepError("Expected 'invalid serial' error in compositor log".to_string()))
     }
 }
 
@@ -472,14 +440,13 @@ async fn client_has_received_configure(world: &mut ThingOsWorld) -> Result<(), S
 #[when("the client sends xdg_surface.ack_configure with that serial")]
 async fn client_sends_valid_ack_configure(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // wayland_hello sends ack_configure with the received serial.
-    let found = world.wait_for_serial("wayland-server: xdg_surface.ack_configure serial=", 10.0).await;
+    let found =
+        world.wait_for_serial("wayland-server: xdg_surface.ack_configure serial=", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ ack_configure sent with valid serial");
         Ok(())
     } else {
-        Err(StepError(
-            "No ack_configure accepted message in compositor log".to_string(),
-        ))
+        Err(StepError("No ack_configure accepted message in compositor log".to_string()))
     }
 }
 
@@ -529,9 +496,8 @@ async fn surface_permitted_to_commit(world: &mut ThingOsWorld) -> Result<(), Ste
 /// `Given the client has ack_configured its xdg_surface`
 #[given("the client has ack_configured its xdg_surface")]
 async fn client_has_ack_configured(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    let found = world
-        .wait_for_serial("wayland-server: xdg_surface.ack_configure serial=", 15.0)
-        .await;
+    let found =
+        world.wait_for_serial("wayland-server: xdg_surface.ack_configure serial=", 15.0).await;
     if found {
         eprintln!("│  │  │      ✅ ack_configure accepted — surface is configured");
         Ok(())
@@ -551,8 +517,7 @@ async fn client_has_attached_shm_buffer(_world: &mut ThingOsWorld) {
 #[when("the client calls wl_surface.commit")]
 async fn client_calls_wl_surface_commit(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // wayland_hello commits after ack. Check for mapping readiness.
-    let found =
-        world.wait_for_serial("wayland-server: surface ", 10.0).await;
+    let found = world.wait_for_serial("wayland-server: surface ", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ wl_surface.commit processed by compositor");
         Ok(())
@@ -563,9 +528,7 @@ async fn client_calls_wl_surface_commit(world: &mut ThingOsWorld) -> Result<(), 
 
 /// `And the compositor marks the surface as eligible for mapping`
 #[then("the compositor marks the surface as eligible for mapping")]
-async fn compositor_marks_surface_for_mapping(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn compositor_marks_surface_for_mapping(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let found = world.wait_for_serial("wayland-server: surface ", 10.0).await;
     let log = world.get_serial_log().await;
     if found && log.contains("ready for mapping") {
@@ -590,10 +553,7 @@ async fn client_sends_set_title(world: &mut ThingOsWorld, title: String) -> Resu
         eprintln!("│  │  │      ✅ set_title observed in compositor log");
         Ok(())
     } else {
-        Err(StepError(format!(
-            "set_title '{}' not observed in compositor log",
-            title
-        )))
+        Err(StepError(format!("set_title '{}' not observed in compositor log", title)))
     }
 }
 
@@ -608,16 +568,16 @@ async fn client_sends_set_app_id(
         eprintln!("│  │  │      ✅ set_app_id observed in compositor log");
         Ok(())
     } else {
-        Err(StepError(format!(
-            "set_app_id '{}' not observed in compositor log",
-            app_id
-        )))
+        Err(StepError(format!("set_app_id '{}' not observed in compositor log", app_id)))
     }
 }
 
 /// `And the compositor records the title as "..."` (regex)
 #[then(regex = r#"^the compositor records the title as "(.+)"$"#)]
-async fn compositor_records_title(world: &mut ThingOsWorld, title: String) -> Result<(), StepError> {
+async fn compositor_records_title(
+    world: &mut ThingOsWorld,
+    title: String,
+) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
     let pattern = format!("title=\"{}\"", title);
     if log.contains(&pattern) {
@@ -628,9 +588,7 @@ async fn compositor_records_title(world: &mut ThingOsWorld, title: String) -> Re
         Err(StepError(format!(
             "Compositor did not record title \"{}\". Found: {:?}",
             title,
-            log.lines()
-                .filter(|l| l.contains("title="))
-                .collect::<Vec<_>>()
+            log.lines().filter(|l| l.contains("title=")).collect::<Vec<_>>()
         )))
     }
 }
@@ -650,9 +608,7 @@ async fn compositor_records_app_id(
         Err(StepError(format!(
             "Compositor did not record app_id \"{}\". Found: {:?}",
             app_id,
-            log.lines()
-                .filter(|l| l.contains("app_id="))
-                .collect::<Vec<_>>()
+            log.lines().filter(|l| l.contains("app_id=")).collect::<Vec<_>>()
         )))
     }
 }
@@ -668,9 +624,7 @@ async fn compositor_sent_ping(world: &mut ThingOsWorld) -> Result<(), StepError>
     } else {
         // Ping is sent by the compositor on a timer or when it decides to.
         // If wayland_hello is running and connected, a ping may be sent.
-        Err(StepError(
-            "No xdg_wm_base.ping observed in compositor log within 30s".to_string(),
-        ))
+        Err(StepError("No xdg_wm_base.ping observed in compositor log within 30s".to_string()))
     }
 }
 
@@ -683,9 +637,7 @@ async fn client_responds_with_pong(world: &mut ThingOsWorld) -> Result<(), StepE
         eprintln!("│  │  │      ✅ xdg_wm_base.pong received by compositor");
         Ok(())
     } else {
-        Err(StepError(
-            "No xdg_wm_base.pong observed in compositor log".to_string(),
-        ))
+        Err(StepError("No xdg_wm_base.pong observed in compositor log".to_string()))
     }
 }
 
@@ -702,8 +654,7 @@ async fn client_sends_toplevel_destroy(world: &mut ThingOsWorld) -> Result<(), S
         Ok(())
     } else {
         Err(StepError(
-            "xdg_toplevel.destroy not observed — a dedicated teardown client is needed"
-                .to_string(),
+            "xdg_toplevel.destroy not observed — a dedicated teardown client is needed".to_string(),
         ))
     }
 }
@@ -717,8 +668,7 @@ async fn client_sends_surface_destroy(world: &mut ThingOsWorld) -> Result<(), St
         Ok(())
     } else {
         Err(StepError(
-            "xdg_surface.destroy not observed — a dedicated teardown client is needed"
-                .to_string(),
+            "xdg_surface.destroy not observed — a dedicated teardown client is needed".to_string(),
         ))
     }
 }
@@ -743,15 +693,12 @@ async fn compositor_no_longer_tracks(world: &mut ThingOsWorld) -> Result<(), Ste
 #[when("the client calls xdg_surface.get_popup")]
 async fn client_calls_get_popup(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // wayland_hello calls get_popup which is rejected in v1.
-    let found =
-        world.wait_for_serial("wayland-server: xdg_surface.get_popup rejected", 10.0).await;
+    let found = world.wait_for_serial("wayland-server: xdg_surface.get_popup rejected", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ get_popup call triggered rejection");
         Ok(())
     } else {
-        Err(StepError(
-            "get_popup rejection not observed in compositor log".to_string(),
-        ))
+        Err(StepError("get_popup rejection not observed in compositor log".to_string()))
     }
 }
 
@@ -771,20 +718,15 @@ async fn error_popups_not_supported(world: &mut ThingOsWorld) -> Result<(), Step
 
 /// `Given the client has a fully configured xdg_toplevel`
 #[given("the client has a fully configured xdg_toplevel")]
-async fn client_has_fully_configured_toplevel(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn client_has_fully_configured_toplevel(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // A fully configured toplevel has: xdg_surface created + get_toplevel + ack_configure.
-    let ack = world
-        .wait_for_serial("wayland-server: xdg_surface.ack_configure serial=", 15.0)
-        .await;
+    let ack =
+        world.wait_for_serial("wayland-server: xdg_surface.ack_configure serial=", 15.0).await;
     if ack {
         eprintln!("│  │  │      ✅ Fully configured xdg_toplevel confirmed");
         Ok(())
     } else {
-        Err(StepError(
-            "No ack_configure observed — xdg_toplevel not fully configured".to_string(),
-        ))
+        Err(StepError("No ack_configure observed — xdg_toplevel not fully configured".to_string()))
     }
 }
 
@@ -845,5 +787,3 @@ async fn client_receives_callback_done(world: &mut ThingOsWorld) -> Result<(), S
         ))
     }
 }
-
-

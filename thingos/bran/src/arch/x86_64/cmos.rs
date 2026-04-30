@@ -1,5 +1,6 @@
-use abi::device::RtcTime;
 use core::arch::asm;
+
+use abi::device::RtcTime;
 
 #[inline]
 #[allow(dead_code)]
@@ -67,14 +68,5 @@ pub unsafe fn read_rtc() -> RtcTime {
     // Century register? Without ACPI assume 2000+.
     let full_year = 2000 + (year as u16);
 
-    RtcTime {
-        year: full_year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        weekday: 0,
-        flags: 0,
-    }
+    RtcTime { year: full_year, month, day, hour, minute, second, weekday: 0, flags: 0 }
 }

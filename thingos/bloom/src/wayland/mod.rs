@@ -30,7 +30,7 @@ use alloc::vec::Vec;
 
 use blossom::Blossom;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
-use stem::syscall::socket::{accept, bind, listen, socket};
+use stem::syscall::socket::{accept, bind, listen, recvmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
 use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_read, vfs_unlink};
@@ -257,19 +257,42 @@ impl WaylandServer {
         };
 
         let mut tmp = [0u8; 4096];
+        let mut fds = [0u32; 8];
         let mut new_bytes: Vec<u8> = Vec::new();
         let mut dead = false;
+        let mut read_sendmsg_packet = false;
         loop {
-            match vfs_read(client_fd, &mut tmp) {
-                Ok(0) => {
-                    dead = true;
-                    break;
+            match recvmsg(client_fd, &mut tmp, &mut fds) {
+                Ok((n, h_count)) => {
+                    read_sendmsg_packet = true;
+                    new_bytes.extend_from_slice(&tmp[..n]);
+                    if let Some(client) = self.clients.get_mut(&token) {
+                        for fd in fds.iter().take(h_count) {
+                            client.pending_fds.push_back(*fd);
+                        }
+                    }
                 }
-                Ok(n) => new_bytes.extend_from_slice(&tmp[..n]),
                 Err(abi::errors::Errno::EAGAIN) => break,
                 Err(_) => {
                     dead = true;
                     break;
+                }
+            }
+        }
+
+        if !read_sendmsg_packet {
+            loop {
+                match vfs_read(client_fd, &mut tmp) {
+                    Ok(0) => {
+                        dead = true;
+                        break;
+                    }
+                    Ok(n) => new_bytes.extend_from_slice(&tmp[..n]),
+                    Err(abi::errors::Errno::EAGAIN) => break,
+                    Err(_) => {
+                        dead = true;
+                        break;
+                    }
                 }
             }
         }

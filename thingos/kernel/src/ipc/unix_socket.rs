@@ -658,11 +658,11 @@ impl VfsNode for UnixSocketNode {
             SocketState::Connected { side, peer, shutdown_rd, shutdown_wr } => {
                 let d = peer.data.lock();
                 let mut events = 0u16;
-                let (rx_buf, tx_buf, other_alive) = match side {
-                    Side::A => (&d.b_to_a, &d.a_to_b, d.b_alive),
-                    Side::B => (&d.a_to_b, &d.b_to_a, d.a_alive),
+                let (rx_buf, rx_msgs, tx_buf, other_alive) = match side {
+                    Side::A => (&d.b_to_a, &d.msgs_b_to_a, &d.a_to_b, d.b_alive),
+                    Side::B => (&d.a_to_b, &d.msgs_a_to_b, &d.b_to_a, d.a_alive),
                 };
-                if !shutdown_rd && (!rx_buf.is_empty() || !other_alive) {
+                if !shutdown_rd && (!rx_buf.is_empty() || !rx_msgs.is_empty() || !other_alive) {
                     events |= POLLIN;
                 }
                 if !other_alive {
@@ -919,6 +919,21 @@ mod tests {
         a.write(0, b"x").expect("write");
 
         assert_ne!(b.poll() & poll_flags::POLLIN, 0, "B readable after A writes");
+    }
+
+    #[test]
+    fn socketpair_poll_sendmsg_then_recvmsg() {
+        setup_test_hooks();
+        let (a, b) = UnixSocketNode::new_pair();
+
+        assert_eq!(b.poll() & poll_flags::POLLIN, 0, "B not readable initially");
+
+        a.sock_sendmsg(b"hello", Vec::new()).expect("sendmsg");
+
+        assert_ne!(b.poll() & poll_flags::POLLIN, 0, "B readable after A sendmsg");
+        let (data, fds) = b.sock_recvmsg().expect("recvmsg").expect("queued message");
+        assert_eq!(&data, b"hello");
+        assert!(fds.is_empty());
     }
 
     #[test]

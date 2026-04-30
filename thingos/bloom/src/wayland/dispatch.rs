@@ -287,13 +287,18 @@ fn dispatch_shm(msg: &WireMsg, client: &mut WaylandClient) -> Vec<Vec<u8>> {
         return vec![];
     }
     // create_pool(new_id: new_id<wl_shm_pool>, fd: fd, size: int)
-    // In ThingOS the shared-memory "fd" is passed inline as a u32 ThingId.
+    // The current Thing-OS socket path transfers `fd` through sendmsg/recvmsg
+    // ancillary handles.  Older demos sent the handle inline; keep accepting
+    // that layout so stale clients fail gracefully instead of desynchronizing.
     let new_id = match read_u32(&msg.data, 0) {
         Some(id) => id,
         None => return vec![],
     };
-    let handle = read_u32(&msg.data, 4).unwrap_or(0);
-    let size = read_u32(&msg.data, 8).unwrap_or(0);
+    let (handle, size) = if let Some(fd) = client.pending_fds.pop_front() {
+        (fd, read_u32(&msg.data, 4).unwrap_or(0))
+    } else {
+        (read_u32(&msg.data, 4).unwrap_or(0), read_u32(&msg.data, 8).unwrap_or(0))
+    };
     client.insert(new_id, ObjectEntry::ShmPool { handle, size });
     vec![]
 }

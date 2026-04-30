@@ -13,11 +13,7 @@ fn current_cpu_index() -> usize {
         );
     }
     let idx = idx as usize;
-    if idx < MAX_CPUS {
-        idx
-    } else {
-        0
-    }
+    if idx < MAX_CPUS { idx } else { 0 }
 }
 
 pub const KERNEL_CODE_SEL: u16 = 0x08;

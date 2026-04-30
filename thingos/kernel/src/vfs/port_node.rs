@@ -69,24 +69,12 @@ impl VfsNode for PortNode {
                 if !has_writers {
                     revents |= POLLHUP;
                 }
-                if revents != 0 {
-                    crate::ktrace!(
-                        "PORTNODE: poll(Read) -> revents=0x{:x} (empty={}, has_writers={}, port={:p})",
-                        revents,
-                        empty,
-                        has_writers,
-                        Arc::as_ptr(&self.port)
-                    );
-                }
             }
             IpcHandleMode::Write => {
                 if !self.port.has_readers() {
                     revents |= POLLHUP | POLLERR;
                 } else if !self.port.is_full() {
                     revents |= POLLOUT;
-                }
-                if revents != 0 {
-                    crate::ktrace!("PORTNODE: poll(Write) -> revents=0x{:x}", revents);
                 }
             }
         }

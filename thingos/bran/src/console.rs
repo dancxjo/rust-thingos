@@ -1,12 +1,11 @@
 use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicBool, Ordering};
+
 use kernel::{BootRuntime, BootRuntimeBase};
 use spin::Mutex;
 
-use crate::runtime::ArchRuntime as _;
-
-
 use crate::framebuffer::Framebuffer;
+use crate::runtime::ArchRuntime as _;
 
 const CELL_H: u32 = 16;
 const CELL_W: u32 = 8;
@@ -973,21 +972,25 @@ pub fn serial_drain_irq() {
     }
 
     let mut local = [0u8; 16]; // One FIFO burst
-    let (n, empty) = {
+    let n = {
         let mut ring = match SERIAL_DEFERRED.try_lock() {
             Some(r) => r,
             None => return,
         };
-        let drained = ring.drain(&mut local);
-        (drained, ring.is_empty())
+        ring.drain(&mut local)
     };
 
     if n > 0 {
         crate::RUNTIME.arch.write_serial_fifo_burst(&local[..n]);
     }
 
-    if empty {
-        crate::RUNTIME.arch.disarm_serial_tx_irq();
+    if let Some(ring) = SERIAL_DEFERRED.try_lock() {
+        if ring.is_empty() {
+            // Disarm while holding the ring lock.  Otherwise a producer can see
+            // the IRQ as armed, enqueue bytes, and then lose the race to this
+            // disarm, leaving serial output stuck until some unrelated flush.
+            crate::RUNTIME.arch.disarm_serial_tx_irq();
+        }
     }
 }
 
@@ -1053,7 +1056,7 @@ pub unsafe fn force_unlock() {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeferredRing, DEFERRED_CAP};
+    use super::{DEFERRED_CAP, DeferredRing};
     type TestRing = DeferredRing<DEFERRED_CAP>;
 
     fn drain_all(ring: &mut TestRing, out: &mut [u8]) -> usize {

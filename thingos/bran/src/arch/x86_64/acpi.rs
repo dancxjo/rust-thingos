@@ -6,6 +6,7 @@
 //! - Interrupt Source Overrides (legacy IRQ remapping)
 
 use core::ptr;
+
 use kernel::{FrameAllocatorHook, MapKind, MapPerms};
 
 use super::paging;
@@ -21,13 +22,8 @@ fn map_phys_range(phys: u64, len: u64, hhdm: u64) {
     let start = phys & !0xfff;
     let end = (phys + len + 0xfff) & !0xfff;
     let aspace = paging::active_address_space();
-    let perms = MapPerms {
-        user: false,
-        read: true,
-        write: false,
-        exec: false,
-        kind: MapKind::Normal,
-    };
+    let perms =
+        MapPerms { user: false, read: true, write: false, exec: false, kind: MapKind::Normal };
 
     let mut p = start;
     while p < end {
@@ -41,11 +37,7 @@ fn map_phys_range(phys: u64, len: u64, hhdm: u64) {
 }
 
 fn rsdp_phys_from_virt(rsdp_addr: u64, hhdm_offset: u64) -> u64 {
-    if rsdp_addr >= hhdm_offset {
-        rsdp_addr - hhdm_offset
-    } else {
-        rsdp_addr
-    }
+    if rsdp_addr >= hhdm_offset { rsdp_addr - hhdm_offset } else { rsdp_addr }
 }
 
 /// ACPI table signature
@@ -172,11 +164,7 @@ pub unsafe fn parse_madt(rsdp_virt: u64, hhdm_offset: u64) -> Option<MadtInfo> {
     let madt_phys = if revision >= 2 {
         // ACPI 2.0+: use XSDT
         let xsdt_phys = unsafe { ptr::read_unaligned(ptr::addr_of!((*rsdp).xsdt_address)) };
-        map_phys_range(
-            xsdt_phys,
-            core::mem::size_of::<AcpiSdtHeader>() as u64,
-            hhdm_offset,
-        );
+        map_phys_range(xsdt_phys, core::mem::size_of::<AcpiSdtHeader>() as u64, hhdm_offset);
         let xsdt_virt = xsdt_phys + hhdm_offset;
         let length = unsafe {
             ptr::read_unaligned(ptr::addr_of!((*(xsdt_virt as *const AcpiSdtHeader)).length))
@@ -186,11 +174,7 @@ pub unsafe fn parse_madt(rsdp_virt: u64, hhdm_offset: u64) -> Option<MadtInfo> {
     } else {
         // ACPI 1.0: use RSDT
         let rsdt_phys = unsafe { ptr::read_unaligned(ptr::addr_of!((*rsdp).rsdt_address)) };
-        map_phys_range(
-            rsdt_phys as u64,
-            core::mem::size_of::<AcpiSdtHeader>() as u64,
-            hhdm_offset,
-        );
+        map_phys_range(rsdt_phys as u64, core::mem::size_of::<AcpiSdtHeader>() as u64, hhdm_offset);
         let rsdt_virt = (rsdt_phys as u64) + hhdm_offset;
         let length = unsafe {
             ptr::read_unaligned(ptr::addr_of!((*(rsdt_virt as *const AcpiSdtHeader)).length))
@@ -200,11 +184,7 @@ pub unsafe fn parse_madt(rsdp_virt: u64, hhdm_offset: u64) -> Option<MadtInfo> {
     };
 
     let madt_virt = madt_phys + hhdm_offset;
-    map_phys_range(
-        madt_phys,
-        core::mem::size_of::<AcpiSdtHeader>() as u64,
-        hhdm_offset,
-    );
+    map_phys_range(madt_phys, core::mem::size_of::<AcpiSdtHeader>() as u64, hhdm_offset);
     let madt_length = unsafe {
         ptr::read_unaligned(ptr::addr_of!((*(madt_virt as *const AcpiSdtHeader)).length))
     };
@@ -273,12 +253,7 @@ unsafe fn parse_madt_table(madt_virt: u64) -> Option<MadtInfo> {
         let entry_len = unsafe { ptr::read_unaligned((ptr + 1) as *const u8) };
 
         // Debug: log EVERY entry
-        kernel::ktrace!(
-            "MADT: Entry type {}, len {} at 0x{:x}",
-            entry_type,
-            entry_len,
-            ptr
-        );
+        kernel::ktrace!("MADT: Entry type {}, len {} at 0x{:x}", entry_type, entry_len, ptr);
 
         if entry_len < 2 {
             kernel::kerror!("MADT: Invalid entry length {} at 0x{:x}", entry_len, ptr);

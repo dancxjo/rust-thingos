@@ -6,10 +6,11 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use abi::syscall::vfs_flags::O_RDWR;
 use stem::info;
-use stem::syscall::{sleep_ms, vfs_open, vfs_read, vfs_write};
-use stem::thing::{ThingId, sys as thingsys};
+use stem::syscall::socket::{connect, sendmsg, socket};
+use stem::syscall::socket_domain::AF_UNIX;
+use stem::syscall::socket_type::SOCK_STREAM;
+use stem::syscall::{memfd_create, sleep_ms, vfs_read, vm_map};
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -29,7 +30,7 @@ const POPUP_ID: u32 = 23;
 struct BufferState {
     pool_id: u32,
     buffer_id: u32,
-    bs_id: ThingId,
+    handle: u32,
     ptr: *mut u8,
     width: u32,
     height: u32,
@@ -181,13 +182,23 @@ fn connect_wayland() -> u32 {
         stem::error!("wayland_hello: failed to wait for /run/wayland-0: {:?}", e);
     }
 
-    match vfs_open("/run/wayland-0", O_RDWR) {
-        Ok(fd) => {
+    let fd = match socket(AF_UNIX, SOCK_STREAM, 0) {
+        Ok(fd) => fd,
+        Err(e) => {
+            stem::error!("wayland_hello: socket(AF_UNIX) failed: {:?}", e);
+            loop {
+                sleep_ms(1000);
+            }
+        }
+    };
+
+    match connect(fd, "/run/wayland-0") {
+        Ok(()) => {
             info!("wayland_hello: connected to /run/wayland-0");
             fd
         }
         Err(e) => {
-            stem::error!("wayland_hello: failed to open /run/wayland-0: {:?}", e);
+            stem::error!("wayland_hello: failed to connect /run/wayland-0: {:?}", e);
             loop {
                 sleep_ms(1000);
             }
@@ -216,7 +227,7 @@ fn ensure_buffer(
 
     let stride = width * 4;
     let size = stride * height;
-    let fd_buf = thingsys::memfd_create("wl.buffer", size as usize).expect("create memfd");
+    let fd_buf = memfd_create("wl.buffer", size as usize).expect("create memfd");
 
     use abi::vm::{VmBacking, VmMapReq, VmProt};
     let req = VmMapReq {
@@ -226,7 +237,7 @@ fn ensure_buffer(
         flags: abi::vm::VmMapFlags::empty(),
         backing: VmBacking::File { thing: fd_buf, offset: 0 },
     };
-    let resp = thingsys::vm_map(&req).expect("map memfd");
+    let resp = vm_map(&req).expect("map memfd");
     let ptr = resp.addr as *mut u8;
 
     let pool_id = base_id;
@@ -234,15 +245,7 @@ fn ensure_buffer(
     create_pool(fd, shm_id, pool_id, fd_buf, size);
     create_buffer(fd, pool_id, buffer_id, width, height, stride);
 
-    let out = BufferState {
-        pool_id,
-        buffer_id,
-        bs_id: ThingId::from_u64(fd_buf as u64),
-        ptr,
-        width,
-        height,
-        stride,
-    };
+    let out = BufferState { pool_id, buffer_id, handle: fd_buf, ptr, width, height, stride };
     *current = Some(out);
     out
 }
@@ -376,7 +379,7 @@ fn send_get_registry(fd: u32, new_id: u32) {
     let mut buf = Vec::new();
     encode_header(1, 1, 12, &mut buf);
     buf.extend_from_slice(&new_id.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn bind_global(fd: u32, name: u32, interface: &str, version: u32, new_id: u32) {
@@ -394,14 +397,14 @@ fn bind_global(fd: u32, name: u32, interface: &str, version: u32, new_id: u32) {
     buf.extend_from_slice(&bytes);
     buf.extend_from_slice(&version.to_ne_bytes());
     buf.extend_from_slice(&new_id.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn create_surface(fd: u32, compositor_id: u32, new_id: u32) {
     let mut buf = Vec::new();
     encode_header(compositor_id, 0, 12, &mut buf);
     buf.extend_from_slice(&new_id.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn get_xdg_surface(fd: u32, wm_base_id: u32, new_id: u32, surface_id: u32) {
@@ -409,14 +412,14 @@ fn get_xdg_surface(fd: u32, wm_base_id: u32, new_id: u32, surface_id: u32) {
     encode_header(wm_base_id, 2, 16, &mut buf);
     buf.extend_from_slice(&new_id.to_ne_bytes());
     buf.extend_from_slice(&surface_id.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn get_toplevel(fd: u32, xdg_surface_id: u32, new_id: u32) {
     let mut buf = Vec::new();
     encode_header(xdg_surface_id, 1, 12, &mut buf);
     buf.extend_from_slice(&new_id.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn set_toplevel_title(fd: u32, toplevel_id: u32, title: &str) {
@@ -431,7 +434,7 @@ fn create_positioner(fd: u32, wm_base_id: u32, new_id: u32) {
     let mut buf = Vec::new();
     encode_header(wm_base_id, 1, 12, &mut buf);
     buf.extend_from_slice(&new_id.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn positioner_set_size(fd: u32, positioner_id: u32, width: i32, height: i32) {
@@ -439,7 +442,7 @@ fn positioner_set_size(fd: u32, positioner_id: u32, width: i32, height: i32) {
     encode_header(positioner_id, 1, 16, &mut buf);
     buf.extend_from_slice(&width.to_ne_bytes());
     buf.extend_from_slice(&height.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn positioner_set_anchor_rect(
@@ -456,7 +459,7 @@ fn positioner_set_anchor_rect(
     buf.extend_from_slice(&y.to_ne_bytes());
     buf.extend_from_slice(&width.to_ne_bytes());
     buf.extend_from_slice(&height.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn positioner_set_offset(fd: u32, positioner_id: u32, x: i32, y: i32) {
@@ -464,7 +467,7 @@ fn positioner_set_offset(fd: u32, positioner_id: u32, x: i32, y: i32) {
     encode_header(positioner_id, 6, 16, &mut buf);
     buf.extend_from_slice(&x.to_ne_bytes());
     buf.extend_from_slice(&y.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn get_popup(
@@ -479,30 +482,29 @@ fn get_popup(
     buf.extend_from_slice(&popup_id.to_ne_bytes());
     buf.extend_from_slice(&parent_xdg_surface_id.to_ne_bytes());
     buf.extend_from_slice(&positioner_id.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn ack_configure(fd: u32, xdg_surface_id: u32, serial: u32) {
     let mut buf = Vec::new();
     encode_header(xdg_surface_id, 4, 12, &mut buf);
     buf.extend_from_slice(&serial.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn send_pong(fd: u32, wm_base_id: u32, serial: u32) {
     let mut buf = Vec::new();
     encode_header(wm_base_id, 3, 12, &mut buf);
     buf.extend_from_slice(&serial.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn create_pool(fd: u32, shm_id: u32, pool_id: u32, bs_raw: u32, size: u32) {
     let mut buf = Vec::new();
-    encode_header(shm_id, 0, 20, &mut buf);
+    encode_header(shm_id, 0, 16, &mut buf);
     buf.extend_from_slice(&pool_id.to_ne_bytes());
-    buf.extend_from_slice(&bs_raw.to_ne_bytes());
     buf.extend_from_slice(&size.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request_with_fds(fd, &buf, &[bs_raw]);
 }
 
 fn create_buffer(fd: u32, pool_id: u32, buffer_id: u32, width: u32, height: u32, stride: u32) {
@@ -514,7 +516,7 @@ fn create_buffer(fd: u32, pool_id: u32, buffer_id: u32, width: u32, height: u32,
     buf.extend_from_slice(&height.to_ne_bytes());
     buf.extend_from_slice(&stride.to_ne_bytes());
     buf.extend_from_slice(&0u32.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn attach_buffer(fd: u32, surface_id: u32, buffer_id: u32) {
@@ -523,13 +525,13 @@ fn attach_buffer(fd: u32, surface_id: u32, buffer_id: u32) {
     buf.extend_from_slice(&buffer_id.to_ne_bytes());
     buf.extend_from_slice(&0u32.to_ne_bytes());
     buf.extend_from_slice(&0u32.to_ne_bytes());
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn commit_surface(fd: u32, surface_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 6, 8, &mut buf);
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
 }
 
 fn send_string_request(fd: u32, object_id: u32, opcode: u16, value: &str) {
@@ -544,7 +546,17 @@ fn send_string_request(fd: u32, object_id: u32, opcode: u16, value: &str) {
     encode_header(object_id, opcode, size, &mut buf);
     buf.extend_from_slice(&len.to_ne_bytes());
     buf.extend_from_slice(&bytes);
-    let _ = vfs_write(fd, &buf);
+    send_request(fd, &buf);
+}
+
+fn send_request(fd: u32, buf: &[u8]) {
+    send_request_with_fds(fd, buf, &[]);
+}
+
+fn send_request_with_fds(fd: u32, buf: &[u8], fds: &[u32]) {
+    if let Err(e) = sendmsg(fd, buf, fds) {
+        stem::warn!("wayland_hello: sendmsg failed: {:?}", e);
+    }
 }
 
 fn encode_header(object_id: u32, opcode: u16, size: u16, buf: &mut Vec<u8>) {

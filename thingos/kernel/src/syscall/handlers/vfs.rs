@@ -381,8 +381,6 @@ pub fn sys_fs_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<us
 // ── write ───────────────────────────────────────────────────────────────────
 
 pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
-    let tid = unsafe { crate::sched::current_tid_current() };
-    crate::ktrace!("sys_fs_write: tid={} fd={} len={}", tid, fd, buf_len);
     validate_user_range(buf_ptr, buf_len, false)?;
     if buf_len == 0 {
         return Ok(0);
@@ -390,9 +388,7 @@ pub fn sys_fs_write(fd: usize, buf_ptr: usize, buf_len: usize) -> SysResult<usiz
 
     let mut kbuf = vec![0u8; buf_len];
     unsafe {
-        crate::kdebug!("sys_fs_write: tid={} fd={} starting copyin", tid, fd);
         copyin(&mut kbuf, buf_ptr)?;
-        crate::kdebug!("sys_fs_write: tid={} fd={} copyin ok", tid, fd);
     };
 
     let (node, offset_cell, status_flags, mount_id) = {

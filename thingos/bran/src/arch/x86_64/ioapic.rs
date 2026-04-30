@@ -4,6 +4,7 @@
 
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering};
+
 use kernel::{FrameAllocatorHook, MapKind, MapPerms, ioport_read_u8, ioport_write_u8};
 
 use super::paging;
