@@ -83,6 +83,7 @@ const SCANCODE_MAP_SHIFT: &[u8] =
     b"\0\x1b!@#$%^&*()_+\x08\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~ \0ZXCVBNM<>?\0*\0 ";
 
 pub fn buffer_scancode(byte: u8) -> bool {
+    crate::kinfo!("buffer_scancode: 0x{:02x}", byte);
     PS2_QUEUE.push(byte);
     update_pause_hotkey_state(byte)
 }
@@ -123,6 +124,8 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
     let released = (byte & 0x80) != 0;
     let scancode = byte & 0x7F;
 
+    crate::kinfo!("PS/2 update_pause: ext={} scan=0x{:02x} rel={}", extended, scancode, released);
+
     // Track modifiers
     match (extended, scancode) {
         (false, 0x2A) | (false, 0x36) => {
@@ -148,6 +151,7 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
             if released {
                 F1_DOWN.store(false, Ordering::Release);
             } else if !F1_DOWN.swap(true, Ordering::AcqRel) {
+                crate::kinfo!("PS/2 hotkey F1 detected; cycling log level");
                 let level = crate::logging::cycle_log_level();
                 LOG_LEVEL_HOTKEY_PENDING.store(level as usize + 1, Ordering::Release);
             }

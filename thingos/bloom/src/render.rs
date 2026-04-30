@@ -70,6 +70,7 @@ pub struct CompositorVisuals {
     cursor: Option<CursorBuffer>,
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
+    shadow_overlay: Option<ChromeOverlayBuffer>,
     chrome_overlay: Option<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
     theme: UiTheme,
@@ -139,6 +140,7 @@ impl CompositorVisuals {
             cursor: None,
             cursor_variants: Vec::new(),
             pointer_overlay: None,
+            shadow_overlay: None,
             chrome_overlay: None,
             pistil,
             theme: default_theme(),
@@ -349,32 +351,54 @@ impl CompositorVisuals {
         &mut self,
         display: &DisplayBackend,
         composition: &[CompositionEntry],
-    ) -> Option<OverlayPlane> {
+    ) -> (Option<OverlayPlane>, Option<OverlayPlane>) {
         if !composition.iter().any(|entry| !entry.chrome.is_empty()) {
-            return None;
+            return (None, None);
         }
-        self.ensure_chrome_overlay(display)?;
-        let overlay = self.chrome_overlay.as_mut()?;
+        self.ensure_overlay_buffers(display);
+        let shadow = self.shadow_overlay.as_mut();
+        let chrome = self.chrome_overlay.as_mut();
+        if shadow.is_none() && chrome.is_none() {
+            return (None, None);
+        }
+
         let draw_svg_icon = self.pistil.as_ref().and_then(|lib| lib.draw_svg_icon);
         let draw_text = self.pistil.as_ref().and_then(|lib| lib.draw_text);
         let draw_symbol_text = self.pistil.as_ref().and_then(|lib| lib.draw_symbol_text);
-        draw_chrome_overlay(
-            overlay.texture.as_slice_mut(),
-            overlay.width,
-            overlay.height,
-            composition,
-            draw_svg_icon,
-            draw_text,
-            draw_symbol_text,
-            self.theme,
-        );
-        Some(OverlayPlane {
-            buffer_id: overlay.buffer_id,
-            x: 0,
-            y: 0,
-            width: overlay.width,
-            height: overlay.height,
-        })
+
+        if let Some(overlay) = shadow {
+            draw_shadow_overlay(overlay.texture.as_slice_mut(), overlay.width, overlay.height, composition, self.theme);
+        }
+
+        if let Some(overlay) = chrome {
+            draw_chrome_overlay(
+                overlay.texture.as_slice_mut(),
+                overlay.width,
+                overlay.height,
+                composition,
+                draw_svg_icon,
+                draw_text,
+                draw_symbol_text,
+                self.theme,
+            );
+        }
+
+        (
+            self.shadow_overlay.as_ref().map(|o| OverlayPlane {
+                buffer_id: o.buffer_id,
+                x: 0,
+                y: 0,
+                width: o.width,
+                height: o.height,
+            }),
+            self.chrome_overlay.as_ref().map(|o| OverlayPlane {
+                buffer_id: o.buffer_id,
+                x: 0,
+                y: 0,
+                width: o.width,
+                height: o.height,
+            }),
+        )
     }
 
     fn cursor_buffer(
@@ -446,30 +470,55 @@ impl CompositorVisuals {
         Some(())
     }
 
-    fn ensure_chrome_overlay(&mut self, display: &DisplayBackend) -> Option<()> {
+    fn ensure_overlay_buffers(&mut self, display: &DisplayBackend) {
         let (width, height) = display.output_size();
-        if matches!(
-            self.chrome_overlay.as_ref(),
-            Some(overlay) if overlay.width == width && overlay.height == height
-        ) {
-            return Some(());
+        if self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height)
+            && self.shadow_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height)
+        {
+            return;
         }
-        let texture = Texture::new("bloom.compositor.chrome_overlay", width, height, 4)?;
-        let buffer_id = display.import_buffer(
-            texture.fd,
-            width,
-            height,
-            texture.stride,
-            PixelFormat::Bgra8888,
-            0,
-            0,
-        )?;
-        if let Some(old) = self.chrome_overlay.take() {
-            display.release_buffer(old.buffer_id);
+
+        // Allocate chrome overlay
+        if !self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
+            if let Some(texture) = Texture::new("bloom.compositor.chrome_overlay", width, height, 4) {
+                if let Some(buffer_id) = display.import_buffer(
+                    texture.fd,
+                    width,
+                    height,
+                    texture.stride,
+                    PixelFormat::Bgra8888,
+                    0,
+                    0,
+                ) {
+                    if let Some(old) = self.chrome_overlay.take() {
+                        display.release_buffer(old.buffer_id);
+                    }
+                    self.chrome_overlay = Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
+                    stem::info!("bloom: chrome overlay ready buffer={} size={}x{}", buffer_id, width, height);
+                }
+            }
         }
-        self.chrome_overlay = Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
-        stem::info!("bloom: chrome overlay ready buffer={} size={}x{}", buffer_id, width, height);
-        Some(())
+
+        // Allocate shadow overlay
+        if !self.shadow_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
+            if let Some(texture) = Texture::new("bloom.compositor.shadow_overlay", width, height, 4) {
+                if let Some(buffer_id) = display.import_buffer(
+                    texture.fd,
+                    width,
+                    height,
+                    texture.stride,
+                    PixelFormat::Bgra8888,
+                    0,
+                    0,
+                ) {
+                    if let Some(old) = self.shadow_overlay.take() {
+                        display.release_buffer(old.buffer_id);
+                    }
+                    self.shadow_overlay = Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
+                    stem::info!("bloom: shadow overlay ready buffer={} size={}x{}", buffer_id, width, height);
+                }
+            }
+        }
     }
 
     pub fn pointer_overlay_plane(
@@ -758,7 +807,7 @@ fn draw_chrome_overlay(
         let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height).min(h);
         let cr = theme.corner_radius;
 
-        draw_window_shadow(dst, stride, height, x, y, w, h, entry.active, cr);
+        // Note: Shadows are now drawn into a separate shadow_overlay plane.
         if titlebar_height > 0 {
             fill_top_rounded_vertical_gradient(
                 dst,
@@ -849,6 +898,34 @@ fn draw_chrome_overlay(
     }
 }
 
+fn draw_shadow_overlay(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    composition: &[CompositionEntry],
+    theme: UiTheme,
+) {
+    dst.fill(0);
+    // Draw shadows bottom-to-top to match z-order.
+    for entry in composition {
+        if entry.is_fullscreen || entry.chrome.is_empty() {
+            continue;
+        }
+        let rect = entry.dest_rect;
+        draw_window_shadow(
+            dst,
+            stride,
+            height,
+            rect.x as i32,
+            rect.y as i32,
+            rect.w,
+            rect.h,
+            entry.active,
+            theme.corner_radius,
+        );
+    }
+}
+
 fn draw_window_shadow(
     dst: &mut [u32],
     stride: u32,
@@ -864,47 +941,77 @@ fn draw_window_shadow(
         return;
     }
 
-    // Shadow layers fall down-right, simulating an upper-left light source.
-    // Each successive layer is farther offset, larger (expand), softer (lower
-    // alpha), and uses a warm brown tint to harmonize with the golden theme.
+    // Soft layered shadow falling down-right, simulating an upper-left light.
+    // Uses warm brown (rgb 80,55,20) instead of black for a natural look.
+    // No symmetric expand — each layer only adds size to the right and bottom
+    // so the left edge stays almost shadow-free.
     //
-    // Active windows appear slightly more elevated with larger, darker shadows.
-    // Inactive windows use smaller, lighter shadows.
+    // The shadow is a faint soft stain under the window, mostly below and to
+    // the right.  It should not look like a second rectangle.
 
     struct ShadowLayer {
         offset_x: i32,
         offset_y: i32,
-        expand: u32,
+        pad_right: u32,
+        pad_bottom: u32,
         radius_add: u32,
-        color: u32,
+        color: u32, // ARGB
     }
 
+    // Warm brown base: R=80 G=55 B=20 → 0x__503714
     let layers: &[ShadowLayer] = if active {
         &[
-            // Layer 1: wide ambient glow (barely visible, large spread)
-            ShadowLayer { offset_x: 7, offset_y: 9, expand: 10, radius_add: 5, color: 0x0F6F5226 },
-            // Layer 2: soft cast shadow
-            ShadowLayer { offset_x: 5, offset_y: 7, expand: 5, radius_add: 2, color: 0x1E5C3D14 },
-            // Layer 3: medium cast shadow
-            ShadowLayer { offset_x: 3, offset_y: 4, expand: 2, radius_add: 0, color: 0x2D4A2E0C },
-            // Layer 4: contact shadow (tightest, warmest)
-            ShadowLayer { offset_x: 2, offset_y: 2, expand: 0, radius_add: 0, color: 0x384A2E0C },
+            // Layer 1 (outermost): faintest, furthest offset
+            ShadowLayer {
+                offset_x: 7, offset_y: 8,
+                pad_right: 6, pad_bottom: 8,
+                radius_add: 6,
+                color: 0x0D503714, // alpha ~5%
+            },
+            // Layer 2 (middle): moderate
+            ShadowLayer {
+                offset_x: 4, offset_y: 5,
+                pad_right: 3, pad_bottom: 4,
+                radius_add: 3,
+                color: 0x1A503714, // alpha ~10%
+            },
+            // Layer 3 (contact): closest, darkest of the three
+            ShadowLayer {
+                offset_x: 2, offset_y: 2,
+                pad_right: 1, pad_bottom: 2,
+                radius_add: 0,
+                color: 0x2E503714, // alpha ~18%
+            },
         ]
     } else {
         &[
-            // Inactive: gentler, smaller shadows
-            ShadowLayer { offset_x: 5, offset_y: 7, expand: 7, radius_add: 3, color: 0x0A6F5226 },
-            ShadowLayer { offset_x: 3, offset_y: 5, expand: 3, radius_add: 1, color: 0x145C3D14 },
-            ShadowLayer { offset_x: 2, offset_y: 3, expand: 1, radius_add: 0, color: 0x1E4A2E0C },
-            ShadowLayer { offset_x: 1, offset_y: 1, expand: 0, radius_add: 0, color: 0x244A2E0C },
+            // Inactive: gentler
+            ShadowLayer {
+                offset_x: 5, offset_y: 6,
+                pad_right: 4, pad_bottom: 6,
+                radius_add: 4,
+                color: 0x0A503714, // alpha ~4%
+            },
+            ShadowLayer {
+                offset_x: 3, offset_y: 4,
+                pad_right: 2, pad_bottom: 3,
+                radius_add: 2,
+                color: 0x14503714, // alpha ~8%
+            },
+            ShadowLayer {
+                offset_x: 1, offset_y: 1,
+                pad_right: 1, pad_bottom: 1,
+                radius_add: 0,
+                color: 0x20503714, // alpha ~12%
+            },
         ]
     };
 
     for layer in layers {
-        let sx = x.saturating_add(layer.offset_x).saturating_sub(layer.expand as i32);
-        let sy = y.saturating_add(layer.offset_y).saturating_sub(layer.expand as i32);
-        let sw = w.saturating_add(layer.expand.saturating_mul(2));
-        let sh = h.saturating_add(layer.expand.saturating_mul(2));
+        let sx = x.saturating_add(layer.offset_x);
+        let sy = y.saturating_add(layer.offset_y);
+        let sw = w.saturating_add(layer.pad_right);
+        let sh = h.saturating_add(layer.pad_bottom);
         let shadow_radius = corner_radius.saturating_add(layer.radius_add);
         fill_rounded_vertical_gradient_blend(
             dst,

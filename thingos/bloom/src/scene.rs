@@ -947,17 +947,18 @@ pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
     if chrome.is_empty() {
         return rect;
     }
-    // The shadow extends down-right.  The widest active layer uses
-    // offset (7, 9) with expand=10, so the shadow can reach:
-    //   left:   x + 7 - 10 = x - 3   (3 px left of window)
-    //   top:    y + 9 - 10 = y - 1   (1 px above window)
-    //   right:  x + w + 7 + 10 = x + w + 17
-    //   bottom: y + h + 9 + 10 = y + h + 19
-    // We add a generous margin to avoid clipping artifacts.
-    const SHADOW_PAD_LEFT: u32 = 4;
+    // Shadows now fall only right+down (no symmetric expand).
+    // The widest active layer uses offset (7,8) with pad_right=6, pad_bottom=8,
+    // so the shadow reaches at most:
+    //   right:  x + w + 7 + 6 = x + w + 13
+    //   bottom: y + h + 8 + 8 = y + h + 16
+    // Left/top are barely affected (contact layer: offset 2,2 with no expand).
+    // Add a small margin to avoid clipping artifacts.
+    const SHADOW_PAD_LEFT: u32 = 2;
     const SHADOW_PAD_TOP: u32 = 2;
-    const SHADOW_PAD_RIGHT: u32 = 20;
+    const SHADOW_PAD_RIGHT: u32 = 18;
     const SHADOW_PAD_BOTTOM: u32 = 22;
+
 
     Rect {
         x: rect.x.saturating_sub(SHADOW_PAD_LEFT),

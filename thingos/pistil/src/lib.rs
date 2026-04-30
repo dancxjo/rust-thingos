@@ -8,6 +8,7 @@ pub mod compositor;
 pub mod font;
 pub mod geometry;
 pub mod raster;
+pub mod shadow;
 pub mod skia;
 pub mod tessellate;
 pub mod typography;

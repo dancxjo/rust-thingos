@@ -150,6 +150,7 @@ impl DisplayBackend {
         composition_list: &[CompositionEntry],
         damage: &[Rect],
         fallback_buffer: Option<u32>,
+        shadow_overlay: Option<OverlayPlane>,
         chrome_overlay: Option<OverlayPlane>,
         pointer_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
@@ -172,6 +173,27 @@ impl DisplayBackend {
                 _reserved: [0; 7],
             };
             plane_count += 1;
+        }
+
+        // 1.1 Shadow overlay (below all windows, above background)
+        if let Some(overlay) = shadow_overlay {
+            if plane_count < MAX_COMMIT_PLANES {
+                planes[plane_count] = PlaneCommit {
+                    plane_id: PlaneId(plane_count as u32),
+                    buffer_id: abi::display::BufferId(overlay.buffer_id),
+                    dest_rect: Rect {
+                        x: overlay.x.max(0) as u32,
+                        y: overlay.y.max(0) as u32,
+                        w: overlay.width,
+                        h: overlay.height,
+                    },
+                    src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
+                    z_order: BACKGROUND_Z_ORDER + 1,
+                    alpha: 255,
+                    _reserved: [0; 7],
+                };
+                plane_count += 1;
+            }
         }
 
         // 2. Surface planes

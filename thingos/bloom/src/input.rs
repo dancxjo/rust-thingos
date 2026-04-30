@@ -756,6 +756,8 @@ impl InputState {
         mark_surface_visual_damage(scene, damage, surface_id, toggled.old_rect);
         mark_surface_visual_damage(scene, damage, surface_id, toggled.new_rect);
 
+        stem::info!("BLOOM_FULLSCREEN_TOGGLE_TRIGGERED (active={})", toggled.active);
+
         let new_focus = Some(surface_id);
         let old_focus = scene.keyboard_focus;
         scene.keyboard_focus = new_focus;

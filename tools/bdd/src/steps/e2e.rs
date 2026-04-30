@@ -719,9 +719,15 @@ async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
                 r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "key", "data": {{"down": false, "key": {{"type": "qcode", "data": "{}"}}}}}}]}}}}"#,
                 qcode
             );
-            let _ = world.execute_qmp_control(&press).await;
+            let res_p = world.execute_qmp_control(&press).await;
+            if let Err(e) = res_p {
+                eprintln!("│  │  │      ❌ QMP Press Error: {}", e);
+            }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = world.execute_qmp_control(&release).await;
+            let res_r = world.execute_qmp_control(&release).await;
+            if let Err(e) = res_r {
+                eprintln!("│  │  │      ❌ QMP Release Error: {}", e);
+            }
         }
 
         // Release modifiers
@@ -736,7 +742,10 @@ async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
                 r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "key", "data": {{"down": false, "key": {{"type": "qcode", "data": "{}"}}}}}}]}}}}"#,
                 qcode
             );
-            let _ = world.execute_qmp_control(&cmd).await;
+            let res = world.execute_qmp_control(&cmd).await;
+            if let Err(e) = res {
+                eprintln!("│  │  │      ❌ QMP Modifier Release Error: {}", e);
+            }
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;

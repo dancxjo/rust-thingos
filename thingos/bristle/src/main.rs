@@ -353,7 +353,7 @@ fn accumulate_and_dispatch(
                                 stem::info!("bristle: Ctrl+Alt+Del - rebooting...");
                                 stem::syscall::reboot();
                             }
-                            Key::F1 => {
+                            Key::F11 => {
                                 update_active_ui("bloom");
                             }
                             Key::F12 => {

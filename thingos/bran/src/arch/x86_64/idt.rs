@@ -901,6 +901,7 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, bool, Option<u8>, usiz
 
         let byte = raw_inb(PS2_DATA_PORT);
         captured += 1;
+        kernel::kprintln!("PS/2 byte received: 0x{:02x}", byte);
         if detect_ctrl_alt_del_reboot(byte) {
             ctrl_alt_del = true;
         }
@@ -968,11 +969,8 @@ fn poll_ps2_keyboard_fallback() -> (bool, bool) {
 }
 
 fn announce_log_level_hotkey(level: u8) {
-    kernel::kprintln!(
-        "F11 hotkey: log level set to {} ({})",
-        level,
-        kernel::logging::log_level_name(level)
-    );
+    let name = kernel::logging::log_level_name(level);
+    kernel::kinfo!("F1 hotkey: log level set to {} ({})", level, name);
 }
 
 fn try_spawn_shell(path: &str) -> Option<u64> {
@@ -1451,11 +1449,9 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
 
     if resolved == 0x21 {
         let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        /*
-        if count <= 3 || (count % 128 == 0) {
-            kinfo!("IRQ1 fired (count={})", count);
+        if count <= 3 || (count % 16 == 0) {
+            kernel::kinfo!("IRQ1 fired (count={})", count);
         }
-        */
         let (pause, f12, reboot) = capture_ps2_keyboard_irq();
         pause_dump = pause;
         f12_press = f12;

@@ -50,7 +50,7 @@ pub fn get_log_level() -> u8 {
 
 /// Cycle the minimum log level for low-level hotkey handling.
 ///
-/// The cycle includes `Off` so repeated F11 presses can quiet a noisy system
+/// The cycle includes `Off` so repeated F1 presses can quiet a noisy system
 /// without requiring a userspace shell or privileged syscall.
 pub fn cycle_log_level() -> u8 {
     let mut current = MIN_LOG_LEVEL.load(Ordering::Relaxed);
