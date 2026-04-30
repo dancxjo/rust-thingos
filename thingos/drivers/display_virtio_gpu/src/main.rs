@@ -562,7 +562,12 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     );
                 }
                 if let Err(e) = stem::syscall::vfs::vfs_close(buf.fd) {
-                    stem::warn!("DISP: failed to close released buffer id={} fd={}: {:?}", id.0, buf.fd, e);
+                    stem::warn!(
+                        "DISP: failed to close released buffer id={} fd={}: {:?}",
+                        id.0,
+                        buf.fd,
+                        e
+                    );
                 }
                 ProviderResponse::ok_device_call(0, &[])
             } else {
