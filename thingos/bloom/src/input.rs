@@ -26,6 +26,10 @@ const CURSOR_SMOOTHING_DIVISOR: i32 = 3;
 const CURSOR_SMOOTHING_MIN_STEP: i32 = 8;
 static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);
 static CURSOR_SMOOTHING_LOGS: AtomicU32 = AtomicU32::new(0);
+/// Counts every raw PointerMove event received (pre-coalesce).
+static COALESCE_PRE: AtomicU32 = AtomicU32::new(0);
+/// Limits how many times coalesce-flush stats are logged.
+static COALESCE_FLUSH_LOGS: AtomicU32 = AtomicU32::new(0);
 
 pub struct InputState {
     /// Latest logical pointer position from Bristle input. Clients and focus
@@ -38,6 +42,11 @@ pub struct InputState {
     visible_x: i32,
     visible_y: i32,
     pending_cursor_motion: bool,
+    /// Timestamp of the most recent coalesced PointerMove event awaiting
+    /// delivery to clients.  Multiple raw motion samples between frames are
+    /// collapsed here so focus lookup and client delivery happen only once per
+    /// frame rather than per sample.  `None` means no motion since last flush.
+    pending_motion_ts: Option<u64>,
     output_w: i32,
     output_h: i32,
 }
@@ -54,6 +63,7 @@ impl InputState {
             visible_x: pointer_x,
             visible_y: pointer_y,
             pending_cursor_motion: false,
+            pending_motion_ts: None,
             output_w,
             output_h,
         }
@@ -104,6 +114,50 @@ impl InputState {
         }
     }
 
+    /// Deliver the coalesced pointer motion event (if any) to the focused
+    /// client and update pointer focus.
+    ///
+    /// Multiple raw `PointerMove` samples accumulate into `pending_motion_ts`
+    /// between frames.  This method is called **once per frame boundary**
+    /// (from `BloomWorld::try_present`) to flush the latest position to
+    /// clients in a single event, reducing redundant focus lookups and
+    /// client deliveries.
+    ///
+    /// It is also called immediately before button press/release events so
+    /// that ordering is preserved: clients always see the latest motion
+    /// position before a click.
+    pub fn flush_pointer_motion(&mut self, scene: &mut Scene) {
+        let Some(ts) = self.pending_motion_ts.take() else {
+            return;
+        };
+
+        let flush_count = COALESCE_FLUSH_LOGS.fetch_add(1, Ordering::Relaxed);
+        if flush_count < 8 {
+            let pre = COALESCE_PRE.load(Ordering::Relaxed);
+            stem::info!(
+                "bloom: motion coalesce pre={} post={} pos={},{}",
+                pre,
+                flush_count + 1,
+                self.pointer_x,
+                self.pointer_y
+            );
+        }
+
+        self.update_pointer_focus(scene);
+        if let Some(surface_id) = scene.pointer_focus {
+            if let Some(client_id) = scene.surface_client(surface_id) {
+                let ev = PointerMotionEvent {
+                    header: msg_header(EVT_POINTER_MOTION),
+                    surface_id,
+                    x: self.pointer_x,
+                    y: self.pointer_y,
+                    timestamp_ns: ts,
+                };
+                send_client_event(scene, client_id, KIND_POINTER_MOTION, &to_vec(&ev));
+            }
+        }
+    }
+
     pub fn handle_bristle_event(
         &mut self,
         bytes: &[u8],
@@ -132,6 +186,11 @@ impl InputState {
                 self.pointer_y =
                     (self.pointer_y + dy as i32).clamp(0, self.output_h.saturating_sub(1));
                 self.pending_cursor_motion = true;
+                // Coalesce: keep only the latest timestamp; focus lookup and
+                // client delivery are deferred to flush_pointer_motion() which
+                // is called once per frame boundary.
+                self.pending_motion_ts = Some(header.timestamp_ns);
+                COALESCE_PRE.fetch_add(1, Ordering::Relaxed);
                 if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < 8 {
                     stem::info!(
                         "bloom: pointer moved dx={} dy={} pos={},{}",
@@ -141,24 +200,16 @@ impl InputState {
                         self.pointer_y
                     );
                 }
-                self.update_pointer_focus(scene);
-                if let Some(surface_id) = scene.pointer_focus {
-                    if let Some(client_id) = scene.surface_client(surface_id) {
-                        let ev = PointerMotionEvent {
-                            header: msg_header(EVT_POINTER_MOTION),
-                            surface_id,
-                            x: self.pointer_x,
-                            y: self.pointer_y,
-                            timestamp_ns: header.timestamp_ns,
-                        };
-                        send_client_event(scene, client_id, KIND_POINTER_MOTION, &to_vec(&ev));
-                    }
-                }
+                // Focus update and client PointerMotionEvent delivery are
+                // deferred — do NOT call update_pointer_focus here.
             }
             Ok(EventType::PointerButtonDown) if payload.len() >= PointerButtonPayload::SIZE => {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
                 p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
                 let btn = PointerButtonPayload::from_bytes(&p);
+                // Flush any pending coalesced motion so clients see the latest
+                // position before the button event (preserves ordering).
+                self.flush_pointer_motion(scene);
                 self.update_pointer_focus(scene);
                 let old_focus = scene.keyboard_focus;
                 scene.keyboard_focus = scene.pointer_focus;
@@ -188,6 +239,8 @@ impl InputState {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
                 p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
                 let btn = PointerButtonPayload::from_bytes(&p);
+                // Flush any pending coalesced motion before the button-up event.
+                self.flush_pointer_motion(scene);
                 self.update_pointer_focus(scene);
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {

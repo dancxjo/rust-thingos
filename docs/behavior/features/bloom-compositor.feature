@@ -144,3 +144,12 @@ Feature: Bloom compositor service loop and responsiveness
     When I wait for the shell prompt
     And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: wallpaper decode failed" within 60s
+
+  @pointer-debug
+  Scenario: pointer motion events are coalesced to latest-per-frame
+    # Multiple PointerMove samples arriving between frames must be aggregated
+    # into a single focus lookup and a single client delivery.  The compositor
+    # logs coalesce stats (pre= post=) on the first few motion flushes.
+    Given the machine is booted
+    Then the pointer debug overlay should update after mouse movement
+    And the serial output should contain "bloom: motion coalesce pre=" within 60s
