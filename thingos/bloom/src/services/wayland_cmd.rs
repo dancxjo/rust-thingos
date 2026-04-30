@@ -34,6 +34,7 @@ pub struct WaylandCommandService {
     buf_key_to_bloom: BTreeMap<u32, u32>,
     /// bloom buffer_id → wl_buf_key.
     bloom_to_buf_key: BTreeMap<u32, u32>,
+    rx_buf: Vec<u8>,
     interests: Vec<Interest>,
 }
 
@@ -46,6 +47,7 @@ impl WaylandCommandService {
             wayland_client_id,
             buf_key_to_bloom: BTreeMap::new(),
             bloom_to_buf_key: BTreeMap::new(),
+            rx_buf: Vec::new(),
             interests,
         }
     }
@@ -205,13 +207,43 @@ impl BloomService for WaylandCommandService {
             match vfs_read(self.cmd_read_fd, &mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if self.handle_command(&buf[..n], world) {
-                        repaint = true;
-                    }
+                    self.rx_buf.extend_from_slice(&buf[..n]);
                 }
             }
         }
 
+        let mut consumed = 0usize;
+        while consumed < self.rx_buf.len() {
+            let Some(command_len) = wayland_command_len(&self.rx_buf[consumed..]) else {
+                break;
+            };
+            if consumed + command_len > self.rx_buf.len() {
+                break;
+            }
+            let command = self.rx_buf[consumed..consumed + command_len].to_vec();
+            if self.handle_command(&command, world) {
+                repaint = true;
+            }
+            consumed += command_len;
+        }
+
+        if consumed > 0 {
+            self.rx_buf.drain(..consumed);
+        }
+
         if repaint { LoopAction::RequestRepaint } else { LoopAction::None }
     }
+}
+
+fn wayland_command_len(data: &[u8]) -> Option<usize> {
+    let msg_type = *data.first()?;
+    let len = match msg_type {
+        ipc::WCMD_CREATE_SURFACE => 8,
+        ipc::WCMD_DESTROY_SURFACE => 8,
+        ipc::WCMD_IMPORT_ATTACH => 32,
+        ipc::WCMD_DAMAGE => 24,
+        ipc::WCMD_COMMIT => 12,
+        _ => 1,
+    };
+    Some(len)
 }

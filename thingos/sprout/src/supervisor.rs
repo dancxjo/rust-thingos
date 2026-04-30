@@ -38,6 +38,7 @@ const NETD_LIVENESS_PATH: &str = "/net/icmp/new";
 const NETD_PROBE_INTERVAL_NS: u64 = 1_000_000_000;
 const NETD_MAX_PROBE_FAILURES: u32 = 3;
 const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
+const WAYLAND_HELLO_BLOOM_GRACE_NS: u64 = 1_000_000_000;
 /// Periodic supervisor cadence — preserves the previous 100 ms `sleep_ms`
 /// rhythm that drove netd liveness probing and the health-vine restart loop.
 const SUPERVISOR_TICK_MS: u64 = 100;
@@ -68,6 +69,8 @@ pub struct Supervisor {
     bristle_spawned: bool,
     /// Whether bloom has been spawned (guarded so we only launch once).
     bloom_spawned: bool,
+    /// Monotonic timestamp when Bloom was spawned.
+    bloom_spawned_at_ns: u64,
     /// Whether the default Wayland demo client has been spawned.
     wayland_hello_spawned: bool,
     /// Whether early audio/chime bring-up has been started.
@@ -100,6 +103,7 @@ impl Supervisor {
             netd_last_probe_ns: 0,
             bristle_spawned: false,
             bloom_spawned: false,
+            bloom_spawned_at_ns: 0,
             wayland_hello_spawned: false,
             audio_spawned: false,
             display_card_mounted: false,
@@ -701,6 +705,7 @@ impl Supervisor {
             }
         }
         self.bloom_spawned = true;
+        self.bloom_spawned_at_ns = stem::monotonic_ns();
     }
 
     fn spawn_audio_if_ready(&mut self) {
@@ -715,10 +720,15 @@ impl Supervisor {
         if self.wayland_hello_spawned || !self.bloom_spawned {
             return;
         }
-        if !path_exists("/run/wayland-0") {
+        if stem::monotonic_ns().saturating_sub(self.bloom_spawned_at_ns)
+            < WAYLAND_HELLO_BLOOM_GRACE_NS
+        {
             return;
         }
 
+        // `/run/wayland-0` is registered in the Unix socket registry rather
+        // than as a stat-able VFS node, so let the client synchronize with the
+        // compositor through connect().
         let path = "/bin/wayland_hello";
         match stem::syscall::spawn_process(path, 0) {
             Ok(pid) => {

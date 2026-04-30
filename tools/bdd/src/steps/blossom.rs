@@ -534,6 +534,67 @@ async fn compositor_marks_surface_for_mapping(world: &mut ThingOsWorld) -> Resul
     }
 }
 
+#[then("the Wayland hello client should be visible")]
+async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let _ = world.wait_for_serial("First frame rendered", 60.0).await;
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+    let mut last_counts = (0u32, 0u32, 0u32);
+    let mut attempt = 0u32;
+
+    while start.elapsed() < timeout {
+        attempt += 1;
+        let screenshot_path = crate::artifacts::global()
+            .lock()
+            .await
+            .screenshot_path(&format!("wayland_hello_visible_{}", attempt));
+        let png_path = world
+            .take_screenshot(&screenshot_path)
+            .await
+            .map_err(|e| StepError(format!("Failed to take screenshot: {}", e)))?;
+
+        let img = image::open(&png_path)
+            .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?
+            .to_rgb8();
+        let (width, height) = img.dimensions();
+        let max_x = width.min(520);
+        let max_y = height.min(360);
+        let mut title_pixels = 0u32;
+        let mut body_pixels = 0u32;
+        let mut text_pixels = 0u32;
+
+        for y in 0..max_y {
+            for x in 0..max_x {
+                let [r, g, b] = img.get_pixel(x, y).0;
+                if (48..=72).contains(&r) && (58..=82).contains(&g) && (72..=96).contains(&b) {
+                    title_pixels += 1;
+                } else if r <= 30 && (20..=35).contains(&g) && (25..=45).contains(&b) {
+                    body_pixels += 1;
+                } else if r > 220 && g > 220 && b > 220 {
+                    text_pixels += 1;
+                }
+            }
+        }
+
+        last_counts = (title_pixels, body_pixels, text_pixels);
+        if title_pixels > 4_000 && body_pixels > 25_000 && text_pixels > 150 {
+            eprintln!(
+                "│  │  │      ✅ Wayland hello client visible (title={}, body={}, text={})",
+                title_pixels, body_pixels, text_pixels
+            );
+            return Ok(());
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    Err(StepError(format!(
+        "Wayland hello client was not visible above the background (title={}, body={}, text={})",
+        last_counts.0, last_counts.1, last_counts.2
+    )))
+}
+
 /// `When the client sends xdg_toplevel.set_title "..."` (regex)
 #[when(regex = r#"^the client sends xdg_toplevel\.set_title "(.+)"$"#)]
 async fn client_sends_set_title(world: &mut ThingOsWorld, title: String) -> Result<(), StepError> {

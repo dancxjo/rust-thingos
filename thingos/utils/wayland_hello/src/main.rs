@@ -10,7 +10,7 @@ use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::{memfd_create, sleep_ms, vfs_read, vm_map};
+use stem::syscall::{memfd_create, sleep_ms, vfs_close, vfs_read, vfs_write, vm_map};
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -196,29 +196,24 @@ fn main(_arg: usize) -> ! {
 }
 
 fn connect_wayland() -> u32 {
-    if let Err(e) = stem::fs::wait_until_exists("/run/wayland-0") {
-        stem::error!("wayland_hello: failed to wait for /run/wayland-0: {:?}", e);
-    }
-
-    let fd = match socket(AF_UNIX, SOCK_STREAM, 0) {
-        Ok(fd) => fd,
-        Err(e) => {
-            stem::error!("wayland_hello: socket(AF_UNIX) failed: {:?}", e);
-            loop {
-                sleep_ms(1000);
+    loop {
+        let fd = match socket(AF_UNIX, SOCK_STREAM, 0) {
+            Ok(fd) => fd,
+            Err(e) => {
+                stem::error!("wayland_hello: socket(AF_UNIX) failed: {:?}", e);
+                sleep_ms(250);
+                continue;
             }
-        }
-    };
+        };
 
-    match connect(fd, "/run/wayland-0") {
-        Ok(()) => {
-            info!("wayland_hello: connected to /run/wayland-0");
-            fd
-        }
-        Err(e) => {
-            stem::error!("wayland_hello: failed to connect /run/wayland-0: {:?}", e);
-            loop {
-                sleep_ms(1000);
+        match connect(fd, "/run/wayland-0") {
+            Ok(()) => {
+                info!("wayland_hello: connected to /run/wayland-0");
+                return fd;
+            }
+            Err(_) => {
+                let _ = vfs_close(fd);
+                sleep_ms(50);
             }
         }
     }
@@ -591,10 +586,16 @@ fn send_string_request(fd: u32, object_id: u32, opcode: u16, value: &str) {
 }
 
 fn send_request(fd: u32, buf: &[u8]) {
-    send_request_with_fds(fd, buf, &[]);
+    if let Err(e) = vfs_write(fd, buf) {
+        stem::warn!("wayland_hello: write failed: {:?}", e);
+    }
 }
 
 fn send_request_with_fds(fd: u32, buf: &[u8], fds: &[u32]) {
+    if fds.is_empty() {
+        send_request(fd, buf);
+        return;
+    }
     if let Err(e) = sendmsg(fd, buf, fds) {
         stem::warn!("wayland_hello: sendmsg failed: {:?}", e);
     }

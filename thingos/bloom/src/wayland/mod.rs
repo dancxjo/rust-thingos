@@ -33,7 +33,7 @@ use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::socket::{accept, bind, listen, recvmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_read, vfs_unlink};
+use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_poll, vfs_read, vfs_unlink};
 use stem::wait_set::WaitToken;
 use stem::{info, warn};
 
@@ -41,6 +41,18 @@ use self::client::WaylandClient;
 
 pub const WAYLAND_SOCKET_PATH: &str = "/run/wayland-0";
 const MAX_BACKLOG: usize = 8;
+
+fn stream_readable(fd: u32) -> bool {
+    let mut pollfd = [abi::syscall::PollHandle {
+        handle: fd as i32,
+        events: abi::syscall::poll_flags::POLLIN,
+        revents: 0,
+    }];
+    match vfs_poll(&mut pollfd, 0) {
+        Ok(n) if n > 0 => pollfd[0].revents & abi::syscall::poll_flags::POLLIN != 0,
+        _ => false,
+    }
+}
 
 /// Initialization parameters passed from the main thread to the Wayland
 /// server thread.
@@ -172,7 +184,7 @@ impl WaylandServer {
         let mut evt_buf = [0u8; 128];
 
         loop {
-            let event = match self.svc.next_event(None::<stem::time::Duration>) {
+            let event = match self.svc.next_event(Some(stem::time::Duration::from_millis(10))) {
                 Ok(ev) => ev,
                 Err(e) => {
                     warn!("wayland-server: next_event error: {:?}", e);
@@ -217,9 +229,18 @@ impl WaylandServer {
                     }
                 }
 
-                ServiceEvent::Timeout => {}
+                ServiceEvent::Timeout => {
+                    self.drain_clients();
+                }
                 ServiceEvent::Ready { .. } => {}
             }
+        }
+    }
+
+    fn drain_clients(&mut self) {
+        let tokens: Vec<WaitToken> = self.clients.keys().copied().collect();
+        for token in tokens {
+            self.handle_client_readable(token);
         }
     }
 
@@ -240,6 +261,10 @@ impl WaylandServer {
                 self.next_surface_key += 100;
                 self.clients.insert(tok, client);
                 info!("wayland-server: new client fd={}", client_fd);
+                for _ in 0..20 {
+                    stem::sleep_ms(5);
+                    self.handle_client_readable(tok);
+                }
             }
             Err(e) => {
                 warn!("wayland-server: accept() failed: {:?}", e);
@@ -280,19 +305,15 @@ impl WaylandServer {
             }
         }
 
-        if !read_sendmsg_packet {
-            loop {
-                match vfs_read(client_fd, &mut tmp) {
-                    Ok(0) => {
-                        dead = true;
-                        break;
-                    }
-                    Ok(n) => new_bytes.extend_from_slice(&tmp[..n]),
-                    Err(abi::errors::Errno::EAGAIN) => break,
-                    Err(_) => {
-                        dead = true;
-                        break;
-                    }
+        if !read_sendmsg_packet && stream_readable(client_fd) {
+            match vfs_read(client_fd, &mut tmp) {
+                Ok(0) => {
+                    dead = true;
+                }
+                Ok(n) => new_bytes.extend_from_slice(&tmp[..n]),
+                Err(abi::errors::Errno::EAGAIN) => {}
+                Err(_) => {
+                    dead = true;
                 }
             }
         }

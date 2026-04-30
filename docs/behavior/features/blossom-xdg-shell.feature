@@ -64,6 +64,10 @@ Feature: blossom xdg-shell lifecycle
     Then no protocol error is sent
     And the compositor marks the surface as eligible for mapping
 
+  @wayland-visible
+  Scenario: first valid commit is visible above the compositor background
+    Then the Wayland hello client should be visible
+
   # ── State updates ────────────────────────────────────────────────────────────
 
   Scenario: set_title and set_app_id update toplevel state

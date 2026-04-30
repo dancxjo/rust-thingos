@@ -15,6 +15,7 @@ use crate::scene::CompositionEntry;
 
 const MAX_COMMIT_PLANES: usize = 16;
 const MAX_DAMAGE_RECTS: usize = 32;
+const BACKGROUND_Z_ORDER: i32 = i32::MIN;
 const MAX_COMMIT_PAYLOAD_BYTES: usize = core::mem::size_of::<CommitRequest>()
     + MAX_COMMIT_PLANES * core::mem::size_of::<PlaneCommit>()
     + MAX_DAMAGE_RECTS * core::mem::size_of::<Rect>();
@@ -144,7 +145,7 @@ impl DisplayBackend {
                 buffer_id: abi::display::BufferId(id),
                 dest_rect: Rect { x: 0, y: 0, w, h },
                 src_rect: Rect { x: 0, y: 0, w, h },
-                z_order: 0,
+                z_order: BACKGROUND_Z_ORDER,
                 alpha: 255,
                 _reserved: [0; 7],
             };
