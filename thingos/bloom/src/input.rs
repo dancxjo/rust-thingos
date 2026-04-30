@@ -101,6 +101,7 @@ impl InputState {
             return;
         }
 
+        let had_pending_cursor_motion = self.pending_cursor_motion;
         let old_x = self.visible_x;
         let old_y = self.visible_y;
         self.visible_x = self.pointer_x;
@@ -108,7 +109,7 @@ impl InputState {
         self.pending_cursor_motion = false;
         mark_cursor_damage(damage, old_x, old_y, self.visible_x, self.visible_y);
 
-        if self.pending_cursor_motion
+        if had_pending_cursor_motion
             && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS
         {
             stem::info!(

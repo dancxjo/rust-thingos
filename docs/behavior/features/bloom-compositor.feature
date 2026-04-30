@@ -128,6 +128,7 @@ Feature: Bloom compositor service loop and responsiveness
   Scenario: Alt F7 toggles the pointer debug overlay
     Given the machine is booted
     Then the serial output should contain "bloom: registered bristle pointer sink" within 60s
+    And the serial output should contain "ps2_kbd: bristle pid=" within 60s
     When I press Alt+F7
     Then the serial output should contain "bloom: pointer debug overlay enabled" within 60s
     And the serial output should contain "bloom: pointer debug overlay ready" within 60s

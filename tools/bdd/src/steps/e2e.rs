@@ -933,6 +933,9 @@ async fn ensure_pointer_debug_overlay_enabled(world: &mut ThingOsWorld) -> Resul
     if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
         return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
     }
+    if !world.wait_for_serial("ps2_kbd: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 keyboard driver did not connect to Bristle".to_string()));
+    }
 
     let press_alt = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": true, "key": {"type": "qcode", "data": "alt"}}}]}}"#;
     let press_f7 = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": true, "key": {"type": "qcode", "data": "f7"}}}]}}"#;
