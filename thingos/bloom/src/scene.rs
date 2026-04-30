@@ -59,10 +59,6 @@ pub struct SurfaceChrome {
     pub frame_thickness: u32,
 }
 
-pub(crate) const WINDOW_SHADOW_OFFSET_X: i32 = 4;
-pub(crate) const WINDOW_SHADOW_OFFSET_Y: i32 = 7;
-pub(crate) const WINDOW_SHADOW_RADIUS: i32 = 12;
-
 impl SurfaceChrome {
     pub fn is_empty(self) -> bool {
         self.titlebar_height == 0 && self.frame_thickness == 0
@@ -594,47 +590,8 @@ pub struct SurfaceResize {
     pub changed: bool,
 }
 
-pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
-    if chrome.is_empty() || rect.w == 0 || rect.h == 0 {
-        return rect;
-    }
-
-    let base_x0 = rect.x as i64;
-    let base_y0 = rect.y as i64;
-    let base_x1 = base_x0.saturating_add(rect.w as i64);
-    let base_y1 = base_y0.saturating_add(rect.h as i64);
-    let shadow_x0 = base_x0
-        .saturating_add(WINDOW_SHADOW_OFFSET_X as i64)
-        .saturating_sub(WINDOW_SHADOW_RADIUS as i64);
-    let shadow_y0 = base_y0
-        .saturating_add(WINDOW_SHADOW_OFFSET_Y as i64)
-        .saturating_sub(WINDOW_SHADOW_RADIUS as i64);
-    let shadow_x1 = shadow_x0
-        .saturating_add(rect.w as i64)
-        .saturating_add((WINDOW_SHADOW_RADIUS as i64).saturating_mul(2));
-    let shadow_y1 = shadow_y0
-        .saturating_add(rect.h as i64)
-        .saturating_add((WINDOW_SHADOW_RADIUS as i64).saturating_mul(2));
-
-    rect_from_bounds(
-        base_x0.min(shadow_x0),
-        base_y0.min(shadow_y0),
-        base_x1.max(shadow_x1),
-        base_y1.max(shadow_y1),
-    )
-}
-
-fn rect_from_bounds(x0: i64, y0: i64, x1: i64, y1: i64) -> Rect {
-    let x0 = x0.max(0).min(u32::MAX as i64);
-    let y0 = y0.max(0).min(u32::MAX as i64);
-    let x1 = x1.max(x0).min(u32::MAX as i64);
-    let y1 = y1.max(y0).min(u32::MAX as i64);
-    Rect {
-        x: x0 as u32,
-        y: y0 as u32,
-        w: x1.saturating_sub(x0) as u32,
-        h: y1.saturating_sub(y0) as u32,
-    }
+pub fn surface_visual_rect(rect: Rect, _chrome: SurfaceChrome) -> Rect {
+    rect
 }
 
 fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {

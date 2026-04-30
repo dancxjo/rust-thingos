@@ -147,9 +147,13 @@ Feature: Bloom compositor service loop and responsiveness
 
   @pointer-debug
   Scenario: pointer movement commits bounded damage
+    # Pointer movement drives a burst of small DISPLAY_OP_COMMIT calls through
+    # display_virtio_gpu.  The virtio control queue must not wedge or fault
+    # while processing the transfer/flush sequence for those commits.
     Given the machine is booted
     Then the pointer debug overlay should update after mouse movement
     And the serial output should contain "bloom: committing bounded damage rects=" within 60s
+    And the serial output should not contain "controlq faulted"
 
   @pointer-debug
   Scenario: delayed pointer samples animate the visible cursor toward the latest position

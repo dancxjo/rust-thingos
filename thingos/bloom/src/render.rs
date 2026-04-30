@@ -6,8 +6,7 @@ use pistil_types::Texture;
 
 use crate::display::DisplayBackend;
 use crate::scene::{
-    ChromeButton, CompositionEntry, CursorKind, SurfaceChrome, WINDOW_SHADOW_OFFSET_X,
-    WINDOW_SHADOW_OFFSET_Y, WINDOW_SHADOW_RADIUS, chrome_button_rects,
+    ChromeButton, CompositionEntry, CursorKind, SurfaceChrome, chrome_button_rects,
 };
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
@@ -43,9 +42,6 @@ const CHROME_BUTTON_DARK: u32 = 0xFF7A641A;
 const CHROME_BUTTON_SHADOW: u32 = 0xFF3D3515;
 const CHROME_OUTLINE_DARK: u32 = 0xAA32331F;
 const CHROME_OUTLINE_LIGHT: u32 = 0x66FFE07A;
-const SHADOW_COLOR: u32 = 0x000000;
-const SHADOW_ALPHA_INNER: u32 = 82;
-const SHADOW_ALPHA_OUTER: u32 = 10;
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -667,13 +663,6 @@ fn draw_chrome_overlay(
     dst.fill(0);
     for entry in composition {
         let chrome = entry.chrome;
-        if !chrome.is_empty() {
-            draw_window_shadow(dst, stride, height, entry.dest_rect);
-        }
-    }
-
-    for entry in composition {
-        let chrome = entry.chrome;
         if chrome.is_empty() {
             continue;
         }
@@ -776,39 +765,6 @@ fn title_prefix(title: &str, max_chars: usize) -> &str {
     }
 }
 
-fn draw_window_shadow(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    rect: abi::display_protocol::Rect,
-) {
-    if rect.w == 0 || rect.h == 0 {
-        return;
-    }
-
-    let exclude = IRect::from_rect(rect);
-    let shadow_base = IRect {
-        x: rect.x as i32 + WINDOW_SHADOW_OFFSET_X,
-        y: rect.y as i32 + WINDOW_SHADOW_OFFSET_Y,
-        w: rect.w as i32,
-        h: rect.h as i32,
-    };
-    for layer in (0..=WINDOW_SHADOW_RADIUS).rev() {
-        let alpha = shadow_alpha(layer);
-        if alpha == 0 {
-            continue;
-        }
-        let shadow = shadow_base.expand(layer);
-        fill_rect_excluding(dst, stride, height, shadow, exclude, SHADOW_COLOR | (alpha << 24));
-    }
-}
-
-fn shadow_alpha(layer: i32) -> u32 {
-    let layer = layer.clamp(0, WINDOW_SHADOW_RADIUS) as u32;
-    let range = SHADOW_ALPHA_INNER.saturating_sub(SHADOW_ALPHA_OUTER);
-    SHADOW_ALPHA_INNER.saturating_sub((range * layer) / WINDOW_SHADOW_RADIUS.max(1) as u32)
-}
-
 fn draw_frame_outline(dst: &mut [u32], stride: u32, rect: abi::display_protocol::Rect, frame: u32) {
     let x = rect.x as i32;
     let y = rect.y as i32;
@@ -866,87 +822,6 @@ fn draw_frame_outline(dst: &mut [u32], stride: u32, rect: abi::display_protocol:
         1,
         ih,
         CHROME_OUTLINE_DARK,
-    );
-}
-
-#[derive(Clone, Copy)]
-struct IRect {
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-}
-
-impl IRect {
-    fn from_rect(rect: abi::display_protocol::Rect) -> Self {
-        Self { x: rect.x as i32, y: rect.y as i32, w: rect.w as i32, h: rect.h as i32 }
-    }
-
-    fn expand(self, amount: i32) -> Self {
-        Self {
-            x: self.x.saturating_sub(amount),
-            y: self.y.saturating_sub(amount),
-            w: self.w.saturating_add(amount.saturating_mul(2)),
-            h: self.h.saturating_add(amount.saturating_mul(2)),
-        }
-    }
-
-    fn right(self) -> i32 {
-        self.x.saturating_add(self.w)
-    }
-
-    fn bottom(self) -> i32 {
-        self.y.saturating_add(self.h)
-    }
-}
-
-fn fill_rect_excluding(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    rect: IRect,
-    exclude: IRect,
-    color: u32,
-) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-
-    let rx0 = rect.x;
-    let ry0 = rect.y;
-    let rx1 = rect.right();
-    let ry1 = rect.bottom();
-    let ex0 = exclude.x.max(rx0).min(rx1);
-    let ey0 = exclude.y.max(ry0).min(ry1);
-    let ex1 = exclude.right().max(rx0).min(rx1);
-    let ey1 = exclude.bottom().max(ry0).min(ry1);
-
-    if ex0 >= ex1 || ey0 >= ey1 {
-        fill_rect_i32(dst, stride, height, rx0, ry0, rect.w, rect.h, color);
-        return;
-    }
-
-    fill_rect_i32(dst, stride, height, rx0, ry0, rect.w, ey0.saturating_sub(ry0), color);
-    fill_rect_i32(dst, stride, height, rx0, ey1, rect.w, ry1.saturating_sub(ey1), color);
-    fill_rect_i32(
-        dst,
-        stride,
-        height,
-        rx0,
-        ey0,
-        ex0.saturating_sub(rx0),
-        ey1.saturating_sub(ey0),
-        color,
-    );
-    fill_rect_i32(
-        dst,
-        stride,
-        height,
-        ex1,
-        ey0,
-        rx1.saturating_sub(ex1),
-        ey1.saturating_sub(ey0),
-        color,
     );
 }
 

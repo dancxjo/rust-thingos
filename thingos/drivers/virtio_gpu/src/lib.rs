@@ -28,6 +28,10 @@ pub struct Rect {
     pub h: u32,
 }
 
+const DMA_PAGE_SIZE: usize = 4096;
+const COMMAND_TIMEOUT_NS: u64 = 500_000_000;
+const COMMAND_SLEEP_NS: u64 = 50_000;
+
 /// Virtio GPU driver state
 pub struct VirtioGpu {
     claim_handle: usize,
@@ -39,6 +43,8 @@ pub struct VirtioGpu {
 
     // Virtqueues
     controlq: Option<Virtqueue>,
+    controlq_notify_off: u16,
+    controlq_faulted: bool,
 
     // Display info
     display_width: u32,
@@ -115,6 +121,8 @@ impl VirtioGpu {
             notify_cfg,
             notify_off_multiplier: notify_multiplier,
             controlq: None,
+            controlq_notify_off: 0,
+            controlq_faulted: false,
             display_width: 1024,
             display_height: 768,
             framebuffer: 0,
@@ -133,14 +141,17 @@ impl VirtioGpu {
     /// Initialize the virtio device
     pub fn init_virtio(&mut self) -> Result<(), &'static str> {
         // 1. Reset device
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, 0);
+        self.write_common_u8(virtio::VIRTIO_COMMON_STATUS, 0);
 
         // 2. Set ACKNOWLEDGE status
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, virtio::VIRTIO_STATUS_ACKNOWLEDGE);
+        self.write_common_u8(virtio::VIRTIO_COMMON_STATUS, virtio::VIRTIO_STATUS_ACKNOWLEDGE as u8);
 
         // 3. Set DRIVER status
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_DRIVER);
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        self.write_common_u8(
+            virtio::VIRTIO_COMMON_STATUS,
+            status | virtio::VIRTIO_STATUS_DRIVER as u8,
+        );
 
         // 4. Read device features (feature bank 0 for GPU-specific features)
         self.write_common(virtio::VIRTIO_COMMON_DEVICE_FEATURE_SELECT, 0);
@@ -161,12 +172,15 @@ impl VirtioGpu {
         self.write_common(virtio::VIRTIO_COMMON_DRIVER_FEATURE, driver_features);
 
         // 6. Set FEATURES_OK
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_FEATURES_OK);
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        self.write_common_u8(
+            virtio::VIRTIO_COMMON_STATUS,
+            status | virtio::VIRTIO_STATUS_FEATURES_OK as u8,
+        );
 
         // 7. Verify FEATURES_OK
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        if (status & virtio::VIRTIO_STATUS_FEATURES_OK) == 0 {
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        if (status & virtio::VIRTIO_STATUS_FEATURES_OK as u8) == 0 {
             return Err("Features not accepted");
         }
 
@@ -174,8 +188,11 @@ impl VirtioGpu {
         self.setup_controlq()?;
 
         // 9. Set DRIVER_OK
-        let status = self.read_common(virtio::VIRTIO_COMMON_STATUS);
-        self.write_common(virtio::VIRTIO_COMMON_STATUS, status | virtio::VIRTIO_STATUS_DRIVER_OK);
+        let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
+        self.write_common_u8(
+            virtio::VIRTIO_COMMON_STATUS,
+            status | virtio::VIRTIO_STATUS_DRIVER_OK as u8,
+        );
 
         Ok(())
     }
@@ -522,9 +539,18 @@ impl VirtioGpu {
 
         let header_size = core::mem::size_of::<VirtioGpuCmdSubmit3d>();
         let total_size = header_size + commands.len();
+        let resp_offset = ((total_size + 15) / 16) * 16;
+        let resp_size = core::mem::size_of::<VirtioGpuCtrlHdr>();
+        if resp_offset.saturating_add(resp_size) > DMA_PAGE_SIZE {
+            return Err("Submit 3D command too large");
+        }
+        if self.controlq_faulted {
+            return Err("Control queue faulted");
+        }
 
         // Copy header and command data to DMA buffer
         let cmd_ptr = self.cmd_buf as *mut u8;
+        let resp_ptr = (self.cmd_buf + resp_offset as u64) as *mut u8;
         unsafe {
             // Write header
             let header_bytes =
@@ -536,12 +562,12 @@ impl VirtioGpu {
             for (i, byte) in commands.iter().enumerate() {
                 core::ptr::write_volatile(cmd_ptr.add(header_size + i), *byte);
             }
+            for i in 0..resp_size {
+                core::ptr::write_volatile(resp_ptr.add(i), 0);
+            }
         }
 
-        // Response offset
-        let resp_offset = ((total_size + 15) / 16) * 16;
         let resp_phys = self.cmd_buf_phys + resp_offset as u64;
-        let resp_size = core::mem::size_of::<VirtioGpuCtrlHdr>();
 
         // Send via virtqueue
         {
@@ -554,41 +580,7 @@ impl VirtioGpu {
         }
 
         self.notify_queue(0);
-
-        // Wait for response
-        for i in 0..10_000_000 {
-            let completed = {
-                let vq = self.controlq.as_mut().ok_or("No controlq")?;
-                vq.poll_used().is_some()
-            };
-
-            if completed {
-                let resp_ptr = (self.cmd_buf + resp_offset as u64) as *const u8;
-                let resp_type = unsafe {
-                    let type_bytes: [u8; 4] =
-                        [*resp_ptr, *resp_ptr.add(1), *resp_ptr.add(2), *resp_ptr.add(3)];
-                    u32::from_le_bytes(type_bytes)
-                };
-
-                if is_ok_response(resp_type) {
-                    return Ok(());
-                } else {
-                    stem::error!(
-                        "VirtioGpu: Submit 3D command failed with resp_type={}",
-                        resp_type
-                    );
-                    return Err("Submit 3D command failed");
-                }
-            }
-            if i % 100 == 0 {
-                stem::yield_now();
-            } else {
-                core::hint::spin_loop();
-            }
-        }
-
-        stem::error!("VirtioGpu: Submit 3D command timeout!");
-        Err("Submit 3D command timeout")
+        self.wait_for_response(resp_offset, VIRTIO_GPU_CMD_SUBMIT_3D, "Submit 3D command")
     }
 
     /// Create a 3D resource (texture, render target, etc.)
@@ -726,8 +718,9 @@ impl VirtioGpu {
         let vq = Virtqueue::new(vq_virt, vq_phys, 128);
 
         // Configure the queue in device
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_SELECT, 0);
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_SIZE, 128);
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_SELECT, 0);
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_SIZE, 128);
+        self.controlq_notify_off = self.read_common_u16(virtio::VIRTIO_COMMON_QUEUE_NOTIFY_OFF);
 
         // Write queue addresses
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_LO, (vq_phys & 0xFFFFFFFF) as u32);
@@ -745,7 +738,7 @@ impl VirtioGpu {
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_HI, (used_phys >> 32) as u32);
 
         // Enable the queue
-        self.write_common(virtio::VIRTIO_COMMON_QUEUE_ENABLE, 1);
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_ENABLE, 1);
 
         self.controlq = Some(vq);
         Ok(())
@@ -759,27 +752,55 @@ impl VirtioGpu {
         unsafe { write_volatile((self.common_cfg + offset as u64) as *mut u32, value) }
     }
 
+    fn read_common_u8(&self, offset: u32) -> u8 {
+        unsafe { read_volatile((self.common_cfg + offset as u64) as *const u8) }
+    }
+
+    fn write_common_u8(&self, offset: u32, value: u8) {
+        unsafe { write_volatile((self.common_cfg + offset as u64) as *mut u8, value) }
+    }
+
+    fn read_common_u16(&self, offset: u32) -> u16 {
+        unsafe { read_volatile((self.common_cfg + offset as u64) as *const u16) }
+    }
+
+    fn write_common_u16(&self, offset: u32, value: u16) {
+        unsafe { write_volatile((self.common_cfg + offset as u64) as *mut u16, value) }
+    }
+
     fn notify_queue(&self, queue_idx: u16) {
         // Write queue index to notify register
-        let notify_addr = self.notify_cfg + (queue_idx as u64 * self.notify_off_multiplier as u64);
+        let notify_off = if queue_idx == 0 { self.controlq_notify_off } else { queue_idx };
+        let notify_addr = self.notify_cfg + (notify_off as u64 * self.notify_off_multiplier as u64);
         unsafe { write_volatile(notify_addr as *mut u16, queue_idx) }
     }
 
     /// Send a command and wait for response
     fn send_cmd(&mut self, cmd: &[u8], resp_size: usize) -> Result<(), &'static str> {
+        if self.controlq_faulted {
+            return Err("Control queue faulted");
+        }
         let cmd_type = unsafe { *(cmd.as_ptr() as *const u32) };
         // stem::info!("VirtioGpu: sending cmd type=0x{:x}", cmd_type);
 
+        let resp_offset = ((cmd.len() + 15) / 16) * 16; // Align to 16 bytes
+        if resp_offset.saturating_add(resp_size) > DMA_PAGE_SIZE {
+            return Err("Command too large");
+        }
+
         // Copy command to DMA buffer
         let cmd_ptr = self.cmd_buf as *mut u8;
+        let resp_ptr = (self.cmd_buf + resp_offset as u64) as *mut u8;
         unsafe {
             for (i, byte) in cmd.iter().enumerate() {
                 write_volatile(cmd_ptr.add(i), *byte);
             }
+            for i in 0..resp_size {
+                write_volatile(resp_ptr.add(i), 0);
+            }
         }
 
         // Response goes after command
-        let resp_offset = ((cmd.len() + 15) / 16) * 16; // Align to 16 bytes
         let resp_phys = self.cmd_buf_phys + resp_offset as u64;
 
         // Get mutable ref to controlq, add buffer, then release borrow
@@ -795,9 +816,20 @@ impl VirtioGpu {
 
         // Notify device (no borrow conflict now)
         self.notify_queue(0);
+        self.wait_for_response(resp_offset, cmd_type, "Command")
+    }
 
-        // Wait for response (poll used ring)
-        for i in 0..10_000_000 {
+    fn wait_for_response(
+        &mut self,
+        resp_offset: usize,
+        cmd_type: u32,
+        label: &'static str,
+    ) -> Result<(), &'static str> {
+        let start = stem::time::monotonic_ns();
+        let deadline = start.saturating_add(COMMAND_TIMEOUT_NS);
+        let mut polls = 0u32;
+
+        loop {
             let completed = {
                 let vq = self.controlq.as_mut().ok_or("No controlq")?;
                 vq.poll_used().is_some()
@@ -807,8 +839,12 @@ impl VirtioGpu {
                 // Read response type safely from packed struct
                 let resp_ptr = (self.cmd_buf + resp_offset as u64) as *const u8;
                 let resp_type = unsafe {
-                    let type_bytes: [u8; 4] =
-                        [*resp_ptr, *resp_ptr.add(1), *resp_ptr.add(2), *resp_ptr.add(3)];
+                    let type_bytes: [u8; 4] = [
+                        read_volatile(resp_ptr),
+                        read_volatile(resp_ptr.add(1)),
+                        read_volatile(resp_ptr.add(2)),
+                        read_volatile(resp_ptr.add(3)),
+                    ];
                     u32::from_le_bytes(type_bytes)
                 };
 
@@ -816,22 +852,36 @@ impl VirtioGpu {
                     return Ok(());
                 } else {
                     stem::error!(
-                        "VirtioGpu: Command 0x{:x} failed with resp_type=0x{:x}",
+                        "VirtioGpu: {} 0x{:x} failed with resp_type=0x{:x}",
+                        label,
                         cmd_type,
                         resp_type
                     );
                     return Err("Command failed");
                 }
             }
-            if i % 1000 == 0 {
+
+            if stem::time::monotonic_ns() >= deadline {
+                self.controlq_faulted = true;
+                stem::error!(
+                    "VirtioGpu: {} 0x{:x} timeout after {}ns; status=0x{:02x}; controlq faulted",
+                    label,
+                    cmd_type,
+                    COMMAND_TIMEOUT_NS,
+                    self.read_common_u8(virtio::VIRTIO_COMMON_STATUS)
+                );
+                return Err("Command timeout");
+            }
+
+            polls = polls.wrapping_add(1);
+            if polls % 1024 == 0 {
+                stem::time::sleep_ns(COMMAND_SLEEP_NS);
+            } else if polls % 64 == 0 {
                 stem::yield_now();
             } else {
                 core::hint::spin_loop();
             }
         }
-
-        stem::error!("VirtioGpu: Command 0x{:x} timeout!", cmd_type);
-        Err("Command timeout")
     }
 
     /// Get claim handle for device operations
