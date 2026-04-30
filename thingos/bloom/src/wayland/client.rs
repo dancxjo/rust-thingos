@@ -54,6 +54,14 @@ pub enum ObjectEntry {
     Keyboard,
     /// wl_output global — represents a physical or virtual display.
     Output,
+    /// wl_data_device_manager global.
+    DataDeviceManager,
+    /// wl_data_source — client-created clipboard/DnD data source.
+    DataSource { mime_types: Vec<String> },
+    /// wl_data_device — per-seat data device for clipboard and DnD.
+    DataDevice { seat_obj: u32 },
+    /// wl_data_offer — server-created offer advertising data types to a receiver.
+    DataOffer,
     /// Object has been destroyed (tombstone).
     Destroyed,
 }
@@ -80,6 +88,16 @@ pub struct WaylandClient {
     pub frame_cbs: BTreeMap<u32, Vec<u32>>,
     /// Last modifier mask sent to this client's wl_keyboard.
     pub keyboard_modifiers: u8,
+    /// The wl_data_device object ID bound by this client, if any.
+    pub data_device_obj: Option<u32>,
+    /// Set by `wl_data_device.set_selection` during message processing.
+    /// Contains `(source_obj, mime_types)` to be broadcast to other clients.
+    /// Cleared by the server after broadcasting.
+    pub pending_clipboard_set: Option<(u32, Vec<String>)>,
+    /// Set by `wl_data_offer.receive` during message processing.
+    /// Contains `(mime_type, write_fd)` to be forwarded to the clipboard owner.
+    /// Cleared by the server after forwarding.
+    pub pending_offer_receive: Option<(String, u32)>,
 }
 
 impl WaylandClient {
@@ -96,6 +114,9 @@ impl WaylandClient {
             buf_key_to_obj: BTreeMap::new(),
             frame_cbs: BTreeMap::new(),
             keyboard_modifiers: 0,
+            data_device_obj: None,
+            pending_clipboard_set: None,
+            pending_offer_receive: None,
         }
     }
 

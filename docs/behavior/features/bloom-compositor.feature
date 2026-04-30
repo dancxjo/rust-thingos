@@ -190,3 +190,19 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+
+  Scenario: wl_data_device_manager is advertised in wl_registry
+    # Verifies that bloom advertises wl_data_device_manager so Wayland clients
+    # can use clipboard (copy/paste) functionality.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wl_data_device_manager" within 60s
+
+  Scenario: clipboard selection is broadcast to other clients
+    # Verifies that wl_data_device.set_selection causes bloom to log the
+    # clipboard ownership change and relay the offer to other clients.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    When I wait for the shell prompt
+    And I type "wayland_clipboard_test" on the serial console
+    Then the serial output should contain "wayland-server: clipboard selection set" within 60s

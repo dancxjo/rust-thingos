@@ -26,6 +26,7 @@ pub mod wire;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use blossom::Blossom;
@@ -104,6 +105,14 @@ struct WaylandServer {
     next_serial: u32,
     /// Primary display output info forwarded from the main thread.
     output: crate::display::OutputInfo,
+    /// Token of the client that currently owns the clipboard selection.
+    clipboard_owner: Option<WaitToken>,
+    /// wl_data_source object ID in the clipboard owner client.
+    clipboard_source_obj: u32,
+    /// MIME types advertised by the current clipboard selection.
+    clipboard_mime_types: Vec<String>,
+    /// Counter for server-assigned Wayland object IDs (range [0xFF000001, 0xFFFFFFFF]).
+    next_server_id: u32,
 }
 
 impl WaylandServer {
@@ -187,6 +196,10 @@ impl WaylandServer {
             evt_rx_buf: Vec::new(),
             next_serial: 1,
             output: args.output,
+            clipboard_owner: None,
+            clipboard_source_obj: 0,
+            clipboard_mime_types: Vec::new(),
+            next_server_id: 0xFF00_0001,
         };
 
         server.event_loop()
@@ -418,8 +431,22 @@ impl WaylandServer {
         // Remove consumed bytes.
         client.recv_buf.drain(..consumed);
 
+        // Extract clipboard side-effects before reinserting the client.
+        let pending_clip = client.pending_clipboard_set.take();
+        let pending_recv = client.pending_offer_receive.take();
+
         // Reinsert client.
         self.clients.insert(token, client);
+
+        // Process clipboard set_selection broadcast.
+        if let Some((source_obj, mime_types)) = pending_clip {
+            self.handle_clipboard_set(token, source_obj, mime_types);
+        }
+
+        // Process data_offer.receive fd routing.
+        if let Some((mime_type, write_fd)) = pending_recv {
+            self.handle_offer_receive(write_fd, mime_type);
+        }
     }
 
     // ── Main thread events ───────────────────────────────────────────────
@@ -790,6 +817,169 @@ impl WaylandServer {
             let _ = vfs_close(client.fd);
             self.svc.remove(token);
         }
+        // If the clipboard owner disconnected, clear the selection for all others.
+        if self.clipboard_owner == Some(token) {
+            self.clipboard_owner = None;
+            let prev_source = self.clipboard_source_obj;
+            self.clipboard_source_obj = 0;
+            self.clipboard_mime_types = Vec::new();
+            debug!("wayland-server: clipboard owner disconnected, clearing selection");
+            // Notify remaining clients that the selection is cleared.
+            if prev_source != 0 {
+                self.broadcast_selection_null();
+            }
+        }
+    }
+
+    // ── Clipboard helpers ────────────────────────────────────────────────
+
+    /// Allocate the next server-assigned Wayland object ID.
+    ///
+    /// Server-assigned IDs must be in the range [0xFF000001, 0xFFFFFFFF].
+    fn alloc_server_id(&mut self) -> u32 {
+        let id = self.next_server_id;
+        // Wrap within the server-assigned range before reaching 0xFFFFFFFF.
+        self.next_server_id = if id >= 0xFFFF_FFFE { 0xFF00_0001 } else { id + 1 };
+        id
+    }
+
+    /// Handle `wl_data_device.set_selection`:
+    /// update clipboard state and broadcast the new selection to all other
+    /// clients that have a bound `wl_data_device`.
+    fn handle_clipboard_set(
+        &mut self,
+        owner_token: WaitToken,
+        source_obj: u32,
+        mime_types: Vec<String>,
+    ) {
+        // Cancel the previous selection source (send wl_data_source.cancelled).
+        if let Some(prev_tok) = self.clipboard_owner {
+            let prev_source = self.clipboard_source_obj;
+            if prev_source != 0 {
+                if let Some(prev_client) = self.clients.get(&prev_tok) {
+                    // wl_data_source.cancelled — opcode 2, no payload
+                    prev_client.send(prev_source, 2, &[]);
+                }
+            }
+        }
+
+        if source_obj == 0 {
+            // Client is clearing the selection.
+            self.clipboard_owner = None;
+            self.clipboard_source_obj = 0;
+            self.clipboard_mime_types = Vec::new();
+            info!("wayland-server: clipboard selection cleared");
+            self.broadcast_selection_null();
+            return;
+        }
+
+        self.clipboard_owner = Some(owner_token);
+        self.clipboard_source_obj = source_obj;
+        self.clipboard_mime_types = mime_types.clone();
+        info!(
+            "wayland-server: clipboard selection set source={} mimes={}",
+            source_obj,
+            mime_types.len()
+        );
+
+        // Broadcast the new selection to all OTHER clients that have a data device.
+        let tokens: Vec<WaitToken> = self.clients.keys().copied().collect();
+        for tok in tokens {
+            if tok == owner_token {
+                continue;
+            }
+            self.send_selection_offer(tok, &mime_types);
+        }
+    }
+
+    /// Send `wl_data_device.selection(null)` to all clients with a data device.
+    fn broadcast_selection_null(&mut self) {
+        let tokens: Vec<WaitToken> = self.clients.keys().copied().collect();
+        for tok in tokens {
+            if let Some(client) = self.clients.get(&tok) {
+                if let Some(dd_obj) = client.data_device_obj {
+                    // wl_data_device.selection(id: null) — opcode 5
+                    client.send(dd_obj, 5, &0u32.to_ne_bytes());
+                }
+            }
+        }
+    }
+
+    /// Create a new `wl_data_offer` for `receiver_token` and deliver the
+    /// current clipboard MIME types, then send `wl_data_device.selection`.
+    fn send_selection_offer(&mut self, receiver_token: WaitToken, mime_types: &[String]) {
+        use crate::wayland::wire::encode_string;
+
+        let client = match self.clients.get(&receiver_token) {
+            Some(c) => c,
+            None => return,
+        };
+        let dd_obj = match client.data_device_obj {
+            Some(d) => d,
+            None => return,
+        };
+
+        let offer_id = self.alloc_server_id();
+
+        // Register the data_offer object on this client.
+        if let Some(client) = self.clients.get_mut(&receiver_token) {
+            client.insert(offer_id, crate::wayland::client::ObjectEntry::DataOffer);
+
+            // wl_data_device.data_offer(id) — opcode 0: announce new offer
+            client.send(dd_obj, 0, &offer_id.to_ne_bytes());
+
+            // wl_data_offer.offer(mime_type) — opcode 0: for each MIME type
+            for mime in mime_types {
+                client.send(offer_id, 0, &encode_string(mime));
+            }
+
+            // wl_data_device.selection(offer_id) — opcode 5
+            client.send(dd_obj, 5, &offer_id.to_ne_bytes());
+
+            debug!(
+                "wayland-server: sent clipboard offer={} to client fd={}",
+                offer_id, client.fd
+            );
+        }
+    }
+
+    /// Handle `wl_data_offer.receive`:
+    /// forward the write end of the pipe to the clipboard source client so
+    /// it can write the requested data.
+    fn handle_offer_receive(&mut self, write_fd: u32, mime_type: String) {
+        use crate::wayland::wire::encode_string;
+
+        let (source_client_fd, source_obj) = {
+            let owner_tok = match self.clipboard_owner {
+                Some(t) => t,
+                None => {
+                    warn!("wayland-server: data_offer.receive: no clipboard owner");
+                    return;
+                }
+            };
+            let owner = match self.clients.get(&owner_tok) {
+                Some(c) => c,
+                None => {
+                    warn!("wayland-server: data_offer.receive: owner client gone");
+                    return;
+                }
+            };
+            (owner.fd, self.clipboard_source_obj)
+        };
+
+        // Find the source client by fd and send wl_data_source.send(mime_type, fd).
+        for client in self.clients.values() {
+            if client.fd == source_client_fd {
+                // wl_data_source.send(mime_type: string, fd: fd) — opcode 1
+                client.send_with_fds(source_obj, 1, &encode_string(&mime_type), &[write_fd]);
+                debug!(
+                    "wayland-server: routed data_offer.receive fd={} mime=\"{}\" to source fd={}",
+                    write_fd, mime_type, source_client_fd
+                );
+                return;
+            }
+        }
+        warn!("wayland-server: data_offer.receive: source client fd={} not found", source_client_fd);
     }
 }
 
