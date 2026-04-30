@@ -4,7 +4,7 @@ use core::default::Default;
 extern crate alloc;
 use alloc::collections::BTreeMap;
 
-use abi::display::{BufferId, CommitFlags, CommitRequest, DisplayInfo, PlaneCommit, PlaneId};
+use abi::display::{BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DisplayInfo, PlaneCommit, PlaneId};
 use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
 use abi::display_protocol::Rect;
 use abi::errors::{Errno, SysResult};
@@ -53,7 +53,7 @@ impl BootFbDriver {
             preferred_mode: abi::display::DisplayMode {
                 width: self.fb.width,
                 height: self.fb.height,
-                refresh_mhz: 60000,
+                refresh_mhz: DEFAULT_REFRESH_MHZ,
             },
             plane_count: 1,
             max_buffers: 32,
@@ -139,7 +139,7 @@ impl BootFbDriver {
 
     /// Returns the display refresh rate in milli-Hertz (e.g. 60000 = 60 Hz).
     fn fb_refresh_mhz(&self) -> u32 {
-        60_000
+        DEFAULT_REFRESH_MHZ
     }
 
     fn blit_plane_clipped(&mut self, commit: &PlaneCommit, clip: Rect) -> SysResult<()> {
@@ -235,13 +235,11 @@ fn rect_intersect(a: Rect, b: Rect) -> Option<Rect> {
 /// approximately one frame interval relative to the previous present, matching
 /// the semantics of a real hardware vblank wait.
 ///
-/// `refresh_mhz` is in milli-Hertz (e.g. 60 000 = 60 Hz).
+/// `refresh_mhz` is in milli-Hertz (e.g. 60 000 = 60 Hz). A value of zero
+/// falls back to `DEFAULT_REFRESH_MHZ`.
 fn vsync_wait(last_present_ns: &mut u64, refresh_mhz: u32) {
-    let frame_ns = if refresh_mhz > 0 {
-        1_000_000_000_000u64 / refresh_mhz as u64
-    } else {
-        16_666_667 // default 60 Hz
-    };
+    let effective_mhz = if refresh_mhz > 0 { refresh_mhz } else { DEFAULT_REFRESH_MHZ };
+    let frame_ns = 1_000_000_000_000u64 / effective_mhz as u64;
     let now = stem::time::monotonic_ns();
     let next = last_present_ns.saturating_add(frame_ns);
     if now < next {

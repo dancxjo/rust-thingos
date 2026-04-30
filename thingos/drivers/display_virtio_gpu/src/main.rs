@@ -4,9 +4,9 @@ use alloc::string::ToString;
 extern crate alloc;
 
 use abi::display::{
-    BufferHandle, BufferId, CommitFlags, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
-    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps, DisplayInfo, DisplayMode,
-    PlaneCommit,
+    BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_COMMIT,
+    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps,
+    DisplayInfo, DisplayMode, PlaneCommit,
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -300,13 +300,11 @@ fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
 /// approximately one frame interval relative to the previous present, matching
 /// the semantics of a real hardware vblank wait.
 ///
-/// `refresh_mhz` is in milli-Hertz (e.g. 60 000 = 60 Hz).
+/// `refresh_mhz` is in milli-Hertz (e.g. 60 000 = 60 Hz). A value of zero
+/// falls back to `DEFAULT_REFRESH_MHZ`.
 fn vsync_wait(last_present_ns: &mut u64, refresh_mhz: u32) {
-    let frame_ns = if refresh_mhz > 0 {
-        1_000_000_000_000u64 / refresh_mhz as u64
-    } else {
-        16_666_667 // default 60 Hz
-    };
+    let effective_mhz = if refresh_mhz > 0 { refresh_mhz } else { DEFAULT_REFRESH_MHZ };
+    let frame_ns = 1_000_000_000_000u64 / effective_mhz as u64;
     let now = stem::time::monotonic_ns();
     let next = last_present_ns.saturating_add(frame_ns);
     if now < next {
@@ -378,7 +376,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 preferred_mode: DisplayMode {
                     width: driver.disp_width,
                     height: driver.disp_height,
-                    refresh_mhz: 60000,
+                    refresh_mhz: DEFAULT_REFRESH_MHZ,
                 },
                 plane_count: 1,
                 max_buffers: 32,
@@ -755,7 +753,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     // Software vsync: pace frame delivery to the display refresh
                     // interval when the caller requests synchronisation.
                     if req.flags.contains(CommitFlags::VSYNC) {
-                        vsync_wait(&mut driver.last_present_ns, 60_000);
+                        vsync_wait(&mut driver.last_present_ns, DEFAULT_REFRESH_MHZ);
                     }
                 }
             }

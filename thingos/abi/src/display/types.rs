@@ -24,6 +24,12 @@ pub struct DisplayMode {
     pub refresh_mhz: u32, // Refresh rate in milli-Hertz (e.g. 60000 = 60Hz)
 }
 
+/// Default display refresh rate in milli-Hertz (60 Hz).
+///
+/// Used as a fallback when the hardware does not report a refresh rate and in
+/// software vsync implementations to derive the target frame interval.
+pub const DEFAULT_REFRESH_MHZ: u32 = 60_000;
+
 /// Explicit FD-backed pixel buffer description for importation.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

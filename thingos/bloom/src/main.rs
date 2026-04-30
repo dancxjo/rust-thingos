@@ -72,6 +72,11 @@ fn main(_arg: usize) -> ! {
     }
     let primary = outputs[0];
     info!("bloom: output0 {}x{} @ {}mHz", primary.width, primary.height, primary.refresh_mhz);
+    if display.supports_vblank() {
+        info!("bloom: display driver supports VBLANK (vsync)");
+    } else {
+        info!("bloom: display driver does not support VBLANK");
+    }
 
     // ── Create and publish the service port ───────────────────────────────────
     info!("bloom: creating service port...");

@@ -79,6 +79,12 @@ impl DisplayBackend {
         Some(())
     }
 
+    /// Returns `true` when the connected display driver supports blocking vsync
+    /// (`DisplayCaps::VBLANK`).
+    pub fn supports_vblank(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::VBLANK)
+    }
+
     pub fn enumerate_outputs(&self) -> Vec<OutputInfo> {
         alloc::vec![OutputInfo {
             output_id: 0,

@@ -150,3 +150,4 @@ Feature: Bloom compositor service loop and responsiveness
     # bloom and other clients know that CommitFlags::VSYNC is honoured.
     Given the machine is booted
     Then the serial output should contain "bloom: output0" within 60s
+    And the serial output should contain "bloom: display driver supports VBLANK (vsync)" within 60s
