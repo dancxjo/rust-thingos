@@ -981,7 +981,7 @@ fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEd
     }
 }
 
-pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(ChromeButton, Rect); 4]> {
+pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(ChromeButton, Rect); 3]> {
     if chrome.titlebar_height == 0 || rect.w == 0 || rect.h == 0 {
         return None;
     }
@@ -1000,20 +1000,18 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let right = rect.x.saturating_add(rect.w).saturating_sub(right_inset);
     let y = rect.y.saturating_add((titlebar_height.saturating_sub(button_height)) / 2);
-    let total_w = button_width.saturating_mul(4).saturating_add(spacing.saturating_mul(3));
+    let total_w = button_width.saturating_mul(3).saturating_add(spacing.saturating_mul(2));
     if total_w.saturating_add(right_inset) > rect.w {
         return None;
     }
 
     let close_x = right.saturating_sub(button_width);
-    let full_x = close_x.saturating_sub(spacing).saturating_sub(button_width);
-    let max_x = full_x.saturating_sub(spacing).saturating_sub(button_width);
-    let shade_x = max_x.saturating_sub(spacing).saturating_sub(button_width);
+    let max_x = close_x.saturating_sub(spacing).saturating_sub(button_width);
+    let min_x = max_x.saturating_sub(spacing).saturating_sub(button_width);
 
     Some([
-        (ChromeButton::Minimize, Rect { x: shade_x, y, w: button_width, h: button_height }),
-        (ChromeButton::Maximize, Rect { x: max_x, y, w: button_width, h: button_height }),
-        (ChromeButton::Fullscreen, Rect { x: full_x, y, w: button_width, h: button_height }),
+        (ChromeButton::Shade, Rect { x: min_x, y, w: button_width, h: button_height }),
+        (ChromeButton::Fullscreen, Rect { x: max_x, y, w: button_width, h: button_height }),
         (ChromeButton::Close, Rect { x: close_x, y, w: button_width, h: button_height }),
     ])
 }
