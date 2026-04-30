@@ -92,7 +92,13 @@ impl BloomService for InputService {
                     }
                 }
 
-                if handled { LoopAction::RequestImmediateRepaint } else { LoopAction::None }
+                if handled {
+                    LoopAction::RequestImmediateRepaint
+                } else if world.input.has_pending_cursor_motion() {
+                    LoopAction::RequestRepaint
+                } else {
+                    LoopAction::None
+                }
             }
             _ => LoopAction::None,
         }

@@ -141,7 +141,7 @@ Feature: Bloom compositor service loop and responsiveness
     Then the pointer debug overlay should include the cursor svg
 
   @pointer-debug
-  Scenario: pointer debug overlay updates after mouse movement
+  Scenario: pointer motion schedules a paced cursor repaint
     Given the machine is booted
     Then the pointer debug overlay should update after mouse movement
 
