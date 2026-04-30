@@ -35,7 +35,7 @@ use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
 use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_poll, vfs_read, vfs_unlink};
 use stem::wait_set::WaitToken;
-use stem::{info, warn};
+use stem::{debug, info, warn};
 
 use self::client::WaylandClient;
 
@@ -260,7 +260,7 @@ impl WaylandServer {
                 let client = WaylandClient::new(client_fd, self.next_surface_key);
                 self.next_surface_key += 100;
                 self.clients.insert(tok, client);
-                info!("wayland-server: new client fd={}", client_fd);
+                debug!("wayland-server: new client fd={}", client_fd);
                 for _ in 0..20 {
                     stem::sleep_ms(5);
                     self.handle_client_readable(tok);
@@ -392,7 +392,7 @@ impl WaylandServer {
                     // list is intentionally dropped.
                     let fired = client.fire_frame_cbs(bloom_surface_id, timestamp_ms);
                     if !fired.is_empty() {
-                        stem::debug!(
+                        stem::trace!(
                             "wayland-server: frame callback done surface={} ts={}ms callbacks={}",
                             bloom_surface_id,
                             timestamp_ms,
@@ -409,7 +409,7 @@ impl WaylandServer {
 
     fn remove_client(&mut self, token: WaitToken) {
         if let Some(client) = self.clients.remove(&token) {
-            info!("wayland-server: client disconnected fd={}", client.fd);
+            debug!("wayland-server: client disconnected fd={}", client.fd);
             let _ = vfs_close(client.fd);
             self.svc.remove(token);
         }

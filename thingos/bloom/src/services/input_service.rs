@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 
 use abi::KindId;
 use abi::hid::{
-    BRISTLE_SINK_TAG_BLOOM, BristleEventHeader, KIND_BRISTLE_REGISTER_SINK, encode_register_sink,
+    BRISTLE_EVENT_CLASS_ALL, BRISTLE_SINK_TAG_BLOOM, BristleEventHeader,
+    KIND_BRISTLE_REGISTER_SINK, encode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::O_RDONLY;
 use stem::syscall::message::msg_send;
@@ -103,7 +104,11 @@ impl InputService {
         let Some(pid) = read_bristle_pid() else {
             return false;
         };
-        let payload = encode_register_sink(BRISTLE_SINK_TAG_BLOOM, self.sink_write);
+        let payload = encode_register_sink_with_mask(
+            BRISTLE_SINK_TAG_BLOOM,
+            self.sink_write,
+            BRISTLE_EVENT_CLASS_ALL,
+        );
         msg_send(pid, KindId(KIND_BRISTLE_REGISTER_SINK), &payload).is_ok()
     }
 

@@ -14,6 +14,7 @@
 //! | `WCMD_IMPORT_ATTACH` | Import a shm buffer and attach it to surface  |
 //! | `WCMD_DAMAGE`        | Mark a damage region on a surface             |
 //! | `WCMD_COMMIT`        | Commit pending surface state                  |
+//! | `WCMD_SET_CHROME`    | Mark compositor-known shell chrome geometry   |
 //!
 //! # Main → Wayland (events)
 //!
@@ -29,6 +30,7 @@ pub const WCMD_DESTROY_SURFACE: u8 = 2;
 pub const WCMD_IMPORT_ATTACH: u8 = 3;
 pub const WCMD_DAMAGE: u8 = 4;
 pub const WCMD_COMMIT: u8 = 5;
+pub const WCMD_SET_CHROME: u8 = 6;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
 pub const WEVT_FRAME_DONE: u8 = 2;
@@ -101,6 +103,16 @@ pub struct WCmdCommit {
     pub bloom_surface_id: u32,
     /// Frame callback key (meaningful only when `has_frame_callback == 1`).
     pub cb_key: u32,
+}
+
+/// [`WCMD_SET_CHROME`] — attach compositor-known shell chrome to a surface.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WCmdSetChrome {
+    pub msg_type: u8, // = WCMD_SET_CHROME
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
+    pub titlebar_height: u32,
 }
 
 /// [`WEVT_BUFFER_RELEASE`] — the compositor no longer references a buffer.
@@ -188,6 +200,18 @@ pub fn encode_commit(bloom_surface_id: u32, has_frame_callback: bool, cb_key: u3
     };
     let mut out = [0u8; 12];
     out.copy_from_slice(as_bytes!(msg, WCmdCommit));
+    out
+}
+
+pub fn encode_set_chrome(bloom_surface_id: u32, titlebar_height: u32) -> [u8; 12] {
+    let msg = WCmdSetChrome {
+        msg_type: WCMD_SET_CHROME,
+        _pad: [0; 3],
+        bloom_surface_id,
+        titlebar_height,
+    };
+    let mut out = [0u8; 12];
+    out.copy_from_slice(as_bytes!(msg, WCmdSetChrome));
     out
 }
 

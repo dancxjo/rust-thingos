@@ -189,7 +189,7 @@ fn drain_keyboard_data(bristle_pid: u32, state: &mut KeyboardState, drop_counter
             }
         } else {
             // If aux data (mouse), stop draining - let ps2_mouse handle it
-            stem::debug!("ps2_kbd: yield on AUX data (mouse packet)");
+            stem::trace!("ps2_kbd: yield on AUX data (mouse packet)");
             break;
         }
     }

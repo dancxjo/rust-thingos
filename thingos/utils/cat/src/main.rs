@@ -170,10 +170,10 @@ fn main(_arg: usize) -> ! {
                 continue;
             }
 
-            stem::info!("cat: opening '{}'", path);
+            stem::debug!("cat: opening '{}'", path);
             match vfs_open(path, vfs_flags::O_RDONLY) {
                 Ok(fd) => {
-                    stem::info!("cat: opened '{}' fd={}", path, fd);
+                    stem::debug!("cat: opened '{}' fd={}", path, fd);
                     if stream(fd, 1, &mut buf, number_lines, &mut lineno, &mut at_line_start)
                         .is_err()
                     {

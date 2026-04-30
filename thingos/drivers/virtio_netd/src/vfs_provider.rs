@@ -285,7 +285,7 @@ fn handle_lookup(payload: &[u8]) -> ProviderResponse {
         Err(_) => return ProviderResponse::err(Errno::EINVAL),
     };
     let path = path.trim_matches('/');
-    stem::debug!("VIRTIO_NETD: lookup '{}'", path);
+    stem::trace!("VIRTIO_NETD: lookup '{}'", path);
 
     let handle: u64 = match path {
         "" => HANDLE_ROOT,
@@ -298,12 +298,12 @@ fn handle_lookup(payload: &[u8]) -> ProviderResponse {
         "features" => HANDLE_FEATURES,
         "events" => HANDLE_EVENTS,
         _ => {
-            stem::debug!("VIRTIO_NETD: lookup '{}' -> ENOENT", path);
+            stem::trace!("VIRTIO_NETD: lookup '{}' -> ENOENT", path);
             return ProviderResponse::err(Errno::ENOENT);
         }
     };
 
-    stem::debug!("VIRTIO_NETD: lookup '{}' -> handle={}", path, handle);
+    stem::trace!("VIRTIO_NETD: lookup '{}' -> handle={}", path, handle);
     ProviderResponse::ok_u64(handle)
 }
 
@@ -417,7 +417,7 @@ fn handle_read(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
 
     match handle {
         HANDLE_STATUS => {
-            debug!("VIRTIO_NETD: read status");
+            trace!("VIRTIO_NETD: read status");
             let text = alloc::format!(
                 "state: {}\nlink: {}\nmac: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\nmtu: {}\n",
                 if state.link_up { "up" } else { "down" },
@@ -433,7 +433,7 @@ fn handle_read(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
             ProviderResponse::ok_read(text_slice(text.as_bytes(), offset, len))
         }
         HANDLE_MAC => {
-            debug!("VIRTIO_NETD: read mac");
+            trace!("VIRTIO_NETD: read mac");
             let text = alloc::format!(
                 "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                 state.mac[0],
@@ -446,17 +446,17 @@ fn handle_read(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
             ProviderResponse::ok_read(text_slice(text.as_bytes(), offset, len))
         }
         HANDLE_MTU => {
-            debug!("VIRTIO_NETD: read mtu");
+            trace!("VIRTIO_NETD: read mtu");
             let text = alloc::format!("{}\n", state.mtu);
             ProviderResponse::ok_read(text_slice(text.as_bytes(), offset, len))
         }
         HANDLE_FEATURES => {
-            debug!("VIRTIO_NETD: read features");
+            trace!("VIRTIO_NETD: read features");
             let text = alloc::format!("0x{:08x}\n", state.features);
             ProviderResponse::ok_read(text_slice(text.as_bytes(), offset, len))
         }
         HANDLE_RX => {
-            debug!("VIRTIO_NETD: read rx queued={}", state.rx_queue.len());
+            trace!("VIRTIO_NETD: read rx queued={}", state.rx_queue.len());
             // Return one length-prefixed frame, or empty if none available.
             if let Some(frame) = state.rx_queue.pop_front() {
                 let frame_len = frame.len() as u32;
@@ -469,7 +469,7 @@ fn handle_read(state: &mut NetVfsState, payload: &[u8]) -> ProviderResponse {
             }
         }
         HANDLE_EVENTS => {
-            debug!("VIRTIO_NETD: read events queued={}", state.events_queue.len());
+            trace!("VIRTIO_NETD: read events queued={}", state.events_queue.len());
             // Return one newline-terminated event, or empty if none queued.
             if let Some(event) = state.events_queue.pop_front() {
                 ProviderResponse::ok_read(&event)
@@ -513,7 +513,7 @@ fn handle_write(
 
     match handle {
         HANDLE_CTL => {
-            debug!("VIRTIO_NETD: write ctl len={}", data_len);
+            trace!("VIRTIO_NETD: write ctl len={}", data_len);
             let cmd = core::str::from_utf8(data).unwrap_or("").trim();
             if cmd == "up" {
                 state.link_up = true;
@@ -531,7 +531,7 @@ fn handle_write(
             ProviderResponse::ok_written(data_len as u32)
         }
         HANDLE_MTU => {
-            debug!("VIRTIO_NETD: write mtu len={}", data_len);
+            trace!("VIRTIO_NETD: write mtu len={}", data_len);
             let text = core::str::from_utf8(data).unwrap_or("").trim();
             if let Ok(mtu) = text.parse::<u32>() {
                 state.mtu = mtu;
@@ -541,7 +541,7 @@ fn handle_write(
             }
         }
         HANDLE_TX => {
-            debug!("VIRTIO_NETD: write tx len={}", data_len);
+            trace!("VIRTIO_NETD: write tx len={}", data_len);
             // Expect length-prefixed frame: [4 bytes: len][len bytes: frame data]
             if data.len() < 4 {
                 return ProviderResponse::err(Errno::EINVAL);

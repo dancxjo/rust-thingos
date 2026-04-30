@@ -55,8 +55,10 @@ pub use pointer::{
     MouseButton, MouseMessage, PointerButtonPayload, PointerMovePayload, ScrollPayload,
 };
 pub use registration::{
+    BRISTLE_EVENT_CLASS_ALL, BRISTLE_EVENT_CLASS_KEYBOARD, BRISTLE_EVENT_CLASS_POINTER,
     BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO, KIND_BRISTLE_DEVICE_EVENT,
-    KIND_BRISTLE_REGISTER_SINK, decode_register_sink, encode_register_sink,
+    KIND_BRISTLE_REGISTER_SINK, decode_register_sink, decode_register_sink_with_mask,
+    encode_register_sink, encode_register_sink_with_mask,
 };
 
 mod bristle;

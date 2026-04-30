@@ -26,7 +26,7 @@ use stem::syscall::vfs::vfs_mount;
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_map_mmio, port_create,
 };
-use stem::{debug, error, info, warn, yield_now};
+use stem::{debug, error, info, trace, warn, yield_now};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ahci_disk";
 
@@ -258,7 +258,7 @@ impl AhciDevice {
             return Err(BlockError::NotReady);
         }
 
-        debug!("AHCI: sending command for LBA {}", lba);
+        trace!("AHCI: sending command for LBA {}", lba);
         mmio_write32(pb, PORT_CI, 1);
         let mut loop_timeout = 10000000; // Increased timeout
         loop {
@@ -279,7 +279,7 @@ impl AhciDevice {
                 return Err(BlockError::NotReady);
             }
         }
-        debug!("AHCI: command completed for LBA {}", lba);
+        trace!("AHCI: command completed for LBA {}", lba);
 
         let src = unsafe {
             core::slice::from_raw_parts((self.dma_virt as usize + OFFSET_DATA) as *const u8, 2048)
@@ -304,7 +304,7 @@ impl StorageProvider {
             VfsRpcOp::Read => {
                 let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
                 let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
-                debug!("AHCI: Read RPC offset={} len={}", offset, len);
+                trace!("AHCI: Read RPC offset={} len={}", offset, len);
                 let sector_size = self.device.sector_size();
                 let start_lba = offset / sector_size;
                 let end_lba = if len > 0 {

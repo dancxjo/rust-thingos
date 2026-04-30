@@ -8,13 +8,20 @@
 
 /// `KindId` for the `RegisterSink` inbox message sent to bristle.
 ///
-/// Payload layout (5 bytes):
+/// Payload layout v1 (5 bytes, still accepted):
 /// ```text
 /// byte 0      : tag  — BRISTLE_SINK_TAG_BLOOM or BRISTLE_SINK_TAG_ECHO
 /// bytes 1..=4 : port write handle as u32 little-endian
 /// ```
+///
+/// Payload layout v2 (6 bytes):
+/// ```text
+/// byte 0      : tag
+/// bytes 1..=4 : port write handle as u32 little-endian
+/// byte 5      : interest mask, see `BRISTLE_EVENT_CLASS_*`
+/// ```
 /// Bristle bridges the handle to a VFS FD and writes normalized bristle
-/// events to it whenever input arrives from a device.
+/// events matching the interest mask whenever input arrives from a device.
 pub const KIND_BRISTLE_REGISTER_SINK: [u8; 16] = [
     0xb4, 0x1c, 0xe8, 0x5a, 0x0f, 0x3d, 0x72, 0x9e, 0xc2, 0x58, 0x4a, 0x17, 0xd6, 0x83, 0xf0, 0x21,
 ];
@@ -33,6 +40,13 @@ pub const BRISTLE_SINK_TAG_BLOOM: u8 = 0;
 /// Sink tag identifying the echo / input-echo consumer as the target.
 pub const BRISTLE_SINK_TAG_ECHO: u8 = 1;
 
+/// Sink interest bit for keyboard events.
+pub const BRISTLE_EVENT_CLASS_KEYBOARD: u8 = 1 << 0;
+/// Sink interest bit for pointer and scroll events.
+pub const BRISTLE_EVENT_CLASS_POINTER: u8 = 1 << 1;
+/// Subscribe to every currently defined input event class.
+pub const BRISTLE_EVENT_CLASS_ALL: u8 = BRISTLE_EVENT_CLASS_KEYBOARD | BRISTLE_EVENT_CLASS_POINTER;
+
 // ── RegisterSink payload helpers ──────────────────────────────────────────────
 
 /// Encode a `RegisterSink` payload.
@@ -45,15 +59,31 @@ pub fn encode_register_sink(tag: u8, handle: u32) -> [u8; 5] {
     [tag, h[0], h[1], h[2], h[3]]
 }
 
+/// Encode a v2 `RegisterSink` payload with an explicit event-interest mask.
+#[inline]
+pub fn encode_register_sink_with_mask(tag: u8, handle: u32, event_mask: u8) -> [u8; 6] {
+    let h = handle.to_le_bytes();
+    [tag, h[0], h[1], h[2], h[3], event_mask]
+}
+
 /// Decode a `RegisterSink` payload, returning `(tag, handle)`.
 ///
 /// Returns `None` if `bytes` is shorter than 5 bytes.
 #[inline]
 pub fn decode_register_sink(bytes: &[u8]) -> Option<(u8, u32)> {
+    decode_register_sink_with_mask(bytes).map(|(tag, handle, _)| (tag, handle))
+}
+
+/// Decode a `RegisterSink` payload, returning `(tag, handle, event_mask)`.
+///
+/// Old 5-byte payloads default to [`BRISTLE_EVENT_CLASS_ALL`].
+#[inline]
+pub fn decode_register_sink_with_mask(bytes: &[u8]) -> Option<(u8, u32, u8)> {
     if bytes.len() < 5 {
         return None;
     }
     let tag = bytes[0];
     let handle = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
-    Some((tag, handle))
+    let event_mask = bytes.get(5).copied().unwrap_or(BRISTLE_EVENT_CLASS_ALL);
+    Some((tag, handle, event_mask))
 }

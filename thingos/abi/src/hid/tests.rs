@@ -291,6 +291,29 @@ fn payload_golden_bytes() {
 }
 
 #[test]
+fn bristle_register_sink_v1_defaults_to_all_events() {
+    let bytes = encode_register_sink(BRISTLE_SINK_TAG_BLOOM, 0x1234_5678);
+    assert_eq!(decode_register_sink(&bytes), Some((BRISTLE_SINK_TAG_BLOOM, 0x1234_5678)));
+    assert_eq!(
+        decode_register_sink_with_mask(&bytes),
+        Some((BRISTLE_SINK_TAG_BLOOM, 0x1234_5678, BRISTLE_EVENT_CLASS_ALL))
+    );
+}
+
+#[test]
+fn bristle_register_sink_v2_preserves_event_mask() {
+    let bytes = encode_register_sink_with_mask(
+        BRISTLE_SINK_TAG_ECHO,
+        0x90ab_cdef,
+        BRISTLE_EVENT_CLASS_POINTER,
+    );
+    assert_eq!(
+        decode_register_sink_with_mask(&bytes),
+        Some((BRISTLE_SINK_TAG_ECHO, 0x90ab_cdef, BRISTLE_EVENT_CLASS_POINTER))
+    );
+}
+
+#[test]
 fn raw_input_envelope_invariants() {
     let envelope = RawInputEnvelope {
         device_id: 0x1111_2222_3333_4444,

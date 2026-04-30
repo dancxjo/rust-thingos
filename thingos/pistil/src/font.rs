@@ -19,27 +19,27 @@ impl TextRenderer {
     }
 
     pub fn load_from_boot(path: &str) -> Option<Self> {
-        stem::info!("pistil: opening font {}", path);
+        stem::debug!("pistil: opening font {}", path);
         let fd = vfs_open(path, O_RDONLY).ok()?;
 
         // Get size
-        stem::info!("pistil: stat font {}", path);
+        stem::debug!("pistil: stat font {}", path);
         let stat = vfs_stat(fd).ok()?;
         let size = stat.size as usize;
 
-        stem::info!("pistil: reading font {} bytes from {}", size, path);
+        stem::debug!("pistil: reading font {} bytes from {}", size, path);
         let mut data = vec![0u8; size];
         let n = vfs_read(fd, &mut data).ok()?;
-        stem::info!("pistil: font read returned {} of {} bytes", n, size);
+        stem::debug!("pistil: font read returned {} of {} bytes", n, size);
         if n < size {
             let _ = vfs_close(fd);
             return None;
         }
         let _ = vfs_close(fd);
 
-        stem::info!("pistil: parsing font {}", path);
+        stem::debug!("pistil: parsing font {}", path);
         let font = Font::from_bytes(data, FontSettings::default()).ok()?;
-        stem::info!("pistil: parsed font {}", path);
+        stem::debug!("pistil: parsed font {}", path);
         Some(Self { font })
     }
 

@@ -68,6 +68,13 @@ Feature: blossom xdg-shell lifecycle
   Scenario: first valid commit is visible above the compositor background
     Then the Wayland hello client should be visible
 
+  @pointer-debug
+  Scenario: dragging the title bar moves a toplevel window
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I drag the Wayland hello title bar
+    Then the compositor should move the toplevel window
+
   # ── State updates ────────────────────────────────────────────────────────────
 
   Scenario: set_title and set_app_id update toplevel state

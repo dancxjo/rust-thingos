@@ -53,7 +53,7 @@ use spec::*;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::port::port_create;
 use stem::syscall::vfs::vfs_mount;
-use stem::{error, info, warn};
+use stem::{debug, error, info, trace, warn};
 use virtio::device::VirtioDevice;
 
 const AUDIO_RING_SOCKET_PATH: &str = "/run/audio-card0.sock";
@@ -630,17 +630,17 @@ fn debug_log_rpc(op: VfsRpcOp, payload: &[u8]) {
                     u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
                 if payload.len() >= 4 + path_len {
                     if let Ok(path) = core::str::from_utf8(&payload[4..4 + path_len]) {
-                        info!("SND: rpc Lookup '{}'", path);
+                        trace!("SND: rpc Lookup '{}'", path);
                         return;
                     }
                 }
             }
-            info!("SND: rpc Lookup <malformed>");
+            trace!("SND: rpc Lookup <malformed>");
         }
         VfsRpcOp::Stat => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                info!("SND: rpc Stat handle={}", handle);
+                trace!("SND: rpc Stat handle={}", handle);
             }
         }
         VfsRpcOp::DeviceCall => {
@@ -651,7 +651,7 @@ fn debug_log_rpc(op: VfsRpcOp, payload: &[u8]) {
                         payload[8..].as_ptr() as *const abi::device::DeviceCall
                     )
                 };
-                info!("SND: rpc DeviceCall handle={} op={}", handle, dc.op);
+                trace!("SND: rpc DeviceCall handle={} op={}", handle, dc.op);
             }
         }
         VfsRpcOp::Write => {
@@ -659,29 +659,29 @@ fn debug_log_rpc(op: VfsRpcOp, payload: &[u8]) {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
                 let data_len =
                     u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
-                info!("SND: rpc Write handle={} len={}", handle, data_len);
+                trace!("SND: rpc Write handle={} len={}", handle, data_len);
             }
         }
         VfsRpcOp::Poll => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                info!("SND: rpc Poll handle={}", handle);
+                trace!("SND: rpc Poll handle={}", handle);
             }
         }
         VfsRpcOp::SubscribeReady => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                info!("SND: rpc SubscribeReady handle={}", handle);
+                trace!("SND: rpc SubscribeReady handle={}", handle);
             }
         }
         VfsRpcOp::UnsubscribeReady => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                info!("SND: rpc UnsubscribeReady handle={}", handle);
+                trace!("SND: rpc UnsubscribeReady handle={}", handle);
             }
         }
         _ => {
-            info!("SND: rpc {:?}", op as u8);
+            trace!("SND: rpc {:?}", op as u8);
         }
     }
 }
@@ -1513,7 +1513,7 @@ fn send_pcm_command(
     cmd: u32,
     stream_id: u32,
 ) -> bool {
-    info!("SND: control {} begin for stream {}", pcm_cmd_name(cmd), stream_id);
+    debug!("SND: control {} begin for stream {}", pcm_cmd_name(cmd), stream_id);
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmHdr) =
             VirtioSndPcmHdr { hdr: VirtioSndHdr { code: cmd }, stream_id };
@@ -1548,7 +1548,7 @@ fn send_pcm_command(
                 );
                 return false;
             }
-            info!("SND: control {} complete for stream {}", pcm_cmd_name(cmd), stream_id);
+            debug!("SND: control {} complete for stream {}", pcm_cmd_name(cmd), stream_id);
             return true;
         }
         if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
@@ -1599,7 +1599,7 @@ fn configure_stream(
     stream_id: u32,
     params: &AudioParams,
 ) -> bool {
-    info!("SND: control SET_PARAMS begin for stream {}", stream_id);
+    debug!("SND: control SET_PARAMS begin for stream {}", stream_id);
     let bytes_per_frame = AudioSampleFormat::from_u32(params.sample_format)
         .unwrap_or(AudioSampleFormat::S16LE)
         .bytes_per_sample() as u32
@@ -1649,7 +1649,7 @@ fn configure_stream(
                 );
                 return false;
             }
-            info!("SND: control SET_PARAMS complete for stream {}", stream_id);
+            debug!("SND: control SET_PARAMS complete for stream {}", stream_id);
             break;
         }
         if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {

@@ -21,9 +21,9 @@
 extern crate alloc;
 
 use abi::hid::{
-    BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO, BristleEventHeader, EventType,
-    KIND_BRISTLE_DEVICE_EVENT, KIND_BRISTLE_REGISTER_SINK, Key, KeyEventPayload,
-    decode_register_sink,
+    BRISTLE_EVENT_CLASS_KEYBOARD, BRISTLE_EVENT_CLASS_POINTER, BRISTLE_SINK_TAG_BLOOM,
+    BRISTLE_SINK_TAG_ECHO, BristleEventHeader, EventType, KIND_BRISTLE_DEVICE_EVENT,
+    KIND_BRISTLE_REGISTER_SINK, Key, KeyEventPayload, decode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::wire::KindId;
@@ -33,7 +33,7 @@ use stem::syscall::vfs::{
 };
 use stem::syscall::{port_close, port_create, port_send_all};
 use stem::wait_set::WaitToken;
-use stem::{debug, info, warn};
+use stem::{debug, info, trace, warn};
 
 fn ensure_session_roots() {
     let _ = vfs_mkdir("/session");
@@ -46,8 +46,14 @@ fn update_active_ui(target: &str) {
     if let Ok(fd) = vfs_open("/session/active_ui", O_RDWR | O_CREAT | O_TRUNC) {
         let _ = vfs_write(fd, target.as_bytes());
         let _ = vfs_close(fd);
-        stem::debug!("bristle: active_ui set to '{}'", target);
+        stem::trace!("bristle: active_ui set to '{}'", target);
     }
+}
+
+#[derive(Clone, Copy)]
+struct Sink {
+    handle: u32,
+    event_mask: u8,
 }
 
 /// Publish bristle's PID to `/run/bristle/pid` so consumers can find us.
@@ -148,8 +154,8 @@ fn main(_arg: usize) -> ! {
 
     // ── Event-dispatch state ──────────────────────────────────────────────
     // Registered event sinks — registered via inbox RegisterSink messages.
-    let mut bloom_sink: Option<u32> = None;
-    let mut echo_sink: Option<u32> = None;
+    let mut bloom_sink: Option<Sink> = None;
+    let mut echo_sink: Option<Sink> = None;
 
     let mut recv_buf = [0u8; 128];
     let mut kbd_event_accum = [0u8; 64];
@@ -188,7 +194,7 @@ fn main(_arg: usize) -> ! {
                         &mut drop_counter,
                     );
                 } else {
-                    debug!("bristle: unknown inbox message kind {:?}", kind.0);
+                    trace!("bristle: unknown inbox message kind {:?}", kind.0);
                 }
             }
 
@@ -260,33 +266,41 @@ fn is_pointer_event_payload(payload: &[u8]) -> bool {
     };
     matches!(
         EventType::from_raw(header.event_type),
-        Ok(EventType::PointerMove | EventType::PointerButtonDown | EventType::PointerButtonUp)
+        Ok(EventType::PointerMove
+            | EventType::PointerButtonDown
+            | EventType::PointerButtonUp
+            | EventType::Scroll)
     )
 }
 
 /// Handle a `RegisterSink` inbox message.
-fn handle_register_sink(payload: &[u8], bloom_sink: &mut Option<u32>, echo_sink: &mut Option<u32>) {
-    let Some((tag, handle)) = decode_register_sink(payload) else {
+fn handle_register_sink(
+    payload: &[u8],
+    bloom_sink: &mut Option<Sink>,
+    echo_sink: &mut Option<Sink>,
+) {
+    let Some((tag, handle, event_mask)) = decode_register_sink_with_mask(payload) else {
         warn!("bristle: RegisterSink payload too short ({} bytes)", payload.len());
         return;
     };
+    let sink = Sink { handle, event_mask };
 
     match tag {
         BRISTLE_SINK_TAG_BLOOM => {
-            if let Some(old) = bloom_sink.replace(handle) {
-                if old != handle {
-                    let _ = port_close(old);
+            if let Some(old) = bloom_sink.replace(sink) {
+                if old.handle != handle {
+                    let _ = port_close(old.handle);
                 }
             }
-            info!("bristle: bloom sink registered (handle={})", handle);
+            info!("bristle: bloom sink registered (handle={} mask=0x{:02x})", handle, event_mask);
         }
         BRISTLE_SINK_TAG_ECHO => {
-            if let Some(old) = echo_sink.replace(handle) {
-                if old != handle {
-                    let _ = port_close(old);
+            if let Some(old) = echo_sink.replace(sink) {
+                if old.handle != handle {
+                    let _ = port_close(old.handle);
                 }
             }
-            info!("bristle: echo sink registered (handle={})", handle);
+            info!("bristle: echo sink registered (handle={} mask=0x{:02x})", handle, event_mask);
         }
         _ => {
             warn!("bristle: RegisterSink unknown tag {}", tag);
@@ -301,8 +315,8 @@ fn accumulate_and_dispatch(
     input: &[u8],
     event_accum: &mut [u8; 64],
     accum_len: &mut usize,
-    bloom_sink: Option<u32>,
-    echo_sink: Option<u32>,
+    bloom_sink: Option<Sink>,
+    echo_sink: Option<Sink>,
     drop_counter: &mut u32,
 ) {
     let mut cursor = 0;
@@ -350,13 +364,18 @@ fn accumulate_and_dispatch(
                     }
 
                     // Forward to registered sinks.
-                    if let Some(handle) = bloom_sink {
-                        if port_send_all(handle, event_bytes).is_err() {
+                    let event_class = event_class(header.event_type);
+                    if let Some(sink) = bloom_sink {
+                        if sink.accepts(event_class)
+                            && port_send_all(sink.handle, event_bytes).is_err()
+                        {
                             *drop_counter += 1;
                         }
                     }
-                    if let Some(handle) = echo_sink {
-                        if port_send_all(handle, event_bytes).is_err() {
+                    if let Some(sink) = echo_sink {
+                        if sink.accepts(event_class)
+                            && port_send_all(sink.handle, event_bytes).is_err()
+                        {
                             *drop_counter += 1;
                         }
                     }
@@ -377,5 +396,24 @@ fn accumulate_and_dispatch(
                 }
             }
         }
+    }
+}
+
+impl Sink {
+    fn accepts(self, event_class: u8) -> bool {
+        event_class == 0 || (self.event_mask & event_class) != 0
+    }
+}
+
+fn event_class(event_type: u16) -> u8 {
+    match EventType::from_raw(event_type) {
+        Ok(EventType::KeyDown | EventType::KeyUp) => BRISTLE_EVENT_CLASS_KEYBOARD,
+        Ok(
+            EventType::PointerMove
+            | EventType::PointerButtonDown
+            | EventType::PointerButtonUp
+            | EventType::Scroll,
+        ) => BRISTLE_EVENT_CLASS_POINTER,
+        _ => 0,
     }
 }

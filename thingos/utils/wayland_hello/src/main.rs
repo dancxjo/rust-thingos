@@ -71,7 +71,7 @@ fn main(_arg: usize) -> ! {
     create_surface(fd, COMPOSITOR_ID, TOP_SURFACE_ID);
     get_xdg_surface(fd, WM_BASE_ID, TOP_XDG_SURFACE_ID, TOP_SURFACE_ID);
     get_toplevel(fd, TOP_XDG_SURFACE_ID, TOPLEVEL_ID);
-    set_toplevel_title(fd, TOPLEVEL_ID, "Thing-OS XDG Demo");
+    set_toplevel_title(fd, TOPLEVEL_ID, "Thing-OS Wayland Lab");
     set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.wayland_hello");
     commit_surface(fd, TOP_SURFACE_ID);
 
@@ -154,7 +154,7 @@ fn main(_arg: usize) -> ! {
         }
 
         if top_pending.dirty {
-            let title = "THING-OS XDG";
+            let title = "Thing-OS Wayland";
             let buffer = ensure_buffer(
                 fd,
                 SHM_ID,
@@ -195,7 +195,7 @@ fn main(_arg: usize) -> ! {
                 popup_pending.width,
                 popup_pending.height,
             );
-            render_popup(buffer, "POPUP", text_renderer.as_ref());
+            render_popup(buffer, "Fresh pixels", text_renderer.as_ref());
             ack_configure(fd, POPUP_XDG_SURFACE_ID, popup_pending.serial.unwrap_or(0));
             attach_buffer(fd, POPUP_SURFACE_ID, buffer.buffer_id);
             damage_surface(fd, POPUP_SURFACE_ID, 0, 0, popup_pending.width, popup_pending.height);
@@ -307,7 +307,7 @@ fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRe
             16,
             78,
             18.0,
-            "RESIZE ME FROM THE FRAME",
+            "Resize the frame; the buffer follows.",
             0xFF9AD1FF,
         );
         draw_text(
@@ -318,7 +318,7 @@ fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRe
             16,
             114,
             18.0,
-            "POPUP BELOW IS XDG_POPUP",
+            "Compositor round-trip: shm, xdg, paint.",
             0xFFE7D68A,
         );
     }

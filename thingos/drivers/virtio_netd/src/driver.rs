@@ -278,7 +278,7 @@ impl VirtioNetDriver {
         let rxq = self.device.queue_mut(0)?;
 
         if let Some((desc_id, len)) = rxq.poll_used() {
-            stem::debug!("VirtIO-NET: RX frame! desc={} len={}", desc_id, len);
+            stem::trace!("VirtIO-NET: RX frame desc={} len={}", desc_id, len);
 
             let buf_virt = self.rx_buffers_virt[desc_id as usize];
 

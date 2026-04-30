@@ -89,14 +89,14 @@ impl FrameClock {
     /// Clears the `repaint_requested` flag and records the commit timestamp so
     /// the minimum frame interval is enforced before the next repaint.
     ///
-    /// Logs the measured frame interval at debug level so drift and jitter are
+    /// Logs the measured frame interval at trace level so drift and jitter are
     /// visible without needing external tooling.
     pub fn after_commit(&mut self) {
         self.repaint_requested = false;
         let now = monotonic_ns();
         if self.last_commit_ns > 0 {
             let interval_ns = now.saturating_sub(self.last_commit_ns);
-            stem::debug!(
+            stem::trace!(
                 "bloom: frame interval {}ns (target {}ns)",
                 interval_ns,
                 self.frame_interval_ns

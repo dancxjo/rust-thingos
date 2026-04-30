@@ -1193,7 +1193,7 @@ fn spawn_job(
                     let spawn_syscall_us = t_spawn_return.saturating_sub(t_spawn_call) / 1_000;
                     let setpgid_us = t_after_setpgid.saturating_sub(t_before_setpgid) / 1_000;
                     let elapsed_us = t_after_setpgid.saturating_sub(t_job_start) / 1_000;
-                    stem::info!(
+                    stem::debug!(
                         "SPAWN_TIMING sh '{}': elapsed={}µs | \
                          path_probe={}µs spawn_syscall={}µs setpgid={}µs",
                         path,
@@ -1209,7 +1209,7 @@ fn spawn_job(
                 {
                     let t_err = stem::syscall::monotonic_ns();
                     let spawn_syscall_us = t_err.saturating_sub(t_spawn_call) / 1_000;
-                    stem::info!(
+                    stem::debug!(
                         "SPAWN_TIMING sh '{}': spawn_syscall={}µs -> error {:?}",
                         path,
                         spawn_syscall_us,
@@ -1233,7 +1233,7 @@ fn spawn_job(
         let t_cleanup_end = stem::syscall::monotonic_ns();
         let cleanup_us = t_cleanup_end.saturating_sub(t_cleanup_start) / 1_000;
         let total_us = t_cleanup_end.saturating_sub(t_job_start) / 1_000;
-        stem::info!("SPAWN_TIMING sh job: total={}µs | cleanup_fds={}µs", total_us, cleanup_us);
+        stem::debug!("SPAWN_TIMING sh job: total={}µs | cleanup_fds={}µs", total_us, cleanup_us);
     }
     Ok((pgid, spawned))
 }
@@ -1241,7 +1241,7 @@ fn spawn_job(
 fn cleanup_fds(pipes: &[[u32; 2]], transient_fds: &[u32], bg_in: Option<u32>, bg_out: Option<u32>) {
     stem::debug!("sh: cleaning up {} pipes", pipes.len());
     for (idx, pair) in pipes.iter().enumerate() {
-        stem::info!("sh: closing pipe {} ends: read={} write={}", idx, pair[0], pair[1]);
+        stem::trace!("sh: closing pipe {} ends: read={} write={}", idx, pair[0], pair[1]);
         let _ = syscall::vfs_close(pair[0]);
         let _ = syscall::vfs_close(pair[1]);
     }

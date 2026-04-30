@@ -272,7 +272,7 @@ impl BloomWorld {
         if result.success {
             if !self.cursor_present_logged {
                 if let Some(cursor) = cursor {
-                    stem::info!(
+                    stem::debug!(
                         "bloom: presented cursor buffer={} at {},{} size={}x{}",
                         cursor.buffer_id,
                         cursor.x,

@@ -275,7 +275,7 @@ impl HttpsProvider {
     }
 
     fn resolve_path(&mut self, path: &str) -> Result<u64, Errno> {
-        info!("httpsd: resolve_path path='{}'", path);
+        trace!("httpsd: resolve_path path='{}'", path);
         let clean = path.trim_matches('/');
         if clean.is_empty() {
             debug!("httpsd: lookup '{}' -> root", path);
@@ -316,7 +316,7 @@ impl HttpsProvider {
         let node = HttpsNode::new(host, &rest_str);
         debug!("httpsd: lookup '{}' -> staging {}", path, node.url());
         let handle = self.allocate_node(host, &rest_str, None);
-        info!("httpsd: lookup '{}' -> handle {}", path, handle);
+        trace!("httpsd: lookup '{}' -> handle {}", path, handle);
         Ok(handle)
     }
 
@@ -384,7 +384,7 @@ impl HttpsProvider {
         } else {
             return Err(Errno::EBADF);
         };
-        info!("httpsd: ensure_cached_entry handle={} key={:?}", handle, key);
+        debug!("httpsd: ensure_cached_entry handle={} key={:?}", handle, key);
         if let Some(e) = self.shared.cache.lock().peek(&key) {
             return Ok(e.clone());
         }
@@ -620,7 +620,7 @@ fn ensure_upstream_on(
     // Check shared cache first to avoid redundant network I/O for xattr/stat calls.
     let key = state.node.cache_key();
     if let Some(entry) = shared.cache.lock().peek(&key) {
-        info!("httpsd: ensure_upstream handle={} FOUND {} in cache", handle_id, state.node.url());
+        debug!("httpsd: ensure_upstream handle={} FOUND {} in cache", handle_id, state.node.url());
         state.is_redirect = entry.is_redirect();
         state.headers_cached = true;
         if state.is_redirect {
@@ -630,7 +630,7 @@ fn ensure_upstream_on(
     }
 
     let url = state.node.url();
-    info!("httpsd: ensure_upstream handle={} MISS {} - opening network stream", handle_id, url);
+    debug!("httpsd: ensure_upstream handle={} MISS {} - opening network stream", handle_id, url);
     let response = HttpClient::get(&url).map_err(|err| {
         error!("httpsd: upstream open failed for handle={} {}: {}", handle_id, url, err);
         Errno::EIO
@@ -729,7 +729,7 @@ fn perform_read(
 
     let key = state.node.cache_key();
 
-    info!(
+    trace!(
         "httpsd: read handle={} url={} offset={} len={} cached={} start={} eof={}",
         handle_id,
         state.node.url(),
@@ -783,12 +783,12 @@ fn perform_read(
         })?;
         trace!("httpsd: read_chunk handle={} returned {} bytes", handle_id, chunk.len());
         if chunk.is_empty() {
-            info!("httpsd: upstream EOF for handle={} cached={}", handle_id, state.body.len());
+            debug!("httpsd: upstream EOF for handle={} cached={}", handle_id, state.body.len());
             state.response = None;
             state.eof = true;
             break;
         }
-        debug!("httpsd: upstream chunk handle={} bytes={}", handle_id, chunk.len());
+        trace!("httpsd: upstream chunk handle={} bytes={}", handle_id, chunk.len());
         chunks_to_mirror.push(chunk.clone());
         state.push_chunk(&chunk)?;
         body_end = state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
@@ -875,7 +875,7 @@ fn run_handle_worker(
     shared: Arc<SharedState>,
     _mount_point: String,
 ) {
-    info!("httpsd: worker started for handle={} url={}", handle_id, state.node.url());
+    debug!("httpsd: worker started for handle={} url={}", handle_id, state.node.url());
     loop {
         let msg = loop {
             if let Some(m) = channel.pop() {
@@ -893,7 +893,7 @@ fn run_handle_worker(
                 send_worker_response(resp_port, req_id, resp);
             }
             WorkerMsg::Close => {
-                info!("httpsd: worker exiting for handle={}", handle_id);
+                debug!("httpsd: worker exiting for handle={}", handle_id);
                 break;
             }
         }
@@ -1078,7 +1078,7 @@ fn dispatch(
     resp_port: u32,
     req_id: u16,
 ) -> Option<ProviderResponse> {
-    info!("httpsd: RPC op={:?} payload_len={}", op, payload.len());
+    trace!("httpsd: RPC op={:?} payload_len={}", op, payload.len());
     match op {
         VfsRpcOp::Lookup => Some(dispatch_lookup(provider, payload)),
         VfsRpcOp::Read => dispatch_read(provider, payload, resp_port, req_id),
@@ -1106,7 +1106,7 @@ fn dispatch_lookup(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderResp
     let Ok(path) = core::str::from_utf8(&payload[4..4 + path_len]) else {
         return ProviderResponse::err(Errno::EINVAL);
     };
-    info!("httpsd: dispatch_lookup path='{}'", path);
+    trace!("httpsd: dispatch_lookup path='{}'", path);
     match provider.resolve_path(path) {
         Ok(handle) => ProviderResponse::ok_u64(handle),
         Err(e) => ProviderResponse::err(e),
@@ -1198,7 +1198,7 @@ fn dispatch_attr_list(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderR
         return ProviderResponse::err(Errno::EINVAL);
     }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
-    info!("httpsd: dispatch_attr_list handle={}", handle);
+    trace!("httpsd: dispatch_attr_list handle={}", handle);
     let entry = match provider.ensure_cached_entry(handle) {
         Ok(e) => e,
         Err(e) => return ProviderResponse::err(e),
@@ -1235,7 +1235,7 @@ fn dispatch_readlink(provider: &mut HttpsProvider, payload: &[u8]) -> ProviderRe
         return ProviderResponse::err(Errno::EINVAL);
     }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
-    info!("httpsd: dispatch_readlink handle={}", handle);
+    trace!("httpsd: dispatch_readlink handle={}", handle);
     // Readlink is a cheap cache-only lookup: we explicitly do NOT trigger
     // an upstream fetch here, because the kernel calls `readlink()` on
     // every path component during resolution and each fetch would be an

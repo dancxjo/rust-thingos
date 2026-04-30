@@ -16,7 +16,7 @@ use rand_core::SeedableRng;
 use stem::syscall::port::{PortHandle, port_close, port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 use stem::thread::spawn_task_detached;
-use stem::{debug, info, trace, warn};
+use stem::{debug, trace, warn};
 
 const IO_POLL_TIMEOUT_MS: u64 = 60_000;
 const CONNECT_TIMEOUT_MS: u64 = 30_000;
@@ -111,10 +111,10 @@ impl TcpStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, String> {
         use abi::syscall::vfs_flags::{O_NONBLOCK, O_RDONLY, O_RDWR};
 
-        info!("http: connect host={} port={}", host, port);
+        debug!("http: connect host={} port={}", host, port);
 
         // 1. Allocate a new TCP socket via /net/tcp/new
-        info!("http: opening /net/tcp/new");
+        debug!("http: opening /net/tcp/new");
         let new_fd = vfs_open("/net/tcp/new", O_RDONLY)
             .map_err(|e| format!("failed to open /net/tcp/new: {:?}", e))?;
         let mut buf = [0u8; 16];
@@ -133,16 +133,16 @@ impl TcpStream {
 
         let socket_id =
             core::str::from_utf8(&buf[..n]).map_err(|_| "invalid socket id encoding")?.trim();
-        info!("http: allocated tcp socket id={}", socket_id);
+        debug!("http: allocated tcp socket id={}", socket_id);
 
         // 2. Open ctl and data files
         let ctl_path = format!("/net/tcp/{}/ctl", socket_id);
         let data_path = format!("/net/tcp/{}/data", socket_id);
 
-        info!("http: opening ctl path {}", ctl_path);
+        debug!("http: opening ctl path {}", ctl_path);
         let ctl_fd =
             vfs_open(&ctl_path, O_RDWR).map_err(|e| format!("failed to open ctl: {:?}", e))?;
-        info!("http: opening data path {}", data_path);
+        debug!("http: opening data path {}", data_path);
         let data_fd = match vfs_open(&data_path, O_RDWR | O_NONBLOCK) {
             Ok(fd) => fd,
             Err(e) => {
@@ -153,14 +153,14 @@ impl TcpStream {
 
         // 3. Connect via ctl file
         let conn_cmd = format!("connect {} {}", host, port);
-        info!("http: issuing connect command: {}", conn_cmd.trim());
+        debug!("http: issuing connect command: {}", conn_cmd.trim());
         if let Err(e) = vfs_write(ctl_fd, conn_cmd.as_bytes()) {
             let _ = vfs_close(data_fd);
             let _ = vfs_close(ctl_fd);
             return Err(format!("connect command failed: {:?}", e));
         }
 
-        info!("http: waiting for socket readiness...");
+        trace!("http: waiting for socket readiness...");
         let revents = wait_fd_ready(
             data_fd,
             poll_flags::POLLOUT | poll_flags::POLLIN,
@@ -450,7 +450,7 @@ where
                 return;
             }
         };
-        info!("http: background task: TCP connected to {}", host);
+        debug!("http: background task: TCP connected to {}", host);
 
         let transport = TcpTransport { inner: tcp };
         let mut record_read_buf = [0u8; TLS_RECORD_READ_BUF_SIZE];
@@ -458,7 +458,7 @@ where
         let mut tls = TlsConnection::new(transport, &mut record_read_buf, &mut record_write_buf);
 
         let config = TlsConfig::new().with_server_name(&host).enable_rsa_signatures();
-        info!("http: background task: starting TLS handshake with {}", host);
+        debug!("http: background task: starting TLS handshake with {}", host);
         let seed = match build_tls_seed() {
             Ok(s) => s,
             Err(e) => {
@@ -477,9 +477,9 @@ where
             let _ = port_close(write_handle);
             return;
         }
-        info!("http: background task: TLS handshake complete for {}", host);
+        debug!("http: background task: TLS handshake complete for {}", host);
 
-        info!("http: background task: sending {} byte request", req_bytes.len());
+        trace!("http: background task: sending {} byte request", req_bytes.len());
         let mut offset = 0usize;
         while offset < req_bytes.len() {
             match tls.write(&req_bytes[offset..]) {
@@ -501,7 +501,7 @@ where
             }
         }
 
-        info!("http: background task: flushing TLS stream");
+        trace!("http: background task: flushing TLS stream");
         if let Err(e) = tls.flush() {
             let msg = format!("ERR: https flush failed: {:?}", e);
             let _ = port_send_all(write_handle, msg.as_bytes());
@@ -509,7 +509,7 @@ where
             return;
         }
 
-        info!("http: background task: entering read loop");
+        trace!("http: background task: entering read loop");
         let mut buf = [0u8; HTTPS_STREAM_CHUNK_SIZE];
         loop {
             match tls.read(&mut buf) {
@@ -589,7 +589,7 @@ where
         );
         match recv_from_port_until(read_handle, &mut buf, deadline_ns, "http header read") {
             Ok(0) => {
-                info!("http: port closed early during header read");
+                debug!("http: port closed early during header read");
                 break;
             }
             Ok(n) => {
@@ -607,7 +607,7 @@ where
                 {
                     body_start = start;
                     headers_done = true;
-                    info!("http: headers complete body_start={}", body_start);
+                    debug!("http: headers complete body_start={}", body_start);
                     if let Ok(headers) = core::str::from_utf8(&response[..body_start]) {
                         for line in headers.lines() {
                             debug!("http: response header: {}", line);
@@ -617,7 +617,7 @@ where
                 }
             }
             Err(e) => {
-                info!("http: header read slice wait: {}", e);
+                debug!("http: header read slice wait: {}", e);
                 continue;
             }
         }

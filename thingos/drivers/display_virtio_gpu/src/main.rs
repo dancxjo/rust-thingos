@@ -236,7 +236,7 @@ impl PresentStats {
 
     fn log_and_reset(&mut self) {
         if self.frame_count > 0 {
-            debug!(
+            trace!(
                 "display_virtio_gpu stats: frames={}, rects_in={}, transfers={}, flushes={}, union_flush={}, per_rect_flush={}, frame_pool={}",
                 self.frame_count,
                 self.total_rects_in,
@@ -372,7 +372,7 @@ fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
         Ok(s) => s,
         Err(_) => return ProviderResponse::err(Errno::EINVAL),
     };
-    stem::debug!("DISP: vfs_lookup path='{}'", path);
+    stem::trace!("DISP: vfs_lookup path='{}'", path);
     let handle: u64 = match path.trim_matches('/') {
         "" => HANDLE_CARD,
         "card0" => HANDLE_CARD,
@@ -417,7 +417,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
     match call.op {
         DISPLAY_OP_GET_INFO => {
-            stem::debug!("DISP: DISPLAY_OP_GET_INFO requested");
+            stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
             let info = DisplayInfo {
                 card_id: 0,
                 preferred_mode: DisplayMode {
@@ -430,7 +430,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 supported_formats: 1 << 1,
                 caps: DisplayCaps::ATOMIC | DisplayCaps::VBLANK,
             };
-            stem::debug!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
+            stem::trace!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
                 core::slice::from_raw_parts(
                     &info as *const _ as *const u8,
@@ -445,7 +445,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
             let bh: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
-            stem::debug!(
+            stem::trace!(
                 "DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd={}, size={}x{}",
                 bh.handle,
                 bh.width,
@@ -463,7 +463,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 Ok(map_resp) => {
                     let id = BufferId(driver.next_import_id);
                     driver.next_import_id = driver.next_import_id.saturating_add(1);
-                    stem::debug!("DISP: Imported buffer as ID={}", id.0);
+                    stem::debug!("DISP: imported buffer as ID={}", id.0);
                     driver.imported_buffers.insert(
                         id,
                         ImportedBuffer {
@@ -489,14 +489,14 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
             let id = BufferId(u32::from_le_bytes(call_payload[..4].try_into().unwrap()));
             if let Some(buf) = driver.imported_buffers.remove(&id) {
-                stem::debug!(
+                stem::trace!(
                     "DISP: DISPLAY_OP_RELEASE_BUFFER requested: id={} size={} (mapping retained)",
                     id.0,
                     buf.size
                 );
                 ProviderResponse::ok_device_call(0, &[])
             } else {
-                stem::debug!("DISP: DISPLAY_OP_RELEASE_BUFFER requested for unknown id={}", id.0);
+                stem::trace!("DISP: DISPLAY_OP_RELEASE_BUFFER requested for unknown id={}", id.0);
                 ProviderResponse::err(Errno::ENOENT)
             }
         }
@@ -510,7 +510,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
             let plane_size = core::mem::size_of::<PlaneCommit>();
             let plane_count = req.commit_count as usize;
-            stem::debug!("DISP: DISPLAY_OP_COMMIT requested: planes={}", plane_count);
+            stem::trace!("DISP: DISPLAY_OP_COMMIT requested: planes={}", plane_count);
             let needed = header_size.saturating_add(plane_count.saturating_mul(plane_size));
             if plane_count > 0 && call_payload.len() < needed {
                 return ProviderResponse::err(Errno::EINVAL);
@@ -849,7 +849,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         }
                         driver.cursor_commit_logged = true;
                     }
-                    stem::debug!("DISP: COMMIT complete (seq={})", driver.present_seq);
+                    stem::trace!("DISP: COMMIT complete (seq={})", driver.present_seq);
                     driver.current_fd = Some(driver.frame_pool[idx].fd);
 
                     // Software vsync: pace frame delivery to the display refresh
@@ -1448,7 +1448,7 @@ fn main(boot_arg: usize) -> ! {
         // Always drain VFS RPCs, even if readiness wait fails or times out.
         while let Ok(Some(req)) = vfs_loop.try_next_request() {
             did_work = true;
-            stem::debug!("display_virtio_gpu: VFS RPC op={:?}", req.op);
+            stem::trace!("display_virtio_gpu: VFS RPC op={:?}", req.op);
             let resp = dispatch_vfs_rpc(&mut driver, &req);
             vfs_loop.send_response(&req, resp).ok();
         }

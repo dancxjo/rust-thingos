@@ -62,6 +62,7 @@ impl WaylandCommandService {
             ipc::WCMD_IMPORT_ATTACH => self.handle_import_attach(data, world),
             ipc::WCMD_DAMAGE => self.handle_damage(data, world),
             ipc::WCMD_COMMIT => self.handle_commit(data, world),
+            ipc::WCMD_SET_CHROME => self.handle_set_chrome(data, world),
             other => {
                 warn!("wayland-cmd: unknown command type {}", other);
                 false
@@ -188,6 +189,25 @@ impl WaylandCommandService {
 
         result.changed
     }
+
+    fn handle_set_chrome(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
+        if data.len() < 12 {
+            return false;
+        }
+        let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        let titlebar_height = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+        if world.scene.set_surface_chrome(
+            self.wayland_client_id,
+            bloom_surface_id,
+            crate::scene::SurfaceChrome { titlebar_height },
+        ) {
+            debug!(
+                "bloom: registered titlebar drag zone surface={} height={}",
+                bloom_surface_id, titlebar_height
+            );
+        }
+        false
+    }
 }
 
 impl BloomService for WaylandCommandService {
@@ -243,6 +263,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_IMPORT_ATTACH => 32,
         ipc::WCMD_DAMAGE => 24,
         ipc::WCMD_COMMIT => 12,
+        ipc::WCMD_SET_CHROME => 12,
         _ => 1,
     };
     Some(len)

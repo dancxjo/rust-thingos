@@ -16,7 +16,7 @@ use crate::protocol::{
     KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent, PointerLeaveEvent,
     PointerMotionEvent, msg_header, to_vec,
 };
-use crate::scene::Scene;
+use crate::scene::{HitTarget, Scene};
 
 const CURSOR_DAMAGE_W: u32 = 96;
 const CURSOR_DAMAGE_H: u32 = 96;
@@ -48,8 +48,20 @@ pub struct InputState {
     /// frame rather than per sample.  `None` means no motion since last flush.
     pending_motion_ts: Option<u64>,
     pointer_overlay_enabled: bool,
+    pointer_grab: Option<PointerGrab>,
     output_w: i32,
     output_h: i32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PointerGrab {
+    surface_id: u32,
+    kind: PointerGrabKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PointerGrabKind {
+    Move { offset_x: i32, offset_y: i32 },
 }
 
 impl InputState {
@@ -66,6 +78,7 @@ impl InputState {
             pending_cursor_motion: false,
             pending_motion_ts: None,
             pointer_overlay_enabled: false,
+            pointer_grab: None,
             output_w,
             output_h,
         }
@@ -112,7 +125,7 @@ impl InputState {
         if had_pending_cursor_motion
             && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS
         {
-            stem::info!(
+            stem::trace!(
                 "bloom: cursor smoothing visible={},{} target={},{}",
                 self.visible_x,
                 self.visible_y,
@@ -142,13 +155,17 @@ impl InputState {
         let flush_count = COALESCE_FLUSH_LOGS.fetch_add(1, Ordering::Relaxed);
         if flush_count < MAX_STARTUP_LOGS {
             let pre = COALESCE_PRE.load(Ordering::Relaxed);
-            stem::info!(
+            stem::trace!(
                 "bloom: motion coalesce pre={} post={} pos={},{}",
                 pre,
                 flush_count + 1,
                 self.pointer_x,
                 self.pointer_y
             );
+        }
+
+        if self.pointer_grab.is_some() {
+            return;
         }
 
         self.update_pointer_focus(scene);
@@ -203,13 +220,16 @@ impl InputState {
                     return;
                 }
                 self.pending_cursor_motion = true;
+                if self.update_pointer_grab(scene, damage) {
+                    return;
+                }
                 // Coalesce: keep only the latest timestamp; focus lookup and
                 // client delivery are deferred to flush_pointer_motion() which
                 // is called once per frame boundary.
                 self.pending_motion_ts = Some(header.timestamp_ns);
                 COALESCE_PRE.fetch_add(1, Ordering::Relaxed);
                 if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
-                    stem::info!(
+                    stem::trace!(
                         "bloom: pointer moved dx={} dy={} pos={},{}",
                         dx,
                         dy,
@@ -237,6 +257,16 @@ impl InputState {
                 let old_focus = scene.keyboard_focus;
                 scene.keyboard_focus = scene.pointer_focus;
                 self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                if btn.button == 0 && self.start_titlebar_drag(scene) {
+                    mark_cursor_damage(
+                        damage,
+                        self.visible_x,
+                        self.visible_y,
+                        self.pointer_x,
+                        self.pointer_y,
+                    );
+                    return;
+                }
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
                         let ev = PointerButtonEvent {
@@ -270,6 +300,16 @@ impl InputState {
                 self.flush_pointer_motion(scene);
                 if !had_pending {
                     self.update_pointer_focus(scene);
+                }
+                if btn.button == 0 && self.end_pointer_grab() {
+                    mark_cursor_damage(
+                        damage,
+                        self.visible_x,
+                        self.visible_y,
+                        self.pointer_x,
+                        self.pointer_y,
+                    );
+                    return;
                 }
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
@@ -378,6 +418,68 @@ impl InputState {
                 send_client_event(scene, client_id, KIND_POINTER_ENTER, &to_vec(&ev));
             }
         }
+    }
+
+    fn start_titlebar_drag(&mut self, scene: &Scene) -> bool {
+        let Some(HitTarget::TitleBar { surface_id }) =
+            scene.hit_test(self.pointer_x, self.pointer_y)
+        else {
+            return false;
+        };
+        let Some(rect) = scene.surface_rect(surface_id) else {
+            return false;
+        };
+        self.pointer_grab = Some(PointerGrab {
+            surface_id,
+            kind: PointerGrabKind::Move {
+                offset_x: self.pointer_x.saturating_sub(rect.x as i32),
+                offset_y: self.pointer_y.saturating_sub(rect.y as i32),
+            },
+        });
+        stem::info!(
+            "bloom: window drag started surface={} pointer={},{}",
+            surface_id,
+            self.pointer_x,
+            self.pointer_y
+        );
+        true
+    }
+
+    fn update_pointer_grab(&mut self, scene: &mut Scene, damage: &mut DamageTracker) -> bool {
+        let Some(grab) = self.pointer_grab else {
+            return false;
+        };
+
+        match grab.kind {
+            PointerGrabKind::Move { offset_x, offset_y } => {
+                let target_x = self.pointer_x.saturating_sub(offset_x);
+                let target_y = self.pointer_y.saturating_sub(offset_y);
+                let Some(moved) = scene.move_surface_absolute(grab.surface_id, target_x, target_y)
+                else {
+                    self.pointer_grab = None;
+                    return true;
+                };
+                if moved.changed {
+                    damage.mark_rect(moved.old_rect);
+                    damage.mark_rect(moved.new_rect);
+                    stem::info!(
+                        "bloom: window drag moved surface={} to {},{}",
+                        grab.surface_id,
+                        moved.new_rect.x,
+                        moved.new_rect.y
+                    );
+                }
+                true
+            }
+        }
+    }
+
+    fn end_pointer_grab(&mut self) -> bool {
+        let Some(grab) = self.pointer_grab.take() else {
+            return false;
+        };
+        stem::info!("bloom: window drag ended surface={}", grab.surface_id);
+        true
     }
 
     fn send_keyboard_focus_events(

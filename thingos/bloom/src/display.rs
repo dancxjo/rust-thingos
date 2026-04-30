@@ -112,7 +112,7 @@ impl DisplayBackend {
         let mut id = 0u32;
         match device_call(self.fd, DISPLAY_OP_IMPORT_BUFFER, &bh, Some(&mut id)) {
             Some(_) => {
-                stem::info!("bloom: imported buffer {}x{} as ID={}", width, height, id);
+                stem::debug!("bloom: imported buffer {}x{} as ID={}", width, height, id);
                 Some(id)
             }
             None => {
@@ -266,7 +266,7 @@ impl DisplayBackend {
             )
             && BOUNDED_DAMAGE_LOGS.fetch_add(1, Ordering::Relaxed) < 4
         {
-            stem::info!("bloom: committing bounded damage rects={}", damage_count);
+            stem::trace!("bloom: committing bounded damage rects={}", damage_count);
         }
 
         let req = CommitRequest {

@@ -47,7 +47,19 @@ pub struct Surface {
     pub mapped: bool,
     pub visible: bool,
     pub focus_eligible: bool,
+    pub chrome: SurfaceChrome,
     pub frame_serial: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceChrome {
+    pub titlebar_height: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitTarget {
+    Client { surface_id: u32 },
+    TitleBar { surface_id: u32 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -121,6 +133,7 @@ impl Scene {
                 mapped: false,
                 visible: true,
                 focus_eligible: true,
+                chrome: SurfaceChrome::default(),
                 frame_serial: 0,
             },
         );
@@ -228,6 +241,38 @@ impl Scene {
         true
     }
 
+    pub fn set_surface_chrome(
+        &mut self,
+        client_id: u32,
+        surface_id: u32,
+        chrome: SurfaceChrome,
+    ) -> bool {
+        let Some(surface) = self.surfaces.get_mut(&surface_id) else {
+            return false;
+        };
+        if surface.client_id != client_id {
+            return false;
+        }
+        surface.chrome = chrome;
+        true
+    }
+
+    pub fn move_surface_absolute(
+        &mut self,
+        surface_id: u32,
+        x: i32,
+        y: i32,
+    ) -> Option<SurfaceMove> {
+        let surface = self.surfaces.get_mut(&surface_id)?;
+        let old_rect = surface.current.dest_rect;
+        let new_rect = Rect { x: x.max(0) as u32, y: y.max(0) as u32, ..old_rect };
+        if old_rect.x == new_rect.x && old_rect.y == new_rect.y {
+            return Some(SurfaceMove { old_rect, new_rect, changed: false });
+        }
+        surface.current.dest_rect = new_rect;
+        Some(SurfaceMove { old_rect, new_rect, changed: true })
+    }
+
     pub fn commit_surface(&mut self, client_id: u32, surface_id: u32) -> Option<CommitResult> {
         let surface = self.surfaces.get_mut(&surface_id)?;
         if surface.client_id != client_id {
@@ -331,6 +376,12 @@ impl Scene {
     }
 
     pub fn top_surface_at(&self, x: i32, y: i32) -> Option<u32> {
+        self.hit_test(x, y).map(|target| match target {
+            HitTarget::Client { surface_id } | HitTarget::TitleBar { surface_id } => surface_id,
+        })
+    }
+
+    pub fn hit_test(&self, x: i32, y: i32) -> Option<HitTarget> {
         let mut best: Option<(u32, i32)> = None;
         for surface in self.surfaces.values() {
             if !surface.visible || !surface.mapped || !surface.focus_eligible {
@@ -348,11 +399,28 @@ impl Scene {
                 _ => best = Some((surface.id, surface.current.z_order)),
             }
         }
-        best.map(|(id, _)| id)
+        let (surface_id, _) = best?;
+        let surface = self.surfaces.get(&surface_id)?;
+        let rect = surface.current.dest_rect;
+        let titlebar_bottom = rect.y.saturating_add(surface.chrome.titlebar_height);
+        if surface.chrome.titlebar_height > 0
+            && x >= rect.x as i32
+            && x < rect.x.saturating_add(rect.w) as i32
+            && y >= rect.y as i32
+            && y < titlebar_bottom as i32
+        {
+            Some(HitTarget::TitleBar { surface_id })
+        } else {
+            Some(HitTarget::Client { surface_id })
+        }
     }
 
     pub fn surface_client(&self, surface_id: u32) -> Option<u32> {
         self.surfaces.get(&surface_id).map(|s| s.client_id)
+    }
+
+    pub fn surface_rect(&self, surface_id: u32) -> Option<Rect> {
+        self.surfaces.get(&surface_id).map(|s| s.current.dest_rect)
     }
 }
 
@@ -362,6 +430,12 @@ pub struct CommitResult {
     pub frame_serial: u64,
     pub damage_rects: Vec<Rect>,
     pub needs_full_repaint: bool,
+}
+
+pub struct SurfaceMove {
+    pub old_rect: Rect,
+    pub new_rect: Rect,
+    pub changed: bool,
 }
 
 fn translate_surface_damage(local: Rect, src_w: u32, src_h: u32, dest: Rect) -> Option<Rect> {

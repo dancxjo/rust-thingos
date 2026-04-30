@@ -19,7 +19,7 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::time::Duration;
 use stem::wait_set::WaitSet;
-use stem::{debug, error, info, warn};
+use stem::{debug, error, info, trace, warn};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_mouse";
 
@@ -448,10 +448,10 @@ fn send_pointer_event(bristle_pid: u32, event_type: EventType, payload: &[u8]) -
 fn record_drop(drop_counter: &mut u32, bristle_pid: u32) {
     *drop_counter = drop_counter.wrapping_add(1);
     if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-        debug!(
-            "ps2_mouse: dropped {} mouse events (send pid={} failed)",
-            *drop_counter, bristle_pid
-        );
+            trace!(
+                "ps2_mouse: dropped {} mouse events (send pid={} failed)",
+                *drop_counter, bristle_pid
+            );
     }
 }
 
@@ -620,7 +620,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
         flush_motion_if_due(bristle_pid, &mut motion, &mut drop_counter);
 
         if (irq_wake_count + timeout_count) % 256 == 0 {
-            debug!(
+            trace!(
                 "ps2_mouse: irq_wakes={} poll_timeouts={} last_drain_bytes={}",
                 irq_wake_count, timeout_count, drained
             );

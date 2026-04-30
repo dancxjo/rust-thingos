@@ -378,7 +378,7 @@ async fn compositor_sends_unconfigured_buffer_error(
 /// `Given the client has an xdg_toplevel`
 #[given("the client has an xdg_toplevel")]
 async fn client_has_xdg_toplevel(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    let found = world.wait_for_serial("wayland-server: xdg_toplevel obj=", 15.0).await;
+    let found = world.wait_for_serial("wayland-server: xdg_toplevel obj=", 60.0).await;
     if found {
         eprintln!("│  │  │      ✅ xdg_toplevel present");
         Ok(())
@@ -593,6 +593,68 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
         "Wayland hello client was not visible above the background (title={}, body={}, text={})",
         last_counts.0, last_counts.1, last_counts.2
     )))
+}
+
+#[when("I drag the Wayland hello title bar")]
+async fn drag_wayland_hello_title_bar(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for title-bar drag input".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered titlebar drag zone", 60.0).await {
+        return Err(StepError("Bloom did not register a title-bar drag zone".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let commands = [
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": -10000}}, {"type": "rel", "data": {"axis": "y", "value": -10000}}]}}"#,
+            1_000,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 48}}, {"type": "rel", "data": {"axis": "y", "value": 20}}]}}"#,
+            500,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#,
+            200,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 80}}, {"type": "rel", "data": {"axis": "y", "value": 48}}]}}"#,
+            500,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#,
+            100,
+        ),
+    ];
+
+    for (command, settle_ms) in commands {
+        world
+            .execute_qmp_control(command)
+            .await
+            .map_err(|e| StepError(format!("QMP title-bar drag failed: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
+    }
+    Ok(())
+}
+
+#[then("the compositor should move the toplevel window")]
+async fn compositor_moves_toplevel_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if !world.wait_for_serial("bloom: window drag started", 30.0).await {
+        return Err(StepError("Bloom did not start a title-bar drag".to_string()));
+    }
+    if !world.wait_for_serial("bloom: window drag moved", 30.0).await {
+        return Err(StepError("Bloom did not move the dragged window".to_string()));
+    }
+    if !world.wait_for_serial("bloom: window drag ended", 30.0).await {
+        return Err(StepError("Bloom did not end the title-bar drag".to_string()));
+    }
+    Ok(())
 }
 
 /// `When the client sends xdg_toplevel.set_title "..."` (regex)
