@@ -1,7 +1,7 @@
 use cucumber::{given, then, when};
 
 use super::basic::turn_on_machine;
-use super::helpers::{StepError, capture_failure_diagnostics};
+use super::helpers::{StepError, capture_failure_diagnostics, color_close};
 use crate::world::ThingOsWorld;
 
 // ===== Blossom XDG-Shell Steps =====
@@ -567,11 +567,17 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
         for y in 0..max_y {
             for x in 0..max_x {
                 let [r, g, b] = img.get_pixel(x, y).0;
-                if (48..=72).contains(&r) && (58..=82).contains(&g) && (72..=96).contains(&b) {
+                let pixel = [r, g, b];
+                if color_close(pixel, [0xFF, 0xB9, 0x00], 12) {
                     title_pixels += 1;
                 } else if r <= 30 && (20..=35).contains(&g) && (25..=45).contains(&b) {
                     body_pixels += 1;
-                } else if r > 220 && g > 220 && b > 220 {
+                } else if r < 80 && g < 80 && b < 70
+                    || (r > 130
+                        && g > 150
+                        && b > 120
+                        && !color_close(pixel, [0xFF, 0xB9, 0x00], 32))
+                {
                     text_pixels += 1;
                 }
             }
@@ -592,6 +598,64 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
     Err(StepError(format!(
         "Wayland hello client was not visible above the background (title={}, body={}, text={})",
         last_counts.0, last_counts.1, last_counts.2
+    )))
+}
+
+#[then("active window chrome should use the future gold tab color")]
+async fn active_window_chrome_uses_future_gold(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let _ = world.wait_for_serial("First frame rendered", 60.0).await;
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+    let mut last_counts = (0u32, 0u32);
+    let mut attempt = 0u32;
+
+    while start.elapsed() < timeout {
+        attempt += 1;
+        let screenshot_path = crate::artifacts::global()
+            .lock()
+            .await
+            .screenshot_path(&format!("active_chrome_gold_{}", attempt));
+        let png_path = world
+            .take_screenshot(&screenshot_path)
+            .await
+            .map_err(|e| StepError(format!("Failed to take screenshot: {}", e)))?;
+
+        let img = image::open(&png_path)
+            .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?
+            .to_rgb8();
+        let (width, height) = img.dimensions();
+        let max_x = width.min(520);
+        let max_y = height.min(80);
+        let mut gold_pixels = 0u32;
+        let mut dark_text_pixels = 0u32;
+
+        for y in 0..max_y {
+            for x in 0..max_x {
+                let pixel = img.get_pixel(x, y).0;
+                if color_close(pixel, [0xFF, 0xB9, 0x00], 12) {
+                    gold_pixels += 1;
+                } else if color_close(pixel, [0x32, 0x33, 0x1F], 28) {
+                    dark_text_pixels += 1;
+                }
+            }
+        }
+
+        last_counts = (gold_pixels, dark_text_pixels);
+        if gold_pixels > 4_000 && dark_text_pixels > 40 {
+            eprintln!(
+                "│  │  │      ✅ Active chrome uses future gold (gold={}, dark_text={})",
+                gold_pixels, dark_text_pixels
+            );
+            return Ok(());
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    Err(StepError(format!(
+        "Active chrome did not show future gold and dark title text (gold={}, dark_text={})",
+        last_counts.0, last_counts.1
     )))
 }
 

@@ -15,6 +15,7 @@
 //! | `WCMD_DAMAGE`        | Mark a damage region on a surface             |
 //! | `WCMD_COMMIT`        | Commit pending surface state                  |
 //! | `WCMD_SET_CHROME`    | Mark compositor-known shell chrome geometry   |
+//! | `WCMD_SET_TITLE`     | Update compositor-owned shell chrome title    |
 //!
 //! # Main → Wayland (events)
 //!
@@ -32,6 +33,8 @@ pub const WCMD_IMPORT_ATTACH: u8 = 3;
 pub const WCMD_DAMAGE: u8 = 4;
 pub const WCMD_COMMIT: u8 = 5;
 pub const WCMD_SET_CHROME: u8 = 6;
+pub const WCMD_SET_TITLE: u8 = 7;
+pub const MAX_TITLE_BYTES: usize = 64;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
 pub const WEVT_FRAME_DONE: u8 = 2;
@@ -116,6 +119,17 @@ pub struct WCmdSetChrome {
     pub bloom_surface_id: u32,
     pub titlebar_height: u32,
     pub frame_thickness: u32,
+}
+
+/// [`WCMD_SET_TITLE`] — update the compositor-owned title text for a surface.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WCmdSetTitle {
+    pub msg_type: u8, // = WCMD_SET_TITLE
+    pub title_len: u8,
+    pub _pad: [u8; 2],
+    pub bloom_surface_id: u32,
+    pub title: [u8; MAX_TITLE_BYTES],
 }
 
 /// [`WEVT_BUFFER_RELEASE`] — the compositor no longer references a buffer.
@@ -232,6 +246,25 @@ pub fn encode_set_chrome(
     };
     let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WCmdSetChrome));
+    out
+}
+
+pub fn encode_set_title(bloom_surface_id: u32, title: &str) -> [u8; 72] {
+    let mut title_bytes = [0u8; MAX_TITLE_BYTES];
+    let mut title_len = title.len().min(MAX_TITLE_BYTES);
+    while !title.is_char_boundary(title_len) {
+        title_len -= 1;
+    }
+    title_bytes[..title_len].copy_from_slice(&title.as_bytes()[..title_len]);
+    let msg = WCmdSetTitle {
+        msg_type: WCMD_SET_TITLE,
+        title_len: title_len as u8,
+        _pad: [0; 2],
+        bloom_surface_id,
+        title: title_bytes,
+    };
+    let mut out = [0u8; 72];
+    out.copy_from_slice(as_bytes!(msg, WCmdSetTitle));
     out
 }
 

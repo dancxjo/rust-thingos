@@ -9,6 +9,7 @@
 //! events back to Wayland clients after surface commits.
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -63,6 +64,7 @@ impl WaylandCommandService {
             ipc::WCMD_DAMAGE => self.handle_damage(data, world),
             ipc::WCMD_COMMIT => self.handle_commit(data, world),
             ipc::WCMD_SET_CHROME => self.handle_set_chrome(data, world),
+            ipc::WCMD_SET_TITLE => self.handle_set_title(data, world),
             other => {
                 warn!("wayland-cmd: unknown command type {}", other);
                 false
@@ -228,6 +230,22 @@ impl WaylandCommandService {
         }
         true
     }
+
+    fn handle_set_title(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
+        if data.len() < 8 + ipc::MAX_TITLE_BYTES {
+            return false;
+        }
+        let title_len = (data[1] as usize).min(ipc::MAX_TITLE_BYTES);
+        let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        let title = String::from_utf8_lossy(&data[8..8 + title_len]).into_owned();
+        if world.scene.set_surface_title(self.wayland_client_id, bloom_surface_id, title) {
+            if let Some(rect) = world.scene.surface_rect(bloom_surface_id) {
+                world.damage.mark_rect(rect);
+            }
+            return true;
+        }
+        false
+    }
 }
 
 impl BloomService for WaylandCommandService {
@@ -284,6 +302,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_DAMAGE => 24,
         ipc::WCMD_COMMIT => 12,
         ipc::WCMD_SET_CHROME => 16,
+        ipc::WCMD_SET_TITLE => 8 + ipc::MAX_TITLE_BYTES,
         _ => 1,
     };
     Some(len)

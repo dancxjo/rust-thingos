@@ -67,6 +67,7 @@ Feature: blossom xdg-shell lifecycle
   @wayland-visible
   Scenario: first valid commit is visible above the compositor background
     Then the Wayland hello client should be visible
+    And active window chrome should use the future gold tab color
 
   @pointer-debug
   Scenario: dragging the title bar moves a toplevel window

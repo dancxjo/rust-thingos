@@ -68,7 +68,7 @@ pub fn dispatch(
         ObjKind::XdgWmBase => dispatch_xdg_wm_base(msg, client, obj_id, blossom),
         ObjKind::XdgPositioner => vec![],
         ObjKind::XdgSurface => dispatch_xdg_surface(msg, client, obj_id, blossom, cmd_write),
-        ObjKind::XdgToplevel => dispatch_xdg_toplevel(msg, client, obj_id, blossom),
+        ObjKind::XdgToplevel => dispatch_xdg_toplevel(msg, client, obj_id, blossom, cmd_write),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -735,6 +735,7 @@ fn dispatch_xdg_toplevel(
     client: &mut WaylandClient,
     obj_id: u32,
     blossom: &mut blossom::Blossom,
+    cmd_write: u32,
 ) -> Vec<Vec<u8>> {
     match msg.opcode {
         XDG_TOPLEVEL_DESTROY => {
@@ -751,6 +752,10 @@ fn dispatch_xdg_toplevel(
                 let title = String::from_utf8_lossy(s).into_owned();
                 blossom_debug!("wayland-server: xdg_toplevel obj={} title=\"{}\"", obj_id, title);
                 let _ = blossom.set_title(obj_id, title);
+                if let Some(bloom_surface_id) = toplevel_bloom_surface(client, obj_id) {
+                    let msg = ipc::encode_set_title(bloom_surface_id, &String::from_utf8_lossy(s));
+                    let _ = stem::syscall::port_send_all(cmd_write, &msg);
+                }
             }
         }
         XDG_TOPLEVEL_SET_APP_ID => {
@@ -797,6 +802,17 @@ fn dispatch_xdg_toplevel(
         _ => {}
     }
     vec![]
+}
+
+fn toplevel_bloom_surface(client: &WaylandClient, toplevel_obj: u32) -> Option<u32> {
+    let xdg_surface_obj = match client.objects.get(&toplevel_obj)? {
+        ObjectEntry::XdgToplevel { xdg_surface_obj } => *xdg_surface_obj,
+        _ => return None,
+    };
+    match client.objects.get(&xdg_surface_obj)? {
+        ObjectEntry::XdgSurface { bloom_surface_id } => Some(*bloom_surface_id),
+        _ => None,
+    }
 }
 
 // ── Blossom command translation ───────────────────────────────────────────────

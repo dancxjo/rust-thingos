@@ -279,7 +279,9 @@ impl InputState {
                     if let Some(surface_id) =
                         self.start_chrome_grab(scene, damage, wayland_evt_write)
                     {
-                        scene.keyboard_focus = Some(surface_id);
+                        let new_focus = Some(surface_id);
+                        scene.keyboard_focus = new_focus;
+                        mark_focus_damage(scene, damage, old_focus, new_focus);
                         self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
                         mark_cursor_damage(
                             damage,
@@ -291,7 +293,9 @@ impl InputState {
                         return;
                     }
                 }
-                scene.keyboard_focus = scene.pointer_focus;
+                let new_focus = scene.pointer_focus;
+                scene.keyboard_focus = new_focus;
+                mark_focus_damage(scene, damage, old_focus, new_focus);
                 self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
@@ -654,6 +658,27 @@ fn mark_cursor_damage(damage: &mut DamageTracker, old_x: i32, old_y: i32, new_x:
     mark_cursor_rect(damage, old_x, old_y);
     if old_x != new_x || old_y != new_y {
         mark_cursor_rect(damage, new_x, new_y);
+    }
+}
+
+fn mark_focus_damage(
+    scene: &Scene,
+    damage: &mut DamageTracker,
+    old_focus: Option<u32>,
+    new_focus: Option<u32>,
+) {
+    if old_focus == new_focus {
+        return;
+    }
+    if let Some(surface_id) = old_focus {
+        if let Some(rect) = scene.surface_rect(surface_id) {
+            damage.mark_rect(rect);
+        }
+    }
+    if let Some(surface_id) = new_focus {
+        if let Some(rect) = scene.surface_rect(surface_id) {
+            damage.mark_rect(rect);
+        }
     }
 }
 

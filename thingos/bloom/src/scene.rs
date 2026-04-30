@@ -1,4 +1,5 @@
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use abi::display_protocol::Rect;
@@ -48,6 +49,7 @@ pub struct Surface {
     pub visible: bool,
     pub focus_eligible: bool,
     pub chrome: SurfaceChrome,
+    pub title: Option<String>,
     pub frame_serial: u64,
 }
 
@@ -112,7 +114,7 @@ impl CursorKind {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CompositionEntry {
     pub surface_id: u32,
     pub buffer_id: u32,
@@ -121,6 +123,8 @@ pub struct CompositionEntry {
     pub z_order: i32,
     pub alpha: u8,
     pub chrome: SurfaceChrome,
+    pub active: bool,
+    pub title: Option<String>,
 }
 
 pub struct Scene {
@@ -185,6 +189,7 @@ impl Scene {
                 visible: true,
                 focus_eligible: true,
                 chrome: SurfaceChrome::default(),
+                title: None,
                 frame_serial: 0,
             },
         );
@@ -308,6 +313,17 @@ impl Scene {
         true
     }
 
+    pub fn set_surface_title(&mut self, client_id: u32, surface_id: u32, title: String) -> bool {
+        let Some(surface) = self.surfaces.get_mut(&surface_id) else {
+            return false;
+        };
+        if surface.client_id != client_id {
+            return false;
+        }
+        surface.title = if title.is_empty() { None } else { Some(title) };
+        true
+    }
+
     pub fn move_surface_absolute(
         &mut self,
         surface_id: u32,
@@ -420,6 +436,13 @@ impl Scene {
 
     pub fn collect_composition(&self) -> Vec<CompositionEntry> {
         let mut list = Vec::new();
+        let active_surface = self.keyboard_focus.or_else(|| {
+            self.surfaces
+                .values()
+                .filter(|surface| surface.visible && surface.mapped && surface.focus_eligible)
+                .max_by_key(|surface| surface.current.z_order)
+                .map(|surface| surface.id)
+        });
         for surface in self.surfaces.values() {
             if !surface.visible || !surface.mapped {
                 continue;
@@ -435,6 +458,8 @@ impl Scene {
                 z_order: surface.current.z_order,
                 alpha: 255,
                 chrome: surface.chrome,
+                active: active_surface == Some(surface.id),
+                title: surface.title.clone(),
             });
         }
         list.sort_by_key(|entry| entry.z_order);

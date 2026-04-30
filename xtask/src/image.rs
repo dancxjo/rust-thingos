@@ -65,6 +65,10 @@ fn asset_list_contains_wallpaper(assets: &[PathBuf], file_name: &str) -> bool {
     assets.iter().any(|asset| asset.to_string_lossy().replace('\\', "/").ends_with(&suffix))
 }
 
+fn is_future_cursor_asset(clean_path: &str) -> bool {
+    clean_path.starts_with("assets/cursors/future/") && clean_path.ends_with(".svg")
+}
+
 fn stage_default_wallpapers_hdd(sh: &Shell, hdd: &str, arch: &str) -> Result<()> {
     let staged = std::env::temp_dir().join(format!("thingos_default_wallpapers_{arch}"));
     if staged.exists() {
@@ -503,7 +507,7 @@ fn limine_modules(
         let clean_path = path_str.replace('\\', "/");
 
         let allowed = (clean_path.starts_with("assets/fonts/") && clean_path.ends_with(".ttf"))
-            || clean_path.ends_with("future/default.svg")
+            || is_future_cursor_asset(&clean_path)
             || clean_path.ends_with("wallpapers/flower.bmp")
             || clean_path.ends_with("wallpapers/flower.png")
             || clean_path.ends_with("wallpapers/clouds.bmp")
@@ -1233,5 +1237,26 @@ mod tests {
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_fake"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/virtio_gpu"));
         assert!(bootfb_entry.contains("module_path: boot():/bin/bloom"));
+    }
+
+    #[test]
+    fn limine_config_includes_future_cursor_variants() {
+        let sh = Shell::new().expect("shell");
+        let programs = [test_program("bloom")];
+        let assets = [
+            PathBuf::from("assets/cursors/future/default.svg"),
+            PathBuf::from("assets/cursors/future/fleur.svg"),
+            PathBuf::from("assets/cursors/future/top_side.svg"),
+            PathBuf::from("assets/cursors/future/bottom_right_corner.svg"),
+            PathBuf::from("assets/cursors/plain/Normal.cur"),
+        ];
+
+        let conf = generate_limine_config(&sh, &programs, &assets, None, None, false, false, false);
+
+        assert!(conf.contains("module_path: boot():/share/cursors/future/default.svg"));
+        assert!(conf.contains("module_path: boot():/share/cursors/future/fleur.svg"));
+        assert!(conf.contains("module_path: boot():/share/cursors/future/top_side.svg"));
+        assert!(conf.contains("module_path: boot():/share/cursors/future/bottom_right_corner.svg"));
+        assert!(!conf.contains("module_path: boot():/share/cursors/plain/Normal.cur"));
     }
 }

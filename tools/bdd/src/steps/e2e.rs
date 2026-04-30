@@ -926,6 +926,18 @@ async fn pointer_debug_overlay_includes_cursor_svg(
         )));
     }
 
+    let cursor = cursor_signature_pixels(&img, icon_x0, icon_y0, cursor_size);
+    eprintln!(
+        "│  │  │      pointer debug Future cursor pixels: white={} gold={} dark={}",
+        cursor.white, cursor.gold, cursor.dark
+    );
+    if cursor.white < 300 || cursor.gold < 40 || cursor.dark < 120 {
+        return Err(StepError(format!(
+            "Pointer debug overlay does not contain the Future cursor art (white={}, gold={}, dark={})",
+            cursor.white, cursor.gold, cursor.dark
+        )));
+    }
+
     Ok(())
 }
 

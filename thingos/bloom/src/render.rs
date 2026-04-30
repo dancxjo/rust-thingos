@@ -28,6 +28,9 @@ const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
 const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
+const ACTIVE_CHROME: u32 = 0xFFFFB900;
+const INACTIVE_CHROME: u32 = 0xFFA6984A;
+const CHROME_TEXT: u32 = 0xFF32331F;
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -321,11 +324,13 @@ impl CompositorVisuals {
         }
         self.ensure_chrome_overlay(display)?;
         let overlay = self.chrome_overlay.as_mut()?;
+        let draw_text = self.pistil.as_ref().and_then(|lib| lib.draw_text);
         draw_chrome_overlay(
             overlay.texture.as_slice_mut(),
             overlay.width,
             overlay.height,
             composition,
+            draw_text,
         );
         Some(OverlayPlane {
             buffer_id: overlay.buffer_id,
@@ -629,6 +634,7 @@ fn draw_chrome_overlay(
     stride: u32,
     height: u32,
     composition: &[CompositionEntry],
+    pistil_draw_text: Option<DrawTextFn>,
 ) {
     dst.fill(0);
     for entry in composition {
@@ -645,9 +651,35 @@ fn draw_chrome_overlay(
         let y = rect.y as i32;
         let w = rect.w;
         let h = rect.h;
+        let chrome_color = if entry.active { ACTIVE_CHROME } else { INACTIVE_CHROME };
 
-        fill_rect(dst, stride, x, y, w, frame, 0xFFE8E8E8);
-        fill_rect(dst, stride, x, y, frame, h, 0xFFE8E8E8);
+        let titlebar_height = chrome.titlebar_height.min(h);
+        if titlebar_height > 0 {
+            fill_rect(dst, stride, x, y, w, titlebar_height, chrome_color);
+            if let Some(title) = entry.title.as_deref() {
+                let text_x = x.saturating_add(frame as i32).saturating_add(12);
+                let text_y = y.saturating_add(28);
+                let max_chars = w
+                    .saturating_sub(frame.saturating_mul(2))
+                    .saturating_sub(24)
+                    .saturating_div(11)
+                    .max(1) as usize;
+                draw_overlay_text(
+                    pistil_draw_text,
+                    dst,
+                    stride,
+                    height,
+                    text_x,
+                    text_y,
+                    18.0,
+                    title_prefix(title, max_chars),
+                    CHROME_TEXT,
+                );
+            }
+        } else {
+            fill_rect(dst, stride, x, y, w, frame, chrome_color);
+        }
+        fill_rect(dst, stride, x, y, frame, h, chrome_color);
         fill_rect(
             dst,
             stride,
@@ -655,7 +687,7 @@ fn draw_chrome_overlay(
             y.saturating_add(h.saturating_sub(frame) as i32),
             w,
             frame,
-            0xFF2A2A2A,
+            chrome_color,
         );
         fill_rect(
             dst,
@@ -664,50 +696,13 @@ fn draw_chrome_overlay(
             y,
             frame,
             h,
-            0xFF2A2A2A,
-        );
-        fill_rect(
-            dst,
-            stride,
-            x.saturating_add(1),
-            y.saturating_add(1),
-            w.saturating_sub(2),
-            1,
-            0xFFFFFFFF,
-        );
-        fill_rect(
-            dst,
-            stride,
-            x.saturating_add(1),
-            y.saturating_add(1),
-            1,
-            h.saturating_sub(2),
-            0xFFFFFFFF,
-        );
-        fill_rect(
-            dst,
-            stride,
-            x.saturating_add(1),
-            y.saturating_add(h.saturating_sub(2) as i32),
-            w.saturating_sub(2),
-            1,
-            0xFF000000,
-        );
-        fill_rect(
-            dst,
-            stride,
-            x.saturating_add(w.saturating_sub(2) as i32),
-            y.saturating_add(1),
-            1,
-            h.saturating_sub(2),
-            0xFF000000,
+            chrome_color,
         );
         if chrome.titlebar_height > frame.saturating_mul(2)
             && chrome.titlebar_height < h.saturating_sub(frame)
         {
             let sep_y = y.saturating_add(chrome.titlebar_height as i32);
-            fill_rect(dst, stride, x, sep_y, w, 1, 0xFF303030);
-            fill_rect(dst, stride, x, sep_y.saturating_add(1), w, 1, 0xFFFFFFFF);
+            fill_rect(dst, stride, x, sep_y, w, 1, CHROME_TEXT);
         }
     }
 
@@ -716,6 +711,16 @@ fn draw_chrome_overlay(
         for px in &mut dst[len..] {
             *px = 0;
         }
+    }
+}
+
+fn title_prefix(title: &str, max_chars: usize) -> &str {
+    if max_chars == 0 {
+        return "";
+    }
+    match title.char_indices().nth(max_chars) {
+        Some((idx, _)) => &title[..idx],
+        None => title,
     }
 }
 
