@@ -145,6 +145,12 @@ Feature: Bloom compositor service loop and responsiveness
     And I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: wallpaper decode failed" within 60s
 
+  Scenario: display driver reports VBLANK capability
+    # Verifies that the display driver advertises the VBLANK capability so
+    # bloom and other clients know that CommitFlags::VSYNC is honoured.
+    Given the machine is booted
+    Then the serial output should contain "bloom: output0" within 60s
+    And the serial output should contain "bloom: display driver supports VBLANK (vsync)" within 60s
   @pointer-debug
   Scenario: pointer motion events are coalesced to latest-per-frame
     # Multiple PointerMove samples arriving between frames must be aggregated

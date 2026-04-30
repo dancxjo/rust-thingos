@@ -4,7 +4,7 @@ use core::default::Default;
 extern crate alloc;
 use alloc::collections::BTreeMap;
 
-use abi::display::{BufferId, CommitRequest, DisplayInfo, PlaneCommit, PlaneId};
+use abi::display::{BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, NS_PER_SECOND_PER_MILLI_HZ, DisplayInfo, PlaneCommit, PlaneId};
 use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
 use abi::display_protocol::Rect;
 use abi::errors::{Errno, SysResult};
@@ -36,12 +36,15 @@ pub struct BootFbDriver {
     pub fb: Framebuffer,
     pub buffers: BTreeMap<BufferId, MappedBuffer>,
     pub next_buffer_id: u32,
+    /// Monotonic nanosecond timestamp of the last successful present.
+    /// Used to implement software vsync pacing when `CommitFlags::VSYNC` is set.
+    pub last_present_ns: u64,
 }
 
 impl BootFbDriver {
     pub fn new() -> Option<Self> {
         let fb = find_framebuffer()?;
-        Some(Self { fb, buffers: BTreeMap::new(), next_buffer_id: 1 })
+        Some(Self { fb, buffers: BTreeMap::new(), next_buffer_id: 1, last_present_ns: 0 })
     }
 
     pub fn get_info(&self) -> DisplayInfo {
@@ -50,12 +53,12 @@ impl BootFbDriver {
             preferred_mode: abi::display::DisplayMode {
                 width: self.fb.width,
                 height: self.fb.height,
-                refresh_mhz: 60000,
+                refresh_mhz: DEFAULT_REFRESH_MHZ,
             },
             plane_count: 1,
             max_buffers: 32,
             supported_formats: 1 << (PixelFormat::Bgra8888 as u8),
-            caps: abi::display::DisplayCaps::empty(),
+            caps: abi::display::DisplayCaps::VBLANK,
         }
     }
 
@@ -106,25 +109,40 @@ impl BootFbDriver {
 
     pub fn commit(&mut self, req: &CommitRequest) -> SysResult<()> {
         let damage = req.damage_rects();
+        // Blit all planes — with or without damage rects.  Both paths continue
+        // to the vsync wait below so that the VSYNC flag is honoured regardless
+        // of the damage mode (full-output or bounded rects).
         if damage.is_empty() {
             for plane in req.planes() {
                 self.blit_plane(plane)?;
             }
-            return Ok(());
-        }
-
-        for plane in req.planes() {
-            for rect in damage {
-                if let Some(clip) = rect_intersect(plane.dest_rect, *rect) {
-                    self.blit_plane_clipped(plane, clip)?;
+        } else {
+            for plane in req.planes() {
+                for rect in damage {
+                    if let Some(clip) = rect_intersect(plane.dest_rect, *rect) {
+                        self.blit_plane_clipped(plane, clip)?;
+                    }
                 }
             }
         }
+
+        // Software vsync: when requested, pace frame delivery to the display
+        // refresh interval so callers that set VSYNC get accurate timing.
+        if req.flags.contains(CommitFlags::VSYNC) {
+            let refresh = self.fb_refresh_mhz();
+            vsync_wait(&mut self.last_present_ns, refresh);
+        }
+
         Ok(())
     }
 
     fn blit_plane(&mut self, commit: &PlaneCommit) -> SysResult<()> {
         self.blit_plane_clipped(commit, commit.dest_rect)
+    }
+
+    /// Returns the display refresh rate in milli-Hertz (e.g. 60000 = 60 Hz).
+    fn fb_refresh_mhz(&self) -> u32 {
+        DEFAULT_REFRESH_MHZ
     }
 
     fn blit_plane_clipped(&mut self, commit: &PlaneCommit, clip: Rect) -> SysResult<()> {
@@ -210,6 +228,28 @@ fn rect_intersect(a: Rect, b: Rect) -> Option<Rect> {
     let x2 = a.x.saturating_add(a.w).min(b.x.saturating_add(b.w));
     let y2 = a.y.saturating_add(a.h).min(b.y.saturating_add(b.h));
     if x2 <= x1 || y2 <= y1 { None } else { Some(Rect { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }) }
+}
+
+/// Software vsync pacing helper.
+///
+/// Sleeps until the next frame boundary derived from the display refresh rate,
+/// then records the current monotonic time as the new present timestamp.
+/// This ensures that callers requesting `CommitFlags::VSYNC` are blocked for
+/// approximately one frame interval relative to the previous present, matching
+/// the semantics of a real hardware vblank wait.
+///
+/// `refresh_mhz` is in milli-Hertz (e.g. 60 000 = 60 Hz). A value of zero
+/// falls back to `DEFAULT_REFRESH_MHZ`.
+fn vsync_wait(last_present_ns: &mut u64, refresh_mhz: u32) {
+    let effective_mhz = if refresh_mhz > 0 { refresh_mhz } else { DEFAULT_REFRESH_MHZ };
+    // NS_PER_SECOND_PER_MILLI_HZ / refresh_mhz converts milli-Hertz to ns per frame.
+    let frame_ns = NS_PER_SECOND_PER_MILLI_HZ / effective_mhz as u64;
+    let now = stem::time::monotonic_ns();
+    let next = last_present_ns.saturating_add(frame_ns);
+    if now < next {
+        stem::time::sleep_ns(next - now);
+    }
+    *last_present_ns = stem::time::monotonic_ns();
 }
 
 fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
