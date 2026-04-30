@@ -42,7 +42,7 @@ const CHROME_OUTLINE_LIGHT: u32 = 0xFF000000;
 const CHROME_ICON_MINIMIZE: &str = "\u{1F5D5}";
 const CHROME_ICON_SHADE: &str = "\u{25B2}";
 const CHROME_ICON_MAXIMIZE: &str = "\u{1F5D6}";
-const CHROME_ICON_FULLSCREEN: &str = "\u{26F6}";
+const CHROME_ICON_FULLSCREEN: &str = "\u{25FB}";
 const CHROME_ICON_CLOSE: &str = "\u{1F5D9}";
 const CHROME_ICON_SCRATCH_PAD: u32 = 24;
 const CHROME_ICON_X_BIAS: i32 = -2;
@@ -976,7 +976,7 @@ fn draw_chrome_button_fallback_glyph(
                 CHROME_TEXT,
             );
         }
-        ChromeButton::Maximize | ChromeButton::Fullscreen => {
+        ChromeButton::Maximize => {
             let box_w = (w - 10).max(7);
             let box_h = (h - 10).max(7);
             let bx = cx - box_w / 2;
@@ -988,6 +988,25 @@ fn draw_chrome_button_fallback_glyph(
             if box_w > 4 && box_h > 4 {
                 fill_rect_i32(dst, stride, height, bx + 2, by + 2, box_w - 4, 1, CHROME_TEXT);
             }
+        }
+        ChromeButton::Fullscreen => {
+            let box_w = (w - 10).max(7);
+            let box_h = (h - 10).max(7);
+            let bx = cx - box_w / 2;
+            let by = cy - box_h / 2;
+            let clen = 3;
+            // Corners
+            fill_rect_i32(dst, stride, height, bx, by, clen, 1, CHROME_TEXT);
+            fill_rect_i32(dst, stride, height, bx, by, 1, clen, CHROME_TEXT);
+
+            fill_rect_i32(dst, stride, height, bx + box_w - clen, by, clen, 1, CHROME_TEXT);
+            fill_rect_i32(dst, stride, height, bx + box_w - 1, by, 1, clen, CHROME_TEXT);
+
+            fill_rect_i32(dst, stride, height, bx, by + box_h - 1, clen, 1, CHROME_TEXT);
+            fill_rect_i32(dst, stride, height, bx, by + box_h - clen, 1, clen, CHROME_TEXT);
+
+            fill_rect_i32(dst, stride, height, bx + box_w - clen, by + box_h - 1, clen, 1, CHROME_TEXT);
+            fill_rect_i32(dst, stride, height, bx + box_w - 1, by + box_h - clen, 1, clen, CHROME_TEXT);
         }
         ChromeButton::Close => {
             let radius = ((w.min(h) - 8) / 2).max(3);

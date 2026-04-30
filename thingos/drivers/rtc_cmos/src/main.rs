@@ -1,14 +1,15 @@
 #![no_std]
 #![no_main]
-use core::default::Default;
+use alloc::string::{String, ToString};
 extern crate alloc;
 
 use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
     ProbeResult, Status,
 };
-use stem::abi::driver_ctx::DriverCtx;
-use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
+use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
+use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
+use stem::syscall::{device_claim, vm_map, vm_unmap};
 use stem::{debug, info, warn};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"rtc_cmos";
@@ -92,11 +93,7 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> St
 pub static MANIFEST: ManifestHeader = ManifestHeader {
     magic: MANIFEST_MAGIC,
     kind: ModuleKind::Driver,
-    device_kind: [
-        0x64, 0x65, 0x76, 0x2e, 0x72, 0x74, 0x63, 0x2e, 0x43, 0x6d, 0x6f, 0x73, 0x00, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ],
+    device_kind: device_kind_bytes(b"dev.rtc.Cmos"),
     version: 1,
     _reserved: 0,
 };
@@ -281,6 +278,54 @@ fn anchor_from_rtc() -> bool {
     true
 }
 
+fn device_path_from_ctx_memfd(boot_fd: usize) -> Option<String> {
+    if boot_fd == 0 {
+        return None;
+    }
+
+    let len = core::mem::size_of::<DriverEntryCtx>();
+    let req = VmMapReq {
+        addr_hint: 0,
+        len,
+        prot: VmProt::READ | VmProt::USER,
+        flags: VmMapFlags::empty(),
+        backing: VmBacking::File { thing: boot_fd as u32, offset: 0 },
+    };
+    let Ok(resp) = vm_map(&req) else {
+        return None;
+    };
+
+    let path = unsafe {
+        let ctx = &*(resp.addr as *const DriverEntryCtx);
+        if ctx.version == 1 {
+            let path = ctx.device_path_str();
+            if path.is_empty() { None } else { Some(path.to_string()) }
+        } else {
+            None
+        }
+    };
+    let _ = vm_unmap(resp.addr, resp.len);
+    path
+}
+
+fn claim_device_from_boot_arg(boot_arg: usize) -> Option<usize> {
+    let Some(path) = device_path_from_ctx_memfd(boot_arg) else {
+        debug!("RTC: starting without a DriverEntryCtx device path");
+        return None;
+    };
+
+    match device_claim(&path) {
+        Ok(claim) => {
+            info!("RTC: claimed {} (handle={})", path, claim);
+            Some(claim)
+        }
+        Err(err) => {
+            warn!("RTC: failed to claim {}: {:?}", path, err);
+            None
+        }
+    }
+}
+
 #[stem::main]
 fn main(arg: usize) -> ! {
     let cpu = stem::arch::whoami();
@@ -290,16 +335,7 @@ fn main(arg: usize) -> ! {
     );
 
     debug!("Starting... arg={:x}", arg);
-
-    let _dev_id = if arg != 0 {
-        let ctx = DriverCtx::from_raw(arg);
-        let id = stem::thing::ThingId(ctx.device_id.0);
-        debug!("Serving device ID: {:?}", id);
-        id
-    } else {
-        debug!("Starting without explicit context (phased boot mode).");
-        Default::default()
-    };
+    let _claim = claim_device_from_boot_arg(arg);
 
     for attempt in 1..=20 {
         if anchor_from_rtc() {
