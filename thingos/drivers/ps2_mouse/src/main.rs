@@ -1,8 +1,8 @@
-//! PS/2 Mouse Driver (Interrupt-driven)
+//! PS/2 Mouse Driver (IRQ-assisted)
 //!
-//! Subscribes to IRQ12 via IOAPIC and blocks on `irq_wait` for each interrupt.
-//! All pending PS/2 bytes are drained on each IRQ wake before waiting again.
-//! Falls back to a time-bounded polling loop only when IRQ delivery is unavailable.
+//! Subscribes to IRQ12 via IOAPIC and drains pending PS/2 bytes when the IRQ
+//! fires. The wait is deliberately time-bounded so the mouse still works when
+//! virtual hardware or interrupt routing fails to deliver IRQ12.
 #![no_std]
 #![no_main]
 use alloc::string::ToString;
@@ -16,7 +16,9 @@ use abi::driver_interface::{
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::message::msg_send;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{ioport_read, ioport_write, irq_subscribe, irq_wait};
+use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
+use stem::time::Duration;
+use stem::wait_set::WaitSet;
 use stem::{debug, error, info, warn};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_mouse";
@@ -113,6 +115,7 @@ const MOUSE_ENABLE: u8 = 0xF4;
 /// IRQ12 vector (mouse) - legacy IRQ12 maps to vector 0x2C after IOAPIC remap
 const MOUSE_VECTOR: u8 = 0x2C;
 const POLLING_INTERVAL_MS: u64 = 8;
+const IRQ_ASSIST_POLL_MS: u64 = 4;
 
 /// Preferred PS/2 mouse sample rate (Hz). Higher rates give smoother pointer motion.
 const PREFERRED_SAMPLE_RATE: u8 = 200;
@@ -264,7 +267,10 @@ fn init_mouse() {
         if set_sample_rate(FALLBACK_SAMPLE_RATE) {
             info!("ps2_mouse: sample rate set to {} Hz (fallback)", FALLBACK_SAMPLE_RATE);
         } else {
-            warn!("ps2_mouse: fallback sample rate {} Hz also failed; continuing with device default", FALLBACK_SAMPLE_RATE);
+            warn!(
+                "ps2_mouse: fallback sample rate {} Hz also failed; continuing with device default",
+                FALLBACK_SAMPLE_RATE
+            );
         }
         FALLBACK_SAMPLE_RATE
     };
@@ -423,20 +429,18 @@ fn send_mouse_events(
                     len = 22;
                 }
             }
-            let send_ok = len > 0
-                && msg_send(
-                    bristle_pid,
-                    abi::KindId(KIND_BRISTLE_DEVICE_EVENT),
-                    &buf[..len],
-                )
-                .is_ok();
-            if !send_ok && len > 0 {
-                *drop_counter = drop_counter.wrapping_add(1);
-                if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-                    debug!(
-                        "ps2_mouse: dropped {} mouse events (send pid={} failed)",
-                        *drop_counter, bristle_pid
-                    );
+            if len > 0 {
+                let send_ok = len > 0
+                    && msg_send(bristle_pid, abi::KindId(KIND_BRISTLE_DEVICE_EVENT), &buf[..len])
+                        .is_ok();
+                if !send_ok && len > 0 {
+                    *drop_counter = drop_counter.wrapping_add(1);
+                    if *drop_counter <= 4 || *drop_counter % 100 == 0 {
+                        debug!(
+                            "ps2_mouse: dropped {} mouse events (send pid={} failed)",
+                            *drop_counter, bristle_pid
+                        );
+                    }
                 }
             }
         }
@@ -486,52 +490,69 @@ fn drain_mouse_data(
     bytes_read
 }
 
-/// Interrupt-driven service loop (primary path).
+/// IRQ-assisted service loop (primary path).
 ///
-/// Blocks on `irq_wait` until IRQ12 fires, then drains all pending PS/2 bytes.
-/// This avoids the previous polling cadence (8 ms interval + 1 ms unconditional
-/// sleep per iteration) and removes pointer jitter during normal operation.
-/// If `irq_wait` returns an error the driver falls back to the bounded polling
-/// loop so the cursor never becomes completely unresponsive.
+/// Waits briefly for IRQ12, then drains all pending PS/2 bytes even if the wait
+/// timed out. This keeps normal interrupt latency low without making pointer
+/// updates depend on a perfectly routed IRQ line.
 fn interrupt_loop(bristle_pid: u32) -> ! {
     debug!(
-        "ps2_mouse: using interrupt-driven loop (IRQ vector 0x{:02x})",
-        MOUSE_VECTOR
+        "ps2_mouse: using IRQ-assisted loop (IRQ vector 0x{:02x}, poll={}ms)",
+        MOUSE_VECTOR, IRQ_ASSIST_POLL_MS
     );
+
+    let mut waitset = WaitSet::new();
+    let irq_token = match waitset.add_irq(MOUSE_VECTOR as u64) {
+        Ok(token) => token,
+        Err(e) => {
+            warn!("ps2_mouse: failed to add IRQ wait source ({:?}), switching to polling", e);
+            polling_loop(bristle_pid);
+        }
+    };
+
     let mut packet = [0u8; 3];
     let mut idx = 0usize;
     let mut mouse_state = MouseState::new();
     let mut drop_counter = 0u32;
     let mut irq_wake_count = 0u64;
+    let mut timeout_count = 0u64;
 
     loop {
-        match irq_wait(MOUSE_VECTOR) {
-            Ok(pending) => {
-                irq_wake_count += 1;
-                let drained = drain_mouse_data(
-                    bristle_pid,
-                    &mut mouse_state,
-                    &mut packet,
-                    &mut idx,
-                    &mut drop_counter,
-                );
-                // Periodic diagnostic log (every 256 wakes) to confirm IRQ delivery.
-                if irq_wake_count % 256 == 0 {
-                    debug!(
-                        "ps2_mouse: irq_wakes={} pending={} last_drain_bytes={}",
-                        irq_wake_count, pending, drained
-                    );
+        match waitset.wait(Some(Duration::from_millis(IRQ_ASSIST_POLL_MS))) {
+            Ok(events) => {
+                let mut saw_irq = false;
+                for event in events {
+                    if event.token() == irq_token && event.is_irq() {
+                        irq_wake_count = irq_wake_count.wrapping_add(1);
+                        saw_irq = true;
+                    }
+                }
+                if !saw_irq {
+                    timeout_count = timeout_count.wrapping_add(1);
                 }
             }
             Err(e) => {
-                // irq_wait should not fail once subscribed; if it does, switch to
-                // the fallback polling loop so the driver keeps functioning.
                 warn!(
-                    "ps2_mouse: irq_wait error ({:?}) after {} wakes, switching to polling fallback",
+                    "ps2_mouse: IRQ wait error ({:?}) after {} wakes, switching to polling fallback",
                     e, irq_wake_count
                 );
                 break;
             }
+        }
+
+        let drained = drain_mouse_data(
+            bristle_pid,
+            &mut mouse_state,
+            &mut packet,
+            &mut idx,
+            &mut drop_counter,
+        );
+
+        if (irq_wake_count + timeout_count) % 256 == 0 {
+            debug!(
+                "ps2_mouse: irq_wakes={} poll_timeouts={} last_drain_bytes={}",
+                irq_wake_count, timeout_count, drained
+            );
         }
     }
     polling_loop(bristle_pid)
@@ -539,10 +560,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
 
 /// Fallback polling loop – used only when IRQ subscription or wait fails.
 fn polling_loop(bristle_pid: u32) -> ! {
-    debug!(
-        "ps2_mouse: using fallback polling loop ({}ms interval)",
-        POLLING_INTERVAL_MS
-    );
+    debug!("ps2_mouse: using fallback polling loop ({}ms interval)", POLLING_INTERVAL_MS);
 
     let mut packet = [0u8; 3];
     let mut idx = 0usize;

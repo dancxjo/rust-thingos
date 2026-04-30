@@ -45,6 +45,10 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+/// Fallback frame interval used when no display refresh rate is known yet
+/// (≈ 60 fps = 16 666 666 ns per frame).
+const DEFAULT_FRAME_INTERVAL_NS: u64 = 16_666_666;
+
 use stem::time::monotonic_ns;
 use stem::wait_set::{WaitSet, WaitToken};
 
@@ -259,21 +263,21 @@ impl BloomLoop {
     ///
     /// Returns `None` (wait indefinitely) only when no repaint is pending and
     /// no timers are armed.  Returns `Some(0)` to skip sleeping entirely.
+    ///
+    /// All comparisons are done at nanosecond precision to preserve the full
+    /// 16.67 ms frame interval without millisecond rounding.
     fn next_timeout(&self) -> Option<core::time::Duration> {
-        let frame_ms = self.frame_clock.next_deadline_ms();
+        let frame_ns = self.frame_clock.next_deadline_ns();
         let timer_ns = self.timers.front().map(|t| {
             let now = monotonic_ns();
             t.expiry_ns.saturating_sub(now)
         });
 
-        match (frame_ms, timer_ns) {
+        match (frame_ns, timer_ns) {
             (None, None) => None,
-            (Some(ms), None) => Some(core::time::Duration::from_millis(ms)),
+            (Some(ns), None) => Some(core::time::Duration::from_nanos(ns)),
             (None, Some(ns)) => Some(core::time::Duration::from_nanos(ns)),
-            (Some(ms), Some(ns)) => {
-                let frame_ns = ms * 1_000_000;
-                Some(core::time::Duration::from_nanos(frame_ns.min(ns)))
-            }
+            (Some(fns), Some(tns)) => Some(core::time::Duration::from_nanos(fns.min(tns))),
         }
     }
 
@@ -339,9 +343,10 @@ impl BloomLoop {
                 // No FDs registered yet; pace with the frame interval.
                 // Respect a zero timeout (e.g. from Wake) by skipping the sleep
                 // entirely so the loop can re-run immediately.
-                let sleep_ms = timeout.map(|d| d.as_millis() as u64).unwrap_or(16);
-                if sleep_ms > 0 {
-                    stem::sleep_ms(sleep_ms);
+                let sleep_ns = timeout.map(|d| d.as_nanos().min(u64::MAX as u128) as u64)
+                    .unwrap_or(DEFAULT_FRAME_INTERVAL_NS);
+                if sleep_ns > 0 {
+                    stem::time::sleep_ns(sleep_ns);
                 }
                 // Still need to fire timers even without FDs.
                 let (_fired, timer_wake) = self.fire_due_timers(world);
