@@ -52,6 +52,8 @@ pub enum ObjectEntry {
     Pointer,
     /// wl_keyboard created from wl_seat.
     Keyboard,
+    /// wl_output global — represents a physical or virtual display.
+    Output,
     /// Object has been destroyed (tombstone).
     Destroyed,
 }
