@@ -1104,7 +1104,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     sh.remove_path("motd")?;
 
     let limine_conf_content =
-        generate_limine_config(sh, programs, &asset_files, None, None, false, false);
+        generate_limine_config(sh, programs, &asset_files, None, None, false, false, false);
     let limine_cfg = "limine.generated.conf";
     sh.write_file(limine_cfg, limine_conf_content)?;
     cmd!(sh, "mcopy -i {hdd}@@1M {limine_cfg} ::/boot/limine/limine.conf").run()?;
@@ -1218,7 +1218,7 @@ mod tests {
             test_program("bloom"),
         ];
 
-        let conf = generate_limine_config(&sh, &programs, &[], None, None, false, false);
+        let conf = generate_limine_config(&sh, &programs, &[], None, None, false, false, false);
         let normal_entry = limine_entry(&conf, "ThingOS");
         let bootfb_entry = limine_entry(&conf, "ThingOS (BootFB Fallback)");
 
