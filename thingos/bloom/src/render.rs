@@ -5,12 +5,16 @@ use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use pistil_types::Texture;
 
 use crate::display::DisplayBackend;
-use crate::scene::{CompositionEntry, CursorKind};
+use crate::scene::{
+    ChromeButton, CompositionEntry, CursorKind, SurfaceChrome, WINDOW_SHADOW_OFFSET_X,
+    WINDOW_SHADOW_OFFSET_Y, WINDOW_SHADOW_RADIUS, chrome_button_rects,
+};
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
 const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
+const DRAW_SYMBOL_TEXT_SYMBOL: &[u8] = b"pistil_draw_symbol_text";
 const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
 const MOVE_CURSOR_PATH: &str = "/share/cursors/future/fleur.svg";
 const RESIZE_N_CURSOR_PATH: &str = "/share/cursors/future/top_side.svg";
@@ -22,6 +26,7 @@ const RESIZE_NW_CURSOR_PATH: &str = "/share/cursors/future/top_left_corner.svg";
 const RESIZE_SE_CURSOR_PATH: &str = "/share/cursors/future/bottom_right_corner.svg";
 const RESIZE_SW_CURSOR_PATH: &str = "/share/cursors/future/bottom_left_corner.svg";
 const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
+const SYMBOL_FONT_PATH: &str = "/share/fonts/NotoSansSymbol2-Regular.ttf";
 const CURSOR_SIZE: u32 = 96;
 const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
 const POINTER_OVERLAY_MAX_W: u32 = 460;
@@ -31,6 +36,16 @@ const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
 const ACTIVE_CHROME: u32 = 0xFFFFB900;
 const INACTIVE_CHROME: u32 = 0xFFA6984A;
 const CHROME_TEXT: u32 = 0xFF32331F;
+const CHROME_BUTTON_FACE_ACTIVE: u32 = 0xFFFFCC42;
+const CHROME_BUTTON_FACE_INACTIVE: u32 = 0xFFD6C36B;
+const CHROME_BUTTON_LIGHT: u32 = 0xFFFFF1A6;
+const CHROME_BUTTON_DARK: u32 = 0xFF7A641A;
+const CHROME_BUTTON_SHADOW: u32 = 0xFF3D3515;
+const CHROME_OUTLINE_DARK: u32 = 0xAA32331F;
+const CHROME_OUTLINE_LIGHT: u32 = 0x66FFE07A;
+const SHADOW_COLOR: u32 = 0x000000;
+const SHADOW_ALPHA_INNER: u32 = 82;
+const SHADOW_ALPHA_OUTER: u32 = 10;
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -65,6 +80,7 @@ struct PistilLib {
     prepare_bg: PrepareBackgroundFn,
     prepare_cursor: Option<PrepareCursorFn>,
     draw_text: Option<DrawTextFn>,
+    draw_symbol_text: Option<DrawTextFn>,
 }
 
 struct ServerBuffer {
@@ -325,12 +341,14 @@ impl CompositorVisuals {
         self.ensure_chrome_overlay(display)?;
         let overlay = self.chrome_overlay.as_mut()?;
         let draw_text = self.pistil.as_ref().and_then(|lib| lib.draw_text);
+        let draw_symbol_text = self.pistil.as_ref().and_then(|lib| lib.draw_symbol_text);
         draw_chrome_overlay(
             overlay.texture.as_slice_mut(),
             overlay.width,
             overlay.height,
             composition,
             draw_text,
+            draw_symbol_text,
         );
         Some(OverlayPlane {
             buffer_id: overlay.buffer_id,
@@ -531,11 +549,20 @@ fn load_pistil() -> Option<PistilLib> {
     let text_sym = dlsym_bytes(handle, DRAW_TEXT_SYMBOL);
     let draw_text =
         if text_sym.is_null() { None } else { Some(unsafe { core::mem::transmute(text_sym) }) };
+    let symbol_text_sym = dlsym_bytes(handle, DRAW_SYMBOL_TEXT_SYMBOL);
+    let draw_symbol_text = if symbol_text_sym.is_null() {
+        None
+    } else {
+        Some(unsafe { core::mem::transmute(symbol_text_sym) })
+    };
     stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
     if draw_text.is_some() {
         stem::info!("bloom: pistil font text renderer loaded with default {}", DEFAULT_FONT_PATH);
     }
-    Some(PistilLib { _handle: handle, prepare_bg, prepare_cursor, draw_text })
+    if draw_symbol_text.is_some() {
+        stem::info!("bloom: pistil symbol renderer loaded with {}", SYMBOL_FONT_PATH);
+    }
+    Some(PistilLib { _handle: handle, prepare_bg, prepare_cursor, draw_text, draw_symbol_text })
 }
 
 fn log_dlerror(prefix: &str) {
@@ -635,8 +662,16 @@ fn draw_chrome_overlay(
     height: u32,
     composition: &[CompositionEntry],
     pistil_draw_text: Option<DrawTextFn>,
+    pistil_draw_symbol_text: Option<DrawTextFn>,
 ) {
     dst.fill(0);
+    for entry in composition {
+        let chrome = entry.chrome;
+        if !chrome.is_empty() {
+            draw_window_shadow(dst, stride, height, entry.dest_rect);
+        }
+    }
+
     for entry in composition {
         let chrome = entry.chrome;
         if chrome.is_empty() {
@@ -656,15 +691,31 @@ fn draw_chrome_overlay(
         let titlebar_height = chrome.titlebar_height.min(h);
         if titlebar_height > 0 {
             fill_rect(dst, stride, x, y, w, titlebar_height, chrome_color);
+            draw_chrome_buttons(
+                dst,
+                stride,
+                height,
+                rect,
+                chrome,
+                entry.active,
+                pistil_draw_symbol_text.or(pistil_draw_text),
+            );
             if let Some(title) = entry.title.as_deref() {
                 let text_x = x.saturating_add(frame as i32).saturating_add(12);
                 let text_y = y.saturating_add(28);
+                let buttons_w = chrome_button_rects(rect, chrome)
+                    .map(|rects| {
+                        let first = rects[0].1;
+                        rect.x.saturating_add(rect.w).saturating_sub(first.x)
+                    })
+                    .unwrap_or(0);
                 let max_chars = w
                     .saturating_sub(frame.saturating_mul(2))
                     .saturating_sub(24)
+                    .saturating_sub(buttons_w)
                     .saturating_div(11)
                     .max(1) as usize;
-                draw_overlay_text(
+                draw_overlay_text_bold(
                     pistil_draw_text,
                     dst,
                     stride,
@@ -698,6 +749,7 @@ fn draw_chrome_overlay(
             h,
             chrome_color,
         );
+        draw_frame_outline(dst, stride, rect, frame);
         if chrome.titlebar_height > frame.saturating_mul(2)
             && chrome.titlebar_height < h.saturating_sub(frame)
         {
@@ -722,6 +774,372 @@ fn title_prefix(title: &str, max_chars: usize) -> &str {
         Some((idx, _)) => &title[..idx],
         None => title,
     }
+}
+
+fn draw_window_shadow(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: abi::display_protocol::Rect,
+) {
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+
+    let exclude = IRect::from_rect(rect);
+    let shadow_base = IRect {
+        x: rect.x as i32 + WINDOW_SHADOW_OFFSET_X,
+        y: rect.y as i32 + WINDOW_SHADOW_OFFSET_Y,
+        w: rect.w as i32,
+        h: rect.h as i32,
+    };
+    for layer in (0..=WINDOW_SHADOW_RADIUS).rev() {
+        let alpha = shadow_alpha(layer);
+        if alpha == 0 {
+            continue;
+        }
+        let shadow = shadow_base.expand(layer);
+        fill_rect_excluding(dst, stride, height, shadow, exclude, SHADOW_COLOR | (alpha << 24));
+    }
+}
+
+fn shadow_alpha(layer: i32) -> u32 {
+    let layer = layer.clamp(0, WINDOW_SHADOW_RADIUS) as u32;
+    let range = SHADOW_ALPHA_INNER.saturating_sub(SHADOW_ALPHA_OUTER);
+    SHADOW_ALPHA_INNER.saturating_sub((range * layer) / WINDOW_SHADOW_RADIUS.max(1) as u32)
+}
+
+fn draw_frame_outline(dst: &mut [u32], stride: u32, rect: abi::display_protocol::Rect, frame: u32) {
+    let x = rect.x as i32;
+    let y = rect.y as i32;
+    let w = rect.w;
+    let h = rect.h;
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    fill_rect(dst, stride, x, y, w, 1, CHROME_OUTLINE_DARK);
+    fill_rect(dst, stride, x, y, 1, h, CHROME_OUTLINE_DARK);
+    fill_rect(
+        dst,
+        stride,
+        x,
+        y.saturating_add(h.saturating_sub(1) as i32),
+        w,
+        1,
+        CHROME_OUTLINE_DARK,
+    );
+    fill_rect(
+        dst,
+        stride,
+        x.saturating_add(w.saturating_sub(1) as i32),
+        y,
+        1,
+        h,
+        CHROME_OUTLINE_DARK,
+    );
+
+    if frame <= 1 || w <= frame.saturating_mul(2) || h <= frame.saturating_mul(2) {
+        return;
+    }
+
+    let ix = x.saturating_add(frame as i32);
+    let iy = y.saturating_add(frame as i32);
+    let iw = w.saturating_sub(frame.saturating_mul(2));
+    let ih = h.saturating_sub(frame.saturating_mul(2));
+    fill_rect(dst, stride, ix, iy, iw, 1, CHROME_OUTLINE_LIGHT);
+    fill_rect(dst, stride, ix, iy, 1, ih, CHROME_OUTLINE_LIGHT);
+    fill_rect(
+        dst,
+        stride,
+        ix,
+        iy.saturating_add(ih.saturating_sub(1) as i32),
+        iw,
+        1,
+        CHROME_OUTLINE_DARK,
+    );
+    fill_rect(
+        dst,
+        stride,
+        ix.saturating_add(iw.saturating_sub(1) as i32),
+        iy,
+        1,
+        ih,
+        CHROME_OUTLINE_DARK,
+    );
+}
+
+#[derive(Clone, Copy)]
+struct IRect {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+impl IRect {
+    fn from_rect(rect: abi::display_protocol::Rect) -> Self {
+        Self { x: rect.x as i32, y: rect.y as i32, w: rect.w as i32, h: rect.h as i32 }
+    }
+
+    fn expand(self, amount: i32) -> Self {
+        Self {
+            x: self.x.saturating_sub(amount),
+            y: self.y.saturating_sub(amount),
+            w: self.w.saturating_add(amount.saturating_mul(2)),
+            h: self.h.saturating_add(amount.saturating_mul(2)),
+        }
+    }
+
+    fn right(self) -> i32 {
+        self.x.saturating_add(self.w)
+    }
+
+    fn bottom(self) -> i32 {
+        self.y.saturating_add(self.h)
+    }
+}
+
+fn fill_rect_excluding(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: IRect,
+    exclude: IRect,
+    color: u32,
+) {
+    if rect.w <= 0 || rect.h <= 0 {
+        return;
+    }
+
+    let rx0 = rect.x;
+    let ry0 = rect.y;
+    let rx1 = rect.right();
+    let ry1 = rect.bottom();
+    let ex0 = exclude.x.max(rx0).min(rx1);
+    let ey0 = exclude.y.max(ry0).min(ry1);
+    let ex1 = exclude.right().max(rx0).min(rx1);
+    let ey1 = exclude.bottom().max(ry0).min(ry1);
+
+    if ex0 >= ex1 || ey0 >= ey1 {
+        fill_rect_i32(dst, stride, height, rx0, ry0, rect.w, rect.h, color);
+        return;
+    }
+
+    fill_rect_i32(dst, stride, height, rx0, ry0, rect.w, ey0.saturating_sub(ry0), color);
+    fill_rect_i32(dst, stride, height, rx0, ey1, rect.w, ry1.saturating_sub(ey1), color);
+    fill_rect_i32(
+        dst,
+        stride,
+        height,
+        rx0,
+        ey0,
+        ex0.saturating_sub(rx0),
+        ey1.saturating_sub(ey0),
+        color,
+    );
+    fill_rect_i32(
+        dst,
+        stride,
+        height,
+        ex1,
+        ey0,
+        rx1.saturating_sub(ex1),
+        ey1.saturating_sub(ey0),
+        color,
+    );
+}
+
+fn draw_chrome_buttons(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    surface_rect: abi::display_protocol::Rect,
+    chrome: SurfaceChrome,
+    active: bool,
+    _pistil_draw_symbol_text: Option<DrawTextFn>,
+) {
+    let Some(buttons) = chrome_button_rects(surface_rect, chrome) else {
+        return;
+    };
+
+    for (button, rect) in buttons {
+        draw_haiku_button(dst, stride, height, rect, button, active);
+    }
+}
+
+fn draw_haiku_button(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: abi::display_protocol::Rect,
+    button: ChromeButton,
+    active: bool,
+) {
+    if rect.w < 8 || rect.h < 8 {
+        return;
+    }
+
+    let face = if active { CHROME_BUTTON_FACE_ACTIVE } else { CHROME_BUTTON_FACE_INACTIVE };
+    let x = rect.x as i32;
+    let y = rect.y as i32;
+    fill_rect(dst, stride, x, y, rect.w, rect.h, face);
+
+    fill_rect(dst, stride, x, y, rect.w, 1, CHROME_BUTTON_LIGHT);
+    fill_rect(dst, stride, x, y, 1, rect.h, CHROME_BUTTON_LIGHT);
+    fill_rect(
+        dst,
+        stride,
+        x,
+        y.saturating_add(rect.h.saturating_sub(1) as i32),
+        rect.w,
+        1,
+        CHROME_BUTTON_SHADOW,
+    );
+    fill_rect(
+        dst,
+        stride,
+        x.saturating_add(rect.w.saturating_sub(1) as i32),
+        y,
+        1,
+        rect.h,
+        CHROME_BUTTON_SHADOW,
+    );
+
+    if rect.w > 4 && rect.h > 4 {
+        fill_rect(
+            dst,
+            stride,
+            x + 1,
+            y + 1,
+            rect.w.saturating_sub(2),
+            1,
+            blend_argb(face, 0x30FFFFFF),
+        );
+        fill_rect(
+            dst,
+            stride,
+            x + 1,
+            y + 1,
+            1,
+            rect.h.saturating_sub(2),
+            blend_argb(face, 0x20FFFFFF),
+        );
+        fill_rect(
+            dst,
+            stride,
+            x + 1,
+            y.saturating_add(rect.h.saturating_sub(2) as i32),
+            rect.w.saturating_sub(2),
+            1,
+            CHROME_BUTTON_DARK,
+        );
+        fill_rect(
+            dst,
+            stride,
+            x.saturating_add(rect.w.saturating_sub(2) as i32),
+            y + 1,
+            1,
+            rect.h.saturating_sub(2),
+            CHROME_BUTTON_DARK,
+        );
+    }
+
+    draw_haiku_button_glyph(dst, stride, height, rect, button);
+}
+
+fn draw_haiku_button_glyph(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: abi::display_protocol::Rect,
+    button: ChromeButton,
+) {
+    let x = rect.x as i32;
+    let y = rect.y as i32;
+    let w = rect.w as i32;
+    let h = rect.h as i32;
+    let cx = x + w / 2;
+    let cy = y + h / 2;
+
+    match button {
+        ChromeButton::Minimize => {
+            let glyph_w = (w - 10).max(6);
+            let glyph_h = 2;
+            fill_rect_i32(
+                dst,
+                stride,
+                height,
+                cx - glyph_w / 2,
+                y + h - 7,
+                glyph_w,
+                glyph_h,
+                CHROME_TEXT,
+            );
+        }
+        ChromeButton::Maximize => {
+            let box_w = (w - 10).max(7);
+            let box_h = (h - 10).max(7);
+            let bx = cx - box_w / 2;
+            let by = cy - box_h / 2;
+            fill_rect_i32(dst, stride, height, bx, by, box_w, 1, CHROME_TEXT);
+            fill_rect_i32(dst, stride, height, bx, by, 1, box_h, CHROME_TEXT);
+            fill_rect_i32(dst, stride, height, bx, by + box_h - 1, box_w, 1, CHROME_TEXT);
+            fill_rect_i32(dst, stride, height, bx + box_w - 1, by, 1, box_h, CHROME_TEXT);
+            if box_w > 4 && box_h > 4 {
+                fill_rect_i32(dst, stride, height, bx + 2, by + 2, box_w - 4, 1, CHROME_TEXT);
+            }
+        }
+        ChromeButton::Close => {
+            let radius = ((w.min(h) - 8) / 2).max(3);
+            for d in -radius..=radius {
+                plot_thick_pixel(dst, stride, height, cx + d, cy + d, CHROME_TEXT, 1);
+                plot_thick_pixel(dst, stride, height, cx + d, cy - d, CHROME_TEXT, 1);
+            }
+        }
+    }
+}
+
+fn plot_thick_pixel(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    color: u32,
+    thickness: i32,
+) {
+    let half = thickness / 2;
+    fill_rect_i32(
+        dst,
+        stride,
+        height,
+        x - half,
+        y - half,
+        thickness.max(1),
+        thickness.max(1),
+        color,
+    );
+}
+
+fn blend_argb(base: u32, overlay: u32) -> u32 {
+    let oa = (overlay >> 24) & 0xFF;
+    if oa == 0 {
+        return base;
+    }
+
+    let br = (base >> 16) & 0xFF;
+    let bg = (base >> 8) & 0xFF;
+    let bb = base & 0xFF;
+
+    let or = (overlay >> 16) & 0xFF;
+    let og = (overlay >> 8) & 0xFF;
+    let ob = overlay & 0xFF;
+
+    let r = (br * (255 - oa) + or * oa) / 255;
+    let g = (bg * (255 - oa) + og * oa) / 255;
+    let b = (bb * (255 - oa) + ob * oa) / 255;
+    (0xFF << 24) | (r << 16) | (g << 8) | b
 }
 
 fn draw_pointer_overlay(
@@ -843,15 +1261,23 @@ fn blit_nontransparent(
     }
 }
 
-fn fill_rect(dst: &mut [u32], stride: u32, x: i32, y: i32, w: u32, h: u32, color: u32) {
-    if stride == 0 {
+fn fill_rect_i32(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: u32,
+) {
+    if stride == 0 || w <= 0 || h <= 0 {
         return;
     }
-    let height = (dst.len() as u32) / stride;
     let x0 = x.max(0) as u32;
     let y0 = y.max(0) as u32;
-    let x1 = (x.saturating_add(w as i32)).max(0) as u32;
-    let y1 = (y.saturating_add(h as i32)).max(0) as u32;
+    let x1 = x.saturating_add(w).max(0) as u32;
+    let y1 = y.saturating_add(h).max(0) as u32;
     let x1 = x1.min(stride);
     let y1 = y1.min(height);
     for yy in y0..y1 {
@@ -860,6 +1286,11 @@ fn fill_rect(dst: &mut [u32], stride: u32, x: i32, y: i32, w: u32, h: u32, color
             dst[row + xx as usize] = color;
         }
     }
+}
+
+fn fill_rect(dst: &mut [u32], stride: u32, x: i32, y: i32, w: u32, h: u32, color: u32) {
+    let height = if stride == 0 { 0 } else { (dst.len() as u32) / stride };
+    fill_rect_i32(dst, stride, height, x, y, w as i32, h as i32, color);
 }
 
 fn draw_text(
@@ -911,13 +1342,39 @@ fn draw_overlay_text(
                 color,
             );
             if rc == 0 {
-                return x + (bytes.len() as i32 * (px_size * 0.62) as i32);
+                return x + (text.chars().count() as i32 * (px_size * 0.62) as i32);
             }
         }
     }
 
     let scale = ((px_size / 9.0) as u32).max(1);
     draw_text(dst, stride, height, x, y - (7 * scale) as i32, scale, text, color)
+}
+
+fn draw_overlay_text_bold(
+    pistil_draw_text: Option<DrawTextFn>,
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    px_size: f32,
+    text: &str,
+    color: u32,
+) -> i32 {
+    let end = draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, px_size, text, color);
+    draw_overlay_text(
+        pistil_draw_text,
+        dst,
+        stride,
+        height,
+        x.saturating_add(1),
+        y,
+        px_size,
+        text,
+        color,
+    );
+    end
 }
 
 fn draw_signed_number(

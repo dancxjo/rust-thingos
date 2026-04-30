@@ -215,6 +215,7 @@ impl WaylandCommandService {
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
         let titlebar_height = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
         let frame_thickness = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+        let old_visual = world.scene.surface_visual_rect(bloom_surface_id);
         if world.scene.set_surface_chrome(
             self.wayland_client_id,
             bloom_surface_id,
@@ -224,7 +225,10 @@ impl WaylandCommandService {
                 "bloom: registered titlebar drag zone surface={} height={} frame={}",
                 bloom_surface_id, titlebar_height, frame_thickness
             );
-            if let Some(rect) = world.scene.surface_rect(bloom_surface_id) {
+            if let Some(rect) = old_visual {
+                world.damage.mark_rect(rect);
+            }
+            if let Some(rect) = world.scene.surface_visual_rect(bloom_surface_id) {
                 world.damage.mark_rect(rect);
             }
         }
@@ -239,7 +243,7 @@ impl WaylandCommandService {
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
         let title = String::from_utf8_lossy(&data[8..8 + title_len]).into_owned();
         if world.scene.set_surface_title(self.wayland_client_id, bloom_surface_id, title) {
-            if let Some(rect) = world.scene.surface_rect(bloom_surface_id) {
+            if let Some(rect) = world.scene.surface_visual_rect(bloom_surface_id) {
                 world.damage.mark_rect(rect);
             }
             return true;

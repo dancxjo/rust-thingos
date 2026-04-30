@@ -55,6 +55,7 @@ pub fn sys_wait_many(
     let mut results = [WaitResult::default(); wait::WAIT_MANY_MAX_ITEMS];
     let results_cap = results_cap.min(wait::WAIT_MANY_MAX_ITEMS);
 
+    let nonblocking_poll = timeout_ns == 0;
     let timeout_deadline_ns = if timeout_ns == u64::MAX {
         None
     } else {
@@ -64,18 +65,21 @@ pub fn sys_wait_many(
 
     let regs = {
         let lock = pinfo_arc.lock();
-        let r = register_all(&lock, specs, tid)?;
+        let r = if nonblocking_poll {
+            alloc::vec::Vec::new()
+        } else {
+            register_all(&lock, specs, tid)?
+        };
         if let Some(wake_tick) = timeout_wake_tick {
             crate::sched::register_timeout_wake_current(tid, wake_tick);
         }
         r
     };
 
-    let mut ready = 0;
-    loop {
-        ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
+    let ready = loop {
+        let ready = collect_ready(&pinfo_arc, specs, &mut results[..results_cap])?;
         if ready > 0 || timeout_expired(timeout_deadline_ns) {
-            break;
+            break ready;
         }
 
         if crate::sched::take_pending_interrupt_current() {
@@ -86,7 +90,7 @@ pub fn sys_wait_many(
         unsafe {
             crate::sched::block_current_erased();
         }
-    }
+    };
 
     cleanup_all(&regs, tid, timeout_wake_tick)?;
 
@@ -122,7 +126,7 @@ fn timeout_expired(timeout_deadline_ns: Option<u64>) -> bool {
 }
 
 fn timeout_wake_tick(timeout_ns: u64) -> Option<u64> {
-    if timeout_ns == u64::MAX {
+    if timeout_ns == 0 || timeout_ns == u64::MAX {
         return None;
     }
     let ticks = crate::time::duration_to_sleep_ticks(timeout_ns);
@@ -640,10 +644,7 @@ mod tests {
             },
         ];
         let mut results = [WaitResult::default(); 2];
-        let ready = {
-            let lock = pinfo.lock();
-            collect_ready(pinfo, &specs, &mut results).expect("collect")
-        };
+        let ready = collect_ready(&pinfo, &specs, &mut results).expect("collect");
         assert_eq!(ready, 2);
         assert_eq!(results[0].token, 1);
         assert_eq!(results[1].token, 2);
@@ -690,10 +691,7 @@ mod tests {
             },
         ];
         let mut results = [WaitResult::default(); 1];
-        let ready = {
-            let lock = pinfo.lock();
-            collect_ready(pinfo, &specs, &mut results).expect("collect")
-        };
+        let ready = collect_ready(&pinfo, &specs, &mut results).expect("collect");
         assert_eq!(ready, 1);
         assert_eq!(results[0].token, 101);
     }
@@ -777,7 +775,7 @@ mod tests {
     fn timeout_wake_tick_converts_duration_to_scheduler_ticks() {
         crate::sched::TICK_COUNT.store(50, Ordering::Relaxed);
         assert_eq!(timeout_wake_tick(u64::MAX), None);
-        assert_eq!(timeout_wake_tick(0), Some(50));
+        assert_eq!(timeout_wake_tick(0), None);
         assert_eq!(timeout_wake_tick(crate::time::SCHED_TICK_NANOS), Some(51));
         assert_eq!(timeout_wake_tick(crate::time::SCHED_TICK_NANOS + 1), Some(52));
     }

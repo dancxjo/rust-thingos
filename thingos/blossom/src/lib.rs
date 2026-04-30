@@ -711,6 +711,18 @@ impl Blossom {
         ])
     }
 
+    /// Emit compositor-initiated `xdg_toplevel.close` for the toplevel wrapping
+    /// `wl_surface`.
+    pub fn close_toplevel_for_surface(&self, wl_surface: SurfaceId) -> Option<Vec<BlossomCommand>> {
+        let xdg_surface = *self.surface_to_xdg.get(&wl_surface)?;
+        let surface = self.surfaces.get(&xdg_surface)?;
+        let toplevel = match surface.role {
+            Some(XdgRole::Toplevel(id)) => id,
+            _ => return None,
+        };
+        Some(vec![BlossomCommand::CloseToplevel { toplevel }])
+    }
+
     // ── Accessors ────────────────────────────────────────────────────────
 
     /// Read-only access to an `xdg_surface` state record.
@@ -944,6 +956,18 @@ mod tests {
             BlossomCommand::SendXdgSurfaceConfigure { xdg_surface: XDG_SURF, serial, .. }
                 if serial > 0
         ));
+    }
+
+    #[test]
+    fn compositor_close_emits_xdg_toplevel_close() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        make_toplevel(&mut b);
+
+        let cmds = b.close_toplevel_for_surface(SURFACE_ID).unwrap();
+
+        assert_eq!(cmds.len(), 1);
+        assert!(matches!(cmds[0], BlossomCommand::CloseToplevel { toplevel: TOPLEVEL }));
     }
 
     // ── metadata ────────────────────────────────────────────────────────

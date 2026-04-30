@@ -16,7 +16,7 @@ use crate::protocol::{
     KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent, PointerLeaveEvent,
     PointerMotionEvent, msg_header, to_vec,
 };
-use crate::scene::{CursorKind, HitTarget, ResizeEdge, Scene};
+use crate::scene::{ChromeButton, CursorKind, HitTarget, ResizeEdge, Scene};
 use crate::wayland::ipc;
 
 const CURSOR_DAMAGE_W: u32 = 96;
@@ -276,6 +276,16 @@ impl InputState {
                 }
                 let old_focus = scene.keyboard_focus;
                 if btn.button == 0 {
+                    if self.handle_chrome_button(scene, damage, wayland_evt_write, old_focus) {
+                        mark_cursor_damage(
+                            damage,
+                            self.visible_x,
+                            self.visible_y,
+                            self.pointer_x,
+                            self.pointer_y,
+                        );
+                        return;
+                    }
                     if let Some(surface_id) =
                         self.start_chrome_grab(scene, damage, wayland_evt_write)
                     {
@@ -498,8 +508,83 @@ impl InputState {
                 );
                 Some(surface_id)
             }
-            HitTarget::Client { .. } => None,
+            HitTarget::Client { .. } | HitTarget::ChromeButton { .. } => None,
         }
+    }
+
+    fn handle_chrome_button(
+        &mut self,
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+        old_focus: Option<u32>,
+    ) -> bool {
+        let Some(HitTarget::ChromeButton { surface_id, button }) =
+            scene.hit_test(self.pointer_x, self.pointer_y)
+        else {
+            return false;
+        };
+
+        match button {
+            ChromeButton::Close => {
+                let new_focus = Some(surface_id);
+                scene.keyboard_focus = new_focus;
+                mark_focus_damage(scene, damage, old_focus, new_focus);
+                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                send_wayland_toplevel_action(
+                    wayland_evt_write,
+                    surface_id,
+                    ipc::TOPLEVEL_ACTION_CLOSE,
+                    0,
+                    0,
+                );
+                stem::info!("bloom: close button pressed surface={}", surface_id);
+            }
+            ChromeButton::Minimize => {
+                if let Some(rect) = scene.set_surface_visible(surface_id, false) {
+                    mark_surface_visual_damage(scene, damage, surface_id, rect);
+                }
+                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                send_wayland_toplevel_action(
+                    wayland_evt_write,
+                    surface_id,
+                    ipc::TOPLEVEL_ACTION_MINIMIZE,
+                    0,
+                    0,
+                );
+                stem::info!("bloom: minimize button pressed surface={}", surface_id);
+            }
+            ChromeButton::Maximize => {
+                let target = abi::display_protocol::Rect {
+                    x: 0,
+                    y: 0,
+                    w: self.output_w.max(MIN_RESIZE_W as i32) as u32,
+                    h: self.output_h.max(MIN_RESIZE_H as i32) as u32,
+                };
+                if let Some(resized) = scene.resize_surface_absolute(surface_id, target) {
+                    mark_surface_visual_damage(scene, damage, surface_id, resized.old_rect);
+                    mark_surface_visual_damage(scene, damage, surface_id, resized.new_rect);
+                }
+                let new_focus = Some(surface_id);
+                scene.keyboard_focus = new_focus;
+                mark_focus_damage(scene, damage, old_focus, new_focus);
+                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                send_wayland_toplevel_action(
+                    wayland_evt_write,
+                    surface_id,
+                    ipc::TOPLEVEL_ACTION_MAXIMIZE,
+                    target.w as i32,
+                    target.h as i32,
+                );
+                stem::info!(
+                    "bloom: maximize button pressed surface={} size={}x{}",
+                    surface_id,
+                    target.w,
+                    target.h
+                );
+            }
+        }
+        true
     }
 
     fn update_pointer_grab(
@@ -522,8 +607,24 @@ impl InputState {
                     return true;
                 };
                 if moved.changed {
-                    damage.mark_rect(moved.old_rect);
-                    damage.mark_rect(moved.new_rect);
+                    let old_damage =
+                        mark_surface_visual_damage(scene, damage, grab.surface_id, moved.old_rect);
+                    let new_damage =
+                        mark_surface_visual_damage(scene, damage, grab.surface_id, moved.new_rect);
+                    if old_damage != moved.old_rect || new_damage != moved.new_rect {
+                        stem::info!(
+                            "bloom: window drag damaged shadow surface={} old={}x{}+{},{} new={}x{}+{},{}",
+                            grab.surface_id,
+                            old_damage.w,
+                            old_damage.h,
+                            old_damage.x,
+                            old_damage.y,
+                            new_damage.w,
+                            new_damage.h,
+                            new_damage.x,
+                            new_damage.y
+                        );
+                    }
                     stem::info!(
                         "bloom: window drag moved surface={} to {},{}",
                         grab.surface_id,
@@ -548,8 +649,8 @@ impl InputState {
                     return true;
                 };
                 if resized.changed {
-                    damage.mark_rect(resized.old_rect);
-                    damage.mark_rect(resized.new_rect);
+                    mark_surface_visual_damage(scene, damage, grab.surface_id, resized.old_rect);
+                    mark_surface_visual_damage(scene, damage, grab.surface_id, resized.new_rect);
                     send_wayland_configure(
                         wayland_evt_write,
                         grab.surface_id,
@@ -604,6 +705,7 @@ impl InputState {
             None => match scene.hit_test(self.pointer_x, self.pointer_y) {
                 Some(HitTarget::TitleBar { .. }) => CursorKind::Move,
                 Some(HitTarget::Frame { edge, .. }) => CursorKind::for_resize_edge(edge),
+                Some(HitTarget::ChromeButton { .. }) => CursorKind::Default,
                 _ => CursorKind::Default,
             },
         };
@@ -672,14 +774,25 @@ fn mark_focus_damage(
     }
     if let Some(surface_id) = old_focus {
         if let Some(rect) = scene.surface_rect(surface_id) {
-            damage.mark_rect(rect);
+            mark_surface_visual_damage(scene, damage, surface_id, rect);
         }
     }
     if let Some(surface_id) = new_focus {
         if let Some(rect) = scene.surface_rect(surface_id) {
-            damage.mark_rect(rect);
+            mark_surface_visual_damage(scene, damage, surface_id, rect);
         }
     }
+}
+
+fn mark_surface_visual_damage(
+    scene: &Scene,
+    damage: &mut DamageTracker,
+    surface_id: u32,
+    rect: abi::display_protocol::Rect,
+) -> abi::display_protocol::Rect {
+    let visual = scene.visual_rect_for_surface_rect(surface_id, rect).unwrap_or(rect);
+    damage.mark_rect(visual);
+    visual
 }
 
 fn mark_cursor_rect(damage: &mut DamageTracker, x: i32, y: i32) {
@@ -765,6 +878,20 @@ fn send_wayland_configure(
         return;
     };
     let msg = ipc::encode_configure_surface(surface_id, width as i32, height as i32, resizing);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_toplevel_action(
+    wayland_evt_write: Option<u32>,
+    surface_id: u32,
+    action: u8,
+    width: i32,
+    height: i32,
+) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_toplevel_action(surface_id, action, width, height);
     let _ = port_send_all(evt_write, &msg);
 }
 

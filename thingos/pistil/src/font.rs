@@ -8,6 +8,7 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat};
 use crate::Canvas;
 
 pub const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
+pub const SYMBOL_FONT_PATH: &str = "/share/fonts/NotoSansSymbol2-Regular.ttf";
 
 pub struct TextRenderer {
     pub font: Font,
@@ -100,6 +101,22 @@ pub fn default_text_renderer() -> Option<&'static TextRenderer> {
     }
 
     let renderer = Box::leak(Box::new(TextRenderer::load_default()?)) as *const TextRenderer;
+    unsafe {
+        RENDERER = renderer;
+        Some(&*renderer)
+    }
+}
+
+pub fn symbol_text_renderer() -> Option<&'static TextRenderer> {
+    static mut RENDERER: *const TextRenderer = core::ptr::null();
+
+    let renderer = unsafe { RENDERER };
+    if !renderer.is_null() {
+        return Some(unsafe { &*renderer });
+    }
+
+    let renderer =
+        Box::leak(Box::new(TextRenderer::load_from_boot(SYMBOL_FONT_PATH)?)) as *const TextRenderer;
     unsafe {
         RENDERER = renderer;
         Some(&*renderer)

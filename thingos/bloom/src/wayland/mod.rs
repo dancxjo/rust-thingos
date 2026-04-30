@@ -433,6 +433,57 @@ impl WaylandServer {
                     break;
                 }
             }
+            ipc::WEVT_TOPLEVEL_ACTION => {
+                if data.len() < 16 {
+                    return;
+                }
+                let action = data.get(1).copied().unwrap_or(0);
+                let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                let width = i32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+                let height = i32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+                for client in self.clients.values_mut() {
+                    if client.xdg_toplevel_for_bloom_surface(bloom_surface_id).is_none() {
+                        continue;
+                    }
+                    match action {
+                        ipc::TOPLEVEL_ACTION_CLOSE => {
+                            if let Some(cmds) =
+                                self.blossom.close_toplevel_for_surface(bloom_surface_id)
+                            {
+                                dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
+                                info!(
+                                    "wayland-server: sent xdg_toplevel.close surface={}",
+                                    bloom_surface_id
+                                );
+                            }
+                        }
+                        ipc::TOPLEVEL_ACTION_MINIMIZE => {
+                            // xdg-shell has no compositor-to-client minimized state event.
+                            // Bloom hides the surface; the Wayland side only records the action.
+                            info!(
+                                "wayland-server: minimized surface={} via compositor chrome",
+                                bloom_surface_id
+                            );
+                        }
+                        ipc::TOPLEVEL_ACTION_MAXIMIZE => {
+                            if let Some(cmds) = self.blossom.configure_toplevel_for_surface(
+                                bloom_surface_id,
+                                width,
+                                height,
+                                alloc::vec![blossom::XdgToplevelStateAtom::Maximized],
+                            ) {
+                                dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
+                                info!(
+                                    "wayland-server: maximized surface={} size={}x{}",
+                                    bloom_surface_id, width, height
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                    break;
+                }
+            }
             _ => {}
         }
     }

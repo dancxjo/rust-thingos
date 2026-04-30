@@ -75,6 +75,7 @@ Feature: blossom xdg-shell lifecycle
     Then the Wayland hello client should be visible
     When I drag the Wayland hello title bar
     Then the compositor should move the toplevel window
+    And the compositor should damage the moved toplevel shadow
 
   @pointer-debug
   Scenario: dragging the frame resizes a toplevel window
@@ -82,6 +83,27 @@ Feature: blossom xdg-shell lifecycle
     Then the Wayland hello client should be visible
     When I drag the Wayland hello frame
     Then the compositor should resize the toplevel window
+
+  @pointer-debug
+  Scenario: clicking the maximize chrome button sends a maximized configure
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I click the Wayland hello maximize button
+    Then the compositor should send a maximized toplevel configure
+
+  @pointer-debug
+  Scenario: clicking the minimize chrome button minimizes through compositor chrome
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I click the Wayland hello minimize button
+    Then the compositor should minimize the toplevel window
+
+  @pointer-debug
+  Scenario: clicking the close chrome button sends xdg_toplevel.close
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I click the Wayland hello close button
+    Then the compositor should send xdg_toplevel.close
 
   # ── State updates ────────────────────────────────────────────────────────────
 

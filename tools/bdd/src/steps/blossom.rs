@@ -721,6 +721,16 @@ async fn compositor_moves_toplevel_window(world: &mut ThingOsWorld) -> Result<()
     Ok(())
 }
 
+#[then("the compositor should damage the moved toplevel shadow")]
+async fn compositor_damages_moved_toplevel_shadow(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    if !world.wait_for_serial("bloom: window drag damaged shadow", 30.0).await {
+        return Err(StepError("Bloom did not damage the dragged window shadow".to_string()));
+    }
+    Ok(())
+}
+
 #[when("I drag the Wayland hello frame")]
 async fn drag_wayland_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
@@ -782,6 +792,105 @@ async fn compositor_resizes_toplevel_window(world: &mut ThingOsWorld) -> Result<
     }
     if !world.wait_for_serial("bloom: window resize ended", 30.0).await {
         return Err(StepError("Bloom did not end the frame resize".to_string()));
+    }
+    Ok(())
+}
+
+async fn click_wayland_hello_chrome_button(
+    world: &mut ThingOsWorld,
+    name: &str,
+    x: i32,
+) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError(format!("No QMP connection for {} button input", name)));
+    }
+    if !world.wait_for_serial("bloom: registered titlebar drag zone", 60.0).await {
+        return Err(StepError("Bloom did not register compositor chrome".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let move_to_button = format!(
+        r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "rel", "data": {{"axis": "x", "value": {}}}}}, {{"type": "rel", "data": {{"axis": "y", "value": 20}}}}]}}}}"#,
+        x
+    );
+    let commands = [
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": -10000}}, {"type": "rel", "data": {"axis": "y", "value": -10000}}]}}"#.to_string(),
+            1_000,
+        ),
+        (move_to_button, 500),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#.to_string(),
+            200,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#.to_string(),
+            200,
+        ),
+    ];
+
+    for (command, settle_ms) in commands {
+        world
+            .execute_qmp_control(&command)
+            .await
+            .map_err(|e| StepError(format!("QMP {} button click failed: {}", name, e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
+    }
+    Ok(())
+}
+
+#[when("I click the Wayland hello maximize button")]
+async fn click_wayland_hello_maximize_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    click_wayland_hello_chrome_button(world, "maximize", 424).await
+}
+
+#[then("the compositor should send a maximized toplevel configure")]
+async fn compositor_sends_maximized_configure(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if !world.wait_for_serial("bloom: maximize button pressed", 30.0).await {
+        return Err(StepError("Bloom did not handle the maximize chrome button".to_string()));
+    }
+    if !world.wait_for_serial("wayland-server: maximized surface=", 30.0).await {
+        return Err(StepError("Wayland server did not send a maximized configure".to_string()));
+    }
+    Ok(())
+}
+
+#[when("I click the Wayland hello minimize button")]
+async fn click_wayland_hello_minimize_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    click_wayland_hello_chrome_button(world, "minimize", 392).await
+}
+
+#[then("the compositor should minimize the toplevel window")]
+async fn compositor_minimizes_toplevel_window(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if !world.wait_for_serial("bloom: minimize button pressed", 30.0).await {
+        return Err(StepError("Bloom did not handle the minimize chrome button".to_string()));
+    }
+    if !world.wait_for_serial("wayland-server: minimized surface=", 30.0).await {
+        return Err(StepError("Wayland server did not observe the minimize action".to_string()));
+    }
+    Ok(())
+}
+
+#[when("I click the Wayland hello close button")]
+async fn click_wayland_hello_close_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    click_wayland_hello_chrome_button(world, "close", 456).await
+}
+
+#[then("the compositor should send xdg_toplevel.close")]
+async fn compositor_sends_toplevel_close(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if !world.wait_for_serial("bloom: close button pressed", 30.0).await {
+        return Err(StepError("Bloom did not handle the close chrome button".to_string()));
+    }
+    if !world.wait_for_serial("wayland-server: sent xdg_toplevel.close", 30.0).await {
+        return Err(StepError("Wayland server did not send xdg_toplevel.close".to_string()));
+    }
+    if !world.wait_for_serial("wayland_hello: compositor requested close", 30.0).await {
+        return Err(StepError("Wayland client did not receive xdg_toplevel.close".to_string()));
     }
     Ok(())
 }

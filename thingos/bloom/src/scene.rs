@@ -59,6 +59,10 @@ pub struct SurfaceChrome {
     pub frame_thickness: u32,
 }
 
+pub(crate) const WINDOW_SHADOW_OFFSET_X: i32 = 4;
+pub(crate) const WINDOW_SHADOW_OFFSET_Y: i32 = 7;
+pub(crate) const WINDOW_SHADOW_RADIUS: i32 = 12;
+
 impl SurfaceChrome {
     pub fn is_empty(self) -> bool {
         self.titlebar_height == 0 && self.frame_thickness == 0
@@ -69,7 +73,15 @@ impl SurfaceChrome {
 pub enum HitTarget {
     Client { surface_id: u32 },
     TitleBar { surface_id: u32 },
+    ChromeButton { surface_id: u32, button: ChromeButton },
     Frame { surface_id: u32, edge: ResizeEdge },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChromeButton {
+    Minimize,
+    Maximize,
+    Close,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -387,10 +399,10 @@ impl Scene {
 
         if let Some(dest) = pending_dest {
             if old_mapped {
-                damage_rects.push(old_dest);
+                damage_rects.push(surface_visual_rect(old_dest, surface.chrome));
             }
             surface.current.dest_rect = dest;
-            damage_rects.push(dest);
+            damage_rects.push(surface_visual_rect(dest, surface.chrome));
             changed = true;
         }
         if let Some(z) = surface.pending.z_order.take() {
@@ -421,7 +433,7 @@ impl Scene {
             changed = true;
         }
         if visual_full_damage {
-            damage_rects.push(surface.current.dest_rect);
+            damage_rects.push(surface_visual_rect(surface.current.dest_rect, surface.chrome));
         }
 
         surface.frame_serial = surface.frame_serial.saturating_add(1);
@@ -470,6 +482,7 @@ impl Scene {
         self.hit_test(x, y).map(|target| match target {
             HitTarget::Client { surface_id }
             | HitTarget::TitleBar { surface_id }
+            | HitTarget::ChromeButton { surface_id, .. }
             | HitTarget::Frame { surface_id, .. } => surface_id,
         })
     }
@@ -487,7 +500,11 @@ impl Scene {
             if !surface.visible || !surface.mapped || !surface.focus_eligible {
                 continue;
             }
-            let rect = surface.current.input_region.unwrap_or(surface.current.dest_rect);
+            let rect = if surface.chrome.is_empty() {
+                surface.current.input_region.unwrap_or(surface.current.dest_rect)
+            } else {
+                surface.current.dest_rect
+            };
             let max_x = rect.x.saturating_add(rect.w) as i32;
             let max_y = rect.y.saturating_add(rect.h) as i32;
             let inside = x >= rect.x as i32 && y >= rect.y as i32 && x < max_x && y < max_y;
@@ -504,6 +521,9 @@ impl Scene {
         let rect = surface.current.dest_rect;
         if let Some(edge) = resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
             return Some(HitTarget::Frame { surface_id, edge });
+        }
+        if let Some(button) = chrome_button_at(rect, surface.chrome, x, y) {
+            return Some(HitTarget::ChromeButton { surface_id, button });
         }
         let titlebar_bottom = rect.y.saturating_add(surface.chrome.titlebar_height);
         if surface.chrome.titlebar_height > 0
@@ -525,6 +545,33 @@ impl Scene {
     pub fn surface_rect(&self, surface_id: u32) -> Option<Rect> {
         self.surfaces.get(&surface_id).map(|s| s.current.dest_rect)
     }
+
+    pub fn surface_visual_rect(&self, surface_id: u32) -> Option<Rect> {
+        let surface = self.surfaces.get(&surface_id)?;
+        Some(surface_visual_rect(surface.current.dest_rect, surface.chrome))
+    }
+
+    pub fn visual_rect_for_surface_rect(&self, surface_id: u32, rect: Rect) -> Option<Rect> {
+        let surface = self.surfaces.get(&surface_id)?;
+        Some(surface_visual_rect(rect, surface.chrome))
+    }
+
+    pub fn set_surface_visible(&mut self, surface_id: u32, visible: bool) -> Option<Rect> {
+        let surface = self.surfaces.get_mut(&surface_id)?;
+        if surface.visible == visible {
+            return Some(surface.current.dest_rect);
+        }
+        surface.visible = visible;
+        if !visible {
+            if self.pointer_focus == Some(surface_id) {
+                self.pointer_focus = None;
+            }
+            if self.keyboard_focus == Some(surface_id) {
+                self.keyboard_focus = None;
+            }
+        }
+        Some(surface.current.dest_rect)
+    }
 }
 
 pub struct CommitResult {
@@ -545,6 +592,49 @@ pub struct SurfaceResize {
     pub old_rect: Rect,
     pub new_rect: Rect,
     pub changed: bool,
+}
+
+pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
+    if chrome.is_empty() || rect.w == 0 || rect.h == 0 {
+        return rect;
+    }
+
+    let base_x0 = rect.x as i64;
+    let base_y0 = rect.y as i64;
+    let base_x1 = base_x0.saturating_add(rect.w as i64);
+    let base_y1 = base_y0.saturating_add(rect.h as i64);
+    let shadow_x0 = base_x0
+        .saturating_add(WINDOW_SHADOW_OFFSET_X as i64)
+        .saturating_sub(WINDOW_SHADOW_RADIUS as i64);
+    let shadow_y0 = base_y0
+        .saturating_add(WINDOW_SHADOW_OFFSET_Y as i64)
+        .saturating_sub(WINDOW_SHADOW_RADIUS as i64);
+    let shadow_x1 = shadow_x0
+        .saturating_add(rect.w as i64)
+        .saturating_add((WINDOW_SHADOW_RADIUS as i64).saturating_mul(2));
+    let shadow_y1 = shadow_y0
+        .saturating_add(rect.h as i64)
+        .saturating_add((WINDOW_SHADOW_RADIUS as i64).saturating_mul(2));
+
+    rect_from_bounds(
+        base_x0.min(shadow_x0),
+        base_y0.min(shadow_y0),
+        base_x1.max(shadow_x1),
+        base_y1.max(shadow_y1),
+    )
+}
+
+fn rect_from_bounds(x0: i64, y0: i64, x1: i64, y1: i64) -> Rect {
+    let x0 = x0.max(0).min(u32::MAX as i64);
+    let y0 = y0.max(0).min(u32::MAX as i64);
+    let x1 = x1.max(x0).min(u32::MAX as i64);
+    let y1 = y1.max(y0).min(u32::MAX as i64);
+    Rect {
+        x: x0 as u32,
+        y: y0 as u32,
+        w: x1.saturating_sub(x0) as u32,
+        h: y1.saturating_sub(y0) as u32,
+    }
 }
 
 fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {
@@ -579,6 +669,54 @@ fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEd
         (_, _, _, true) => Some(ResizeEdge::East),
         _ => None,
     }
+}
+
+pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(ChromeButton, Rect); 3]> {
+    if chrome.titlebar_height == 0 || rect.w == 0 || rect.h == 0 {
+        return None;
+    }
+
+    let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
+    let titlebar_height = chrome.titlebar_height.min(rect.h);
+    let button_size = titlebar_height.saturating_sub(frame.saturating_mul(2)).min(28);
+    if button_size < 12 {
+        return None;
+    }
+
+    let gap = 4u32.min(button_size / 3);
+    let right = rect.x.saturating_add(rect.w).saturating_sub(frame).saturating_sub(gap);
+    let y = rect
+        .y
+        .saturating_add(frame)
+        .saturating_add(titlebar_height.saturating_sub(frame.saturating_mul(2) + button_size) / 2);
+    let total_w = button_size.saturating_mul(3).saturating_add(gap.saturating_mul(2));
+    if total_w.saturating_add(frame).saturating_add(gap) > rect.w {
+        return None;
+    }
+
+    let close_x = right.saturating_sub(button_size);
+    let max_x = close_x.saturating_sub(gap).saturating_sub(button_size);
+    let min_x = max_x.saturating_sub(gap).saturating_sub(button_size);
+
+    Some([
+        (ChromeButton::Minimize, Rect { x: min_x, y, w: button_size, h: button_size }),
+        (ChromeButton::Maximize, Rect { x: max_x, y, w: button_size, h: button_size }),
+        (ChromeButton::Close, Rect { x: close_x, y, w: button_size, h: button_size }),
+    ])
+}
+
+fn chrome_button_at(rect: Rect, chrome: SurfaceChrome, x: i32, y: i32) -> Option<ChromeButton> {
+    let rects = chrome_button_rects(rect, chrome)?;
+    for (button, bounds) in rects {
+        let x0 = bounds.x as i32;
+        let y0 = bounds.y as i32;
+        let x1 = bounds.x.saturating_add(bounds.w) as i32;
+        let y1 = bounds.y.saturating_add(bounds.h) as i32;
+        if x >= x0 && x < x1 && y >= y0 && y < y1 {
+            return Some(button);
+        }
+    }
+    None
 }
 
 fn translate_surface_damage(local: Rect, src_w: u32, src_h: u32, dest: Rect) -> Option<Rect> {

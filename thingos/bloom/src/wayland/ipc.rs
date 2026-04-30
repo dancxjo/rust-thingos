@@ -24,6 +24,7 @@
 //! | `WEVT_BUFFER_RELEASE`| The compositor no longer needs a buffer       |
 //! | `WEVT_FRAME_DONE`    | A frame has been presented                    |
 //! | `WEVT_CONFIGURE_SURFACE` | The compositor requests a toplevel size   |
+//! | `WEVT_TOPLEVEL_ACTION` | The compositor requests a toplevel action  |
 
 // ── Discriminants ────────────────────────────────────────────────────────────
 
@@ -39,6 +40,11 @@ pub const MAX_TITLE_BYTES: usize = 64;
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
 pub const WEVT_FRAME_DONE: u8 = 2;
 pub const WEVT_CONFIGURE_SURFACE: u8 = 3;
+pub const WEVT_TOPLEVEL_ACTION: u8 = 4;
+
+pub const TOPLEVEL_ACTION_CLOSE: u8 = 1;
+pub const TOPLEVEL_ACTION_MINIMIZE: u8 = 2;
+pub const TOPLEVEL_ACTION_MAXIMIZE: u8 = 3;
 
 // ── Message structs (repr C, fixed size) ─────────────────────────────────────
 
@@ -157,6 +163,18 @@ pub struct WEvtFrameDone {
 pub struct WEvtConfigureSurface {
     pub msg_type: u8, // = WEVT_CONFIGURE_SURFACE
     pub resizing: u8,
+    pub _pad: [u8; 2],
+    pub bloom_surface_id: u32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// [`WEVT_TOPLEVEL_ACTION`] — compositor-owned window button action.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtToplevelAction {
+    pub msg_type: u8, // = WEVT_TOPLEVEL_ACTION
+    pub action: u8,
     pub _pad: [u8; 2],
     pub bloom_surface_id: u32,
     pub width: i32,
@@ -299,5 +317,24 @@ pub fn encode_configure_surface(
     };
     let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WEvtConfigureSurface));
+    out
+}
+
+pub fn encode_toplevel_action(
+    bloom_surface_id: u32,
+    action: u8,
+    width: i32,
+    height: i32,
+) -> [u8; 16] {
+    let msg = WEvtToplevelAction {
+        msg_type: WEVT_TOPLEVEL_ACTION,
+        action,
+        _pad: [0; 2],
+        bloom_surface_id,
+        width,
+        height,
+    };
+    let mut out = [0u8; 16];
+    out.copy_from_slice(as_bytes!(msg, WEvtToplevelAction));
     out
 }

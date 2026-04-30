@@ -23,6 +23,14 @@ Feature: ServiceLoop — inbox-backed control plane for ThingOS services
     Then the harness should observe a "Message" event with kind "test.ping" within 5s
     And the harness should not have observed any "Ready" event before the message
 
+  Scenario: finite timeout waits remain event-driven
+    # A ServiceLoop with a periodic timeout must stay registered in WaitSet
+    # while it waits.  Inbox delivery should wake the loop as an event, not
+    # wait for a userspace poll/sleep timeout cycle.
+    When the harness creates a ServiceLoop with max_payload 4096
+    And another task sends a typed message with kind "test.timeout-wake" to the harness inbox
+    Then the harness should observe a "Message" event with kind "test.timeout-wake" within 5s
+
   Scenario: when the inbox and a pipe both fire, the inbox wins
     # Resolves the design question in docs/ipc/service_loop.md §3.1:
     # control-plane priority is part of the contract, not an implementation

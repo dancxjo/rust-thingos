@@ -519,18 +519,7 @@ impl ServiceLoop {
         self.report_state(LoopState::Waiting, b"");
 
         let events = match timeout {
-            Some(timeout) => {
-                let timeout_ns = timeout.as_nanos();
-                let deadline = crate::time::monotonic_ns().saturating_add(timeout_ns);
-                loop {
-                    let events = self.waitset.wait(Some(Duration::from_nanos(0)))?;
-                    if !events.is_empty() || crate::time::monotonic_ns() >= deadline {
-                        break events;
-                    }
-                    let remaining = deadline.saturating_sub(crate::time::monotonic_ns());
-                    crate::time::sleep_ns(remaining.min(10_000_000));
-                }
-            }
+            Some(timeout) => self.waitset.wait(Some(timeout))?,
             None => self.waitset.wait(None::<Duration>)?,
         };
         self.metrics.last_exit_wait_ns.store(crate::time::monotonic_ns(), Ordering::Relaxed);
