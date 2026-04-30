@@ -191,11 +191,11 @@ impl FbConsole {
         match idx {
             0 => 0x0000_0000,
             1 => 0x00AA_0000,
-            2 => 0x0000_AA00,
+            2 => 0x00FF_CC00, // Golden
             3 => 0x00AA_AA00,
             4 => 0x0000_00AA,
             5 => 0x00AA_00AA,
-            6 => 0x0000_AAAA,
+            6 => 0x00AA_88FF, // Lavender
             7 => 0x00C0_C0C0,
             _ => {
                 if is_bg {

@@ -184,11 +184,11 @@ impl TermModel {
         match code - base {
             0 => 0xFF000000,
             1 => 0xFFFF0000,
-            2 => 0xFF00FF00,
+            2 => 0xFFFFCC00, // Golden
             3 => 0xFFFFFF00,
             4 => 0xFF0000FF,
             5 => 0xFFFF00FF,
-            6 => 0xFF00FFFF,
+            6 => 0xFFAA88FF, // Lavender
             7 => 0xFFFFFFFF,
             _ => {
                 if is_bg {

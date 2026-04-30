@@ -88,7 +88,7 @@ impl BootFbDriver {
             },
         );
 
-        debug!(
+        info!(
             "display_bootfb: imported buffer {} ({}x{} @ {:p})",
             id.0, handle.width, handle.height, resp.addr as *mut u8
         );

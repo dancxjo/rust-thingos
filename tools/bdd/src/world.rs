@@ -53,6 +53,9 @@ pub struct ThingOsWorld {
     /// Scenario-wide default timeout derived from feature/scenario tags.
     #[world(skip)]
     pub scenario_timeout_secs: Option<f64>,
+    /// Force the BootFB fallback boot entry for this scenario.
+    #[world(skip)]
+    pub force_bootfb: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -99,15 +102,19 @@ impl ThingOsWorld {
         )
     }
 
-    fn cached_iso_path(arch: &str, resolution: &str, loglevel: &str) -> PathBuf {
+    fn cached_iso_path(arch: &str, resolution: &str, loglevel: &str, force_bootfb: bool) -> PathBuf {
         let safe_resolution: String =
             resolution.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
         let safe_loglevel: String =
             loglevel.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        let display = if force_bootfb { "bootfb" } else { "auto" };
         PathBuf::from("target")
             .join("bdd")
             .join("images")
-            .join(format!("thing-os-bdd-{}-{}-{}.iso", arch, safe_resolution, safe_loglevel))
+            .join(format!(
+                "thing-os-bdd-{}-{}-{}-{}.iso",
+                arch, safe_resolution, safe_loglevel, display
+            ))
     }
 
     fn bdd_audiodev_arg() -> Option<String> {
@@ -226,7 +233,7 @@ impl ThingOsWorld {
 
         let loglevel = std::env::var("BDD_LOGLEVEL").unwrap_or_else(|_| "3".to_string());
 
-        let iso_path = Self::cached_iso_path(arch, &resolution, &loglevel);
+        let iso_path = Self::cached_iso_path(arch, &resolution, &loglevel, self.force_bootfb);
         let force_rebuild = Self::env_flag("BDD_FORCE_REBUILD_IMAGE");
 
         if let Some(parent) = iso_path.parent() {
@@ -240,33 +247,36 @@ impl ThingOsWorld {
                 eprintln!("[bdd] Forcing ISO rebuild: {}", iso_path.display());
             } else {
                 eprintln!(
-                    "[bdd] Building ISO {} with resolution {}...",
+                    "[bdd] Building ISO {} with resolution {}{}...",
                     iso_path.display(),
-                    resolution
+                    resolution,
+                    if self.force_bootfb { " (bootfb default)" } else { "" }
                 );
             }
 
             let iso_output = iso_path.to_string_lossy().to_string();
             // Use `cargo run -p xtask -- ...` instead of `cargo xtask ...` so CI does not
             // depend on Cargo alias resolution from .cargo/config.toml.
-            let build_output = std::process::Command::new("cargo")
-                .args([
-                    "run",
-                    "-p",
-                    "xtask",
-                    "--",
-                    "iso",
-                    "--env",
-                    arch,
-                    "--resolution",
-                    &resolution,
-                    "--output",
-                    &iso_output,
-                    "--loglevel",
-                    &loglevel,
-                ])
-                .env("RUSTFLAGS", "-Awarnings")
-                .output()?;
+            let mut build_cmd = std::process::Command::new("cargo");
+            build_cmd.args([
+                "run",
+                "-p",
+                "xtask",
+                "--",
+                "iso",
+                "--env",
+                arch,
+                "--resolution",
+                &resolution,
+                "--output",
+                &iso_output,
+                "--loglevel",
+                &loglevel,
+            ]);
+            if self.force_bootfb {
+                build_cmd.arg("--bootfb-default");
+            }
+            let build_output = build_cmd.env("RUSTFLAGS", "-Awarnings").output()?;
 
             if !build_output.status.success() {
                 let stdout = String::from_utf8_lossy(&build_output.stdout);

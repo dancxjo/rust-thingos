@@ -70,6 +70,11 @@ fn main() {
                 .max_concurrent_scenarios(1) // Force sequential execution to avoid global artifact race conditions
                 .before(|feature, _rule, scenario, world| {
                     Box::pin(async move {
+                        world.force_bootfb = feature
+                            .tags
+                            .iter()
+                            .chain(scenario.tags.iter())
+                            .any(|tag| tag.trim_start_matches('@') == "bootfb");
                         world.scenario_timeout_secs = feature
                             .tags
                             .iter()

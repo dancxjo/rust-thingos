@@ -59,16 +59,16 @@ const DOT_LABELS: [&str; NUM_DOTS] = ["FB", "MEM", "CPU", "BUS", "DEV", "CLK", "
 // ── Colour palette ────────────────────────────────────────────────────────────
 const PANEL_BG: u32 = 0x111111;
 const PENDING_FG: u32 = 0x2A2A2A; // very dim – task not yet reached
-const ACTIVE_FG: u32 = 0x00AADD; // cyan  – task just pushed (in progress)
-const COMPLETE_FG: u32 = 0x55AACC; // light cyan – task finished
-const CHECK_COLOR: u32 = 0x00CC55; // green corner marker for complete cells
+const ACTIVE_FG: u32 = 0xAA88FF; // lavender – task just pushed (in progress)
+const COMPLETE_FG: u32 = 0xCCAAFF; // light lavender – task finished
+const CHECK_COLOR: u32 = 0xFFCC00; // golden corner marker for complete cells
 const TEXT_FG: u32 = 0xCCCCCC; // milestone label text
 const LABEL_FG: u32 = 0x666666; // dot phase labels
 const BAR_BG: u32 = 0x222222; // unfilled bar
-const BAR_FG: u32 = 0x00AA44; // filled bar (green)
+const BAR_FG: u32 = 0xCCAA00; // filled bar (golden)
 const DOT_PENDING_COLOR: u32 = 0x2D2D2D;
-const DOT_COMPLETE_COLOR: u32 = 0x00AA44;
-const DOT_ACTIVE_COLOR: u32 = 0x00AADD;
+const DOT_COMPLETE_COLOR: u32 = 0xCCAA00;
+const DOT_ACTIVE_COLOR: u32 = 0xAA88FF;
 
 const BAR_H: usize = 6;
 const DOT_SIZE: usize = 8;
