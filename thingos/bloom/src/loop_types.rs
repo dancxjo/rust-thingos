@@ -390,12 +390,14 @@ impl BloomLoop {
             // a repaint was requested earlier.  Dirty scene damage and pending
             // cursor motion both need a present: cursor damage is coalesced and
             // stamped into the damage tracker immediately before committing.
-            let repaint_needed =
-                world.damage.is_dirty() || world.input.has_pending_cursor_motion();
+            let repaint_needed = world.damage.is_dirty() || world.input.has_pending_cursor_motion();
             if self.frame_clock.repaint_due() && repaint_needed {
                 if let Some(composition) = world.try_present() {
                     world.send_frame_callbacks(&composition);
                     self.frame_clock.after_commit();
+                    if world.input.has_pending_cursor_motion() {
+                        self.frame_clock.request_repaint();
+                    }
                     if !first_frame_rendered {
                         stem::info!("First frame rendered");
                         first_frame_rendered = true;

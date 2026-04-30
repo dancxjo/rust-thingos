@@ -1,8 +1,9 @@
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use abi::KindId;
 use abi::hid::{
     BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
-use core::sync::atomic::{AtomicU32, Ordering};
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
 
@@ -21,7 +22,10 @@ const CURSOR_DAMAGE_W: u32 = 96;
 const CURSOR_DAMAGE_H: u32 = 96;
 const CURSOR_HOTSPOT_X: i32 = 9;
 const CURSOR_HOTSPOT_Y: i32 = 6;
+const CURSOR_SMOOTHING_DIVISOR: i32 = 3;
+const CURSOR_SMOOTHING_MIN_STEP: i32 = 8;
 static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);
+static CURSOR_SMOOTHING_LOGS: AtomicU32 = AtomicU32::new(0);
 
 pub struct InputState {
     /// Latest logical pointer position from Bristle input. Clients and focus
@@ -83,10 +87,21 @@ impl InputState {
 
         let old_x = self.visible_x;
         let old_y = self.visible_y;
-        self.visible_x = self.pointer_x;
-        self.visible_y = self.pointer_y;
-        self.pending_cursor_motion = false;
+        self.visible_x = smooth_cursor_axis(self.visible_x, self.pointer_x);
+        self.visible_y = smooth_cursor_axis(self.visible_y, self.pointer_y);
+        self.pending_cursor_motion =
+            self.pointer_x != self.visible_x || self.pointer_y != self.visible_y;
         mark_cursor_damage(damage, old_x, old_y, self.visible_x, self.visible_y);
+
+        if self.pending_cursor_motion && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < 8 {
+            stem::info!(
+                "bloom: cursor smoothing visible={},{} target={},{}",
+                self.visible_x,
+                self.visible_y,
+                self.pointer_x,
+                self.pointer_y
+            );
+        }
     }
 
     pub fn handle_bristle_event(
@@ -308,6 +323,17 @@ fn mark_cursor_damage(damage: &mut DamageTracker, old_x: i32, old_y: i32, new_x:
     if old_x != new_x || old_y != new_y {
         mark_cursor_rect(damage, new_x, new_y);
     }
+}
+
+fn smooth_cursor_axis(visible: i32, target: i32) -> i32 {
+    let delta = target.saturating_sub(visible);
+    if delta == 0 {
+        return target;
+    }
+
+    let distance = delta.unsigned_abs() as i32;
+    let step = (distance / CURSOR_SMOOTHING_DIVISOR).max(CURSOR_SMOOTHING_MIN_STEP).min(distance);
+    visible.saturating_add(step * delta.signum())
 }
 
 fn mark_cursor_rect(damage: &mut DamageTracker, x: i32, y: i32) {
