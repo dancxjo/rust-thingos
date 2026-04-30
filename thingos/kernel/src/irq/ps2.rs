@@ -207,7 +207,7 @@ mod tests {
         while take_scancode().is_some() {}
         EXTENDED_PREFIX.store(false, Ordering::Release);
         ALT_DOWN.store(false, Ordering::Release);
-        F11_DOWN.store(false, Ordering::Release);
+        F1_DOWN.store(false, Ordering::Release);
         F12_DOWN.store(false, Ordering::Release);
         LOG_LEVEL_HOTKEY_PENDING.store(0, Ordering::Release);
         TERMINAL_HOTKEY_PENDING.store(false, Ordering::Release);
@@ -265,36 +265,36 @@ mod tests {
     }
 
     #[test]
-    fn plain_f11_cycles_log_level_once_per_press() {
+    fn plain_f1_cycles_log_level_once_per_press() {
         reset_state();
-
+ 
         assert_eq!(crate::logging::get_log_level(), 3);
-        assert!(!buffer_scancode(0x57));
+        assert!(!buffer_scancode(0x3B));
         assert_eq!(take_log_level_hotkey(), Some(4));
         assert_eq!(crate::logging::get_log_level(), 4);
-
+ 
         // Typematic repeat while held should not cycle.
-        assert!(!buffer_scancode(0x57));
+        assert!(!buffer_scancode(0x3B));
         assert_eq!(take_log_level_hotkey(), None);
         assert_eq!(crate::logging::get_log_level(), 4);
-
-        assert!(!buffer_scancode(0xD7));
-        assert!(!buffer_scancode(0x57));
+ 
+        assert!(!buffer_scancode(0xBB));
+        assert!(!buffer_scancode(0x3B));
         assert_eq!(take_log_level_hotkey(), Some(5));
         assert_eq!(crate::logging::get_log_level(), 5);
     }
 
     #[test]
-    fn f11_cycle_wraps_through_off() {
+    fn f1_cycle_wraps_through_off() {
         reset_state();
         crate::logging::set_log_level(5);
-
-        assert!(!buffer_scancode(0x57));
+ 
+        assert!(!buffer_scancode(0x3B));
         assert_eq!(take_log_level_hotkey(), Some(0));
         assert_eq!(crate::logging::get_log_level(), 0);
-
-        assert!(!buffer_scancode(0xD7));
-        assert!(!buffer_scancode(0x57));
+ 
+        assert!(!buffer_scancode(0xBB));
+        assert!(!buffer_scancode(0x3B));
         assert_eq!(take_log_level_hotkey(), Some(1));
         assert_eq!(crate::logging::get_log_level(), 1);
     }
