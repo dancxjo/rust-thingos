@@ -402,20 +402,20 @@ fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRe
             pixels,
             buffer.width,
             buffer.height,
-            22,
-            42,
-            17.0,
+            10,
+            23,
+            13.0,
             title,
-            0xFF586E75,
+            0xFF3F3A2F,
         );
         draw_text(
             text_renderer,
             pixels,
             buffer.width,
             buffer.height,
-            22,
-            68,
-            18.0,
+            10,
+            48,
+            13.0,
             "Resize the frame; the buffer follows.",
             0xFF3F3A2F,
         );
@@ -424,11 +424,11 @@ fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRe
             pixels,
             buffer.width,
             buffer.height,
-            22,
-            96,
-            18.0,
+            10,
+            72,
+            13.0,
             "Compositor round-trip: shm, xdg, paint.",
-            0xFF586E75,
+            0xFF3F3A2F,
         );
     }
 }
@@ -730,29 +730,23 @@ fn create_dmabuf_buffer(
     let mut buf = Vec::new();
     encode_header(dmabuf_id, 1, 12, &mut buf);
     buf.extend_from_slice(&params_id.to_ne_bytes());
-    send_request(fd, &buf);
 
-    let mut add = Vec::new();
-    encode_header(params_id, 1, 28, &mut add);
-    add.extend_from_slice(&0u32.to_ne_bytes()); // plane_idx
-    add.extend_from_slice(&0u32.to_ne_bytes()); // offset
-    add.extend_from_slice(&stride.to_ne_bytes());
-    add.extend_from_slice(&0u32.to_ne_bytes()); // modifier_hi: linear
-    add.extend_from_slice(&0u32.to_ne_bytes()); // modifier_lo: linear
-    send_request_with_fds(fd, &add, &[dma_fd]);
+    encode_header(params_id, 1, 28, &mut buf);
+    buf.extend_from_slice(&0u32.to_ne_bytes()); // plane_idx
+    buf.extend_from_slice(&0u32.to_ne_bytes()); // offset
+    buf.extend_from_slice(&stride.to_ne_bytes());
+    buf.extend_from_slice(&0u32.to_ne_bytes()); // modifier_hi: linear
+    buf.extend_from_slice(&0u32.to_ne_bytes()); // modifier_lo: linear
 
-    let mut create = Vec::new();
-    encode_header(params_id, 3, 28, &mut create);
-    create.extend_from_slice(&buffer_id.to_ne_bytes());
-    create.extend_from_slice(&(width as i32).to_ne_bytes());
-    create.extend_from_slice(&(height as i32).to_ne_bytes());
-    create.extend_from_slice(&DRM_FORMAT_ARGB8888.to_ne_bytes());
-    create.extend_from_slice(&0u32.to_ne_bytes()); // flags
-    send_request(fd, &create);
+    encode_header(params_id, 3, 28, &mut buf);
+    buf.extend_from_slice(&buffer_id.to_ne_bytes());
+    buf.extend_from_slice(&(width as i32).to_ne_bytes());
+    buf.extend_from_slice(&(height as i32).to_ne_bytes());
+    buf.extend_from_slice(&DRM_FORMAT_ARGB8888.to_ne_bytes());
+    buf.extend_from_slice(&0u32.to_ne_bytes()); // flags
 
-    let mut destroy = Vec::new();
-    encode_header(params_id, 0, 8, &mut destroy);
-    send_request(fd, &destroy);
+    encode_header(params_id, 0, 8, &mut buf);
+    send_request_with_fds(fd, &buf, &[dma_fd]);
 }
 
 fn create_buffer(fd: u32, pool_id: u32, buffer_id: u32, width: u32, height: u32, stride: u32) {

@@ -6,6 +6,22 @@ use crate::world::ThingOsWorld;
 
 // ===== Blossom XDG-Shell Steps =====
 
+fn is_brass_pixel(pixel: [u8; 3]) -> bool {
+    color_close(pixel, [0xF3, 0xCC, 0x58], 24)
+        || color_close(pixel, [0xE5, 0xB8, 0x3F], 24)
+        || color_close(pixel, [0xD4, 0x9A, 0x20], 24)
+}
+
+fn is_paper_pixel(pixel: [u8; 3]) -> bool {
+    color_close(pixel, [0xFF, 0xF9, 0xEC], 16)
+        || color_close(pixel, [0xFD, 0xF1, 0xD2], 16)
+        || (pixel[0] >= 245 && pixel[1] >= 232 && pixel[2] >= 200)
+}
+
+fn is_paper_text_pixel(pixel: [u8; 3]) -> bool {
+    color_close(pixel, [0x3F, 0x3A, 0x2F], 30) || color_close(pixel, [0x3B, 0x2A, 0x0A], 30)
+}
+
 /// Background: `Given the bloom compositor is running with blossom support`
 #[given("the bloom compositor is running with blossom support")]
 async fn bloom_compositor_running_with_blossom(world: &mut ThingOsWorld) -> Result<(), StepError> {
@@ -568,16 +584,11 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
             for x in 0..max_x {
                 let [r, g, b] = img.get_pixel(x, y).0;
                 let pixel = [r, g, b];
-                if color_close(pixel, [0xFF, 0xB9, 0x00], 12) {
+                if is_brass_pixel(pixel) {
                     title_pixels += 1;
-                } else if r <= 30 && (20..=35).contains(&g) && (25..=45).contains(&b) {
+                } else if is_paper_pixel(pixel) {
                     body_pixels += 1;
-                } else if r < 80 && g < 80 && b < 70
-                    || (r > 130
-                        && g > 150
-                        && b > 120
-                        && !color_close(pixel, [0xFF, 0xB9, 0x00], 32))
-                {
+                } else if is_paper_text_pixel(pixel) {
                     text_pixels += 1;
                 }
             }
@@ -639,12 +650,12 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
         for y in 0..max_y {
             for x in 0..max_x {
                 let pixel = img.get_pixel(x, y).0;
-                if color_close(pixel, [0xFF, 0xB9, 0x00], 12) {
+                if is_brass_pixel(pixel) {
                     gold_pixels += 1;
-                } else if color_close(pixel, [0x32, 0x33, 0x1F], 28) {
+                } else if is_paper_text_pixel(pixel) {
                     dark_text_pixels += 1;
                 }
-                if x >= 340 && y < 40 && color_close(pixel, [0x32, 0x33, 0x1F], 28) {
+                if x >= 340 && y < 40 && is_paper_text_pixel(pixel) {
                     button_icon_pixels += 1;
                     if y < 7 {
                         icon_pixels_high_in_frame += 1;

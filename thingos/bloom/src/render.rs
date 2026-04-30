@@ -39,8 +39,8 @@ const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
 const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
-const CHROME_ICON_X_BIAS: i32 = -2;
-const CHROME_ICON_Y_BIAS: i32 = 3;
+const CHROME_ICON_X_BIAS: i32 = 0;
+const CHROME_ICON_Y_BIAS: i32 = 0;
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -779,8 +779,8 @@ fn draw_chrome_overlay(
                 theme.close_icon,
             );
             if let Some(title) = entry.title.as_deref() {
-                let text_x = x.saturating_add(frame as i32).saturating_add(12);
-                let text_y = y.saturating_add((titlebar_height as i32 + 16) / 2);
+                let text_x = x.saturating_add(frame as i32).saturating_add(10);
+                let text_y = y.saturating_add((titlebar_height as i32 + 13) / 2);
                 let buttons_w = chrome_button_rects(rect, chrome)
                     .map(|rects| {
                         let first = rects[0].1;
@@ -800,7 +800,7 @@ fn draw_chrome_overlay(
                     height,
                     text_x,
                     text_y,
-                    16.0,
+                    13.0,
                     title_prefix(title, max_chars),
                     text_color,
                 );
@@ -852,16 +852,20 @@ fn draw_window_shadow(
     if w == 0 || h == 0 {
         return;
     }
-    let (soft, core) = if active { (0x2B2B1B03, 0x382B1B03) } else { (0x1C2B1B03, 0x242B1B03) };
+    let (soft, mid, core) = if active {
+        (0x142B1B03, 0x2B2B1B03, 0x4D2B1B03)
+    } else {
+        (0x102B1B03, 0x242B1B03, 0x3D2B1B03)
+    };
     fill_rounded_vertical_gradient(
         dst,
         stride,
         height,
-        x.saturating_sub(5),
-        y.saturating_add(7),
-        w.saturating_add(10),
-        h.saturating_add(5),
-        9,
+        x.saturating_sub(14),
+        y.saturating_add(6),
+        w.saturating_add(28),
+        h.saturating_add(18),
+        18,
         soft,
         0x002B1B03,
     );
@@ -869,11 +873,23 @@ fn draw_window_shadow(
         dst,
         stride,
         height,
-        x.saturating_sub(2),
-        y.saturating_add(2),
-        w.saturating_add(4),
-        h.saturating_add(2),
-        8,
+        x.saturating_sub(8),
+        y.saturating_add(6),
+        w.saturating_add(16),
+        h.saturating_add(12),
+        14,
+        mid,
+        0x062B1B03,
+    );
+    fill_rounded_vertical_gradient(
+        dst,
+        stride,
+        height,
+        x.saturating_sub(3),
+        y.saturating_add(6),
+        w.saturating_add(6),
+        h.saturating_add(5),
+        10,
         core,
         0x142B1B03,
     );
@@ -895,7 +911,7 @@ fn draw_frame_outline(
     stride: u32,
     height: u32,
     rect: abi::display_protocol::Rect,
-    frame: u32,
+    _frame: u32,
     theme: UiTheme,
     active: bool,
 ) {
@@ -910,15 +926,20 @@ fn draw_frame_outline(
     let border = if active { theme.active.border } else { theme.inactive.border };
     stroke_rounded_rect(dst, stride, height, x, y, w, h, 7, border, theme.visual_border);
 
-    if frame <= 1 || w <= frame.saturating_mul(2) || h <= frame.saturating_mul(2) {
-        return;
+    if w > 2 && h > 2 {
+        stroke_rounded_rect(
+            dst,
+            stride,
+            height,
+            x + 1,
+            y + 1,
+            w.saturating_sub(2),
+            h.saturating_sub(2),
+            6,
+            theme.inner_highlight,
+            1,
+        );
     }
-
-    let ix = x.saturating_add(frame as i32);
-    let iy = y.saturating_add(frame as i32);
-    let iw = w.saturating_sub(frame.saturating_mul(2));
-    let ih = h.saturating_sub(frame.saturating_mul(2));
-    stroke_rounded_rect(dst, stride, height, ix, iy, iw, ih, 4, theme.inner_highlight, 1);
 }
 
 fn draw_chrome_buttons(
@@ -993,20 +1014,8 @@ fn draw_chrome_button_well(
         return;
     }
 
-    fill_rounded_vertical_gradient(dst, stride, height, x, y, w, h, 5, 0x8CFFF4D4, 0x7AD8A92F);
-    stroke_rounded_rect(dst, stride, height, x, y, w, h, 5, 0xA08C6500, 1);
-    stroke_rounded_rect(
-        dst,
-        stride,
-        height,
-        x + 1,
-        y + 1,
-        w.saturating_sub(2),
-        h.saturating_sub(2),
-        4,
-        0x4DFFFFFF,
-        1,
-    );
+    fill_rounded_vertical_gradient(dst, stride, height, x, y, w, h, 4, 0x2EFFFFFF, 0x2EFFFFFF);
+    stroke_rounded_rect(dst, stride, height, x, y, w, h, 4, 0x383B2A0A, 1);
 }
 
 fn draw_chrome_button_lucide(
@@ -1025,7 +1034,7 @@ fn draw_chrome_button_lucide(
         return false;
     };
 
-    let icon_size = rect.w.min(rect.h).saturating_sub(4).clamp(12, 18);
+    let icon_size = rect.w.min(rect.h).saturating_sub(11).clamp(9, 9);
     let dst_x = rect.x as i32 + ((rect.w.saturating_sub(icon_size)) / 2) as i32;
     let dst_y = rect.y as i32 + ((rect.h.saturating_sub(icon_size)) / 2) as i32;
     call_draw_svg_icon(
