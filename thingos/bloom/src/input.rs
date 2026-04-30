@@ -464,8 +464,8 @@ impl InputState {
                     return true;
                 }
 
-                // Alt+F or F1: Fullscreen
-                if (key.mods().has_alt() && key.key() == Key::F) || key.key() == Key::F1 {
+                // F11: Fullscreen
+                if key.key() == Key::F11 {
                     if !key.is_repeat() {
                         if let Some(surface_id) = scene.keyboard_focus {
                             self.toggle_fullscreen(scene, damage, wayland_evt_write, surface_id);

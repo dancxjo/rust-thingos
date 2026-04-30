@@ -57,7 +57,7 @@ static PS2_QUEUE: Ps2Queue = Ps2Queue::new();
 
 static EXTENDED_PREFIX: AtomicBool = AtomicBool::new(false);
 static ALT_DOWN: AtomicBool = AtomicBool::new(false);
-static F11_DOWN: AtomicBool = AtomicBool::new(false);
+static F1_DOWN: AtomicBool = AtomicBool::new(false);
 static F12_DOWN: AtomicBool = AtomicBool::new(false);
 static LOG_LEVEL_HOTKEY_PENDING: AtomicUsize = AtomicUsize::new(0);
 static TERMINAL_HOTKEY_PENDING: AtomicBool = AtomicBool::new(false);
@@ -144,10 +144,10 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
             ALT_DOWN.store(!released, Ordering::Release);
             false
         }
-        (false, 0x57) => {
+        (false, 0x3B) => {
             if released {
-                F11_DOWN.store(false, Ordering::Release);
-            } else if !F11_DOWN.swap(true, Ordering::AcqRel) {
+                F1_DOWN.store(false, Ordering::Release);
+            } else if !F1_DOWN.swap(true, Ordering::AcqRel) {
                 let level = crate::logging::cycle_log_level();
                 LOG_LEVEL_HOTKEY_PENDING.store(level as usize + 1, Ordering::Release);
             }
