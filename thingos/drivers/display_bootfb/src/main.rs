@@ -351,7 +351,19 @@ fn main(boot_fd: usize) -> ! {
             Err(_) => break,
         };
         let resp = dispatch_vfs_rpc(&mut driver, &req);
-        lp.send_response(&req, resp).ok();
+        match lp.send_response(&req, resp) {
+            Ok(()) => stem::trace!(
+                "display_bootfb: VFS RPC response sent op={:?} req_id={}",
+                req.op,
+                req.req_id
+            ),
+            Err(e) => stem::error!(
+                "display_bootfb: VFS RPC response failed op={:?} req_id={} err={:?}",
+                req.op,
+                req.req_id,
+                e
+            ),
+        }
     }
 
     info!("display_bootfb: VFS provider port closed — exiting");

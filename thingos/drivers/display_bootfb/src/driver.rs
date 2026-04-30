@@ -61,7 +61,10 @@ impl BootFbDriver {
             plane_count: 1,
             max_buffers: 32,
             supported_formats: 1 << (PixelFormat::Bgra8888 as u8),
-            caps: abi::display::DisplayCaps::VBLANK,
+            // This provider replies to DISPLAY_OP_COMMIT synchronously.
+            // Advertising VBLANK would make clients sleep inside the VFS RPC
+            // response path instead of returning to their event loops.
+            caps: abi::display::DisplayCaps::empty(),
         }
     }
 
@@ -115,9 +118,7 @@ impl BootFbDriver {
 
     pub fn commit(&mut self, req: &CommitRequest) -> SysResult<()> {
         let damage = req.damage_rects();
-        // Blit all planes — with or without damage rects.  Both paths continue
-        // to the vsync wait below so that the VSYNC flag is honoured regardless
-        // of the damage mode (full-output or bounded rects).
+        // Blit all planes, with or without damage rects.
         if damage.is_empty() {
             for plane in req.planes() {
                 self.blit_plane(plane)?;
@@ -132,11 +133,8 @@ impl BootFbDriver {
             }
         }
 
-        // Software vsync: when requested, pace frame delivery to the display
-        // refresh interval so callers that set VSYNC get accurate timing.
         if req.flags.contains(CommitFlags::VSYNC) {
-            let refresh = self.fb_refresh_mhz();
-            vsync_wait(&mut self.last_present_ns, refresh);
+            stem::trace!("display_bootfb: ignoring VSYNC flag on synchronous commit path");
         }
 
         Ok(())

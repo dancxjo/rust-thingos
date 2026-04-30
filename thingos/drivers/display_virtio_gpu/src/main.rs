@@ -428,7 +428,10 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 plane_count: 1,
                 max_buffers: 32,
                 supported_formats: 1 << 1,
-                caps: DisplayCaps::ATOMIC | DisplayCaps::VBLANK,
+                // This provider replies to DISPLAY_OP_COMMIT synchronously.
+                // Advertising VBLANK would make clients sleep inside the VFS
+                // RPC response path instead of returning to their event loops.
+                caps: DisplayCaps::ATOMIC,
             };
             stem::trace!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
@@ -852,10 +855,10 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     stem::trace!("DISP: COMMIT complete (seq={})", driver.present_seq);
                     driver.current_fd = Some(driver.frame_pool[idx].fd);
 
-                    // Software vsync: pace frame delivery to the display refresh
-                    // interval when the caller requests synchronisation.
                     if req.flags.contains(CommitFlags::VSYNC) {
-                        vsync_wait(&mut driver.last_present_ns, DEFAULT_REFRESH_MHZ);
+                        stem::trace!(
+                            "DISP: ignoring VSYNC flag on synchronous VFS commit response path"
+                        );
                     }
                 }
             }
@@ -1450,7 +1453,24 @@ fn main(boot_arg: usize) -> ! {
             did_work = true;
             stem::trace!("display_virtio_gpu: VFS RPC op={:?}", req.op);
             let resp = dispatch_vfs_rpc(&mut driver, &req);
-            vfs_loop.send_response(&req, resp).ok();
+            stem::trace!(
+                "display_virtio_gpu: VFS RPC response begin op={:?} req_id={}",
+                req.op,
+                req.req_id
+            );
+            match vfs_loop.send_response(&req, resp) {
+                Ok(()) => stem::trace!(
+                    "display_virtio_gpu: VFS RPC response sent op={:?} req_id={}",
+                    req.op,
+                    req.req_id
+                ),
+                Err(e) => stem::error!(
+                    "display_virtio_gpu: VFS RPC response failed op={:?} req_id={} err={:?}",
+                    req.op,
+                    req.req_id,
+                    e
+                ),
+            }
         }
 
         while let Some((header, payload)) = frames.next_message() {

@@ -45,6 +45,7 @@ impl BloomWorld {
         display: DisplayBackend,
         primary: OutputInfo,
     ) -> Self {
+        let vsync_enabled = display.supports_vblank();
         Self {
             scene,
             damage,
@@ -52,7 +53,7 @@ impl BloomWorld {
             visuals,
             display,
             primary,
-            vsync_enabled: true,
+            vsync_enabled,
             cursor_present_logged: false,
             wayland_evt_write: None,
             last_active_id: None,
