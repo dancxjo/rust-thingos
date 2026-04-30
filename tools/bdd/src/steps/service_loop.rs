@@ -1,8 +1,7 @@
 use cucumber::{given, then, when};
 
-use crate::world::{ThingOsWorld, strip_ansi};
-
 use super::helpers::{StepError, capture_failure_diagnostics};
+use crate::world::{ThingOsWorld, strip_ansi};
 
 // ===== ServiceLoop Test Harness Steps =====
 //
@@ -65,10 +64,7 @@ async fn harness_creates_service_loop(world: &mut ThingOsWorld) -> Result<(), St
     // Launch the harness in the background; it awaits further commands.
     let mut cmd = b"sl_harness create 4096\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     // Wait for the harness to confirm creation.
@@ -90,10 +86,7 @@ async fn send_typed_message_to_harness(
 ) -> Result<(), StepError> {
     let mut cmd = format!("sl_harness send {}\n", kind).into_bytes();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     eprintln!("│  │  │      📨 Sent '{}' to harness inbox", kind);
@@ -101,9 +94,7 @@ async fn send_typed_message_to_harness(
 }
 
 /// `Then the harness should observe a "Message" event with kind "<kind>" within 5s` (regex)
-#[then(
-    regex = r#"^the harness should observe a "Message" event with kind "([^"]+)" within 5s$"#
-)]
+#[then(regex = r#"^the harness should observe a "Message" event with kind "([^"]+)" within 5s$"#)]
 async fn harness_observes_message_event(
     world: &mut ThingOsWorld,
     kind: String,
@@ -136,17 +127,12 @@ async fn harness_no_ready_before_message(_world: &mut ThingOsWorld) {
 async fn harness_registers_pipe_fd(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness register_pipe\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     let found = world.wait_for_serial("SLHARNESS:PipeRegistered", 5.0).await;
     if !found {
-        return Err(StepError(
-            "Harness did not confirm pipe FD registration".to_string(),
-        ));
+        return Err(StepError("Harness did not confirm pipe FD registration".to_string()));
     }
     Ok(())
 }
@@ -156,10 +142,7 @@ async fn harness_registers_pipe_fd(world: &mut ThingOsWorld) -> Result<(), StepE
 async fn pipe_write_end_filled(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness fill_pipe\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     Ok(())
@@ -218,16 +201,11 @@ async fn harness_observes_pipe_ready(world: &mut ThingOsWorld) -> Result<(), Ste
 }
 
 /// `And the harness subscribes to a synthetic test IRQ and registers it as a secondary source`
-#[when(
-    "the harness subscribes to a synthetic test IRQ and registers it as a secondary source"
-)]
+#[when("the harness subscribes to a synthetic test IRQ and registers it as a secondary source")]
 async fn harness_subscribes_to_irq(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness register_irq\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     let found = world.wait_for_serial("SLHARNESS:IrqRegistered", 5.0).await;
@@ -242,10 +220,7 @@ async fn harness_subscribes_to_irq(world: &mut ThingOsWorld) -> Result<(), StepE
 async fn synthetic_irq_fired(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness fire_irq\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     Ok(())
@@ -272,10 +247,7 @@ async fn harness_observes_irq_ready(world: &mut ThingOsWorld) -> Result<(), Step
 async fn harness_inbox_closed(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness close_inbox\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     Ok(())
@@ -308,10 +280,7 @@ async fn subsequent_next_event_returns_inbox_closed(
         eprintln!("│  │  │      ✅ InboxClosed is latched");
         Ok(())
     } else {
-        Err(StepError(format!(
-            "InboxClosed latch not confirmed ('{}' not found)",
-            needle
-        )))
+        Err(StepError(format!("InboxClosed latch not confirmed ('{}' not found)", needle)))
     }
 }
 
@@ -335,9 +304,7 @@ async fn harness_low_cpu_after_close(world: &mut ThingOsWorld) -> Result<(), Ste
 }
 
 /// `And another task sends 4 typed messages with kind "<kind>" to the harness inbox` (regex)
-#[when(
-    regex = r#"^another task sends 4 typed messages with kind "([^"]+)" to the harness inbox$"#
-)]
+#[when(regex = r#"^another task sends 4 typed messages with kind "([^"]+)" to the harness inbox$"#)]
 async fn send_4_typed_messages(world: &mut ThingOsWorld, kind: String) -> Result<(), StepError> {
     for _ in 0..4 {
         let mut cmd = format!("sl_harness send {}\n", kind).into_bytes();
@@ -358,10 +325,7 @@ async fn send_4_typed_messages(world: &mut ThingOsWorld, kind: String) -> Result
 async fn harness_calls_next_then_drain(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness drain\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     Ok(())
@@ -376,10 +340,7 @@ async fn harness_reports_4_total(world: &mut ThingOsWorld) -> Result<(), StepErr
         eprintln!("│  │  │      ✅ Harness reported 4 total messages");
         Ok(())
     } else {
-        Err(StepError(format!(
-            "Harness did not report total_count:4 ('{}' not found)",
-            needle
-        )))
+        Err(StepError(format!("Harness did not report total_count:4 ('{}' not found)", needle)))
     }
 }
 
@@ -392,10 +353,7 @@ async fn harness_reports_1_from_next_event(world: &mut ThingOsWorld) -> Result<(
         eprintln!("│  │  │      ✅ 1 message from next_event confirmed");
         Ok(())
     } else {
-        Err(StepError(format!(
-            "Harness did not report next_count:1 ('{}' not found)",
-            needle
-        )))
+        Err(StepError(format!("Harness did not report next_count:1 ('{}' not found)", needle)))
     }
 }
 
@@ -408,24 +366,16 @@ async fn harness_reports_3_from_drain(world: &mut ThingOsWorld) -> Result<(), St
         eprintln!("│  │  │      ✅ 3 messages from drain_inbox confirmed");
         Ok(())
     } else {
-        Err(StepError(format!(
-            "Harness did not report drain_count:3 ('{}' not found)",
-            needle
-        )))
+        Err(StepError(format!("Harness did not report drain_count:3 ('{}' not found)", needle)))
     }
 }
 
 /// `And the harness attempts to remove the inbox token`
 #[when("the harness attempts to remove the inbox token")]
-async fn harness_attempts_remove_inbox_token(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn harness_attempts_remove_inbox_token(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness remove_inbox\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     Ok(())
@@ -464,19 +414,14 @@ async fn service_loop_still_has_inbox(world: &mut ThingOsWorld) -> Result<(), St
 }
 
 /// `And the harness arms a run_until_shutdown hook that records "<tag>"` (regex)
-#[when(
-    regex = r#"^the harness arms a run_until_shutdown hook that records "([^"]+)"$"#
-)]
+#[when(regex = r#"^the harness arms a run_until_shutdown hook that records "([^"]+)"$"#)]
 async fn harness_arms_shutdown_hook(
     world: &mut ThingOsWorld,
     tag: String,
 ) -> Result<(), StepError> {
     let mut cmd = format!("sl_harness arm_shutdown_hook {}\n", tag).into_bytes();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     eprintln!("│  │  │      🔧 Armed shutdown hook with tag '{}'", tag);
@@ -511,10 +456,7 @@ async fn run_until_shutdown_returned(world: &mut ThingOsWorld) -> Result<(), Ste
         eprintln!("│  │  │      ✅ run_until_shutdown returned cleanly");
         Ok(())
     } else {
-        Err(StepError(format!(
-            "run_until_shutdown did not report return ('{}' not found)",
-            needle
-        )))
+        Err(StepError(format!("run_until_shutdown did not report return ('{}' not found)", needle)))
     }
 }
 
@@ -523,14 +465,9 @@ async fn run_until_shutdown_returned(world: &mut ThingOsWorld) -> Result<(), Ste
 async fn handler_returns_break(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let mut cmd = b"sl_harness arm_break_handler\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     eprintln!("│  │  │      🔧 Armed Break handler");
     Ok(())
 }
-
-

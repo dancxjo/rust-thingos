@@ -36,8 +36,8 @@ use core::mem::size_of;
 use abi::device::DeviceKind;
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
-    DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
-    ProbeResult, Status,
+    DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1, ProbeResult,
+    Status,
 };
 use abi::errors::Errno;
 use abi::sound::{

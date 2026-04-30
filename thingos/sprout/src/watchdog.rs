@@ -135,16 +135,8 @@ pub fn read_daemon_stats(pid: u64) -> Option<DaemonLoopStats> {
             pid,
             "last_dispatch_start_ns",
         )),
-        last_dispatch_end_ns: read_u64_from_proc(proc_sl_path(
-            &mut b,
-            pid,
-            "last_dispatch_end_ns",
-        )),
-        current_event_kind: read_u64_from_proc(proc_sl_path(
-            &mut b,
-            pid,
-            "current_event_kind",
-        )),
+        last_dispatch_end_ns: read_u64_from_proc(proc_sl_path(&mut b, pid, "last_dispatch_end_ns")),
+        current_event_kind: read_u64_from_proc(proc_sl_path(&mut b, pid, "current_event_kind")),
     })
 }
 
@@ -165,8 +157,7 @@ pub fn check_daemons(pids: &[u64], stuck_threshold_ns: u64) {
         };
 
         if stats.is_stuck_in_dispatch(now_ns, stuck_threshold_ns) {
-            let elapsed_ms =
-                now_ns.saturating_sub(stats.last_dispatch_start_ns) / 1_000_000;
+            let elapsed_ms = now_ns.saturating_sub(stats.last_dispatch_start_ns) / 1_000_000;
             warn!(
                 "watchdog: pid {} stuck in dispatch for {}ms (op={})",
                 pid,
@@ -174,12 +165,8 @@ pub fn check_daemons(pids: &[u64], stuck_threshold_ns: u64) {
                 stats.event_kind_name()
             );
         } else if stats.is_silent(now_ns, DEFAULT_NO_WAKEUP_NS) {
-            let elapsed_ms =
-                now_ns.saturating_sub(stats.last_exit_wait_ns) / 1_000_000;
-            warn!(
-                "watchdog: pid {} has not received a wakeup for {}ms",
-                pid, elapsed_ms
-            );
+            let elapsed_ms = now_ns.saturating_sub(stats.last_exit_wait_ns) / 1_000_000;
+            warn!("watchdog: pid {} has not received a wakeup for {}ms", pid, elapsed_ms);
         } else {
             debug!(
                 "watchdog: pid {} healthy (op={}, dispatch_ns={})",
@@ -195,8 +182,6 @@ pub fn check_daemons(pids: &[u64], stuck_threshold_ns: u64) {
 ///
 /// A convenience wrapper used by the Supervisor to build the pid list for
 /// `check_daemons`.
-pub fn collect_monitored_pids(
-    tasks: &spin::Mutex<Vec<crate::task::ManagedTask>>,
-) -> Vec<u64> {
+pub fn collect_monitored_pids(tasks: &spin::Mutex<Vec<crate::task::ManagedTask>>) -> Vec<u64> {
     tasks.lock().iter().filter_map(|t| t.pid).collect()
 }

@@ -26,13 +26,13 @@ use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
     DriverEntryCtx, ProbeResult, Status,
 };
-use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use abi::sound::{
     AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_PARAMS, AUDIO_GET_STATUS, AUDIO_SET_PARAMS, AUDIO_START,
     AUDIO_STOP, AudioParams, AudioSampleFormat, AudioState, AudioStatus, AudioStreamInfo,
     format_bit,
 };
 use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp, VfsRpcReqHeader};
+use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::port::{port_create, port_send_all, port_try_recv};
 use stem::syscall::vfs::vfs_mount;
@@ -223,11 +223,7 @@ fn main(boot_fd: usize) -> ! {
                 let ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
                 if ctx.version == 1 {
                     let s = ctx.device_path_str();
-                    if !s.is_empty() {
-                        Some(alloc::string::String::from(s))
-                    } else {
-                        None
-                    }
+                    if !s.is_empty() { Some(alloc::string::String::from(s)) } else { None }
                 } else {
                     None
                 }

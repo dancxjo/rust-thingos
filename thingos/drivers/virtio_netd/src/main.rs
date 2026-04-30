@@ -19,8 +19,8 @@ mod vfs_provider;
 
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
-    DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1,
-    ProbeResult, Status,
+    DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1, ProbeResult,
+    Status,
 };
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::VirtioNetDriver;

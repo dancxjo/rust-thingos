@@ -108,11 +108,8 @@ struct ProviderState {
 fn main(_arg: usize) -> ! {
     info!("ipc_provider_demo: starting up");
 
-    let mut state = ProviderState {
-        request_count: 0,
-        attrs: BTreeMap::new(),
-        shutdown_requested: false,
-    };
+    let mut state =
+        ProviderState { request_count: 0, attrs: BTreeMap::new(), shutdown_requested: false };
 
     // ── 1. Create the provider port pair ──────────────────────────────────
     let (write_h, read_h) = match port_create(65536) {
@@ -208,11 +205,7 @@ fn main(_arg: usize) -> ! {
 /// This is the control-plane entry point.  In a real driver you would match
 /// on `kind` to distinguish message types (shutdown, reload-config, …).
 fn handle_control_message(kind: KindId, payload: &[u8], state: &mut ProviderState) {
-    info!(
-        "ipc_provider_demo: inbox message kind={:?} payload_len={}",
-        kind.0,
-        payload.len()
-    );
+    info!("ipc_provider_demo: inbox message kind={:?} payload_len={}", kind.0, payload.len());
 
     // As a simple demo, treat any inbox message whose first byte is b'q' as a
     // "please shut down gracefully" signal.

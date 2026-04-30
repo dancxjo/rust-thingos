@@ -641,8 +641,6 @@ pub mod kinds {
     pub const FONT_IMPORT_REQUEST: &str = "font.ImportRequest";
     pub const FONT_GLYPH_REQUEST: &str = "font.GlyphRequest";
 
-
-
     pub const BINDING: &str = "Binding";
 
     // XML Graph Kinds

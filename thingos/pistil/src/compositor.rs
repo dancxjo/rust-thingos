@@ -5,9 +5,7 @@ use pistil_types::Canvas;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat};
 use tiny_skia::Pixmap;
 
-use crate::font::TextRenderer;
-
-const DEBUG_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
+use crate::font::{DEFAULT_FONT_PATH, TextRenderer, default_text_renderer};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BlitRect {
@@ -216,17 +214,57 @@ pub extern "C" fn pistil_draw_debug_text(
         return -2;
     };
 
-    let Some(renderer) = TextRenderer::load_from_boot(DEBUG_FONT_PATH) else {
-        stem::error!("pistil: failed to load debug font {}", DEBUG_FONT_PATH);
+    let Some(renderer) = default_text_renderer() else {
+        stem::error!("pistil: failed to load default font {}", DEFAULT_FONT_PATH);
         return -5;
     };
 
-    stem::info!("pistil: drawing debug text with {}", DEBUG_FONT_PATH);
+    stem::info!("pistil: drawing debug text with {}", DEFAULT_FONT_PATH);
     let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
     draw_debug_text_lines(&renderer, &mut canvas, text);
-    // The target allocator currently trips when fontdue's owned font data is
-    // dropped from this dlopen path. Keep the diagnostic focused on rendering.
-    core::mem::forget(renderer);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_draw_text(
+    text_ptr: *const u8,
+    dst_ptr: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+    x: i32,
+    y: i32,
+    px_size: f32,
+    color: u32,
+) -> i32 {
+    if text_ptr.is_null()
+        || dst_ptr.is_null()
+        || dst_w == 0
+        || dst_h == 0
+        || dst_stride_pixels < dst_w
+        || px_size <= 0.0
+    {
+        return -3;
+    }
+
+    let mut len = 0usize;
+    while unsafe { *text_ptr.add(len) } != 0 && len < 512 {
+        len += 1;
+    }
+    let text = unsafe { core::slice::from_raw_parts(text_ptr, len) };
+    let Ok(text) = core::str::from_utf8(text) else {
+        return -2;
+    };
+
+    let Some(renderer) = default_text_renderer() else {
+        stem::error!("pistil: failed to load default font {}", DEFAULT_FONT_PATH);
+        return -5;
+    };
+
+    let dst =
+        unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
+    let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
+    renderer.draw_text(&mut canvas, text, x, y, px_size, color);
     0
 }
 

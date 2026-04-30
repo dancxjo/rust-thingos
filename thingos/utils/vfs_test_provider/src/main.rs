@@ -104,8 +104,7 @@ struct ProviderState {
 fn main(_arg: usize) -> ! {
     info!("vfs_test_provider: starting up");
 
-    let mut state =
-        ProviderState { request_count: 0, hang_pending: Vec::new() };
+    let mut state = ProviderState { request_count: 0, hang_pending: Vec::new() };
 
     // 1. Create provider port pair.
     let (write_h, read_h) = match port_create(65536) {
@@ -121,10 +120,7 @@ fn main(_arg: usize) -> ! {
     match vfs_mount(write_h, MOUNT_POINT) {
         Ok(()) => info!("vfs_test_provider: mounted at {}", MOUNT_POINT),
         Err(e) => {
-            warn!(
-                "vfs_test_provider: vfs_mount failed: {:?} (continuing anyway for testing)",
-                e
-            );
+            warn!("vfs_test_provider: vfs_mount failed: {:?} (continuing anyway for testing)", e);
         }
     }
 
@@ -147,10 +143,7 @@ fn main(_arg: usize) -> ! {
         match svc.next_event(None) {
             Ok(ServiceProviderEvent::ProviderRequest(req)) => {
                 state.request_count += 1;
-                info!(
-                    "vfs_test_provider: request #{} op={:?}",
-                    state.request_count, req.op
-                );
+                info!("vfs_test_provider: request #{} op={:?}", state.request_count, req.op);
 
                 // Hang requests: deliberately skip send_response so the
                 // client waits indefinitely — this tests timeout/stuck-waiter
@@ -164,10 +157,7 @@ fn main(_arg: usize) -> ! {
                 // Slow requests: sleep briefly before replying to simulate
                 // a provider that takes time to answer.
                 if is_slow_request(&req.op, &req.payload) {
-                    info!(
-                        "vfs_test_provider: slow request — sleeping {}ms",
-                        SLOW_DELAY_MS
-                    );
+                    info!("vfs_test_provider: slow request — sleeping {}ms", SLOW_DELAY_MS);
                     stem::time::sleep_ms(SLOW_DELAY_MS);
                 }
 
@@ -178,11 +168,7 @@ fn main(_arg: usize) -> ! {
             }
 
             Ok(ServiceProviderEvent::Message { kind, payload }) => {
-                info!(
-                    "vfs_test_provider: inbox message kind={:?} len={}",
-                    kind.0,
-                    payload.len()
-                );
+                info!("vfs_test_provider: inbox message kind={:?} len={}", kind.0, payload.len());
                 if payload.first() == Some(&b'q') {
                     info!("vfs_test_provider: shutdown requested via inbox");
                     break;

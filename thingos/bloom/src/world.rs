@@ -256,8 +256,11 @@ impl BloomWorld {
         self.input.flush_visible_pointer(&mut self.damage);
         let pending_damage = self.damage.take();
         let (pointer_x, pointer_y) = self.input.visible_pointer_position();
-        let pointer_overlay =
-            self.visuals.pointer_overlay_plane(&self.display, pointer_x, pointer_y);
+        let pointer_overlay = if self.input.pointer_overlay_enabled() {
+            self.visuals.pointer_overlay_plane(&self.display, pointer_x, pointer_y)
+        } else {
+            None
+        };
         let cursor = self.visuals.cursor_plane(pointer_x, pointer_y);
         let result = self.display.present(
             &composition,

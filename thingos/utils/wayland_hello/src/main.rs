@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
@@ -25,6 +26,17 @@ const POPUP_SURFACE_ID: u32 = 20;
 const POPUP_XDG_SURFACE_ID: u32 = 21;
 const POSITIONER_ID: u32 = 22;
 const POPUP_ID: u32 = 23;
+
+const PISTIL_PATH: &str = "/lib/libpistil.so";
+const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
+const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
+
+type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
+
+struct TextRenderer {
+    _handle: *mut core::ffi::c_void,
+    draw_text: DrawTextFn,
+}
 
 #[derive(Clone, Copy)]
 struct BufferState {
@@ -47,6 +59,7 @@ struct PendingSurface {
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let fd = connect_wayland();
+    let text_renderer = load_text_renderer();
 
     send_get_registry(fd, REGISTRY_ID);
     read_initial_globals(fd);
@@ -150,7 +163,7 @@ fn main(_arg: usize) -> ! {
                 top_pending.width,
                 top_pending.height,
             );
-            render_window(buffer, title);
+            render_window(buffer, title, text_renderer.as_ref());
             ack_configure(fd, TOP_XDG_SURFACE_ID, top_pending.serial.unwrap_or(0));
             attach_buffer(fd, TOP_SURFACE_ID, buffer.buffer_id);
             damage_surface(fd, TOP_SURFACE_ID, 0, 0, top_pending.width, top_pending.height);
@@ -182,7 +195,7 @@ fn main(_arg: usize) -> ! {
                 popup_pending.width,
                 popup_pending.height,
             );
-            render_popup(buffer, "POPUP");
+            render_popup(buffer, "POPUP", text_renderer.as_ref());
             ack_configure(fd, POPUP_XDG_SURFACE_ID, popup_pending.serial.unwrap_or(0));
             attach_buffer(fd, POPUP_SURFACE_ID, buffer.buffer_id);
             damage_surface(fd, POPUP_SURFACE_ID, 0, 0, popup_pending.width, popup_pending.height);
@@ -263,7 +276,7 @@ fn ensure_buffer(
     out
 }
 
-fn render_window(buffer: BufferState, title: &str) {
+fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRenderer>) {
     unsafe {
         let pixels = core::slice::from_raw_parts_mut(
             buffer.ptr as *mut u32,
@@ -275,21 +288,43 @@ fn render_window(buffer: BufferState, title: &str) {
                 pixels[y * buffer.width as usize + x] = color;
             }
         }
-        draw_text(pixels, buffer.width as usize, 16, 12, title, 0xFFFFFFFF, 3);
-        draw_text(pixels, buffer.width as usize, 16, 72, "RESIZE ME FROM THE FRAME", 0xFF9AD1FF, 2);
         draw_text(
+            text_renderer,
             pixels,
-            buffer.width as usize,
+            buffer.width,
+            buffer.height,
             16,
-            110,
+            32,
+            24.0,
+            title,
+            0xFFFFFFFF,
+        );
+        draw_text(
+            text_renderer,
+            pixels,
+            buffer.width,
+            buffer.height,
+            16,
+            78,
+            18.0,
+            "RESIZE ME FROM THE FRAME",
+            0xFF9AD1FF,
+        );
+        draw_text(
+            text_renderer,
+            pixels,
+            buffer.width,
+            buffer.height,
+            16,
+            114,
+            18.0,
             "POPUP BELOW IS XDG_POPUP",
             0xFFE7D68A,
-            2,
         );
     }
 }
 
-fn render_popup(buffer: BufferState, label: &str) {
+fn render_popup(buffer: BufferState, label: &str, text_renderer: Option<&TextRenderer>) {
     unsafe {
         let pixels = core::slice::from_raw_parts_mut(
             buffer.ptr as *mut u32,
@@ -305,74 +340,93 @@ fn render_popup(buffer: BufferState, label: &str) {
                     if border { 0xFFFFFFFF } else { 0xFF202830 };
             }
         }
-        draw_text(pixels, buffer.width as usize, 14, 18, label, 0xFFFFFFFF, 2);
+        draw_text(
+            text_renderer,
+            pixels,
+            buffer.width,
+            buffer.height,
+            14,
+            34,
+            18.0,
+            label,
+            0xFFFFFFFF,
+        );
     }
 }
 
 fn draw_text(
+    text_renderer: Option<&TextRenderer>,
     pixels: &mut [u32],
-    stride: usize,
-    x: usize,
-    y: usize,
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    px_size: f32,
     text: &str,
     color: u32,
-    scale: usize,
 ) {
-    let mut pen_x = x;
-    for ch in text.bytes() {
-        draw_glyph(pixels, stride, pen_x, y, ch, color, scale);
-        pen_x += 6 * scale;
+    let Some(renderer) = text_renderer else {
+        return;
+    };
+
+    let mut text_c = [0u8; 128];
+    let bytes = text.as_bytes();
+    if bytes.len() >= text_c.len() {
+        stem::warn!("wayland_hello: text too long for pistil text call");
+        return;
+    }
+    text_c[..bytes.len()].copy_from_slice(bytes);
+
+    let rc = (renderer.draw_text)(
+        text_c.as_ptr(),
+        pixels.as_mut_ptr(),
+        width,
+        height,
+        width,
+        x,
+        y,
+        px_size,
+        color,
+    );
+    if rc != 0 {
+        stem::warn!("wayland_hello: pistil_draw_text failed: {}", rc);
     }
 }
 
-fn draw_glyph(
-    pixels: &mut [u32],
-    stride: usize,
-    x: usize,
-    y: usize,
-    ch: u8,
-    color: u32,
-    scale: usize,
-) {
-    let glyph = match ch {
-        b'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-        b'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
-        b'D' => [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
-        b'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
-        b'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
-        b'G' => [0x0F, 0x10, 0x10, 0x17, 0x11, 0x11, 0x0F],
-        b'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-        b'I' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F],
-        b'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
-        b'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
-        b'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-        b'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
-        b'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
-        b'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
-        b'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-        b'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-        b'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
-        b'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
-        b'_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
-        b' ' => [0; 7],
-        _ => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x00, 0x08],
-    };
+fn load_text_renderer() -> Option<TextRenderer> {
+    let handle = dlopen_str(PISTIL_PATH, RTLD_NOW);
+    if handle.is_null() {
+        log_dlerror("wayland_hello: failed to load /lib/libpistil.so");
+        return None;
+    }
 
-    for (row, bits) in glyph.iter().enumerate() {
-        for col in 0..5usize {
-            if (bits & (1 << (4 - col))) == 0 {
-                continue;
-            }
-            for sy in 0..scale {
-                for sx in 0..scale {
-                    let px = x + col * scale + sx;
-                    let py = y + row * scale + sy;
-                    let idx = py * stride + px;
-                    if idx < pixels.len() {
-                        pixels[idx] = color;
-                    }
-                }
-            }
+    let sym = dlsym_bytes(handle, DRAW_TEXT_SYMBOL);
+    if sym.is_null() {
+        log_dlerror("wayland_hello: failed to resolve pistil_draw_text");
+        return None;
+    }
+
+    let draw_text: DrawTextFn = unsafe { core::mem::transmute(sym) };
+    info!("wayland_hello: pistil text renderer loaded with default {}", DEFAULT_FONT_PATH);
+    Some(TextRenderer { _handle: handle, draw_text })
+}
+
+fn log_dlerror(prefix: &str) {
+    let err = dlerror();
+    if err.is_null() {
+        stem::warn!("{}", prefix);
+        return;
+    }
+
+    let mut len = 0usize;
+    unsafe {
+        while *err.add(len) != 0 && len < 256 {
+            len += 1;
+        }
+        let bytes = core::slice::from_raw_parts(err, len);
+        match core::str::from_utf8(bytes) {
+            Ok(msg) => stem::warn!("{}: {}", prefix, msg),
+            Err(_) => stem::warn!("{}", prefix),
         }
     }
 }

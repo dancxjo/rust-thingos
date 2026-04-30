@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::KindId;
 use abi::hid::{
-    BristleEventHeader, EventType, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
+    BristleEventHeader, EventType, Key, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
 };
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
@@ -47,6 +47,7 @@ pub struct InputState {
     /// collapsed here so focus lookup and client delivery happen only once per
     /// frame rather than per sample.  `None` means no motion since last flush.
     pending_motion_ts: Option<u64>,
+    pointer_overlay_enabled: bool,
     output_w: i32,
     output_h: i32,
 }
@@ -64,6 +65,7 @@ impl InputState {
             visible_y: pointer_y,
             pending_cursor_motion: false,
             pending_motion_ts: None,
+            pointer_overlay_enabled: false,
             output_w,
             output_h,
         }
@@ -90,6 +92,10 @@ impl InputState {
             || self.pointer_y != self.visible_y
     }
 
+    pub fn pointer_overlay_enabled(&self) -> bool {
+        self.pointer_overlay_enabled
+    }
+
     pub fn flush_visible_pointer(&mut self, damage: &mut DamageTracker) {
         if !self.has_pending_cursor_motion() {
             return;
@@ -102,7 +108,9 @@ impl InputState {
         self.pending_cursor_motion = false;
         mark_cursor_damage(damage, old_x, old_y, self.visible_x, self.visible_y);
 
-        if self.pending_cursor_motion && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
+        if self.pending_cursor_motion
+            && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS
+        {
             stem::info!(
                 "bloom: cursor smoothing visible={},{} target={},{}",
                 self.visible_x,
@@ -287,6 +295,17 @@ impl InputState {
                 let mut p = [0u8; KeyEventPayload::SIZE];
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
+                if is_pointer_overlay_toggle(key) {
+                    if !key.is_repeat() {
+                        self.pointer_overlay_enabled = !self.pointer_overlay_enabled;
+                        damage.mark_full(self.output_w as u32, self.output_h as u32);
+                        stem::info!(
+                            "bloom: pointer debug overlay {}",
+                            if self.pointer_overlay_enabled { "enabled" } else { "disabled" }
+                        );
+                    }
+                    return;
+                }
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
                         let ev = KeyboardKeyEvent {
@@ -307,6 +326,9 @@ impl InputState {
                 let mut p = [0u8; KeyEventPayload::SIZE];
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
+                if is_pointer_overlay_toggle(key) {
+                    return;
+                }
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
                         let ev = KeyboardKeyEvent {
@@ -407,6 +429,10 @@ fn mark_cursor_rect(damage: &mut DamageTracker, x: i32, y: i32) {
 #[inline]
 fn pressed_flag(pressed: bool) -> u8 {
     if pressed { 1 } else { 0 }
+}
+
+fn is_pointer_overlay_toggle(key: KeyEventPayload) -> bool {
+    key.key() == Key::F7 && key.mods().has_alt()
 }
 
 /// Deliver a serialized Bloom event to a client.

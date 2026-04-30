@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::vec;
 
 use abi::syscall::vfs_flags::O_RDONLY;
@@ -6,11 +7,17 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat};
 
 use crate::Canvas;
 
+pub const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
+
 pub struct TextRenderer {
     pub font: Font,
 }
 
 impl TextRenderer {
+    pub fn load_default() -> Option<Self> {
+        Self::load_from_boot(DEFAULT_FONT_PATH)
+    }
+
     pub fn load_from_boot(path: &str) -> Option<Self> {
         stem::info!("pistil: opening font {}", path);
         let fd = vfs_open(path, O_RDONLY).ok()?;
@@ -81,6 +88,21 @@ impl TextRenderer {
 
             cur_x += metrics.advance_width;
         }
+    }
+}
+
+pub fn default_text_renderer() -> Option<&'static TextRenderer> {
+    static mut RENDERER: *const TextRenderer = core::ptr::null();
+
+    let renderer = unsafe { RENDERER };
+    if !renderer.is_null() {
+        return Some(unsafe { &*renderer });
+    }
+
+    let renderer = Box::leak(Box::new(TextRenderer::load_default()?)) as *const TextRenderer;
+    unsafe {
+        RENDERER = renderer;
+        Some(&*renderer)
     }
 }
 

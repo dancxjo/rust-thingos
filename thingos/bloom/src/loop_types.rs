@@ -343,7 +343,8 @@ impl BloomLoop {
                 // No FDs registered yet; pace with the frame interval.
                 // Respect a zero timeout (e.g. from Wake) by skipping the sleep
                 // entirely so the loop can re-run immediately.
-                let sleep_ns = timeout.map(|d| d.as_nanos().min(u64::MAX as u128) as u64)
+                let sleep_ns = timeout
+                    .map(|d| d.as_nanos().min(u64::MAX as u128) as u64)
                     .unwrap_or(DEFAULT_FRAME_INTERVAL_NS);
                 if sleep_ns > 0 {
                     stem::time::sleep_ns(sleep_ns);

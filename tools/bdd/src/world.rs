@@ -102,19 +102,21 @@ impl ThingOsWorld {
         )
     }
 
-    fn cached_iso_path(arch: &str, resolution: &str, loglevel: &str, force_bootfb: bool) -> PathBuf {
+    fn cached_iso_path(
+        arch: &str,
+        resolution: &str,
+        loglevel: &str,
+        force_bootfb: bool,
+    ) -> PathBuf {
         let safe_resolution: String =
             resolution.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
         let safe_loglevel: String =
             loglevel.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
         let display = if force_bootfb { "bootfb" } else { "auto" };
-        PathBuf::from("target")
-            .join("bdd")
-            .join("images")
-            .join(format!(
-                "thing-os-bdd-{}-{}-{}-{}.iso",
-                arch, safe_resolution, safe_loglevel, display
-            ))
+        PathBuf::from("target").join("bdd").join("images").join(format!(
+            "thing-os-bdd-{}-{}-{}-{}.iso",
+            arch, safe_resolution, safe_loglevel, display
+        ))
     }
 
     fn bdd_audiodev_arg() -> Option<String> {
@@ -604,7 +606,11 @@ impl ThingOsWorld {
                         needle,
                         log.len()
                     );
-                    let tail = if log.len() > DEBUG_TAIL_LENGTH { &log[log.len() - DEBUG_TAIL_LENGTH..] } else { &log[..] };
+                    let tail = if log.len() > DEBUG_TAIL_LENGTH {
+                        &log[log.len() - DEBUG_TAIL_LENGTH..]
+                    } else {
+                        &log[..]
+                    };
                     eprintln!("│  │  │      debug: tail: {:?}", tail);
                     last_print = std::time::Instant::now();
                 }
@@ -650,7 +656,11 @@ impl ThingOsWorld {
                         pattern,
                         log.len()
                     );
-                    let tail = if clean.len() > DEBUG_TAIL_LENGTH { &clean[clean.len() - DEBUG_TAIL_LENGTH..] } else { &clean[..] };
+                    let tail = if clean.len() > DEBUG_TAIL_LENGTH {
+                        &clean[clean.len() - DEBUG_TAIL_LENGTH..]
+                    } else {
+                        &clean[..]
+                    };
                     eprintln!("│  │  │      debug: tail: {:?}", tail);
                     last_print = std::time::Instant::now();
                 }

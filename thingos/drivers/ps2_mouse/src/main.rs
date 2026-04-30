@@ -455,11 +455,7 @@ fn record_drop(drop_counter: &mut u32, bristle_pid: u32) {
     }
 }
 
-fn flush_motion_if_due(
-    bristle_pid: u32,
-    motion: &mut MotionCoalescer,
-    drop_counter: &mut u32,
-) {
+fn flush_motion_if_due(bristle_pid: u32, motion: &mut MotionCoalescer, drop_counter: &mut u32) {
     let now_ns = stem::monotonic_ns();
     if !motion.due(now_ns) {
         return;
@@ -471,11 +467,7 @@ fn flush_motion_if_due(
     }
 
     let payload = PointerMovePayload { dx, dy };
-    if !send_pointer_event(
-        bristle_pid,
-        EventType::PointerMove,
-        &payload.to_bytes(),
-    ) {
+    if !send_pointer_event(bristle_pid, EventType::PointerMove, &payload.to_bytes()) {
         record_drop(drop_counter, bristle_pid);
     }
 }

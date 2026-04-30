@@ -1,11 +1,9 @@
 use cucumber::{then, when};
 
+use super::helpers::{StepError, capture_failure_diagnostics};
 use crate::world::{LIVENESS_SIGNALS, REQUIRED_BOOT_SIGNALS, ThingOsWorld, diag_enabled};
 
-use super::helpers::{StepError, capture_failure_diagnostics};
-
 // ===== Consolidated Boot Feature Steps =====
-
 
 /// Default timeout for boot ready state (seconds).
 const BOOT_READY_TIMEOUT_SECS: f64 = 120.0;
@@ -119,5 +117,3 @@ async fn log_should_not_contain(
 ) -> Result<(), StepError> {
     log_does_not_contain(world, pattern).await
 }
-
-

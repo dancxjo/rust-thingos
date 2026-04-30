@@ -54,7 +54,7 @@ fn main() {
 
     let format_str = &args[1];
     let expanded = expand_escapes(format_str);
-    
+
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     let _ = handle.write_all(expanded.as_bytes());

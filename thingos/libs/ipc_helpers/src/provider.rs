@@ -371,7 +371,11 @@ impl ProviderLoop {
     }
 
     /// Send `response` back to the kernel for the given `req`.
-    pub fn send_response(&self, req: &ProviderRequest, response: ProviderResponse) -> Result<(), Errno> {
+    pub fn send_response(
+        &self,
+        req: &ProviderRequest,
+        response: ProviderResponse,
+    ) -> Result<(), Errno> {
         let total = 3 + response.payload.len();
         let mut buf = alloc::vec![0u8; total.min(VFS_RPC_MAX_RESP)];
         buf[0..2].copy_from_slice(&req.req_id.to_le_bytes());

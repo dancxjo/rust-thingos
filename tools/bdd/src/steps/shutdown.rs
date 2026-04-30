@@ -1,17 +1,13 @@
 use cucumber::{given, then, when};
 
-use crate::world::{ThingOsWorld, strip_ansi};
-
 use super::helpers::{StepError, capture_failure_diagnostics};
+use crate::world::{ThingOsWorld, strip_ansi};
 
 // ===== Daemon Shutdown Steps =====
 
 /// `Given a VFS provider is mounted at "<path>"` (regex)
 #[given(regex = r#"^a VFS provider is mounted at "([^"]+)"$"#)]
-async fn vfs_provider_mounted_at(
-    world: &mut ThingOsWorld,
-    path: String,
-) -> Result<(), StepError> {
+async fn vfs_provider_mounted_at(world: &mut ThingOsWorld, path: String) -> Result<(), StepError> {
     eprintln!("│  │  │      🔌 Waiting for VFS provider at {}", path);
     // Check if vfs_test_provider is already running and mounted.
     // The vfs_test_provider mounts at /dev/test/provider by default.
@@ -19,10 +15,7 @@ async fn vfs_provider_mounted_at(
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = format!("vfs_test_provider {} &\n", path).into_bytes();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     // Wait for the provider to mount.
@@ -42,10 +35,7 @@ async fn vfs_provider_mounted_at(
             return Ok(());
         }
         capture_failure_diagnostics(world, &marker).await;
-        Err(StepError(format!(
-            "VFS provider did not mount at '{}' within timeout",
-            path
-        )))
+        Err(StepError(format!("VFS provider did not mount at '{}' within timeout", path)))
     }
 }
 
@@ -58,10 +48,7 @@ async fn service_provider_loop_registered_path(
     // This is an internal state assertion; the provider reports it at startup.
     let log = world.get_serial_log().await;
     if log.contains("vfs_test_provider: mounted at") {
-        eprintln!(
-            "│  │  │      ✅ ServiceProviderLoop has registered '{}' as a mount path",
-            path
-        );
+        eprintln!("│  │  │      ✅ ServiceProviderLoop has registered '{}' as a mount path", path);
         Ok(())
     } else {
         Err(StepError(format!(
@@ -78,10 +65,7 @@ async fn shutdown_sequence_called(world: &mut ThingOsWorld) -> Result<(), StepEr
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"vfs_test_provider --shutdown\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     // Wait for the shutdown to begin.
@@ -107,10 +91,7 @@ async fn path_no_longer_accessible(
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = format!("ls {}\n", path).into_bytes();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -143,10 +124,7 @@ async fn shutdown_log_should_contain(
         Ok(())
     } else {
         capture_failure_diagnostics(world, &pattern).await;
-        Err(StepError(format!(
-            "Shutdown log does not contain '{}' within timeout",
-            pattern
-        )))
+        Err(StepError(format!("Shutdown log does not contain '{}' within timeout", pattern)))
     }
 }
 
@@ -161,10 +139,7 @@ async fn shutdown_sequence_called_twice(world: &mut ThingOsWorld) -> Result<(), 
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"vfs_test_provider --shutdown\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -203,9 +178,7 @@ async fn unmount_log_exactly_once(world: &mut ThingOsWorld) -> Result<(), StepEr
 }
 
 /// `Given a ServiceProviderLoop is running with a provider mounted at "<path>"` (regex)
-#[given(
-    regex = r#"^a ServiceProviderLoop is running with a provider mounted at "([^"]+)"$"#
-)]
+#[given(regex = r#"^a ServiceProviderLoop is running with a provider mounted at "([^"]+)"$"#)]
 async fn service_provider_loop_running_at(
     world: &mut ThingOsWorld,
     path: String,
@@ -221,10 +194,7 @@ async fn provider_daemon_inbox_closed(world: &mut ThingOsWorld) -> Result<(), St
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"vfs_test_provider --close-inbox\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     eprintln!("│  │  │      📭 Provider daemon inbox close requested");
@@ -263,13 +233,8 @@ async fn daemon_exits_cleanly(world: &mut ThingOsWorld) -> Result<(), StepError>
 }
 
 /// `Given virtio_netd is running and has mounted its provider at "<path>"` (regex)
-#[given(
-    regex = r#"^virtio_netd is running and has mounted its provider at "([^"]+)"$"#
-)]
-async fn virtio_netd_running_at(
-    world: &mut ThingOsWorld,
-    path: String,
-) -> Result<(), StepError> {
+#[given(regex = r#"^virtio_netd is running and has mounted its provider at "([^"]+)"$"#)]
+async fn virtio_netd_running_at(world: &mut ThingOsWorld, path: String) -> Result<(), StepError> {
     let marker = format!("VIRTIO_NETD: Mounted at {}", path);
     let found = world.wait_for_serial(&marker, 60.0).await;
     if found {
@@ -287,10 +252,7 @@ async fn virtio_netd_running_at(
             return Ok(());
         }
         capture_failure_diagnostics(world, &marker).await;
-        Err(StepError(format!(
-            "virtio_netd did not mount at '{}' within timeout",
-            path
-        )))
+        Err(StepError(format!("virtio_netd did not mount at '{}' within timeout", path)))
     }
 }
 
@@ -301,10 +263,7 @@ async fn kernel_closes_virtio_netd_inbox(world: &mut ThingOsWorld) -> Result<(),
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"kill $(pgrep virtio_netd)\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -318,10 +277,7 @@ async fn virtio_netd_started_again(world: &mut ThingOsWorld) -> Result<(), StepE
     world.serial_checkpoint = world.get_serial_log().await.len();
     let mut cmd = b"virtio_netd &\n".to_vec();
     for b in cmd {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     eprintln!("│  │  │      🚀 virtio_netd restarted");
@@ -354,9 +310,7 @@ async fn no_ghost_mount_error(world: &mut ThingOsWorld) -> Result<(), StepError>
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let log = world.get_serial_log().await;
     if log.contains("ghost mount") || log.contains("EEXIST") || log.contains("already mounted") {
-        Err(StepError(
-            "Ghost mount error detected in kernel log after restart".to_string(),
-        ))
+        Err(StepError("Ghost mount error detected in kernel log after restart".to_string()))
     } else {
         eprintln!("│  │  │      ✅ No ghost mount errors in kernel log");
         Ok(())
@@ -375,18 +329,13 @@ async fn kernel_log_should_contain(
         Ok(())
     } else {
         capture_failure_diagnostics(world, &pattern).await;
-        Err(StepError(format!(
-            "Kernel log does not contain '{}' within timeout",
-            pattern
-        )))
+        Err(StepError(format!("Kernel log does not contain '{}' within timeout", pattern)))
     }
 }
 
 /// `When the kernel closes the virtio_netd inbox` (without parenthetical)
 #[when("the kernel closes the virtio_netd inbox")]
-async fn kernel_closes_virtio_netd_inbox_simple(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn kernel_closes_virtio_netd_inbox_simple(world: &mut ThingOsWorld) -> Result<(), StepError> {
     kernel_closes_virtio_netd_inbox(world).await
 }
 
@@ -414,8 +363,7 @@ async fn shutdown_is_triggered(world: &mut ThingOsWorld) -> Result<(), StepError
 async fn provider_thread_stops_polling(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // Allow brief time for the shutdown to propagate.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let found =
-        world.wait_for_serial("VIRTIO_NETD: shutdown initiated", 10.0).await;
+    let found = world.wait_for_serial("VIRTIO_NETD: shutdown initiated", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ Provider thread shutdown initiated");
         Ok(())
@@ -463,10 +411,7 @@ async fn system_is_running_normally(world: &mut ThingOsWorld) -> Result<(), Step
 async fn bin_shutdown_invoked(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let cmd = b"/bin/shutdown\n";
     for b in cmd {
-        world
-            .serial_write(&[*b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[*b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     eprintln!("│  │  │      ✅ /bin/shutdown invoked");
@@ -479,10 +424,7 @@ async fn bin_shutdown_invoked_twice(world: &mut ThingOsWorld) -> Result<(), Step
     // Launch two shutdowns in quick succession via the shell
     let cmd = b"/bin/shutdown & /bin/shutdown\n";
     for b in cmd {
-        world
-            .serial_write(&[*b])
-            .await
-            .map_err(|e| StepError(format!("serial write: {}", e)))?;
+        world.serial_write(&[*b]).await.map_err(|e| StepError(format!("serial write: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     eprintln!("│  │  │      ✅ /bin/shutdown invoked twice");
@@ -522,7 +464,10 @@ async fn spawn_fails_with_ebusy(world: &mut ThingOsWorld) -> Result<(), StepErro
     // is_shutdown_in_progress() is true.  We verify the log contains the
     // shutdown-in-progress indicator rather than a spawn-succeeded entry.
     let found = world
-        .wait_for_serial("SYSCALL SHUTDOWN: shutdown already in progress, duplicate caller exiting", 10.0)
+        .wait_for_serial(
+            "SYSCALL SHUTDOWN: shutdown already in progress, duplicate caller exiting",
+            10.0,
+        )
         .await;
     if found {
         eprintln!("│  │  │      ✅ spawn rejected with EBUSY (shutdown in progress)");

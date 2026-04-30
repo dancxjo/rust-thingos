@@ -14,6 +14,10 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: pistil background renderer loaded from /lib/libpistil.so" within 60s
 
+  Scenario: bloom links the pistil Noto Sans text renderer
+    Given the machine is booted
+    Then the serial output should contain "bloom: pistil font text renderer loaded with default /share/fonts/NotoSans-Regular.ttf" within 60s
+
   Scenario: libpistil exports the vector renderer
     Given the machine is booted
     When I wait for the shell prompt
@@ -115,11 +119,25 @@ Feature: Bloom compositor service loop and responsiveness
     And the serial output should contain "First frame rendered" within 60s
     And the bloom cursor should be visible
 
-  Scenario: bloom first frame includes the pointer debug overlay
+  Scenario: bloom first frame leaves the pointer debug overlay off by default
     Given the machine is booted
-    Then the serial output should contain "bloom: pointer debug overlay ready" within 60s
-    And the serial output should contain "First frame rendered" within 60s
-    And the pointer debug overlay should include the cursor svg
+    Then the serial output should contain "First frame rendered" within 60s
+    And the serial output should not contain "bloom: pointer debug overlay ready"
+
+  @pointer-debug
+  Scenario: Alt F7 toggles the pointer debug overlay
+    Given the machine is booted
+    Then the serial output should contain "bloom: registered bristle pointer sink" within 60s
+    When I press Alt+F7
+    Then the serial output should contain "bloom: pointer debug overlay enabled" within 60s
+    And the serial output should contain "bloom: pointer debug overlay ready" within 60s
+    When I press Alt+F7
+    Then the serial output should contain "bloom: pointer debug overlay disabled" within 60s
+
+  @pointer-debug
+  Scenario: enabled pointer debug overlay includes the cursor svg
+    Given the machine is booted
+    Then the pointer debug overlay should include the cursor svg
 
   @pointer-debug
   Scenario: pointer debug overlay updates after mouse movement

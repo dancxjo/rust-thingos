@@ -14,9 +14,9 @@ use abi::errors::Errno;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::{info, warn};
 use stem::syscall::vfs::{vfs_handle_from_port, vfs_mount};
 use stem::syscall::{PortHandle, port_create, port_recv, port_send};
+use stem::{info, warn};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_fake";
 
 #[unsafe(no_mangle)]

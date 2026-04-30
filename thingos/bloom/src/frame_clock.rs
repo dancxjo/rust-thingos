@@ -81,11 +81,7 @@ impl FrameClock {
         }
         let now = monotonic_ns();
         let next = self.last_commit_ns.saturating_add(self.frame_interval_ns);
-        if now >= next {
-            Some(0)
-        } else {
-            Some(next - now)
-        }
+        if now >= next { Some(0) } else { Some(next - now) }
     }
 
     /// Record that a display commit just completed.

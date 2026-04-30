@@ -180,9 +180,7 @@ fn bounded_copy_extent(
         return None;
     }
 
-    let max_w = width
-        .min((src_stride - src_col) / bpp)
-        .min((dst_stride - dst_col) / bpp);
+    let max_w = width.min((src_stride - src_col) / bpp).min((dst_stride - dst_col) / bpp);
     if max_w == 0 {
         return None;
     }
@@ -1404,42 +1402,42 @@ fn main(boot_arg: usize) -> ! {
                     if !events.is_empty() {
                         did_work = true;
                     }
-                for ev in events {
-                    if ev.token() == drv_req_read_tok && ev.is_readable() {
-                        stem::trace!("display_virtio_gpu: drv_req readable token fired");
+                    for ev in events {
+                        if ev.token() == drv_req_read_tok && ev.is_readable() {
+                            stem::trace!("display_virtio_gpu: drv_req readable token fired");
+                        }
+                        if ev.token() == vfs_read_tok && ev.is_readable() {
+                            stem::trace!("display_virtio_gpu: vfs_read readable token fired");
+                        }
                     }
-                    if ev.token() == vfs_read_tok && ev.is_readable() {
-                        stem::trace!("display_virtio_gpu: vfs_read readable token fired");
-                    }
-                }
 
-                let mut read_total = 0;
-                // Drain with non-blocking receives only. A blocking recv here can
-                // starve VFS RPC handling and wedge /dev/display/card0 clients.
-                loop {
-                    match stem::syscall::port_try_recv(drv_req_read, &mut buf) {
-                        Ok(n) => {
-                            if n == 0 {
+                    let mut read_total = 0;
+                    // Drain with non-blocking receives only. A blocking recv here can
+                    // starve VFS RPC handling and wedge /dev/display/card0 clients.
+                    loop {
+                        match stem::syscall::port_try_recv(drv_req_read, &mut buf) {
+                            Ok(n) => {
+                                if n == 0 {
+                                    break;
+                                }
+                                frames.push(&buf[..n]);
+                                read_total += n;
+                            }
+                            Err(abi::errors::Errno::EAGAIN) => break,
+                            Err(e) => {
+                                stem::error!("display_virtio_gpu: port_try_recv ERR: {:?}", e);
                                 break;
                             }
-                            frames.push(&buf[..n]);
-                            read_total += n;
-                        }
-                        Err(abi::errors::Errno::EAGAIN) => break,
-                        Err(e) => {
-                            stem::error!("display_virtio_gpu: port_try_recv ERR: {:?}", e);
-                            break;
                         }
                     }
-                }
-                if read_total > 0 {
-                    did_work = true;
-                    stem::trace!(
-                        "display_virtio_gpu: WaitSet read {} bytes, dropped={}",
-                        read_total,
-                        frames.dropped_bytes()
-                    );
-                }
+                    if read_total > 0 {
+                        did_work = true;
+                        stem::trace!(
+                            "display_virtio_gpu: WaitSet read {} bytes, dropped={}",
+                            read_total,
+                            frames.dropped_bytes()
+                        );
+                    }
                 }
                 Err(e) => {
                     stem::trace!("display_virtio_gpu: WaitSet returned ERR: {:?}", e);

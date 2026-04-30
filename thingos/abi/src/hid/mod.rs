@@ -47,16 +47,16 @@ pub const BRISTLE_EVENT_MAGIC: u32 = 0x48494445;
 pub const BRISTLE_EVENT_VERSION: u16 = 0;
 
 pub use bristle::{BristleEventHeader, KeyEventPayload, KeyboardMessage};
-pub use registration::{
-    BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO, KIND_BRISTLE_DEVICE_EVENT,
-    KIND_BRISTLE_REGISTER_SINK, decode_register_sink, encode_register_sink,
-};
 pub use event::{EventType, HidParseError};
 pub use input::{InputDeviceKind, Ps2KeyPayload, RawInputEnvelope};
 pub use key::Key;
 pub use modifiers::{Locks, Mods};
 pub use pointer::{
     MouseButton, MouseMessage, PointerButtonPayload, PointerMovePayload, ScrollPayload,
+};
+pub use registration::{
+    BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO, KIND_BRISTLE_DEVICE_EVENT,
+    KIND_BRISTLE_REGISTER_SINK, decode_register_sink, encode_register_sink,
 };
 
 mod bristle;

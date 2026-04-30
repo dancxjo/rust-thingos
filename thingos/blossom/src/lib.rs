@@ -154,22 +154,14 @@ pub enum BlossomCommand {
         states: Vec<XdgToplevelStateAtom>,
     },
     /// Send `xdg_surface.configure(serial)` to the client.
-    SendXdgSurfaceConfigure {
-        client: ClientId,
-        xdg_surface: ObjectId,
-        serial: ConfigureSerial,
-    },
+    SendXdgSurfaceConfigure { client: ClientId, xdg_surface: ObjectId, serial: ConfigureSerial },
     /// The surface has completed the configure/ack handshake and committed a
     /// buffer; it is now eligible to be made visible (mapped).
     MarkSurfaceReadyForMapping { surface: SurfaceId },
     /// The compositor should send `xdg_toplevel.close` and initiate teardown.
     CloseToplevel { toplevel: ToplevelId },
     /// Send `xdg_wm_base.ping(serial)` to the client.
-    SendPing {
-        client: ClientId,
-        wm_base: ObjectId,
-        serial: ConfigureSerial,
-    },
+    SendPing { client: ClientId, wm_base: ObjectId, serial: ConfigureSerial },
 }
 
 // ── Internal state ────────────────────────────────────────────────────────────
@@ -367,16 +359,15 @@ impl Blossom {
                 height: 0,
                 states: vec![],
             },
-            BlossomCommand::SendXdgSurfaceConfigure {
-                client,
-                xdg_surface: xdg_surface_id,
-                serial,
-            },
+            BlossomCommand::SendXdgSurfaceConfigure { client, xdg_surface: xdg_surface_id, serial },
         ])
     }
 
     /// `xdg_surface.get_popup` — explicitly unsupported in v1.
-    pub fn get_popup(&mut self, _xdg_surface_id: ObjectId) -> Result<Vec<BlossomCommand>, BlossomError> {
+    pub fn get_popup(
+        &mut self,
+        _xdg_surface_id: ObjectId,
+    ) -> Result<Vec<BlossomCommand>, BlossomError> {
         Err(BlossomError::PopupNotSupported)
     }
 
@@ -552,7 +543,10 @@ impl Blossom {
     }
 
     /// `xdg_toplevel.set_maximized` — record client intent.
-    pub fn set_maximized(&mut self, toplevel_id: ObjectId) -> Result<Vec<BlossomCommand>, BlossomError> {
+    pub fn set_maximized(
+        &mut self,
+        toplevel_id: ObjectId,
+    ) -> Result<Vec<BlossomCommand>, BlossomError> {
         let tl = self
             .toplevels
             .get_mut(&toplevel_id)
@@ -562,7 +556,10 @@ impl Blossom {
     }
 
     /// `xdg_toplevel.unset_maximized` — clear client intent.
-    pub fn unset_maximized(&mut self, toplevel_id: ObjectId) -> Result<Vec<BlossomCommand>, BlossomError> {
+    pub fn unset_maximized(
+        &mut self,
+        toplevel_id: ObjectId,
+    ) -> Result<Vec<BlossomCommand>, BlossomError> {
         let tl = self
             .toplevels
             .get_mut(&toplevel_id)
@@ -572,7 +569,10 @@ impl Blossom {
     }
 
     /// `xdg_toplevel.set_fullscreen` — record client intent.
-    pub fn set_fullscreen(&mut self, toplevel_id: ObjectId) -> Result<Vec<BlossomCommand>, BlossomError> {
+    pub fn set_fullscreen(
+        &mut self,
+        toplevel_id: ObjectId,
+    ) -> Result<Vec<BlossomCommand>, BlossomError> {
         let tl = self
             .toplevels
             .get_mut(&toplevel_id)
@@ -608,7 +608,10 @@ impl Blossom {
     }
 
     /// `xdg_toplevel.show_window_menu` — accepted as no-op in v1.
-    pub fn show_window_menu(&mut self, toplevel_id: ObjectId) -> Result<Vec<BlossomCommand>, BlossomError> {
+    pub fn show_window_menu(
+        &mut self,
+        toplevel_id: ObjectId,
+    ) -> Result<Vec<BlossomCommand>, BlossomError> {
         self.toplevels
             .get(&toplevel_id)
             .ok_or(BlossomError::UnknownToplevel { id: toplevel_id })?;
@@ -616,7 +619,10 @@ impl Blossom {
     }
 
     /// `xdg_toplevel.move` — accepted as no-op in v1.
-    pub fn request_move(&mut self, toplevel_id: ObjectId) -> Result<Vec<BlossomCommand>, BlossomError> {
+    pub fn request_move(
+        &mut self,
+        toplevel_id: ObjectId,
+    ) -> Result<Vec<BlossomCommand>, BlossomError> {
         self.toplevels
             .get(&toplevel_id)
             .ok_or(BlossomError::UnknownToplevel { id: toplevel_id })?;
@@ -776,8 +782,14 @@ mod tests {
         make_xdg_surface(&mut b);
         let cmds = make_toplevel(&mut b);
         // Rule: xdg_toplevel.configure must come BEFORE xdg_surface.configure.
-        let tl_pos = cmds.iter().position(|c| matches!(c, BlossomCommand::SendXdgToplevelConfigure { .. })).unwrap();
-        let surf_pos = cmds.iter().position(|c| matches!(c, BlossomCommand::SendXdgSurfaceConfigure { .. })).unwrap();
+        let tl_pos = cmds
+            .iter()
+            .position(|c| matches!(c, BlossomCommand::SendXdgToplevelConfigure { .. }))
+            .unwrap();
+        let surf_pos = cmds
+            .iter()
+            .position(|c| matches!(c, BlossomCommand::SendXdgSurfaceConfigure { .. }))
+            .unwrap();
         assert!(tl_pos < surf_pos, "toplevel.configure must precede surface.configure");
     }
 
@@ -832,7 +844,10 @@ mod tests {
 
         let cmds = b.on_surface_commit(XDG_SURF, true).unwrap();
         assert_eq!(cmds.len(), 1);
-        assert!(matches!(cmds[0], BlossomCommand::MarkSurfaceReadyForMapping { surface: SURFACE_ID }));
+        assert!(matches!(
+            cmds[0],
+            BlossomCommand::MarkSurfaceReadyForMapping { surface: SURFACE_ID }
+        ));
     }
 
     #[test]

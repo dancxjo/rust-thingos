@@ -1,8 +1,7 @@
 use cucumber::{then, when};
 
-use crate::world::ThingOsWorld;
-
 use super::helpers::{StepError, capture_failure_diagnostics};
+use crate::world::ThingOsWorld;
 
 // ===== Driver-Ready Inbox Steps =====
 
@@ -98,5 +97,3 @@ async fn serial_output_should_not_contain(
     eprintln!("│  │  │      ✅ Pattern '{}' absent from serial output", pattern);
     Ok(())
 }
-
-

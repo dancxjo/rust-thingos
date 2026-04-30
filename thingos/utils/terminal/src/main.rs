@@ -711,14 +711,7 @@ fn main(arg: usize) -> ! {
         let fb = FbPtr(fb_ptr);
 
         let _ = stem::thread::spawn_task_detached(move || {
-            renderer_loop(
-                shared_r,
-                font_r,
-                fb,
-                fb_info.width,
-                fb_info.height,
-                fb_info.stride,
-            );
+            renderer_loop(shared_r, font_r, fb, fb_info.width, fb_info.height, fb_info.stride);
         });
     }
 

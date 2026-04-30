@@ -791,9 +791,7 @@ async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), S
         return Err(StepError("No QMP connection for pointer debug screenshot check".to_string()));
     }
 
-    if !world.wait_for_serial("bloom: pointer debug overlay ready", 60.0).await {
-        return Err(StepError("Pointer debug overlay did not become ready".to_string()));
-    }
+    ensure_pointer_debug_overlay_enabled(world).await?;
     if !world.wait_for_serial("First frame rendered", 60.0).await {
         return Err(StepError("Bloom did not render first frame".to_string()));
     }
@@ -883,9 +881,7 @@ async fn pointer_debug_overlay_includes_cursor_svg(
         return Err(StepError("No QMP connection for pointer debug screenshot check".to_string()));
     }
 
-    if !world.wait_for_serial("bloom: pointer debug overlay ready", 60.0).await {
-        return Err(StepError("Pointer debug overlay did not become ready".to_string()));
-    }
+    ensure_pointer_debug_overlay_enabled(world).await?;
     if !world.wait_for_serial("First frame rendered", 60.0).await {
         return Err(StepError("Bloom did not render first frame".to_string()));
     }
@@ -928,6 +924,39 @@ async fn pointer_debug_overlay_includes_cursor_svg(
             "Pointer debug overlay cursor SVG not detected ({} pixels)",
             cursor_like
         )));
+    }
+
+    Ok(())
+}
+
+async fn ensure_pointer_debug_overlay_enabled(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let press_alt = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": true, "key": {"type": "qcode", "data": "alt"}}}]}}"#;
+    let press_f7 = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": true, "key": {"type": "qcode", "data": "f7"}}}]}}"#;
+    let release_f7 = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": false, "key": {"type": "qcode", "data": "f7"}}}]}}"#;
+    let release_alt = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": false, "key": {"type": "qcode", "data": "alt"}}}]}}"#;
+
+    for cmd in [press_alt, press_f7, release_f7, release_alt] {
+        world
+            .execute_qmp_control(cmd)
+            .await
+            .map_err(|e| StepError(format!("QMP Alt+F7 toggle failed: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    if !world.wait_for_serial("bloom: pointer debug overlay enabled", 30.0).await {
+        return Err(StepError("Bloom did not enable the pointer debug overlay".to_string()));
+    }
+    let nudge = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 1}}]}}"#;
+    world
+        .execute_qmp_control(nudge)
+        .await
+        .map_err(|e| StepError(format!("QMP pointer nudge failed: {}", e)))?;
+    if !world.wait_for_serial("bloom: pointer debug overlay ready", 30.0).await {
+        return Err(StepError("Pointer debug overlay did not become ready".to_string()));
     }
 
     Ok(())

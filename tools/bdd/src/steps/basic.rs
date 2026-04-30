@@ -1,8 +1,7 @@
 use cucumber::{then, when};
 
-use crate::world::ThingOsWorld;
-
 use super::helpers::{StepError, color_close};
+use crate::world::ThingOsWorld;
 
 #[when("I turn on the machine")]
 pub(super) async fn turn_on_machine(world: &mut ThingOsWorld) -> Result<(), StepError> {
@@ -106,4 +105,3 @@ async fn check_rect_color(
 
     Ok(())
 }
-

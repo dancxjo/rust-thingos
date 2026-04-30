@@ -17,7 +17,9 @@ use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use iso9660::{ISO_SECTOR_SIZE, IsoFs};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_mount, vfs_write};
+use stem::syscall::vfs::{
+    vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_write,
+};
 use stem::syscall::{PortHandle, port_create};
 use stem::{info, warn};
 
@@ -49,10 +51,13 @@ struct VfsBlockDevice {
 }
 
 impl BlockDevice for VfsBlockDevice {
-    fn sector_size(&self) -> u64 { ISO_SECTOR_SIZE }
+    fn sector_size(&self) -> u64 {
+        ISO_SECTOR_SIZE
+    }
 
     fn read_sectors(&self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
-        let fd = vfs_open(&self.path, abi::syscall::vfs_flags::O_RDONLY).map_err(|_| BlockError::IoError)?;
+        let fd = vfs_open(&self.path, abi::syscall::vfs_flags::O_RDONLY)
+            .map_err(|_| BlockError::IoError)?;
         let offset = lba * ISO_SECTOR_SIZE;
         vfs_seek(fd, offset as i64, 0).map_err(|_| BlockError::IoError)?;
 
@@ -61,7 +66,10 @@ impl BlockDevice for VfsBlockDevice {
             match vfs_read(fd, &mut buf[total..]) {
                 Ok(0) => break,
                 Ok(n) => total += n,
-                Err(_) => { vfs_close(fd); return Err(BlockError::IoError); }
+                Err(_) => {
+                    vfs_close(fd);
+                    return Err(BlockError::IoError);
+                }
             }
         }
         vfs_close(fd);
@@ -71,8 +79,12 @@ impl BlockDevice for VfsBlockDevice {
 
 // ── Handle encoding ─────────────────────────────────────────────────────────
 
-fn encode_handle(lba: u32, size: u32) -> u64 { ((lba as u64) << 32) | (size as u64) }
-fn decode_handle(h: u64) -> (u32, u32) { ((h >> 32) as u32, (h & 0xFFFF_FFFF) as u32) }
+fn encode_handle(lba: u32, size: u32) -> u64 {
+    ((lba as u64) << 32) | (size as u64)
+}
+fn decode_handle(h: u64) -> (u32, u32) {
+    ((h >> 32) as u32, (h & 0xFFFF_FFFF) as u32)
+}
 
 const S_IFDIR: u32 = 0o040000;
 const S_IFREG: u32 = 0o100000;
@@ -86,17 +98,21 @@ fn dispatch_request(fs: &IsoFs, dev: &VfsBlockDevice, req: &ProviderRequest) -> 
         VfsRpcOp::ReadIntoFd => handle_read_into_fd(dev, &req.payload),
         VfsRpcOp::Readdir => handle_readdir(fs, dev, &req.payload),
         VfsRpcOp::Stat => handle_stat(fs, dev, &req.payload),
-        VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
+        VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
+            ProviderResponse::ok_empty()
+        }
         VfsRpcOp::Poll => ProviderResponse::ok_bytes(&1u32.to_le_bytes()),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }
 
 fn handle_lookup(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
-    if payload.len() < 4 { return ProviderResponse::err(Errno::EINVAL); }
+    if payload.len() < 4 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
     let path_len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let path = core::str::from_utf8(&payload[4..4+path_len]).unwrap_or("");
-    
+    let path = core::str::from_utf8(&payload[4..4 + path_len]).unwrap_or("");
+
     let (lba, size) = if path.is_empty() || path == "/" {
         (fs.pvd.root_dir_extent, fs.pvd.root_dir_size)
     } else {
@@ -114,7 +130,9 @@ fn handle_read(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
     let len = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
     let (lba, size) = decode_handle(handle);
 
-    if offset >= size as u64 { return ProviderResponse::ok_read(&[]); }
+    if offset >= size as u64 {
+        return ProviderResponse::ok_read(&[]);
+    }
     let iso_file = iso9660::IsoFile { extent_lba: lba, size };
     match iso_file.read_range(dev, offset, len) {
         Ok(data) => ProviderResponse::ok_read(&data),
@@ -130,10 +148,12 @@ fn handle_read(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
 /// travels in one shot, reducing the kernel↔provider IPC round-trips from
 /// O(file_size / 64 KiB) to O(1).
 fn handle_read_into_fd(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
-    if payload.len() < 24 { return ProviderResponse::err(Errno::EINVAL); }
-    let handle  = u64::from_le_bytes(payload[0..8].try_into().unwrap());
-    let offset  = u64::from_le_bytes(payload[8..16].try_into().unwrap());
-    let len     = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
+    if payload.len() < 24 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+    let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+    let len = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
     let dest_fd = u32::from_le_bytes(payload[20..24].try_into().unwrap());
     let (lba, size) = decode_handle(handle);
 
@@ -168,7 +188,9 @@ fn handle_readdir(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderR
         let name_len = name.len().min(255) as u8;
         let file_type: u8 = if entry.is_directory { 4 } else { 8 };
         let ino = encode_handle(entry.extent_lba, entry.size);
-        if out.len() + 10 + name_len as usize > max_bytes { break; }
+        if out.len() + 10 + name_len as usize > max_bytes {
+            break;
+        }
         out.extend_from_slice(&ino.to_le_bytes());
         out.push(file_type);
         out.push(name_len);
@@ -192,7 +214,9 @@ fn main(_arg: usize) -> ! {
     info!("ISO9660D: Starting VFS provider");
 
     let (fs, dev, req_read) = loop {
-        if let Some(res) = try_scan_and_mount() { break res; }
+        if let Some(res) = try_scan_and_mount() {
+            break res;
+        }
         stem::time::sleep_ms(500);
     };
 
@@ -201,10 +225,14 @@ fn main(_arg: usize) -> ! {
         if let Ok(req) = lp.next_request() {
             let resp = dispatch_request(&fs, &dev, &req);
             let _ = lp.send_response(&req, resp);
-        } else { break; }
+        } else {
+            break;
+        }
     }
 
-    loop { stem::yield_now(); }
+    loop {
+        stem::yield_now();
+    }
 }
 
 fn try_scan_and_mount() -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
@@ -216,7 +244,9 @@ fn try_scan_and_mount() -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
     let mut offset = 0;
     while offset < n {
         let mut end = offset;
-        while end < n && buf[end] != 0 { end += 1; }
+        while end < n && buf[end] != 0 {
+            end += 1;
+        }
         if end > offset {
             if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
                 let path = format!("/dev/storage/{}", name);

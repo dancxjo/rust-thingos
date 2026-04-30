@@ -258,8 +258,7 @@ impl HttpsProvider {
             run_handle_worker(handle, h, ch_clone, shared, mount_point);
         }) {
             Ok(_) => {
-                self.workers
-                    .insert(handle, WorkerHandle { node, channel: channel.clone() });
+                self.workers.insert(handle, WorkerHandle { node, channel: channel.clone() });
                 Ok(channel)
             }
             Err(e) => {
@@ -362,13 +361,7 @@ impl HttpsProvider {
         // for this (host, path), subsequent stats report a symlink so the
         // kernel can follow the `Readlink` chain transparently.
         let is_redirect = is_redirect_local
-            || self
-                .shared
-                .cache
-                .lock()
-                .peek(&cache_key)
-                .map(|e| e.is_redirect())
-                .unwrap_or(false);
+            || self.shared.cache.lock().peek(&cache_key).map(|e| e.is_redirect()).unwrap_or(false);
         if is_redirect {
             // S_IFLNK (0o120000) with rwx for everyone — the kernel follows
             // the link without checking permissions but tooling like
@@ -615,7 +608,11 @@ impl CacheFsProvider {
 /// Idempotent: returns immediately if the stream is already open, the handle
 /// has already reached EOF, or the headers have already been cached from a
 /// previous fetch.
-fn ensure_upstream_on(handle_id: u64, state: &mut HttpsHandle, shared: &SharedState) -> Result<(), Errno> {
+fn ensure_upstream_on(
+    handle_id: u64,
+    state: &mut HttpsHandle,
+    shared: &SharedState,
+) -> Result<(), Errno> {
     if state.response.is_some() || state.eof || state.headers_cached {
         return Ok(());
     }
@@ -659,12 +656,10 @@ fn populate_cache_headers_on(state: &mut HttpsHandle, shared: &SharedState) {
     let head = response.head().clone();
     let directives = CacheDirectives::from_head(&head);
     let fetched_at_ns = stem::syscall::monotonic_ns();
-    let expires_at_ns =
-        directives.max_age.map(|s| fetched_at_ns.saturating_add(s * 1_000_000_000));
+    let expires_at_ns = directives.max_age.map(|s| fetched_at_ns.saturating_add(s * 1_000_000_000));
     let is_redirect = head.is_redirect();
     let redirect_target = if is_redirect {
-        head.header("Location")
-            .map(|loc| resolve_redirect(&state.node.host, &state.node.path, loc))
+        head.header("Location").map(|loc| resolve_redirect(&state.node.host, &state.node.path, loc))
     } else {
         None
     };
@@ -796,8 +791,7 @@ fn perform_read(
         debug!("httpsd: upstream chunk handle={} bytes={}", handle_id, chunk.len());
         chunks_to_mirror.push(chunk.clone());
         state.push_chunk(&chunk)?;
-        body_end =
-            state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
+        body_end = state.body_start_offset.checked_add(state.body.len()).ok_or(Errno::EOVERFLOW)?;
     }
 
     // Re-check after fetch because the retained window may have advanced while reading chunks.
@@ -1091,12 +1085,8 @@ fn dispatch(
         VfsRpcOp::Stat => Some(dispatch_stat(provider, payload)),
         VfsRpcOp::Readdir => Some(dispatch_readdir(payload)),
         VfsRpcOp::Close => Some(dispatch_close(provider, payload)),
-        VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
-            Some(ProviderResponse::ok_empty())
-        }
-        VfsRpcOp::Poll => {
-            Some(ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN as u32))
-        }
+        VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => Some(ProviderResponse::ok_empty()),
+        VfsRpcOp::Poll => Some(ProviderResponse::ok_poll(abi::syscall::poll_flags::POLLIN as u32)),
         VfsRpcOp::AttrList => Some(dispatch_attr_list(provider, payload)),
         VfsRpcOp::AttrGet => Some(dispatch_attr_get(provider, payload)),
         VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove => Some(ProviderResponse::err(Errno::EROFS)),

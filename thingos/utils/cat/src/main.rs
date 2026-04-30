@@ -81,13 +81,13 @@ fn stream(
                     let mut pos = 0;
 
                     while pos < chunk.len() {
-                        if let Some(newline_offset) = chunk[pos..].iter().position(|&b| b == b'\n') {
+                        if let Some(newline_offset) = chunk[pos..].iter().position(|&b| b == b'\n')
+                        {
                             let nl = pos + newline_offset;
                             if *at_line_start {
                                 // Write prefix + line content as one atomic write.
                                 *lineno += 1;
-                                let mut out =
-                                    alloc::format!("{:6}  ", *lineno).into_bytes();
+                                let mut out = alloc::format!("{:6}  ", *lineno).into_bytes();
                                 out.extend_from_slice(&chunk[pos..=nl]);
                                 let _ = vfs_write(out_fd, &out);
                             } else {
@@ -100,8 +100,7 @@ fn stream(
                             // Remaining bytes form a partial line (no newline yet).
                             if *at_line_start {
                                 *lineno += 1;
-                                let mut out =
-                                    alloc::format!("{:6}  ", *lineno).into_bytes();
+                                let mut out = alloc::format!("{:6}  ", *lineno).into_bytes();
                                 out.extend_from_slice(&chunk[pos..]);
                                 let _ = vfs_write(out_fd, &out);
                                 *at_line_start = false;
@@ -175,7 +174,8 @@ fn main(_arg: usize) -> ! {
             match vfs_open(path, vfs_flags::O_RDONLY) {
                 Ok(fd) => {
                     stem::info!("cat: opened '{}' fd={}", path, fd);
-                    if stream(fd, 1, &mut buf, number_lines, &mut lineno, &mut at_line_start).is_err()
+                    if stream(fd, 1, &mut buf, number_lines, &mut lineno, &mut at_line_start)
+                        .is_err()
                     {
                         print_error(&alloc::format!("error reading {}", path));
                     }

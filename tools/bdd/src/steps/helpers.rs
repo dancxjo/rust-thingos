@@ -374,7 +374,10 @@ mod tests {
 }
 
 #[then(regex = r#"^I should see the wallpaper on the screen within (\d+) seconds$"#)]
-pub(super) async fn wallpaper_within_timeout(world: &mut ThingOsWorld, timeout: u64) -> Result<(), StepError> {
+pub(super) async fn wallpaper_within_timeout(
+    world: &mut ThingOsWorld,
+    timeout: u64,
+) -> Result<(), StepError> {
     eprintln!("│  │  │      🖼️ Waiting for wallpaper...");
 
     // Wait for bloom first frame info log
@@ -487,7 +490,11 @@ pub(super) async fn check_window_bg_color(
 }
 
 #[then(regex = r#"^I should see text-like pixels inside the window at (\d+), (\d+)$"#)]
-pub(super) async fn check_text_pixels(world: &mut ThingOsWorld, x: u32, y: u32) -> Result<(), StepError> {
+pub(super) async fn check_text_pixels(
+    world: &mut ThingOsWorld,
+    x: u32,
+    y: u32,
+) -> Result<(), StepError> {
     let screenshot_path =
         crate::artifacts::global().lock().await.screenshot_path("window_text_check");
 
@@ -533,4 +540,3 @@ pub(super) async fn check_text_pixels(world: &mut ThingOsWorld, x: u32, y: u32) 
 
     Ok(())
 }
-

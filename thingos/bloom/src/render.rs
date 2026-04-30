@@ -7,7 +7,9 @@ use crate::display::DisplayBackend;
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
 const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
+const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
+const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
 const CURSOR_SIZE: u32 = 96;
 const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
 const POINTER_OVERLAY_MAX_W: u32 = 460;
@@ -32,6 +34,8 @@ type PrepareCursorFn = extern "C" fn(
     hotspot_out: *mut u32,
 ) -> i32;
 
+type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
+
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
     cursor: Option<CursorBuffer>,
@@ -43,6 +47,7 @@ struct PistilLib {
     _handle: *mut core::ffi::c_void,
     prepare_bg: PrepareBackgroundFn,
     prepare_cursor: Option<PrepareCursorFn>,
+    draw_text: Option<DrawTextFn>,
 }
 
 struct ServerBuffer {
@@ -294,6 +299,7 @@ impl CompositorVisuals {
             pointer_x,
             pointer_y,
             cursor_sample,
+            self.pistil.as_ref().and_then(|lib| lib.draw_text),
         );
         Some(OverlayPlane {
             buffer_id: overlay.buffer_id,
@@ -365,8 +371,14 @@ fn load_pistil() -> Option<PistilLib> {
     let cursor_sym = dlsym_bytes(handle, PREPARE_CURSOR_SYMBOL);
     let prepare_cursor =
         if cursor_sym.is_null() { None } else { Some(unsafe { core::mem::transmute(cursor_sym) }) };
+    let text_sym = dlsym_bytes(handle, DRAW_TEXT_SYMBOL);
+    let draw_text =
+        if text_sym.is_null() { None } else { Some(unsafe { core::mem::transmute(text_sym) }) };
     stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
-    Some(PistilLib { _handle: handle, prepare_bg, prepare_cursor })
+    if draw_text.is_some() {
+        stem::info!("bloom: pistil font text renderer loaded with default {}", DEFAULT_FONT_PATH);
+    }
+    Some(PistilLib { _handle: handle, prepare_bg, prepare_cursor, draw_text })
 }
 
 fn log_dlerror(prefix: &str) {
@@ -452,18 +464,57 @@ fn draw_pointer_overlay(
     pointer_x: i32,
     pointer_y: i32,
     cursor_sample: Option<&[u32]>,
+    pistil_draw_text: Option<DrawTextFn>,
 ) {
     dst.fill(0);
     fill_rect(dst, width, 0, 0, width, height, 0xAA101820);
     fill_rect(dst, width, 0, 0, width, 2, 0xFF7DD3FC);
     fill_rect(dst, width, 0, height.saturating_sub(2) as i32, width, 2, 0x6659C3C3);
 
-    draw_text(dst, width, height, 16, 14, 2, "BLOOM POINTER DEBUG", 0xFFFFF4B0);
-    draw_text(dst, width, height, 18, 48, 2, "POINTER 0: X=", 0xFFE6F7FF);
-    let next_x = draw_signed_number(dst, width, height, 18 + 13 * 12, 48, 2, pointer_x, 0xFFFFFFFF);
+    draw_overlay_text(
+        pistil_draw_text,
+        dst,
+        width,
+        height,
+        16,
+        32,
+        22.0,
+        "BLOOM POINTER DEBUG",
+        0xFFFFF4B0,
+    );
+    draw_overlay_text(
+        pistil_draw_text,
+        dst,
+        width,
+        height,
+        18,
+        68,
+        18.0,
+        "POINTER 0: X=",
+        0xFFE6F7FF,
+    );
+    let next_x = draw_signed_number(
+        pistil_draw_text,
+        dst,
+        width,
+        height,
+        18 + 13 * 11,
+        68,
+        pointer_x,
+        0xFFFFFFFF,
+    );
     let next_x = next_x + 18;
-    draw_text(dst, width, height, next_x, 48, 2, "Y=", 0xFFE6F7FF);
-    draw_signed_number(dst, width, height, next_x + 24, 48, 2, pointer_y, 0xFFFFFFFF);
+    draw_overlay_text(pistil_draw_text, dst, width, height, next_x, 68, 18.0, "Y=", 0xFFE6F7FF);
+    draw_signed_number(
+        pistil_draw_text,
+        dst,
+        width,
+        height,
+        next_x + 24,
+        68,
+        pointer_y,
+        0xFFFFFFFF,
+    );
 
     if let Some(cursor_sample) = cursor_sample {
         draw_cursor_sample(dst, width, height, cursor_sample);
@@ -565,13 +616,50 @@ fn draw_text(
     x
 }
 
-fn draw_signed_number(
+fn draw_overlay_text(
+    pistil_draw_text: Option<DrawTextFn>,
     dst: &mut [u32],
     stride: u32,
     height: u32,
     x: i32,
     y: i32,
-    scale: u32,
+    px_size: f32,
+    text: &str,
+    color: u32,
+) -> i32 {
+    if let Some(draw_text_fn) = pistil_draw_text {
+        let mut text_c = [0u8; 128];
+        let bytes = text.as_bytes();
+        if bytes.len() < text_c.len() {
+            text_c[..bytes.len()].copy_from_slice(bytes);
+            let rc = draw_text_fn(
+                text_c.as_ptr(),
+                dst.as_mut_ptr(),
+                stride,
+                height,
+                stride,
+                x,
+                y,
+                px_size,
+                color,
+            );
+            if rc == 0 {
+                return x + (bytes.len() as i32 * (px_size * 0.62) as i32);
+            }
+        }
+    }
+
+    let scale = ((px_size / 9.0) as u32).max(1);
+    draw_text(dst, stride, height, x, y - (7 * scale) as i32, scale, text, color)
+}
+
+fn draw_signed_number(
+    pistil_draw_text: Option<DrawTextFn>,
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
     value: i32,
     color: u32,
 ) -> i32 {
@@ -594,12 +682,8 @@ fn draw_signed_number(
     }
     buf[start..len].reverse();
 
-    let mut cursor = x;
-    for byte in &buf[..len] {
-        draw_glyph(dst, stride, height, cursor, y, scale, *byte as char, color);
-        cursor += (6 * scale) as i32;
-    }
-    cursor
+    let text = core::str::from_utf8(&buf[..len]).unwrap_or("?");
+    draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, 18.0, text, color)
 }
 
 fn draw_glyph(

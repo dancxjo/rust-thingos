@@ -309,7 +309,9 @@ impl NetVfsProvider {
         Ok(Some((hdr.resp_port as PortHandle, op, hdr.req_id, payload)))
     }
 
-    pub fn try_next_request(&mut self) -> Result<Option<(PortHandle, VfsRpcOp, u16, Vec<u8>)>, Errno> {
+    pub fn try_next_request(
+        &mut self,
+    ) -> Result<Option<(PortHandle, VfsRpcOp, u16, Vec<u8>)>, Errno> {
         loop {
             match self.try_parse_one() {
                 Ok(Some(req)) => return Ok(Some(req)),

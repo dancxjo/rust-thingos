@@ -58,8 +58,8 @@ use abi::seed::{
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_NONBLOCK, O_RDONLY, O_TRUNC, O_WRONLY};
 use abi::syscall::{PollHandle, poll_flags};
-use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use abi::vfs_rpc::VfsRpcOp;
+use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use cmd_queue::{CmdQueue, EventQueue, NetCommand, NetEvent, new_queues};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::wire::EthernetAddress;
@@ -71,9 +71,7 @@ use stem::syscall::vfs::{
 use stem::syscall::{argv_get, exit};
 use stem::{debug, info, warn};
 use vfs_device::VfsNicDevice;
-use vfs_provider::{
-    ICMP_DYN_BASE, TCP_DYN_BASE, UDP_DYN_BASE, NetVfsProvider, E_OK,
-};
+use vfs_provider::{E_OK, ICMP_DYN_BASE, NetVfsProvider, TCP_DYN_BASE, UDP_DYN_BASE};
 
 /// Path prefix for the virtio NIC VFS provider (published by virtio_netd).
 const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
@@ -564,10 +562,7 @@ fn run_rpc_thread(
                 state.last_link_state = current_link;
                 drop(state);
                 net_provider.link_up = current_link;
-                debug!(
-                    "NETD RPC: link state → {}",
-                    if current_link { "UP" } else { "DOWN" }
-                );
+                debug!("NETD RPC: link state → {}", if current_link { "UP" } else { "DOWN" });
             }
         }
 
@@ -581,9 +576,8 @@ fn run_rpc_thread(
             stem::syscall::yield_now();
         } else {
             // No RPC pending — block until the next request arrives (or timeout).
-            let mut pollfds = [
-                PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 },
-            ];
+            let mut pollfds =
+                [PollHandle { handle: req_fd as i32, events: poll_flags::POLLIN, revents: 0 }];
             let _ = vfs_poll(&mut pollfds, 5); // 5 ms timeout
         }
     }
@@ -729,7 +723,10 @@ fn main(arg: usize) -> ! {
         }
     };
 
-    debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", dhcp_config.ip, dhcp_config.gateway, dhcp_config.dns);
+    debug!(
+        "NETD: DHCP — IP: {}, GW: {}, DNS: {}",
+        dhcp_config.ip, dhcp_config.gateway, dhcp_config.dns
+    );
     {
         let mut state = net_state.lock();
         state.ip_configured = true;

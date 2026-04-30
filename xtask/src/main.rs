@@ -212,22 +212,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut programs = default_programs();
             apply_init(&mut programs, init);
 
-            let path = if resolution.is_some()
-                || output.is_some()
-                || loglevel.is_some()
-                || bootfb_default
-            {
-                let output_path = output.as_deref().map(std::path::Path::new);
-                let config = IsoConfig {
-                    resolution: resolution.as_deref(),
-                    iso_path: output_path,
-                    loglevel: loglevel.as_deref(),
-                    bootfb_default,
+            let path =
+                if resolution.is_some() || output.is_some() || loglevel.is_some() || bootfb_default
+                {
+                    let output_path = output.as_deref().map(std::path::Path::new);
+                    let config = IsoConfig {
+                        resolution: resolution.as_deref(),
+                        iso_path: output_path,
+                        loglevel: loglevel.as_deref(),
+                        bootfb_default,
+                    };
+                    build_iso_with_config(&sh, &env, &programs, &config)?
+                } else {
+                    build_iso(&sh, &env, &programs)?
                 };
-                build_iso_with_config(&sh, &env, &programs, &config)?
-            } else {
-                build_iso(&sh, &env, &programs)?
-            };
             println!("{}ISO generated at: {}{}", COLOR_GREEN, path.display(), COLOR_RESET);
         }
         Commands::Hdd { env, profile, init } => {

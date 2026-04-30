@@ -502,7 +502,7 @@ fn limine_modules(
         let path_str = asset.to_string_lossy();
         let clean_path = path_str.replace('\\', "/");
 
-        let allowed = clean_path.ends_with("NotoSans-Regular.ttf")
+        let allowed = (clean_path.starts_with("assets/fonts/") && clean_path.ends_with(".ttf"))
             || clean_path.ends_with("future/default.svg")
             || clean_path.ends_with("wallpapers/flower.bmp")
             || clean_path.ends_with("wallpapers/flower.png")
