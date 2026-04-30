@@ -827,6 +827,18 @@ async fn pointer_debug_overlay_updates(world: &mut ThingOsWorld) -> Result<(), S
         )));
     }
 
+    let cursor = cursor_signature_pixels(&after, 1001, 584, 96);
+    eprintln!(
+        "│  │  │      real cursor layer pixels: white={} gold={} dark={}",
+        cursor.white, cursor.gold, cursor.dark
+    );
+    if cursor.white < 300 || cursor.gold < 40 || cursor.dark < 120 {
+        return Err(StepError(format!(
+            "Real cursor layer not detected at pointer position (white={}, gold={}, dark={})",
+            cursor.white, cursor.gold, cursor.dark
+        )));
+    }
+
     Ok(())
 }
 
@@ -886,4 +898,29 @@ async fn pointer_debug_overlay_includes_cursor_svg(
     }
 
     Ok(())
+}
+
+#[derive(Default)]
+struct CursorSignature {
+    white: u32,
+    gold: u32,
+    dark: u32,
+}
+
+fn cursor_signature_pixels(img: &image::RgbImage, x0: u32, y0: u32, size: u32) -> CursorSignature {
+    let (width, height) = img.dimensions();
+    let mut sig = CursorSignature::default();
+    for y in y0..y0.saturating_add(size).min(height) {
+        for x in x0..x0.saturating_add(size).min(width) {
+            let [r, g, b] = img.get_pixel(x, y).0;
+            if r > 235 && g > 235 && b > 235 {
+                sig.white += 1;
+            } else if r > 190 && (120..=210).contains(&g) && b < 80 {
+                sig.gold += 1;
+            } else if r < 45 && g < 45 && b < 45 {
+                sig.dark += 1;
+            }
+        }
+    }
+    sig
 }
