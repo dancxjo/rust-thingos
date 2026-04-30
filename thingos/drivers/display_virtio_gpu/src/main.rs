@@ -148,6 +148,7 @@ struct Buffer {
 }
 
 struct ImportedBuffer {
+    fd: u32,
     ptr: *mut u8,
     size: usize,
     width: u32,
@@ -524,6 +525,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     driver.imported_buffers.insert(
                         id,
                         ImportedBuffer {
+                            fd: bh.handle,
                             ptr: map_resp.addr as *mut u8,
                             size,
                             width: bh.width,
@@ -547,10 +549,21 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             let id = BufferId(u32::from_le_bytes(call_payload[..4].try_into().unwrap()));
             if let Some(buf) = driver.imported_buffers.remove(&id) {
                 stem::trace!(
-                    "DISP: DISPLAY_OP_RELEASE_BUFFER requested: id={} size={} (mapping retained)",
+                    "DISP: DISPLAY_OP_RELEASE_BUFFER requested: id={} size={}",
                     id.0,
                     buf.size
                 );
+                if let Err(e) = stem::syscall::vm_unmap(buf.ptr as usize, buf.size) {
+                    stem::warn!(
+                        "DISP: failed to unmap released buffer id={} size={}: {:?}",
+                        id.0,
+                        buf.size,
+                        e
+                    );
+                }
+                if let Err(e) = stem::syscall::vfs::vfs_close(buf.fd) {
+                    stem::warn!("DISP: failed to close released buffer id={} fd={}: {:?}", id.0, buf.fd, e);
+                }
                 ProviderResponse::ok_device_call(0, &[])
             } else {
                 stem::trace!("DISP: DISPLAY_OP_RELEASE_BUFFER requested for unknown id={}", id.0);

@@ -750,6 +750,7 @@ pub fn serial_put_char(c: u8) {
     // Kick-start: arm the TX interrupt so the serial IRQ handler drains
     // the ring asynchronously.  This is a no-op if already armed.
     crate::RUNTIME.arch.arm_serial_tx_irq();
+    serial_flush_deferred();
 }
 
 /// Enqueue a byte slice for deferred framebuffer rendering.
@@ -767,6 +768,7 @@ pub fn serial_put_buf(buf: &[u8]) {
     SERIAL_DEFERRED.lock().push_slice(buf);
     // Kick-start TX interrupt for async drain.
     crate::RUNTIME.arch.arm_serial_tx_irq();
+    serial_flush_deferred();
 }
 
 /// Called from the timer IRQ to blink the cursor.
