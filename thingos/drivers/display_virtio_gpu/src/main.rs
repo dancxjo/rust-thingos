@@ -6,7 +6,7 @@ extern crate alloc;
 use abi::display::{
     BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_COMMIT,
     DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps,
-    DisplayInfo, DisplayMode, NS_PER_SECOND_PER_MILLI_HZ, PlaneCommit,
+    DisplayInfo, DisplayMode, PlaneCommit,
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -295,9 +295,6 @@ struct VirtioGpuDriver {
     current_res_id: u32,
     first_commit_logged: bool,
     cursor_commit_logged: bool,
-    /// Monotonic nanosecond timestamp of the last successful present.
-    /// Used to implement software vsync pacing when `CommitFlags::VSYNC` is set.
-    last_present_ns: u64,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -336,28 +333,6 @@ fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
     let g = (sg * src_a + dg * inv + 127) / 255;
     let b = (sb * src_a + db * inv + 127) / 255;
     0xff00_0000 | (r << 16) | (g << 8) | b
-}
-
-/// Software vsync pacing helper.
-///
-/// Sleeps until the next frame boundary derived from the display refresh rate,
-/// then records the current monotonic time as the new present timestamp.
-/// This ensures that callers requesting `CommitFlags::VSYNC` are blocked for
-/// approximately one frame interval relative to the previous present, matching
-/// the semantics of a real hardware vblank wait.
-///
-/// `refresh_mhz` is in milli-Hertz (e.g. 60 000 = 60 Hz). A value of zero
-/// falls back to `DEFAULT_REFRESH_MHZ`.
-fn vsync_wait(last_present_ns: &mut u64, refresh_mhz: u32) {
-    let effective_mhz = if refresh_mhz > 0 { refresh_mhz } else { DEFAULT_REFRESH_MHZ };
-    // NS_PER_SECOND_PER_MILLI_HZ / refresh_mhz converts milli-Hertz to ns per frame.
-    let frame_ns = NS_PER_SECOND_PER_MILLI_HZ / effective_mhz as u64;
-    let now = stem::time::monotonic_ns();
-    let next = last_present_ns.saturating_add(frame_ns);
-    if now < next {
-        stem::time::sleep_ns(next - now);
-    }
-    *last_present_ns = stem::time::monotonic_ns();
 }
 
 fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
@@ -1361,7 +1336,6 @@ fn main(boot_arg: usize) -> ! {
         current_res_id: 1,
         first_commit_logged: false,
         cursor_commit_logged: false,
-        last_present_ns: 0,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every
