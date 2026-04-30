@@ -35,13 +35,16 @@ const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
 const ACTIVE_CHROME: u32 = 0xFFFFB900;
 const INACTIVE_CHROME: u32 = 0xFFA6984A;
 const CHROME_TEXT: u32 = 0xFF32331F;
-const CHROME_BUTTON_FACE_ACTIVE: u32 = 0xFFFFCC42;
-const CHROME_BUTTON_FACE_INACTIVE: u32 = 0xFFD6C36B;
-const CHROME_BUTTON_LIGHT: u32 = 0xFFFFF1A6;
-const CHROME_BUTTON_DARK: u32 = 0xFF7A641A;
-const CHROME_BUTTON_SHADOW: u32 = 0xFF3D3515;
+const CHROME_BUTTON_FACE_ACTIVE: u32 = 0xFFE2E2DC;
+const CHROME_BUTTON_FACE_INACTIVE: u32 = 0xFFC6C6BE;
+const CHROME_BUTTON_LIGHT: u32 = 0xFFFFFFFF;
+const CHROME_BUTTON_DARK: u32 = 0xFF6F6F68;
+const CHROME_BUTTON_SHADOW: u32 = 0xFF24241F;
 const CHROME_OUTLINE_DARK: u32 = 0xAA32331F;
 const CHROME_OUTLINE_LIGHT: u32 = 0x66FFE07A;
+const CHROME_ICON_MINIMIZE: &str = "\u{1F5D5}";
+const CHROME_ICON_MAXIMIZE: &str = "\u{1F5D6}";
+const CHROME_ICON_CLOSE: &str = "\u{1F5D9}";
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -832,24 +835,25 @@ fn draw_chrome_buttons(
     surface_rect: abi::display_protocol::Rect,
     chrome: SurfaceChrome,
     active: bool,
-    _pistil_draw_symbol_text: Option<DrawTextFn>,
+    pistil_draw_symbol_text: Option<DrawTextFn>,
 ) {
     let Some(buttons) = chrome_button_rects(surface_rect, chrome) else {
         return;
     };
 
     for (button, rect) in buttons {
-        draw_haiku_button(dst, stride, height, rect, button, active);
+        draw_chrome_button(dst, stride, height, rect, button, active, pistil_draw_symbol_text);
     }
 }
 
-fn draw_haiku_button(
+fn draw_chrome_button(
     dst: &mut [u32],
     stride: u32,
     height: u32,
     rect: abi::display_protocol::Rect,
     button: ChromeButton,
     active: bool,
+    pistil_draw_symbol_text: Option<DrawTextFn>,
 ) {
     if rect.w < 8 || rect.h < 8 {
         return;
@@ -920,10 +924,52 @@ fn draw_haiku_button(
         );
     }
 
-    draw_haiku_button_glyph(dst, stride, height, rect, button);
+    if !draw_chrome_button_symbol(
+        pistil_draw_symbol_text,
+        dst,
+        stride,
+        height,
+        rect,
+        button,
+        CHROME_TEXT,
+    ) {
+        draw_chrome_button_fallback_glyph(dst, stride, height, rect, button);
+    }
 }
 
-fn draw_haiku_button_glyph(
+fn draw_chrome_button_symbol(
+    pistil_draw_symbol_text: Option<DrawTextFn>,
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: abi::display_protocol::Rect,
+    button: ChromeButton,
+    color: u32,
+) -> bool {
+    let Some(draw_text_fn) = pistil_draw_symbol_text else {
+        return false;
+    };
+
+    let symbol = match button {
+        ChromeButton::Minimize => CHROME_ICON_MINIMIZE,
+        ChromeButton::Maximize => CHROME_ICON_MAXIMIZE,
+        ChromeButton::Close => CHROME_ICON_CLOSE,
+    };
+    let px_size = ((rect.h.min(rect.w) as f32) * 0.62).clamp(14.0, 28.0);
+    let x = rect.x as i32 + (rect.w as i32 / 2) - (px_size * 0.36) as i32;
+    let y = rect.y as i32 + (rect.h as i32 / 2) + (px_size * 0.38) as i32;
+
+    let mut text_c = [0u8; 16];
+    let bytes = symbol.as_bytes();
+    if bytes.len() >= text_c.len() {
+        return false;
+    }
+    text_c[..bytes.len()].copy_from_slice(bytes);
+    draw_text_fn(text_c.as_ptr(), dst.as_mut_ptr(), stride, height, stride, x, y, px_size, color)
+        == 0
+}
+
+fn draw_chrome_button_fallback_glyph(
     dst: &mut [u32],
     stride: u32,
     height: u32,

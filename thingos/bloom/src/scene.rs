@@ -635,30 +635,27 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
     let titlebar_height = chrome.titlebar_height.min(rect.h);
-    let button_size = titlebar_height.saturating_sub(frame.saturating_mul(2)).min(28);
-    if button_size < 12 {
+    let button_height = titlebar_height;
+    let button_width = button_height.min(44);
+    if button_height < 12 || button_width < 12 {
         return None;
     }
 
-    let gap = 4u32.min(button_size / 3);
-    let right = rect.x.saturating_add(rect.w).saturating_sub(frame).saturating_sub(gap);
-    let y = rect
-        .y
-        .saturating_add(frame)
-        .saturating_add(titlebar_height.saturating_sub(frame.saturating_mul(2) + button_size) / 2);
-    let total_w = button_size.saturating_mul(3).saturating_add(gap.saturating_mul(2));
-    if total_w.saturating_add(frame).saturating_add(gap) > rect.w {
+    let right = rect.x.saturating_add(rect.w).saturating_sub(frame);
+    let y = rect.y;
+    let total_w = button_width.saturating_mul(3);
+    if total_w.saturating_add(frame) > rect.w {
         return None;
     }
 
-    let close_x = right.saturating_sub(button_size);
-    let max_x = close_x.saturating_sub(gap).saturating_sub(button_size);
-    let min_x = max_x.saturating_sub(gap).saturating_sub(button_size);
+    let close_x = right.saturating_sub(button_width);
+    let max_x = close_x.saturating_sub(button_width);
+    let min_x = max_x.saturating_sub(button_width);
 
     Some([
-        (ChromeButton::Minimize, Rect { x: min_x, y, w: button_size, h: button_size }),
-        (ChromeButton::Maximize, Rect { x: max_x, y, w: button_size, h: button_size }),
-        (ChromeButton::Close, Rect { x: close_x, y, w: button_size, h: button_size }),
+        (ChromeButton::Minimize, Rect { x: min_x, y, w: button_width, h: button_height }),
+        (ChromeButton::Maximize, Rect { x: max_x, y, w: button_width, h: button_height }),
+        (ChromeButton::Close, Rect { x: close_x, y, w: button_width, h: button_height }),
     ])
 }
 

@@ -601,13 +601,15 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
     )))
 }
 
-#[then("active window chrome should use the future gold tab color")]
-async fn active_window_chrome_uses_future_gold(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[then("active window chrome should use the future gold tab color and full-height symbol buttons")]
+async fn active_window_chrome_uses_future_gold_and_symbol_buttons(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
     let _ = world.wait_for_serial("First frame rendered", 60.0).await;
 
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(30);
-    let mut last_counts = (0u32, 0u32);
+    let mut last_counts = (0u32, 0u32, 0u32, 0u32, 0u32);
     let mut attempt = 0u32;
 
     while start.elapsed() < timeout {
@@ -629,6 +631,9 @@ async fn active_window_chrome_uses_future_gold(world: &mut ThingOsWorld) -> Resu
         let max_y = height.min(80);
         let mut gold_pixels = 0u32;
         let mut dark_text_pixels = 0u32;
+        let mut button_face_top_pixels = 0u32;
+        let mut button_face_bottom_pixels = 0u32;
+        let mut button_icon_pixels = 0u32;
 
         for y in 0..max_y {
             for x in 0..max_x {
@@ -638,14 +643,39 @@ async fn active_window_chrome_uses_future_gold(world: &mut ThingOsWorld) -> Resu
                 } else if color_close(pixel, [0x32, 0x33, 0x1F], 28) {
                     dark_text_pixels += 1;
                 }
+                if x >= 340 && y < 40 && color_close(pixel, [0xE2, 0xE2, 0xDC], 14) {
+                    if y < 18 {
+                        button_face_top_pixels += 1;
+                    } else if y >= 22 {
+                        button_face_bottom_pixels += 1;
+                    }
+                }
+                if x >= 340 && y < 40 && color_close(pixel, [0x32, 0x33, 0x1F], 28) {
+                    button_icon_pixels += 1;
+                }
             }
         }
 
-        last_counts = (gold_pixels, dark_text_pixels);
-        if gold_pixels > 4_000 && dark_text_pixels > 40 {
+        last_counts = (
+            gold_pixels,
+            dark_text_pixels,
+            button_face_top_pixels,
+            button_face_bottom_pixels,
+            button_icon_pixels,
+        );
+        if gold_pixels > 4_000
+            && dark_text_pixels > 40
+            && button_face_top_pixels > 600
+            && button_face_bottom_pixels > 600
+            && button_icon_pixels > 20
+        {
             eprintln!(
-                "│  │  │      ✅ Active chrome uses future gold (gold={}, dark_text={})",
-                gold_pixels, dark_text_pixels
+                "│  │  │      ✅ Active chrome uses future gold and symbol buttons (gold={}, dark_text={}, button_top={}, button_bottom={}, button_icons={})",
+                gold_pixels,
+                dark_text_pixels,
+                button_face_top_pixels,
+                button_face_bottom_pixels,
+                button_icon_pixels
             );
             return Ok(());
         }
@@ -654,8 +684,8 @@ async fn active_window_chrome_uses_future_gold(world: &mut ThingOsWorld) -> Resu
     }
 
     Err(StepError(format!(
-        "Active chrome did not show future gold and dark title text (gold={}, dark_text={})",
-        last_counts.0, last_counts.1
+        "Active chrome did not show future gold and full-height symbol buttons (gold={}, dark_text={}, button_top={}, button_bottom={}, button_icons={})",
+        last_counts.0, last_counts.1, last_counts.2, last_counts.3, last_counts.4
     )))
 }
 

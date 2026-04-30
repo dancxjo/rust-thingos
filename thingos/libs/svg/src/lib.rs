@@ -76,7 +76,15 @@ pub fn rasterize_cursor(
 ) -> Result<CursorHotspot, SvgError> {
     rasterize(svg, dst, width, height, stride)?;
 
-    let hotspot = parse_hotspot(svg).unwrap_or(CursorHotspot { x: 3, y: 2 });
+    let hotspot = parse_hotspot(svg).unwrap_or_else(|| {
+        if svg == DEFAULT_CURSOR_SVG {
+            CursorHotspot { x: 3, y: 2 }
+        } else {
+            let (source_w, source_h) = svg_source_size_from_bytes(svg).unwrap_or((32.0, 32.0));
+            CursorHotspot { x: (source_w / 2.0) as u32, y: (source_h / 2.0) as u32 }
+        }
+    });
+
     let (source_w, source_h) = svg_source_size_from_bytes(svg).unwrap_or((32.0, 32.0));
     let hotspot = CursorHotspot {
         x: ((hotspot.x as f32 * width as f32) / source_w).round() as u32,
@@ -705,12 +713,8 @@ fn premul_to_argb(px: tiny_skia::PremultipliedColorU8) -> u32 {
 
 fn parse_hotspot(svg: &[u8]) -> Option<CursorHotspot> {
     let text = core::str::from_utf8(svg).ok()?;
-    let x = parse_attr_u32(text, "data-hotspot-x")
-        .or_else(|| parse_attr_u32(text, "hotspot-x"))
-        .unwrap_or(3);
-    let y = parse_attr_u32(text, "data-hotspot-y")
-        .or_else(|| parse_attr_u32(text, "hotspot-y"))
-        .unwrap_or(2);
+    let x = parse_attr_u32(text, "data-hotspot-x").or_else(|| parse_attr_u32(text, "hotspot-x"))?;
+    let y = parse_attr_u32(text, "data-hotspot-y").or_else(|| parse_attr_u32(text, "hotspot-y"))?;
     Some(CursorHotspot { x, y })
 }
 
@@ -748,6 +752,39 @@ mod tests {
         let svg = core::str::from_utf8(DEFAULT_CURSOR_SVG).unwrap();
         assert!(svg.contains("#ffb900"));
         assert!(!svg.contains("M3 2 L3 25 L9 19"));
+    }
+
+    #[test]
+    fn test_parse_hotspot() {
+        let svg = r#"<svg data-hotspot-x="10" data-hotspot-y="20"></svg>"#.as_bytes();
+        let hotspot = parse_hotspot(svg).unwrap();
+        assert_eq!(hotspot.x, 10);
+        assert_eq!(hotspot.y, 20);
+
+        let svg = r#"<svg hotspot-x="5" hotspot-y="15"></svg>"#.as_bytes();
+        let hotspot = parse_hotspot(svg).unwrap();
+        assert_eq!(hotspot.x, 5);
+        assert_eq!(hotspot.y, 15);
+
+        let svg = r#"<svg></svg>"#.as_bytes();
+        assert!(parse_hotspot(svg).is_none());
+    }
+
+    #[test]
+    fn test_rasterize_cursor_fallback() {
+        let svg = r#"<svg width="32" height="32"></svg>"#.as_bytes();
+        let mut dst = [0u32; 32 * 32];
+        let hotspot = rasterize_cursor(svg, &mut dst, 32, 32, 32).unwrap();
+        // Should default to center (16, 16)
+        assert_eq!(hotspot.x, 16);
+        assert_eq!(hotspot.y, 16);
+
+        let svg = DEFAULT_CURSOR_SVG;
+        let mut dst = [0u32; 32 * 32];
+        let hotspot = rasterize_cursor(svg, &mut dst, 32, 32, 32).unwrap();
+        // Should default to (3, 2)
+        assert_eq!(hotspot.x, 3);
+        assert_eq!(hotspot.y, 2);
     }
 
     #[test]
