@@ -8,8 +8,8 @@
 //! # Protocol coverage (v1)
 //!
 //! - `xdg_wm_base`: `get_xdg_surface`, `create_positioner`, `pong`, `destroy`
-//! - `xdg_surface`: `get_toplevel`, `get_popup` (returns explicit error),
-//!   `set_window_geometry`, `ack_configure`, `destroy`
+//! - `xdg_surface`: `get_toplevel`, `get_popup`, `set_window_geometry`,
+//!   `ack_configure`, `destroy`
 //! - `xdg_toplevel`: all `set_*` / `unset_*` / `show_window_menu` / `move` /
 //!   `resize` requests; most are recorded as client intent or accepted as
 //!   no-ops in v1
@@ -41,7 +41,7 @@ pub type ObjectId = u32;
 pub type SurfaceId = u32;
 /// Identifies a mapped `xdg_toplevel`.
 pub type ToplevelId = ObjectId;
-/// Identifies a mapped `xdg_popup` (reserved for v2+).
+/// Identifies a mapped `xdg_popup`.
 pub type PopupId = ObjectId;
 /// Identifies a Wayland client connection.
 pub type ClientId = u32;
@@ -128,8 +128,8 @@ pub enum BlossomError {
     /// configure/ack_configure handshake.  `xdg_surface` error
     /// `unconfigured_buffer`.
     CommitBeforeAckConfigure { xdg_surface: ObjectId },
-    /// `get_popup` is not supported in this version of blossom.
-    PopupNotSupported,
+    /// The referenced `xdg_popup` object ID is not known to blossom.
+    UnknownPopup { id: ObjectId },
 }
 
 // ── Command output ────────────────────────────────────────────────────────────
@@ -158,6 +158,15 @@ pub enum BlossomCommand {
         width: i32,
         height: i32,
         states: Vec<XdgToplevelStateAtom>,
+    },
+    /// Send `xdg_popup.configure(x, y, width, height)` to the client.
+    SendXdgPopupConfigure {
+        client: ClientId,
+        xdg_popup: ObjectId,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
     },
     /// Send `xdg_surface.configure(serial)` to the client.
     SendXdgSurfaceConfigure { client: ClientId, xdg_surface: ObjectId, serial: ConfigureSerial },
@@ -229,6 +238,17 @@ pub struct XdgToplevelState {
     pub requested: ToplevelRequested,
 }
 
+/// Per-`xdg_popup` protocol state tracked by blossom.
+#[derive(Debug, Clone)]
+pub struct XdgPopupState {
+    /// The client connection that owns this popup.
+    pub client: ClientId,
+    /// Parent xdg_surface, if the client supplied one.
+    pub parent: Option<ObjectId>,
+    /// Positioner object used to create the popup.
+    pub positioner: ObjectId,
+}
+
 // ── Main state machine ────────────────────────────────────────────────────────
 
 /// The `blossom` xdg-shell state machine.
@@ -249,6 +269,8 @@ pub struct Blossom {
     surfaces: BTreeMap<ObjectId, XdgSurfaceState>,
     /// xdg_toplevel ObjectId → state.
     toplevels: BTreeMap<ObjectId, XdgToplevelState>,
+    /// xdg_popup ObjectId → state.
+    popups: BTreeMap<ObjectId, XdgPopupState>,
     /// wl_surface SurfaceId → xdg_surface ObjectId (uniqueness check).
     surface_to_xdg: BTreeMap<SurfaceId, ObjectId>,
     /// Monotonically increasing serial for configure events.
@@ -267,6 +289,7 @@ impl Blossom {
         Self {
             surfaces: BTreeMap::new(),
             toplevels: BTreeMap::new(),
+            popups: BTreeMap::new(),
             surface_to_xdg: BTreeMap::new(),
             serial: SerialGenerator::new(),
         }
@@ -378,12 +401,41 @@ impl Blossom {
         ])
     }
 
-    /// `xdg_surface.get_popup` — explicitly unsupported in v1.
+    /// `xdg_surface.get_popup(new_id, parent, positioner)`.
     pub fn get_popup(
         &mut self,
-        _xdg_surface_id: ObjectId,
+        client: ClientId,
+        xdg_surface_id: ObjectId,
+        popup_id: ObjectId,
+        parent: Option<ObjectId>,
+        positioner: ObjectId,
     ) -> Result<Vec<BlossomCommand>, BlossomError> {
-        Err(BlossomError::PopupNotSupported)
+        let surface = self
+            .surfaces
+            .get_mut(&xdg_surface_id)
+            .ok_or(BlossomError::UnknownXdgSurface { id: xdg_surface_id })?;
+
+        if surface.role.is_some() {
+            return Err(BlossomError::XdgSurfaceAlreadyHasRole { xdg_surface: xdg_surface_id });
+        }
+
+        surface.role = Some(XdgRole::Popup(popup_id));
+        self.popups.insert(popup_id, XdgPopupState { client, parent, positioner });
+
+        let serial = self.serial.next();
+        surface.pending_configures.push_back(serial);
+
+        Ok(vec![
+            BlossomCommand::SendXdgPopupConfigure {
+                client,
+                xdg_popup: popup_id,
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 96,
+            },
+            BlossomCommand::SendXdgSurfaceConfigure { client, xdg_surface: xdg_surface_id, serial },
+        ])
     }
 
     /// `xdg_surface.set_window_geometry(x, y, w, h)`.
@@ -445,8 +497,31 @@ impl Blossom {
 
         self.surface_to_xdg.remove(&surface.wl_surface);
 
-        if let Some(XdgRole::Toplevel(tid)) = surface.role {
-            self.toplevels.remove(&tid);
+        match surface.role {
+            Some(XdgRole::Toplevel(tid)) => {
+                self.toplevels.remove(&tid);
+            }
+            Some(XdgRole::Popup(pid)) => {
+                self.popups.remove(&pid);
+            }
+            None => {}
+        }
+
+        Ok(vec![])
+    }
+
+    /// `xdg_popup.destroy`.
+    pub fn destroy_popup(
+        &mut self,
+        popup_id: ObjectId,
+    ) -> Result<Vec<BlossomCommand>, BlossomError> {
+        self.popups.remove(&popup_id).ok_or(BlossomError::UnknownPopup { id: popup_id })?;
+
+        for surface in self.surfaces.values_mut() {
+            if surface.role == Some(XdgRole::Popup(popup_id)) {
+                surface.role = None;
+                break;
+            }
         }
 
         Ok(vec![])
@@ -761,6 +836,8 @@ mod tests {
     const XDG_SURF2: ObjectId = 21;
     const TOPLEVEL2: ObjectId = 22;
     const SURFACE_ID2: SurfaceId = 20;
+    const POPUP: ObjectId = 31;
+    const POSITIONER: ObjectId = 32;
 
     fn setup() -> Blossom {
         Blossom::new()
@@ -1029,11 +1106,49 @@ mod tests {
     // ── popup ────────────────────────────────────────────────────────────
 
     #[test]
-    fn get_popup_returns_explicit_error() {
+    fn get_popup_assigns_role_and_emits_configure() {
         let mut b = setup();
         make_xdg_surface(&mut b);
-        let err = b.get_popup(XDG_SURF).unwrap_err();
-        assert_eq!(err, BlossomError::PopupNotSupported);
+        let cmds = b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+
+        assert_eq!(cmds.len(), 2, "get_popup must emit popup + surface configure commands");
+        assert!(matches!(
+            cmds[0],
+            BlossomCommand::SendXdgPopupConfigure {
+                xdg_popup: POPUP,
+                x: 0,
+                y: 0,
+                width: 160,
+                height: 96,
+                ..
+            }
+        ));
+        assert!(matches!(
+            cmds[1],
+            BlossomCommand::SendXdgSurfaceConfigure { xdg_surface: XDG_SURF, serial, .. }
+                if serial > 0
+        ));
+        assert_eq!(b.xdg_surface(XDG_SURF).unwrap().role, Some(XdgRole::Popup(POPUP)));
+    }
+
+    #[test]
+    fn get_popup_on_surface_with_role_errors() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        make_toplevel(&mut b);
+        let err = b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap_err();
+        assert_eq!(err, BlossomError::XdgSurfaceAlreadyHasRole { xdg_surface: XDG_SURF });
+    }
+
+    #[test]
+    fn destroy_xdg_surface_removes_popup_transitively() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+
+        b.destroy_xdg_surface(XDG_SURF).unwrap();
+        assert!(b.xdg_surface(XDG_SURF).is_none());
+        assert!(b.xdg_surface_for_wl_surface(SURFACE_ID).is_none());
     }
 
     // ── multiple surfaces ────────────────────────────────────────────────

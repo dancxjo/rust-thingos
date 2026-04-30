@@ -44,6 +44,8 @@ pub enum ObjectEntry {
     XdgSurface { bloom_surface_id: u32 },
     /// xdg_toplevel.
     XdgToplevel { xdg_surface_obj: u32 },
+    /// xdg_popup.
+    XdgPopup { xdg_surface_obj: u32 },
     /// Object has been destroyed (tombstone).
     Destroyed,
 }

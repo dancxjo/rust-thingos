@@ -35,11 +35,6 @@ const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
 const ACTIVE_CHROME: u32 = 0xFFFFB900;
 const INACTIVE_CHROME: u32 = 0xFFA6984A;
 const CHROME_TEXT: u32 = 0xFF32331F;
-const CHROME_BUTTON_FACE_ACTIVE: u32 = 0xFFE2E2DC;
-const CHROME_BUTTON_FACE_INACTIVE: u32 = 0xFFC6C6BE;
-const CHROME_BUTTON_LIGHT: u32 = 0xFFFFFFFF;
-const CHROME_BUTTON_DARK: u32 = 0xFF6F6F68;
-const CHROME_BUTTON_SHADOW: u32 = 0xFF24241F;
 const CHROME_OUTLINE_DARK: u32 = 0xAA32331F;
 const CHROME_OUTLINE_LIGHT: u32 = 0x66FFE07A;
 const CHROME_ICON_MINIMIZE: &str = "\u{1F5D5}";
@@ -852,76 +847,11 @@ fn draw_chrome_button(
     height: u32,
     rect: abi::display_protocol::Rect,
     button: ChromeButton,
-    active: bool,
+    _active: bool,
     pistil_draw_symbol_text: Option<DrawTextFn>,
 ) {
     if rect.w < 8 || rect.h < 8 {
         return;
-    }
-
-    let face = if active { CHROME_BUTTON_FACE_ACTIVE } else { CHROME_BUTTON_FACE_INACTIVE };
-    let x = rect.x as i32;
-    let y = rect.y as i32;
-    fill_rect(dst, stride, x, y, rect.w, rect.h, face);
-
-    fill_rect(dst, stride, x, y, rect.w, 1, CHROME_BUTTON_LIGHT);
-    fill_rect(dst, stride, x, y, 1, rect.h, CHROME_BUTTON_LIGHT);
-    fill_rect(
-        dst,
-        stride,
-        x,
-        y.saturating_add(rect.h.saturating_sub(1) as i32),
-        rect.w,
-        1,
-        CHROME_BUTTON_SHADOW,
-    );
-    fill_rect(
-        dst,
-        stride,
-        x.saturating_add(rect.w.saturating_sub(1) as i32),
-        y,
-        1,
-        rect.h,
-        CHROME_BUTTON_SHADOW,
-    );
-
-    if rect.w > 4 && rect.h > 4 {
-        fill_rect(
-            dst,
-            stride,
-            x + 1,
-            y + 1,
-            rect.w.saturating_sub(2),
-            1,
-            blend_argb(face, 0x30FFFFFF),
-        );
-        fill_rect(
-            dst,
-            stride,
-            x + 1,
-            y + 1,
-            1,
-            rect.h.saturating_sub(2),
-            blend_argb(face, 0x20FFFFFF),
-        );
-        fill_rect(
-            dst,
-            stride,
-            x + 1,
-            y.saturating_add(rect.h.saturating_sub(2) as i32),
-            rect.w.saturating_sub(2),
-            1,
-            CHROME_BUTTON_DARK,
-        );
-        fill_rect(
-            dst,
-            stride,
-            x.saturating_add(rect.w.saturating_sub(2) as i32),
-            y + 1,
-            1,
-            rect.h.saturating_sub(2),
-            CHROME_BUTTON_DARK,
-        );
     }
 
     if !draw_chrome_button_symbol(
@@ -955,9 +885,6 @@ fn draw_chrome_button_symbol(
         ChromeButton::Maximize => CHROME_ICON_MAXIMIZE,
         ChromeButton::Close => CHROME_ICON_CLOSE,
     };
-    let px_size = ((rect.h.min(rect.w) as f32) * 0.62).clamp(14.0, 28.0);
-    let x = rect.x as i32 + (rect.w as i32 / 2) - (px_size * 0.36) as i32;
-    let y = rect.y as i32 + (rect.h as i32 / 2) + (px_size * 0.38) as i32;
 
     let mut text_c = [0u8; 16];
     let bytes = symbol.as_bytes();
@@ -965,8 +892,44 @@ fn draw_chrome_button_symbol(
         return false;
     }
     text_c[..bytes.len()].copy_from_slice(bytes);
-    draw_text_fn(text_c.as_ptr(), dst.as_mut_ptr(), stride, height, stride, x, y, px_size, color)
-        == 0
+
+    let scratch_w = rect.w.max(32);
+    let scratch_h = rect.h.max(32);
+    let scratch_len = scratch_w.saturating_mul(scratch_h) as usize;
+    let mut scratch = Vec::new();
+    if scratch.try_reserve_exact(scratch_len).is_err() {
+        return false;
+    }
+    scratch.resize(scratch_len, 0);
+
+    let px_size = ((rect.h.min(rect.w) as f32) * 0.62).clamp(14.0, 28.0);
+    let draw_x = scratch_w as i32 / 2 - (px_size * 0.36) as i32;
+    let draw_y = scratch_h as i32 / 2 + (px_size * 0.38) as i32;
+    if draw_text_fn(
+        text_c.as_ptr(),
+        scratch.as_mut_ptr(),
+        scratch_w,
+        scratch_h,
+        scratch_w,
+        draw_x,
+        draw_y,
+        px_size,
+        color,
+    ) != 0
+    {
+        return false;
+    }
+
+    let Some(bounds) = nontransparent_bounds(&scratch, scratch_w, scratch_h, scratch_w) else {
+        return false;
+    };
+    let (min_x, min_y, max_x, max_y) = bounds;
+    let glyph_w = max_x.saturating_sub(min_x).saturating_add(1);
+    let glyph_h = max_y.saturating_sub(min_y).saturating_add(1);
+    let dst_x = rect.x as i32 + ((rect.w.saturating_sub(glyph_w)) / 2) as i32 - min_x as i32;
+    let dst_y = rect.y as i32 + ((rect.h.saturating_sub(glyph_h)) / 2) as i32 - min_y as i32;
+    blit_argb_over(dst, stride, height, &scratch, scratch_w, scratch_h, scratch_w, dst_x, dst_y);
+    true
 }
 
 fn draw_chrome_button_fallback_glyph(
@@ -992,7 +955,7 @@ fn draw_chrome_button_fallback_glyph(
                 stride,
                 height,
                 cx - glyph_w / 2,
-                y + h - 7,
+                cy - glyph_h / 2,
                 glyph_w,
                 glyph_h,
                 CHROME_TEXT,
@@ -1180,6 +1143,75 @@ fn blit_nontransparent(
             dst[(dy as u32 * dst_stride + dx as u32) as usize] = src_px;
         }
     }
+}
+
+fn blit_argb_over(
+    dst: &mut [u32],
+    dst_stride: u32,
+    dst_height: u32,
+    src: &[u32],
+    src_width: u32,
+    src_height: u32,
+    src_stride: u32,
+    dst_x: i32,
+    dst_y: i32,
+) {
+    if dst_stride == 0 || src_stride < src_width {
+        return;
+    }
+
+    for sy in 0..src_height {
+        let dy = dst_y + sy as i32;
+        if dy < 0 || dy >= dst_height as i32 {
+            continue;
+        }
+        for sx in 0..src_width {
+            let dx = dst_x + sx as i32;
+            if dx < 0 || dx >= dst_stride as i32 {
+                continue;
+            }
+
+            let src_px = src[(sy * src_stride + sx) as usize];
+            if src_px >> 24 == 0 {
+                continue;
+            }
+            let dst_idx = (dy as u32 * dst_stride + dx as u32) as usize;
+            dst[dst_idx] = blend_argb(dst[dst_idx], src_px);
+        }
+    }
+}
+
+fn nontransparent_bounds(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    if width == 0 || height == 0 || stride < width {
+        return None;
+    }
+
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut found = false;
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = (y * stride + x) as usize;
+            if pixels.get(idx).copied().unwrap_or(0) >> 24 == 0 {
+                continue;
+            }
+            found = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+
+    if found { Some((min_x, min_y, max_x, max_y)) } else { None }
 }
 
 fn fill_rect_i32(

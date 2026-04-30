@@ -19,10 +19,10 @@ use crate::protocol::{
 use crate::scene::{ChromeButton, CursorKind, HitTarget, ResizeEdge, Scene};
 use crate::wayland::ipc;
 
-const CURSOR_DAMAGE_W: u32 = 96;
-const CURSOR_DAMAGE_H: u32 = 96;
-const CURSOR_HOTSPOT_X: i32 = 9;
-const CURSOR_HOTSPOT_Y: i32 = 6;
+const CURSOR_DAMAGE_W: u32 = 192;
+const CURSOR_DAMAGE_H: u32 = 192;
+const CURSOR_HOTSPOT_X: i32 = 96;
+const CURSOR_HOTSPOT_Y: i32 = 96;
 const MIN_RESIZE_W: u32 = 160;
 const MIN_RESIZE_H: u32 = 96;
 static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);

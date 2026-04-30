@@ -601,8 +601,10 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
     )))
 }
 
-#[then("active window chrome should use the future gold tab color and full-height symbol buttons")]
-async fn active_window_chrome_uses_future_gold_and_symbol_buttons(
+#[then(
+    "active window chrome should use the future gold tab color and transparent full-height symbol buttons"
+)]
+async fn active_window_chrome_uses_future_gold_and_transparent_symbol_buttons(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
     let _ = world.wait_for_serial("First frame rendered", 60.0).await;
@@ -631,8 +633,8 @@ async fn active_window_chrome_uses_future_gold_and_symbol_buttons(
         let max_y = height.min(80);
         let mut gold_pixels = 0u32;
         let mut dark_text_pixels = 0u32;
-        let mut button_face_top_pixels = 0u32;
-        let mut button_face_bottom_pixels = 0u32;
+        let mut button_gold_top_pixels = 0u32;
+        let mut button_gold_bottom_pixels = 0u32;
         let mut button_icon_pixels = 0u32;
 
         for y in 0..max_y {
@@ -643,11 +645,11 @@ async fn active_window_chrome_uses_future_gold_and_symbol_buttons(
                 } else if color_close(pixel, [0x32, 0x33, 0x1F], 28) {
                     dark_text_pixels += 1;
                 }
-                if x >= 340 && y < 40 && color_close(pixel, [0xE2, 0xE2, 0xDC], 14) {
+                if x >= 340 && y < 40 && color_close(pixel, [0xFF, 0xB9, 0x00], 12) {
                     if y < 18 {
-                        button_face_top_pixels += 1;
+                        button_gold_top_pixels += 1;
                     } else if y >= 22 {
-                        button_face_bottom_pixels += 1;
+                        button_gold_bottom_pixels += 1;
                     }
                 }
                 if x >= 340 && y < 40 && color_close(pixel, [0x32, 0x33, 0x1F], 28) {
@@ -659,22 +661,22 @@ async fn active_window_chrome_uses_future_gold_and_symbol_buttons(
         last_counts = (
             gold_pixels,
             dark_text_pixels,
-            button_face_top_pixels,
-            button_face_bottom_pixels,
+            button_gold_top_pixels,
+            button_gold_bottom_pixels,
             button_icon_pixels,
         );
         if gold_pixels > 4_000
             && dark_text_pixels > 40
-            && button_face_top_pixels > 600
-            && button_face_bottom_pixels > 600
+            && button_gold_top_pixels > 600
+            && button_gold_bottom_pixels > 600
             && button_icon_pixels > 20
         {
             eprintln!(
-                "│  │  │      ✅ Active chrome uses future gold and symbol buttons (gold={}, dark_text={}, button_top={}, button_bottom={}, button_icons={})",
+                "│  │  │      ✅ Active chrome uses future gold and transparent symbol buttons (gold={}, dark_text={}, button_gold_top={}, button_gold_bottom={}, button_icons={})",
                 gold_pixels,
                 dark_text_pixels,
-                button_face_top_pixels,
-                button_face_bottom_pixels,
+                button_gold_top_pixels,
+                button_gold_bottom_pixels,
                 button_icon_pixels
             );
             return Ok(());
@@ -684,7 +686,7 @@ async fn active_window_chrome_uses_future_gold_and_symbol_buttons(
     }
 
     Err(StepError(format!(
-        "Active chrome did not show future gold and full-height symbol buttons (gold={}, dark_text={}, button_top={}, button_bottom={}, button_icons={})",
+        "Active chrome did not show future gold and transparent full-height symbol buttons (gold={}, dark_text={}, button_gold_top={}, button_gold_bottom={}, button_icons={})",
         last_counts.0, last_counts.1, last_counts.2, last_counts.3, last_counts.4
     )))
 }
@@ -1076,27 +1078,55 @@ async fn compositor_no_longer_tracks(world: &mut ThingOsWorld) -> Result<(), Ste
 /// `When the client calls xdg_surface.get_popup`
 #[when("the client calls xdg_surface.get_popup")]
 async fn client_calls_get_popup(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello calls get_popup which is rejected in v1.
-    let found = world.wait_for_serial("wayland-server: xdg_surface.get_popup rejected", 10.0).await;
+    let found = world.wait_for_serial("wayland-server: xdg_popup obj=", 10.0).await;
     if found {
-        eprintln!("│  │  │      ✅ get_popup call triggered rejection");
+        eprintln!("│  │  │      ✅ get_popup call created xdg_popup");
         Ok(())
     } else {
-        Err(StepError("get_popup rejection not observed in compositor log".to_string()))
+        Err(StepError("xdg_popup creation not observed in compositor log".to_string()))
     }
 }
 
-/// `And the error message indicates popups are not supported in v1`
-#[then("the error message indicates popups are not supported in v1")]
-async fn error_popups_not_supported(world: &mut ThingOsWorld) -> Result<(), StepError> {
+/// `Then a new xdg_popup object is registered successfully`
+#[then("a new xdg_popup object is registered successfully")]
+async fn xdg_popup_registered(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    if log.contains("not supported in v1") {
-        eprintln!("│  │  │      ✅ 'not supported in v1' error confirmed for popups");
+    if log.contains("wayland-server: xdg_popup obj=")
+        && log.contains("assigned to xdg_surface=")
+        && !log.contains("wayland-server: xdg_surface.get_popup rejected")
+    {
+        eprintln!("│  │  │      ✅ xdg_popup registered successfully");
         Ok(())
     } else {
-        Err(StepError(
-            "Expected 'not supported in v1' in compositor log for get_popup rejection".to_string(),
-        ))
+        Err(StepError("No successful xdg_popup registration observed".to_string()))
+    }
+}
+
+/// `And the compositor emits xdg_popup.configure before xdg_surface.configure`
+#[then("the compositor emits xdg_popup.configure before xdg_surface.configure")]
+async fn xdg_popup_configure_precedes_surface_configure(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let popup_found = world.wait_for_serial("wayland-server: xdg_popup.configure obj=", 10.0).await;
+    let surface_found = world.wait_for_serial("sent to obj=21", 10.0).await;
+    if !popup_found {
+        return Err(StepError("No xdg_popup.configure observed".to_string()));
+    }
+    if !surface_found {
+        return Err(StepError("No xdg_surface.configure observed after popup".to_string()));
+    }
+
+    let log = world.get_serial_log().await;
+    let popup_pos = log.rfind("wayland-server: xdg_popup.configure obj=");
+    let surface_pos = log.rfind("wayland-server: xdg_surface.configure serial=");
+    match (popup_pos, surface_pos) {
+        (Some(popup_pos), Some(surface_pos)) if popup_pos < surface_pos => {
+            eprintln!("│  │  │      ✅ xdg_popup.configure precedes xdg_surface.configure");
+            Ok(())
+        }
+        _ => {
+            Err(StepError("Expected xdg_popup.configure before xdg_surface.configure".to_string()))
+        }
     }
 }
 

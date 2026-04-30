@@ -67,7 +67,7 @@ Feature: blossom xdg-shell lifecycle
   @wayland-visible
   Scenario: first valid commit is visible above the compositor background
     Then the Wayland hello client should be visible
-    And active window chrome should use the future gold tab color and full-height symbol buttons
+    And active window chrome should use the future gold tab color and transparent full-height symbol buttons
 
   @pointer-debug
   Scenario: dragging the title bar moves a toplevel window
@@ -131,13 +131,13 @@ Feature: blossom xdg-shell lifecycle
     Then no error is sent
     And the compositor no longer tracks any state for those objects
 
-  # ── Unsupported paths ────────────────────────────────────────────────────────
+  # ── Popup lifecycle ──────────────────────────────────────────────────────────
 
-  Scenario: get_popup is explicitly unsupported in v1
+  Scenario: get_popup assigns the popup role and emits configure
     Given the client has an xdg_surface
     When the client calls xdg_surface.get_popup
-    Then the compositor sends a wl_display.error
-    And the error message indicates popups are not supported in v1
+    Then a new xdg_popup object is registered successfully
+    And the compositor emits xdg_popup.configure before xdg_surface.configure
 
   # ── Frame callbacks ───────────────────────────────────────────────────────────
 

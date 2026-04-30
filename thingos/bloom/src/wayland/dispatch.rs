@@ -69,6 +69,7 @@ pub fn dispatch(
         ObjKind::XdgPositioner => vec![],
         ObjKind::XdgSurface => dispatch_xdg_surface(msg, client, obj_id, blossom, cmd_write),
         ObjKind::XdgToplevel => dispatch_xdg_toplevel(msg, client, obj_id, blossom, cmd_write),
+        ObjKind::XdgPopup => dispatch_xdg_popup(msg, client, obj_id, blossom),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -89,6 +90,7 @@ enum ObjKind {
     XdgPositioner,
     XdgSurface,
     XdgToplevel,
+    XdgPopup,
     Destroyed,
     Unknown,
 }
@@ -107,6 +109,7 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::XdgPositioner => ObjKind::XdgPositioner,
         ObjectEntry::XdgSurface { .. } => ObjKind::XdgSurface,
         ObjectEntry::XdgToplevel { .. } => ObjKind::XdgToplevel,
+        ObjectEntry::XdgPopup { .. } => ObjKind::XdgPopup,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -678,9 +681,34 @@ fn dispatch_xdg_surface(
             }
         }
         XDG_SURFACE_GET_POPUP => {
-            // Unsupported in v1 — send protocol error.
-            blossom_warn!("wayland-server: xdg_surface.get_popup rejected: not supported in v1");
-            client.send_protocol_error(obj_id, 0, "get_popup not supported in v1");
+            let new_id = match read_u32(&msg.data, 0) {
+                Some(id) => id,
+                None => return vec![],
+            };
+            let parent = read_u32(&msg.data, 4).filter(|id| *id != 0);
+            let positioner = match read_u32(&msg.data, 8) {
+                Some(id) => id,
+                None => return vec![],
+            };
+            match blossom.get_popup(client_id, obj_id, new_id, parent, positioner) {
+                Ok(cmds) => {
+                    stem::info!(
+                        "wayland-server: xdg_popup obj={} assigned to xdg_surface={}",
+                        new_id,
+                        obj_id
+                    );
+                    client.insert(new_id, ObjectEntry::XdgPopup { xdg_surface_obj: obj_id });
+                    send_blossom_commands(client, &cmds, cmd_write);
+                }
+                Err(BlossomError::XdgSurfaceAlreadyHasRole { .. }) => {
+                    blossom_warn!(
+                        "wayland-server: xdg_surface error: surface={} already has a role",
+                        obj_id
+                    );
+                    client.send_protocol_error(obj_id, 4, "xdg_surface already has a role");
+                }
+                Err(_) => {}
+            }
         }
         XDG_SURFACE_SET_WINDOW_GEOMETRY => {
             let x = read_i32(&msg.data, 0).unwrap_or(0);
@@ -709,6 +737,24 @@ fn dispatch_xdg_surface(
             }
         }
         _ => {}
+    }
+    vec![]
+}
+
+// ── xdg_popup ────────────────────────────────────────────────────────────────
+
+const XDG_POPUP_DESTROY: u16 = 0;
+
+fn dispatch_xdg_popup(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+    blossom: &mut blossom::Blossom,
+) -> Vec<Vec<u8>> {
+    if msg.opcode == XDG_POPUP_DESTROY {
+        blossom_debug!("wayland-server: xdg_popup obj={} destroyed", obj_id);
+        let _ = blossom.destroy_popup(obj_id);
+        client.destroy(obj_id);
     }
     vec![]
 }
@@ -857,6 +903,24 @@ pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand]
                     xdg_surface
                 );
                 client.send(*xdg_surface, 0, &serial.to_ne_bytes());
+            }
+            BlossomCommand::SendXdgPopupConfigure { xdg_popup, x, y, width, height, .. } => {
+                // xdg_popup.configure(x: int, y: int, width: int, height: int)
+                // opcode 0
+                blossom_debug!(
+                    "wayland-server: xdg_popup.configure obj={} x={} y={} width={} height={}",
+                    xdg_popup,
+                    x,
+                    y,
+                    width,
+                    height
+                );
+                let mut payload = alloc::vec::Vec::new();
+                payload.extend_from_slice(&x.to_ne_bytes());
+                payload.extend_from_slice(&y.to_ne_bytes());
+                payload.extend_from_slice(&width.to_ne_bytes());
+                payload.extend_from_slice(&height.to_ne_bytes());
+                client.send(*xdg_popup, 0, &payload);
             }
             BlossomCommand::MarkSurfaceReadyForMapping { surface } => {
                 blossom_debug!("wayland-server: surface {} ready for mapping", surface);
