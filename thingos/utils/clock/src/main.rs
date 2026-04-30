@@ -306,44 +306,45 @@ fn render_clock(
         paint_background(pixels, buffer.width, buffer.height);
 
         let panel_x = 18i32;
-        let panel_y = 48i32;
+        let panel_y = 56i32;
         let panel_w = buffer.width.saturating_sub(36);
-        let panel_h = buffer.height.saturating_sub(78);
+        let panel_h = buffer.height.saturating_sub(panel_y as u32).saturating_sub(18);
+        fill_vertical_gradient(
+            pixels,
+            buffer.width,
+            buffer.height,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            0xFFFFF6DF,
+            0xFFF3DFC1,
+        );
+        stroke_rect(
+            pixels,
+            buffer.width,
+            buffer.height,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            0xFFD6B46A,
+        );
         fill_rect(
             pixels,
             buffer.width,
             buffer.height,
-            panel_x,
-            panel_y,
-            panel_w,
-            panel_h,
-            0xFF12091E,
-        );
-        stroke_rect(
-            pixels,
-            buffer.width,
-            buffer.height,
-            panel_x,
-            panel_y,
-            panel_w,
-            panel_h,
-            0xFF5E3576,
-        );
-        stroke_rect(
-            pixels,
-            buffer.width,
-            buffer.height,
-            panel_x + 2,
-            panel_y + 2,
-            panel_w.saturating_sub(4),
-            panel_h.saturating_sub(4),
-            0xFF1F1030,
+            panel_x + 3,
+            panel_y + 1,
+            panel_w.saturating_sub(6),
+            1,
+            0x4DFFFFFF,
         );
 
-        let px_size = (buffer.width as f32 / 7.5).clamp(42.0, 76.0);
+        let px_size = (buffer.width as f32 / 8.8).clamp(42.0, 50.0);
         let estimated_w = (time_text.len() as f32 * px_size * 0.55) as i32;
         let text_x = ((buffer.width as i32 - estimated_w) / 2).max(18);
-        let text_y = (buffer.height as f32 * 0.63) as i32;
+        let text_y = panel_y + ((panel_h as f32 * 0.58) as i32);
 
         draw_dseg7_text(
             text_renderer,
@@ -354,16 +355,11 @@ fn render_clock(
             text_y,
             px_size,
             "88:88:88",
-            0x221E1230,
+            0x12B58900,
         );
-        for (dx, dy, color) in [
-            (-3, 0, 0x304B1E70),
-            (3, 0, 0x304B1E70),
-            (0, -3, 0x305C2888),
-            (0, 3, 0x305C2888),
-            (-1, -1, 0x66A85EFF),
-            (1, 1, 0x669353E8),
-        ] {
+        for (dx, dy, color) in
+            [(-1, 0, 0x2ECB4B16), (1, 0, 0x2ECB4B16), (0, -1, 0x30B58900), (0, 1, 0x30B58900)]
+        {
             draw_dseg7_text(
                 text_renderer,
                 pixels,
@@ -385,20 +381,20 @@ fn render_clock(
             text_y,
             px_size,
             time_text,
-            0xFFE6C1FF,
+            0xFF7A431B,
         );
 
         let dot_y = panel_y + 13;
-        fill_rect(pixels, buffer.width, buffer.height, panel_x + 15, dot_y, 8, 8, 0xFFE6C1FF);
+        fill_rect(pixels, buffer.width, buffer.height, panel_x + 15, dot_y, 4, 4, 0xFFCB4B16);
         fill_rect(
             pixels,
             buffer.width,
             buffer.height,
-            panel_x + panel_w as i32 - 23,
+            panel_x + panel_w as i32 - 19,
             dot_y,
-            8,
-            8,
-            0xFF8A5CFF,
+            4,
+            4,
+            0xFFCB4B16,
         );
         draw_dseg7_text(
             text_renderer,
@@ -406,38 +402,60 @@ fn render_clock(
             buffer.width,
             buffer.height,
             28,
-            30,
-            18.0,
+            36,
+            20.0,
             "ALARM",
-            0xFFB987FF,
+            0xFF586E75,
         );
         draw_dseg7_text(
             text_renderer,
             pixels,
             buffer.width,
             buffer.height,
-            28,
-            buffer.height as i32 - 18,
-            18.0,
+            panel_x + 10,
+            panel_y + panel_h as i32 - 14,
+            20.0,
             date_text,
-            0xFF8E74AF,
+            0xD1586E75,
         );
     }
 }
 
 fn paint_background(pixels: &mut [u32], width: u32, height: u32) {
-    let w = width as usize;
-    for y in 0..height as usize {
-        for x in 0..w {
-            let edge = x < 4 || y < 4 || x + 4 >= w || y + 4 >= height as usize;
-            let band = ((x * 3 + y * 5) % 19) as u32;
-            let r = 15 + band / 4;
-            let g = 10 + band / 6;
-            let b = 22 + band / 3;
-            pixels[y * w + x] =
-                if edge { 0xFF2A1838 } else { 0xFF00_0000 | (r << 16) | (g << 8) | b };
+    for y in 0..height {
+        let color = lerp_argb(0xFFFFF9EC, 0xFFFDF1D2, y.saturating_mul(255) / height.max(1));
+        let row = y as usize * width as usize;
+        for x in 0..width as usize {
+            pixels[row + x] = color;
         }
     }
+}
+
+fn fill_vertical_gradient(
+    pixels: &mut [u32],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    rect_w: u32,
+    rect_h: u32,
+    top: u32,
+    bottom: u32,
+) {
+    let denom = rect_h.saturating_sub(1).max(1);
+    for row in 0..rect_h {
+        let color = lerp_argb(top, bottom, row.saturating_mul(255) / denom);
+        fill_rect(pixels, width, height, x, y.saturating_add(row as i32), rect_w, 1, color);
+    }
+}
+
+fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
+    let inv = 255u32.saturating_sub(t.min(255));
+    let aa = ((a >> 24) & 0xFF) * inv + ((b >> 24) & 0xFF) * t;
+    let ar = ((a >> 16) & 0xFF) * inv + ((b >> 16) & 0xFF) * t;
+    let ag = ((a >> 8) & 0xFF) * inv + ((b >> 8) & 0xFF) * t;
+    let ab = (a & 0xFF) * inv + (b & 0xFF) * t;
+    ((aa / 255) << 24) | ((ar / 255) << 16) | ((ag / 255) << 8) | (ab / 255)
 }
 
 fn fill_rect(

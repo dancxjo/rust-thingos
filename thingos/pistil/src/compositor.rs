@@ -400,6 +400,163 @@ pub extern "C" fn pistil_prepare_cursor(
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_draw_svg_icon(
+    path_ptr: *const u8,
+    dst_ptr: *mut u32,
+    dst_w: u32,
+    dst_h: u32,
+    dst_stride_pixels: u32,
+    x: i32,
+    y: i32,
+    icon_w: u32,
+    icon_h: u32,
+    color: u32,
+) -> i32 {
+    if path_ptr.is_null()
+        || dst_ptr.is_null()
+        || dst_w == 0
+        || dst_h == 0
+        || dst_stride_pixels < dst_w
+        || icon_w == 0
+        || icon_h == 0
+    {
+        return -3;
+    }
+
+    let mut len = 0usize;
+    while unsafe { *path_ptr.add(len) } != 0 && len < 256 {
+        len += 1;
+    }
+    let path = unsafe { core::slice::from_raw_parts(path_ptr, len) };
+    let Ok(path) = core::str::from_utf8(path) else {
+        return -2;
+    };
+    let Ok(svg_bytes) = read_vfs_file(path) else {
+        return -3;
+    };
+
+    let scale = 4u32;
+    let raster_w = icon_w.saturating_mul(scale);
+    let raster_h = icon_h.saturating_mul(scale);
+    if raster_w == 0 || raster_h == 0 {
+        return -3;
+    }
+
+    let mut scratch = Vec::new();
+    let scratch_len = raster_w.saturating_mul(raster_h) as usize;
+    if scratch.try_reserve_exact(scratch_len).is_err() {
+        return -4;
+    }
+    scratch.resize(scratch_len, 0u32);
+    if svg::rasterize(&svg_bytes, &mut scratch, raster_w, raster_h, raster_w).is_err() {
+        return -3;
+    }
+
+    let dst =
+        unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
+    blend_supersampled_alpha_icon(
+        dst,
+        dst_stride_pixels,
+        dst_w,
+        dst_h,
+        &scratch,
+        raster_w,
+        x,
+        y,
+        icon_w,
+        icon_h,
+        scale,
+        color,
+    );
+    0
+}
+
+fn blend_supersampled_alpha_icon(
+    dst: &mut [u32],
+    dst_stride_pixels: u32,
+    dst_w: u32,
+    dst_h: u32,
+    src: &[u32],
+    src_stride_pixels: u32,
+    x: i32,
+    y: i32,
+    icon_w: u32,
+    icon_h: u32,
+    scale: u32,
+    color: u32,
+) {
+    let color_alpha = (color >> 24) & 0xFF;
+    let rgb = color & 0x00FF_FFFF;
+    let samples = scale.saturating_mul(scale).max(1);
+
+    for dy in 0..icon_h {
+        let out_y = y.saturating_add(dy as i32);
+        if out_y < 0 || out_y >= dst_h as i32 {
+            continue;
+        }
+
+        for dx in 0..icon_w {
+            let out_x = x.saturating_add(dx as i32);
+            if out_x < 0 || out_x >= dst_w as i32 {
+                continue;
+            }
+
+            let mut alpha_sum = 0u32;
+            let src_x0 = dx.saturating_mul(scale);
+            let src_y0 = dy.saturating_mul(scale);
+            for sy in 0..scale {
+                let src_row = (src_y0 + sy).saturating_mul(src_stride_pixels);
+                for sx in 0..scale {
+                    let idx = src_row.saturating_add(src_x0 + sx) as usize;
+                    alpha_sum = alpha_sum.saturating_add(src.get(idx).copied().unwrap_or(0) >> 24);
+                }
+            }
+
+            let alpha = ((alpha_sum / samples) * color_alpha + 127) / 255;
+            if alpha == 0 {
+                continue;
+            }
+
+            let src_px = (alpha << 24) | rgb;
+            let dst_idx = (out_y as u32)
+                .saturating_mul(dst_stride_pixels)
+                .saturating_add(out_x as u32) as usize;
+            if let Some(dst_px) = dst.get_mut(dst_idx) {
+                *dst_px = blend_argb_over(*dst_px, src_px);
+            }
+        }
+    }
+}
+
+fn blend_argb_over(dst: u32, src: u32) -> u32 {
+    let sa = (src >> 24) & 0xFF;
+    if sa == 0 {
+        return dst;
+    }
+    if sa == 255 {
+        return src;
+    }
+
+    let inv_sa = 255 - sa;
+    let sr = (src >> 16) & 0xFF;
+    let sg = (src >> 8) & 0xFF;
+    let sb = src & 0xFF;
+    let da = (dst >> 24) & 0xFF;
+    let dr = (dst >> 16) & 0xFF;
+    let dg = (dst >> 8) & 0xFF;
+    let db = dst & 0xFF;
+
+    let out_a = sa + (da * inv_sa + 127) / 255;
+    if out_a == 0 {
+        return 0;
+    }
+    let r = (sr * sa + (dr * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let g = (sg * sa + (dg * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    let b = (sb * sa + (db * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
+    (out_a << 24) | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
+}
+
 fn draw_debug_text_lines(renderer: &TextRenderer, canvas: &mut Canvas, text: &str) {
     let mut y = 96;
     for line in text.lines() {

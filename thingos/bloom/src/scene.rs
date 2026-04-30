@@ -320,11 +320,8 @@ impl Scene {
         }
 
         // Update child link and recompute absolute dest_rect / z_order.
-        let parent_rect = self
-            .surfaces
-            .get(&parent_id)
-            .map(|p| p.current.dest_rect)
-            .unwrap_or_default();
+        let parent_rect =
+            self.surfaces.get(&parent_id).map(|p| p.current.dest_rect).unwrap_or_default();
         let parent_z = self.surfaces.get(&parent_id).map(|p| p.current.z_order).unwrap_or(0);
 
         if let Some(child) = self.surfaces.get_mut(&child_id) {
@@ -333,12 +330,7 @@ impl Scene {
             let new_y = parent_rect.y as i32 + y;
             let w = child.current.dest_rect.w;
             let h = child.current.dest_rect.h;
-            child.current.dest_rect = Rect {
-                x: new_x.max(0) as u32,
-                y: new_y.max(0) as u32,
-                w,
-                h,
-            };
+            child.current.dest_rect = Rect { x: new_x.max(0) as u32, y: new_y.max(0) as u32, w, h };
             child.current.z_order = parent_z.saturating_add(z_above);
             // Subsurfaces are not focusable as standalone toplevels.
             child.focus_eligible = false;
@@ -678,12 +670,7 @@ impl Scene {
             let new_x = parent_dest.x as i32 + link.x;
             let new_y = parent_dest.y as i32 + link.y;
             let new_z = parent_z.saturating_add(link.z_above);
-            let new_rect = Rect {
-                x: new_x.max(0) as u32,
-                y: new_y.max(0) as u32,
-                w,
-                h,
-            };
+            let new_rect = Rect { x: new_x.max(0) as u32, y: new_y.max(0) as u32, w, h };
             if let Some(child) = self.surfaces.get_mut(&child_id) {
                 child.current.dest_rect = new_rect;
                 child.current.z_order = new_z;
@@ -771,11 +758,11 @@ impl Scene {
         if surface.is_fullscreen {
             return Some(HitTarget::Client { surface_id });
         }
-        if let Some(edge) = resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
-            return Some(HitTarget::Frame { surface_id, edge });
-        }
         if let Some(button) = chrome_button_at(rect, surface.chrome, x, y) {
             return Some(HitTarget::ChromeButton { surface_id, button });
+        }
+        if let Some(edge) = resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
+            return Some(HitTarget::Frame { surface_id, edge });
         }
         let titlebar_bottom = rect.y.saturating_add(surface.chrome.titlebar_height);
         if surface.chrome.titlebar_height > 0
@@ -878,13 +865,25 @@ impl Scene {
         let new_focus = Some(eligible[new_idx]);
         self.keyboard_focus = new_focus;
 
-        // Raise the new focus to the top
+        // Reorder Z-stack to enable cycling through all windows.
+        // Forward (Alt+Tab): Sink the old focus to the bottom and raise the new one.
+        // Backward (Alt+Shift+Tab): Just raise the new focus to the top.
         if let Some(id) = new_focus {
-            let max_z = self.surfaces.values().map(|s| s.current.z_order).max().unwrap_or(0);
-            if let Some(s) = self.surfaces.get_mut(&id) {
-                if s.current.z_order < max_z {
-                    s.current.z_order = max_z + 1;
+            let mut max_z = self.surfaces.values().map(|s| s.current.z_order).max().unwrap_or(0);
+            let mut min_z = self.surfaces.values().map(|s| s.current.z_order).min().unwrap_or(0);
+
+            if forward {
+                if let Some(old_id) = old_focus {
+                    if let Some(old_s) = self.surfaces.get_mut(&old_id) {
+                        min_z = min_z.saturating_sub(1);
+                        old_s.current.z_order = min_z;
+                    }
                 }
+            }
+
+            if let Some(new_s) = self.surfaces.get_mut(&id) {
+                max_z = max_z.max(new_s.current.z_order).saturating_add(1);
+                new_s.current.z_order = max_z;
             }
         }
 
@@ -991,27 +990,28 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
     let titlebar_height = chrome.titlebar_height.min(rect.h);
-    let v_padding = (titlebar_height / 8).max(2);
-    let button_height = titlebar_height.saturating_sub(v_padding * 2);
-    let button_width = button_height.saturating_add(v_padding * 2).min(44);
+    let button_height = titlebar_height.saturating_sub(8).clamp(18, 22);
+    let button_width = button_height.saturating_add(6).clamp(24, 28);
+    let spacing = 6u32;
+    let right_inset = frame.saturating_add(6);
     if button_height < 8 || button_width < 12 {
         return None;
     }
 
-    let right = rect.x.saturating_add(rect.w).saturating_sub(frame);
-    let y = rect.y.saturating_add(v_padding);
-    let total_w = button_width.saturating_mul(4);
-    if total_w.saturating_add(frame) > rect.w {
+    let right = rect.x.saturating_add(rect.w).saturating_sub(right_inset);
+    let y = rect.y.saturating_add((titlebar_height.saturating_sub(button_height)) / 2);
+    let total_w = button_width.saturating_mul(4).saturating_add(spacing.saturating_mul(3));
+    if total_w.saturating_add(right_inset) > rect.w {
         return None;
     }
 
     let close_x = right.saturating_sub(button_width);
-    let full_x = close_x.saturating_sub(button_width);
-    let max_x = full_x.saturating_sub(button_width);
-    let shade_x = max_x.saturating_sub(button_width);
+    let full_x = close_x.saturating_sub(spacing).saturating_sub(button_width);
+    let max_x = full_x.saturating_sub(spacing).saturating_sub(button_width);
+    let shade_x = max_x.saturating_sub(spacing).saturating_sub(button_width);
 
     Some([
-        (ChromeButton::Shade, Rect { x: shade_x, y, w: button_width, h: button_height }),
+        (ChromeButton::Minimize, Rect { x: shade_x, y, w: button_width, h: button_height }),
         (ChromeButton::Maximize, Rect { x: max_x, y, w: button_width, h: button_height }),
         (ChromeButton::Fullscreen, Rect { x: full_x, y, w: button_width, h: button_height }),
         (ChromeButton::Close, Rect { x: close_x, y, w: button_width, h: button_height }),

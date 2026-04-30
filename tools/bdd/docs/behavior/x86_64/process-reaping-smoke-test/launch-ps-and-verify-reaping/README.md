@@ -1,10 +1,10 @@
 # ❌ Scenario: Launch ps and verify reaping
 
-> Last run: 2026-04-22 08:29:25
+> Last run: 2026-04-30 14:38:37
 
 ## Steps
 
 | # | Step | Result | Duration | Artifacts |
 |---|------|--------|----------|-----------|
-| 1 | Given the machine is booted | ❌ | 1001ms | - - - |
+| 1 | Given the machine is booted | ❌ | 1004ms | - - - |
 

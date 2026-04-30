@@ -7,7 +7,7 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat};
 
 use crate::Canvas;
 
-pub const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
+pub const DEFAULT_FONT_PATH: &str = "/share/fonts/Inter-Regular.ttf";
 pub const SYMBOL_FONT_PATH: &str = "/share/fonts/NotoSansSymbol2-Regular.ttf";
 pub const DSEG7_FONT_PATH: &str = "/share/fonts/DSEG7Classic-Regular.ttf";
 

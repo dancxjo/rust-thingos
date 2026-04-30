@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
@@ -36,7 +35,7 @@ const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
-const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
+const DEFAULT_FONT_PATH: &str = "/share/fonts/Inter-Regular.ttf";
 
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 
@@ -397,44 +396,39 @@ fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRe
             buffer.ptr as *mut u32,
             (buffer.width * buffer.height) as usize,
         );
-        for y in 0..buffer.height as usize {
-            for x in 0..buffer.width as usize {
-                let color = if y < 40 { 0xFF3A4452 } else { 0xFF14181E };
-                pixels[y * buffer.width as usize + x] = color;
-            }
-        }
+        paint_vertical_gradient(pixels, buffer.width, buffer.height, 0xFFFFF9EC, 0xFFFDF1D2);
         draw_text(
             text_renderer,
             pixels,
             buffer.width,
             buffer.height,
-            16,
-            32,
-            24.0,
+            22,
+            42,
+            17.0,
             title,
-            0xFFFFFFFF,
+            0xFF586E75,
         );
         draw_text(
             text_renderer,
             pixels,
             buffer.width,
             buffer.height,
-            16,
-            78,
+            22,
+            68,
             18.0,
             "Resize the frame; the buffer follows.",
-            0xFF9AD1FF,
+            0xFF3F3A2F,
         );
         draw_text(
             text_renderer,
             pixels,
             buffer.width,
             buffer.height,
-            16,
-            114,
+            22,
+            96,
             18.0,
             "Compositor round-trip: shm, xdg, paint.",
-            0xFFE7D68A,
+            0xFF586E75,
         );
     }
 }
@@ -452,7 +446,7 @@ fn render_popup(buffer: BufferState, label: &str, text_renderer: Option<&TextRen
                     || x + 2 >= buffer.width as usize
                     || y + 2 >= buffer.height as usize;
                 pixels[y * buffer.width as usize + x] =
-                    if border { 0xFFFFFFFF } else { 0xFF202830 };
+                    if border { 0xFFB58900 } else { 0xEEFEF6E3 };
             }
         }
         draw_text(
@@ -464,9 +458,29 @@ fn render_popup(buffer: BufferState, label: &str, text_renderer: Option<&TextRen
             34,
             18.0,
             label,
-            0xFFFFFFFF,
+            0xFF3F3A2F,
         );
     }
+}
+
+fn paint_vertical_gradient(pixels: &mut [u32], width: u32, height: u32, top: u32, bottom: u32) {
+    let denom = height.saturating_sub(1).max(1);
+    for y in 0..height {
+        let color = lerp_argb(top, bottom, y.saturating_mul(255) / denom);
+        let row = y as usize * width as usize;
+        for x in 0..width as usize {
+            pixels[row + x] = color;
+        }
+    }
+}
+
+fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
+    let inv = 255u32.saturating_sub(t.min(255));
+    let aa = ((a >> 24) & 0xFF) * inv + ((b >> 24) & 0xFF) * t;
+    let ar = ((a >> 16) & 0xFF) * inv + ((b >> 16) & 0xFF) * t;
+    let ag = ((a >> 8) & 0xFF) * inv + ((b >> 8) & 0xFF) * t;
+    let ab = (a & 0xFF) * inv + (b & 0xFF) * t;
+    ((aa / 255) << 24) | ((ar / 255) << 16) | ((ag / 255) << 8) | (ab / 255)
 }
 
 fn draw_text(

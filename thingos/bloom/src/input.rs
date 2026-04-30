@@ -445,7 +445,14 @@ impl InputState {
                 }
                 if key.key() == Key::Tab && key.mods().has_alt() {
                     if !key.is_repeat() {
-                        let (old_focus, new_focus) = scene.cycle_focus(!key.mods().has_shift());
+                        let forward = !key.mods().has_shift();
+                        let (old_focus, new_focus) = scene.cycle_focus(forward);
+                        stem::info!(
+                            "bloom: focus cycled from {:?} to {:?} (forward={})",
+                            old_focus,
+                            new_focus,
+                            forward
+                        );
                         mark_focus_damage(scene, damage, old_focus, new_focus);
                         self.send_keyboard_focus_events(
                             scene,

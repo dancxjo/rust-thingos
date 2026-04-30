@@ -13,6 +13,7 @@ mod render;
 mod scene;
 mod services;
 mod session_fs;
+mod theme;
 mod wayland;
 mod world;
 
@@ -25,6 +26,7 @@ use loop_types::BloomLoop;
 use render::CompositorVisuals;
 use scene::Scene;
 use services::input_service::InputService;
+use services::theme_service::{DEFAULT_THEME_CONFIG_PATH, ThemeService, ensure_theme_config};
 use services::wallpaper::{WallpaperService, ensure_wallpaper_config};
 use services::wayland::WaylandService;
 use services::wayland_cmd::WaylandCommandService;
@@ -38,6 +40,7 @@ use world::BloomWorld;
 
 const SERVICE_PATH: &str = "/services/bloom";
 const WP_PATH: &str = "/session/desktop/wallpaper";
+const THEME_PATH: &str = DEFAULT_THEME_CONFIG_PATH;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -101,6 +104,9 @@ fn main(_arg: usize) -> ! {
     session_fs::init();
 
     let mut visuals = CompositorVisuals::new();
+    let initial_theme = ensure_theme_config(THEME_PATH);
+    let applied_theme = visuals.set_theme_by_name(&initial_theme);
+    stem::info!("bloom: initial theme configured {}", applied_theme);
     visuals.prepare_solid_background(&display, 0xFFCCCCFF);
     let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
     stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
@@ -126,6 +132,18 @@ fn main(_arg: usize) -> ! {
         }
         Err(e) => {
             warn!("bloom: failed to watch wallpaper config {}: {:?}", WP_PATH, e);
+            None
+        }
+    };
+
+    // ── Theme watch FD ────────────────────────────────────────────────────────
+    let theme_watch_fd = match vfs_watch_path(THEME_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
+        Ok(fd) => {
+            info!("bloom: watching theme config {}", THEME_PATH);
+            Some(fd)
+        }
+        Err(e) => {
+            warn!("bloom: failed to watch theme config {}: {:?}", THEME_PATH, e);
             None
         }
     };
@@ -165,6 +183,9 @@ fn main(_arg: usize) -> ! {
     // Wallpaper watch → WallpaperService
     bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(wp_watch_fd, WP_PATH)));
 
+    // Theme watch → ThemeService
+    bloom_loop.add_service(alloc::boxed::Box::new(ThemeService::new(theme_watch_fd, THEME_PATH)));
+
     // ── Spawn Wayland server thread + wire IPC ports ──────────────────────────
     // cmd port: Wayland → Main (surface operations)
     // evt port: Main → Wayland (buffer releases, frame dones)
@@ -176,7 +197,11 @@ fn main(_arg: usize) -> ! {
                     world.wayland_evt_write = Some(evt_write);
 
                     // Spawn the Wayland server (runs its own ServiceLoop).
-                    let args = alloc::boxed::Box::new(WaylandThreadArgs { cmd_write, evt_read_fd, output: primary });
+                    let args = alloc::boxed::Box::new(WaylandThreadArgs {
+                        cmd_write,
+                        evt_read_fd,
+                        output: primary,
+                    });
                     let arg_ptr = alloc::boxed::Box::into_raw(args) as usize;
                     match stem::thread::spawn_with_arg(wayland::wayland_thread_entry, arg_ptr) {
                         Ok(_) => {

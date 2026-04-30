@@ -1,7 +1,7 @@
 Feature: Bloom compositor service loop and responsiveness
 
   The bloom compositor is readiness-driven: a single service loop waits on
-  all I/O sources (Wayland client port, bristle HID events, wallpaper watch)
+  all I/O sources (Wayland client port, bristle HID events, wallpaper/theme watch)
   and dispatches to focused service objects.  Wallpaper changes are loaded
   after the loop is live so first paint is not blocked by image decoding.
 
@@ -14,9 +14,21 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: pistil background renderer loaded from /lib/libpistil.so" within 60s
 
-  Scenario: bloom links the pistil Noto Sans text renderer
+  Scenario: bloom links the pistil Inter text renderer
     Given the machine is booted
-    Then the serial output should contain "bloom: pistil font text renderer loaded with default /share/fonts/NotoSans-Regular.ttf" within 60s
+    Then the serial output should contain "bloom: pistil font text renderer loaded with default /share/fonts/Inter-Regular.ttf" within 60s
+
+  Scenario: bloom configures the default Solarized Warm theme
+    Given the machine is booted
+    Then the serial output should contain "bloom: initial theme configured Solarized Warm" within 60s
+    And the serial output should contain "bloom: watching theme config /session/desktop/theme" within 60s
+
+  Scenario: bloom compositor reacts to theme watch path
+    Given the machine is booted
+    Then the serial output should contain "bloom: service loop started" within 60s
+    When I wait for the shell prompt
+    And I type "echo Solarized Warm > /session/desktop/theme" on the serial console
+    Then the serial output should contain "bloom: reacting to theme change: Solarized Warm -> Solarized Warm" within 60s
 
   Scenario: libpistil exports the vector renderer
     Given the machine is booted

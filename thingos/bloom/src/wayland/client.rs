@@ -4,6 +4,8 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use blossom::Blossom;
+
 #[derive(Debug, Clone, Copy)]
 pub struct DmabufPlane {
     pub fd: u32,
@@ -125,6 +127,12 @@ pub enum ObjectEntry {
 pub struct WaylandClient {
     /// The connected socket FD.
     pub fd: u32,
+    /// xdg-shell state machine for this client.
+    ///
+    /// Wayland object IDs are scoped to a single client.  Keeping Blossom
+    /// state per client prevents clients that reuse object IDs such as
+    /// wl_surface=10 / xdg_surface=11 from colliding with each other.
+    pub blossom: Blossom,
     /// Map: Wayland object ID → entry.
     pub objects: BTreeMap<u32, ObjectEntry>,
     /// Accumulation buffer for partial socket reads.
@@ -160,6 +168,7 @@ impl WaylandClient {
         objects.insert(1, ObjectEntry::Display);
         Self {
             fd,
+            blossom: Blossom::new(),
             objects,
             recv_buf: Vec::new(),
             pending_fds: VecDeque::new(),

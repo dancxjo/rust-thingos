@@ -29,7 +29,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use blossom::Blossom;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::socket::{accept, bind, listen, recvmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
@@ -93,8 +92,6 @@ struct WaylandServer {
     accept_tok: WaitToken,
     /// Map: ServiceLoop token → WaylandClient.
     clients: BTreeMap<WaitToken, WaylandClient>,
-    /// xdg-shell state machine (shared across all clients in this thread).
-    blossom: Blossom,
     /// Counter for synthetic surface keys (used for alloc_bloom_surface).
     next_surface_key: u32,
     /// VFS fd for receiving events from the main thread.
@@ -199,7 +196,6 @@ impl WaylandServer {
             accept_fd,
             accept_tok,
             clients: BTreeMap::new(),
-            blossom: Blossom::new(),
             next_surface_key: 1,
             evt_read_fd: args.evt_read_fd,
             evt_rx_buf: Vec::new(),
@@ -422,14 +418,17 @@ impl WaylandServer {
                 None => break,
                 Some((msg, sz)) => {
                     consumed += sz;
+                    let mut blossom =
+                        core::mem::replace(&mut client.blossom, blossom::Blossom::new());
                     let cmds = dispatch::dispatch(
                         &msg,
                         &mut client,
-                        &mut self.blossom,
+                        &mut blossom,
                         self.cmd_write,
                         &mut self.next_surface_key,
                         &self.output,
                     );
+                    client.blossom = blossom;
                     for cmd in cmds {
                         let _ = stem::syscall::port_send_all(self.cmd_write, &cmd);
                     }
@@ -518,7 +517,7 @@ impl WaylandServer {
                     } else {
                         alloc::vec![]
                     };
-                    if let Some(cmds) = self.blossom.configure_toplevel_for_surface(
+                    if let Some(cmds) = client.blossom.configure_toplevel_for_surface(
                         bloom_surface_id,
                         width,
                         height,
@@ -548,7 +547,7 @@ impl WaylandServer {
                     match action {
                         ipc::TOPLEVEL_ACTION_CLOSE => {
                             if let Some(cmds) =
-                                self.blossom.close_toplevel_for_surface(bloom_surface_id)
+                                client.blossom.close_toplevel_for_surface(bloom_surface_id)
                             {
                                 dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
                                 info!(
@@ -566,7 +565,7 @@ impl WaylandServer {
                             );
                         }
                         ipc::TOPLEVEL_ACTION_MAXIMIZE => {
-                            if let Some(cmds) = self.blossom.configure_toplevel_for_surface(
+                            if let Some(cmds) = client.blossom.configure_toplevel_for_surface(
                                 bloom_surface_id,
                                 width,
                                 height,
@@ -580,7 +579,7 @@ impl WaylandServer {
                             }
                         }
                         ipc::TOPLEVEL_ACTION_FULLSCREEN => {
-                            if let Some(cmds) = self.blossom.configure_toplevel_for_surface(
+                            if let Some(cmds) = client.blossom.configure_toplevel_for_surface(
                                 bloom_surface_id,
                                 width,
                                 height,
@@ -945,10 +944,7 @@ impl WaylandServer {
             // wl_data_device.selection(offer_id) — opcode 5
             client.send(dd_obj, 5, &offer_id.to_ne_bytes());
 
-            debug!(
-                "wayland-server: sent clipboard offer={} to client fd={}",
-                offer_id, client.fd
-            );
+            debug!("wayland-server: sent clipboard offer={} to client fd={}", offer_id, client.fd);
         }
     }
 
@@ -988,7 +984,10 @@ impl WaylandServer {
                 return;
             }
         }
-        warn!("wayland-server: data_offer.receive: source client fd={} not found", source_client_fd);
+        warn!(
+            "wayland-server: data_offer.receive: source client fd={} not found",
+            source_client_fd
+        );
     }
 }
 

@@ -660,6 +660,32 @@ async fn then_output_contains(world: &mut ThingOsWorld, expected: String) -> Res
     latest_serial_contains(world, expected).await
 }
 
+#[then(regex = r#"^the latest output should contain "(.+)" within (\d+)s$"#)]
+async fn latest_serial_contains_within(
+    world: &mut ThingOsWorld,
+    expected: String,
+    timeout_secs: u64,
+) -> Result<(), StepError> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let log = world.get_serial_log().await;
+        let start_offset = world.serial_checkpoint.min(log.len());
+        let recent = strip_ansi(&log[start_offset..]);
+        if recent.contains(&expected) {
+            break;
+        }
+        if start.elapsed() >= timeout {
+            return Err(StepError(format!(
+                "Timeout waiting for latest output to contain '{}' (waited {}s)",
+                expected, timeout_secs
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 #[when(regex = r#"^I press (.+)$"#)]
 async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
     if world.qmp_control.is_some() {

@@ -509,11 +509,13 @@ fn limine_modules(
 
         let allowed = (clean_path.starts_with("assets/fonts/") && clean_path.ends_with(".ttf"))
             || is_future_cursor_asset(&clean_path)
+            || (clean_path.starts_with("assets/icons/lucide/") && clean_path.ends_with(".svg"))
             || clean_path.ends_with("wallpapers/flower.bmp")
             || clean_path.ends_with("wallpapers/flower.png")
             || clean_path.ends_with("wallpapers/clouds.bmp")
             || clean_path.ends_with("wallpapers/leather.bmp")
             || clean_path.ends_with("wallpapers/linen.bmp")
+            || clean_path.ends_with("themes/solarized_warm.toml")
             || clean_path.ends_with("themes/genie_circles.wasm")
             || clean_path.ends_with("unifont.hex");
 
