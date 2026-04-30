@@ -2240,6 +2240,121 @@ fn test_wake_task_remote_mailbox_forces_ipi_when_pending_and_rate_limited() {
 }
 
 #[test]
+fn test_wake_task_scheduler_path_forces_latency_sensitive_remote_ipi() {
+    let _g = init_test_env();
+    TICK_COUNT.store(100, Ordering::Relaxed);
+    DIAG_IPI_SENT.store(0, Ordering::Relaxed);
+    DIAG_IPI_SENT_WAKE_TASK.store(0, Ordering::Relaxed);
+    PROF_IPI_SUPPRESSED.store(0, Ordering::Relaxed);
+    LAST_RESCHED_IPI_SENT_AT_TICK[1].store(100, Ordering::Relaxed);
+    clear_global_need_resched(1, Ordering::Relaxed);
+
+    let mut sched = types::Scheduler::<MockRuntime>::new();
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new_for_cpu(0));
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new_for_cpu(1));
+    sched.state.mark_cpu_online(1);
+
+    let task = make_task(6_204, TaskState::Blocked, TaskPriority::High);
+    let mut task = task;
+    task.affinity = Affinity::Pinned(1);
+    task.last_cpu = Some(1);
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 6_204,
+        runq_location: None,
+        state: TaskState::Blocked,
+        priority: TaskPriority::High,
+        affinity: Affinity::Pinned(1),
+        last_cpu: Some(1),
+        wake_cpu: Some(1),
+        run_cpu: None,
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+
+    {
+        let mut lock = SCHEDULER.lock();
+        *lock = Some((&mut sched as *mut types::Scheduler<MockRuntime>) as usize);
+    }
+
+    crate::sched::blocking::wake_task::<MockRuntime>(6_204);
+
+    assert_eq!(
+        DIAG_IPI_SENT.load(Ordering::Relaxed),
+        1,
+        "latency-sensitive remote wake should send an IPI even inside the generic IPI throttle window"
+    );
+    assert_eq!(DIAG_IPI_SENT_WAKE_TASK.load(Ordering::Relaxed), 1);
+
+    let mut lock = SCHEDULER.lock();
+    *lock = None;
+    clear_global_need_resched(1, Ordering::Relaxed);
+}
+
+#[test]
+fn test_wake_task_local_path_mirrors_need_resched_to_atomic() {
+    let _g = init_test_env();
+    TICK_COUNT.store(100, Ordering::Relaxed);
+    clear_global_need_resched(0, Ordering::Relaxed);
+
+    let mut sched = types::Scheduler::<MockRuntime>::new();
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new_for_cpu(0));
+
+    let current_tid = 6_210;
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: current_tid,
+        runq_location: None,
+        state: TaskState::Running,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Pinned(0),
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: Some(0),
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+    sched.state.per_cpu[0].current = Some(current_tid);
+
+    let task = make_task(6_211, TaskState::Blocked, TaskPriority::High);
+    let mut task = task;
+    task.affinity = Affinity::Pinned(0);
+    task.last_cpu = Some(0);
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(task));
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 6_211,
+        runq_location: None,
+        state: TaskState::Blocked,
+        priority: TaskPriority::High,
+        affinity: Affinity::Pinned(0),
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: None,
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+
+    let (_ipi_cpu, _deferred) =
+        crate::sched::blocking::wake_task_locked::<MockRuntime>(&mut sched, 6_211);
+
+    assert!(sched.state.per_cpu[0].need_resched);
+    assert!(
+        need_resched_pending(0),
+        "local wake must mirror need_resched to the atomic safe-point flag"
+    );
+
+    clear_global_need_resched(0, Ordering::Relaxed);
+}
+
+#[test]
 fn test_drain_remote_wake_mailbox_enqueues_locally() {
     let _g = init_test_env();
 

@@ -128,11 +128,7 @@ fn timeout_wake_tick(timeout_ns: u64) -> Option<u64> {
         return None;
     }
     let ticks = crate::time::duration_to_sleep_ticks(timeout_ns);
-    Some(
-        crate::sched::TICK_COUNT
-            .load(core::sync::atomic::Ordering::Relaxed)
-            .saturating_add(ticks),
-    )
+    Some(crate::sched::TICK_COUNT.load(core::sync::atomic::Ordering::Relaxed).saturating_add(ticks))
 }
 
 fn collect_ready(

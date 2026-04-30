@@ -405,6 +405,10 @@ pub fn wake_task_locked<R: BootRuntime>(
         if task_priority >= current_prio || is_idle {
             if safe_cpu == super::current_cpu_index::<R>() {
                 sched.state.per_cpu[safe_cpu].need_resched = true;
+                // Mirror local wake preemption to the lock-free safe-point flag.
+                // Otherwise a syscall-return resched check can miss the wake
+                // until the next timer tick.
+                super::set_global_need_resched(safe_cpu);
             } else {
                 // Only request a remote IPI if the pending flag was not already set.
                 // A set flag means a previous IPI is already in flight.
@@ -559,10 +563,11 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     }
 
     if let Some(cpu) = ipi_cpu {
-        if !super::should_send_remote_resched_ipi(cpu) {
-            rt.irq_restore(_irq);
-            return;
-        }
+        // This wake path is on the critical latency chain for userland IRQ
+        // handlers, HID brokers, and compositor input sinks. The generic
+        // prepare-schedule IPI throttle is still useful for migration repair,
+        // but applying it here can enqueue a freshly woken task and leave the
+        // target CPU running unrelated work until a later tick.
         super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         rt.send_ipi(cpu, 0x30);

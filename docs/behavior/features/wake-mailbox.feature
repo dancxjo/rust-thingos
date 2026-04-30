@@ -17,3 +17,12 @@ Feature: Per-CPU wake mailbox for cross-CPU task delivery
     Given the machine is started
     When I wait for the system to boot
     Then the serial output should contain "per-CPU scheduler(s) allocated"
+
+  @smoke
+  @timeout-30s
+  Scenario: Scheduler diagnostics expose remote wake IPI delivery
+    Given the machine is started
+    When I wait for the system to boot
+    And the shell command "cat /proc/sched/stat" succeeds
+    Then the latest command output should contain "resched_ipi_received:"
+    And the latest command output should contain "mailbox_tasks_drained:"
