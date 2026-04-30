@@ -39,7 +39,7 @@ impl VfsNicDevice {
             if let Some(dev) = Self::try_open() {
                 return dev;
             }
-            stem::info!("VfsNicDevice: /dev/net/virtio0 not ready, retrying...");
+            stem::debug!("VfsNicDevice: /dev/net/virtio0 not ready, retrying...");
             stem::time::sleep_ms(100);
         }
     }

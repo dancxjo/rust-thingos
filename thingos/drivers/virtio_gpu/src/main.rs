@@ -15,7 +15,7 @@ use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::device::device_enable_msi;
 use stem::syscall::{device_alloc_dma, device_dma_phys, device_irq_subscribe};
 use stem::wait_set::{WaitSet, WaitToken};
-use stem::{error, info, warn};
+use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"virtio_gpu";
 
@@ -255,7 +255,7 @@ fn main(boot_fd: usize) -> ! {
         let _ = gpu.present_rect(DEMO_RESOURCE_ID, full_rect);
 
         if frame % 60 == 0 {
-            info!("VIRTIO_GPU: Frame {}", frame);
+            debug!("VIRTIO_GPU: Frame {}", frame);
         }
 
         frame = frame.wrapping_add(1);
@@ -267,7 +267,7 @@ fn main(boot_fd: usize) -> ! {
                 Ok(events) => {
                     for ev in events {
                         if ev.is_irq() {
-                            info!("VIRTIO_GPU: IRQ fired");
+                            trace!("VIRTIO_GPU: IRQ fired");
                         }
                     }
                 }
@@ -296,7 +296,7 @@ fn create_demo_framebuffer(gpu: &mut VirtioGpu) -> Result<u64, &'static str> {
         device_alloc_dma(gpu.claim_handle(), pages).map_err(|_| "Failed to alloc framebuffer")?;
     let fb_phys = device_dma_phys(framebuffer).map_err(|_| "Failed to get fb phys")?;
 
-    info!(
+    debug!(
         "VIRTIO_GPU: Framebuffer {}x{} @ virt=0x{:x} phys=0x{:x}",
         width, height, framebuffer, fb_phys
     );

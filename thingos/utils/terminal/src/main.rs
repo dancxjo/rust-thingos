@@ -15,7 +15,7 @@ use abi::display_driver_protocol::{BindPayload, FB_INFO_PAYLOAD_SIZE, FbInfoPayl
 use abi::syscall::vfs_flags::O_RDONLY;
 use spin::Mutex;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat, vfs_watch_path};
-use stem::{error, info};
+use stem::{debug, error, info};
 
 /// A single glyph from the Unifont font.
 struct Glyph {
@@ -728,7 +728,7 @@ fn main(arg: usize) -> ! {
     // commit flag.  It never touches the framebuffer directly.
     loop {
         if frame_count % 60 == 0 {
-            info!("Terminal: Liveness check - frame {}", frame_count);
+            debug!("Terminal: Liveness check - frame {}", frame_count);
             {
                 let mut m = shared.model.lock();
                 m.write_str(".", &font);
