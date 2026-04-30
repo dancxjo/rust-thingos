@@ -148,14 +148,17 @@ pub fn resolve_write_port_compat(
     handle: Handle,
 ) -> SysResult<Arc<crate::ipc::Port>> {
     let lock = pinfo_arc.lock();
+    if let Ok(entry) = lookup_ipc_entry_write(&lock.ipc_table, handle) {
+        return Ok(entry.port.clone());
+    }
+
     if let Ok(file) = lock.handle_table.get(handle.0) {
         if let Some(port) = file.node.as_port() {
             return Ok(port);
         }
     }
 
-    let entry = lookup_ipc_entry_write(&lock.ipc_table, handle)?;
-    Ok(entry.port.clone())
+    Err(Errno::EBADF)
 }
 
 #[cfg(test)]
@@ -261,5 +264,38 @@ mod tests {
         drop(lock);
         pinfo.lock().ipc_table.close(handle);
         crate::ipc::close_port(port_id);
+    }
+
+    #[test]
+    fn test_resolve_write_port_compat_prefers_ipc_handle_over_fd_collision() {
+        let ipc_port_id = crate::ipc::create_port(8);
+        let ipc_port = crate::ipc::get_port(ipc_port_id).unwrap();
+        let fd_port_id = crate::ipc::create_port(8);
+        let fd_port = crate::ipc::get_port(fd_port_id).unwrap();
+        let pinfo = make_test_process_with_thing_table(&[]);
+
+        let handle = {
+            let mut lock = pinfo.lock();
+            lock.ipc_table
+                .alloc(ipc_port.clone(), crate::ipc::IpcHandleMode::Write)
+                .expect("allocate ipc handle")
+        };
+
+        let fd_node: Arc<dyn VfsNode> = Arc::new(crate::vfs::port_node::PortNode::new(
+            fd_port,
+            crate::ipc::IpcHandleMode::Write,
+        ));
+        pinfo
+            .lock()
+            .handle_table
+            .insert_at(handle.0, fd_node, OpenFlags::read_write(), "fd-collision".into())
+            .expect("insert colliding fd");
+
+        let resolved = resolve_write_port_compat(&pinfo, Handle(handle.0)).expect("resolve");
+        assert!(Arc::ptr_eq(&resolved, &ipc_port));
+
+        pinfo.lock().ipc_table.close(handle);
+        crate::ipc::close_port(ipc_port_id);
+        crate::ipc::close_port(fd_port_id);
     }
 }
