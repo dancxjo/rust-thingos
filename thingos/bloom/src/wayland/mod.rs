@@ -543,6 +543,20 @@ impl WaylandServer {
                                 );
                             }
                         }
+                        ipc::TOPLEVEL_ACTION_FULLSCREEN => {
+                            if let Some(cmds) = self.blossom.configure_toplevel_for_surface(
+                                bloom_surface_id,
+                                width,
+                                height,
+                                alloc::vec![blossom::XdgToplevelStateAtom::Fullscreen],
+                            ) {
+                                dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
+                                info!(
+                                    "wayland-server: fullscreen surface={} size={}x{}",
+                                    bloom_surface_id, width, height
+                                );
+                            }
+                        }
                         _ => {}
                     }
                     break;

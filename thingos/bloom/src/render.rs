@@ -40,7 +40,9 @@ const CHROME_TEXT: u32 = 0xFF32331F;
 const CHROME_OUTLINE_DARK: u32 = 0xFF000000;
 const CHROME_OUTLINE_LIGHT: u32 = 0xFF000000;
 const CHROME_ICON_MINIMIZE: &str = "\u{1F5D5}";
+const CHROME_ICON_SHADE: &str = "\u{25B2}";
 const CHROME_ICON_MAXIMIZE: &str = "\u{1F5D6}";
+const CHROME_ICON_FULLSCREEN: &str = "\u{26F6}";
 const CHROME_ICON_CLOSE: &str = "\u{1F5D9}";
 const CHROME_ICON_SCRATCH_PAD: u32 = 24;
 const CHROME_ICON_X_BIAS: i32 = -2;
@@ -665,6 +667,9 @@ fn draw_chrome_overlay(
 ) {
     dst.fill(0);
     for entry in composition {
+        if entry.is_fullscreen {
+            continue;
+        }
         let chrome = entry.chrome;
         if chrome.is_empty() {
             continue;
@@ -888,7 +893,9 @@ fn draw_chrome_button_symbol(
 
     let symbol = match button {
         ChromeButton::Minimize => CHROME_ICON_MINIMIZE,
+        ChromeButton::Shade => CHROME_ICON_SHADE,
         ChromeButton::Maximize => CHROME_ICON_MAXIMIZE,
+        ChromeButton::Fullscreen => CHROME_ICON_FULLSCREEN,
         ChromeButton::Close => CHROME_ICON_CLOSE,
     };
 
@@ -955,7 +962,7 @@ fn draw_chrome_button_fallback_glyph(
     let cy = y + h / 2 + CHROME_ICON_Y_BIAS;
 
     match button {
-        ChromeButton::Minimize => {
+        ChromeButton::Minimize | ChromeButton::Shade => {
             let glyph_w = (w - 10).max(6);
             let glyph_h = 2;
             fill_rect_i32(
@@ -969,7 +976,7 @@ fn draw_chrome_button_fallback_glyph(
                 CHROME_TEXT,
             );
         }
-        ChromeButton::Maximize => {
+        ChromeButton::Maximize | ChromeButton::Fullscreen => {
             let box_w = (w - 10).max(7);
             let box_h = (h - 10).max(7);
             let bx = cx - box_w / 2;

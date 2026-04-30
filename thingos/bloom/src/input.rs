@@ -456,6 +456,28 @@ impl InputState {
                     }
                     return true;
                 }
+
+                // Alt+F or F1: Fullscreen
+                if (key.mods().has_alt() && key.key() == Key::F) || key.key() == Key::F1 {
+                    if !key.is_repeat() {
+                        if let Some(surface_id) = scene.keyboard_focus {
+                            self.toggle_fullscreen(scene, damage, wayland_evt_write, surface_id);
+                        }
+                    }
+                    return true;
+                }
+
+                // Alt+F4 or Meta+W: Close
+                if (key.mods().has_alt() && key.key() == Key::F4)
+                    || (key.mods().has_meta() && key.key() == Key::W)
+                {
+                    if !key.is_repeat() {
+                        if let Some(surface_id) = scene.keyboard_focus {
+                            self.close_surface(scene, damage, wayland_evt_write, surface_id);
+                        }
+                    }
+                    return true;
+                }
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
                         let ev = KeyboardKeyEvent {
@@ -619,42 +641,10 @@ impl InputState {
 
         match button {
             ChromeButton::Close => {
-                let new_focus = Some(surface_id);
-                scene.keyboard_focus = new_focus;
-                mark_focus_damage(scene, damage, old_focus, new_focus);
-                self.send_keyboard_focus_events(
-                    scene,
-                    old_focus,
-                    scene.keyboard_focus,
-                    wayland_evt_write,
-                );
-                send_wayland_toplevel_action(
-                    wayland_evt_write,
-                    surface_id,
-                    ipc::TOPLEVEL_ACTION_CLOSE,
-                    0,
-                    0,
-                );
-                stem::info!("bloom: close button pressed surface={}", surface_id);
+                self.close_surface(scene, damage, wayland_evt_write, surface_id);
             }
-            ChromeButton::Minimize => {
-                if let Some(rect) = scene.set_surface_visible(surface_id, false) {
-                    mark_surface_visual_damage(scene, damage, surface_id, rect);
-                }
-                self.send_keyboard_focus_events(
-                    scene,
-                    old_focus,
-                    scene.keyboard_focus,
-                    wayland_evt_write,
-                );
-                send_wayland_toplevel_action(
-                    wayland_evt_write,
-                    surface_id,
-                    ipc::TOPLEVEL_ACTION_MINIMIZE,
-                    0,
-                    0,
-                );
-                stem::info!("bloom: minimize button pressed surface={}", surface_id);
+            ChromeButton::Minimize | ChromeButton::Shade => {
+                self.toggle_shade(scene, damage, wayland_evt_write, surface_id);
             }
             ChromeButton::Maximize => {
                 let target = abi::display_protocol::Rect {
@@ -690,8 +680,127 @@ impl InputState {
                     target.h
                 );
             }
+            ChromeButton::Fullscreen => {
+                self.toggle_fullscreen(scene, damage, wayland_evt_write, surface_id);
+            }
         }
         true
+    }
+
+    fn close_surface(
+        &mut self,
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+        surface_id: u32,
+    ) {
+        let old_focus = scene.keyboard_focus;
+        let new_focus = Some(surface_id);
+        scene.keyboard_focus = new_focus;
+        mark_focus_damage(scene, damage, old_focus, new_focus);
+        self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);
+        send_wayland_toplevel_action(
+            wayland_evt_write,
+            surface_id,
+            ipc::TOPLEVEL_ACTION_CLOSE,
+            0,
+            0,
+        );
+        stem::info!("bloom: close action surface={}", surface_id);
+    }
+
+    fn toggle_shade(
+        &mut self,
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+        surface_id: u32,
+    ) {
+        let Some(surface) = scene.get_surface_mut(surface_id) else { return };
+        let chrome = surface.chrome;
+        let old_rect = surface.current.dest_rect;
+        let mut new_rect = old_rect;
+
+        if surface.is_shaded {
+            if let Some(restored) = surface.restored_rect.take() {
+                new_rect = restored;
+            }
+            surface.is_shaded = false;
+        } else {
+            surface.restored_rect = Some(old_rect);
+            surface.is_shaded = true;
+            new_rect.h = chrome.titlebar_height;
+        }
+
+        if let Some(resized) = scene.resize_surface_absolute(surface_id, new_rect) {
+            mark_surface_visual_damage(scene, damage, surface_id, resized.old_rect);
+            mark_surface_visual_damage(scene, damage, surface_id, resized.new_rect);
+        }
+
+        let new_focus = Some(surface_id);
+        let old_focus = scene.keyboard_focus;
+        scene.keyboard_focus = new_focus;
+        mark_focus_damage(scene, damage, old_focus, new_focus);
+        self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);
+        stem::info!("bloom: shade toggled surface={} shaded={}", surface_id, surface.is_shaded);
+    }
+
+    fn toggle_fullscreen(
+        &mut self,
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+        surface_id: u32,
+    ) {
+        let Some(surface) = scene.get_surface_mut(surface_id) else { return };
+        let old_rect = surface.current.dest_rect;
+        let mut new_rect = old_rect;
+
+        if surface.is_fullscreen {
+            if let Some(restored) = surface.restored_rect.take() {
+                new_rect = restored;
+            }
+            surface.is_fullscreen = false;
+        } else {
+            surface.restored_rect = Some(old_rect);
+            surface.is_fullscreen = true;
+            new_rect = abi::display_protocol::Rect {
+                x: 0,
+                y: 0,
+                w: self.output_w as u32,
+                h: self.output_h as u32,
+            };
+        }
+
+        if let Some(resized) = scene.resize_surface_absolute(surface_id, new_rect) {
+            mark_surface_visual_damage(scene, damage, surface_id, resized.old_rect);
+            mark_surface_visual_damage(scene, damage, surface_id, resized.new_rect);
+        }
+
+        let new_focus = Some(surface_id);
+        let old_focus = scene.keyboard_focus;
+        scene.keyboard_focus = new_focus;
+        mark_focus_damage(scene, damage, old_focus, new_focus);
+        self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);
+
+        let action = if surface.is_fullscreen {
+            ipc::TOPLEVEL_ACTION_FULLSCREEN
+        } else {
+            ipc::TOPLEVEL_ACTION_MAXIMIZE // Use maximize as fallback for "un-fullscreen"
+        };
+
+        send_wayland_toplevel_action(
+            wayland_evt_write,
+            surface_id,
+            action,
+            new_rect.w as i32,
+            new_rect.h as i32,
+        );
+        stem::info!(
+            "bloom: fullscreen toggled surface={} fullscreen={}",
+            surface_id,
+            surface.is_fullscreen
+        );
     }
 
     fn update_pointer_grab(

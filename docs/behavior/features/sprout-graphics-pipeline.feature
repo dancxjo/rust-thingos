@@ -30,3 +30,8 @@ Feature: Sprout graphics pipeline orchestration
     Then the serial output should contain "SPROUT: Spawned clock" within 180s
     And the serial output should contain "clock: connected to /run/wayland-0" within 180s
     And the serial output should contain "clock: pistil DSEG7 text renderer loaded with /share/fonts/DSEG7Classic-Regular.ttf" within 180s
+
+  Scenario: rtc anchors the system clock before the Wayland clock displays realtime
+    Given the machine is booted
+    Then the serial output should contain "RTC: System clock anchored" within 180s
+    And the serial output should contain "System clock anchored:" within 180s

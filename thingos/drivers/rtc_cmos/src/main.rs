@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 
@@ -10,7 +9,7 @@ use abi::driver_interface::{
 };
 use stem::abi::driver_ctx::DriverCtx;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
-use stem::{debug, error, info, warn};
+use stem::{debug, info, warn};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"rtc_cmos";
 
@@ -116,6 +115,16 @@ const RTC_YEAR: u8 = 0x09;
 const RTC_STATUS_A: u8 = 0x0A;
 const RTC_STATUS_B: u8 = 0x0B;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RtcSample {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+}
+
 fn cmos_read(reg: u8) -> u8 {
     stem::syscall::ioport_write(CMOS_ADDR as usize, reg as usize, 1);
     stem::syscall::ioport_read(CMOS_DATA as usize, 1) as u8
@@ -129,8 +138,7 @@ fn bcd_to_binary(bcd: u8) -> u8 {
     (bcd & 0x0F) + ((bcd >> 4) * 10)
 }
 
-fn read_rtc() -> (u16, u8, u8, u8, u8, u8) {
-    // Wait for update to complete
+fn read_cmos_raw() -> (u8, u8, u8, u8, u8, u8, u8) {
     while is_updating() {
         stem::yield_now();
     }
@@ -141,27 +149,80 @@ fn read_rtc() -> (u16, u8, u8, u8, u8, u8) {
     let day = cmos_read(RTC_DAY);
     let month = cmos_read(RTC_MONTH);
     let year = cmos_read(RTC_YEAR);
-
     let status_b = cmos_read(RTC_STATUS_B);
-    let is_bcd = (status_b & 0x04) == 0;
 
-    let (s, m, h, d, mo, y) = if is_bcd {
+    (year, month, day, hours, minutes, seconds, status_b)
+}
+
+fn decode_rtc_sample(raw: (u8, u8, u8, u8, u8, u8, u8)) -> Option<RtcSample> {
+    let (year, month, day, hours, minutes, seconds, status_b) = raw;
+    let is_bcd = (status_b & 0x04) == 0;
+    let is_24h = (status_b & 0x02) != 0;
+    let pm = !is_24h && (hours & 0x80) != 0;
+    let hour_without_pm = hours & 0x7F;
+
+    let (second, minute, mut hour, day, month, year) = if is_bcd {
         (
             bcd_to_binary(seconds),
             bcd_to_binary(minutes),
-            bcd_to_binary(hours & 0x7F), // Mask out PM bit for 12-hour mode
+            bcd_to_binary(hour_without_pm),
             bcd_to_binary(day),
             bcd_to_binary(month),
             bcd_to_binary(year),
         )
     } else {
-        (seconds, minutes, hours & 0x7F, day, month, year)
+        (seconds, minutes, hour_without_pm, day, month, year)
     };
 
-    // Assume century is 20xx for year < 70, 19xx for >= 70
-    let full_year = if y < 70 { 2000 + y as u16 } else { 1900 + y as u16 };
+    if !is_24h {
+        if hour == 12 {
+            hour = 0;
+        }
+        if pm {
+            hour = hour.saturating_add(12);
+        }
+    }
 
-    (full_year, mo, d, h, m, s)
+    // Assume century is 20xx for year < 70, 19xx for >= 70
+    let full_year = if year < 70 { 2000 + year as u16 } else { 1900 + year as u16 };
+
+    let sample = RtcSample { year: full_year, month, day, hour, minute, second };
+    if validate_rtc_sample(sample) { Some(sample) } else { None }
+}
+
+fn read_rtc() -> Option<RtcSample> {
+    for _ in 0..8 {
+        let first = read_cmos_raw();
+        let second = read_cmos_raw();
+        if first == second {
+            return decode_rtc_sample(second);
+        }
+        stem::sleep_ms(2);
+    }
+    None
+}
+
+fn validate_rtc_sample(sample: RtcSample) -> bool {
+    sample.year >= 2020
+        && (1..=12).contains(&sample.month)
+        && (1..=days_in_month(sample.year, sample.month)).contains(&sample.day)
+        && sample.hour < 24
+        && sample.minute < 60
+        && sample.second < 60
+}
+
+fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: u16) -> bool {
+    (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0))
 }
 
 /// Convert calendar time to Unix timestamp (seconds since 1970-01-01 00:00:00 UTC)
@@ -196,6 +257,30 @@ fn rtc_to_unix(year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) 
     days * 86400 + hour as u64 * 3600 + minute as u64 * 60 + second as u64
 }
 
+fn anchor_from_rtc() -> bool {
+    let Some(sample) = read_rtc() else {
+        warn!("RTC: failed to read a stable CMOS timestamp; system clock remains unanchored");
+        return false;
+    };
+    let unix_secs = rtc_to_unix(
+        sample.year,
+        sample.month,
+        sample.day,
+        sample.hour,
+        sample.minute,
+        sample.second,
+    );
+
+    info!(
+        "RTC: {:04}-{:02}-{:02} {:02}:{:02}:{:02} = {} unix_secs",
+        sample.year, sample.month, sample.day, sample.hour, sample.minute, sample.second, unix_secs
+    );
+
+    stem::syscall::time_anchor(unix_secs);
+    info!("RTC: System clock anchored to {} unix_secs", unix_secs);
+    true
+}
+
 #[stem::main]
 fn main(arg: usize) -> ! {
     let cpu = stem::arch::whoami();
@@ -206,7 +291,7 @@ fn main(arg: usize) -> ! {
 
     debug!("Starting... arg={:x}", arg);
 
-    let dev_id = if arg != 0 {
+    let _dev_id = if arg != 0 {
         let ctx = DriverCtx::from_raw(arg);
         let id = stem::thing::ThingId(ctx.device_id.0);
         debug!("Serving device ID: {:?}", id);
@@ -216,25 +301,18 @@ fn main(arg: usize) -> ! {
         Default::default()
     };
 
-    // Read RTC and anchor system clock
-    let (year, month, day, hour, minute, second) = read_rtc();
-    let unix_secs = rtc_to_unix(year, month, day, hour, minute, second);
-
-    debug!(
-        "RTC: {:04}-{:02}-{:02} {:02}:{:02}:{:02} = {} unix_secs",
-        year, month, day, hour, minute, second, unix_secs
-    );
-
-    // Anchor the system clock!
-    stem::syscall::time_anchor(unix_secs);
-    debug!("RTC: System clock anchored to {} unix_secs", unix_secs);
+    for attempt in 1..=20 {
+        if anchor_from_rtc() {
+            break;
+        }
+        warn!("RTC: anchor attempt {} failed; retrying", attempt);
+        stem::sleep_ms(100);
+    }
 
     debug!("RTC: Entering maintenance loop.");
 
     loop {
         stem::sleep(core::time::Duration::from_secs(3600)); // Update once per hour
-        let (year, month, day, hour, minute, second) = read_rtc();
-        let unix_secs = rtc_to_unix(year, month, day, hour, minute, second);
-        stem::syscall::time_anchor(unix_secs);
+        let _ = anchor_from_rtc();
     }
 }

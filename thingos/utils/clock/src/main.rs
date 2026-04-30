@@ -104,12 +104,21 @@ fn main(_arg: usize) -> ! {
             last_tz_refresh_ns = now_ns;
         }
 
-        let dt = local_datetime(tz_offset);
-        let time_text = format!("{:02}:{:02}:{:02}", dt.hour, dt.minute, dt.second);
-        let date_text = format!("{:04}-{:02}-{:02} UTC{:+}", dt.year, dt.month, dt.day, tz_offset);
+        let realtime = local_datetime(tz_offset);
+        let (time_text, date_text) = match realtime {
+            Some(dt) => (
+                format!("{:02}:{:02}:{:02}", dt.hour, dt.minute, dt.second),
+                format!("{:04}-{:02}-{:02} UTC{:+}", dt.year, dt.month, dt.day, tz_offset),
+            ),
+            None => ("00:00:00".into(), format!("WAITING FOR RTC UTC{:+}", tz_offset)),
+        };
 
         if now_ns.saturating_sub(last_trace_ns) >= TRACE_INTERVAL_NS {
-            stem::trace!("clock: current time {} {}", date_text, time_text);
+            if realtime.is_some() {
+                stem::trace!("clock: current time {} {}", date_text, time_text);
+            } else {
+                stem::trace!("clock: waiting for system clock anchor");
+            }
             last_trace_ns = now_ns;
         }
 
@@ -527,14 +536,14 @@ fn log_dlerror(prefix: &str) {
     }
 }
 
-fn local_datetime(tz_offset_hours: i32) -> DateTime {
-    let unix_secs = stem::time::now_unix_seconds();
+fn local_datetime(tz_offset_hours: i32) -> Option<DateTime> {
+    let unix_secs = stem::time::clock_now(stem::time::ClockId::Realtime).map(|spec| spec.secs)?;
     let local_secs = if tz_offset_hours >= 0 {
         unix_secs.saturating_add(tz_offset_hours as u64 * 3600)
     } else {
         unix_secs.saturating_sub(tz_offset_hours.abs() as u64 * 3600)
     };
-    unix_to_datetime(local_secs)
+    Some(unix_to_datetime(local_secs))
 }
 
 fn get_tz_offset() -> i32 {

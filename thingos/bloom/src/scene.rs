@@ -51,6 +51,9 @@ pub struct Surface {
     pub chrome: SurfaceChrome,
     pub title: Option<String>,
     pub frame_serial: u64,
+    pub is_fullscreen: bool,
+    pub is_shaded: bool,
+    pub restored_rect: Option<Rect>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -76,7 +79,9 @@ pub enum HitTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChromeButton {
     Minimize,
+    Shade,
     Maximize,
+    Fullscreen,
     Close,
 }
 
@@ -133,6 +138,8 @@ pub struct CompositionEntry {
     pub chrome: SurfaceChrome,
     pub active: bool,
     pub title: Option<String>,
+    pub is_fullscreen: bool,
+    pub is_shaded: bool,
 }
 
 pub struct Scene {
@@ -199,6 +206,9 @@ impl Scene {
                 chrome: SurfaceChrome::default(),
                 title: None,
                 frame_serial: 0,
+                is_fullscreen: false,
+                is_shaded: false,
+                restored_rect: None,
             },
         );
         Some(id)
@@ -468,6 +478,8 @@ impl Scene {
                 chrome: surface.chrome,
                 active: active_surface == Some(surface.id),
                 title: surface.title.clone(),
+                is_fullscreen: surface.is_fullscreen,
+                is_shaded: surface.is_shaded,
             });
         }
         list.sort_by_key(|entry| entry.z_order);
@@ -515,6 +527,9 @@ impl Scene {
         let (surface_id, _) = best?;
         let surface = self.surfaces.get(&surface_id)?;
         let rect = surface.current.dest_rect;
+        if surface.is_fullscreen {
+            return Some(HitTarget::Client { surface_id });
+        }
         if let Some(edge) = resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
             return Some(HitTarget::Frame { surface_id, edge });
         }
@@ -709,10 +724,12 @@ fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEd
     }
 }
 
-pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(ChromeButton, Rect); 3]> {
+pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(ChromeButton, Rect); 4]> {
     if chrome.titlebar_height == 0 || rect.w == 0 || rect.h == 0 {
         return None;
     }
+    // If the window is shaded, we still want the buttons.
+    // If the window is fullscreen, we don't draw chrome.
 
     let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
     let titlebar_height = chrome.titlebar_height.min(rect.h);
@@ -725,18 +742,20 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let right = rect.x.saturating_add(rect.w).saturating_sub(frame);
     let y = rect.y.saturating_add(v_padding);
-    let total_w = button_width.saturating_mul(3);
+    let total_w = button_width.saturating_mul(4);
     if total_w.saturating_add(frame) > rect.w {
         return None;
     }
 
     let close_x = right.saturating_sub(button_width);
-    let max_x = close_x.saturating_sub(button_width);
-    let min_x = max_x.saturating_sub(button_width);
+    let full_x = close_x.saturating_sub(button_width);
+    let max_x = full_x.saturating_sub(button_width);
+    let shade_x = max_x.saturating_sub(button_width);
 
     Some([
-        (ChromeButton::Minimize, Rect { x: min_x, y, w: button_width, h: button_height }),
+        (ChromeButton::Shade, Rect { x: shade_x, y, w: button_width, h: button_height }),
         (ChromeButton::Maximize, Rect { x: max_x, y, w: button_width, h: button_height }),
+        (ChromeButton::Fullscreen, Rect { x: full_x, y, w: button_width, h: button_height }),
         (ChromeButton::Close, Rect { x: close_x, y, w: button_width, h: button_height }),
     ])
 }
