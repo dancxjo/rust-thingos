@@ -57,10 +57,10 @@ pub enum ObjectEntry {
     XdgPopup { xdg_surface_obj: u32 },
     /// wl_subsurface — relates a wl_surface to its parent wl_surface.
     ///
-    /// All subsurface state defaults to "applied immediately" (desync) until
-    /// the spec-default `set_sync` is called.  `pending_position` and
-    /// `pending_place` are committed on the parent surface's `wl_surface.commit`
-    /// in synchronized mode.
+    /// Per the Wayland spec, `sync` defaults to `true` (synchronized mode):
+    /// `pending_position` and `pending_place` are buffered and atomically
+    /// applied on the parent surface's `wl_surface.commit`.  In desync mode
+    /// (`set_desync`) those changes apply immediately.
     Subsurface {
         /// Child wl_surface object ID.
         child_wl_surface: u32,

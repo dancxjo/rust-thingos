@@ -588,14 +588,11 @@ impl Scene {
             let new_x = parent_dest.x as i32 + link.x;
             let new_y = parent_dest.y as i32 + link.y;
             let new_z = parent_z.saturating_add(link.z_above);
-            let (new_rect, new_z) = {
-                let new_rect = Rect {
-                    x: new_x.max(0) as u32,
-                    y: new_y.max(0) as u32,
-                    w,
-                    h,
-                };
-                (new_rect, new_z)
+            let new_rect = Rect {
+                x: new_x.max(0) as u32,
+                y: new_y.max(0) as u32,
+                w,
+                h,
             };
             if let Some(child) = self.surfaces.get_mut(&child_id) {
                 child.current.dest_rect = new_rect;

@@ -1069,22 +1069,15 @@ fn dispatch_subcompositor(
             // Validate child is a wl_surface and not yet a subsurface and not
             // already an xdg_surface (Wayland spec: a wl_surface may carry at
             // most one role).
-            let child_already_sub = matches!(
-                client.objects.get(&surface_obj),
-                Some(ObjectEntry::Surface { subsurface_obj: Some(_), .. })
-            );
-            let child_already_xdg = matches!(
-                client.objects.get(&surface_obj),
-                Some(ObjectEntry::Surface { xdg_surface_obj: Some(_), .. })
-            );
-            let child_is_surface = matches!(
-                client.objects.get(&surface_obj),
-                Some(ObjectEntry::Surface { .. })
-            );
-            let parent_is_surface = matches!(
-                client.objects.get(&parent_obj),
-                Some(ObjectEntry::Surface { .. })
-            );
+            let (child_is_surface, child_already_sub, child_already_xdg) =
+                match client.objects.get(&surface_obj) {
+                    Some(ObjectEntry::Surface { subsurface_obj, xdg_surface_obj, .. }) => {
+                        (true, subsurface_obj.is_some(), xdg_surface_obj.is_some())
+                    }
+                    _ => (false, false, false),
+                };
+            let parent_is_surface =
+                matches!(client.objects.get(&parent_obj), Some(ObjectEntry::Surface { .. }));
             if !child_is_surface
                 || !parent_is_surface
                 || child_already_sub
@@ -1210,7 +1203,13 @@ fn dispatch_subsurface(
                 apply_subsurface_position(client, obj_id, x, y);
             }
             if let Some((sibling, above)) = take_pending_place(client, obj_id) {
-                let _ = apply_subsurface_place(client, obj_id, sibling, above);
+                if !apply_subsurface_place(client, obj_id, sibling, above) {
+                    client.send_protocol_error(
+                        obj_id,
+                        WL_SUBSURFACE_ERROR_BAD_SURFACE,
+                        "place_above/below sibling not a sibling subsurface",
+                    );
+                }
             }
             if let Some(cmd) = subsurface_state_command(client, obj_id) {
                 let _ = stem::syscall::port_send_all(cmd_write, &cmd);
