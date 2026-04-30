@@ -32,6 +32,14 @@ Feature: Bloom compositor service loop and responsiveness
     And I type "echo /share/wallpapers/flower.png > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
 
+  Scenario: bloom uses the wallpaper watch without steady-state polling
+    Given the machine is booted
+    Then the serial output should contain "bloom: watching wallpaper config /session/desktop/wallpaper" within 60s
+    When I wait for the shell prompt
+    And I type "echo wallpaper-watch-idle" on the serial console
+    And I wait for 2 seconds
+    Then the latest serial output should not contain "VFS: sys_fs_open path='/session/desktop/wallpaper'"
+
   Scenario: bloom service loop starts
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s

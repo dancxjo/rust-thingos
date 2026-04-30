@@ -14,9 +14,9 @@ use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
 use crate::world::BloomWorld;
 
 pub const DEFAULT_WALLPAPER_PATH: &str = "/share/wallpapers/flower.png";
-const WALLPAPER_POLL_TIMER: u64 = 1;
+const WALLPAPER_FALLBACK_POLL_TIMER: u64 = 1;
 const WALLPAPER_INITIAL_LOAD_TIMER: u64 = 2;
-const WALLPAPER_POLL_MS: u64 = 250;
+const WALLPAPER_FALLBACK_POLL_MS: u64 = 1000;
 const WALLPAPER_INITIAL_LOAD_MS: u64 = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,7 +76,8 @@ fn wallpaper_config_stamp(config_path: &str) -> Option<WallpaperStamp> {
 ///
 /// `fd` is the watch FD returned by `vfs_watch_path`.  When the watch fires,
 /// the service drains the event bytes (to keep the FD clear) and delegates
-/// the actual reload to [`CompositorVisuals::start_background_load`].
+/// the actual reload to [`CompositorVisuals::start_background_load`].  If the
+/// watch could not be registered, the service falls back to a slow stat poll.
 pub struct WallpaperService {
     fd: Option<u32>,
     config_path: &'static str,
@@ -108,11 +109,15 @@ impl WallpaperService {
         }
     }
 
-    fn arm_poll_timer() -> LoopAction {
+    fn arm_fallback_poll_timer() -> LoopAction {
         LoopAction::ArmTimer {
-            delay: Duration::from_millis(WALLPAPER_POLL_MS),
-            id: WALLPAPER_POLL_TIMER,
+            delay: Duration::from_millis(WALLPAPER_FALLBACK_POLL_MS),
+            id: WALLPAPER_FALLBACK_POLL_TIMER,
         }
+    }
+
+    fn arm_change_detection(&self) -> LoopAction {
+        if self.fd.is_some() { LoopAction::None } else { Self::arm_fallback_poll_timer() }
     }
 
     fn reload_background(&mut self, world: &mut BloomWorld) {
@@ -169,15 +174,15 @@ impl BloomService for WallpaperService {
                 self.reload_background(world);
                 LoopAction::RequestRepaint
             }
-            LoopEvent::Timer(WALLPAPER_POLL_TIMER) => {
+            LoopEvent::Timer(WALLPAPER_FALLBACK_POLL_TIMER) => {
                 self.poll_config(world);
-                Self::arm_poll_timer()
+                self.arm_change_detection()
             }
             LoopEvent::Timer(WALLPAPER_INITIAL_LOAD_TIMER) => {
                 self.load_initial_background(world);
-                Self::arm_poll_timer()
+                self.arm_change_detection()
             }
-            _ => Self::arm_poll_timer(),
+            _ => self.arm_change_detection(),
         }
     }
 }
