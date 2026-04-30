@@ -134,6 +134,7 @@ impl DisplayBackend {
         chrome_overlay: Option<OverlayPlane>,
         pointer_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
+        flags: CommitFlags,
     ) -> PresentResult {
         let mut planes = [empty_plane_commit(); MAX_COMMIT_PLANES];
         let mut plane_count = 0usize;
@@ -248,10 +249,15 @@ impl DisplayBackend {
 
         planes[..plane_count].sort_unstable_by_key(|plane| plane.z_order);
 
-        PresentResult { success: self.commit_display_planes(&planes[..plane_count], damage) }
+        PresentResult { success: self.commit_display_planes(&planes[..plane_count], damage, flags) }
     }
 
-    pub fn commit_display_planes(&self, planes: &[PlaneCommit], damage: &[Rect]) -> bool {
+    pub fn commit_display_planes(
+        &self,
+        planes: &[PlaneCommit],
+        damage: &[Rect],
+        flags: CommitFlags,
+    ) -> bool {
         if planes.len() > MAX_COMMIT_PLANES {
             stem::warn!("bloom: commit has too many planes ({})", planes.len());
             return false;
@@ -296,7 +302,7 @@ impl DisplayBackend {
 
         let req = CommitRequest {
             commit_count: planes.len() as u32,
-            flags: CommitFlags::VSYNC,
+            flags,
             commits_ptr: 0,
             damage_count: damage_count as u32,
             _reserved: 0,

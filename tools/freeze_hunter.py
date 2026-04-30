@@ -110,6 +110,7 @@ def run_session(session_id):
             raise
         finally:
             stop_process_group(process, sig=signal.SIGTERM)
+            process.stdout.close()
             
     runtime = time.time() - start_time
     # If it died very quickly with almost no output, it might be a build error or config issue

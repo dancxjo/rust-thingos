@@ -92,7 +92,7 @@ impl BloomService for InputService {
                     }
                 }
 
-                if handled { LoopAction::RequestRepaint } else { LoopAction::None }
+                if handled { LoopAction::RequestImmediateRepaint } else { LoopAction::None }
             }
             _ => LoopAction::None,
         }
@@ -146,8 +146,7 @@ impl InputService {
                     break;
                 }
 
-                world.handle_bristle_event(&self.event_accum[..total_len]);
-                handled = true;
+                handled |= world.handle_bristle_event(&self.event_accum[..total_len]);
 
                 self.accum_len -= total_len;
                 if self.accum_len > 0 {

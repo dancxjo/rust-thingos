@@ -12,6 +12,7 @@ mod protocol;
 mod render;
 mod scene;
 mod services;
+mod session_fs;
 mod wayland;
 mod world;
 
@@ -94,6 +95,7 @@ fn main(_arg: usize) -> ! {
     // ── Session directories + wallpaper ───────────────────────────────────────
     let _ = vfs_mkdir("/session");
     let _ = vfs_mkdir("/session/desktop");
+    session_fs::init();
 
     let mut visuals = CompositorVisuals::new();
     visuals.prepare_solid_background(&display, 0xFFCCCCFF);

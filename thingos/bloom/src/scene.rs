@@ -569,6 +569,25 @@ impl Scene {
         Some(surface.current.dest_rect)
     }
 
+    pub fn surface_snapshots(&self) -> Vec<SurfaceSnapshot> {
+        self.surfaces
+            .values()
+            .map(|surface| SurfaceSnapshot {
+                id: surface.id,
+                client_id: surface.client_id,
+                rect: surface.current.dest_rect,
+                z_order: surface.current.z_order,
+                mapped: surface.mapped,
+                visible: surface.visible,
+                focus_eligible: surface.focus_eligible,
+                buffer_id: surface.current.buffer.map(|buffer| buffer.buffer_id),
+                title: surface.title.clone(),
+                frame_serial: surface.frame_serial,
+                is_window: surface.visible && surface.mapped && surface.current.buffer.is_some(),
+            })
+            .collect()
+    }
+
     pub fn cycle_focus(&mut self, forward: bool) -> (Option<u32>, Option<u32>) {
         let mut eligible: Vec<u32> = self
             .surfaces
@@ -582,9 +601,11 @@ impl Scene {
         }
 
         // Sort by Z-order descending (top-most first)
-        eligible.sort_by_key(|id| core::cmp::Reverse(self.surfaces.get(id).unwrap().current.z_order));
+        eligible
+            .sort_by_key(|id| core::cmp::Reverse(self.surfaces.get(id).unwrap().current.z_order));
 
-        let current_idx = self.keyboard_focus.and_then(|id| eligible.iter().position(|&sid| sid == id));
+        let current_idx =
+            self.keyboard_focus.and_then(|id| eligible.iter().position(|&sid| sid == id));
 
         let new_idx = match current_idx {
             Some(idx) => {
@@ -621,6 +642,21 @@ pub struct CommitResult {
     pub frame_serial: u64,
     pub damage_rects: Vec<Rect>,
     pub needs_full_repaint: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SurfaceSnapshot {
+    pub id: u32,
+    pub client_id: u32,
+    pub rect: Rect,
+    pub z_order: i32,
+    pub mapped: bool,
+    pub visible: bool,
+    pub focus_eligible: bool,
+    pub buffer_id: Option<u32>,
+    pub title: Option<String>,
+    pub frame_serial: u64,
+    pub is_window: bool,
 }
 
 pub struct SurfaceMove {

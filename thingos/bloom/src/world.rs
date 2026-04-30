@@ -18,6 +18,7 @@ use crate::protocol::{
 };
 use crate::render::CompositorVisuals;
 use crate::scene::{CommitResult, CompositionEntry, Scene, SurfaceBuffer};
+use crate::session_fs;
 
 /// All mutable compositor state owned by the main loop.
 pub struct BloomWorld {
@@ -27,6 +28,7 @@ pub struct BloomWorld {
     pub visuals: CompositorVisuals,
     pub display: DisplayBackend,
     pub primary: OutputInfo,
+    pub vsync_enabled: bool,
     cursor_present_logged: bool,
     /// Port write handle to the Wayland server thread's event port, if running.
     pub wayland_evt_write: Option<u32>,
@@ -50,6 +52,7 @@ impl BloomWorld {
             visuals,
             display,
             primary,
+            vsync_enabled: true,
             cursor_present_logged: false,
             wayland_evt_write: None,
             last_active_id: None,
@@ -90,19 +93,25 @@ impl BloomWorld {
                     return false;
                 };
                 send_ack(req.reply_port, 0, surface_id, 0);
+                self.sync_wayland_session_fs(alloc::format!("surface_created id={}\n", surface_id));
                 true
             }
             ClientRequest::DestroySurface(req) => {
-                let Some(release_ids) = self.scene.destroy_surface(req.client_id, req.surface_id)
-                else {
+                let client_id = req.client_id;
+                let surface_id = req.surface_id;
+                let Some(release_ids) = self.scene.destroy_surface(client_id, surface_id) else {
                     send_ack(req.reply_port, 1, 0, 0);
                     return false;
                 };
                 for id in release_ids {
                     self.display.release_buffer(id);
                 }
-                send_ack(req.reply_port, 0, req.surface_id, 0);
+                send_ack(req.reply_port, 0, surface_id, 0);
                 self.damage.mark_dirty();
+                self.remove_wayland_session_surface(
+                    surface_id,
+                    alloc::format!("surface_destroyed id={}\n", surface_id),
+                );
                 true
             }
             ClientRequest::AttachBuffer(req) => {
@@ -191,15 +200,22 @@ impl BloomWorld {
                 }
             }
             ClientRequest::Commit(req) => {
-                let Some(result) = self.scene.commit_surface(req.client_id, req.surface_id) else {
+                let client_id = req.client_id;
+                let surface_id = req.surface_id;
+                let Some(result) = self.scene.commit_surface(client_id, surface_id) else {
                     send_ack(req.reply_port, 1, 0, 0);
                     return false;
                 };
                 for id in &result.released_buffer_ids {
                     self.display.release_buffer(*id);
                 }
-                send_ack(req.reply_port, 0, req.surface_id, result.frame_serial);
+                send_ack(req.reply_port, 0, surface_id, result.frame_serial);
                 self.apply_commit_damage(&result);
+                self.sync_wayland_session_fs(alloc::format!(
+                    "surface_committed id={} frame_serial={}\n",
+                    surface_id,
+                    result.frame_serial
+                ));
                 result.changed
             }
         }
@@ -218,19 +234,32 @@ impl BloomWorld {
         }
     }
 
-    pub fn apply_surface_visual_damage(&mut self, surface_id: u32, rect: abi::display_protocol::Rect) {
+    pub fn sync_wayland_session_fs(&self, event: alloc::string::String) {
+        session_fs::sync_scene(&self.scene, &event);
+    }
+
+    pub fn remove_wayland_session_surface(&self, surface_id: u32, event: alloc::string::String) {
+        session_fs::remove_surface(surface_id, &event);
+        session_fs::sync_scene(&self.scene, &event);
+    }
+
+    pub fn apply_surface_visual_damage(
+        &mut self,
+        surface_id: u32,
+        rect: abi::display_protocol::Rect,
+    ) {
         let visual = self.scene.visual_rect_for_surface_rect(surface_id, rect).unwrap_or(rect);
         self.damage.mark_rect(visual);
     }
 
     /// Process one raw bristle HID event.
-    pub fn handle_bristle_event(&mut self, data: &[u8]) {
+    pub fn handle_bristle_event(&mut self, data: &[u8]) -> bool {
         self.input.handle_bristle_event(
             data,
             &mut self.scene,
             &mut self.damage,
             self.wayland_evt_write,
-        );
+        )
     }
 
     /// Send `FRAME_DONE` events to each client whose surface appeared in
@@ -297,6 +326,16 @@ impl BloomWorld {
         let cursor_kind = self.input.visible_cursor_kind();
         let chrome_overlay = self.visuals.chrome_overlay_plane(&self.display, &composition);
         let cursor = self.visuals.cursor_plane(&self.display, cursor_kind, pointer_x, pointer_y);
+
+        let mut flags = if self.vsync_enabled {
+            abi::display::CommitFlags::VSYNC
+        } else {
+            abi::display::CommitFlags::empty()
+        };
+        if self.input.is_resizing() {
+            flags.remove(abi::display::CommitFlags::VSYNC);
+        }
+
         let result = self.display.present(
             &composition,
             &pending_damage,
@@ -304,6 +343,7 @@ impl BloomWorld {
             chrome_overlay,
             pointer_overlay,
             cursor,
+            flags,
         );
         if result.success {
             if !self.cursor_present_logged {

@@ -96,6 +96,9 @@ impl WaylandCommandService {
         }
         debug!("wayland-cmd: created surface bloom_id={}", bloom_id);
         let _ = port_send_all(reply_port, &bloom_id.to_ne_bytes());
+        if bloom_id != 0 {
+            world.sync_wayland_session_fs(alloc::format!("surface_created id={}\n", bloom_id));
+        }
         true
     }
 
@@ -115,6 +118,10 @@ impl WaylandCommandService {
                     let _ = port_send_all(self.evt_write, &msg);
                 }
             }
+            world.remove_wayland_session_surface(
+                bloom_surface_id,
+                alloc::format!("surface_destroyed id={}\n", bloom_surface_id),
+            );
         }
         true
     }
@@ -204,6 +211,11 @@ impl WaylandCommandService {
         }
 
         world.apply_commit_damage(&result);
+        world.sync_wayland_session_fs(alloc::format!(
+            "surface_committed id={} frame_serial={}\n",
+            bloom_surface_id,
+            result.frame_serial
+        ));
 
         result.changed
     }
@@ -231,6 +243,10 @@ impl WaylandCommandService {
             if let Some(rect) = world.scene.surface_visual_rect(bloom_surface_id) {
                 world.damage.mark_rect(rect);
             }
+            world.sync_wayland_session_fs(alloc::format!(
+                "surface_chrome_changed id={}\n",
+                bloom_surface_id
+            ));
         }
         true
     }
@@ -246,6 +262,10 @@ impl WaylandCommandService {
             if let Some(rect) = world.scene.surface_visual_rect(bloom_surface_id) {
                 world.damage.mark_rect(rect);
             }
+            world.sync_wayland_session_fs(alloc::format!(
+                "surface_title_changed id={}\n",
+                bloom_surface_id
+            ));
             return true;
         }
         false

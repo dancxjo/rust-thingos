@@ -67,7 +67,21 @@ Feature: blossom xdg-shell lifecycle
   @wayland-visible
   Scenario: first valid commit is visible above the compositor background
     Then the Wayland hello client should be visible
-    And active window chrome should use the future gold tab color and transparent full-height symbol buttons
+    And active window chrome button glyphs should be centered inside their buttons
+
+  @wayland-visible @wayland-fs
+  Scenario: displayed Wayland windows are visible through the session filesystem
+    Then the Wayland hello client should be visible
+    When I wait for the shell prompt
+    And I type "find /session/wayland/windows" on the serial console
+    Then the latest serial output should contain "/session/wayland/windows/index"
+    When I type "cat /session/wayland/windows/index" on the serial console
+    Then the latest serial output should contain "Thing-OS Wayland Lab"
+    And the latest serial output should contain "title="
+    When I type "cat /session/wayland/components" on the serial console
+    Then the latest serial output should contain "xdg_toplevel"
+    When I type "cat /session/wayland/events/latest" on the serial console
+    Then the latest serial output should contain "surface_committed"
 
   @pointer-debug
   Scenario: dragging the title bar moves a toplevel window

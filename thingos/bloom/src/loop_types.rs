@@ -106,6 +106,8 @@ pub enum LoopAction {
     ArmTimer { delay: core::time::Duration, id: u64 },
     /// Ask the frame clock to schedule a repaint.
     RequestRepaint,
+    /// Ask the frame clock to schedule an immediate repaint (bypassing pacing).
+    RequestImmediateRepaint,
     /// Shut down the compositor gracefully.
     Shutdown,
 }
@@ -293,6 +295,10 @@ impl BloomLoop {
             LoopAction::RequestRepaint => {
                 self.frame_clock.request_repaint();
                 false
+            }
+            LoopAction::RequestImmediateRepaint => {
+                self.frame_clock.request_immediate_repaint();
+                true
             }
             LoopAction::Wake => true,
             LoopAction::ArmTimer { delay, id } => {

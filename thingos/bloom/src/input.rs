@@ -99,6 +99,13 @@ impl InputState {
         }
     }
 
+    pub fn is_resizing(&self) -> bool {
+        let Some(grab) = &self.pointer_grab else {
+            return false;
+        };
+        matches!(grab.kind, PointerGrabKind::Resize { .. })
+    }
+
     pub fn update_dimensions(&mut self, output_w: u32, output_h: u32) {
         self.output_w = output_w as i32;
         self.output_h = output_h as i32;
@@ -222,14 +229,15 @@ impl InputState {
         scene: &mut Scene,
         damage: &mut DamageTracker,
         wayland_evt_write: Option<u32>,
-    ) {
+    ) -> bool {
+        let mut immediate_repaint = false;
         if bytes.len() < BristleEventHeader::SIZE {
-            return;
+            return false;
         }
         let mut hdr_bytes = [0u8; BristleEventHeader::SIZE];
         hdr_bytes.copy_from_slice(&bytes[..BristleEventHeader::SIZE]);
         let Ok(header) = BristleEventHeader::from_bytes(&hdr_bytes) else {
-            return;
+            return false;
         };
         let payload = &bytes[BristleEventHeader::SIZE..];
 
@@ -251,11 +259,11 @@ impl InputState {
                     .saturating_add(dy as i32)
                     .clamp(0, self.output_h.saturating_sub(1));
                 if self.pointer_x == old_x && self.pointer_y == old_y {
-                    return;
+                    return false;
                 }
                 self.pending_cursor_motion = true;
                 if self.update_pointer_grab(scene, damage, wayland_evt_write) {
-                    return;
+                    return true;
                 }
                 self.update_cursor_kind(scene, damage);
                 // Coalesce: keep only the latest timestamp; focus lookup and
@@ -292,6 +300,7 @@ impl InputState {
                 let old_focus = scene.keyboard_focus;
                 if btn.button == 0 {
                     if self.handle_chrome_button(scene, damage, wayland_evt_write, old_focus) {
+                        immediate_repaint = true;
                         mark_cursor_damage(
                             damage,
                             self.visible_x,
@@ -299,7 +308,7 @@ impl InputState {
                             self.pointer_x,
                             self.pointer_y,
                         );
-                        return;
+                        return true;
                     }
                     if let Some(surface_id) =
                         self.start_chrome_grab(scene, damage, wayland_evt_write)
@@ -315,7 +324,7 @@ impl InputState {
                             self.pointer_x,
                             self.pointer_y,
                         );
-                        return;
+                        return true;
                     }
                 }
                 let new_focus = scene.pointer_focus;
@@ -357,6 +366,7 @@ impl InputState {
                     self.update_pointer_focus(scene);
                 }
                 if btn.button == 0 && self.end_pointer_grab(wayland_evt_write, scene) {
+                    immediate_repaint = true;
                     self.update_cursor_kind(scene, damage);
                     mark_cursor_damage(
                         damage,
@@ -365,7 +375,7 @@ impl InputState {
                         self.pointer_x,
                         self.pointer_y,
                     );
-                    return;
+                    return true;
                 }
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
@@ -401,7 +411,7 @@ impl InputState {
                             if self.pointer_overlay_enabled { "enabled" } else { "disabled" }
                         );
                     }
-                    return;
+                    return true;
                 }
                 if key.key() == Key::Tab && key.mods().has_alt() {
                     if !key.is_repeat() {
@@ -409,7 +419,7 @@ impl InputState {
                         mark_focus_damage(scene, damage, old_focus, new_focus);
                         self.send_keyboard_focus_events(scene, old_focus, new_focus);
                     }
-                    return;
+                    return true;
                 }
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
@@ -432,7 +442,7 @@ impl InputState {
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
                 if is_pointer_overlay_toggle(key) {
-                    return;
+                    return false;
                 }
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
@@ -452,6 +462,7 @@ impl InputState {
             }
             _ => {}
         }
+        immediate_repaint
     }
 
     fn update_pointer_focus(&mut self, scene: &mut Scene) {
@@ -678,35 +689,26 @@ impl InputState {
                     let new_size = (grab.surface_id, resized.new_rect.w, resized.new_rect.h);
                     self.pending_resize = Some(new_size);
 
-                    if !self.resize_sent_this_frame {
-                        send_wayland_configure(
-                            wayland_evt_write,
-                            new_size.0,
-                            new_size.1,
-                            new_size.2,
-                            true,
-                        );
-                        self.resize_sent_this_frame = true;
-                        stem::info!(
-                            "bloom: window resize moved surface={} to {},{} {}x{} (immediate)",
-                            grab.surface_id,
-                            resized.new_rect.x,
-                            resized.new_rect.y,
-                            resized.new_rect.w,
-                            resized.new_rect.h
-                        );
-                    } else {
-                        stem::info!(
-                            "bloom: window resize moved surface={} to {},{} {}x{} (deferred)",
-                            grab.surface_id,
-                            resized.new_rect.x,
-                            resized.new_rect.y,
-                            resized.new_rect.w,
-                            resized.new_rect.h
-                        );
-                    }
+                    // Send configure on every motion during resize for ultra-realtime response.
+                    send_wayland_configure(
+                        wayland_evt_write,
+                        new_size.0,
+                        new_size.1,
+                        new_size.2,
+                        true,
+                    );
+                    self.resize_sent_this_frame = true;
+                    stem::info!(
+                        "bloom: window resize moved surface={} to {},{} {}x{} (realtime)",
+                        grab.surface_id,
+                        resized.new_rect.x,
+                        resized.new_rect.y,
+                        resized.new_rect.w,
+                        resized.new_rect.h
+                    );
+                    return true;
                 }
-                true
+                false
             }
         }
     }

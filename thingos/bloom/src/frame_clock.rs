@@ -25,6 +25,8 @@ pub struct FrameClock {
     frame_interval_ns: u64,
     /// Monotonic nanoseconds at the time of the last display commit.
     last_commit_ns: u64,
+    /// Force a repaint as soon as requested, bypassing frame pacing.
+    repaint_immediate: bool,
 }
 
 impl FrameClock {
@@ -44,6 +46,7 @@ impl FrameClock {
             repaint_requested: true,
             frame_interval_ns,
             last_commit_ns: 0,
+            repaint_immediate: false,
         }
     }
 
@@ -55,11 +58,24 @@ impl FrameClock {
         self.repaint_requested = true;
     }
 
+    /// Ask the clock to schedule an immediate repaint, bypassing frame pacing.
+    pub fn request_immediate_repaint(&mut self) {
+        self.repaint_requested = true;
+        self.repaint_immediate = true;
+    }
+
+    pub fn repaint_requested(&self) -> bool {
+        self.repaint_requested
+    }
+
     /// Returns `true` when a repaint has been requested *and* the minimum
     /// frame interval since the last commit has passed.
     pub fn repaint_due(&self) -> bool {
         if !self.repaint_requested {
             return false;
+        }
+        if self.repaint_immediate {
+            return true;
         }
         let now = monotonic_ns();
         let next = self.last_commit_ns.saturating_add(self.frame_interval_ns);
@@ -79,6 +95,9 @@ impl FrameClock {
         if !self.repaint_requested {
             return None;
         }
+        if self.repaint_immediate {
+            return Some(0);
+        }
         let now = monotonic_ns();
         let next = self.last_commit_ns.saturating_add(self.frame_interval_ns);
         if now >= next { Some(0) } else { Some(next - now) }
@@ -93,6 +112,7 @@ impl FrameClock {
     /// visible without needing external tooling.
     pub fn after_commit(&mut self) {
         self.repaint_requested = false;
+        self.repaint_immediate = false;
         let now = monotonic_ns();
         if self.last_commit_ns > 0 {
             let interval_ns = now.saturating_sub(self.last_commit_ns);

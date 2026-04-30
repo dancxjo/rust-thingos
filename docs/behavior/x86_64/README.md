@@ -1,0 +1,9 @@
+# BDD Test Results: x86_64
+
+> Last run: 2026-04-30 10:57:06
+
+## Features
+
+| Feature | Scenarios | Status |
+|---------|-----------|--------|
+| [blossom xdg-shell lifecycle](blossom-xdg-shell-lifecycle/README.md) | ✅ 1 / ⏭️ 0 / ❌ 0 | ✅ |

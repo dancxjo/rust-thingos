@@ -40,6 +40,9 @@ const CHROME_OUTLINE_LIGHT: u32 = 0xFF000000;
 const CHROME_ICON_MINIMIZE: &str = "\u{1F5D5}";
 const CHROME_ICON_MAXIMIZE: &str = "\u{1F5D6}";
 const CHROME_ICON_CLOSE: &str = "\u{1F5D9}";
+const CHROME_ICON_SCRATCH_PAD: u32 = 24;
+const CHROME_ICON_X_BIAS: i32 = -2;
+const CHROME_ICON_Y_BIAS: i32 = 3;
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -893,8 +896,8 @@ fn draw_chrome_button_symbol(
     }
     text_c[..bytes.len()].copy_from_slice(bytes);
 
-    let scratch_w = rect.w.max(32);
-    let scratch_h = rect.h.max(32);
+    let scratch_w = rect.w.saturating_add(CHROME_ICON_SCRATCH_PAD * 2).max(64);
+    let scratch_h = rect.h.saturating_add(CHROME_ICON_SCRATCH_PAD * 2).max(64);
     let scratch_len = scratch_w.saturating_mul(scratch_h) as usize;
     let mut scratch = Vec::new();
     if scratch.try_reserve_exact(scratch_len).is_err() {
@@ -903,8 +906,8 @@ fn draw_chrome_button_symbol(
     scratch.resize(scratch_len, 0);
 
     let px_size = ((rect.h.min(rect.w) as f32) * 0.52).clamp(12.0, 24.0);
-    let draw_x = scratch_w as i32 / 2 - (px_size * 0.36) as i32;
-    let draw_y = scratch_h as i32 / 2 + (px_size * 0.38) as i32;
+    let draw_x = scratch_w as i32 / 2 - (px_size * 0.50) as i32;
+    let draw_y = scratch_h as i32 / 2 + (px_size * 0.45) as i32;
     if draw_text_fn(
         text_c.as_ptr(),
         scratch.as_mut_ptr(),
@@ -926,8 +929,10 @@ fn draw_chrome_button_symbol(
     let (min_x, min_y, max_x, max_y) = bounds;
     let glyph_w = max_x.saturating_sub(min_x).saturating_add(1);
     let glyph_h = max_y.saturating_sub(min_y).saturating_add(1);
-    let dst_x = rect.x as i32 + ((rect.w.saturating_sub(glyph_w)) / 2) as i32 - min_x as i32;
-    let dst_y = rect.y as i32 + ((rect.h.saturating_sub(glyph_h)) / 2) as i32 - min_y as i32;
+    let dst_x = rect.x as i32 + ((rect.w.saturating_sub(glyph_w)) / 2) as i32 - min_x as i32
+        + CHROME_ICON_X_BIAS;
+    let dst_y = rect.y as i32 + ((rect.h.saturating_sub(glyph_h)) / 2) as i32 - min_y as i32
+        + CHROME_ICON_Y_BIAS;
     blit_argb_over(dst, stride, height, &scratch, scratch_w, scratch_h, scratch_w, dst_x, dst_y);
     true
 }
@@ -943,8 +948,8 @@ fn draw_chrome_button_fallback_glyph(
     let y = rect.y as i32;
     let w = rect.w as i32;
     let h = rect.h as i32;
-    let cx = x + w / 2;
-    let cy = y + h / 2;
+    let cx = x + w / 2 + CHROME_ICON_X_BIAS;
+    let cy = y + h / 2 + CHROME_ICON_Y_BIAS;
 
     match button {
         ChromeButton::Minimize => {

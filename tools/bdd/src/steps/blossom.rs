@@ -601,10 +601,8 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
     )))
 }
 
-#[then(
-    "active window chrome should use the future gold tab color and transparent full-height symbol buttons"
-)]
-async fn active_window_chrome_uses_future_gold_and_transparent_symbol_buttons(
+#[then("active window chrome button glyphs should be centered inside their buttons")]
+async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
     let _ = world.wait_for_serial("First frame rendered", 60.0).await;
@@ -633,9 +631,10 @@ async fn active_window_chrome_uses_future_gold_and_transparent_symbol_buttons(
         let max_y = height.min(80);
         let mut gold_pixels = 0u32;
         let mut dark_text_pixels = 0u32;
-        let mut button_gold_top_pixels = 0u32;
-        let mut button_gold_bottom_pixels = 0u32;
+        let mut icon_pixels_high_in_frame = 0u32;
+        let mut icon_pixels_in_button_band = 0u32;
         let mut button_icon_pixels = 0u32;
+        let mut icon_pixels_at_right_edge = 0u32;
 
         for y in 0..max_y {
             for x in 0..max_x {
@@ -645,15 +644,17 @@ async fn active_window_chrome_uses_future_gold_and_transparent_symbol_buttons(
                 } else if color_close(pixel, [0x32, 0x33, 0x1F], 28) {
                     dark_text_pixels += 1;
                 }
-                if x >= 340 && y < 40 && color_close(pixel, [0xFF, 0xB9, 0x00], 12) {
-                    if y < 18 {
-                        button_gold_top_pixels += 1;
-                    } else if y >= 22 {
-                        button_gold_bottom_pixels += 1;
-                    }
-                }
                 if x >= 340 && y < 40 && color_close(pixel, [0x32, 0x33, 0x1F], 28) {
                     button_icon_pixels += 1;
+                    if y < 7 {
+                        icon_pixels_high_in_frame += 1;
+                    }
+                    if (11..=38).contains(&y) {
+                        icon_pixels_in_button_band += 1;
+                    }
+                    if x >= 470 {
+                        icon_pixels_at_right_edge += 1;
+                    }
                 }
             }
         }
@@ -661,22 +662,23 @@ async fn active_window_chrome_uses_future_gold_and_transparent_symbol_buttons(
         last_counts = (
             gold_pixels,
             dark_text_pixels,
-            button_gold_top_pixels,
-            button_gold_bottom_pixels,
+            icon_pixels_high_in_frame,
+            icon_pixels_in_button_band,
             button_icon_pixels,
         );
         if gold_pixels > 4_000
             && dark_text_pixels > 40
-            && button_gold_top_pixels > 600
-            && button_gold_bottom_pixels > 600
+            && icon_pixels_high_in_frame == 0
+            && icon_pixels_in_button_band > 20
             && button_icon_pixels > 20
+            && icon_pixels_at_right_edge == 0
         {
             eprintln!(
-                "│  │  │      ✅ Active chrome uses future gold and transparent symbol buttons (gold={}, dark_text={}, button_gold_top={}, button_gold_bottom={}, button_icons={})",
+                "│  │  │      ✅ Active chrome button glyphs are centered inside their buttons (gold={}, dark_text={}, icon_high_in_frame={}, icon_in_button_band={}, button_icons={})",
                 gold_pixels,
                 dark_text_pixels,
-                button_gold_top_pixels,
-                button_gold_bottom_pixels,
+                icon_pixels_high_in_frame,
+                icon_pixels_in_button_band,
                 button_icon_pixels
             );
             return Ok(());
@@ -686,7 +688,7 @@ async fn active_window_chrome_uses_future_gold_and_transparent_symbol_buttons(
     }
 
     Err(StepError(format!(
-        "Active chrome did not show future gold and transparent full-height symbol buttons (gold={}, dark_text={}, button_gold_top={}, button_gold_bottom={}, button_icons={})",
+        "Active chrome button glyphs were not centered inside their buttons (gold={}, dark_text={}, icon_high_in_frame={}, icon_in_button_band={}, button_icons={})",
         last_counts.0, last_counts.1, last_counts.2, last_counts.3, last_counts.4
     )))
 }
