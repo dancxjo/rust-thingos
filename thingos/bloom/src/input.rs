@@ -54,6 +54,7 @@ pub struct InputState {
     pointer_grab: Option<PointerGrab>,
     cursor_kind: CursorKind,
     visible_cursor_kind: CursorKind,
+    keyboard_modifiers: u8,
     output_w: i32,
     output_h: i32,
     /// Pending resize event to be sent to a Wayland client on the next frame boundary.
@@ -92,6 +93,7 @@ impl InputState {
             pointer_grab: None,
             cursor_kind: CursorKind::Default,
             visible_cursor_kind: CursorKind::Default,
+            keyboard_modifiers: 0,
             output_w,
             output_h,
             pending_resize: None,
@@ -179,7 +181,7 @@ impl InputState {
     /// It is also called immediately before button press/release events so
     /// that ordering is preserved: clients always see the latest motion
     /// position before a click.
-    pub fn flush_pointer_motion(&mut self, scene: &mut Scene) {
+    pub fn flush_pointer_motion(&mut self, scene: &mut Scene, wayland_evt_write: Option<u32>) {
         let Some(ts) = self.pending_motion_ts.take() else {
             return;
         };
@@ -200,17 +202,20 @@ impl InputState {
             return;
         }
 
-        self.update_pointer_focus(scene);
+        self.update_pointer_focus(scene, wayland_evt_write);
         if let Some(surface_id) = scene.pointer_focus {
             if let Some(client_id) = scene.surface_client(surface_id) {
+                let (local_x, local_y) =
+                    surface_local_position(scene, surface_id, self.pointer_x, self.pointer_y);
                 let ev = PointerMotionEvent {
                     header: msg_header(EVT_POINTER_MOTION),
                     surface_id,
-                    x: self.pointer_x,
-                    y: self.pointer_y,
+                    x: local_x,
+                    y: local_y,
                     timestamp_ns: ts,
                 };
                 send_client_event(scene, client_id, KIND_POINTER_MOTION, &to_vec(&ev));
+                send_wayland_pointer_motion(wayland_evt_write, surface_id, local_x, local_y, ts);
             }
         }
     }
@@ -293,9 +298,9 @@ impl InputState {
                 // when motion was pending; only call it directly when there
                 // was no pending motion so focus is still resolved correctly.
                 let had_pending = self.pending_motion_ts.is_some();
-                self.flush_pointer_motion(scene);
+                self.flush_pointer_motion(scene, wayland_evt_write);
                 if !had_pending {
-                    self.update_pointer_focus(scene);
+                    self.update_pointer_focus(scene, wayland_evt_write);
                 }
                 let old_focus = scene.keyboard_focus;
                 if btn.button == 0 {
@@ -316,7 +321,12 @@ impl InputState {
                         let new_focus = Some(surface_id);
                         scene.keyboard_focus = new_focus;
                         mark_focus_damage(scene, damage, old_focus, new_focus);
-                        self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                        self.send_keyboard_focus_events(
+                            scene,
+                            old_focus,
+                            scene.keyboard_focus,
+                            wayland_evt_write,
+                        );
                         mark_cursor_damage(
                             damage,
                             self.visible_x,
@@ -330,7 +340,12 @@ impl InputState {
                 let new_focus = scene.pointer_focus;
                 scene.keyboard_focus = new_focus;
                 mark_focus_damage(scene, damage, old_focus, new_focus);
-                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                self.send_keyboard_focus_events(
+                    scene,
+                    old_focus,
+                    scene.keyboard_focus,
+                    wayland_evt_write,
+                );
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
                         let ev = PointerButtonEvent {
@@ -342,6 +357,13 @@ impl InputState {
                             timestamp_ns: header.timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
+                        send_wayland_pointer_button(
+                            wayland_evt_write,
+                            surface_id,
+                            btn.button,
+                            true,
+                            header.timestamp_ns,
+                        );
                     }
                 }
                 mark_cursor_damage(
@@ -361,9 +383,9 @@ impl InputState {
                 // when motion was pending; only call it directly when there
                 // was no pending motion so focus is still resolved correctly.
                 let had_pending = self.pending_motion_ts.is_some();
-                self.flush_pointer_motion(scene);
+                self.flush_pointer_motion(scene, wayland_evt_write);
                 if !had_pending {
-                    self.update_pointer_focus(scene);
+                    self.update_pointer_focus(scene, wayland_evt_write);
                 }
                 if btn.button == 0 && self.end_pointer_grab(wayland_evt_write, scene) {
                     immediate_repaint = true;
@@ -388,6 +410,13 @@ impl InputState {
                             timestamp_ns: header.timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
+                        send_wayland_pointer_button(
+                            wayland_evt_write,
+                            surface_id,
+                            btn.button,
+                            false,
+                            header.timestamp_ns,
+                        );
                     }
                 }
                 mark_cursor_damage(
@@ -402,6 +431,7 @@ impl InputState {
                 let mut p = [0u8; KeyEventPayload::SIZE];
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
+                self.keyboard_modifiers = key.mods;
                 if is_pointer_overlay_toggle(key) {
                     if !key.is_repeat() {
                         self.pointer_overlay_enabled = !self.pointer_overlay_enabled;
@@ -417,7 +447,12 @@ impl InputState {
                     if !key.is_repeat() {
                         let (old_focus, new_focus) = scene.cycle_focus(!key.mods().has_shift());
                         mark_focus_damage(scene, damage, old_focus, new_focus);
-                        self.send_keyboard_focus_events(scene, old_focus, new_focus);
+                        self.send_keyboard_focus_events(
+                            scene,
+                            old_focus,
+                            new_focus,
+                            wayland_evt_write,
+                        );
                     }
                     return true;
                 }
@@ -434,6 +469,15 @@ impl InputState {
                             timestamp_ns: header.timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_KEYBOARD_KEY, &to_vec(&ev));
+                        send_wayland_keyboard_key(
+                            wayland_evt_write,
+                            surface_id,
+                            key.key,
+                            true,
+                            key.mods,
+                            key.is_repeat(),
+                            header.timestamp_ns,
+                        );
                     }
                 }
             }
@@ -441,6 +485,7 @@ impl InputState {
                 let mut p = [0u8; KeyEventPayload::SIZE];
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
+                self.keyboard_modifiers = key.mods;
                 if is_pointer_overlay_toggle(key) {
                     return false;
                 }
@@ -457,6 +502,15 @@ impl InputState {
                             timestamp_ns: header.timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_KEYBOARD_KEY, &to_vec(&ev));
+                        send_wayland_keyboard_key(
+                            wayland_evt_write,
+                            surface_id,
+                            key.key,
+                            false,
+                            key.mods,
+                            key.is_repeat(),
+                            header.timestamp_ns,
+                        );
                     }
                 }
             }
@@ -465,7 +519,7 @@ impl InputState {
         immediate_repaint
     }
 
-    fn update_pointer_focus(&mut self, scene: &mut Scene) {
+    fn update_pointer_focus(&mut self, scene: &mut Scene, wayland_evt_write: Option<u32>) {
         let new_focus = scene.top_client_surface_at(self.pointer_x, self.pointer_y);
         if scene.pointer_focus == new_focus {
             return;
@@ -478,19 +532,23 @@ impl InputState {
                     surface_id: old_surface,
                 };
                 send_client_event(scene, client_id, KIND_POINTER_LEAVE, &to_vec(&ev));
+                send_wayland_pointer_leave(wayland_evt_write, old_surface);
             }
         }
 
         scene.pointer_focus = new_focus;
         if let Some(surface_id) = new_focus {
             if let Some(client_id) = scene.surface_client(surface_id) {
+                let (local_x, local_y) =
+                    surface_local_position(scene, surface_id, self.pointer_x, self.pointer_y);
                 let ev = PointerEnterEvent {
                     header: msg_header(EVT_POINTER_ENTER),
                     surface_id,
-                    x: self.pointer_x,
-                    y: self.pointer_y,
+                    x: local_x,
+                    y: local_y,
                 };
                 send_client_event(scene, client_id, KIND_POINTER_ENTER, &to_vec(&ev));
+                send_wayland_pointer_enter(wayland_evt_write, surface_id, local_x, local_y);
             }
         }
     }
@@ -564,7 +622,12 @@ impl InputState {
                 let new_focus = Some(surface_id);
                 scene.keyboard_focus = new_focus;
                 mark_focus_damage(scene, damage, old_focus, new_focus);
-                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                self.send_keyboard_focus_events(
+                    scene,
+                    old_focus,
+                    scene.keyboard_focus,
+                    wayland_evt_write,
+                );
                 send_wayland_toplevel_action(
                     wayland_evt_write,
                     surface_id,
@@ -578,7 +641,12 @@ impl InputState {
                 if let Some(rect) = scene.set_surface_visible(surface_id, false) {
                     mark_surface_visual_damage(scene, damage, surface_id, rect);
                 }
-                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                self.send_keyboard_focus_events(
+                    scene,
+                    old_focus,
+                    scene.keyboard_focus,
+                    wayland_evt_write,
+                );
                 send_wayland_toplevel_action(
                     wayland_evt_write,
                     surface_id,
@@ -602,7 +670,12 @@ impl InputState {
                 let new_focus = Some(surface_id);
                 scene.keyboard_focus = new_focus;
                 mark_focus_damage(scene, damage, old_focus, new_focus);
-                self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                self.send_keyboard_focus_events(
+                    scene,
+                    old_focus,
+                    scene.keyboard_focus,
+                    wayland_evt_write,
+                );
                 send_wayland_toplevel_action(
                     wayland_evt_write,
                     surface_id,
@@ -770,6 +843,7 @@ impl InputState {
         scene: &mut Scene,
         old_focus: Option<u32>,
         new_focus: Option<u32>,
+        wayland_evt_write: Option<u32>,
     ) {
         if old_focus == new_focus {
             return;
@@ -782,6 +856,7 @@ impl InputState {
                     surface_id: old_surface,
                 };
                 send_client_event(scene, client_id, KIND_KEYBOARD_LEAVE, &to_vec(&ev));
+                send_wayland_keyboard_leave(wayland_evt_write, old_surface);
             }
         }
 
@@ -790,10 +865,15 @@ impl InputState {
                 let ev = KeyboardEnterEvent {
                     header: msg_header(EVT_KEYBOARD_ENTER),
                     surface_id: new_surface,
-                    modifiers: 0,
+                    modifiers: self.keyboard_modifiers,
                     _pad: [0; 3],
                 };
                 send_client_event(scene, client_id, KIND_KEYBOARD_ENTER, &to_vec(&ev));
+                send_wayland_keyboard_enter(
+                    wayland_evt_write,
+                    new_surface,
+                    self.keyboard_modifiers,
+                );
             }
         }
     }
@@ -936,6 +1016,90 @@ fn send_wayland_toplevel_action(
     };
     let msg = ipc::encode_toplevel_action(surface_id, action, width, height);
     let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_pointer_enter(wayland_evt_write: Option<u32>, surface_id: u32, x: i32, y: i32) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_pointer_enter(surface_id, x, y);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_pointer_leave(wayland_evt_write: Option<u32>, surface_id: u32) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_pointer_leave(surface_id);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_pointer_motion(
+    wayland_evt_write: Option<u32>,
+    surface_id: u32,
+    x: i32,
+    y: i32,
+    timestamp_ns: u64,
+) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_pointer_motion(surface_id, x, y, timestamp_ns);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_pointer_button(
+    wayland_evt_write: Option<u32>,
+    surface_id: u32,
+    button: u8,
+    pressed: bool,
+    timestamp_ns: u64,
+) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_pointer_button(surface_id, button, pressed, timestamp_ns);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_keyboard_enter(wayland_evt_write: Option<u32>, surface_id: u32, modifiers: u8) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_keyboard_enter(surface_id, modifiers);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_keyboard_leave(wayland_evt_write: Option<u32>, surface_id: u32) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_keyboard_leave(surface_id);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_keyboard_key(
+    wayland_evt_write: Option<u32>,
+    surface_id: u32,
+    key: u16,
+    pressed: bool,
+    modifiers: u8,
+    repeat: bool,
+    timestamp_ns: u64,
+) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_keyboard_key(surface_id, key, pressed, modifiers, repeat, timestamp_ns);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn surface_local_position(scene: &Scene, surface_id: u32, x: i32, y: i32) -> (i32, i32) {
+    if let Some(rect) = scene.surface_rect(surface_id) {
+        (x.saturating_sub(rect.x as i32), y.saturating_sub(rect.y as i32))
+    } else {
+        (x, y)
+    }
 }
 
 #[inline]

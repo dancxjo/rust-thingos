@@ -17,6 +17,9 @@ const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
 const SHM_ID: u32 = 4;
 const WM_BASE_ID: u32 = 5;
+const SEAT_ID: u32 = 6;
+const POINTER_ID: u32 = 7;
+const KEYBOARD_ID: u32 = 8;
 
 const TOP_SURFACE_ID: u32 = 10;
 const TOP_XDG_SURFACE_ID: u32 = 11;
@@ -67,6 +70,9 @@ fn main(_arg: usize) -> ! {
     bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
     bind_global(fd, 2, "wl_shm", 1, SHM_ID);
     bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
+    bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
+    seat_get_pointer(fd, SEAT_ID, POINTER_ID);
+    seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
     create_surface(fd, COMPOSITOR_ID, TOP_SURFACE_ID);
     get_xdg_surface(fd, WM_BASE_ID, TOP_XDG_SURFACE_ID, TOP_SURFACE_ID);
@@ -121,6 +127,47 @@ fn main(_arg: usize) -> ! {
                 (TOPLEVEL_ID, 1) => {
                     info!("wayland_hello: compositor requested close; idling");
                     idle_forever();
+                }
+                (POINTER_ID, 0) if payload.len() >= 16 => {
+                    info!(
+                        "wayland_hello: pointer enter surface={} x={} y={}",
+                        read_u32(payload, 4),
+                        wl_fixed_to_i32(read_i32(payload, 8)),
+                        wl_fixed_to_i32(read_i32(payload, 12))
+                    );
+                }
+                (POINTER_ID, 1) if payload.len() >= 8 => {
+                    info!("wayland_hello: pointer leave surface={}", read_u32(payload, 4));
+                }
+                (POINTER_ID, 2) if payload.len() >= 12 => {
+                    info!(
+                        "wayland_hello: pointer motion x={} y={}",
+                        wl_fixed_to_i32(read_i32(payload, 4)),
+                        wl_fixed_to_i32(read_i32(payload, 8))
+                    );
+                }
+                (POINTER_ID, 3) if payload.len() >= 16 => {
+                    info!(
+                        "wayland_hello: pointer button button={} state={}",
+                        read_u32(payload, 8),
+                        read_u32(payload, 12)
+                    );
+                }
+                (KEYBOARD_ID, 1) if payload.len() >= 8 => {
+                    info!("wayland_hello: keyboard enter surface={}", read_u32(payload, 4));
+                }
+                (KEYBOARD_ID, 2) if payload.len() >= 8 => {
+                    info!("wayland_hello: keyboard leave surface={}", read_u32(payload, 4));
+                }
+                (KEYBOARD_ID, 3) if payload.len() >= 16 => {
+                    info!(
+                        "wayland_hello: keyboard key key={} state={}",
+                        read_u32(payload, 8),
+                        read_u32(payload, 12)
+                    );
+                }
+                (KEYBOARD_ID, 4) if payload.len() >= 20 => {
+                    info!("wayland_hello: keyboard modifiers depressed={}", read_u32(payload, 4));
                 }
                 (POPUP_XDG_SURFACE_ID, 0) if payload.len() >= 4 => {
                     popup_pending.serial = Some(read_u32(payload, 0));
@@ -497,6 +544,20 @@ fn set_toplevel_app_id(fd: u32, toplevel_id: u32, app_id: &str) {
     send_string_request(fd, toplevel_id, 3, app_id);
 }
 
+fn seat_get_pointer(fd: u32, seat_id: u32, new_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(seat_id, 0, 12, &mut buf);
+    buf.extend_from_slice(&new_id.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
+fn seat_get_keyboard(fd: u32, seat_id: u32, new_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(seat_id, 1, 12, &mut buf);
+    buf.extend_from_slice(&new_id.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
 fn create_positioner(fd: u32, wm_base_id: u32, new_id: u32) {
     let mut buf = Vec::new();
     encode_header(wm_base_id, 1, 12, &mut buf);
@@ -672,4 +733,8 @@ fn read_u32(buf: &[u8], offset: usize) -> u32 {
 
 fn read_i32(buf: &[u8], offset: usize) -> i32 {
     i32::from_ne_bytes(buf[offset..offset + 4].try_into().unwrap())
+}
+
+fn wl_fixed_to_i32(value: i32) -> i32 {
+    value / 256
 }

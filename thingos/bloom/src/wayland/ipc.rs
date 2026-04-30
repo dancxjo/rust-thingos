@@ -25,6 +25,8 @@
 //! | `WEVT_FRAME_DONE`    | A frame has been presented                    |
 //! | `WEVT_CONFIGURE_SURFACE` | The compositor requests a toplevel size   |
 //! | `WEVT_TOPLEVEL_ACTION` | The compositor requests a toplevel action  |
+//! | `WEVT_POINTER_*` | Focused pointer events from Bristle/Bloom    |
+//! | `WEVT_KEYBOARD_*` | Focused keyboard events from Bristle/Bloom  |
 
 // ── Discriminants ────────────────────────────────────────────────────────────
 
@@ -41,6 +43,13 @@ pub const WEVT_BUFFER_RELEASE: u8 = 1;
 pub const WEVT_FRAME_DONE: u8 = 2;
 pub const WEVT_CONFIGURE_SURFACE: u8 = 3;
 pub const WEVT_TOPLEVEL_ACTION: u8 = 4;
+pub const WEVT_POINTER_ENTER: u8 = 5;
+pub const WEVT_POINTER_LEAVE: u8 = 6;
+pub const WEVT_POINTER_MOTION: u8 = 7;
+pub const WEVT_POINTER_BUTTON: u8 = 8;
+pub const WEVT_KEYBOARD_ENTER: u8 = 9;
+pub const WEVT_KEYBOARD_LEAVE: u8 = 10;
+pub const WEVT_KEYBOARD_KEY: u8 = 11;
 
 pub const TOPLEVEL_ACTION_CLOSE: u8 = 1;
 pub const TOPLEVEL_ACTION_MINIMIZE: u8 = 2;
@@ -179,6 +188,76 @@ pub struct WEvtToplevelAction {
     pub bloom_surface_id: u32,
     pub width: i32,
     pub height: i32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtPointerEnter {
+    pub msg_type: u8,
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtPointerLeave {
+    pub msg_type: u8,
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtPointerMotion {
+    pub msg_type: u8,
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
+    pub x: i32,
+    pub y: i32,
+    pub timestamp_ms: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtPointerButton {
+    pub msg_type: u8,
+    pub button: u8,
+    pub pressed: u8,
+    pub _pad: u8,
+    pub bloom_surface_id: u32,
+    pub timestamp_ms: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtKeyboardEnter {
+    pub msg_type: u8,
+    pub modifiers: u8,
+    pub _pad: [u8; 2],
+    pub bloom_surface_id: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtKeyboardLeave {
+    pub msg_type: u8,
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtKeyboardKey {
+    pub msg_type: u8,
+    pub pressed: u8,
+    pub modifiers: u8,
+    pub repeat: u8,
+    pub bloom_surface_id: u32,
+    pub key: u16,
+    pub _pad: [u8; 2],
+    pub timestamp_ms: u32,
 }
 
 // ── Encoding helpers ─────────────────────────────────────────────────────────
@@ -336,5 +415,95 @@ pub fn encode_toplevel_action(
     };
     let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WEvtToplevelAction));
+    out
+}
+
+pub fn encode_pointer_enter(bloom_surface_id: u32, x: i32, y: i32) -> [u8; 16] {
+    let msg =
+        WEvtPointerEnter { msg_type: WEVT_POINTER_ENTER, _pad: [0; 3], bloom_surface_id, x, y };
+    let mut out = [0u8; 16];
+    out.copy_from_slice(as_bytes!(msg, WEvtPointerEnter));
+    out
+}
+
+pub fn encode_pointer_leave(bloom_surface_id: u32) -> [u8; 8] {
+    let msg = WEvtPointerLeave { msg_type: WEVT_POINTER_LEAVE, _pad: [0; 3], bloom_surface_id };
+    let mut out = [0u8; 8];
+    out.copy_from_slice(as_bytes!(msg, WEvtPointerLeave));
+    out
+}
+
+pub fn encode_pointer_motion(bloom_surface_id: u32, x: i32, y: i32, timestamp_ns: u64) -> [u8; 20] {
+    let msg = WEvtPointerMotion {
+        msg_type: WEVT_POINTER_MOTION,
+        _pad: [0; 3],
+        bloom_surface_id,
+        x,
+        y,
+        timestamp_ms: (timestamp_ns / 1_000_000) as u32,
+    };
+    let mut out = [0u8; 20];
+    out.copy_from_slice(as_bytes!(msg, WEvtPointerMotion));
+    out
+}
+
+pub fn encode_pointer_button(
+    bloom_surface_id: u32,
+    button: u8,
+    pressed: bool,
+    timestamp_ns: u64,
+) -> [u8; 12] {
+    let msg = WEvtPointerButton {
+        msg_type: WEVT_POINTER_BUTTON,
+        button,
+        pressed: pressed as u8,
+        _pad: 0,
+        bloom_surface_id,
+        timestamp_ms: (timestamp_ns / 1_000_000) as u32,
+    };
+    let mut out = [0u8; 12];
+    out.copy_from_slice(as_bytes!(msg, WEvtPointerButton));
+    out
+}
+
+pub fn encode_keyboard_enter(bloom_surface_id: u32, modifiers: u8) -> [u8; 8] {
+    let msg = WEvtKeyboardEnter {
+        msg_type: WEVT_KEYBOARD_ENTER,
+        modifiers,
+        _pad: [0; 2],
+        bloom_surface_id,
+    };
+    let mut out = [0u8; 8];
+    out.copy_from_slice(as_bytes!(msg, WEvtKeyboardEnter));
+    out
+}
+
+pub fn encode_keyboard_leave(bloom_surface_id: u32) -> [u8; 8] {
+    let msg = WEvtKeyboardLeave { msg_type: WEVT_KEYBOARD_LEAVE, _pad: [0; 3], bloom_surface_id };
+    let mut out = [0u8; 8];
+    out.copy_from_slice(as_bytes!(msg, WEvtKeyboardLeave));
+    out
+}
+
+pub fn encode_keyboard_key(
+    bloom_surface_id: u32,
+    key: u16,
+    pressed: bool,
+    modifiers: u8,
+    repeat: bool,
+    timestamp_ns: u64,
+) -> [u8; 16] {
+    let msg = WEvtKeyboardKey {
+        msg_type: WEVT_KEYBOARD_KEY,
+        pressed: pressed as u8,
+        modifiers,
+        repeat: repeat as u8,
+        bloom_surface_id,
+        key,
+        _pad: [0; 2],
+        timestamp_ms: (timestamp_ns / 1_000_000) as u32,
+    };
+    let mut out = [0u8; 16];
+    out.copy_from_slice(as_bytes!(msg, WEvtKeyboardKey));
     out
 }

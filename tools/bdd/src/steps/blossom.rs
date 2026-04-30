@@ -765,6 +765,77 @@ async fn compositor_damages_moved_toplevel_shadow(
     Ok(())
 }
 
+#[when("I click inside the Wayland hello client and press A")]
+async fn click_wayland_hello_client_and_press_a(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for Wayland input".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("ps2_kbd: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 keyboard driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let commands = [
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": -10000}}, {"type": "rel", "data": {"axis": "y", "value": -10000}}]}}"#,
+            1_000,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 160}}, {"type": "rel", "data": {"axis": "y", "value": 96}}]}}"#,
+            500,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#,
+            150,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#,
+            150,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": true, "key": {"type": "qcode", "data": "a"}}}]}}"#,
+            80,
+        ),
+        (
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "key", "data": {"down": false, "key": {"type": "qcode", "data": "a"}}}]}}"#,
+            200,
+        ),
+    ];
+
+    for (command, settle_ms) in commands {
+        world
+            .execute_qmp_control(command)
+            .await
+            .map_err(|e| StepError(format!("QMP Wayland input failed: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
+    }
+    Ok(())
+}
+
+#[then("the Wayland hello client should receive pointer and keyboard input")]
+async fn wayland_hello_receives_pointer_and_keyboard(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    if !world.wait_for_serial("wayland_hello: pointer enter", 30.0).await {
+        return Err(StepError("Wayland client did not receive wl_pointer.enter".to_string()));
+    }
+    if !world.wait_for_serial("wayland_hello: pointer button", 30.0).await {
+        return Err(StepError("Wayland client did not receive wl_pointer.button".to_string()));
+    }
+    if !world.wait_for_serial("wayland_hello: keyboard enter", 30.0).await {
+        return Err(StepError("Wayland client did not receive wl_keyboard.enter".to_string()));
+    }
+    if !world.wait_for_serial("wayland_hello: keyboard key", 30.0).await {
+        return Err(StepError("Wayland client did not receive wl_keyboard.key".to_string()));
+    }
+    Ok(())
+}
+
 #[when("I drag the Wayland hello frame")]
 async fn drag_wayland_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {

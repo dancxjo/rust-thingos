@@ -84,6 +84,13 @@ Feature: blossom xdg-shell lifecycle
     Then the latest serial output should contain "surface_committed"
 
   @pointer-debug
+  Scenario: wl_seat delivers pointer and keyboard events to the focused client
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I click inside the Wayland hello client and press A
+    Then the Wayland hello client should receive pointer and keyboard input
+
+  @pointer-debug
   Scenario: dragging the title bar moves a toplevel window
     Given the client has an xdg_toplevel
     Then the Wayland hello client should be visible

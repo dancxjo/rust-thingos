@@ -294,7 +294,7 @@ impl BloomWorld {
         let composition = self.scene.collect_composition();
         // Flush coalesced pointer motion: deliver the latest position to
         // clients once per frame rather than per raw sample.
-        self.input.flush_pointer_motion(&mut self.scene);
+        self.input.flush_pointer_motion(&mut self.scene, self.wayland_evt_write);
         self.input.flush_resizes(self.wayland_evt_write);
         self.input.flush_visible_pointer(&mut self.damage);
 

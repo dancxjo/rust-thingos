@@ -12,6 +12,7 @@
 //! | 1    | wl_compositor    | 4       |
 //! | 2    | wl_shm           | 1       |
 //! | 3    | xdg_wm_base      | 1       |
+//! | 4    | wl_seat          | 5       |
 
 use alloc::string::String;
 use alloc::vec;
@@ -29,6 +30,7 @@ use crate::wayland::wire::{WireMsg, read_i32, read_string, read_u32};
 pub const GLOBAL_WL_COMPOSITOR: u32 = 1;
 pub const GLOBAL_WL_SHM: u32 = 2;
 pub const GLOBAL_XDG_WM_BASE: u32 = 3;
+pub const GLOBAL_WL_SEAT: u32 = 4;
 
 // ── Top-level dispatcher ─────────────────────────────────────────────────────
 
@@ -70,6 +72,9 @@ pub fn dispatch(
         ObjKind::XdgSurface => dispatch_xdg_surface(msg, client, obj_id, blossom, cmd_write),
         ObjKind::XdgToplevel => dispatch_xdg_toplevel(msg, client, obj_id, blossom, cmd_write),
         ObjKind::XdgPopup => dispatch_xdg_popup(msg, client, obj_id, blossom),
+        ObjKind::Seat => dispatch_seat(msg, client, obj_id),
+        ObjKind::Pointer => dispatch_pointer(msg, client, obj_id),
+        ObjKind::Keyboard => dispatch_keyboard(msg, client, obj_id),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -91,6 +96,9 @@ enum ObjKind {
     XdgSurface,
     XdgToplevel,
     XdgPopup,
+    Seat,
+    Pointer,
+    Keyboard,
     Destroyed,
     Unknown,
 }
@@ -110,6 +118,9 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::XdgSurface { .. } => ObjKind::XdgSurface,
         ObjectEntry::XdgToplevel { .. } => ObjKind::XdgToplevel,
         ObjectEntry::XdgPopup { .. } => ObjKind::XdgPopup,
+        ObjectEntry::Seat => ObjKind::Seat,
+        ObjectEntry::Pointer => ObjKind::Pointer,
+        ObjectEntry::Keyboard => ObjKind::Keyboard,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -152,6 +163,7 @@ fn dispatch_display(
                 (GLOBAL_WL_COMPOSITOR, "wl_compositor", 4u32),
                 (GLOBAL_WL_SHM, "wl_shm", 1u32),
                 (GLOBAL_XDG_WM_BASE, "xdg_wm_base", 1u32),
+                (GLOBAL_WL_SEAT, "wl_seat", 5u32),
             ] {
                 let mut p = Vec::new();
                 p.extend_from_slice(&name.to_ne_bytes());
@@ -207,11 +219,84 @@ fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient) -> Vec<Vec<u8>> 
         GLOBAL_XDG_WM_BASE => {
             client.insert(new_id, ObjectEntry::XdgWmBase);
         }
+        GLOBAL_WL_SEAT => {
+            client.insert(new_id, ObjectEntry::Seat);
+            send_seat_capabilities(client, new_id);
+        }
         _ => {
             client.send_protocol_error(new_id, 0, "unknown global");
         }
     }
     vec![]
+}
+
+// ── wl_seat / wl_pointer / wl_keyboard ──────────────────────────────────────
+
+const WL_SEAT_GET_POINTER: u16 = 0;
+const WL_SEAT_GET_KEYBOARD: u16 = 1;
+const WL_SEAT_RELEASE: u16 = 3;
+const WL_POINTER_RELEASE: u16 = 1;
+const WL_KEYBOARD_RELEASE: u16 = 1;
+
+const WL_SEAT_CAPABILITY_POINTER: u32 = 1;
+const WL_SEAT_CAPABILITY_KEYBOARD: u32 = 2;
+
+fn send_seat_capabilities(client: &WaylandClient, seat_obj: u32) {
+    let caps = WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD;
+    client.send(seat_obj, 0, &caps.to_ne_bytes());
+    client.send(seat_obj, 1, &crate::wayland::wire::encode_string("seat0"));
+}
+
+fn dispatch_seat(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WL_SEAT_GET_POINTER => {
+            if let Some(new_id) = read_u32(&msg.data, 0) {
+                client.insert(new_id, ObjectEntry::Pointer);
+            }
+        }
+        WL_SEAT_GET_KEYBOARD => {
+            if let Some(new_id) = read_u32(&msg.data, 0) {
+                client.insert(new_id, ObjectEntry::Keyboard);
+                send_keyboard_keymap(client, new_id);
+                send_keyboard_repeat_info(client, new_id);
+            }
+        }
+        WL_SEAT_RELEASE => {
+            client.destroy(obj_id);
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+fn dispatch_pointer(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    if msg.opcode == WL_POINTER_RELEASE {
+        client.destroy(obj_id);
+    }
+    vec![]
+}
+
+fn dispatch_keyboard(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    if msg.opcode == WL_KEYBOARD_RELEASE {
+        client.destroy(obj_id);
+    }
+    vec![]
+}
+
+fn send_keyboard_keymap(client: &WaylandClient, keyboard_obj: u32) {
+    // wl_keyboard.keymap(format=no_keymap, fd, size). With no_keymap the fd is
+    // ignored by clients; send no ancillary handle and a zero size.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&0u32.to_ne_bytes());
+    payload.extend_from_slice(&0u32.to_ne_bytes());
+    client.send_with_fds(keyboard_obj, 0, &payload, &[]);
+}
+
+fn send_keyboard_repeat_info(client: &WaylandClient, keyboard_obj: u32) {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&25i32.to_ne_bytes());
+    payload.extend_from_slice(&600i32.to_ne_bytes());
+    client.send(keyboard_obj, 5, &payload);
 }
 
 // ── wl_compositor ─────────────────────────────────────────────────────────────

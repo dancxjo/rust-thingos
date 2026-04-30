@@ -46,6 +46,12 @@ pub enum ObjectEntry {
     XdgToplevel { xdg_surface_obj: u32 },
     /// xdg_popup.
     XdgPopup { xdg_surface_obj: u32 },
+    /// wl_seat global.
+    Seat,
+    /// wl_pointer created from wl_seat.
+    Pointer,
+    /// wl_keyboard created from wl_seat.
+    Keyboard,
     /// Object has been destroyed (tombstone).
     Destroyed,
 }
@@ -70,6 +76,8 @@ pub struct WaylandClient {
     /// Map: bloom_surface_id → frame callback object ID
     /// (populated on wl_surface.frame, cleared after sending done).
     pub frame_cbs: BTreeMap<u32, Vec<u32>>,
+    /// Last modifier mask sent to this client's wl_keyboard.
+    pub keyboard_modifiers: u8,
 }
 
 impl WaylandClient {
@@ -85,6 +93,7 @@ impl WaylandClient {
             next_buf_key: bloom_surface_id_seed * 1000,
             buf_key_to_obj: BTreeMap::new(),
             frame_cbs: BTreeMap::new(),
+            keyboard_modifiers: 0,
         }
     }
 
@@ -126,6 +135,12 @@ impl WaylandClient {
         let _ = stem::syscall::vfs::vfs_write(self.fd, &msg);
     }
 
+    /// Encode and send a Wayland event with ancillary file descriptors.
+    pub fn send_with_fds(&self, object_id: u32, opcode: u16, payload: &[u8], fds: &[u32]) {
+        let msg = crate::wayland::wire::encode(object_id, opcode, payload);
+        let _ = stem::syscall::socket::sendmsg(self.fd, &msg, fds);
+    }
+
     /// Send a `wl_display.error(object_id, code, message)` protocol error.
     pub fn send_protocol_error(&self, object_id: u32, code: u32, msg: &str) {
         use crate::wayland::wire::encode_string;
@@ -158,6 +173,32 @@ impl WaylandClient {
         } else {
             None
         }
+    }
+
+    /// Find the wl_surface object ID for a Bloom surface.
+    pub fn wl_surface_for_bloom_surface(&self, bloom_id: u32) -> Option<u32> {
+        for (obj_id, entry) in &self.objects {
+            if let ObjectEntry::Surface { bloom_surface_id, .. } = entry {
+                if *bloom_surface_id == bloom_id {
+                    return Some(*obj_id);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn pointer_object(&self) -> Option<u32> {
+        self.objects.iter().find_map(|(id, entry)| match entry {
+            ObjectEntry::Pointer => Some(*id),
+            _ => None,
+        })
+    }
+
+    pub fn keyboard_object(&self) -> Option<u32> {
+        self.objects.iter().find_map(|(id, entry)| match entry {
+            ObjectEntry::Keyboard => Some(*id),
+            _ => None,
+        })
     }
 
     /// Return the xdg_surface object ID associated with a wl_surface.
