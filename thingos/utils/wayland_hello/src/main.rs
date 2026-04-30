@@ -7,11 +7,12 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
+use stem::dmabuf::DmaBuf;
 use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::{memfd_create, sleep_ms, vfs_close, vfs_read, vfs_write, vm_map};
+use stem::syscall::{sleep_ms, vfs_close, vfs_read, vfs_write};
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -50,8 +51,7 @@ struct TextRenderer {
 struct BufferState {
     pool_id: u32,
     buffer_id: u32,
-    handle: u32,
-    ptr: *mut u8,
+    backing: DmaBuf,
     width: u32,
     height: u32,
     stride: u32,
@@ -363,29 +363,18 @@ fn ensure_buffer(
 
     let stride = width * 4;
     let size = stride * height;
-    let fd_buf = memfd_create("wl.buffer", size as usize).expect("create memfd");
-
-    use abi::vm::{VmBacking, VmMapReq, VmProt};
-    let req = VmMapReq {
-        addr_hint: 0,
-        len: size as usize,
-        prot: VmProt::READ | VmProt::WRITE | VmProt::USER,
-        flags: abi::vm::VmMapFlags::empty(),
-        backing: VmBacking::File { thing: fd_buf, offset: 0 },
-    };
-    let resp = vm_map(&req).expect("map memfd");
-    let ptr = resp.addr as *mut u8;
+    let backing = DmaBuf::create("wl.buffer", size as usize).expect("create wl buffer");
 
     let pool_id = base_id;
     let buffer_id = base_id + 1;
     if let Some(dmabuf) = dmabuf_id {
-        create_dmabuf_buffer(fd, dmabuf, pool_id, buffer_id, fd_buf, width, height, stride);
+        create_dmabuf_buffer(fd, dmabuf, pool_id, buffer_id, backing.fd(), width, height, stride);
     } else {
-        create_pool(fd, shm_id, pool_id, fd_buf, size);
+        create_pool(fd, shm_id, pool_id, backing.fd(), size);
         create_buffer(fd, pool_id, buffer_id, width, height, stride);
     }
 
-    let out = BufferState { pool_id, buffer_id, handle: fd_buf, ptr, width, height, stride };
+    let out = BufferState { pool_id, buffer_id, backing, width, height, stride };
     *current = Some(out);
     out
 }
@@ -393,7 +382,7 @@ fn ensure_buffer(
 fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRenderer>) {
     unsafe {
         let pixels = core::slice::from_raw_parts_mut(
-            buffer.ptr as *mut u32,
+            buffer.backing.as_mut_ptr() as *mut u32,
             (buffer.width * buffer.height) as usize,
         );
         paint_vertical_gradient(pixels, buffer.width, buffer.height, 0xFFFFF9EC, 0xFFFDF1D2);
@@ -436,7 +425,7 @@ fn render_window(buffer: BufferState, title: &str, text_renderer: Option<&TextRe
 fn render_popup(buffer: BufferState, label: &str, text_renderer: Option<&TextRenderer>) {
     unsafe {
         let pixels = core::slice::from_raw_parts_mut(
-            buffer.ptr as *mut u32,
+            buffer.backing.as_mut_ptr() as *mut u32,
             (buffer.width * buffer.height) as usize,
         );
         for y in 0..buffer.height as usize {
