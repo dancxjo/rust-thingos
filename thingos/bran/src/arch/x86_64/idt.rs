@@ -19,6 +19,9 @@ static IRQ4_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOTKEY_SHELL_TID: AtomicU64 = AtomicU64::new(0);
 static PAUSE_DUMP_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PAUSE_DUMP_OWNER_CPU: AtomicU64 = AtomicU64::new(u64::MAX);
+static PS2_REBOOT_EXTENDED_PREFIX: AtomicBool = AtomicBool::new(false);
+static PS2_REBOOT_CTRL_DOWN: AtomicBool = AtomicBool::new(false);
+static PS2_REBOOT_ALT_DOWN: AtomicBool = AtomicBool::new(false);
 
 const MAX_PAUSE_CPUS: usize = 256;
 static PAUSE_CPU_VALID: [AtomicBool; MAX_PAUSE_CPUS] =
@@ -823,6 +826,9 @@ const PS2_STATUS_PORT: u16 = 0x64;
 const PS2_DATA_PORT: u16 = 0x60;
 const PS2_STATUS_OUTPUT_FULL: u8 = 0x01;
 const PS2_STATUS_AUX_DATA: u8 = 0x20;
+const PS2_SCANCODE_CTRL: u8 = 0x1D;
+const PS2_SCANCODE_ALT: u8 = 0x38;
+const PS2_SCANCODE_DELETE: u8 = 0x53;
 const PS2_SCANCODE_F12: u8 = 0x58;
 const PS2_SCANCODE_RELEASE_MASK: u8 = 0x80;
 const PS2_SCANCODE_KEY_MASK: u8 = 0x7F;
@@ -837,9 +843,44 @@ fn raw_inb(port: u16) -> u8 {
     value
 }
 
-fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, Option<u8>, usize) {
+fn detect_ctrl_alt_del_reboot(byte: u8) -> bool {
+    match byte {
+        0xE0 => {
+            PS2_REBOOT_EXTENDED_PREFIX.store(true, Ordering::Release);
+            return false;
+        }
+        0xE1 => {
+            PS2_REBOOT_EXTENDED_PREFIX.store(false, Ordering::Release);
+            return false;
+        }
+        _ => {}
+    }
+
+    let extended = PS2_REBOOT_EXTENDED_PREFIX.swap(false, Ordering::AcqRel);
+    let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
+    let scancode = byte & PS2_SCANCODE_KEY_MASK;
+
+    match (extended, scancode) {
+        (false, PS2_SCANCODE_CTRL) | (true, PS2_SCANCODE_CTRL) => {
+            PS2_REBOOT_CTRL_DOWN.store(!released, Ordering::Release);
+            false
+        }
+        (false, PS2_SCANCODE_ALT) | (true, PS2_SCANCODE_ALT) => {
+            PS2_REBOOT_ALT_DOWN.store(!released, Ordering::Release);
+            false
+        }
+        (true, PS2_SCANCODE_DELETE) if !released => {
+            PS2_REBOOT_CTRL_DOWN.load(Ordering::Acquire)
+                && PS2_REBOOT_ALT_DOWN.load(Ordering::Acquire)
+        }
+        _ => false,
+    }
+}
+
+fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, bool, Option<u8>, usize) {
     let mut pause_dump = false;
     let mut f12_press = false;
+    let mut ctrl_alt_del = false;
     let mut log_level = None;
     let mut captured = 0usize;
 
@@ -854,6 +895,9 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, Option<u8>, usize) {
 
         let byte = raw_inb(PS2_DATA_PORT);
         captured += 1;
+        if detect_ctrl_alt_del_reboot(byte) {
+            ctrl_alt_del = true;
+        }
         if kernel::irq::ps2::buffer_scancode(byte) {
             pause_dump = true;
         }
@@ -865,7 +909,7 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, Option<u8>, usize) {
         }
     }
 
-    (pause_dump, f12_press, log_level, captured)
+    (pause_dump, f12_press, ctrl_alt_del, log_level, captured)
 }
 
 fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
@@ -883,6 +927,9 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
         let byte = raw_inb(PS2_DATA_PORT);
         let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
         let scancode = byte & PS2_SCANCODE_KEY_MASK;
+        if detect_ctrl_alt_del_reboot(byte) {
+            reboot = true;
+        }
         let _ = kernel::irq::ps2::buffer_scancode(byte);
         if !released && scancode == PS2_SCANCODE_F12 {
             reboot = true;
@@ -892,26 +939,26 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
     reboot
 }
 
-fn capture_ps2_keyboard_irq() -> (bool, bool) {
-    let (pause, f12, log_level, _) = capture_ps2_keyboard(32);
+fn capture_ps2_keyboard_irq() -> (bool, bool, bool) {
+    let (pause, f12, ctrl_alt_del, log_level, _) = capture_ps2_keyboard(32);
     if let Some(level) = log_level {
         announce_log_level_hotkey(level);
     }
-    (pause, f12)
+    (pause, f12, ctrl_alt_del)
 }
 
-fn poll_ps2_keyboard_fallback() -> bool {
-    let (pause_dump, f12_press, log_level, captured) = capture_ps2_keyboard(8);
+fn poll_ps2_keyboard_fallback() -> (bool, bool) {
+    let (pause_dump, f12_press, ctrl_alt_del, log_level, captured) = capture_ps2_keyboard(8);
     if let Some(level) = log_level {
         announce_log_level_hotkey(level);
     }
     if f12_press {
         activate_terminal_and_spawn_shell();
     }
-    if captured != 0 {
+    if captured != 0 && !ctrl_alt_del {
         kernel::irq::dispatch_irq(0x21);
     }
-    pause_dump
+    (pause_dump, ctrl_alt_del)
 }
 
 fn announce_log_level_hotkey(level: u8) {
@@ -1354,9 +1401,13 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
     }
 
     let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let (pause_dump, f12_press, log_level, captured) = capture_ps2_keyboard(32);
+    let (pause_dump, f12_press, ctrl_alt_del, log_level, captured) = capture_ps2_keyboard(32);
     if let Some(level) = log_level {
         announce_log_level_hotkey(level);
+    }
+    if ctrl_alt_del {
+        kernel::kinfo!("PS/2 hotkey Ctrl+Alt+Del detected; forcing immediate reboot");
+        kernel::runtime_base().reboot();
     }
     if f12_press {
         activate_terminal_and_spawn_shell();
@@ -1391,6 +1442,7 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
 
     let mut pause_dump = false;
     let mut f12_press = false;
+    let mut ctrl_alt_del = false;
 
     if resolved == 0x21 {
         let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1399,9 +1451,10 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
             kinfo!("IRQ1 fired (count={})", count);
         }
         */
-        let (pause, f12) = capture_ps2_keyboard_irq();
+        let (pause, f12, reboot) = capture_ps2_keyboard_irq();
         pause_dump = pause;
         f12_press = f12;
+        ctrl_alt_del = reboot;
     }
 
     if resolved == 0x2C {
@@ -1418,6 +1471,11 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
 
     if (resolved >= 0x20 && resolved <= 0x2F) || (resolved >= 0xF0) {
         crate::arch::x86_64::pic::send_eoi(resolved);
+    }
+
+    if ctrl_alt_del {
+        kernel::kinfo!("PS/2 hotkey Ctrl+Alt+Del detected; forcing immediate reboot");
+        kernel::runtime_base().reboot();
     }
 
     if pause_dump {
@@ -1440,7 +1498,12 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
 
     // IRQ_TIMER_VECTOR or IRQ_RESCHED_VECTOR is our preemption heartbeat
     if resolved == IRQ_TIMER_VECTOR {
-        if !pause_dump && poll_ps2_keyboard_fallback() {
+        let (fallback_pause, fallback_reboot) = poll_ps2_keyboard_fallback();
+        if fallback_reboot {
+            kernel::kinfo!("PS/2 hotkey Ctrl+Alt+Del detected; forcing immediate reboot");
+            kernel::runtime_base().reboot();
+        }
+        if !pause_dump && fallback_pause {
             let snapshot =
                 if irq_snapshot.is_null() { None } else { Some(unsafe { &*irq_snapshot }) };
             trigger_pause_dump(snapshot);

@@ -88,6 +88,16 @@ Feature: Bloom compositor service loop and responsiveness
     And the serial output should not contain "Freed node"
     And the bloom first frame should contain visible pixels
 
+  @bootfb
+  Scenario: boot framebuffer driver survives the first compositor commit
+    # Regression coverage for /dev/fb0 shared mappings: the display_bootfb
+    # provider must map the physical framebuffer into userspace, not the
+    # kernel-virtual scanout address reported by the boot runtime.
+    Given the machine is booted
+    Then the serial output should contain "display_bootfb: imported buffer" within 60s
+    And the serial output should contain "First frame rendered" within 60s
+    And the serial output should not contain "task='display_bootfb'"
+
   Scenario: bloom first frame includes the cached cursor plane
     Given the machine is booted
     Then the serial output should contain "bloom: cursor ready" within 60s

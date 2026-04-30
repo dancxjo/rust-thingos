@@ -663,6 +663,7 @@ async fn then_output_contains(world: &mut ThingOsWorld, expected: String) -> Res
 #[when(regex = r#"^I press (.+)$"#)]
 async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
     if world.qmp_control.is_some() {
+        world.serial_checkpoint = world.get_serial_log().await.len();
         let parts: Vec<&str> = keys.split('+').collect();
         eprintln!("│  │  │      ⌨️ Pressing: {}", keys);
 
@@ -715,6 +716,32 @@ async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     } else {
         eprintln!("│  │  │      ⚠️ No QMP connection for keyboard input");
+    }
+}
+
+#[then("the machine should reboot")]
+async fn then_machine_should_reboot(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs_f64(default_timeout_secs(world).max(120.0));
+
+    loop {
+        let log = world.get_serial_log().await;
+        let recent = strip_ansi(&log[world.serial_checkpoint.min(log.len())..]).to_lowercase();
+        if recent.contains("x86_64: performing reboot via 8042")
+            && recent.contains("entering scheduler loop")
+        {
+            eprintln!("│  │  │      ✅ Reboot completed after keyboard trap");
+            return Ok(());
+        }
+
+        if start.elapsed() > timeout {
+            return Err(StepError(
+                "machine did not reboot and reach the scheduler loop after the keyboard trap"
+                    .to_string(),
+            ));
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
 

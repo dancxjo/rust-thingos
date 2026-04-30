@@ -43,7 +43,7 @@ use super::{VfsDriver, VfsNode, VfsStat};
 /// *after* the built-in match, so built-in names (`null`, `zero`, `console`)
 /// can still be overridden if needed.
 static DEVICE_REGISTRY: Mutex<BTreeMap<String, Arc<dyn VfsNode>>> = Mutex::new(BTreeMap::new());
-static BOOT_FB_INFO: Mutex<Option<(crate::FramebufferInfo, u64)>> = Mutex::new(None);
+static BOOT_FB_INFO: Mutex<Option<(crate::FramebufferInfo, u64, u64)>> = Mutex::new(None);
 static KERNEL_CMDLINE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Register a device node under the name `name` in `/dev`.
@@ -71,14 +71,19 @@ pub fn unregister(name: &str) -> bool {
 }
 
 pub fn set_boot_fb(fb: crate::FramebufferInfo, resource_id: u64) {
+    set_boot_fb_physical(fb, resource_id, fb.addr);
+}
+
+pub fn set_boot_fb_physical(fb: crate::FramebufferInfo, resource_id: u64, phys_addr: u64) {
     crate::kdebug!(
-        "devfs: set_boot_fb width={} height={} pitch={} resource_id=0x{:x}",
+        "devfs: set_boot_fb width={} height={} pitch={} resource_id=0x{:x} phys=0x{:x}",
         fb.width,
         fb.height,
         fb.pitch,
-        resource_id
+        resource_id,
+        phys_addr
     );
-    *BOOT_FB_INFO.lock() = Some((fb, resource_id));
+    *BOOT_FB_INFO.lock() = Some((fb, resource_id, phys_addr));
 }
 
 pub fn set_cmdline(cmdline: String) {
@@ -140,14 +145,14 @@ impl VfsDriver for DevFs {
             "null" => Ok(Arc::new(NullNode)),
             "zero" => Ok(Arc::new(ZeroNode)),
             "fb0" => {
-                if let Some((fb, resource_id)) = *BOOT_FB_INFO.lock() {
+                if let Some((fb, resource_id, phys_addr)) = *BOOT_FB_INFO.lock() {
                     crate::ktrace!(
                         "devfs: lookup fb0 -> hit ({}x{} stride={})",
                         fb.width,
                         fb.height,
                         fb.pitch
                     );
-                    Ok(Arc::new(FbNode::new(fb, resource_id)))
+                    Ok(Arc::new(FbNode::new_with_physical(fb, resource_id, phys_addr)))
                 } else {
                     crate::kwarn!("devfs: lookup fb0 -> missing boot fb state");
                     Err(Errno::ENOENT)
@@ -326,7 +331,7 @@ impl crate::vfs::tty::TtyHardware for FbHardware {
 }
 
 fn derive_winsize_from_bootfb() -> abi::termios::Winsize {
-    if let Some((fb, _)) = *BOOT_FB_INFO.lock() {
+    if let Some((fb, _, _)) = *BOOT_FB_INFO.lock() {
         if fb.width > 0 && fb.height > 0 {
             const CELL_WIDTH_PX: u32 = 8;
             const CELL_HEIGHT_PX: u32 = 16;
@@ -579,6 +584,7 @@ impl VfsNode for ZeroNode {
 pub struct FbNode {
     fb: crate::FramebufferInfo,
     resource_id: u64,
+    phys_addr: u64,
     shadow: Mutex<FbShadow>,
 }
 
@@ -588,7 +594,11 @@ struct FbShadow {
 
 impl FbNode {
     pub fn new(fb: crate::FramebufferInfo, resource_id: u64) -> Self {
-        Self { fb, resource_id, shadow: Mutex::new(FbShadow::new(fb)) }
+        Self::new_with_physical(fb, resource_id, fb.addr)
+    }
+
+    pub fn new_with_physical(fb: crate::FramebufferInfo, resource_id: u64, phys_addr: u64) -> Self {
+        Self { fb, resource_id, phys_addr, shadow: Mutex::new(FbShadow::new(fb)) }
     }
 }
 
@@ -777,7 +787,7 @@ impl VfsNode for FbNode {
     }
 
     fn phys_region(&self) -> SysResult<(u64, usize)> {
-        Ok((self.fb.addr, self.fb.byte_len as usize))
+        Ok((self.phys_addr, self.fb.byte_len as usize))
     }
 }
 
@@ -1603,6 +1613,22 @@ mod tests {
         assert_eq!(node.shadow.lock().bytes.len(), 8);
         assert_eq!(&node.shadow.lock().bytes[0..4], &[0u8; 4]);
         assert_eq!(&node.shadow.lock().bytes[4..8], &[1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_fbnode_phys_region_uses_physical_address() {
+        let fb = crate::FramebufferInfo {
+            addr: 0xffff_8000_0010_0000,
+            byte_len: 8192,
+            width: 64,
+            height: 32,
+            pitch: 256,
+            bpp: 32,
+            format: crate::PixelFormat::Bgra8888,
+        };
+        let node = FbNode::new_with_physical(fb, 0xFB00_0000, 0x0010_0000);
+
+        assert_eq!(node.phys_region(), Ok((0x0010_0000, 8192)));
     }
 
     #[test]

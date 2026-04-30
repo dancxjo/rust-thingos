@@ -1055,6 +1055,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     if let Some(fb) = runtime.framebuffer() {
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs have fb\r\n");
         let fb_resource_id = 0xFB00_0000;
+        // fb.addr from the runtime depends on the bootloader/arch, but is
+        // typically a kernel virtual address (HHDM). Device registry BARs and
+        // user VM mappings need the physical address.
+        let ph_offset = runtime.phys_to_virt_offset();
+        let phys_addr = if fb.addr >= ph_offset { fb.addr - ph_offset } else { fb.addr };
 
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry lock begin\r\n");
         {
@@ -1062,12 +1067,6 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry lock ok\r\n");
             let mut bars = [0; 6];
             let mut sizes = [0; 6];
-
-            // CRITICAL: fb.addr from the runtime depends on the bootloader/arch,
-            // but is typically a kernel virtual address (HHDM).
-            // device_registry expects PHYSICAL addresses for BARs.
-            let ph_offset = runtime.phys_to_virt_offset();
-            let phys_addr = if fb.addr >= ph_offset { fb.addr - ph_offset } else { fb.addr };
             boot_trace(runtime, b"[kernel:start] framebuffer/devfs phys addr ok\r\n");
 
             bars[0] = phys_addr;
@@ -1085,7 +1084,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs set_boot_fb begin\r\n");
         let set_boot_fb_start = runtime.mono_ticks();
-        crate::vfs::devfs::set_boot_fb(fb, fb_resource_id);
+        crate::vfs::devfs::set_boot_fb_physical(fb, fb_resource_id, phys_addr);
         let set_boot_fb_elapsed = runtime.mono_ticks().wrapping_sub(set_boot_fb_start);
         crate::kdebug!(
             "[kernel:start] framebuffer/devfs set_boot_fb elapsed_ticks={} elapsed_us={}",
@@ -1095,7 +1094,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs set_boot_fb ok\r\n");
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs fb0 node new begin\r\n");
         let fb0_node_new_start = runtime.mono_ticks();
-        let fb0_node = alloc::sync::Arc::new(crate::vfs::devfs::FbNode::new(fb, fb_resource_id));
+        let fb0_node = alloc::sync::Arc::new(crate::vfs::devfs::FbNode::new_with_physical(
+            fb,
+            fb_resource_id,
+            phys_addr,
+        ));
         let fb0_node_new_elapsed = runtime.mono_ticks().wrapping_sub(fb0_node_new_start);
         crate::kdebug!(
             "[kernel:start] framebuffer/devfs FbNode::new elapsed_ticks={} elapsed_us={}",
