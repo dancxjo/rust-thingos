@@ -267,7 +267,7 @@ pub extern "C" fn pistil_draw_text(
     let dst =
         unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
     let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
-    renderer.draw_text(&mut canvas, text, x, y, px_size, color);
+    renderer.draw_text(&mut canvas, text, x, y, px_size * 1.25, color);
     0
 }
 
@@ -310,7 +310,7 @@ pub extern "C" fn pistil_draw_symbol_text(
     let dst =
         unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
     let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
-    renderer.draw_text(&mut canvas, text, x, y, px_size, color);
+    renderer.draw_text(&mut canvas, text, x, y, px_size * 1.25, color);
     0
 }
 
@@ -353,7 +353,7 @@ pub extern "C" fn pistil_draw_dseg7_text(
     let dst =
         unsafe { core::slice::from_raw_parts_mut(dst_ptr, (dst_h * dst_stride_pixels) as usize) };
     let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
-    renderer.draw_text(&mut canvas, text, x, y, px_size, color);
+    renderer.draw_text(&mut canvas, text, x, y, px_size * 1.25, color);
     0
 }
 

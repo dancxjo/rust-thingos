@@ -40,7 +40,7 @@ pub const SOLARIZED_WARM: UiTheme = UiTheme {
         title_mid: 0xFFE5B83F,
         title_bottom: 0xFFD49A20,
     },
-    titlebar_height: 26,
+    titlebar_height: 30,
     visual_border: 1,
     focus_border: 0xA6CB4B16,
     inner_highlight: 0x59FFFFFF,

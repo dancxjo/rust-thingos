@@ -780,7 +780,7 @@ fn draw_chrome_overlay(
             );
             if let Some(title) = entry.title.as_deref() {
                 let text_x = x.saturating_add(frame as i32).saturating_add(10);
-                let text_y = y.saturating_add((titlebar_height as i32 + 13) / 2);
+                let text_y = y.saturating_add((titlebar_height as i32 + 16) / 2);
                 let buttons_w = chrome_button_rects(rect, chrome)
                     .map(|rects| {
                         let first = rects[0].1;
@@ -800,7 +800,7 @@ fn draw_chrome_overlay(
                     height,
                     text_x,
                     text_y,
-                    13.0,
+                    16.0,
                     title_prefix(title, max_chars),
                     text_color,
                 );
@@ -1205,7 +1205,7 @@ fn draw_pointer_overlay(
         height,
         16,
         32,
-        22.0,
+        28.0,
         "BLOOM POINTER DEBUG",
         0xFFFFF4B0,
     );
@@ -1216,7 +1216,7 @@ fn draw_pointer_overlay(
         height,
         18,
         68,
-        18.0,
+        22.0,
         "POINTER 0: X=",
         0xFFE6F7FF,
     );
@@ -1231,7 +1231,7 @@ fn draw_pointer_overlay(
         0xFFFFFFFF,
     );
     let next_x = next_x + 18;
-    draw_overlay_text(pistil_draw_text, dst, width, height, next_x, 68, 18.0, "Y=", 0xFFE6F7FF);
+    draw_overlay_text(pistil_draw_text, dst, width, height, next_x, 68, 22.0, "Y=", 0xFFE6F7FF);
     draw_signed_number(
         pistil_draw_text,
         dst,
@@ -1707,7 +1707,8 @@ fn draw_overlay_text_bold(
     text: &str,
     color: u32,
 ) -> i32 {
-    draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, px_size, text, color)
+    draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, px_size, text, color);
+    draw_overlay_text(pistil_draw_text, dst, stride, height, x + 1, y, px_size, text, color)
 }
 
 fn draw_signed_number(
@@ -1740,7 +1741,7 @@ fn draw_signed_number(
     buf[start..len].reverse();
 
     let text = core::str::from_utf8(&buf[..len]).unwrap_or("?");
-    draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, 18.0, text, color)
+    draw_overlay_text(pistil_draw_text, dst, stride, height, x, y, 22.0, text, color)
 }
 
 fn draw_glyph(

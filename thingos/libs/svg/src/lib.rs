@@ -77,7 +77,7 @@ pub fn rasterize_cursor(
     rasterize(svg, dst, width, height, stride)?;
 
     let hotspot = parse_hotspot(svg).unwrap_or_else(|| {
-        if svg.starts_with(b"<?xml") && svg.windows(6).any(|w| w == b"ffb900") {
+        if svg.starts_with(b"<?xml") && svg.windows(6).any(|w| w == b"21.457") {
             // Fallback for the default future-style cursor tip
             CursorHotspot { x: 7, y: 4 }
         } else {
