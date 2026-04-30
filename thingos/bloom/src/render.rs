@@ -16,6 +16,7 @@ const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
 const DRAW_SVG_ICON_SYMBOL: &[u8] = b"pistil_draw_svg_icon";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DRAW_SYMBOL_TEXT_SYMBOL: &[u8] = b"pistil_draw_symbol_text";
+const DRAW_NINE_SLICE_SHADOW_SYMBOL: &[u8] = b"pistil_draw_nine_slice_shadow";
 const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
 const MOVE_CURSOR_PATH: &str = "/share/cursors/future/fleur.svg";
 const RESIZE_N_CURSOR_PATH: &str = "/share/cursors/future/top_side.svg";
@@ -64,6 +65,7 @@ type PrepareCursorFn = extern "C" fn(
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 type DrawSvgIconFn =
     extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, u32, u32, u32) -> i32;
+type DrawNineSliceShadowFn = extern "C" fn(*mut u32, u32, u32, u32, i32, i32, u32, u32, u32) -> i32;
 
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
@@ -83,6 +85,7 @@ struct PistilLib {
     draw_svg_icon: Option<DrawSvgIconFn>,
     draw_text: Option<DrawTextFn>,
     draw_symbol_text: Option<DrawTextFn>,
+    draw_nine_slice_shadow: Option<DrawNineSliceShadowFn>,
 }
 
 struct ServerBuffer {
@@ -365,9 +368,18 @@ impl CompositorVisuals {
         let draw_svg_icon = self.pistil.as_ref().and_then(|lib| lib.draw_svg_icon);
         let draw_text = self.pistil.as_ref().and_then(|lib| lib.draw_text);
         let draw_symbol_text = self.pistil.as_ref().and_then(|lib| lib.draw_symbol_text);
+        let draw_nine_slice_shadow =
+            self.pistil.as_ref().and_then(|lib| lib.draw_nine_slice_shadow);
 
         if let Some(overlay) = shadow {
-            draw_shadow_overlay(overlay.texture.as_slice_mut(), overlay.width, overlay.height, composition, self.theme);
+            draw_shadow_overlay(
+                overlay.texture.as_slice_mut(),
+                overlay.width,
+                overlay.height,
+                composition,
+                self.theme,
+                draw_nine_slice_shadow,
+            );
         }
 
         if let Some(overlay) = chrome {
@@ -473,14 +485,18 @@ impl CompositorVisuals {
     fn ensure_overlay_buffers(&mut self, display: &DisplayBackend) {
         let (width, height) = display.output_size();
         if self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height)
-            && self.shadow_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height)
+            && self
+                .shadow_overlay
+                .as_ref()
+                .map_or(false, |o| o.width == width && o.height == height)
         {
             return;
         }
 
         // Allocate chrome overlay
         if !self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
-            if let Some(texture) = Texture::new("bloom.compositor.chrome_overlay", width, height, 4) {
+            if let Some(texture) = Texture::new("bloom.compositor.chrome_overlay", width, height, 4)
+            {
                 if let Some(buffer_id) = display.import_buffer(
                     texture.fd,
                     width,
@@ -493,15 +509,22 @@ impl CompositorVisuals {
                     if let Some(old) = self.chrome_overlay.take() {
                         display.release_buffer(old.buffer_id);
                     }
-                    self.chrome_overlay = Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
-                    stem::info!("bloom: chrome overlay ready buffer={} size={}x{}", buffer_id, width, height);
+                    self.chrome_overlay =
+                        Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
+                    stem::info!(
+                        "bloom: chrome overlay ready buffer={} size={}x{}",
+                        buffer_id,
+                        width,
+                        height
+                    );
                 }
             }
         }
 
         // Allocate shadow overlay
         if !self.shadow_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
-            if let Some(texture) = Texture::new("bloom.compositor.shadow_overlay", width, height, 4) {
+            if let Some(texture) = Texture::new("bloom.compositor.shadow_overlay", width, height, 4)
+            {
                 if let Some(buffer_id) = display.import_buffer(
                     texture.fd,
                     width,
@@ -514,8 +537,14 @@ impl CompositorVisuals {
                     if let Some(old) = self.shadow_overlay.take() {
                         display.release_buffer(old.buffer_id);
                     }
-                    self.shadow_overlay = Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
-                    stem::info!("bloom: shadow overlay ready buffer={} size={}x{}", buffer_id, width, height);
+                    self.shadow_overlay =
+                        Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
+                    stem::info!(
+                        "bloom: shadow overlay ready buffer={} size={}x{}",
+                        buffer_id,
+                        width,
+                        height
+                    );
                 }
             }
         }
@@ -631,12 +660,18 @@ fn load_pistil() -> Option<PistilLib> {
     } else {
         Some(unsafe { core::mem::transmute(symbol_text_sym) })
     };
+    let shadow_sym = dlsym_bytes(handle, DRAW_NINE_SLICE_SHADOW_SYMBOL);
+    let draw_nine_slice_shadow: Option<DrawNineSliceShadowFn> =
+        if shadow_sym.is_null() { None } else { Some(unsafe { core::mem::transmute(shadow_sym) }) };
     stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
     if draw_text.is_some() {
         stem::info!("bloom: pistil font text renderer loaded with default {}", DEFAULT_FONT_PATH);
     }
     if draw_symbol_text.is_some() {
         stem::info!("bloom: pistil symbol renderer loaded with {}", SYMBOL_FONT_PATH);
+    }
+    if draw_nine_slice_shadow.is_some() {
+        stem::info!("bloom: pistil nine-slice shadow renderer loaded");
     }
     Some(PistilLib {
         _handle: handle,
@@ -645,6 +680,7 @@ fn load_pistil() -> Option<PistilLib> {
         draw_svg_icon,
         draw_text,
         draw_symbol_text,
+        draw_nine_slice_shadow,
     })
 }
 
@@ -904,6 +940,7 @@ fn draw_shadow_overlay(
     height: u32,
     composition: &[CompositionEntry],
     theme: UiTheme,
+    pistil_nine_slice: Option<DrawNineSliceShadowFn>,
 ) {
     dst.fill(0);
     // Draw shadows bottom-to-top to match z-order.
@@ -912,17 +949,33 @@ fn draw_shadow_overlay(
             continue;
         }
         let rect = entry.dest_rect;
-        draw_window_shadow(
-            dst,
-            stride,
-            height,
-            rect.x as i32,
-            rect.y as i32,
-            rect.w,
-            rect.h,
-            entry.active,
-            theme.corner_radius,
-        );
+        if let Some(draw_fn) = pistil_nine_slice {
+            // Fast path: nine-slice blit via pistil
+            draw_fn(
+                dst.as_mut_ptr(),
+                stride,
+                height,
+                stride,
+                rect.x as i32,
+                rect.y as i32,
+                rect.w,
+                rect.h,
+                if entry.active { 1 } else { 0 },
+            );
+        } else {
+            // Fallback: manual layered shadow
+            draw_window_shadow(
+                dst,
+                stride,
+                height,
+                rect.x as i32,
+                rect.y as i32,
+                rect.w,
+                rect.h,
+                entry.active,
+                theme.corner_radius,
+            );
+        }
     }
 }
 
@@ -963,22 +1016,28 @@ fn draw_window_shadow(
         &[
             // Layer 1 (outermost): faintest, furthest offset
             ShadowLayer {
-                offset_x: 7, offset_y: 8,
-                pad_right: 6, pad_bottom: 8,
+                offset_x: 7,
+                offset_y: 8,
+                pad_right: 6,
+                pad_bottom: 8,
                 radius_add: 6,
                 color: 0x0D503714, // alpha ~5%
             },
             // Layer 2 (middle): moderate
             ShadowLayer {
-                offset_x: 4, offset_y: 5,
-                pad_right: 3, pad_bottom: 4,
+                offset_x: 4,
+                offset_y: 5,
+                pad_right: 3,
+                pad_bottom: 4,
                 radius_add: 3,
                 color: 0x1A503714, // alpha ~10%
             },
             // Layer 3 (contact): closest, darkest of the three
             ShadowLayer {
-                offset_x: 2, offset_y: 2,
-                pad_right: 1, pad_bottom: 2,
+                offset_x: 2,
+                offset_y: 2,
+                pad_right: 1,
+                pad_bottom: 2,
                 radius_add: 0,
                 color: 0x2E503714, // alpha ~18%
             },
@@ -987,20 +1046,26 @@ fn draw_window_shadow(
         &[
             // Inactive: gentler
             ShadowLayer {
-                offset_x: 5, offset_y: 6,
-                pad_right: 4, pad_bottom: 6,
+                offset_x: 5,
+                offset_y: 6,
+                pad_right: 4,
+                pad_bottom: 6,
                 radius_add: 4,
                 color: 0x0A503714, // alpha ~4%
             },
             ShadowLayer {
-                offset_x: 3, offset_y: 4,
-                pad_right: 2, pad_bottom: 3,
+                offset_x: 3,
+                offset_y: 4,
+                pad_right: 2,
+                pad_bottom: 3,
                 radius_add: 2,
                 color: 0x14503714, // alpha ~8%
             },
             ShadowLayer {
-                offset_x: 1, offset_y: 1,
-                pad_right: 1, pad_bottom: 1,
+                offset_x: 1,
+                offset_y: 1,
+                pad_right: 1,
+                pad_bottom: 1,
                 radius_add: 0,
                 color: 0x20503714, // alpha ~12%
             },
@@ -1132,11 +1197,30 @@ fn draw_chrome_button(
     draw_chrome_button_well(dst, stride, height, rect);
 
     let color = if matches!(button, ChromeButton::Close) { close_icon } else { icon_color };
-    if draw_chrome_button_lucide(pistil_draw_svg_icon, dst, stride, height, rect, button, is_shaded, is_fullscreen, color) {
+    if draw_chrome_button_lucide(
+        pistil_draw_svg_icon,
+        dst,
+        stride,
+        height,
+        rect,
+        button,
+        is_shaded,
+        is_fullscreen,
+        color,
+    ) {
         return;
     }
 
-    draw_chrome_button_fallback_glyph(dst, stride, height, rect, button, is_shaded, is_fullscreen, color);
+    draw_chrome_button_fallback_glyph(
+        dst,
+        stride,
+        height,
+        rect,
+        button,
+        is_shaded,
+        is_fullscreen,
+        color,
+    );
 }
 
 fn draw_chrome_button_well(
@@ -1192,7 +1276,11 @@ fn draw_chrome_button_lucide(
     ) == 0
 }
 
-fn lucide_icon_path(button: ChromeButton, is_shaded: bool, is_fullscreen: bool) -> Option<&'static str> {
+fn lucide_icon_path(
+    button: ChromeButton,
+    is_shaded: bool,
+    is_fullscreen: bool,
+) -> Option<&'static str> {
     match button {
         ChromeButton::Minimize => Some(WINDOW_ICON_MINIMIZE_PATH),
         ChromeButton::Shade => {
@@ -1293,8 +1381,26 @@ fn draw_chrome_button_fallback_glyph(
                 fill_rect_i32(dst, stride, height, bx, by + box_h - 1, clen, 1, color);
                 fill_rect_i32(dst, stride, height, bx, by + box_h - clen, 1, clen - 1, color);
 
-                fill_rect_i32(dst, stride, height, bx + box_w - clen, by + box_h - 1, clen, 1, color);
-                fill_rect_i32(dst, stride, height, bx + box_w - 1, by + box_h - clen, 1, clen - 1, color);
+                fill_rect_i32(
+                    dst,
+                    stride,
+                    height,
+                    bx + box_w - clen,
+                    by + box_h - 1,
+                    clen,
+                    1,
+                    color,
+                );
+                fill_rect_i32(
+                    dst,
+                    stride,
+                    height,
+                    bx + box_w - 1,
+                    by + box_h - clen,
+                    1,
+                    clen - 1,
+                    color,
+                );
             } else {
                 // Expand glyph: outward-pointing corners
                 fill_rect_i32(dst, stride, height, bx, by, clen, 1, color);
@@ -1306,8 +1412,26 @@ fn draw_chrome_button_fallback_glyph(
                 fill_rect_i32(dst, stride, height, bx, by + box_h - 1, clen, 1, color);
                 fill_rect_i32(dst, stride, height, bx, by + box_h - clen, 1, clen, color);
 
-                fill_rect_i32(dst, stride, height, bx + box_w - clen, by + box_h - 1, clen, 1, color);
-                fill_rect_i32(dst, stride, height, bx + box_w - 1, by + box_h - clen, 1, clen, color);
+                fill_rect_i32(
+                    dst,
+                    stride,
+                    height,
+                    bx + box_w - clen,
+                    by + box_h - 1,
+                    clen,
+                    1,
+                    color,
+                );
+                fill_rect_i32(
+                    dst,
+                    stride,
+                    height,
+                    bx + box_w - 1,
+                    by + box_h - clen,
+                    1,
+                    clen,
+                    color,
+                );
             }
         }
         ChromeButton::Close => {
@@ -1778,15 +1902,23 @@ fn rounded_corner_inset(radius: u32, row: u32) -> u32 {
     if radius == 0 || row >= radius {
         return 0;
     }
-    let r = radius as i32;
-    let dy = r - 1 - row as i32;
-    let mut dx = 0i32;
-    while dx < r
-        && dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)) >= r.saturating_mul(r)
-    {
-        dx += 1;
+    let r = radius as u64;
+    let dy = radius.saturating_sub(1).saturating_sub(row) as u64;
+    let dx_sq = r.saturating_mul(r).saturating_sub(dy.saturating_mul(dy));
+    radius.saturating_sub(isqrt(dx_sq) as u32)
+}
+
+fn isqrt(n: u64) -> u64 {
+    if n == 0 {
+        return 0;
     }
-    dx.max(0) as u32
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
 }
 
 fn fill_vertical_gradient(

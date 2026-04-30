@@ -22,6 +22,14 @@ fn is_paper_text_pixel(pixel: [u8; 3]) -> bool {
     color_close(pixel, [0x3F, 0x3A, 0x2F], 30) || color_close(pixel, [0x3B, 0x2A, 0x0A], 30)
 }
 
+fn is_chrome_border_pixel(pixel: [u8; 3]) -> bool {
+    color_close(pixel, [0xB5, 0x89, 0x00], 30) || color_close(pixel, [0xCB, 0x4B, 0x16], 36)
+}
+
+fn is_window_chrome_pixel(pixel: [u8; 3]) -> bool {
+    is_brass_pixel(pixel) || is_chrome_border_pixel(pixel)
+}
+
 /// Background: `Given the bloom compositor is running with blossom support`
 #[given("the bloom compositor is running with blossom support")]
 async fn bloom_compositor_running_with_blossom(world: &mut ThingOsWorld) -> Result<(), StepError> {
@@ -699,6 +707,132 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
     )))
 }
 
+#[then("active window chrome should be stroked as a rounded rectangle")]
+async fn active_window_chrome_should_be_stroked_as_a_rounded_rectangle(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let _ = world.wait_for_serial("First frame rendered", 60.0).await;
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+    let mut last = (0u32, 0u32, 0u32, 0u32);
+    let mut attempt = 0u32;
+
+    while start.elapsed() < timeout {
+        attempt += 1;
+        let screenshot_path = crate::artifacts::global()
+            .lock()
+            .await
+            .screenshot_path(&format!("active_chrome_rounded_{}", attempt));
+        let png_path = world
+            .take_screenshot(&screenshot_path)
+            .await
+            .map_err(|e| StepError(format!("Failed to take screenshot: {}", e)))?;
+
+        let img = image::open(&png_path)
+            .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?
+            .to_rgb8();
+        let (width, height) = img.dimensions();
+        let max_x = width.min(640);
+        let max_y = height.min(160);
+
+        let mut best_row = 0u32;
+        let mut best_count = 0u32;
+        for y in 0..max_y {
+            let mut count = 0u32;
+            for x in 0..max_x {
+                if is_window_chrome_pixel(img.get_pixel(x, y).0) {
+                    count += 1;
+                }
+            }
+            if count > best_count {
+                best_count = count;
+                best_row = y;
+            }
+        }
+        if best_count < 200 {
+            last = (best_row, best_count, 0, 0);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            continue;
+        }
+
+        let Some(mid_left) = first_chrome_pixel_on_row(&img, best_row, 0, max_x) else {
+            last = (best_row, best_count, 0, 0);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            continue;
+        };
+        let mid_right =
+            last_chrome_pixel_on_row(&img, best_row, mid_left, max_x).unwrap_or(mid_left);
+        let min_top_width = (mid_right.saturating_sub(mid_left) / 3).max(40);
+
+        let mut top_y = None;
+        for y in 0..=best_row {
+            let mut count = 0u32;
+            for x in mid_left..=mid_right {
+                if is_window_chrome_pixel(img.get_pixel(x, y).0) {
+                    count += 1;
+                }
+            }
+            if count >= min_top_width {
+                top_y = Some(y);
+                break;
+            }
+        }
+
+        if let Some(top_y) = top_y {
+            if let Some(top_left) = first_chrome_pixel_on_row(&img, top_y, mid_left, mid_right + 1)
+            {
+                let top_inset = top_left.saturating_sub(mid_left);
+                last = (best_row, best_count, top_y, top_inset);
+                if (5..=20).contains(&top_inset) {
+                    eprintln!(
+                        "│  │  │      Active chrome has rounded stroke geometry (row={}, top_y={}, inset={})",
+                        best_row, top_y, top_inset
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    Err(StepError(format!(
+        "Active chrome did not have a rounded stroke inset (best_row={}, row_pixels={}, top_y={}, top_inset={})",
+        last.0, last.1, last.2, last.3
+    )))
+}
+
+fn first_chrome_pixel_on_row(
+    img: &image::RgbImage,
+    y: u32,
+    x_start: u32,
+    x_end: u32,
+) -> Option<u32> {
+    for x in x_start..x_end {
+        if is_window_chrome_pixel(img.get_pixel(x, y).0) {
+            return Some(x);
+        }
+    }
+    None
+}
+
+fn last_chrome_pixel_on_row(
+    img: &image::RgbImage,
+    y: u32,
+    x_start: u32,
+    x_end: u32,
+) -> Option<u32> {
+    let mut x = x_end;
+    while x > x_start {
+        x -= 1;
+        if is_window_chrome_pixel(img.get_pixel(x, y).0) {
+            return Some(x);
+        }
+    }
+    None
+}
+
 #[when("I drag the Wayland hello title bar")]
 async fn drag_wayland_hello_title_bar(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
@@ -1301,9 +1435,7 @@ async fn client_requests_registry(world: &mut ThingOsWorld) -> Result<(), StepEr
 
 /// `Then wl_registry advertises wp_presentation version 1`
 #[then("wl_registry advertises wp_presentation version 1")]
-async fn registry_advertises_wp_presentation(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn registry_advertises_wp_presentation(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
     if log.contains("wayland_hello: bound wp_presentation") {
         eprintln!("│  │  │      ✅ wp_presentation advertised by wl_registry");
@@ -1318,12 +1450,9 @@ async fn registry_advertises_wp_presentation(
 
 /// `And the client has requested wp_presentation.feedback for the surface`
 #[given("the client has requested wp_presentation.feedback for the surface")]
-async fn client_requested_presentation_feedback(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
-    let _ = world
-        .wait_for_serial("wayland-server: wp_presentation.feedback surface_obj=", 15.0)
-        .await;
+async fn client_requested_presentation_feedback(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let _ =
+        world.wait_for_serial("wayland-server: wp_presentation.feedback surface_obj=", 15.0).await;
     let log = world.get_serial_log().await;
     if log.contains("wayland-server: wp_presentation.feedback") {
         eprintln!("│  │  │      ✅ Presentation feedback registered");
@@ -1337,12 +1466,9 @@ async fn client_requested_presentation_feedback(
 
 /// `Then the client receives wp_presentation_feedback.presented for that feedback object`
 #[then("the client receives wp_presentation_feedback.presented for that feedback object")]
-async fn client_receives_feedback_presented(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
-    let found = world
-        .wait_for_serial("wayland_hello: wp_presentation_feedback.presented", 30.0)
-        .await;
+async fn client_receives_feedback_presented(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let found =
+        world.wait_for_serial("wayland_hello: wp_presentation_feedback.presented", 30.0).await;
     if found {
         eprintln!("│  │  │      ✅ wp_presentation_feedback.presented received");
         Ok(())
