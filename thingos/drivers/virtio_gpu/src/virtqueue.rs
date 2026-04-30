@@ -50,6 +50,47 @@ pub struct Virtqueue {
 }
 
 impl Virtqueue {
+    fn desc_ptr(&self) -> *mut VirtqDesc {
+        self.virt_base as *mut VirtqDesc
+    }
+
+    fn used_offset(size: u16) -> usize {
+        let avail_offset = (size as usize) * core::mem::size_of::<VirtqDesc>();
+        let used_unaligned = avail_offset + 6 + (size as usize) * 2;
+        (used_unaligned + 3) & !3
+    }
+
+    fn release_chain(&mut self, head: u16) -> Option<u16> {
+        if head >= self.size {
+            return None;
+        }
+
+        let desc_ptr = self.desc_ptr();
+        let mut count = 1u16;
+        let mut cur = head;
+
+        loop {
+            let flags = unsafe { read_volatile(&raw const (*desc_ptr.add(cur as usize)).flags) };
+            if (flags & crate::virtio::VIRTQ_DESC_F_NEXT) == 0 {
+                break;
+            }
+
+            let next = unsafe { read_volatile(&raw const (*desc_ptr.add(cur as usize)).next) };
+            if next >= self.size || count >= self.size {
+                return None;
+            }
+            cur = next;
+            count += 1;
+        }
+
+        unsafe {
+            write_volatile(&raw mut (*desc_ptr.add(cur as usize)).next, self.free_head);
+        }
+        self.free_head = head;
+        self.num_free = self.num_free.saturating_add(count);
+        Some(count)
+    }
+
     pub fn new(virt_base: u64, phys_base: u64, size: u16) -> Self {
         // Initialize descriptor table
         let desc_ptr = virt_base as *mut VirtqDesc;
@@ -71,8 +112,8 @@ impl Virtqueue {
             write_volatile(&raw mut (*avail_ptr).idx, 0);
         }
 
-        // Initialize used ring (after avail ring)
-        let used_offset = avail_offset + 6 + (size as usize) * 2;
+        // Initialize used ring (after avail ring, 4-byte aligned).
+        let used_offset = Self::used_offset(size);
         let used_ptr = (virt_base + used_offset as u64) as *mut VirtqUsed;
         unsafe {
             write_volatile(&raw mut (*used_ptr).flags, 0);
@@ -134,11 +175,12 @@ impl Virtqueue {
 
     /// Check for completed buffers
     pub fn poll_used(&mut self) -> Option<(u16, u32)> {
-        let used_offset =
-            (self.size as usize) * core::mem::size_of::<VirtqDesc>() + 6 + (self.size as usize) * 2;
+        let used_offset = Self::used_offset(self.size);
         let used_ptr = (self.virt_base + used_offset as u64) as *mut VirtqUsed;
 
         unsafe {
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+
             let used_idx = read_volatile(&raw const (*used_ptr).idx);
             if self.last_used_idx == used_idx {
                 return None;
@@ -150,28 +192,18 @@ impl Virtqueue {
             let len = read_volatile(&raw const (*elem).len);
 
             self.last_used_idx = self.last_used_idx.wrapping_add(1);
-
-            // Count chain length by following NEXT flags
-            let desc_ptr = self.virt_base as *mut VirtqDesc;
-            let mut count = 1u16;
-            let mut cur = id as u16;
-            loop {
-                let flags = read_volatile(&raw const (*desc_ptr.add(cur as usize)).flags);
-                if (flags & crate::virtio::VIRTQ_DESC_F_NEXT) == 0 {
-                    break;
-                }
-                let next = read_volatile(&raw const (*desc_ptr.add(cur as usize)).next);
-                cur = next;
-                count += 1;
+            let head = id as u16;
+            if self.release_chain(head).is_none() {
+                stem::warn!(
+                    "virtio_gpu virtqueue: ignoring invalid used descriptor id={} size={} last_used_idx={}",
+                    id,
+                    self.size,
+                    self.last_used_idx.wrapping_sub(1)
+                );
+                return None;
             }
 
-            // Return descriptors to free list by linking the last descriptor
-            // in the chain to the current free_head
-            write_volatile(&raw mut (*desc_ptr.add(cur as usize)).next, self.free_head);
-            self.free_head = id as u16;
-            self.num_free += count;
-
-            Some((id as u16, len))
+            Some((head, len))
         }
     }
 }

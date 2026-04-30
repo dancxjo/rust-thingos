@@ -33,6 +33,7 @@
 //!   `Inbox::send` directly for typed delivery with a proper `KindId`.
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use abi::errors::{Errno, SysResult};
 
@@ -94,6 +95,44 @@ impl VfsNode for InboxNode {
             Ok(()) => Ok(buf.len()),
             Err(SendError::Full { .. }) => Err(Errno::EAGAIN),
             Err(SendError::Closed) => Err(Errno::EPIPE),
+        }
+    }
+
+    /// Enqueue one typed inbox message with optional attached capabilities.
+    ///
+    /// The userspace `sendmsg` ABI only carries one byte slice, so inbox
+    /// senders prefix the payload with a 16-byte `KindId`.  Short messages are
+    /// accepted as anonymous raw payloads with a zero kind for compatibility
+    /// with the byte-oriented `write` path.
+    fn sock_sendmsg(&self, data: &[u8], fds: Vec<Arc<dyn VfsNode>>) -> SysResult<()> {
+        let (kind, payload) = if data.len() >= 16 {
+            let mut kind = [0u8; 16];
+            kind.copy_from_slice(&data[..16]);
+            (KindId(kind), data[16..].to_vec())
+        } else {
+            (KindId([0u8; 16]), data.to_vec())
+        };
+        let msg = Message::new(kind, payload);
+        let env = MessageEnvelope::anonymous_with_capabilities(msg, fds);
+        match self.inbox.send(env) {
+            Ok(()) => Ok(()),
+            Err(SendError::Full { .. }) => Err(Errno::EAGAIN),
+            Err(SendError::Closed) => Err(Errno::EPIPE),
+        }
+    }
+
+    /// Dequeue one typed inbox message and return `[KindId][payload]` plus
+    /// attached capabilities.
+    fn sock_recvmsg(&self) -> SysResult<Option<(Vec<u8>, Vec<Arc<dyn VfsNode>>)>> {
+        match self.inbox.try_recv() {
+            Ok(Some(env)) => {
+                let mut data = Vec::with_capacity(16 + env.message.payload.len());
+                data.extend_from_slice(&env.message.kind.0);
+                data.extend_from_slice(&env.message.payload);
+                Ok(Some((data, env.capabilities)))
+            }
+            Ok(None) => Ok(None),
+            Err(_) => Err(Errno::EPIPE),
         }
     }
 
@@ -205,6 +244,24 @@ mod tests {
         let mut buf = [0u8; 16];
         let n = node.read(0, &mut buf).expect("read");
         assert_eq!(&buf[..n], b"world");
+    }
+
+    #[test]
+    fn sendmsg_then_recvmsg_round_trips_kind_payload_and_caps() {
+        let node = make_node(8);
+        let cap: Arc<dyn VfsNode> = Arc::new(make_node(1));
+        let kind = [7u8; 16];
+        let mut data = Vec::new();
+        data.extend_from_slice(&kind);
+        data.extend_from_slice(b"payload");
+
+        node.sock_sendmsg(&data, vec![cap.clone()]).expect("sendmsg");
+
+        let (out_data, caps) = node.sock_recvmsg().expect("recvmsg").expect("queued");
+        assert_eq!(&out_data[..16], &kind);
+        assert_eq!(&out_data[16..], b"payload");
+        assert_eq!(caps.len(), 1);
+        assert!(Arc::ptr_eq(&caps[0], &cap));
     }
 
     #[test]

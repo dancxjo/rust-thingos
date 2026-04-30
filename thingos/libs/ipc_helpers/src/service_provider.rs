@@ -68,17 +68,18 @@
 //! - Does **not** add new syscalls.
 //! - Does **not** introduce an async runtime.
 
-use abi::wire::KindId;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::ControlFlow;
 
-use crate::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
+use abi::wire::KindId;
 use stem::errors::Errno;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::vfs::{vfs_close, vfs_umount};
 use stem::time::Duration;
 use stem::wait_set::{WaitEvent, WaitToken};
+
+use crate::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 
 // ─── ServiceProviderEvent ────────────────────────────────────────────────────
 
@@ -269,17 +270,13 @@ impl ServiceProviderLoop {
         loop {
             match self.next_event(timeout) {
                 Ok(ServiceProviderEvent::InboxClosed) => {
-                    stem::info!(
-                        "ServiceProviderLoop: inbox closed — initiating graceful shutdown"
-                    );
+                    stem::info!("ServiceProviderLoop: inbox closed — initiating graceful shutdown");
                     self.shutdown_sequence();
                     return;
                 }
                 Ok(event) => {
                     if let ControlFlow::Break(()) = handler(event) {
-                        stem::info!(
-                            "ServiceProviderLoop: handler requested shutdown"
-                        );
+                        stem::info!("ServiceProviderLoop: handler requested shutdown");
                         self.shutdown_sequence();
                         return;
                     }
@@ -356,7 +353,7 @@ impl ServiceProviderLoop {
             match svc_ev {
                 ServiceEvent::InboxClosed => return Ok(ServiceProviderEvent::InboxClosed),
                 ServiceEvent::Timeout => return Ok(ServiceProviderEvent::Timeout),
-                ServiceEvent::Message { kind, payload } => {
+                ServiceEvent::Message { kind, payload, .. } => {
                     return Ok(ServiceProviderEvent::Message { kind, payload });
                 }
                 ServiceEvent::Ready { token, event } => {
@@ -377,8 +374,6 @@ impl ServiceProviderLoop {
             }
         }
     }
-
-
 
     /// Send `response` back to the kernel for the given `req`.
     ///

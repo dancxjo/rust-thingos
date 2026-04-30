@@ -738,7 +738,8 @@ impl VirtioGpu {
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO, (avail_phys & 0xFFFFFFFF) as u32);
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
 
-        let used_offset = avail_offset + 6 + 128 * 2;
+        let used_unaligned = avail_offset + 6 + 128 * 2;
+        let used_offset = (used_unaligned + 3) & !3;
         let used_phys = vq_phys + used_offset as u64;
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_LO, (used_phys & 0xFFFFFFFF) as u32);
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_HI, (used_phys >> 32) as u32);

@@ -270,7 +270,6 @@ fn probe_bootfb_vfs() -> Option<(u32, u32, u32, u32)> {
 
 pub fn setup_display_pipeline(
     shared_tasks: Arc<Mutex<Vec<ManagedTask>>>,
-    supervisor_port: stem::syscall::PortHandle,
     bind_instance_id: u64,
     force_bootfb: bool,
 ) -> Option<DisplayHandles> {
@@ -333,7 +332,7 @@ pub fn setup_display_pipeline(
     let words = unsafe { core::slice::from_raw_parts_mut(map.addr as *mut u32, boot_size / 4) };
     words[0] = req_read;
     words[1] = resp_write;
-    words[2] = supervisor_port;
+    words[2] = 0;
     words[3] = (bind_instance_id & 0xffff_ffff) as u32;
     words[4] = ((bind_instance_id >> 32) & 0xffff_ffff) as u32;
 

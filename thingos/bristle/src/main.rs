@@ -170,7 +170,7 @@ fn main(_arg: usize) -> ! {
 
         match event {
             // ── Control plane: sink registration via inbox ─────────────
-            ServiceEvent::Message { kind, payload } => {
+            ServiceEvent::Message { kind, payload, .. } => {
                 if kind == KindId(KIND_BRISTLE_REGISTER_SINK) {
                     handle_register_sink(payload, &mut bloom_sink, &mut echo_sink);
                 } else if kind == KindId(KIND_BRISTLE_DEVICE_EVENT) {

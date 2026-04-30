@@ -28,8 +28,8 @@ use abi::driver_interface::{
 };
 use abi::seed::{INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
 use abi::syscall::vfs_flags::O_RDONLY;
-use stem::{debug, info};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek};
+use stem::{debug, info};
 
 /// Maximum ELF binary size the catalog will read into memory for symbol
 /// inspection.  Binaries larger than this are silently skipped.

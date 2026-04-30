@@ -116,6 +116,7 @@ const MOUSE_ENABLE: u8 = 0xF4;
 const MOUSE_VECTOR: u8 = 0x2C;
 const POLLING_INTERVAL_MS: u64 = 8;
 const IRQ_ASSIST_POLL_MS: u64 = 4;
+const POINTER_MOTION_MIN_INTERVAL_NS: u64 = 16_666_666;
 
 /// Preferred PS/2 mouse sample rate (Hz). Higher rates give smoother pointer motion.
 const PREFERRED_SAMPLE_RATE: u8 = 200;
@@ -375,71 +376,130 @@ use abi::hid::{
 };
 use mouse::{MouseState, PointerEvent};
 
+#[derive(Default)]
+struct MotionCoalescer {
+    pending_dx: i32,
+    pending_dy: i32,
+    last_sent_ns: u64,
+}
+
+impl MotionCoalescer {
+    fn add(&mut self, dx: i16, dy: i16) {
+        self.pending_dx = self.pending_dx.saturating_add(dx as i32);
+        self.pending_dy = self.pending_dy.saturating_add(dy as i32);
+    }
+
+    fn has_pending(&self) -> bool {
+        self.pending_dx != 0 || self.pending_dy != 0
+    }
+
+    fn due(&self, now_ns: u64) -> bool {
+        self.has_pending()
+            && (self.last_sent_ns == 0
+                || now_ns.saturating_sub(self.last_sent_ns) >= POINTER_MOTION_MIN_INTERVAL_NS)
+    }
+
+    fn take(&mut self, now_ns: u64) -> (i16, i16) {
+        let dx = clamp_i16(self.pending_dx);
+        let dy = clamp_i16(self.pending_dy);
+        self.pending_dx = self.pending_dx.saturating_sub(dx as i32);
+        self.pending_dy = self.pending_dy.saturating_sub(dy as i32);
+        self.last_sent_ns = now_ns;
+        (dx, dy)
+    }
+}
+
+fn clamp_i16(value: i32) -> i16 {
+    value.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+fn send_pointer_event(bristle_pid: u32, event_type: EventType, payload: &[u8]) -> bool {
+    let timestamp_ns = stem::monotonic_ns();
+    let mut buf = [0u8; 24];
+    let header = BristleEventHeader {
+        magic: BRISTLE_EVENT_MAGIC,
+        version: BRISTLE_EVENT_VERSION,
+        event_type: event_type as u16,
+        timestamp_ns,
+        payload_len: payload.len() as u32,
+    };
+    let len = BristleEventHeader::SIZE + payload.len();
+    buf[..BristleEventHeader::SIZE].copy_from_slice(&header.to_bytes());
+    buf[BristleEventHeader::SIZE..len].copy_from_slice(payload);
+
+    msg_send(bristle_pid, abi::KindId(KIND_BRISTLE_DEVICE_EVENT), &buf[..len]).is_ok()
+}
+
+fn record_drop(drop_counter: &mut u32, bristle_pid: u32) {
+    *drop_counter = drop_counter.wrapping_add(1);
+    if *drop_counter <= 4 || *drop_counter % 100 == 0 {
+        debug!(
+            "ps2_mouse: dropped {} mouse events (send pid={} failed)",
+            *drop_counter, bristle_pid
+        );
+    }
+}
+
+fn flush_motion_if_due(
+    bristle_pid: u32,
+    motion: &mut MotionCoalescer,
+    drop_counter: &mut u32,
+) {
+    let now_ns = stem::monotonic_ns();
+    if !motion.due(now_ns) {
+        return;
+    }
+
+    let (dx, dy) = motion.take(now_ns);
+    if dx == 0 && dy == 0 {
+        return;
+    }
+
+    let payload = PointerMovePayload { dx, dy };
+    if !send_pointer_event(
+        bristle_pid,
+        EventType::PointerMove,
+        &payload.to_bytes(),
+    ) {
+        record_drop(drop_counter, bristle_pid);
+    }
+}
+
 fn send_mouse_events(
     bristle_pid: u32,
     state: &mut MouseState,
+    motion: &mut MotionCoalescer,
     packet: &[u8; 3],
     drop_counter: &mut u32,
 ) {
     let (events, count) = state.process_packet(packet);
     for i in 0..count {
         if let Some(evt) = events[i] {
-            let timestamp_ns = stem::monotonic_ns();
-            let mut buf = [0u8; 24]; // Max size is header + 4 byte payload
-            let len;
-
             match evt {
                 PointerEvent::Move { dx, dy } => {
-                    let header = BristleEventHeader {
-                        magic: BRISTLE_EVENT_MAGIC,
-                        version: BRISTLE_EVENT_VERSION,
-                        event_type: EventType::PointerMove as u16,
-                        timestamp_ns,
-                        payload_len: PointerMovePayload::SIZE as u32,
-                    };
-                    let payload = PointerMovePayload { dx, dy };
-                    buf[0..20].copy_from_slice(&header.to_bytes());
-                    buf[20..24].copy_from_slice(&payload.to_bytes());
-                    len = 24;
+                    motion.add(dx, dy);
+                    flush_motion_if_due(bristle_pid, motion, drop_counter);
                 }
                 PointerEvent::ButtonDown { button } => {
-                    let header = BristleEventHeader {
-                        magic: BRISTLE_EVENT_MAGIC,
-                        version: BRISTLE_EVENT_VERSION,
-                        event_type: EventType::PointerButtonDown as u16,
-                        timestamp_ns,
-                        payload_len: PointerButtonPayload::SIZE as u32,
-                    };
+                    flush_motion_if_due(bristle_pid, motion, drop_counter);
                     let payload = PointerButtonPayload { button, _pad: 0 };
-                    buf[0..20].copy_from_slice(&header.to_bytes());
-                    buf[20..22].copy_from_slice(&payload.to_bytes());
-                    len = 22;
+                    if !send_pointer_event(
+                        bristle_pid,
+                        EventType::PointerButtonDown,
+                        &payload.to_bytes(),
+                    ) {
+                        record_drop(drop_counter, bristle_pid);
+                    }
                 }
                 PointerEvent::ButtonUp { button } => {
-                    let header = BristleEventHeader {
-                        magic: BRISTLE_EVENT_MAGIC,
-                        version: BRISTLE_EVENT_VERSION,
-                        event_type: EventType::PointerButtonUp as u16,
-                        timestamp_ns,
-                        payload_len: PointerButtonPayload::SIZE as u32,
-                    };
+                    flush_motion_if_due(bristle_pid, motion, drop_counter);
                     let payload = PointerButtonPayload { button, _pad: 0 };
-                    buf[0..20].copy_from_slice(&header.to_bytes());
-                    buf[20..22].copy_from_slice(&payload.to_bytes());
-                    len = 22;
-                }
-            }
-            if len > 0 {
-                let send_ok = len > 0
-                    && msg_send(bristle_pid, abi::KindId(KIND_BRISTLE_DEVICE_EVENT), &buf[..len])
-                        .is_ok();
-                if !send_ok && len > 0 {
-                    *drop_counter = drop_counter.wrapping_add(1);
-                    if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-                        debug!(
-                            "ps2_mouse: dropped {} mouse events (send pid={} failed)",
-                            *drop_counter, bristle_pid
-                        );
+                    if !send_pointer_event(
+                        bristle_pid,
+                        EventType::PointerButtonUp,
+                        &payload.to_bytes(),
+                    ) {
+                        record_drop(drop_counter, bristle_pid);
                     }
                 }
             }
@@ -453,6 +513,7 @@ fn send_mouse_events(
 fn drain_mouse_data(
     bristle_pid: u32,
     state: &mut MouseState,
+    motion: &mut MotionCoalescer,
     packet: &mut [u8; 3],
     idx: &mut usize,
     drop_counter: &mut u32,
@@ -478,7 +539,7 @@ fn drain_mouse_data(
             *idx += 1;
 
             if *idx == 3 {
-                send_mouse_events(bristle_pid, state, packet, drop_counter);
+                send_mouse_events(bristle_pid, state, motion, packet, drop_counter);
                 *idx = 0;
             }
         } else {
@@ -513,6 +574,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     let mut packet = [0u8; 3];
     let mut idx = 0usize;
     let mut mouse_state = MouseState::new();
+    let mut motion = MotionCoalescer::default();
     let mut drop_counter = 0u32;
     let mut irq_wake_count = 0u64;
     let mut timeout_count = 0u64;
@@ -543,10 +605,12 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
         let drained = drain_mouse_data(
             bristle_pid,
             &mut mouse_state,
+            &mut motion,
             &mut packet,
             &mut idx,
             &mut drop_counter,
         );
+        flush_motion_if_due(bristle_pid, &mut motion, &mut drop_counter);
 
         if (irq_wake_count + timeout_count) % 256 == 0 {
             debug!(
@@ -565,6 +629,7 @@ fn polling_loop(bristle_pid: u32) -> ! {
     let mut packet = [0u8; 3];
     let mut idx = 0usize;
     let mut mouse_state = MouseState::new();
+    let mut motion = MotionCoalescer::default();
     let mut drop_counter = 0u32;
 
     loop {
@@ -575,10 +640,12 @@ fn polling_loop(bristle_pid: u32) -> ! {
                 drain_mouse_data(
                     bristle_pid,
                     &mut mouse_state,
+                    &mut motion,
                     &mut packet,
                     &mut idx,
                     &mut drop_counter,
                 );
+                flush_motion_if_due(bristle_pid, &mut motion, &mut drop_counter);
             } else {
                 // Leave keyboard bytes queued for ps2_kbd.
                 stem::sleep_ms(POLLING_INTERVAL_MS);

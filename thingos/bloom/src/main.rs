@@ -37,6 +37,7 @@ use world::BloomWorld;
 
 const SERVICE_PATH: &str = "/services/bloom";
 const WP_PATH: &str = "/session/desktop/wallpaper";
+const DISPLAY_INPUT_ISOLATION: bool = true;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -96,8 +97,12 @@ fn main(_arg: usize) -> ! {
     let _ = vfs_mkdir("/session/desktop");
 
     let mut visuals = CompositorVisuals::new();
-    let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
-    stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
+    if DISPLAY_INPUT_ISOLATION {
+        stem::info!("bloom: wallpaper loading disabled for display/input isolation");
+    } else {
+        let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
+        stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
+    }
     visuals.prepare_solid_background(&display, 0xFFCCCCFF);
     visuals.prepare_cursor(&display);
 
@@ -114,14 +119,18 @@ fn main(_arg: usize) -> ! {
     let bristle_pair = port_create(65536).ok();
 
     // ── Wallpaper watch FD ────────────────────────────────────────────────────
-    let wp_watch_fd = match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
-        Ok(fd) => {
-            info!("bloom: watching wallpaper config {}", WP_PATH);
-            Some(fd)
-        }
-        Err(e) => {
-            warn!("bloom: failed to watch wallpaper config {}: {:?}", WP_PATH, e);
-            None
+    let wp_watch_fd = if DISPLAY_INPUT_ISOLATION {
+        None
+    } else {
+        match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
+            Ok(fd) => {
+                info!("bloom: watching wallpaper config {}", WP_PATH);
+                Some(fd)
+            }
+            Err(e) => {
+                warn!("bloom: failed to watch wallpaper config {}: {:?}", WP_PATH, e);
+                None
+            }
         }
     };
 
@@ -158,7 +167,9 @@ fn main(_arg: usize) -> ! {
     }
 
     // Wallpaper watch → WallpaperService
-    bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(wp_watch_fd, WP_PATH)));
+    if !DISPLAY_INPUT_ISOLATION {
+        bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(wp_watch_fd, WP_PATH)));
+    }
 
     // ── Spawn Wayland server thread + wire IPC ports ──────────────────────────
     // cmd port: Wayland → Main (surface operations)

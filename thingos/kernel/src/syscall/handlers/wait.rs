@@ -4,8 +4,6 @@ use core::mem::size_of;
 use abi::errors::{Errno, SysResult};
 use abi::wait::{self, WaitKind, WaitResult, WaitSpec};
 
-use crate::syscall::validate::validate_user_range;
-
 #[derive(Clone)]
 enum Registration {
     PortRead(Arc<crate::ipc::Port>),
@@ -308,7 +306,8 @@ fn poll_irq(spec: &WaitSpec) -> Option<WaitResult> {
     if spec.object > u8::MAX as u64 {
         return Some(error_result(spec, Errno::EINVAL));
     }
-    match crate::irq::poll(spec.object as u8) {
+    let tid = unsafe { crate::sched::current_tid_current() };
+    match crate::irq::try_wait(spec.object as u8, tid) {
         Some(0) => None,
         Some(count) => Some(WaitResult {
             kind: spec.kind,

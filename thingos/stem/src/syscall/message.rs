@@ -22,12 +22,15 @@
 //! FD (see `docs/ipc/convergence_strategy.md` Phase C) and use `SYS_FS_POLL`.
 
 // ── KindId re-export ─────────────────────────────────────────────────────────
+use alloc::format;
+use alloc::vec::Vec;
+
 /// A 16-byte identifier for the semantic type (schema kind) of a message payload.
 ///
 /// Re-exported from `abi` so callers do not need to import `abi` separately.
 pub use abi::KindId;
 use abi::errors::Errno;
-use abi::syscall::vfs_flags::O_RDONLY;
+use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 use abi::syscall::{SYS_MSG_BROADCAST, SYS_MSG_RECV, SYS_MSG_SEND};
 
 use crate::syscall::arch::raw_syscall6;
@@ -179,4 +182,21 @@ pub fn msg_broadcast(pgid: u32, kind: KindId, payload: &[u8]) -> Result<Broadcas
 /// The returned FD also supports `vfs_read` (one message payload per read).
 pub fn msg_inbox_open_self() -> Result<u32, Errno> {
     crate::syscall::vfs::vfs_open("/proc/self/inbox", O_RDONLY)
+}
+
+/// Open another process inbox as a VFS FD.
+///
+/// The returned FD supports `sendmsg`; messages sent through this path prefix
+/// the payload with a 16-byte [`KindId`] and may attach handles.
+pub fn msg_inbox_open(pid: u32) -> Result<u32, Errno> {
+    let path = format!("/proc/{}/inbox", pid);
+    crate::syscall::vfs::vfs_open(&path, O_RDWR)
+}
+
+/// Send a typed inbox message through an inbox FD, optionally attaching FDs.
+pub fn msg_sendmsg(inbox_fd: u32, kind: KindId, payload: &[u8], fds: &[u32]) -> Result<(), Errno> {
+    let mut data = Vec::with_capacity(16 + payload.len());
+    data.extend_from_slice(&kind.0);
+    data.extend_from_slice(payload);
+    crate::syscall::socket::sendmsg(inbox_fd, &data, fds)
 }

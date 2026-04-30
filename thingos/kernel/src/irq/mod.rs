@@ -250,6 +250,14 @@ pub fn poll(vector: u8) -> Option<u32> {
     IRQ_REGISTRY.poll_pending(vector, task_id)
 }
 
+pub fn try_wait(vector: u8, task_id: u64) -> Option<u32> {
+    if IRQ_REGISTRY.poll_pending(vector, task_id).is_some() {
+        Some(IRQ_REGISTRY.try_wait(vector, task_id))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::sync::atomic::{AtomicU32, Ordering};

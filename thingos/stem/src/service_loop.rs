@@ -62,6 +62,7 @@ use abi::wire::KindId;
 
 use crate::errors::Errno;
 use crate::syscall::message::{msg_inbox_open_self, msg_recv};
+use crate::syscall::socket::recvmsg;
 use crate::syscall::vfs::vfs_close;
 use crate::time::Duration;
 use crate::wait_set::{WaitEvent, WaitSet, WaitToken};
@@ -205,6 +206,8 @@ pub enum ServiceEvent<'a> {
         kind: KindId,
         /// Message payload bytes (borrowed from the loop's scratch buffer).
         payload: &'a [u8],
+        /// File descriptors attached to this message.
+        handles: &'a [u32],
     },
     /// A registered secondary readiness source fired (FD, IRQ, task exit,
     /// port, watch).  Use the `token` to dispatch.
@@ -255,6 +258,8 @@ pub struct ServiceLoop {
     inbox_token: WaitToken,
     waitset: WaitSet,
     scratch: Vec<u8>,
+    inbox_data_scratch: Vec<u8>,
+    handle_scratch: Vec<u32>,
     /// Set when the inbox surfaces a hangup / EOF; latched so that subsequent
     /// `next_event` calls keep returning [`ServiceEvent::InboxClosed`] rather
     /// than busy-spinning.
@@ -309,6 +314,8 @@ impl ServiceLoop {
             inbox_token,
             waitset,
             scratch: vec![0u8; max_payload],
+            inbox_data_scratch: vec![0u8; max_payload.saturating_add(16)],
+            handle_scratch: vec![0u32; 16],
             inbox_closed: false,
             metrics: LoopMetrics::default(),
             name: Vec::new(),
@@ -698,8 +705,22 @@ impl ServiceLoop {
 
     fn recv_one_inbox_message(&mut self) -> Result<ServiceEvent<'_>, Errno> {
         let mut kind = KindId([0u8; 16]);
-        match msg_recv(&mut kind, &mut self.scratch) {
-            Ok(n) => {
+        match recvmsg(self.inbox_fd, &mut self.inbox_data_scratch, &mut self.handle_scratch) {
+            Ok((n, h_count)) => {
+                let payload_start = if n >= 16 {
+                    kind.0.copy_from_slice(&self.inbox_data_scratch[..16]);
+                    16
+                } else {
+                    0
+                };
+                let payload_len = n.saturating_sub(payload_start);
+                let copy_len = payload_len.min(self.scratch.len());
+                if copy_len > 0 {
+                    self.scratch[..copy_len].copy_from_slice(
+                        &self.inbox_data_scratch[payload_start..payload_start + copy_len],
+                    );
+                }
+
                 // Record dispatch start and current event kind.
                 self.metrics
                     .last_dispatch_start_ns
@@ -708,9 +729,12 @@ impl ServiceLoop {
                 let kind_hi =
                     u64::from_le_bytes(kind.0[0..8].try_into().expect("KindId is 16 bytes"));
                 self.metrics.current_event_kind.store(kind_hi, Ordering::Relaxed);
-                let copy_len = n.min(self.scratch.len());
                 self.report_state(LoopState::Dispatching, b"message");
-                Ok(ServiceEvent::Message { kind, payload: &self.scratch[..copy_len] })
+                Ok(ServiceEvent::Message {
+                    kind,
+                    payload: &self.scratch[..copy_len],
+                    handles: &self.handle_scratch[..h_count.min(self.handle_scratch.len())],
+                })
             }
             Err(Errno::EAGAIN) => {
                 // Spurious readability — kernel woke us but no message was
@@ -801,11 +825,12 @@ mod tests {
     fn service_event_message_borrows_payload() {
         let kind = KindId([1u8; 16]);
         let buf = [0xAAu8; 4];
-        let ev = ServiceEvent::Message { kind, payload: &buf };
+        let ev = ServiceEvent::Message { kind, payload: &buf, handles: &[] };
         match ev {
-            ServiceEvent::Message { kind: k, payload } => {
+            ServiceEvent::Message { kind: k, payload, handles } => {
                 assert_eq!(k.0, [1u8; 16]);
                 assert_eq!(payload, &[0xAAu8; 4]);
+                assert!(handles.is_empty());
             }
             _ => panic!("expected Message"),
         }

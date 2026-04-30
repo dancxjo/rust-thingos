@@ -85,25 +85,69 @@ pub struct InboxId(pub u64);
 /// This type is deliberately kept small.  Routing metadata (target group,
 /// delivery strategy, sequence number) belongs to layers above the inbox
 /// primitive and should not leak into the envelope at this level.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct MessageEnvelope {
     /// The typed message to deliver.
     pub message: Message,
     /// TID of the sending task at enqueue time, if known.
     pub sender: Option<u64>,
+    /// Capability handles attached to this message.
+    pub capabilities: Vec<Arc<dyn crate::vfs::VfsNode>>,
 }
 
 impl MessageEnvelope {
     /// Construct an envelope with a known sender TID.
     pub fn with_sender(message: Message, sender_tid: u64) -> Self {
-        Self { message, sender: Some(sender_tid) }
+        Self { message, sender: Some(sender_tid), capabilities: Vec::new() }
     }
 
     /// Construct an anonymous envelope (no sender attribution).
     pub fn anonymous(message: Message) -> Self {
-        Self { message, sender: None }
+        Self { message, sender: None, capabilities: Vec::new() }
+    }
+
+    /// Construct an anonymous envelope with attached capability handles.
+    pub fn anonymous_with_capabilities(
+        message: Message,
+        capabilities: Vec<Arc<dyn crate::vfs::VfsNode>>,
+    ) -> Self {
+        Self { message, sender: None, capabilities }
+    }
+
+    /// Construct an envelope with a known sender TID and attached capabilities.
+    pub fn with_sender_and_capabilities(
+        message: Message,
+        sender_tid: u64,
+        capabilities: Vec<Arc<dyn crate::vfs::VfsNode>>,
+    ) -> Self {
+        Self { message, sender: Some(sender_tid), capabilities }
     }
 }
+
+impl core::fmt::Debug for MessageEnvelope {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MessageEnvelope")
+            .field("message", &self.message)
+            .field("sender", &self.sender)
+            .field("capabilities_len", &self.capabilities.len())
+            .finish()
+    }
+}
+
+impl PartialEq for MessageEnvelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.message == other.message
+            && self.sender == other.sender
+            && self.capabilities.len() == other.capabilities.len()
+            && self
+                .capabilities
+                .iter()
+                .zip(other.capabilities.iter())
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+    }
+}
+
+impl Eq for MessageEnvelope {}
 
 // ---------------------------------------------------------------------------
 // SendError / RecvError

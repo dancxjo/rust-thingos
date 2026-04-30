@@ -15,8 +15,9 @@ use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 use driver::BootFbDriver;
 use ipc_helpers::provider::ProviderLoop;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
+use stem::syscall::message::{KindId, msg_inbox_open, msg_recv_blocking, msg_sendmsg};
+use stem::syscall::port_create;
 use stem::syscall::vfs::vfs_handle_from_port;
-use stem::syscall::{port_create, port_recv, port_send};
 use stem::{debug, info, warn};
 use vfs_provider::dispatch_vfs_rpc;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_bootfb";
@@ -110,7 +111,7 @@ fn main(boot_fd: usize) -> ! {
     // 1. Map bootstrap memfd to get handles
     let mut drv_req_read = 0;
     let mut drv_resp_write = 0;
-    let mut supervisor_port = 0;
+    let mut reserved_supervisor_port = 0;
     let mut bind_instance_id = 0u64;
 
     let mut boot_fd = boot_fd;
@@ -167,7 +168,7 @@ fn main(boot_fd: usize) -> ! {
 
                 drv_req_read = slice[0];
                 drv_resp_write = slice[1];
-                supervisor_port = slice[2];
+                reserved_supervisor_port = slice[2];
 
                 let id_low = slice[3] as u64;
                 let id_high = slice[4] as u64;
@@ -177,7 +178,7 @@ fn main(boot_fd: usize) -> ! {
                     "display_bootfb: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
                     drv_req_read,
                     drv_resp_write,
-                    supervisor_port,
+                    reserved_supervisor_port,
                     bind_instance_id
                 );
             }
@@ -194,12 +195,12 @@ fn main(boot_fd: usize) -> ! {
         stem::syscall::exit(1);
     }
 
-    if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {
+    if drv_resp_write == 0 || bind_instance_id == 0 {
         stem::debug!(
-            "display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
+            "display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, reserved={}, id={})",
             drv_req_read,
             drv_resp_write,
-            supervisor_port,
+            reserved_supervisor_port,
             bind_instance_id
         );
         stem::syscall::exit(1);
@@ -230,16 +231,19 @@ fn main(boot_fd: usize) -> ! {
             stem::syscall::exit(1);
         }
     };
-
-    // Bridge the supervisor port handle to a VFS FD once so we can use
-    // sendmsg (FD-based) for capability transfer.
-    let supervisor_port_fd = match vfs_handle_from_port(supervisor_port) {
+    let vfs_write_fd = match vfs_handle_from_port(vfs_write) {
         Ok(fd) => fd,
         Err(e) => {
-            warn!(
-                "display_bootfb: invalid supervisor port handle {} (vfs_handle_from_port failed: {:?})",
-                supervisor_port, e
-            );
+            warn!("display_bootfb: failed to project provider write port to fd: {:?}", e);
+            stem::syscall::exit(1);
+        }
+    };
+
+    let sprout_pid = stem::syscall::getppid();
+    let sprout_inbox_fd = match msg_inbox_open(sprout_pid) {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("display_bootfb: failed to open sprout inbox for pid {}: {:?}", sprout_pid, e);
             stem::syscall::exit(1);
         }
     };
@@ -262,12 +266,16 @@ fn main(boot_fd: usize) -> ! {
             &ready_bytes[..len],
         ) {
             info!(
-                "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x}) to supervisor port...",
+                "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x}) to sprout inbox...",
                 ready.class_mask
             );
             // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let res =
-                stem::syscall::socket::sendmsg(supervisor_port_fd, &buf[..total_len], &[vfs_write]);
+            let res = msg_sendmsg(
+                sprout_inbox_fd,
+                KindId(display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL),
+                &buf[..total_len],
+                &[vfs_write_fd],
+            );
             info!(
                 "display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...",
                 res
@@ -275,50 +283,33 @@ fn main(boot_fd: usize) -> ! {
         }
     }
 
-    // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
-    let mut wait_buf = [0u8; 512];
+    // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED on our inbox.
     let mut bind_instance_id_confirmed = bind_instance_id;
     loop {
-        // Read from drv_req_read, NOT supervisor_port. This should block rather than
-        // spin so the CPU can schedule unrelated work while the driver waits.
-        match port_recv(drv_req_read, &mut wait_buf) {
-            Ok(n) => {
-                if let Some((header, payload)) =
-                    display_driver_protocol::parse_message(&wait_buf[..n])
-                {
-                    if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
-                        if let Some(assigned) =
-                            supervisor_protocol::decode_bind_assigned_le(payload)
-                        {
-                            bind_instance_id_confirmed = assigned.bind_instance_id;
-                            let path_len =
-                                assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
-                            let path = core::str::from_utf8(&assigned.primary_path[..path_len])
-                                .unwrap_or("?");
-                            debug!(
-                                "display_bootfb: Sovereign registration COMPLETE. Assigned: {}",
-                                path
-                            );
-                            break;
-                        }
-                    } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
-                        if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
-                            let reason_len =
-                                failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
-                            let reason =
-                                core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
-                            warn!(
-                                "display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Exiting.",
-                                failed.error_code, reason
-                            );
-                            stem::syscall::exit(1);
-                        }
-                    }
+        let msg = msg_recv_blocking(512);
+        if msg.kind.0 != display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL {
+            continue;
+        }
+        if let Some((header, payload)) = display_driver_protocol::parse_message(&msg.payload) {
+            if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
+                if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
+                    bind_instance_id_confirmed = assigned.bind_instance_id;
+                    let path_len = assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
+                    let path =
+                        core::str::from_utf8(&assigned.primary_path[..path_len]).unwrap_or("?");
+                    debug!("display_bootfb: Sovereign registration COMPLETE. Assigned: {}", path);
+                    break;
                 }
-            }
-            Err(e) => {
-                warn!("display_bootfb: failed waiting for bind assignment: {:?}", e);
-                stem::time::sleep_ms(1);
+            } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
+                if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
+                    let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
+                    let reason = core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
+                    warn!(
+                        "display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Exiting.",
+                        failed.error_code, reason
+                    );
+                    stem::syscall::exit(1);
+                }
             }
         }
     }
@@ -339,7 +330,12 @@ fn main(boot_fd: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ = port_send(supervisor_port, &svc_buf[..total_len]);
+                let _ = msg_sendmsg(
+                    sprout_inbox_fd,
+                    KindId(display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL),
+                    &svc_buf[..total_len],
+                    &[],
+                );
                 debug!("display_bootfb: Sent MSG_SERVICE_READY.");
             }
         }

@@ -2555,6 +2555,17 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let wake_mono = crate::runtime::<R>().mono_ticks();
         for (tid, priority, target_cpu) in to_wake {
             if let Some(sf) = self.state.get_thread_mut(tid) {
+                if sf.state == TaskState::Dead {
+                    continue;
+                }
+                if sf.state != TaskState::Blocked {
+                    // The timeout can fire after a waiter arms its deadline but
+                    // before it reaches block_current(). Preserve the wake as a
+                    // pending handoff so block_current returns immediately
+                    // instead of sleeping forever on an already-expired timeout.
+                    sf.wake_pending = true;
+                    continue;
+                }
                 if sf.last_cpu.is_some_and(|c| c != target_cpu) {
                     if sf.migration_state == MigrationState::Local {
                         let _ = sf
@@ -2568,9 +2579,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 sf.state = TaskState::Runnable;
                 sf.enqueued_at_tick = now;
                 sf.wake_cpu = Some(target_cpu);
+                sf.wake_pending = false;
             } else {
                 continue;
             }
+            self.state.unregister_waiter(tid);
             self.pending_registry_syncs.push(types::DeferredRegistrySync {
                 tid,
                 new_state: Some(TaskState::Runnable),
@@ -2610,7 +2623,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
                 .and_then(|cid| self.state.get_thread(cid))
                 .map(|sf| sf.priority as usize)
                 .unwrap_or(0);
-            if priority > current_prio {
+            let current_is_idle =
+                self.state.per_cpu.get(actual_cpu).is_some_and(|pc| pc.current == pc.idle_task);
+            if priority >= current_prio || current_is_idle {
                 if actual_cpu == current_cpu {
                     self.state.per_cpu[current_cpu].need_resched = true;
                     // Mirror to the per-CPU atomic flag so the lockless
@@ -2720,7 +2735,9 @@ impl<R: BootRuntime> types::Scheduler<R> {
             per_cpu.preempt_disable_depth -= 1;
         }
 
-        if per_cpu.preempt_disable_depth == 0 && per_cpu.need_resched {
+        if per_cpu.preempt_disable_depth == 0
+            && (per_cpu.need_resched || need_resched_pending(cpu_idx))
+        {
             per_cpu.need_resched = false;
             return self.schedule_point(ScheduleReason::SafePoint);
         }
@@ -2964,6 +2981,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
             .expect("prepare_schedule called without current task");
 
         let mut next_id = None;
+        let mut deferred_current_requeue: Option<(usize, TaskId)> = None;
         let mut pick_attempts = 0usize;
         let mut dequeue_failures = 0usize;
         // Priority scan — skip dead and misrouted tasks, evaluating aging on pick.
@@ -3047,6 +3065,11 @@ impl<R: BootRuntime> types::Scheduler<R> {
                             continue;
                         }
                     }
+                    if id == current_id && Some(current_id) != self.state.per_cpu[cpu_idx].idle_task
+                    {
+                        deferred_current_requeue.get_or_insert((p, id));
+                        continue;
+                    }
                     next_id = Some(id);
                     break;
                 }
@@ -3056,80 +3079,113 @@ impl<R: BootRuntime> types::Scheduler<R> {
         let next_id = match next_id {
             Some(id) => Some(id),
             None => {
-                // Check Idle queue — skip dead and misrouted tasks
-                let mut found_idle_q = None;
-                while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
-                    let Some(id) = self.state.dequeue_task_front(cpu_idx, 0) else {
-                        break;
-                    };
-                    pick_attempts += 1;
-                    self.metrics.pops += 1;
-                    // Use the hot-field cache for dead/affinity checks.
-                    match self.state.get_thread(id) {
-                        None => continue, // stale runq entry — skip
-                        Some(sf)
-                            if sf.state == TaskState::Dead
-                                || sf.state == TaskState::Blocked
-                                || (sf.state == TaskState::Running && id != current_id) =>
-                        {
-                            continue;
-                        }
-                        Some(sf) => {
-                            if let crate::task::Affinity::Pinned(target) = sf.affinity {
-                                if target != cpu_idx && target < per_cpu_len {
-                                    self.defer_or_repair_misroute(sf.priority as usize, target, id);
-                                    continue;
-                                }
-                            }
-                            if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
-                                if !aff.allows(cpu_idx, per_cpu_len) {
-                                    // Same safe fallback as the normal picker path.
-                                    let target = aff.pick_cpu(per_cpu_len).unwrap_or_else(|| {
-                                        sf.last_cpu.filter(|&c| c < per_cpu_len).unwrap_or_else(
-                                            || self.state.pick_online_cpu_excluding_bsp(0),
-                                        )
-                                    });
-                                    crate::kdebug!(
-                                        "SCHED[affinity]: tid={} (idle-q) misrouted to cpu{}, \
-                                         re-routing to cpu{} (allowed={:#x})",
-                                        id,
-                                        cpu_idx,
-                                        target,
-                                        aff.allowed.0
-                                    );
-                                    self.defer_or_repair_misroute(sf.priority as usize, target, id);
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    found_idle_q = Some(id);
-                    break;
-                }
-                if let Some(id) = found_idle_q {
-                    Some(id)
+                if deferred_current_requeue.is_some() {
+                    Some(current_id)
                 } else {
-                    if pick_attempts >= PREPARE_SCHEDULE_PICK_BUDGET {
-                        crate::kwarn!("SCHED: CPU {} Priority 0 pick budget exhausted!", cpu_idx);
+                    // Check Idle queue — skip dead and misrouted tasks
+                    let mut found_idle_q = None;
+                    while pick_attempts < PREPARE_SCHEDULE_PICK_BUDGET {
+                        let Some(id) = self.state.dequeue_task_front(cpu_idx, 0) else {
+                            break;
+                        };
+                        pick_attempts += 1;
+                        self.metrics.pops += 1;
+                        // Use the hot-field cache for dead/affinity checks.
+                        match self.state.get_thread(id) {
+                            None => continue, // stale runq entry — skip
+                            Some(sf)
+                                if sf.state == TaskState::Dead
+                                    || sf.state == TaskState::Blocked
+                                    || (sf.state == TaskState::Running && id != current_id) =>
+                            {
+                                continue;
+                            }
+                            Some(sf) => {
+                                if let crate::task::Affinity::Pinned(target) = sf.affinity {
+                                    if target != cpu_idx && target < per_cpu_len {
+                                        self.defer_or_repair_misroute(
+                                            sf.priority as usize,
+                                            target,
+                                            id,
+                                        );
+                                        continue;
+                                    }
+                                }
+                                if let crate::task::Affinity::Restricted(ref aff) = sf.affinity {
+                                    if !aff.allows(cpu_idx, per_cpu_len) {
+                                        // Same safe fallback as the normal picker path.
+                                        let target =
+                                            aff.pick_cpu(per_cpu_len).unwrap_or_else(|| {
+                                                sf.last_cpu
+                                                    .filter(|&c| c < per_cpu_len)
+                                                    .unwrap_or_else(|| {
+                                                        self.state.pick_online_cpu_excluding_bsp(0)
+                                                    })
+                                            });
+                                        crate::kdebug!(
+                                            "SCHED[affinity]: tid={} (idle-q) misrouted to cpu{}, \
+                                         re-routing to cpu{} (allowed={:#x})",
+                                            id,
+                                            cpu_idx,
+                                            target,
+                                            aff.allowed.0
+                                        );
+                                        self.defer_or_repair_misroute(
+                                            sf.priority as usize,
+                                            target,
+                                            id,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        found_idle_q = Some(id);
+                        break;
                     }
-                    // Attempt to steal a task from a peer CPU before falling
-                    // back to the idle task.  Prefer nearby CPUs first to
-                    // exploit shared caches and reduce inter-socket traffic.
-                    // See `idle_steal` for the full selection algorithm.
-                    let stolen = self.idle_steal(cpu_idx);
-                    if stolen.is_some() {
-                        stolen
-                    } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
-                        self.metrics.idle_picks += 1;
-                        Some(idle)
+                    if let Some(id) = found_idle_q {
+                        Some(id)
                     } else {
-                        None
+                        if pick_attempts >= PREPARE_SCHEDULE_PICK_BUDGET {
+                            crate::kwarn!(
+                                "SCHED: CPU {} Priority 0 pick budget exhausted!",
+                                cpu_idx
+                            );
+                        }
+                        // Attempt to steal a task from a peer CPU before falling
+                        // back to the idle task.  Prefer nearby CPUs first to
+                        // exploit shared caches and reduce inter-socket traffic.
+                        // See `idle_steal` for the full selection algorithm.
+                        let stolen = self.idle_steal(cpu_idx);
+                        if stolen.is_some() {
+                            stolen
+                        } else if let Some(idle) = self.state.per_cpu[cpu_idx].idle_task {
+                            self.metrics.idle_picks += 1;
+                            Some(idle)
+                        } else {
+                            None
+                        }
                     }
                 }
             }
         };
 
         let next_id = next_id?;
+
+        if next_id != current_id {
+            if let Some((prio, id)) = deferred_current_requeue.take() {
+                let should_requeue = self.state.get_thread(id).is_some_and(|sf| {
+                    sf.state != TaskState::Dead
+                        && sf.state != TaskState::Blocked
+                        && sf.runq_location.is_none()
+                });
+                if should_requeue {
+                    self.state.enqueue_task(cpu_idx, prio, id);
+                    self.state
+                        .note_enqueue_cause(id, crate::sched::state::EnqueueCause::YieldRequeue);
+                }
+            }
+        }
 
         if next_id == current_id {
             let Some(current_sched) = self.state.get_task_mut(current_id) else {

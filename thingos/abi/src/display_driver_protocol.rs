@@ -6,6 +6,7 @@ use core::mem::size_of;
 
 pub const DRIVER_MAGIC: u32 = 0x4452_5650; // "DRVP"
 pub const DRIVER_VERSION: u16 = 0;
+pub const KIND_ID_DISPLAY_DRIVER_CONTROL: [u8; 16] = *b"disp.driver.ctrl";
 
 pub const MSG_REGISTER: u16 = 1;
 pub const MSG_BIND: u16 = 2;

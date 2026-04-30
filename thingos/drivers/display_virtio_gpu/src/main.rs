@@ -4,10 +4,9 @@ use alloc::string::ToString;
 extern crate alloc;
 
 use abi::display::{
-    BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ,
-    NS_PER_SECOND_PER_MILLI_HZ, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
-    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps, DisplayInfo, DisplayMode,
-    PlaneCommit,
+    BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_COMMIT,
+    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps,
+    DisplayInfo, DisplayMode, NS_PER_SECOND_PER_MILLI_HZ, PlaneCommit,
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -20,6 +19,7 @@ use abi::pixel::PixelFormat;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
+use stem::syscall::message::{KindId, msg_inbox_open, msg_recv_blocking, msg_sendmsg};
 use stem::syscall::{PortHandle, port_create, port_send};
 use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
@@ -239,8 +239,8 @@ struct VirtioGpuDriver {
     last_presented_idx: Option<usize>,
     /// Buffers imported from clients via DISPLAY_OP_IMPORT_BUFFER.  Each
     /// entry is a client-provided shared-memory region mapped read-only into
-    /// this process.  Entries must be unmapped with `vm_unmap` when the
-    /// client calls DISPLAY_OP_RELEASE_BUFFER to avoid memory leaks.
+    /// this process.  Release currently retires the buffer ID without
+    /// synchronously unmapping so the provider can always reply to clients.
     imported_buffers: alloc::collections::BTreeMap<BufferId, ImportedBuffer>,
     next_import_id: u32,
     /// Framebuffer FD used by the legacy MSG_BIND/MSG_PRESENT path.
@@ -444,9 +444,14 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
             let id = BufferId(u32::from_le_bytes(call_payload[..4].try_into().unwrap()));
             if let Some(buf) = driver.imported_buffers.remove(&id) {
-                let _ = stem::syscall::vm_unmap(buf.ptr as usize, buf.size);
+                stem::debug!(
+                    "DISP: DISPLAY_OP_RELEASE_BUFFER requested: id={} size={} (mapping retained)",
+                    id.0,
+                    buf.size
+                );
                 ProviderResponse::ok_device_call(0, &[])
             } else {
+                stem::debug!("DISP: DISPLAY_OP_RELEASE_BUFFER requested for unknown id={}", id.0);
                 ProviderResponse::err(Errno::ENOENT)
             }
         }
@@ -685,19 +690,56 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 if let Some(dmg) = damage {
                     let res_id = driver.frame_pool[idx].res_id;
                     let mut command_ok = true;
+                    stem::trace!(
+                        "DISP: COMMIT transfer begin seq={} res_id={} damage={}x{}+{},{}",
+                        driver.present_seq.saturating_add(1),
+                        res_id,
+                        dmg.w,
+                        dmg.h,
+                        dmg.x,
+                        dmg.y
+                    );
                     if let Err(e) = driver.gpu.transfer_to_host(res_id, dmg) {
                         stem::error!("DISP: transfer_to_host failed: {}", e);
                         command_ok = false;
                     }
+                    stem::trace!(
+                        "DISP: COMMIT transfer end seq={} res_id={}",
+                        driver.present_seq.saturating_add(1),
+                        res_id
+                    );
+                    stem::trace!(
+                        "DISP: COMMIT flush begin seq={} res_id={}",
+                        driver.present_seq.saturating_add(1),
+                        res_id
+                    );
                     if let Err(e) = driver.gpu.flush_resource(res_id, dmg) {
                         stem::error!("DISP: flush_resource failed: {}", e);
                         command_ok = false;
                     }
-                    if let Err(e) =
-                        driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height)
-                    {
-                        stem::error!("DISP: set_scanout failed: {}", e);
-                        command_ok = false;
+                    stem::trace!(
+                        "DISP: COMMIT flush end seq={} res_id={}",
+                        driver.present_seq.saturating_add(1),
+                        res_id
+                    );
+                    if driver.current_res_id != res_id {
+                        stem::trace!(
+                            "DISP: COMMIT set_scanout begin seq={} old_res={} new_res={}",
+                            driver.present_seq.saturating_add(1),
+                            driver.current_res_id,
+                            res_id
+                        );
+                        if let Err(e) =
+                            driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height)
+                        {
+                            stem::error!("DISP: set_scanout failed: {}", e);
+                            command_ok = false;
+                        }
+                        stem::trace!(
+                            "DISP: COMMIT set_scanout end seq={} new_res={}",
+                            driver.present_seq.saturating_add(1),
+                            res_id
+                        );
                     }
                     if !command_ok {
                         return ProviderResponse::err(Errno::EIO);
@@ -923,7 +965,7 @@ fn main(boot_arg: usize) -> ! {
 
     let mut drv_req_read = 0;
     let mut drv_resp_write = 0;
-    let mut supervisor_port = 0;
+    let mut reserved_supervisor_port = 0;
     let mut bind_instance_id = 0;
 
     let boot_size = 4096;
@@ -944,7 +986,7 @@ fn main(boot_arg: usize) -> ! {
 
             drv_req_read = slice[0];
             drv_resp_write = slice[1];
-            supervisor_port = slice[2];
+            reserved_supervisor_port = slice[2];
 
             let id_low = slice[3] as u64;
             let id_high = slice[4] as u64;
@@ -954,7 +996,7 @@ fn main(boot_arg: usize) -> ! {
                 "display_virtio_gpu: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
                 drv_req_read,
                 drv_resp_write,
-                supervisor_port,
+                reserved_supervisor_port,
                 bind_instance_id
             );
         }
@@ -967,12 +1009,12 @@ fn main(boot_arg: usize) -> ! {
         }
     }
 
-    if drv_req_read == 0 || drv_resp_write == 0 || supervisor_port == 0 || bind_instance_id == 0 {
+    if drv_req_read == 0 || drv_resp_write == 0 || bind_instance_id == 0 {
         stem::error!(
             "DISP: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
             drv_req_read,
             drv_resp_write,
-            supervisor_port,
+            reserved_supervisor_port,
             bind_instance_id
         );
         loop {
@@ -982,7 +1024,7 @@ fn main(boot_arg: usize) -> ! {
 
     debug!(
         "display_virtio_gpu: starting (drv_req_r={}, drv_resp_w={}, svc={}, id={})",
-        drv_req_read, drv_resp_write, supervisor_port, bind_instance_id
+        drv_req_read, drv_resp_write, reserved_supervisor_port, bind_instance_id
     );
 
     // Find and initialize GPU
@@ -1119,10 +1161,12 @@ fn main(boot_arg: usize) -> ! {
     // Create VFS provider port
     let (vfs_write, vfs_read) =
         port_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
+    let vfs_write_fd = stem::syscall::vfs::vfs_handle_from_port(vfs_write)
+        .expect("display_virtio_gpu: vfs_handle_from_port(vfs_write)");
 
-    // Bridge the supervisor port handle to a VFS FD for sendmsg.
-    let supervisor_port_fd = stem::syscall::vfs::vfs_handle_from_port(supervisor_port)
-        .expect("display_virtio_gpu: vfs_handle_from_port(supervisor_port)");
+    let sprout_pid = stem::syscall::getppid();
+    let sprout_inbox_fd =
+        msg_inbox_open(sprout_pid).expect("display_virtio_gpu: failed to open sprout inbox");
 
     // Send MSG_BIND_READY to supervisor instead of legacy MSG_REGISTER
     let ready = supervisor_protocol::BindReadyPayload {
@@ -1140,8 +1184,12 @@ fn main(boot_arg: usize) -> ! {
             &ready_bytes[..len],
         ) {
             // Bundle the VFS provider handle and BIND_READY notification atomically.
-            let _ =
-                stem::syscall::socket::sendmsg(supervisor_port_fd, &buf[..total_len], &[vfs_write]);
+            let _ = msg_sendmsg(
+                sprout_inbox_fd,
+                KindId(drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL),
+                &buf[..total_len],
+                &[vfs_write_fd],
+            );
             debug!("display_virtio_gpu: Sent MSG_BIND_READY (ID: {})", bind_instance_id);
         }
     }
@@ -1157,7 +1205,6 @@ fn main(boot_arg: usize) -> ! {
         alloc::collections::BTreeMap::new();
 
     // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
-    let mut wait_buf = [0u8; 512];
     let mut loop_count = 0;
     debug!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
     let assigned_bind_id = loop {
@@ -1165,39 +1212,37 @@ fn main(boot_arg: usize) -> ! {
         if loop_count % 100 == 0 {
             debug!("display_virtio_gpu: Still waiting for BIND_ASSIGNED (loop={})...", loop_count);
         }
-        if let Ok(n) = stem::syscall::port_try_recv(drv_req_read, &mut wait_buf) {
-            if let Some((header, payload)) = drvproto::parse_message(&wait_buf[..n]) {
-                if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
-                    if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
-                        let path_len =
-                            assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
-                        let assigned_path = alloc::string::String::from_utf8_lossy(
-                            &assigned.primary_path[..path_len],
-                        )
-                        .to_string();
-                        info!(
-                            "display_virtio_gpu: Sovereign registration COMPLETE. Assigned: {}",
-                            assigned_path
-                        );
-                        break assigned.bind_instance_id;
-                    }
-                } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
-                    if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
-                        let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
-                        let reason =
-                            core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
-                        warn!(
-                            "display_virtio_gpu: Registration REJECTED by supervisor (code={}, reason={}). Halting.",
-                            failed.error_code, reason
-                        );
-                        loop {
-                            stem::yield_now();
-                        }
+        let msg = msg_recv_blocking(512);
+        if msg.kind.0 != drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL {
+            continue;
+        }
+        if let Some((header, payload)) = drvproto::parse_message(&msg.payload) {
+            if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
+                if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
+                    let path_len = assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
+                    let assigned_path =
+                        alloc::string::String::from_utf8_lossy(&assigned.primary_path[..path_len])
+                            .to_string();
+                    info!(
+                        "display_virtio_gpu: Sovereign registration COMPLETE. Assigned: {}",
+                        assigned_path
+                    );
+                    break assigned.bind_instance_id;
+                }
+            } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
+                if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
+                    let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
+                    let reason = core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
+                    warn!(
+                        "display_virtio_gpu: Registration REJECTED by supervisor (code={}, reason={}). Halting.",
+                        failed.error_code, reason
+                    );
+                    loop {
+                        stem::yield_now();
                     }
                 }
             }
         }
-        stem::time::sleep_ms(10);
     };
 
     // Notify supervisor that this service is now fully operational.
@@ -1216,7 +1261,12 @@ fn main(boot_arg: usize) -> ! {
                 supervisor_protocol::MSG_SERVICE_READY,
                 &payload_bytes[..p_len],
             ) {
-                let _ = port_send(supervisor_port, &svc_buf[..total_len]);
+                let _ = msg_sendmsg(
+                    sprout_inbox_fd,
+                    KindId(drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL),
+                    &svc_buf[..total_len],
+                    &[],
+                );
                 debug!("display_virtio_gpu: Sent MSG_SERVICE_READY.");
             }
         }

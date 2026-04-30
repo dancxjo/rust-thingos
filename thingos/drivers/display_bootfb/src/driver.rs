@@ -4,13 +4,16 @@ use core::default::Default;
 extern crate alloc;
 use alloc::collections::BTreeMap;
 
-use abi::display::{BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, NS_PER_SECOND_PER_MILLI_HZ, DisplayInfo, PlaneCommit, PlaneId};
+use abi::display::{
+    BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DisplayInfo,
+    NS_PER_SECOND_PER_MILLI_HZ, PlaneCommit, PlaneId,
+};
 use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
 use abi::display_protocol::Rect;
 use abi::errors::{Errno, SysResult};
 use abi::pixel::PixelFormat;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
-use stem::syscall::{vfs_close, vfs_open, vfs_read, vm_map, vm_unmap};
+use stem::syscall::{vfs_close, vfs_open, vfs_read, vm_map};
 use stem::{debug, info};
 
 /// HW Framebuffer description
@@ -100,7 +103,10 @@ impl BootFbDriver {
 
     pub fn release_buffer(&mut self, id: BufferId) -> SysResult<()> {
         if let Some(buf) = self.buffers.remove(&id) {
-            let _ = vm_unmap(buf.ptr as usize, buf.size);
+            debug!(
+                "display_bootfb: released buffer {} (size={}, mapping retained)",
+                id.0, buf.size
+            );
             Ok(())
         } else {
             Err(Errno::ENOENT)

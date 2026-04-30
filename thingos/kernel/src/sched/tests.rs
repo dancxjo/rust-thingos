@@ -215,6 +215,7 @@ pub(crate) fn init_test_env() -> spin::MutexGuard<'static, ()> {
         TRYLOCK_MISS_WINDOW_IDLE_TIMER_COUNT[i].store(0, Ordering::Relaxed);
         TRYLOCK_MISS_WINDOW_PENDING_COUNT[i].store(0, Ordering::Relaxed);
         TRYLOCK_MISS_LAST_WARN_TICK[i].store(0, Ordering::Relaxed);
+        GLOBAL_NEED_RESCHED[i].store(false, Ordering::Relaxed);
     }
     crate::runtime::<MockRuntime>().set_idle_task_current(false);
     reset_remote_wake_mailboxes_for_tests();
@@ -894,6 +895,202 @@ fn test_prepare_yield_keeps_current_runnable_when_no_peer_exists() {
 }
 
 #[test]
+fn test_prepare_yield_defers_current_to_run_runnable_peer() {
+    let _g = init_test_env();
+    let mut sched = types::Scheduler::<MockRuntime>::new();
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7101,
+        TaskState::Running,
+        TaskPriority::Normal,
+    )));
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7102,
+        TaskState::Runnable,
+        TaskPriority::Normal,
+    )));
+
+    sched.state.per_cpu[0].current = Some(7101);
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7101,
+        runq_location: None,
+        state: TaskState::Running,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: Some(0),
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7102,
+        runq_location: None,
+        state: TaskState::Runnable,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: None,
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+    sched.state.enqueue_task(0, TaskPriority::Normal as usize, 7102);
+
+    // Make the current task look more deserving under vruntime. A cooperative
+    // yield must still transfer the CPU to a waiting peer instead of repeatedly
+    // reselecting the current task and causing the caller to spin.
+    sched.state.task_runtime_stats_mut(7101).fair_vruntime = 0;
+    sched.state.task_runtime_stats_mut(7102).fair_vruntime = 10_000;
+
+    let switch = sched.prepare_yield().expect("yield should switch to the runnable peer");
+
+    assert_eq!(switch.from_tid, 7101);
+    assert_eq!(switch.to_tid, 7102);
+    assert_eq!(
+        sched.state.get_task(7101).and_then(|sf| sf.runq_location),
+        Some((0, TaskPriority::Normal as usize)),
+        "yielded current task should remain runnable for a later turn"
+    );
+}
+
+#[test]
+fn test_preempt_enable_honors_global_resched_request() {
+    let _g = init_test_env();
+    let mut sched = types::Scheduler::<MockRuntime>::new();
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7201,
+        TaskState::Running,
+        TaskPriority::Normal,
+    )));
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7202,
+        TaskState::Runnable,
+        TaskPriority::Normal,
+    )));
+
+    sched.state.per_cpu[0].current = Some(7201);
+    sched.state.per_cpu[0].preempt_disable_depth = 1;
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7201,
+        runq_location: None,
+        state: TaskState::Running,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: Some(0),
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7202,
+        runq_location: None,
+        state: TaskState::Runnable,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: None,
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+    sched.state.enqueue_task(0, TaskPriority::Normal as usize, 7202);
+    set_global_need_resched(0);
+
+    let switch =
+        sched.preempt_enable().expect("preempt_enable should consume the global resched request");
+
+    assert_eq!(switch.from_tid, 7201);
+    assert_eq!(switch.to_tid, 7202);
+    assert!(!need_resched_pending(0));
+}
+
+#[test]
+fn test_prepare_schedule_skips_blocked_current_stale_runq_entry() {
+    let _g = init_test_env();
+    let mut sched = types::Scheduler::<MockRuntime>::new();
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7301,
+        TaskState::Blocked,
+        TaskPriority::Normal,
+    )));
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7302,
+        TaskState::Runnable,
+        TaskPriority::Normal,
+    )));
+
+    sched.state.per_cpu[0].current = Some(7301);
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7301,
+        runq_location: None,
+        state: TaskState::Blocked,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: Some(0),
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7302,
+        runq_location: None,
+        state: TaskState::Runnable,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: None,
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+
+    // Deliberately model a stale/corrupt current-task queue entry: this can
+    // occur transiently when lifecycle state and queue metadata are repaired on
+    // separate paths. The picker must validate state before treating the
+    // current entry as a deferred yield candidate.
+    sched.state.enqueue_task(0, TaskPriority::Normal as usize, 7301);
+    sched.state.enqueue_task(0, TaskPriority::Normal as usize, 7302);
+    sched.state.task_runtime_stats_mut(7301).fair_vruntime = 0;
+    sched.state.task_runtime_stats_mut(7302).fair_vruntime = 10_000;
+
+    let switch = sched.prepare_schedule().expect("blocked current entry must not suppress peer");
+
+    assert_eq!(switch.from_tid, 7301);
+    assert_eq!(switch.to_tid, 7302);
+    assert_eq!(
+        sched.state.get_task(7301).and_then(|sf| sf.runq_location),
+        None,
+        "blocked stale current entry should be discarded, not requeued"
+    );
+}
+
+#[test]
 fn test_prepare_yield_penalizes_spin_yield_requeue_band() {
     let _g = init_test_env();
     let mut sched = types::Scheduler::<MockRuntime>::new();
@@ -1157,6 +1354,49 @@ fn test_wake_preempts_lower_priority() {
     let switch = switch.unwrap();
     assert_eq!(switch.to_tid, 3002, "Scheduler should switch to the RT task");
     assert_eq!(switch.from_tid, 3001, "Scheduler should switch away from the Normal task");
+}
+
+#[test]
+fn test_wake_sleepers_marks_running_timeout_as_pending_not_runnable() {
+    let _g = init_test_env();
+    let mut sched = types::Scheduler::<MockRuntime>::new();
+    sched.state.per_cpu.push(crate::sched::state::PerCpu::new());
+
+    crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(make_task(
+        7401,
+        TaskState::Running,
+        TaskPriority::Normal,
+    )));
+
+    sched.state.per_cpu[0].current = Some(7401);
+    sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+        tid: 7401,
+        runq_location: None,
+        state: TaskState::Running,
+        priority: TaskPriority::Normal,
+        affinity: Affinity::Any,
+        last_cpu: Some(0),
+        wake_cpu: Some(0),
+        run_cpu: Some(0),
+        timeslice_remaining: types::DEFAULT_TIMESLICE,
+        enqueued_at_tick: 0,
+        voluntary_yields: 0,
+        migration_state: MigrationState::Local,
+        wake_pending: false,
+    });
+
+    TICK_COUNT.store(100, Ordering::Relaxed);
+    sched.state.add_task_to_sleep_queue(7401, 100);
+
+    sched.wake_sleepers();
+
+    let sf = sched.state.get_task(7401).expect("task should remain in scheduler cache");
+    assert_eq!(sf.state, TaskState::Running);
+    assert!(sf.wake_pending, "expired timeout before block_current must be preserved");
+    assert_eq!(
+        sf.runq_location, None,
+        "running timeout task must not be enqueued while still running"
+    );
 }
 
 /// Verify that `wake_sleepers` defers cross-CPU IPIs to `pending_wake_ipis`
