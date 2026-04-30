@@ -847,13 +847,14 @@ pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand]
                 // No outgoing Wayland event needed; the compositor will map
                 // the surface based on the commit IPC command.
             }
-            BlossomCommand::SetToplevelChrome { surface, titlebar_height } => {
+            BlossomCommand::SetToplevelChrome { surface, titlebar_height, frame_thickness } => {
                 blossom_debug!(
-                    "wayland-server: surface {} titlebar height {}",
+                    "wayland-server: surface {} titlebar height {} frame {}",
                     surface,
-                    titlebar_height
+                    titlebar_height,
+                    frame_thickness
                 );
-                let msg = ipc::encode_set_chrome(*surface, *titlebar_height);
+                let msg = ipc::encode_set_chrome(*surface, *titlebar_height, *frame_thickness);
                 let _ = stem::syscall::port_send_all(cmd_write, &msg);
             }
             BlossomCommand::CloseToplevel { toplevel } => {

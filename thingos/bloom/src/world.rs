@@ -217,7 +217,12 @@ impl BloomWorld {
 
     /// Process one raw bristle HID event.
     pub fn handle_bristle_event(&mut self, data: &[u8]) {
-        self.input.handle_bristle_event(data, &mut self.scene, &mut self.damage);
+        self.input.handle_bristle_event(
+            data,
+            &mut self.scene,
+            &mut self.damage,
+            self.wayland_evt_write,
+        );
     }
 
     /// Send `FRAME_DONE` events to each client whose surface appeared in
@@ -261,11 +266,14 @@ impl BloomWorld {
         } else {
             None
         };
-        let cursor = self.visuals.cursor_plane(pointer_x, pointer_y);
+        let cursor_kind = self.input.visible_cursor_kind();
+        let chrome_overlay = self.visuals.chrome_overlay_plane(&self.display, &composition);
+        let cursor = self.visuals.cursor_plane(&self.display, cursor_kind, pointer_x, pointer_y);
         let result = self.display.present(
             &composition,
             &pending_damage,
             self.visuals.fallback_buffer_id(),
+            chrome_overlay,
             pointer_overlay,
             cursor,
         );

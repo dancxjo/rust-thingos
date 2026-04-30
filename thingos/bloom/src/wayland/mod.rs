@@ -401,6 +401,38 @@ impl WaylandServer {
                     }
                 }
             }
+            ipc::WEVT_CONFIGURE_SURFACE => {
+                if data.len() < 16 {
+                    return;
+                }
+                let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                let width = i32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+                let height = i32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+                let resizing = data.get(1).copied().unwrap_or(0) != 0;
+                for client in self.clients.values_mut() {
+                    if client.xdg_toplevel_for_bloom_surface(bloom_surface_id).is_none() {
+                        continue;
+                    }
+                    let states = if resizing {
+                        alloc::vec![blossom::XdgToplevelStateAtom::Resizing]
+                    } else {
+                        alloc::vec![]
+                    };
+                    if let Some(cmds) = self.blossom.configure_toplevel_for_surface(
+                        bloom_surface_id,
+                        width,
+                        height,
+                        states,
+                    ) {
+                        dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
+                        debug!(
+                            "wayland-server: configured surface={} size={}x{} resizing={}",
+                            bloom_surface_id, width, height, resizing
+                        );
+                    }
+                    break;
+                }
+            }
             _ => {}
         }
     }

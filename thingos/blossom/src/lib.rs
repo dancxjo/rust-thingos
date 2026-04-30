@@ -50,6 +50,8 @@ pub type ConfigureSerial = u32;
 
 /// Initial compositor-known title bar height for v1 toplevel chrome.
 pub const DEFAULT_TITLEBAR_HEIGHT: u32 = 40;
+/// Initial compositor-known frame thickness for v1 toplevel chrome.
+pub const DEFAULT_FRAME_THICKNESS: u32 = 6;
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -164,7 +166,7 @@ pub enum BlossomCommand {
     MarkSurfaceReadyForMapping { surface: SurfaceId },
     /// The compositor should treat the top strip of this toplevel surface as
     /// shell chrome that can receive compositor-owned pointer gestures.
-    SetToplevelChrome { surface: SurfaceId, titlebar_height: u32 },
+    SetToplevelChrome { surface: SurfaceId, titlebar_height: u32, frame_thickness: u32 },
     /// The compositor should send `xdg_toplevel.close` and initiate teardown.
     CloseToplevel { toplevel: ToplevelId },
     /// Send `xdg_wm_base.ping(serial)` to the client.
@@ -363,6 +365,7 @@ impl Blossom {
             BlossomCommand::SetToplevelChrome {
                 surface: wl_surface,
                 titlebar_height: DEFAULT_TITLEBAR_HEIGHT,
+                frame_thickness: DEFAULT_FRAME_THICKNESS,
             },
             BlossomCommand::SendXdgToplevelConfigure {
                 client,
@@ -678,6 +681,36 @@ impl Blossom {
         (serial, BlossomCommand::SendPing { client, wm_base, serial })
     }
 
+    /// Emit a compositor-initiated configure for the toplevel wrapping
+    /// `wl_surface`.
+    pub fn configure_toplevel_for_surface(
+        &mut self,
+        wl_surface: SurfaceId,
+        width: i32,
+        height: i32,
+        states: Vec<XdgToplevelStateAtom>,
+    ) -> Option<Vec<BlossomCommand>> {
+        let xdg_surface = *self.surface_to_xdg.get(&wl_surface)?;
+        let surface = self.surfaces.get_mut(&xdg_surface)?;
+        let toplevel = match surface.role {
+            Some(XdgRole::Toplevel(id)) => id,
+            _ => return None,
+        };
+        let client = surface.client;
+        let serial = self.serial.next();
+        surface.pending_configures.push_back(serial);
+        Some(vec![
+            BlossomCommand::SendXdgToplevelConfigure {
+                client,
+                xdg_toplevel: toplevel,
+                width,
+                height,
+                states,
+            },
+            BlossomCommand::SendXdgSurfaceConfigure { client, xdg_surface, serial },
+        ])
+    }
+
     // ── Accessors ────────────────────────────────────────────────────────
 
     /// Read-only access to an `xdg_surface` state record.
@@ -765,10 +798,12 @@ mod tests {
         assert_eq!(cmds.len(), 3, "get_toplevel must emit chrome + configure commands");
 
         let has_chrome = cmds.iter().any(|c| {
-            matches!(c, BlossomCommand::SetToplevelChrome { surface, titlebar_height }
-                if *surface == SURFACE_ID && *titlebar_height == DEFAULT_TITLEBAR_HEIGHT)
+            matches!(c, BlossomCommand::SetToplevelChrome { surface, titlebar_height, frame_thickness }
+                if *surface == SURFACE_ID
+                    && *titlebar_height == DEFAULT_TITLEBAR_HEIGHT
+                    && *frame_thickness == DEFAULT_FRAME_THICKNESS)
         });
-        assert!(has_chrome, "must emit toplevel titlebar chrome metadata");
+        assert!(has_chrome, "must emit toplevel chrome metadata");
 
         let has_tl_configure = cmds.iter().any(|c| {
             matches!(c, BlossomCommand::SendXdgToplevelConfigure { xdg_toplevel, width, height, states, .. }
@@ -878,6 +913,37 @@ mod tests {
         b.on_surface_commit(XDG_SURF, true).unwrap(); // first → MarkReady
         let cmds2 = b.on_surface_commit(XDG_SURF, true).unwrap();
         assert!(cmds2.is_empty(), "subsequent commits must not re-emit MarkReady");
+    }
+
+    #[test]
+    fn compositor_resize_emits_resizing_configure_sequence() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        make_toplevel(&mut b);
+
+        let cmds = b
+            .configure_toplevel_for_surface(
+                SURFACE_ID,
+                640,
+                480,
+                vec![XdgToplevelStateAtom::Resizing],
+            )
+            .unwrap();
+
+        assert_eq!(cmds.len(), 2);
+        assert!(matches!(
+            &cmds[0],
+            BlossomCommand::SendXdgToplevelConfigure { xdg_toplevel, width, height, states, .. }
+                if *xdg_toplevel == TOPLEVEL
+                    && *width == 640
+                    && *height == 480
+                    && states == &vec![XdgToplevelStateAtom::Resizing]
+        ));
+        assert!(matches!(
+            cmds[1],
+            BlossomCommand::SendXdgSurfaceConfigure { xdg_surface: XDG_SURF, serial, .. }
+                if serial > 0
+        ));
     }
 
     // ── metadata ────────────────────────────────────────────────────────

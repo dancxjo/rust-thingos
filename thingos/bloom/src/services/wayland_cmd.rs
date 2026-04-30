@@ -80,12 +80,16 @@ impl WaylandCommandService {
             let _ = world.scene.set_surface_chrome(
                 self.wayland_client_id,
                 bloom_id,
-                crate::scene::SurfaceChrome { titlebar_height: blossom::DEFAULT_TITLEBAR_HEIGHT },
+                crate::scene::SurfaceChrome {
+                    titlebar_height: blossom::DEFAULT_TITLEBAR_HEIGHT,
+                    frame_thickness: blossom::DEFAULT_FRAME_THICKNESS,
+                },
             );
-            debug!(
-                "bloom: registered titlebar drag zone surface={} height={}",
+            stem::info!(
+                "bloom: registered titlebar drag zone surface={} height={} frame={}",
                 bloom_id,
-                blossom::DEFAULT_TITLEBAR_HEIGHT
+                blossom::DEFAULT_TITLEBAR_HEIGHT,
+                blossom::DEFAULT_FRAME_THICKNESS
             );
         }
         debug!("wayland-cmd: created surface bloom_id={}", bloom_id);
@@ -203,22 +207,26 @@ impl WaylandCommandService {
     }
 
     fn handle_set_chrome(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
-        if data.len() < 12 {
+        if data.len() < 16 {
             return false;
         }
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
         let titlebar_height = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+        let frame_thickness = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
         if world.scene.set_surface_chrome(
             self.wayland_client_id,
             bloom_surface_id,
-            crate::scene::SurfaceChrome { titlebar_height },
+            crate::scene::SurfaceChrome { titlebar_height, frame_thickness },
         ) {
             debug!(
-                "bloom: registered titlebar drag zone surface={} height={}",
-                bloom_surface_id, titlebar_height
+                "bloom: registered titlebar drag zone surface={} height={} frame={}",
+                bloom_surface_id, titlebar_height, frame_thickness
             );
+            if let Some(rect) = world.scene.surface_rect(bloom_surface_id) {
+                world.damage.mark_rect(rect);
+            }
         }
-        false
+        true
     }
 }
 
@@ -275,7 +283,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_IMPORT_ATTACH => 32,
         ipc::WCMD_DAMAGE => 24,
         ipc::WCMD_COMMIT => 12,
-        ipc::WCMD_SET_CHROME => 12,
+        ipc::WCMD_SET_CHROME => 16,
         _ => 1,
     };
     Some(len)

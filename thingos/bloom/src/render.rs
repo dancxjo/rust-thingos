@@ -1,14 +1,22 @@
+use alloc::vec::Vec;
+
 use abi::pixel::PixelFormat;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use pistil_types::Texture;
 
 use crate::display::DisplayBackend;
+use crate::scene::{CompositionEntry, CursorKind};
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
 const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
+const MOVE_CURSOR_PATH: &str = "/share/cursors/future/fleur.svg";
+const RESIZE_NS_CURSOR_PATH: &str = "/share/cursors/future/size_ver.svg";
+const RESIZE_EW_CURSOR_PATH: &str = "/share/cursors/future/size_hor.svg";
+const RESIZE_NESW_CURSOR_PATH: &str = "/share/cursors/future/size_bdiag.svg";
+const RESIZE_NWSE_CURSOR_PATH: &str = "/share/cursors/future/size_fdiag.svg";
 const DEFAULT_FONT_PATH: &str = "/share/fonts/NotoSans-Regular.ttf";
 const CURSOR_SIZE: u32 = 96;
 const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
@@ -39,7 +47,9 @@ type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f3
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
     cursor: Option<CursorBuffer>,
+    generated_cursors: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
+    chrome_overlay: Option<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
 }
 
@@ -89,11 +99,25 @@ struct PointerOverlayBuffer {
     height: u32,
 }
 
+struct ChromeOverlayBuffer {
+    texture: Texture,
+    buffer_id: u32,
+    width: u32,
+    height: u32,
+}
+
 impl CompositorVisuals {
     pub fn new() -> Self {
         let pistil = load_pistil();
 
-        Self { background: None, cursor: None, pointer_overlay: None, pistil }
+        Self {
+            background: None,
+            cursor: None,
+            generated_cursors: Vec::new(),
+            pointer_overlay: None,
+            chrome_overlay: None,
+            pistil,
+        }
     }
 
     /// Install a solid-colour background that can be presented immediately.
@@ -266,8 +290,14 @@ impl CompositorVisuals {
         );
     }
 
-    pub fn cursor_plane(&self, pointer_x: i32, pointer_y: i32) -> Option<CursorPlane> {
-        let cursor = self.cursor.as_ref()?;
+    pub fn cursor_plane(
+        &mut self,
+        display: &DisplayBackend,
+        kind: CursorKind,
+        pointer_x: i32,
+        pointer_y: i32,
+    ) -> Option<CursorPlane> {
+        let cursor = self.cursor_buffer(display, kind)?;
         Some(CursorPlane {
             buffer_id: cursor.buffer_id,
             x: pointer_x.saturating_sub(cursor.hotspot_x as i32),
@@ -275,6 +305,128 @@ impl CompositorVisuals {
             width: cursor.width,
             height: cursor.height,
         })
+    }
+
+    pub fn chrome_overlay_plane(
+        &mut self,
+        display: &DisplayBackend,
+        composition: &[CompositionEntry],
+    ) -> Option<OverlayPlane> {
+        if !composition.iter().any(|entry| !entry.chrome.is_empty()) {
+            return None;
+        }
+        self.ensure_chrome_overlay(display)?;
+        let overlay = self.chrome_overlay.as_mut()?;
+        draw_chrome_overlay(
+            overlay.texture.as_slice_mut(),
+            overlay.width,
+            overlay.height,
+            composition,
+        );
+        Some(OverlayPlane {
+            buffer_id: overlay.buffer_id,
+            x: 0,
+            y: 0,
+            width: overlay.width,
+            height: overlay.height,
+        })
+    }
+
+    fn cursor_buffer(
+        &mut self,
+        display: &DisplayBackend,
+        kind: CursorKind,
+    ) -> Option<&CursorBuffer> {
+        if kind == CursorKind::Default {
+            return self.cursor.as_ref();
+        }
+        if let Some(idx) = self.generated_cursors.iter().position(|(k, _)| *k == kind) {
+            return Some(&self.generated_cursors[idx].1);
+        }
+        self.prepare_generated_cursor(display, kind)?;
+        self.generated_cursors
+            .iter()
+            .find_map(|(k, cursor)| if *k == kind { Some(cursor) } else { None })
+    }
+
+    fn prepare_generated_cursor(
+        &mut self,
+        display: &DisplayBackend,
+        kind: CursorKind,
+    ) -> Option<()> {
+        let mut texture =
+            Texture::new("bloom.compositor.cursor.generated", CURSOR_SIZE, CURSOR_SIZE, 4)?;
+        let cursor_path = cursor_path(kind)?;
+        let mut hotspot = [CURSOR_SIZE / 2, CURSOR_SIZE / 2];
+        let success = if let Some(ref lib) = self.pistil {
+            if let Some(prepare_cursor) = lib.prepare_cursor {
+                call_prepare_cursor(
+                    prepare_cursor,
+                    cursor_path,
+                    texture.as_slice_mut().as_mut_ptr(),
+                    CURSOR_SIZE,
+                    CURSOR_SIZE,
+                    &mut hotspot,
+                ) == 0
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !success {
+            stem::warn!("bloom: failed to prepare {} via pistil", cursor_path);
+            return None;
+        }
+        let Some(buffer_id) = display.import_buffer(
+            texture.fd,
+            texture.width,
+            texture.height,
+            texture.stride,
+            PixelFormat::Bgra8888,
+            0,
+        ) else {
+            stem::warn!("bloom: failed to import generated cursor texture");
+            return None;
+        };
+        self.generated_cursors.push((
+            kind,
+            CursorBuffer {
+                _texture: texture,
+                buffer_id,
+                width: CURSOR_SIZE,
+                height: CURSOR_SIZE,
+                hotspot_x: hotspot[0],
+                hotspot_y: hotspot[1],
+            },
+        ));
+        stem::info!("bloom: cursor {:?} ready from {} buffer={}", kind, cursor_path, buffer_id);
+        Some(())
+    }
+
+    fn ensure_chrome_overlay(&mut self, display: &DisplayBackend) -> Option<()> {
+        let (width, height) = display.output_size();
+        if matches!(
+            self.chrome_overlay.as_ref(),
+            Some(overlay) if overlay.width == width && overlay.height == height
+        ) {
+            return Some(());
+        }
+        let texture = Texture::new("bloom.compositor.chrome_overlay", width, height, 4)?;
+        let buffer_id = display.import_buffer(
+            texture.fd,
+            width,
+            height,
+            texture.stride,
+            PixelFormat::Bgra8888,
+            0,
+        )?;
+        if let Some(old) = self.chrome_overlay.take() {
+            display.release_buffer(old.buffer_id);
+        }
+        self.chrome_overlay = Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
+        stem::info!("bloom: chrome overlay ready buffer={} size={}x{}", buffer_id, width, height);
+        Some(())
     }
 
     pub fn pointer_overlay_plane(
@@ -455,6 +607,112 @@ fn copy_cursor_sample(cursor: &CursorBuffer, dst: &mut [u32; CURSOR_PIXELS]) -> 
             .copy_from_slice(&src[src_row..src_row + CURSOR_SIZE as usize]);
     }
     Some(())
+}
+
+fn cursor_path(kind: CursorKind) -> Option<&'static str> {
+    match kind {
+        CursorKind::Default => Some(DEFAULT_CURSOR_PATH),
+        CursorKind::Move => Some(MOVE_CURSOR_PATH),
+        CursorKind::ResizeNorthSouth => Some(RESIZE_NS_CURSOR_PATH),
+        CursorKind::ResizeEastWest => Some(RESIZE_EW_CURSOR_PATH),
+        CursorKind::ResizeNorthEastSouthWest => Some(RESIZE_NESW_CURSOR_PATH),
+        CursorKind::ResizeNorthWestSouthEast => Some(RESIZE_NWSE_CURSOR_PATH),
+    }
+}
+
+fn draw_chrome_overlay(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    composition: &[CompositionEntry],
+) {
+    dst.fill(0);
+    for entry in composition {
+        let chrome = entry.chrome;
+        if chrome.is_empty() {
+            continue;
+        }
+        let rect = entry.dest_rect;
+        let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
+        if frame == 0 {
+            continue;
+        }
+        let x = rect.x as i32;
+        let y = rect.y as i32;
+        let w = rect.w;
+        let h = rect.h;
+
+        fill_rect(dst, stride, x, y, w, frame, 0xFFE8E8E8);
+        fill_rect(dst, stride, x, y, frame, h, 0xFFE8E8E8);
+        fill_rect(
+            dst,
+            stride,
+            x,
+            y.saturating_add(h.saturating_sub(frame) as i32),
+            w,
+            frame,
+            0xFF2A2A2A,
+        );
+        fill_rect(
+            dst,
+            stride,
+            x.saturating_add(w.saturating_sub(frame) as i32),
+            y,
+            frame,
+            h,
+            0xFF2A2A2A,
+        );
+        fill_rect(
+            dst,
+            stride,
+            x.saturating_add(1),
+            y.saturating_add(1),
+            w.saturating_sub(2),
+            1,
+            0xFFFFFFFF,
+        );
+        fill_rect(
+            dst,
+            stride,
+            x.saturating_add(1),
+            y.saturating_add(1),
+            1,
+            h.saturating_sub(2),
+            0xFFFFFFFF,
+        );
+        fill_rect(
+            dst,
+            stride,
+            x.saturating_add(1),
+            y.saturating_add(h.saturating_sub(2) as i32),
+            w.saturating_sub(2),
+            1,
+            0xFF000000,
+        );
+        fill_rect(
+            dst,
+            stride,
+            x.saturating_add(w.saturating_sub(2) as i32),
+            y.saturating_add(1),
+            1,
+            h.saturating_sub(2),
+            0xFF000000,
+        );
+        if chrome.titlebar_height > frame.saturating_mul(2)
+            && chrome.titlebar_height < h.saturating_sub(frame)
+        {
+            let sep_y = y.saturating_add(chrome.titlebar_height as i32);
+            fill_rect(dst, stride, x, sep_y, w, 1, 0xFF303030);
+            fill_rect(dst, stride, x, sep_y.saturating_add(1), w, 1, 0xFFFFFFFF);
+        }
+    }
+
+    let len = (stride.saturating_mul(height)) as usize;
+    if dst.len() > len {
+        for px in &mut dst[len..] {
+            *px = 0;
+        }
+    }
 }
 
 fn draw_pointer_overlay(

@@ -54,12 +54,54 @@ pub struct Surface {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SurfaceChrome {
     pub titlebar_height: u32,
+    pub frame_thickness: u32,
+}
+
+impl SurfaceChrome {
+    pub fn is_empty(self) -> bool {
+        self.titlebar_height == 0 && self.frame_thickness == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitTarget {
     Client { surface_id: u32 },
     TitleBar { surface_id: u32 },
+    Frame { surface_id: u32, edge: ResizeEdge },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeEdge {
+    North,
+    South,
+    East,
+    West,
+    NorthEast,
+    NorthWest,
+    SouthEast,
+    SouthWest,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CursorKind {
+    #[default]
+    Default,
+    Move,
+    ResizeNorthSouth,
+    ResizeEastWest,
+    ResizeNorthEastSouthWest,
+    ResizeNorthWestSouthEast,
+}
+
+impl CursorKind {
+    pub fn for_resize_edge(edge: ResizeEdge) -> Self {
+        match edge {
+            ResizeEdge::North | ResizeEdge::South => Self::ResizeNorthSouth,
+            ResizeEdge::East | ResizeEdge::West => Self::ResizeEastWest,
+            ResizeEdge::NorthEast | ResizeEdge::SouthWest => Self::ResizeNorthEastSouthWest,
+            ResizeEdge::NorthWest | ResizeEdge::SouthEast => Self::ResizeNorthWestSouthEast,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,6 +112,7 @@ pub struct CompositionEntry {
     pub dest_rect: Rect,
     pub z_order: i32,
     pub alpha: u8,
+    pub chrome: SurfaceChrome,
 }
 
 pub struct Scene {
@@ -273,6 +316,20 @@ impl Scene {
         Some(SurfaceMove { old_rect, new_rect, changed: true })
     }
 
+    pub fn resize_surface_absolute(
+        &mut self,
+        surface_id: u32,
+        rect: Rect,
+    ) -> Option<SurfaceResize> {
+        let surface = self.surfaces.get_mut(&surface_id)?;
+        let old_rect = surface.current.dest_rect;
+        if old_rect == rect {
+            return Some(SurfaceResize { old_rect, new_rect: rect, changed: false });
+        }
+        surface.current.dest_rect = rect;
+        Some(SurfaceResize { old_rect, new_rect: rect, changed: true })
+    }
+
     pub fn commit_surface(&mut self, client_id: u32, surface_id: u32) -> Option<CommitResult> {
         let surface = self.surfaces.get_mut(&surface_id)?;
         if surface.client_id != client_id {
@@ -369,6 +426,7 @@ impl Scene {
                 dest_rect: surface.current.dest_rect,
                 z_order: surface.current.z_order,
                 alpha: 255,
+                chrome: surface.chrome,
             });
         }
         list.sort_by_key(|entry| entry.z_order);
@@ -377,8 +435,17 @@ impl Scene {
 
     pub fn top_surface_at(&self, x: i32, y: i32) -> Option<u32> {
         self.hit_test(x, y).map(|target| match target {
-            HitTarget::Client { surface_id } | HitTarget::TitleBar { surface_id } => surface_id,
+            HitTarget::Client { surface_id }
+            | HitTarget::TitleBar { surface_id }
+            | HitTarget::Frame { surface_id, .. } => surface_id,
         })
+    }
+
+    pub fn top_client_surface_at(&self, x: i32, y: i32) -> Option<u32> {
+        match self.hit_test(x, y) {
+            Some(HitTarget::Client { surface_id }) => Some(surface_id),
+            _ => None,
+        }
     }
 
     pub fn hit_test(&self, x: i32, y: i32) -> Option<HitTarget> {
@@ -402,6 +469,9 @@ impl Scene {
         let (surface_id, _) = best?;
         let surface = self.surfaces.get(&surface_id)?;
         let rect = surface.current.dest_rect;
+        if let Some(edge) = resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
+            return Some(HitTarget::Frame { surface_id, edge });
+        }
         let titlebar_bottom = rect.y.saturating_add(surface.chrome.titlebar_height);
         if surface.chrome.titlebar_height > 0
             && x >= rect.x as i32
@@ -436,6 +506,46 @@ pub struct SurfaceMove {
     pub old_rect: Rect,
     pub new_rect: Rect,
     pub changed: bool,
+}
+
+pub struct SurfaceResize {
+    pub old_rect: Rect,
+    pub new_rect: Rect,
+    pub changed: bool,
+}
+
+fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {
+    if thickness == 0 || rect.w == 0 || rect.h == 0 {
+        return None;
+    }
+    let x0 = rect.x as i32;
+    let y0 = rect.y as i32;
+    let x1 = rect.x.saturating_add(rect.w) as i32;
+    let y1 = rect.y.saturating_add(rect.h) as i32;
+    if x < x0 || x >= x1 || y < y0 || y >= y1 {
+        return None;
+    }
+
+    let t = thickness.min(rect.w / 2).min(rect.h / 2) as i32;
+    if t <= 0 {
+        return None;
+    }
+    let north = y < y0.saturating_add(t);
+    let south = y >= y1.saturating_sub(t);
+    let west = x < x0.saturating_add(t);
+    let east = x >= x1.saturating_sub(t);
+
+    match (north, south, west, east) {
+        (true, _, true, _) => Some(ResizeEdge::NorthWest),
+        (true, _, _, true) => Some(ResizeEdge::NorthEast),
+        (_, true, true, _) => Some(ResizeEdge::SouthWest),
+        (_, true, _, true) => Some(ResizeEdge::SouthEast),
+        (true, _, _, _) => Some(ResizeEdge::North),
+        (_, true, _, _) => Some(ResizeEdge::South),
+        (_, _, true, _) => Some(ResizeEdge::West),
+        (_, _, _, true) => Some(ResizeEdge::East),
+        _ => None,
+    }
 }
 
 fn translate_surface_damage(local: Rect, src_w: u32, src_h: u32, dest: Rect) -> Option<Rect> {

@@ -169,6 +169,28 @@ impl WaylandClient {
         }
     }
 
+    /// Find the xdg objects for the toplevel associated with a Bloom surface.
+    pub fn xdg_toplevel_for_bloom_surface(&self, bloom_id: u32) -> Option<(u32, u32)> {
+        let mut xdg_surface = None;
+        for (obj_id, entry) in &self.objects {
+            if let ObjectEntry::XdgSurface { bloom_surface_id } = entry {
+                if *bloom_surface_id == bloom_id {
+                    xdg_surface = Some(*obj_id);
+                    break;
+                }
+            }
+        }
+        let xdg_surface = xdg_surface?;
+        for (obj_id, entry) in &self.objects {
+            if let ObjectEntry::XdgToplevel { xdg_surface_obj } = entry {
+                if *xdg_surface_obj == xdg_surface {
+                    return Some((xdg_surface, *obj_id));
+                }
+            }
+        }
+        None
+    }
+
     /// Register a frame callback for a bloom_surface_id.
     pub fn add_frame_cb(&mut self, bloom_surface_id: u32, cb_obj: u32) {
         self.frame_cbs.entry(bloom_surface_id).or_default().push(cb_obj);

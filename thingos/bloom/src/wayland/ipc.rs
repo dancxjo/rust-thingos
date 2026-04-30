@@ -22,6 +22,7 @@
 //! |----------------------|-----------------------------------------------|
 //! | `WEVT_BUFFER_RELEASE`| The compositor no longer needs a buffer       |
 //! | `WEVT_FRAME_DONE`    | A frame has been presented                    |
+//! | `WEVT_CONFIGURE_SURFACE` | The compositor requests a toplevel size   |
 
 // ── Discriminants ────────────────────────────────────────────────────────────
 
@@ -34,6 +35,7 @@ pub const WCMD_SET_CHROME: u8 = 6;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
 pub const WEVT_FRAME_DONE: u8 = 2;
+pub const WEVT_CONFIGURE_SURFACE: u8 = 3;
 
 // ── Message structs (repr C, fixed size) ─────────────────────────────────────
 
@@ -113,6 +115,7 @@ pub struct WCmdSetChrome {
     pub _pad: [u8; 3],
     pub bloom_surface_id: u32,
     pub titlebar_height: u32,
+    pub frame_thickness: u32,
 }
 
 /// [`WEVT_BUFFER_RELEASE`] — the compositor no longer references a buffer.
@@ -132,6 +135,18 @@ pub struct WEvtFrameDone {
     pub _pad: [u8; 3],
     pub bloom_surface_id: u32,
     pub timestamp_ms: u32,
+}
+
+/// [`WEVT_CONFIGURE_SURFACE`] — compositor-initiated xdg toplevel configure.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtConfigureSurface {
+    pub msg_type: u8, // = WEVT_CONFIGURE_SURFACE
+    pub resizing: u8,
+    pub _pad: [u8; 2],
+    pub bloom_surface_id: u32,
+    pub width: i32,
+    pub height: i32,
 }
 
 // ── Encoding helpers ─────────────────────────────────────────────────────────
@@ -203,14 +218,19 @@ pub fn encode_commit(bloom_surface_id: u32, has_frame_callback: bool, cb_key: u3
     out
 }
 
-pub fn encode_set_chrome(bloom_surface_id: u32, titlebar_height: u32) -> [u8; 12] {
+pub fn encode_set_chrome(
+    bloom_surface_id: u32,
+    titlebar_height: u32,
+    frame_thickness: u32,
+) -> [u8; 16] {
     let msg = WCmdSetChrome {
         msg_type: WCMD_SET_CHROME,
         _pad: [0; 3],
         bloom_surface_id,
         titlebar_height,
+        frame_thickness,
     };
-    let mut out = [0u8; 12];
+    let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WCmdSetChrome));
     out
 }
@@ -227,5 +247,24 @@ pub fn encode_frame_done(bloom_surface_id: u32, timestamp_ms: u32) -> [u8; 12] {
         WEvtFrameDone { msg_type: WEVT_FRAME_DONE, _pad: [0; 3], bloom_surface_id, timestamp_ms };
     let mut out = [0u8; 12];
     out.copy_from_slice(as_bytes!(msg, WEvtFrameDone));
+    out
+}
+
+pub fn encode_configure_surface(
+    bloom_surface_id: u32,
+    width: i32,
+    height: i32,
+    resizing: bool,
+) -> [u8; 16] {
+    let msg = WEvtConfigureSurface {
+        msg_type: WEVT_CONFIGURE_SURFACE,
+        resizing: resizing as u8,
+        _pad: [0; 2],
+        bloom_surface_id,
+        width,
+        height,
+    };
+    let mut out = [0u8; 16];
+    out.copy_from_slice(as_bytes!(msg, WEvtConfigureSurface));
     out
 }

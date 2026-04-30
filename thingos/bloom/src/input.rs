@@ -16,12 +16,15 @@ use crate::protocol::{
     KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent, PointerLeaveEvent,
     PointerMotionEvent, msg_header, to_vec,
 };
-use crate::scene::{HitTarget, Scene};
+use crate::scene::{CursorKind, HitTarget, ResizeEdge, Scene};
+use crate::wayland::ipc;
 
 const CURSOR_DAMAGE_W: u32 = 96;
 const CURSOR_DAMAGE_H: u32 = 96;
 const CURSOR_HOTSPOT_X: i32 = 9;
 const CURSOR_HOTSPOT_Y: i32 = 6;
+const MIN_RESIZE_W: u32 = 160;
+const MIN_RESIZE_H: u32 = 96;
 static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);
 static CURSOR_SMOOTHING_LOGS: AtomicU32 = AtomicU32::new(0);
 /// Counts every raw PointerMove event received (pre-coalesce).
@@ -49,6 +52,8 @@ pub struct InputState {
     pending_motion_ts: Option<u64>,
     pointer_overlay_enabled: bool,
     pointer_grab: Option<PointerGrab>,
+    cursor_kind: CursorKind,
+    visible_cursor_kind: CursorKind,
     output_w: i32,
     output_h: i32,
 }
@@ -62,6 +67,7 @@ struct PointerGrab {
 #[derive(Clone, Copy, Debug)]
 enum PointerGrabKind {
     Move { offset_x: i32, offset_y: i32 },
+    Resize { edge: ResizeEdge, start_rect: abi::display_protocol::Rect, start_x: i32, start_y: i32 },
 }
 
 impl InputState {
@@ -79,6 +85,8 @@ impl InputState {
             pending_motion_ts: None,
             pointer_overlay_enabled: false,
             pointer_grab: None,
+            cursor_kind: CursorKind::Default,
+            visible_cursor_kind: CursorKind::Default,
             output_w,
             output_h,
         }
@@ -103,10 +111,15 @@ impl InputState {
         self.pending_cursor_motion
             || self.pointer_x != self.visible_x
             || self.pointer_y != self.visible_y
+            || self.cursor_kind != self.visible_cursor_kind
     }
 
     pub fn pointer_overlay_enabled(&self) -> bool {
         self.pointer_overlay_enabled
+    }
+
+    pub fn visible_cursor_kind(&self) -> CursorKind {
+        self.visible_cursor_kind
     }
 
     pub fn flush_visible_pointer(&mut self, damage: &mut DamageTracker) {
@@ -117,10 +130,15 @@ impl InputState {
         let had_pending_cursor_motion = self.pending_cursor_motion;
         let old_x = self.visible_x;
         let old_y = self.visible_y;
+        let old_kind = self.visible_cursor_kind;
         self.visible_x = self.pointer_x;
         self.visible_y = self.pointer_y;
+        self.visible_cursor_kind = self.cursor_kind;
         self.pending_cursor_motion = false;
         mark_cursor_damage(damage, old_x, old_y, self.visible_x, self.visible_y);
+        if old_kind != self.visible_cursor_kind {
+            mark_cursor_rect(damage, self.visible_x, self.visible_y);
+        }
 
         if had_pending_cursor_motion
             && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS
@@ -188,6 +206,7 @@ impl InputState {
         bytes: &[u8],
         scene: &mut Scene,
         damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
     ) {
         if bytes.len() < BristleEventHeader::SIZE {
             return;
@@ -220,9 +239,10 @@ impl InputState {
                     return;
                 }
                 self.pending_cursor_motion = true;
-                if self.update_pointer_grab(scene, damage) {
+                if self.update_pointer_grab(scene, damage, wayland_evt_write) {
                     return;
                 }
+                self.update_cursor_kind(scene, damage);
                 // Coalesce: keep only the latest timestamp; focus lookup and
                 // client delivery are deferred to flush_pointer_motion() which
                 // is called once per frame boundary.
@@ -255,18 +275,24 @@ impl InputState {
                     self.update_pointer_focus(scene);
                 }
                 let old_focus = scene.keyboard_focus;
+                if btn.button == 0 {
+                    if let Some(surface_id) =
+                        self.start_chrome_grab(scene, damage, wayland_evt_write)
+                    {
+                        scene.keyboard_focus = Some(surface_id);
+                        self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
+                        mark_cursor_damage(
+                            damage,
+                            self.visible_x,
+                            self.visible_y,
+                            self.pointer_x,
+                            self.pointer_y,
+                        );
+                        return;
+                    }
+                }
                 scene.keyboard_focus = scene.pointer_focus;
                 self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
-                if btn.button == 0 && self.start_titlebar_drag(scene) {
-                    mark_cursor_damage(
-                        damage,
-                        self.visible_x,
-                        self.visible_y,
-                        self.pointer_x,
-                        self.pointer_y,
-                    );
-                    return;
-                }
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
                         let ev = PointerButtonEvent {
@@ -301,7 +327,8 @@ impl InputState {
                 if !had_pending {
                     self.update_pointer_focus(scene);
                 }
-                if btn.button == 0 && self.end_pointer_grab() {
+                if btn.button == 0 && self.end_pointer_grab(wayland_evt_write, scene) {
+                    self.update_cursor_kind(scene, damage);
                     mark_cursor_damage(
                         damage,
                         self.visible_x,
@@ -391,7 +418,7 @@ impl InputState {
     }
 
     fn update_pointer_focus(&mut self, scene: &mut Scene) {
-        let new_focus = scene.top_surface_at(self.pointer_x, self.pointer_y);
+        let new_focus = scene.top_client_surface_at(self.pointer_x, self.pointer_y);
         if scene.pointer_focus == new_focus {
             return;
         }
@@ -420,32 +447,63 @@ impl InputState {
         }
     }
 
-    fn start_titlebar_drag(&mut self, scene: &Scene) -> bool {
-        let Some(HitTarget::TitleBar { surface_id }) =
-            scene.hit_test(self.pointer_x, self.pointer_y)
-        else {
-            return false;
-        };
-        let Some(rect) = scene.surface_rect(surface_id) else {
-            return false;
-        };
-        self.pointer_grab = Some(PointerGrab {
-            surface_id,
-            kind: PointerGrabKind::Move {
-                offset_x: self.pointer_x.saturating_sub(rect.x as i32),
-                offset_y: self.pointer_y.saturating_sub(rect.y as i32),
-            },
-        });
-        stem::trace!(
-            "bloom: window drag started surface={} pointer={},{}",
-            surface_id,
-            self.pointer_x,
-            self.pointer_y
-        );
-        true
+    fn start_chrome_grab(
+        &mut self,
+        scene: &Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+    ) -> Option<u32> {
+        match scene.hit_test(self.pointer_x, self.pointer_y)? {
+            HitTarget::TitleBar { surface_id } => {
+                let rect = scene.surface_rect(surface_id)?;
+                self.pointer_grab = Some(PointerGrab {
+                    surface_id,
+                    kind: PointerGrabKind::Move {
+                        offset_x: self.pointer_x.saturating_sub(rect.x as i32),
+                        offset_y: self.pointer_y.saturating_sub(rect.y as i32),
+                    },
+                });
+                self.set_cursor_kind(CursorKind::Move, damage);
+                stem::info!(
+                    "bloom: window drag started surface={} pointer={},{}",
+                    surface_id,
+                    self.pointer_x,
+                    self.pointer_y
+                );
+                Some(surface_id)
+            }
+            HitTarget::Frame { surface_id, edge } => {
+                let rect = scene.surface_rect(surface_id)?;
+                self.pointer_grab = Some(PointerGrab {
+                    surface_id,
+                    kind: PointerGrabKind::Resize {
+                        edge,
+                        start_rect: rect,
+                        start_x: self.pointer_x,
+                        start_y: self.pointer_y,
+                    },
+                });
+                self.set_cursor_kind(CursorKind::for_resize_edge(edge), damage);
+                send_wayland_configure(wayland_evt_write, surface_id, rect.w, rect.h, true);
+                stem::info!(
+                    "bloom: window resize started surface={} edge={:?} pointer={},{}",
+                    surface_id,
+                    edge,
+                    self.pointer_x,
+                    self.pointer_y
+                );
+                Some(surface_id)
+            }
+            HitTarget::Client { .. } => None,
+        }
     }
 
-    fn update_pointer_grab(&mut self, scene: &mut Scene, damage: &mut DamageTracker) -> bool {
+    fn update_pointer_grab(
+        &mut self,
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+    ) -> bool {
         let Some(grab) = self.pointer_grab else {
             return false;
         };
@@ -462,7 +520,7 @@ impl InputState {
                 if moved.changed {
                     damage.mark_rect(moved.old_rect);
                     damage.mark_rect(moved.new_rect);
-                    stem::trace!(
+                    stem::info!(
                         "bloom: window drag moved surface={} to {},{}",
                         grab.surface_id,
                         moved.new_rect.x,
@@ -471,15 +529,91 @@ impl InputState {
                 }
                 true
             }
+            PointerGrabKind::Resize { edge, start_rect, start_x, start_y } => {
+                let next_rect = resized_rect(
+                    start_rect,
+                    edge,
+                    self.pointer_x.saturating_sub(start_x),
+                    self.pointer_y.saturating_sub(start_y),
+                    self.output_w.max(0) as u32,
+                    self.output_h.max(0) as u32,
+                );
+                let Some(resized) = scene.resize_surface_absolute(grab.surface_id, next_rect)
+                else {
+                    self.pointer_grab = None;
+                    return true;
+                };
+                if resized.changed {
+                    damage.mark_rect(resized.old_rect);
+                    damage.mark_rect(resized.new_rect);
+                    send_wayland_configure(
+                        wayland_evt_write,
+                        grab.surface_id,
+                        resized.new_rect.w,
+                        resized.new_rect.h,
+                        true,
+                    );
+                    stem::info!(
+                        "bloom: window resize moved surface={} to {},{} {}x{}",
+                        grab.surface_id,
+                        resized.new_rect.x,
+                        resized.new_rect.y,
+                        resized.new_rect.w,
+                        resized.new_rect.h
+                    );
+                }
+                true
+            }
         }
     }
 
-    fn end_pointer_grab(&mut self) -> bool {
+    fn end_pointer_grab(&mut self, wayland_evt_write: Option<u32>, scene: &Scene) -> bool {
         let Some(grab) = self.pointer_grab.take() else {
             return false;
         };
-        stem::trace!("bloom: window drag ended surface={}", grab.surface_id);
+        match grab.kind {
+            PointerGrabKind::Move { .. } => {
+                stem::info!("bloom: window drag ended surface={}", grab.surface_id);
+            }
+            PointerGrabKind::Resize { .. } => {
+                if let Some(rect) = scene.surface_rect(grab.surface_id) {
+                    send_wayland_configure(
+                        wayland_evt_write,
+                        grab.surface_id,
+                        rect.w,
+                        rect.h,
+                        false,
+                    );
+                }
+                stem::info!("bloom: window resize ended surface={}", grab.surface_id);
+            }
+        }
         true
+    }
+
+    fn update_cursor_kind(&mut self, scene: &Scene, damage: &mut DamageTracker) {
+        let next = match self.pointer_grab {
+            Some(PointerGrab { kind: PointerGrabKind::Move { .. }, .. }) => CursorKind::Move,
+            Some(PointerGrab { kind: PointerGrabKind::Resize { edge, .. }, .. }) => {
+                CursorKind::for_resize_edge(edge)
+            }
+            None => match scene.hit_test(self.pointer_x, self.pointer_y) {
+                Some(HitTarget::TitleBar { .. }) => CursorKind::Move,
+                Some(HitTarget::Frame { edge, .. }) => CursorKind::for_resize_edge(edge),
+                _ => CursorKind::Default,
+            },
+        };
+        self.set_cursor_kind(next, damage);
+    }
+
+    fn set_cursor_kind(&mut self, next: CursorKind, damage: &mut DamageTracker) {
+        if self.cursor_kind == next {
+            return;
+        }
+        self.cursor_kind = next;
+        self.pending_cursor_motion = true;
+        mark_cursor_rect(damage, self.visible_x, self.visible_y);
+        stem::debug!("bloom: cursor kind {:?}", next);
     }
 
     fn send_keyboard_focus_events(
@@ -527,6 +661,86 @@ fn mark_cursor_rect(damage: &mut DamageTracker, x: i32, y: i32) {
     let x = x.saturating_sub(CURSOR_HOTSPOT_X).max(0) as u32;
     let y = y.saturating_sub(CURSOR_HOTSPOT_Y).max(0) as u32;
     damage.mark_rect(abi::display_protocol::Rect { x, y, w: CURSOR_DAMAGE_W, h: CURSOR_DAMAGE_H });
+}
+
+fn resized_rect(
+    start: abi::display_protocol::Rect,
+    edge: ResizeEdge,
+    dx: i32,
+    dy: i32,
+    output_w: u32,
+    output_h: u32,
+) -> abi::display_protocol::Rect {
+    let mut x0 = start.x as i32;
+    let mut y0 = start.y as i32;
+    let mut x1 = start.x.saturating_add(start.w) as i32;
+    let mut y1 = start.y.saturating_add(start.h) as i32;
+
+    match edge {
+        ResizeEdge::North => y0 = y0.saturating_add(dy),
+        ResizeEdge::South => y1 = y1.saturating_add(dy),
+        ResizeEdge::East => x1 = x1.saturating_add(dx),
+        ResizeEdge::West => x0 = x0.saturating_add(dx),
+        ResizeEdge::NorthEast => {
+            y0 = y0.saturating_add(dy);
+            x1 = x1.saturating_add(dx);
+        }
+        ResizeEdge::NorthWest => {
+            y0 = y0.saturating_add(dy);
+            x0 = x0.saturating_add(dx);
+        }
+        ResizeEdge::SouthEast => {
+            y1 = y1.saturating_add(dy);
+            x1 = x1.saturating_add(dx);
+        }
+        ResizeEdge::SouthWest => {
+            y1 = y1.saturating_add(dy);
+            x0 = x0.saturating_add(dx);
+        }
+    }
+
+    x0 = x0.clamp(0, output_w.saturating_sub(MIN_RESIZE_W) as i32);
+    y0 = y0.clamp(0, output_h.saturating_sub(MIN_RESIZE_H) as i32);
+    x1 = x1.clamp(MIN_RESIZE_W as i32, output_w as i32);
+    y1 = y1.clamp(MIN_RESIZE_H as i32, output_h as i32);
+
+    if x1.saturating_sub(x0) < MIN_RESIZE_W as i32 {
+        match edge {
+            ResizeEdge::West | ResizeEdge::NorthWest | ResizeEdge::SouthWest => {
+                x0 = x1.saturating_sub(MIN_RESIZE_W as i32).max(0);
+            }
+            _ => x1 = x0.saturating_add(MIN_RESIZE_W as i32).min(output_w as i32),
+        }
+    }
+    if y1.saturating_sub(y0) < MIN_RESIZE_H as i32 {
+        match edge {
+            ResizeEdge::North | ResizeEdge::NorthEast | ResizeEdge::NorthWest => {
+                y0 = y1.saturating_sub(MIN_RESIZE_H as i32).max(0);
+            }
+            _ => y1 = y0.saturating_add(MIN_RESIZE_H as i32).min(output_h as i32),
+        }
+    }
+
+    abi::display_protocol::Rect {
+        x: x0.max(0) as u32,
+        y: y0.max(0) as u32,
+        w: x1.saturating_sub(x0).max(MIN_RESIZE_W as i32) as u32,
+        h: y1.saturating_sub(y0).max(MIN_RESIZE_H as i32) as u32,
+    }
+}
+
+fn send_wayland_configure(
+    wayland_evt_write: Option<u32>,
+    surface_id: u32,
+    width: u32,
+    height: u32,
+    resizing: bool,
+) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_configure_surface(surface_id, width as i32, height as i32, resizing);
+    let _ = port_send_all(evt_write, &msg);
 }
 
 #[inline]
