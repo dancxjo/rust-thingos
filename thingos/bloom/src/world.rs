@@ -250,6 +250,9 @@ impl BloomWorld {
     /// can be sent, or `None` on failure (damage is restored internally).
     pub fn try_present(&mut self) -> Option<Vec<CompositionEntry>> {
         let composition = self.scene.collect_composition();
+        // Flush coalesced pointer motion: deliver the latest position to
+        // clients once per frame rather than per raw sample.
+        self.input.flush_pointer_motion(&mut self.scene);
         self.input.flush_visible_pointer(&mut self.damage);
         let pending_damage = self.damage.take();
         let (pointer_x, pointer_y) = self.input.visible_pointer_position();

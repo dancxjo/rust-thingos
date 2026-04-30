@@ -17,6 +17,7 @@ use crate::world::BloomWorld;
 
 const REGISTER_TIMER_ID: u64 = 1;
 const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
+const MAX_READS_PER_WAKE: usize = 64;
 
 /// Handles normalized HID events forwarded by the bristle input service.
 ///
@@ -73,17 +74,23 @@ impl BloomService for InputService {
                 }
             }
             LoopEvent::FdReady(_) => {
-                let mut buf = [0u8; 512];
-                match vfs_read(self.fd, &mut buf) {
-                    Ok(n) if n > 0 => {
-                        if self.drain_bristle_bytes(&buf[..n], world) {
-                            LoopAction::RequestRepaint
-                        } else {
-                            LoopAction::None
+                let mut buf = [0u8; 1024];
+                let mut handled = false;
+
+                for _ in 0..MAX_READS_PER_WAKE {
+                    match vfs_read(self.fd, &mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            handled |= self.drain_bristle_bytes(&buf[..n], world);
+                            if n < buf.len() {
+                                break;
+                            }
                         }
+                        Err(_) => break,
                     }
-                    _ => LoopAction::None,
                 }
+
+                if handled { LoopAction::RequestRepaint } else { LoopAction::None }
             }
             _ => LoopAction::None,
         }

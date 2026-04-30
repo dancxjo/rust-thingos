@@ -111,7 +111,7 @@ fn main(_arg: usize) -> ! {
     // Bloom keeps a read FD ready for bristle HID events and registers the
     // sink from the service loop after startup so first paint is independent
     // from Bristle readiness.
-    let bristle_pair = port_create(4096).ok();
+    let bristle_pair = port_create(65536).ok();
 
     // ── Wallpaper watch FD ────────────────────────────────────────────────────
     let wp_watch_fd = match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {

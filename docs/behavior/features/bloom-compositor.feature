@@ -151,3 +151,11 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "bloom: display driver supports VBLANK (vsync)" within 60s
+  @pointer-debug
+  Scenario: pointer motion events are coalesced to latest-per-frame
+    # Multiple PointerMove samples arriving between frames must be aggregated
+    # into a single focus lookup and a single client delivery.  The compositor
+    # logs coalesce stats (pre= post=) on the first few motion flushes.
+    Given the machine is booted
+    Then the pointer debug overlay should update after mouse movement
+    And the serial output should contain "bloom: motion coalesce pre=" within 60s
