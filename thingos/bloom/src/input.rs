@@ -464,11 +464,13 @@ impl InputState {
                     return true;
                 }
 
-                // F11: Fullscreen
                 if key.key() == Key::F11 {
                     if !key.is_repeat() {
+                        stem::info!("bloom: F11 pressed, keyboard_focus={:?}", scene.keyboard_focus);
                         if let Some(surface_id) = scene.keyboard_focus {
                             self.toggle_fullscreen(scene, damage, wayland_evt_write, surface_id);
+                        } else {
+                            stem::info!("bloom: F11 ignored, no keyboard focus");
                         }
                     }
                     return true;
