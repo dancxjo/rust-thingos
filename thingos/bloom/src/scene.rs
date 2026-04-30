@@ -54,6 +54,21 @@ pub struct Surface {
     pub is_fullscreen: bool,
     pub is_shaded: bool,
     pub restored_rect: Option<Rect>,
+    /// Subsurface relationship (if this surface has been assigned the
+    /// `wl_subsurface` role).  `None` for top-level / standalone surfaces.
+    pub subsurface: Option<SubsurfaceLink>,
+    /// Ordered list of child surface IDs for which this surface is the parent.
+    /// Order is bottom-to-top stacking.  Empty for surfaces with no children.
+    pub subsurface_children: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SubsurfaceLink {
+    pub parent_id: u32,
+    pub x: i32,
+    pub y: i32,
+    /// Stacking offset relative to the parent's z_order.
+    pub z_above: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -209,6 +224,8 @@ impl Scene {
                 is_fullscreen: false,
                 is_shaded: false,
                 restored_rect: None,
+                subsurface: None,
+                subsurface_children: Vec::new(),
             },
         );
         Some(id)
@@ -227,6 +244,18 @@ impl Scene {
         if let Some(buf) = removed.pending.buffer {
             release.push(buf.buffer_id);
         }
+        // Detach from any parent's children list and orphan any of our own
+        // subsurface children so we don't leave dangling parent references.
+        if let Some(link) = removed.subsurface {
+            if let Some(parent) = self.surfaces.get_mut(&link.parent_id) {
+                parent.subsurface_children.retain(|&id| id != surface_id);
+            }
+        }
+        for child_id in &removed.subsurface_children {
+            if let Some(child) = self.surfaces.get_mut(child_id) {
+                child.subsurface = None;
+            }
+        }
         if self.pointer_focus == Some(surface_id) {
             self.pointer_focus = None;
         }
@@ -234,6 +263,83 @@ impl Scene {
             self.keyboard_focus = None;
         }
         Some(release)
+    }
+
+    /// Establish or update a subsurface relationship.
+    ///
+    /// `parent_id == None` (or `Some(0)`) detaches the child from its previous
+    /// parent.  When attached, the child's `dest_rect` is recomputed to be
+    /// `parent.dest_rect + (x, y)` and its `z_order` is set to
+    /// `parent.z_order + z_above`.
+    pub fn set_subsurface(
+        &mut self,
+        child_id: u32,
+        parent_id: Option<u32>,
+        x: i32,
+        y: i32,
+        z_above: i32,
+    ) -> bool {
+        if !self.surfaces.contains_key(&child_id) {
+            return false;
+        }
+
+        // First, detach from the previous parent if any.
+        let prev_parent =
+            self.surfaces.get(&child_id).and_then(|s| s.subsurface.map(|l| l.parent_id));
+        if let Some(prev) = prev_parent {
+            if Some(prev) != parent_id {
+                if let Some(p) = self.surfaces.get_mut(&prev) {
+                    p.subsurface_children.retain(|&id| id != child_id);
+                }
+            }
+        }
+
+        let parent_id = parent_id.filter(|&p| p != 0);
+        let Some(parent_id) = parent_id else {
+            // Detach.
+            if let Some(child) = self.surfaces.get_mut(&child_id) {
+                child.subsurface = None;
+            }
+            return true;
+        };
+        if !self.surfaces.contains_key(&parent_id) || parent_id == child_id {
+            return false;
+        }
+
+        // Add to the parent's children list (if not already present).
+        if let Some(parent) = self.surfaces.get_mut(&parent_id) {
+            if !parent.subsurface_children.contains(&child_id) {
+                parent.subsurface_children.push(child_id);
+            }
+        }
+
+        // Update child link and recompute absolute dest_rect / z_order.
+        let parent_rect = self
+            .surfaces
+            .get(&parent_id)
+            .map(|p| p.current.dest_rect)
+            .unwrap_or_default();
+        let parent_z = self.surfaces.get(&parent_id).map(|p| p.current.z_order).unwrap_or(0);
+
+        if let Some(child) = self.surfaces.get_mut(&child_id) {
+            child.subsurface = Some(SubsurfaceLink { parent_id, x, y, z_above });
+            let new_x = parent_rect.x as i32 + x;
+            let new_y = parent_rect.y as i32 + y;
+            let w = child.current.dest_rect.w;
+            let h = child.current.dest_rect.h;
+            child.current.dest_rect = Rect {
+                x: new_x.max(0) as u32,
+                y: new_y.max(0) as u32,
+                w,
+                h,
+            };
+            child.current.z_order = parent_z.saturating_add(z_above);
+            // Subsurfaces are not focusable as standalone toplevels.
+            child.focus_eligible = false;
+            // Subsurfaces have no compositor-drawn chrome.
+            child.chrome = SurfaceChrome::default();
+        }
+        true
     }
 
     pub fn attach_pending_buffer(
@@ -443,13 +549,61 @@ impl Scene {
         }
 
         surface.frame_serial = surface.frame_serial.saturating_add(1);
+        let frame_serial = surface.frame_serial;
+        let parent_dest = surface.current.dest_rect;
+        let parent_z = surface.current.z_order;
+        let dest_changed_for_children = changed;
+
+        // Propagate parent-relative offsets to subsurface children whenever
+        // the parent's geometry has been touched.
+        if dest_changed_for_children {
+            self.propagate_subsurface_layout(surface_id, parent_dest, parent_z);
+        }
+
         Some(CommitResult {
             changed,
             released_buffer_ids: released,
-            frame_serial: surface.frame_serial,
+            frame_serial,
             damage_rects,
             needs_full_repaint: visual_full_damage && old_mapped,
         })
+    }
+
+    /// Recompute absolute `dest_rect` and `z_order` for every subsurface child
+    /// of the given parent using the parent's current geometry.  Recurses so
+    /// nested subsurface trees stay consistent.
+    fn propagate_subsurface_layout(&mut self, parent_id: u32, parent_dest: Rect, parent_z: i32) {
+        let children: Vec<u32> = match self.surfaces.get(&parent_id) {
+            Some(p) => p.subsurface_children.clone(),
+            None => return,
+        };
+        for child_id in children {
+            let (link, w, h) = match self.surfaces.get(&child_id) {
+                Some(child) => match child.subsurface {
+                    Some(link) => (link, child.current.dest_rect.w, child.current.dest_rect.h),
+                    None => continue,
+                },
+                None => continue,
+            };
+            let new_x = parent_dest.x as i32 + link.x;
+            let new_y = parent_dest.y as i32 + link.y;
+            let new_z = parent_z.saturating_add(link.z_above);
+            let (new_rect, new_z) = {
+                let new_rect = Rect {
+                    x: new_x.max(0) as u32,
+                    y: new_y.max(0) as u32,
+                    w,
+                    h,
+                };
+                (new_rect, new_z)
+            };
+            if let Some(child) = self.surfaces.get_mut(&child_id) {
+                child.current.dest_rect = new_rect;
+                child.current.z_order = new_z;
+            }
+            // Recurse for grandchildren.
+            self.propagate_subsurface_layout(child_id, new_rect, new_z);
+        }
     }
 
     pub fn collect_composition(&self) -> Vec<CompositionEntry> {

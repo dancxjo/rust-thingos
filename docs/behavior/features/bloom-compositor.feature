@@ -190,3 +190,13 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+
+  Scenario: wl_subcompositor global is advertised so clients can build subsurface trees
+    # Verifies that bloom advertises wl_subcompositor (v1) alongside the other
+    # wl_registry globals.  Clients use it to give wl_surfaces the subsurface
+    # role for nested UI hierarchies (e.g. titlebars, popovers, or video
+    # overlays composited inside a parent toplevel).
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wayland-server: advertising globals" within 60s
+    And the serial output should contain "wl_subcompositor" within 60s

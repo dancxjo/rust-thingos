@@ -14,6 +14,7 @@
 //! | 3    | xdg_wm_base      | 1       |
 //! | 4    | wl_seat          | 5       |
 //! | 5    | wl_output        | 2       |
+//! | 6    | wl_subcompositor | 1       |
 
 use alloc::string::String;
 use alloc::vec;
@@ -33,6 +34,7 @@ pub const GLOBAL_WL_SHM: u32 = 2;
 pub const GLOBAL_XDG_WM_BASE: u32 = 3;
 pub const GLOBAL_WL_SEAT: u32 = 4;
 pub const GLOBAL_WL_OUTPUT: u32 = 5;
+pub const GLOBAL_WL_SUBCOMPOSITOR: u32 = 6;
 
 // ── Top-level dispatcher ─────────────────────────────────────────────────────
 
@@ -79,6 +81,8 @@ pub fn dispatch(
         ObjKind::Pointer => dispatch_pointer(msg, client, obj_id),
         ObjKind::Keyboard => dispatch_keyboard(msg, client, obj_id),
         ObjKind::Output => dispatch_output(msg, client, obj_id),
+        ObjKind::Subcompositor => dispatch_subcompositor(msg, client, obj_id),
+        ObjKind::Subsurface => dispatch_subsurface(msg, client, obj_id, cmd_write),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -104,6 +108,8 @@ enum ObjKind {
     Pointer,
     Keyboard,
     Output,
+    Subcompositor,
+    Subsurface,
     Destroyed,
     Unknown,
 }
@@ -127,6 +133,8 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::Pointer => ObjKind::Pointer,
         ObjectEntry::Keyboard => ObjKind::Keyboard,
         ObjectEntry::Output => ObjKind::Output,
+        ObjectEntry::Subcompositor => ObjKind::Subcompositor,
+        ObjectEntry::Subsurface { .. } => ObjKind::Subsurface,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -171,6 +179,7 @@ fn dispatch_display(
                 (GLOBAL_XDG_WM_BASE, "xdg_wm_base", 1u32),
                 (GLOBAL_WL_SEAT, "wl_seat", 5u32),
                 (GLOBAL_WL_OUTPUT, "wl_output", 2u32),
+                (GLOBAL_WL_SUBCOMPOSITOR, "wl_subcompositor", 1u32),
             ] {
                 let mut p = Vec::new();
                 p.extend_from_slice(&name.to_ne_bytes());
@@ -233,6 +242,9 @@ fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient, output: &crate::
         GLOBAL_WL_OUTPUT => {
             client.insert(new_id, ObjectEntry::Output);
             send_output_events(client, new_id, output);
+        }
+        GLOBAL_WL_SUBCOMPOSITOR => {
+            client.insert(new_id, ObjectEntry::Subcompositor);
         }
         _ => {
             client.send_protocol_error(new_id, 0, "unknown global");
@@ -389,6 +401,8 @@ fn dispatch_compositor(
                     pending_buffer: None,
                     pending_damage: None,
                     pending_frame_cb: None,
+                    subsurface_obj: None,
+                    subsurface_children: alloc::vec::Vec::new(),
                 },
             );
         }
@@ -610,6 +624,7 @@ fn handle_surface_commit(
                 pending_buffer,
                 pending_damage,
                 pending_frame_cb,
+                ..
             }) => (
                 *bloom_surface_id,
                 *xdg_surface_obj,
@@ -693,6 +708,11 @@ fn handle_surface_commit(
         *pending_damage = None;
         *pending_frame_cb = None;
     }
+
+    // Atomically apply pending state of any synchronized subsurface children.
+    // (`wl_subsurface` spec: in synchronized mode the subsurface state is
+    // cached and applied as part of the parent's commit.)
+    flush_synchronized_subsurfaces(wl_surface_obj, client, &mut out);
 
     out
 }
@@ -1005,6 +1025,409 @@ fn toplevel_bloom_surface(client: &WaylandClient, toplevel_obj: u32) -> Option<u
     match client.objects.get(&xdg_surface_obj)? {
         ObjectEntry::XdgSurface { bloom_surface_id } => Some(*bloom_surface_id),
         _ => None,
+    }
+}
+
+// ── wl_subcompositor ─────────────────────────────────────────────────────────
+
+const WL_SUBCOMPOSITOR_DESTROY: u16 = 0;
+const WL_SUBCOMPOSITOR_GET_SUBSURFACE: u16 = 1;
+
+/// Error code values from `wl_subcompositor.error`.
+const WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE: u32 = 0;
+
+fn dispatch_subcompositor(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WL_SUBCOMPOSITOR_DESTROY => {
+            client.destroy(obj_id);
+        }
+        WL_SUBCOMPOSITOR_GET_SUBSURFACE => {
+            // get_subsurface(id: new_id<wl_subsurface>, surface: object<wl_surface>,
+            //                parent:  object<wl_surface>)
+            let new_id = match read_u32(&msg.data, 0) {
+                Some(id) => id,
+                None => return vec![],
+            };
+            let surface_obj = read_u32(&msg.data, 4).unwrap_or(0);
+            let parent_obj = read_u32(&msg.data, 8).unwrap_or(0);
+
+            // The surface must exist, must not already be a subsurface, and
+            // must not be the parent of itself.
+            if surface_obj == 0 || parent_obj == 0 || surface_obj == parent_obj {
+                client.send_protocol_error(
+                    obj_id,
+                    WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
+                    "invalid surface for get_subsurface",
+                );
+                return vec![];
+            }
+
+            // Validate child is a wl_surface and not yet a subsurface and not
+            // already an xdg_surface (Wayland spec: a wl_surface may carry at
+            // most one role).
+            let child_already_sub = matches!(
+                client.objects.get(&surface_obj),
+                Some(ObjectEntry::Surface { subsurface_obj: Some(_), .. })
+            );
+            let child_already_xdg = matches!(
+                client.objects.get(&surface_obj),
+                Some(ObjectEntry::Surface { xdg_surface_obj: Some(_), .. })
+            );
+            let child_is_surface = matches!(
+                client.objects.get(&surface_obj),
+                Some(ObjectEntry::Surface { .. })
+            );
+            let parent_is_surface = matches!(
+                client.objects.get(&parent_obj),
+                Some(ObjectEntry::Surface { .. })
+            );
+            if !child_is_surface
+                || !parent_is_surface
+                || child_already_sub
+                || child_already_xdg
+            {
+                client.send_protocol_error(
+                    obj_id,
+                    WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
+                    "surface already has the subsurface role or is invalid",
+                );
+                return vec![];
+            }
+
+            // Register the subsurface object.  Spec defaults: position (0,0),
+            // synchronized mode.
+            client.insert(
+                new_id,
+                ObjectEntry::Subsurface {
+                    child_wl_surface: surface_obj,
+                    parent_wl_surface: parent_obj,
+                    x: 0,
+                    y: 0,
+                    sync: true,
+                    pending_position: None,
+                    pending_place: None,
+                },
+            );
+            // Link child surface back to its subsurface object.
+            if let Some(ObjectEntry::Surface { subsurface_obj, .. }) =
+                client.objects.get_mut(&surface_obj)
+            {
+                *subsurface_obj = Some(new_id);
+            }
+            // Append to the parent's children stack at the top.
+            if let Some(ObjectEntry::Surface { subsurface_children, .. }) =
+                client.objects.get_mut(&parent_obj)
+            {
+                subsurface_children.push(surface_obj);
+            }
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+// ── wl_subsurface ────────────────────────────────────────────────────────────
+
+const WL_SUBSURFACE_DESTROY: u16 = 0;
+const WL_SUBSURFACE_SET_POSITION: u16 = 1;
+const WL_SUBSURFACE_PLACE_ABOVE: u16 = 2;
+const WL_SUBSURFACE_PLACE_BELOW: u16 = 3;
+const WL_SUBSURFACE_SET_SYNC: u16 = 4;
+const WL_SUBSURFACE_SET_DESYNC: u16 = 5;
+
+/// Error code values from `wl_subsurface.error`.
+const WL_SUBSURFACE_ERROR_BAD_SURFACE: u32 = 0;
+
+fn dispatch_subsurface(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+    cmd_write: u32,
+) -> Vec<Vec<u8>> {
+    let mut ipc_cmds: Vec<Vec<u8>> = vec![];
+
+    match msg.opcode {
+        WL_SUBSURFACE_DESTROY => {
+            destroy_subsurface(obj_id, client, &mut ipc_cmds, cmd_write);
+        }
+        WL_SUBSURFACE_SET_POSITION => {
+            let x = read_i32(&msg.data, 0).unwrap_or(0);
+            let y = read_i32(&msg.data, 4).unwrap_or(0);
+            let sync = subsurface_is_sync(client, obj_id);
+            if let Some(ObjectEntry::Subsurface { pending_position, .. }) =
+                client.objects.get_mut(&obj_id)
+            {
+                *pending_position = Some((x, y));
+            }
+            if !sync {
+                // Desync: apply immediately.
+                if let Some((x, y)) = take_pending_position(client, obj_id) {
+                    apply_subsurface_position(client, obj_id, x, y);
+                    if let Some(cmd) = subsurface_state_command(client, obj_id) {
+                        let _ = stem::syscall::port_send_all(cmd_write, &cmd);
+                    }
+                }
+            }
+        }
+        WL_SUBSURFACE_PLACE_ABOVE | WL_SUBSURFACE_PLACE_BELOW => {
+            let sibling = read_u32(&msg.data, 0).unwrap_or(0);
+            let above = msg.opcode == WL_SUBSURFACE_PLACE_ABOVE;
+            let sync = subsurface_is_sync(client, obj_id);
+            if let Some(ObjectEntry::Subsurface { pending_place, .. }) =
+                client.objects.get_mut(&obj_id)
+            {
+                *pending_place = Some((sibling, above));
+            }
+            if !sync {
+                if let Some((sibling, above)) = take_pending_place(client, obj_id) {
+                    if !apply_subsurface_place(client, obj_id, sibling, above) {
+                        client.send_protocol_error(
+                            obj_id,
+                            WL_SUBSURFACE_ERROR_BAD_SURFACE,
+                            "place_above/below sibling not a sibling subsurface",
+                        );
+                    } else if let Some(cmd) = subsurface_state_command(client, obj_id) {
+                        let _ = stem::syscall::port_send_all(cmd_write, &cmd);
+                    }
+                }
+            }
+        }
+        WL_SUBSURFACE_SET_SYNC => {
+            if let Some(ObjectEntry::Subsurface { sync, .. }) = client.objects.get_mut(&obj_id) {
+                *sync = true;
+            }
+        }
+        WL_SUBSURFACE_SET_DESYNC => {
+            if let Some(ObjectEntry::Subsurface { sync, .. }) = client.objects.get_mut(&obj_id) {
+                *sync = false;
+            }
+            // Flush any pending state immediately.
+            if let Some((x, y)) = take_pending_position(client, obj_id) {
+                apply_subsurface_position(client, obj_id, x, y);
+            }
+            if let Some((sibling, above)) = take_pending_place(client, obj_id) {
+                let _ = apply_subsurface_place(client, obj_id, sibling, above);
+            }
+            if let Some(cmd) = subsurface_state_command(client, obj_id) {
+                let _ = stem::syscall::port_send_all(cmd_write, &cmd);
+            }
+        }
+        _ => {}
+    }
+
+    ipc_cmds
+}
+
+/// Tear down a subsurface, removing it from the parent's child list and
+/// detaching the role from the child wl_surface.  An IPC notification is
+/// emitted so the scene can drop the parent/offset relationship.
+fn destroy_subsurface(
+    obj_id: u32,
+    client: &mut WaylandClient,
+    _ipc_cmds: &mut Vec<Vec<u8>>,
+    cmd_write: u32,
+) {
+    let (child_wl_surface, parent_wl_surface) = match client.objects.get(&obj_id) {
+        Some(ObjectEntry::Subsurface { child_wl_surface, parent_wl_surface, .. }) => {
+            (*child_wl_surface, *parent_wl_surface)
+        }
+        _ => {
+            client.destroy(obj_id);
+            return;
+        }
+    };
+    let child_bloom = client.bloom_surface_id(child_wl_surface).unwrap_or(0);
+
+    // Detach role from child.
+    if let Some(ObjectEntry::Surface { subsurface_obj, .. }) =
+        client.objects.get_mut(&child_wl_surface)
+    {
+        if *subsurface_obj == Some(obj_id) {
+            *subsurface_obj = None;
+        }
+    }
+    // Remove from parent's children stack.
+    if let Some(ObjectEntry::Surface { subsurface_children, .. }) =
+        client.objects.get_mut(&parent_wl_surface)
+    {
+        subsurface_children.retain(|&id| id != child_wl_surface);
+    }
+    client.destroy(obj_id);
+
+    if child_bloom != 0 {
+        let cmd = ipc::encode_set_subsurface(child_bloom, 0, 0, 0, 0);
+        let _ = stem::syscall::port_send_all(cmd_write, &cmd);
+    }
+}
+
+fn subsurface_is_sync(client: &WaylandClient, obj_id: u32) -> bool {
+    match client.objects.get(&obj_id) {
+        Some(ObjectEntry::Subsurface { sync, .. }) => *sync,
+        _ => true,
+    }
+}
+
+fn take_pending_position(client: &mut WaylandClient, obj_id: u32) -> Option<(i32, i32)> {
+    match client.objects.get_mut(&obj_id) {
+        Some(ObjectEntry::Subsurface { pending_position, .. }) => pending_position.take(),
+        _ => None,
+    }
+}
+
+fn take_pending_place(client: &mut WaylandClient, obj_id: u32) -> Option<(u32, bool)> {
+    match client.objects.get_mut(&obj_id) {
+        Some(ObjectEntry::Subsurface { pending_place, .. }) => pending_place.take(),
+        _ => None,
+    }
+}
+
+fn apply_subsurface_position(client: &mut WaylandClient, obj_id: u32, new_x: i32, new_y: i32) {
+    if let Some(ObjectEntry::Subsurface { x, y, .. }) = client.objects.get_mut(&obj_id) {
+        *x = new_x;
+        *y = new_y;
+    }
+}
+
+/// Reorder the parent's `subsurface_children` list per `place_above` / `place_below`.
+///
+/// Returns `false` when the requested sibling is not actually a sibling of the
+/// child being moved (Wayland spec calls for a `bad_surface` protocol error).
+/// `sibling == 0` is interpreted as "relative to the parent itself" (place at
+/// top or bottom of the children stack).
+fn apply_subsurface_place(
+    client: &mut WaylandClient,
+    obj_id: u32,
+    sibling: u32,
+    above: bool,
+) -> bool {
+    let (child, parent) = match client.objects.get(&obj_id) {
+        Some(ObjectEntry::Subsurface { child_wl_surface, parent_wl_surface, .. }) => {
+            (*child_wl_surface, *parent_wl_surface)
+        }
+        _ => return false,
+    };
+    let Some(ObjectEntry::Surface { subsurface_children, .. }) =
+        client.objects.get_mut(&parent)
+    else {
+        return false;
+    };
+
+    let Some(child_idx) = subsurface_children.iter().position(|&c| c == child) else {
+        return false;
+    };
+    subsurface_children.remove(child_idx);
+
+    if sibling == 0 || sibling == parent {
+        // Relative to parent: above => top, below => bottom.
+        if above {
+            subsurface_children.push(child);
+        } else {
+            subsurface_children.insert(0, child);
+        }
+        return true;
+    }
+
+    let Some(sibling_idx) = subsurface_children.iter().position(|&c| c == sibling) else {
+        // Sibling not part of this parent's children: protocol error.  Restore
+        // child to the top to keep state consistent.
+        subsurface_children.push(child);
+        return false;
+    };
+    let insert_at = if above { sibling_idx + 1 } else { sibling_idx };
+    subsurface_children.insert(insert_at, child);
+    true
+}
+
+/// Build a `WCMD_SET_SUBSURFACE` for the given wl_subsurface object reflecting
+/// its current parent/position/stacking state.
+fn subsurface_state_command(client: &WaylandClient, obj_id: u32) -> Option<[u8; 24]> {
+    let (child_wl_surface, parent_wl_surface, x, y) = match client.objects.get(&obj_id)? {
+        ObjectEntry::Subsurface { child_wl_surface, parent_wl_surface, x, y, .. } => {
+            (*child_wl_surface, *parent_wl_surface, *x, *y)
+        }
+        _ => return None,
+    };
+    let child_bloom = client.bloom_surface_id(child_wl_surface)?;
+    let parent_bloom = client.bloom_surface_id(parent_wl_surface)?;
+    let z_above = subsurface_z_above(client, parent_wl_surface, child_wl_surface);
+    Some(ipc::encode_set_subsurface(child_bloom, parent_bloom, x, y, z_above))
+}
+
+/// Return the stacking offset of `child_wl_surface` relative to its parent.
+///
+/// Children are numbered 1..=N from bottom-to-top, so the first child is
+/// `+1` (just above the parent) and the topmost child is `+N`.  Returns `0`
+/// when the child is not currently in the parent's stack (caller filters).
+fn subsurface_z_above(
+    client: &WaylandClient,
+    parent_wl_surface: u32,
+    child_wl_surface: u32,
+) -> i32 {
+    let Some(ObjectEntry::Surface { subsurface_children, .. }) =
+        client.objects.get(&parent_wl_surface)
+    else {
+        return 0;
+    };
+    match subsurface_children.iter().position(|&c| c == child_wl_surface) {
+        Some(idx) => (idx as i32) + 1,
+        None => 0,
+    }
+}
+
+/// On parent `wl_surface.commit`, atomically apply pending state of every
+/// synchronized subsurface child and emit IPC updates so the scene matches.
+fn flush_synchronized_subsurfaces(
+    parent_wl_surface: u32,
+    client: &mut WaylandClient,
+    out: &mut Vec<Vec<u8>>,
+) {
+    // Snapshot current children list (cloned to release the borrow).
+    let children: Vec<u32> = match client.objects.get(&parent_wl_surface) {
+        Some(ObjectEntry::Surface { subsurface_children, .. }) => subsurface_children.clone(),
+        _ => return,
+    };
+    // Track which subsurface objects had their stacking applied so we can
+    // re-emit z_above for siblings whose ordinal might have shifted.
+    let mut any_place = false;
+    for child_wl_surface in &children {
+        let sub_obj = match client.objects.get(child_wl_surface) {
+            Some(ObjectEntry::Surface { subsurface_obj: Some(s), .. }) => *s,
+            _ => continue,
+        };
+        let sync = subsurface_is_sync(client, sub_obj);
+        if !sync {
+            continue;
+        }
+        if let Some((x, y)) = take_pending_position(client, sub_obj) {
+            apply_subsurface_position(client, sub_obj, x, y);
+        }
+        if let Some((sibling, above)) = take_pending_place(client, sub_obj) {
+            let _ = apply_subsurface_place(client, sub_obj, sibling, above);
+            any_place = true;
+        }
+    }
+    // Re-emit current state for every synchronized child after the parent
+    // commit so the scene picks up parent-relative offsets / stacking changes.
+    let final_children: Vec<u32> = match client.objects.get(&parent_wl_surface) {
+        Some(ObjectEntry::Surface { subsurface_children, .. }) => subsurface_children.clone(),
+        _ => return,
+    };
+    for child_wl_surface in &final_children {
+        let sub_obj = match client.objects.get(child_wl_surface) {
+            Some(ObjectEntry::Surface { subsurface_obj: Some(s), .. }) => *s,
+            _ => continue,
+        };
+        if !subsurface_is_sync(client, sub_obj) && !any_place {
+            // Desync subsurfaces only need state push when stacking shifted.
+            continue;
+        }
+        if let Some(cmd) = subsurface_state_command(client, sub_obj) {
+            out.push(cmd.to_vec());
+        }
     }
 }
 

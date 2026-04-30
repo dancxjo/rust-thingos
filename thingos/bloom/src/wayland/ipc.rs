@@ -16,6 +16,7 @@
 //! | `WCMD_COMMIT`        | Commit pending surface state                  |
 //! | `WCMD_SET_CHROME`    | Mark compositor-known shell chrome geometry   |
 //! | `WCMD_SET_TITLE`     | Update compositor-owned shell chrome title    |
+//! | `WCMD_SET_SUBSURFACE`| Update parent/position/stacking for a subsurface |
 //!
 //! # Main → Wayland (events)
 //!
@@ -37,6 +38,7 @@ pub const WCMD_DAMAGE: u8 = 4;
 pub const WCMD_COMMIT: u8 = 5;
 pub const WCMD_SET_CHROME: u8 = 6;
 pub const WCMD_SET_TITLE: u8 = 7;
+pub const WCMD_SET_SUBSURFACE: u8 = 8;
 pub const MAX_TITLE_BYTES: usize = 64;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
@@ -146,6 +148,25 @@ pub struct WCmdSetTitle {
     pub _pad: [u8; 2],
     pub bloom_surface_id: u32,
     pub title: [u8; MAX_TITLE_BYTES],
+}
+
+/// [`WCMD_SET_SUBSURFACE`] — declare or update a subsurface relationship.
+///
+/// `parent_surface_id == 0` detaches the child (used when the subsurface is
+/// destroyed).  `x`/`y` is the offset of the child relative to the parent in
+/// surface-local coordinates.  `z_above` is the stacking offset relative to
+/// the parent's z-order: positive places the subsurface above its parent,
+/// negative places it below.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WCmdSetSubsurface {
+    pub msg_type: u8, // = WCMD_SET_SUBSURFACE
+    pub _pad: [u8; 3],
+    pub child_surface_id: u32,
+    pub parent_surface_id: u32,
+    pub x: i32,
+    pub y: i32,
+    pub z_above: i32,
 }
 
 /// [`WEVT_BUFFER_RELEASE`] — the compositor no longer references a buffer.
@@ -363,6 +384,27 @@ pub fn encode_set_title(bloom_surface_id: u32, title: &str) -> [u8; 72] {
     };
     let mut out = [0u8; 72];
     out.copy_from_slice(as_bytes!(msg, WCmdSetTitle));
+    out
+}
+
+pub fn encode_set_subsurface(
+    child_surface_id: u32,
+    parent_surface_id: u32,
+    x: i32,
+    y: i32,
+    z_above: i32,
+) -> [u8; 24] {
+    let msg = WCmdSetSubsurface {
+        msg_type: WCMD_SET_SUBSURFACE,
+        _pad: [0; 3],
+        child_surface_id,
+        parent_surface_id,
+        x,
+        y,
+        z_above,
+    };
+    let mut out = [0u8; 24];
+    out.copy_from_slice(as_bytes!(msg, WCmdSetSubsurface));
     out
 }
 
