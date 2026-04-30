@@ -26,7 +26,7 @@ const TOPLEVEL_ID: u32 = 12;
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_DSEG7_TEXT_SYMBOL: &[u8] = b"pistil_draw_dseg7_text";
 const DSEG7_FONT_PATH: &str = "/share/fonts/DSEG7Classic-Regular.ttf";
-const TRACE_INTERVAL_NS: u64 = 3_000_000_000;
+const SERIAL_TICK_INTERVAL_NS: u64 = 3_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
 
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
@@ -91,7 +91,7 @@ fn main(_arg: usize) -> ! {
     let mut pending_frame_callbacks: Vec<u32> = Vec::new();
     let mut tz_offset = get_tz_offset();
     let mut last_tz_refresh_ns = stem::time::monotonic_ns();
-    let mut last_trace_ns = 0u64;
+    let mut last_serial_tick_ns = 0u64;
     let mut last_time = String::new();
     let mut last_date = String::new();
 
@@ -106,20 +106,34 @@ fn main(_arg: usize) -> ! {
 
         let realtime = local_datetime(tz_offset);
         let (time_text, date_text) = match realtime {
-            Some(dt) => (
+            Some((dt, _, _)) => (
                 format!("{:02}:{:02}:{:02}", dt.hour, dt.minute, dt.second),
                 format!("{:04}-{:02}-{:02} UTC{:+}", dt.year, dt.month, dt.day, tz_offset),
             ),
             None => ("00:00:00".into(), format!("WAITING FOR RTC UTC{:+}", tz_offset)),
         };
 
-        if now_ns.saturating_sub(last_trace_ns) >= TRACE_INTERVAL_NS {
-            if realtime.is_some() {
-                stem::trace!("clock: current time {} {}", date_text, time_text);
-            } else {
-                stem::trace!("clock: waiting for system clock anchor");
+        if now_ns.saturating_sub(last_serial_tick_ns) >= SERIAL_TICK_INTERVAL_NS {
+            match realtime {
+                Some((dt, unix_secs, nanos)) => {
+                    info!(
+                        "clock: tick local={:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC{:+} system_unix={}.{:09}",
+                        dt.year,
+                        dt.month,
+                        dt.day,
+                        dt.hour,
+                        dt.minute,
+                        dt.second,
+                        tz_offset,
+                        unix_secs,
+                        nanos
+                    );
+                }
+                None => {
+                    info!("clock: waiting for system clock anchor");
+                }
             }
-            last_trace_ns = now_ns;
+            last_serial_tick_ns = now_ns;
         }
 
         let time_changed = time_text != last_time || date_text != last_date;
@@ -536,14 +550,15 @@ fn log_dlerror(prefix: &str) {
     }
 }
 
-fn local_datetime(tz_offset_hours: i32) -> Option<DateTime> {
-    let unix_secs = stem::time::clock_now(stem::time::ClockId::Realtime).map(|spec| spec.secs)?;
+fn local_datetime(tz_offset_hours: i32) -> Option<(DateTime, u64, u32)> {
+    let spec = stem::time::clock_now(stem::time::ClockId::Realtime)?;
+    let unix_secs = spec.secs;
     let local_secs = if tz_offset_hours >= 0 {
         unix_secs.saturating_add(tz_offset_hours as u64 * 3600)
     } else {
         unix_secs.saturating_sub(tz_offset_hours.abs() as u64 * 3600)
     };
-    Some(unix_to_datetime(local_secs))
+    Some((unix_to_datetime(local_secs), unix_secs, spec.nanos))
 }
 
 fn get_tz_offset() -> i32 {

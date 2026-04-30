@@ -15,6 +15,7 @@
 //! | 4    | wl_seat          | 5       |
 //! | 5    | wl_output        | 2       |
 //! | 6    | wl_subcompositor | 1       |
+//! | 7    | wl_data_device_manager   | 3       |
 
 use alloc::string::String;
 use alloc::vec;
@@ -35,6 +36,7 @@ pub const GLOBAL_XDG_WM_BASE: u32 = 3;
 pub const GLOBAL_WL_SEAT: u32 = 4;
 pub const GLOBAL_WL_OUTPUT: u32 = 5;
 pub const GLOBAL_WL_SUBCOMPOSITOR: u32 = 6;
+pub const GLOBAL_WL_DATA_DEVICE_MANAGER: u32 = 7;
 
 // ── Top-level dispatcher ─────────────────────────────────────────────────────
 
@@ -83,6 +85,10 @@ pub fn dispatch(
         ObjKind::Output => dispatch_output(msg, client, obj_id),
         ObjKind::Subcompositor => dispatch_subcompositor(msg, client, obj_id),
         ObjKind::Subsurface => dispatch_subsurface(msg, client, obj_id, cmd_write),
+        ObjKind::DataDeviceManager => dispatch_data_device_manager(msg, client),
+        ObjKind::DataSource => dispatch_data_source(msg, client, obj_id),
+        ObjKind::DataDevice => dispatch_data_device(msg, client, obj_id),
+        ObjKind::DataOffer => dispatch_data_offer(msg, client, obj_id),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -110,6 +116,10 @@ enum ObjKind {
     Output,
     Subcompositor,
     Subsurface,
+    DataDeviceManager,
+    DataSource,
+    DataDevice,
+    DataOffer,
     Destroyed,
     Unknown,
 }
@@ -135,6 +145,10 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::Output => ObjKind::Output,
         ObjectEntry::Subcompositor => ObjKind::Subcompositor,
         ObjectEntry::Subsurface { .. } => ObjKind::Subsurface,
+        ObjectEntry::DataDeviceManager => ObjKind::DataDeviceManager,
+        ObjectEntry::DataSource { .. } => ObjKind::DataSource,
+        ObjectEntry::DataDevice { .. } => ObjKind::DataDevice,
+        ObjectEntry::DataOffer => ObjKind::DataOffer,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -180,6 +194,7 @@ fn dispatch_display(
                 (GLOBAL_WL_SEAT, "wl_seat", 5u32),
                 (GLOBAL_WL_OUTPUT, "wl_output", 2u32),
                 (GLOBAL_WL_SUBCOMPOSITOR, "wl_subcompositor", 1u32),
+                (GLOBAL_WL_DATA_DEVICE_MANAGER, "wl_data_device_manager", 3u32),
             ] {
                 let mut p = Vec::new();
                 p.extend_from_slice(&name.to_ne_bytes());
@@ -245,6 +260,8 @@ fn dispatch_registry(msg: &WireMsg, client: &mut WaylandClient, output: &crate::
         }
         GLOBAL_WL_SUBCOMPOSITOR => {
             client.insert(new_id, ObjectEntry::Subcompositor);
+        GLOBAL_WL_DATA_DEVICE_MANAGER => {
+            client.insert(new_id, ObjectEntry::DataDeviceManager);
         }
         _ => {
             client.send_protocol_error(new_id, 0, "unknown global");
@@ -1534,4 +1551,153 @@ fn xdg_state_atom_value(atom: &blossom::XdgToplevelStateAtom) -> u32 {
         TiledTop => 7,
         TiledBottom => 8,
     }
+}
+
+// ── wl_data_device_manager ────────────────────────────────────────────────────
+
+/// wl_data_device_manager request opcodes.
+const WL_DATA_DEVICE_MANAGER_CREATE_DATA_SOURCE: u16 = 0;
+const WL_DATA_DEVICE_MANAGER_GET_DATA_DEVICE: u16 = 1;
+
+fn dispatch_data_device_manager(msg: &WireMsg, client: &mut WaylandClient) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WL_DATA_DEVICE_MANAGER_CREATE_DATA_SOURCE => {
+            if let Some(new_id) = read_u32(&msg.data, 0) {
+                client.insert(new_id, ObjectEntry::DataSource { mime_types: alloc::vec::Vec::new() });
+                blossom_debug!("wayland-server: data_source obj={} created", new_id);
+            }
+        }
+        WL_DATA_DEVICE_MANAGER_GET_DATA_DEVICE => {
+            // get_data_device(new_id: new_id<wl_data_device>, seat: object<wl_seat>)
+            let new_id = match read_u32(&msg.data, 0) {
+                Some(id) => id,
+                None => return vec![],
+            };
+            let seat_obj = read_u32(&msg.data, 4).unwrap_or(0);
+            client.insert(new_id, ObjectEntry::DataDevice { seat_obj });
+            client.data_device_obj = Some(new_id);
+            blossom_debug!("wayland-server: data_device obj={} created for seat={}", new_id, seat_obj);
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+// ── wl_data_source ────────────────────────────────────────────────────────────
+
+/// wl_data_source request opcodes.
+const WL_DATA_SOURCE_OFFER: u16 = 0;
+const WL_DATA_SOURCE_DESTROY: u16 = 1;
+const WL_DATA_SOURCE_SET_ACTIONS: u16 = 2;
+
+fn dispatch_data_source(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WL_DATA_SOURCE_OFFER => {
+            // offer(mime_type: string)
+            if let Some((mime_bytes, _)) = read_string(&msg.data, 0) {
+                let mime = String::from_utf8_lossy(mime_bytes).into_owned();
+                if let Some(ObjectEntry::DataSource { mime_types }) =
+                    client.objects.get_mut(&obj_id)
+                {
+                    mime_types.push(mime);
+                }
+            }
+        }
+        WL_DATA_SOURCE_DESTROY => {
+            blossom_debug!("wayland-server: data_source obj={} destroyed", obj_id);
+            client.destroy(obj_id);
+        }
+        WL_DATA_SOURCE_SET_ACTIONS => {
+            // DnD actions — accepted as no-op for clipboard-only support.
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+// ── wl_data_device ────────────────────────────────────────────────────────────
+
+/// wl_data_device request opcodes.
+const WL_DATA_DEVICE_START_DRAG: u16 = 0;
+const WL_DATA_DEVICE_SET_SELECTION: u16 = 1;
+const WL_DATA_DEVICE_RELEASE: u16 = 2;
+
+fn dispatch_data_device(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WL_DATA_DEVICE_SET_SELECTION => {
+            // set_selection(source: object<wl_data_source>|null, serial: uint)
+            let source_obj = read_u32(&msg.data, 0).unwrap_or(0);
+            let mime_types = if source_obj != 0 {
+                match client.objects.get(&source_obj) {
+                    Some(ObjectEntry::DataSource { mime_types }) => mime_types.clone(),
+                    _ => alloc::vec::Vec::new(),
+                }
+            } else {
+                alloc::vec::Vec::new()
+            };
+            blossom_debug!(
+                "wayland-server: data_device.set_selection source={} mimes={}",
+                source_obj,
+                mime_types.len()
+            );
+            // Signal to the server to broadcast the new selection.
+            client.pending_clipboard_set = Some((source_obj, mime_types));
+        }
+        WL_DATA_DEVICE_RELEASE => {
+            blossom_debug!("wayland-server: data_device obj={} released", obj_id);
+            client.destroy(obj_id);
+            client.data_device_obj = None;
+        }
+        WL_DATA_DEVICE_START_DRAG => {
+            // Drag-and-drop — not implemented; accepted as no-op.
+            blossom_debug!("wayland-server: data_device.start_drag ignored (DnD not implemented)");
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+// ── wl_data_offer ─────────────────────────────────────────────────────────────
+
+/// wl_data_offer request opcodes.
+const WL_DATA_OFFER_ACCEPT: u16 = 0;
+const WL_DATA_OFFER_RECEIVE: u16 = 1;
+const WL_DATA_OFFER_DESTROY: u16 = 2;
+const WL_DATA_OFFER_FINISH: u16 = 3;
+const WL_DATA_OFFER_SET_ACTIONS: u16 = 4;
+
+fn dispatch_data_offer(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WL_DATA_OFFER_RECEIVE => {
+            // receive(mime_type: string, fd: fd)
+            // The write end of a pipe is sent as ancillary data by the client.
+            let mime = match read_string(&msg.data, 0) {
+                Some((bytes, _)) => String::from_utf8_lossy(bytes).into_owned(),
+                None => return vec![],
+            };
+            let write_fd = match client.pending_fds.pop_front() {
+                Some(fd) => fd,
+                None => {
+                    blossom_warn!("wayland-server: data_offer.receive: no fd received");
+                    return vec![];
+                }
+            };
+            blossom_debug!(
+                "wayland-server: data_offer.receive obj={} mime=\"{}\" fd={}",
+                obj_id,
+                mime,
+                write_fd
+            );
+            // Signal to the server to forward the fd to the clipboard source.
+            client.pending_offer_receive = Some((mime, write_fd));
+        }
+        WL_DATA_OFFER_DESTROY => {
+            blossom_debug!("wayland-server: data_offer obj={} destroyed", obj_id);
+            client.destroy(obj_id);
+        }
+        // DnD-only requests: accepted as no-ops.
+        WL_DATA_OFFER_ACCEPT | WL_DATA_OFFER_FINISH | WL_DATA_OFFER_SET_ACTIONS => {}
+        _ => {}
+    }
+    vec![]
 }

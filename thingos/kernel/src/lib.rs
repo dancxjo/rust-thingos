@@ -1198,7 +1198,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         let mut reg = crate::device_registry::REGISTRY.lock();
         // RTC CMOS (0x70, 0x71)
         reg.register(crate::device_registry::DeviceEntry::new_legacy(
-            "rtc_cmos",
+            "dev.rtc.Cmos",
             crate::device_registry::CMOS_IOPORT_RANGES,
             0x70, // Port base as unique-ish ID
         ));
