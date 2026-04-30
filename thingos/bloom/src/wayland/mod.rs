@@ -485,6 +485,19 @@ impl WaylandServer {
                 }
                 let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
                 let timestamp_ms = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+                // Best-effort software presentation timestamp: we don't have
+                // ns precision in WEVT_FRAME_DONE (and no real vblank), so
+                // re-sample the monotonic clock here for `presented`.
+                // This intentionally drifts slightly from the main thread's
+                // `FRAME_DONE` timestamp; replace with true vblank time when
+                // real-vsync timing lands (see related audit issue).
+                let presented_ns = stem::time::monotonic_ns();
+                let refresh_ns: u32 = if self.output.refresh_mhz > 0 {
+                    // refresh_mhz is in milli-Hz; refresh_ns = 1e9 * 1e3 / mHz.
+                    (1_000_000_000_000u64 / self.output.refresh_mhz as u64) as u32
+                } else {
+                    0
+                };
                 for client in self.clients.values_mut() {
                     // fire_frame_cbs returns the IDs that were fired; we only
                     // need the side-effect (sending wl_callback.done), so the
@@ -496,6 +509,21 @@ impl WaylandServer {
                             bloom_surface_id,
                             timestamp_ms,
                             fired.len()
+                        );
+                    }
+                    let output_obj = client.output_object();
+                    let presented = client.fire_presentation_feedbacks_presented(
+                        bloom_surface_id,
+                        presented_ns,
+                        refresh_ns,
+                        output_obj,
+                    );
+                    if !presented.is_empty() {
+                        stem::trace!(
+                            "wayland-server: wp_presentation_feedback.presented surface={} ts_ns={} feedbacks={}",
+                            bloom_surface_id,
+                            presented_ns,
+                            presented.len()
                         );
                     }
                 }

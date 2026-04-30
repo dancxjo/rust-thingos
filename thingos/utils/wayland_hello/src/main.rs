@@ -32,6 +32,8 @@ const POPUP_XDG_SURFACE_ID: u32 = 21;
 const POSITIONER_ID: u32 = 22;
 const POPUP_ID: u32 = 23;
 
+const PRESENTATION_ID: u32 = 30;
+
 const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
@@ -58,6 +60,7 @@ struct BufferState {
 #[derive(Clone, Copy, Default)]
 struct InitialGlobals {
     dmabuf_name: Option<u32>,
+    presentation_name: Option<u32>,
 }
 
 struct PendingSurface {
@@ -87,6 +90,14 @@ fn main(_arg: usize) -> ! {
         info!("wayland_hello: zwp_linux_dmabuf_v1 unavailable; using wl_shm buffers");
         None
     };
+    let presentation_id = if let Some(name) = globals.presentation_name {
+        bind_global(fd, name, "wp_presentation", 1, PRESENTATION_ID);
+        info!("wayland_hello: bound wp_presentation");
+        Some(PRESENTATION_ID)
+    } else {
+        info!("wayland_hello: wp_presentation unavailable");
+        None
+    };
     seat_get_pointer(fd, SEAT_ID, POINTER_ID);
     seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
@@ -104,6 +115,7 @@ fn main(_arg: usize) -> ! {
     let mut popup_created = false;
     let mut next_callback_id = 1000u32;
     let mut pending_frame_callbacks: Vec<u32> = Vec::new();
+    let mut pending_presentation_feedbacks: Vec<u32> = Vec::new();
 
     loop {
         let mut in_buf = [0u8; 4096];
@@ -213,6 +225,27 @@ fn main(_arg: usize) -> ! {
                     );
                     pending_frame_callbacks.retain(|&id| id != object_id);
                 }
+                (_, 1) if pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
+                    // wp_presentation_feedback.presented(tv_sec_hi, tv_sec_lo,
+                    //   tv_nsec, refresh, seq_hi, seq_lo, flags)
+                    let tv_sec_hi = if payload.len() >= 4 { read_u32(payload, 0) } else { 0 };
+                    let tv_sec_lo = if payload.len() >= 8 { read_u32(payload, 4) } else { 0 };
+                    let tv_nsec = if payload.len() >= 12 { read_u32(payload, 8) } else { 0 };
+                    let refresh = if payload.len() >= 16 { read_u32(payload, 12) } else { 0 };
+                    let seq_lo = if payload.len() >= 24 { read_u32(payload, 20) } else { 0 };
+                    info!(
+                        "wayland_hello: wp_presentation_feedback.presented object={} tv={}.{:09} refresh_ns={} seq={}",
+                        object_id, ((tv_sec_hi as u64) << 32) | tv_sec_lo as u64, tv_nsec, refresh, seq_lo
+                    );
+                    pending_presentation_feedbacks.retain(|&id| id != object_id);
+                }
+                (_, 2) if pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
+                    info!(
+                        "wayland_hello: wp_presentation_feedback.discarded object={}",
+                        object_id
+                    );
+                    pending_presentation_feedbacks.retain(|&id| id != object_id);
+                }
                 _ => {}
             }
             offset += size as usize;
@@ -236,6 +269,11 @@ fn main(_arg: usize) -> ! {
             let cb_id = alloc_callback_id(&mut next_callback_id);
             request_frame(fd, TOP_SURFACE_ID, cb_id);
             pending_frame_callbacks.push(cb_id);
+            if let Some(pid) = presentation_id {
+                let fb_id = alloc_callback_id(&mut next_callback_id);
+                request_presentation_feedback(fd, pid, TOP_SURFACE_ID, fb_id);
+                pending_presentation_feedbacks.push(fb_id);
+            }
             commit_surface(fd, TOP_SURFACE_ID);
             top_pending.dirty = false;
 
@@ -269,6 +307,11 @@ fn main(_arg: usize) -> ! {
             let cb_id = alloc_callback_id(&mut next_callback_id);
             request_frame(fd, POPUP_SURFACE_ID, cb_id);
             pending_frame_callbacks.push(cb_id);
+            if let Some(pid) = presentation_id {
+                let fb_id = alloc_callback_id(&mut next_callback_id);
+                request_presentation_feedback(fd, pid, POPUP_SURFACE_ID, fb_id);
+                pending_presentation_feedbacks.push(fb_id);
+            }
             commit_surface(fd, POPUP_SURFACE_ID);
             popup_pending.dirty = false;
         }
@@ -319,11 +362,13 @@ fn read_initial_globals(fd: u32) -> InitialGlobals {
                         let name = read_u32(payload, 0);
                         if let Some((iface, consumed)) = read_wayland_string(payload, 4) {
                             let version_off = 4 + consumed;
-                            if version_off + 4 <= payload.len()
-                                && iface == b"zwp_linux_dmabuf_v1"
-                                && read_u32(payload, version_off) >= 3
-                            {
-                                globals.dmabuf_name = Some(name);
+                            if version_off + 4 <= payload.len() {
+                                let ver = read_u32(payload, version_off);
+                                if iface == b"zwp_linux_dmabuf_v1" && ver >= 3 {
+                                    globals.dmabuf_name = Some(name);
+                                } else if iface == b"wp_presentation" && ver >= 1 {
+                                    globals.presentation_name = Some(name);
+                                }
                             }
                         }
                     }
@@ -332,7 +377,7 @@ fn read_initial_globals(fd: u32) -> InitialGlobals {
                 if offset > 0 {
                     rx.drain(..offset);
                 }
-                if globals.dmabuf_name.is_some() {
+                if globals.dmabuf_name.is_some() && globals.presentation_name.is_some() {
                     break;
                 }
             }
@@ -749,6 +794,24 @@ fn request_frame(fd: u32, surface_id: u32, callback_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 3, 12, &mut buf);
     buf.extend_from_slice(&callback_id.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
+/// Send `wp_presentation.feedback(surface, callback)` (opcode 1).
+///
+/// The compositor will reply on `feedback_id` with either
+/// `wp_presentation_feedback.presented` (opcode 1) or `discarded`
+/// (opcode 2) once the next commit on `surface_id` is settled.
+fn request_presentation_feedback(
+    fd: u32,
+    presentation_id: u32,
+    surface_id: u32,
+    feedback_id: u32,
+) {
+    let mut buf = Vec::new();
+    encode_header(presentation_id, 1, 16, &mut buf);
+    buf.extend_from_slice(&surface_id.to_ne_bytes());
+    buf.extend_from_slice(&feedback_id.to_ne_bytes());
     send_request(fd, &buf);
 }
 

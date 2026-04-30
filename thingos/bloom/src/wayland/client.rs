@@ -58,6 +58,15 @@ pub enum ObjectEntry {
         pending_damage: Option<(i32, i32, u32, u32)>,
         /// Pending frame callback object ID.
         pending_frame_cb: Option<u32>,
+        /// Pending wp_presentation_feedback object IDs.
+        ///
+        /// Per the `wp_presentation` protocol, each `wp_presentation.feedback`
+        /// request creates a feedback object that is associated with the
+        /// surface's *next* content update (i.e. the next `wl_surface.commit`).
+        /// Multiple feedback objects may be requested between commits and they
+        /// must all be settled (`presented` or `discarded`) for the same
+        /// committed frame.
+        pending_presentation_feedback: Vec<u32>,
         /// wl_subsurface object ID, if this surface has been assigned the
         /// subsurface role.
         subsurface_obj: Option<u32>,
@@ -117,6 +126,13 @@ pub enum ObjectEntry {
     DataDevice { seat_obj: u32 },
     /// wl_data_offer — server-created offer advertising data types to a receiver.
     DataOffer,
+    /// wp_presentation global — Wayland Presentation Time protocol manager.
+    Presentation,
+    /// wp_presentation_feedback — one-shot feedback object created by
+    /// `wp_presentation.feedback(surface)`.  After it has been settled with
+    /// either `presented` or `discarded` (both destructor events), the object
+    /// is destroyed by the server.
+    PresentationFeedback,
     /// Object has been destroyed (tombstone).
     Destroyed,
 }
@@ -147,6 +163,15 @@ pub struct WaylandClient {
     /// Map: bloom_surface_id → frame callback object ID
     /// (populated on wl_surface.frame, cleared after sending done).
     pub frame_cbs: BTreeMap<u32, Vec<u32>>,
+    /// Map: bloom_surface_id → wp_presentation_feedback object IDs awaiting
+    /// either `presented` or `discarded`.  Populated on `wl_surface.commit`
+    /// from the surface's `pending_presentation_feedback` list, cleared after
+    /// either event is sent.
+    pub presentation_feedbacks: BTreeMap<u32, Vec<u32>>,
+    /// Monotonically-increasing presentation sequence number sent in the
+    /// `presented` event of `wp_presentation_feedback`.  Best-effort software
+    /// counter — not tied to real vblank/sequence reporting yet.
+    pub presentation_seq: u64,
     /// Last modifier mask sent to this client's wl_keyboard.
     pub keyboard_modifiers: u8,
     /// The wl_data_device object ID bound by this client, if any.
@@ -175,6 +200,8 @@ impl WaylandClient {
             next_buf_key: bloom_surface_id_seed * 1000,
             buf_key_to_obj: BTreeMap::new(),
             frame_cbs: BTreeMap::new(),
+            presentation_feedbacks: BTreeMap::new(),
+            presentation_seq: 0,
             keyboard_modifiers: 0,
             data_device_obj: None,
             pending_clipboard_set: None,
@@ -286,6 +313,15 @@ impl WaylandClient {
         })
     }
 
+    /// Return a `wl_output` object ID that this client has bound, if any.
+    /// Used by `wp_presentation_feedback.sync_output`.
+    pub fn output_object(&self) -> Option<u32> {
+        self.objects.iter().find_map(|(id, entry)| match entry {
+            ObjectEntry::Output => Some(*id),
+            _ => None,
+        })
+    }
+
     /// Return the xdg_surface object ID associated with a wl_surface.
     pub fn xdg_surface_for_surface(&self, wl_surface_obj: u32) -> Option<u32> {
         if let Some(ObjectEntry::Surface { xdg_surface_obj: Some(x), .. }) =
@@ -336,6 +372,139 @@ impl WaylandClient {
             self.destroy(cb_id);
         }
         cbs
+    }
+
+    /// Register a `wp_presentation_feedback` object as pending for the next
+    /// commit of `wl_surface_obj`.  The object is moved from per-surface
+    /// "pending" state to the per-`bloom_surface_id` in-flight map at commit
+    /// time (see [`Self::flush_pending_presentation_feedback`]).
+    pub fn add_pending_presentation_feedback(&mut self, wl_surface_obj: u32, fb_obj: u32) {
+        if let Some(ObjectEntry::Surface { pending_presentation_feedback, .. }) =
+            self.objects.get_mut(&wl_surface_obj)
+        {
+            pending_presentation_feedback.push(fb_obj);
+        }
+    }
+
+    /// At commit time, move any pending `wp_presentation_feedback` objects
+    /// for `wl_surface_obj` into the in-flight map keyed by `bloom_surface_id`.
+    pub fn flush_pending_presentation_feedback(
+        &mut self,
+        wl_surface_obj: u32,
+        bloom_surface_id: u32,
+    ) -> usize {
+        let drained: Vec<u32> = if let Some(ObjectEntry::Surface {
+            pending_presentation_feedback,
+            ..
+        }) = self.objects.get_mut(&wl_surface_obj)
+        {
+            core::mem::take(pending_presentation_feedback)
+        } else {
+            Vec::new()
+        };
+        let n = drained.len();
+        if !drained.is_empty() {
+            self.presentation_feedbacks
+                .entry(bloom_surface_id)
+                .or_default()
+                .extend(drained);
+        }
+        n
+    }
+
+    /// Allocate the next presentation sequence number and return both halves.
+    pub fn next_presentation_seq(&mut self) -> (u32, u32) {
+        let seq = self.presentation_seq;
+        self.presentation_seq = self.presentation_seq.wrapping_add(1);
+        ((seq >> 32) as u32, (seq & 0xffff_ffff) as u32)
+    }
+
+    /// Fire `wp_presentation_feedback.presented` for all in-flight feedbacks
+    /// associated with `bloom_surface_id`.  Each feedback object is then
+    /// destroyed (per protocol, `presented` is a destructor).
+    ///
+    /// `timestamp_ns` is the monotonic timestamp at which the frame became
+    /// visible (best-effort software estimate until real vblank timing is
+    /// available).  `refresh_ns` is the nominal output refresh interval in
+    /// nanoseconds, or 0 if unknown.  `output_obj` is an optional client-side
+    /// `wl_output` to advertise via `sync_output`.
+    ///
+    /// Returns the list of feedback object IDs that were fired.
+    pub fn fire_presentation_feedbacks_presented(
+        &mut self,
+        bloom_surface_id: u32,
+        timestamp_ns: u64,
+        refresh_ns: u32,
+        output_obj: Option<u32>,
+    ) -> Vec<u32> {
+        let fbs = self.presentation_feedbacks.remove(&bloom_surface_id).unwrap_or_default();
+        if fbs.is_empty() {
+            return fbs;
+        }
+        let tv_sec = timestamp_ns / 1_000_000_000;
+        let tv_nsec = (timestamp_ns % 1_000_000_000) as u32;
+        let tv_sec_hi = (tv_sec >> 32) as u32;
+        let tv_sec_lo = (tv_sec & 0xffff_ffff) as u32;
+        // Software best-effort: no VSYNC / HW_CLOCK / HW_COMPLETION / ZERO_COPY
+        // bits are claimed yet.  This keeps clients honest about the limited
+        // timing precision until real vblank reporting is wired up.
+        let flags: u32 = 0;
+        for &fb in &fbs {
+            let (seq_hi, seq_lo) = self.next_presentation_seq();
+            // wp_presentation_feedback.sync_output(output) — opcode 0.
+            // Only advertise if the client has bound the relevant wl_output.
+            if let Some(out_obj) = output_obj {
+                self.send(fb, 0, &out_obj.to_ne_bytes());
+            }
+            // wp_presentation_feedback.presented — opcode 1.
+            // (tv_sec_hi:u32, tv_sec_lo:u32, tv_nsec:u32, refresh:u32,
+            //  seq_hi:u32, seq_lo:u32, flags:u32)
+            let mut payload = [0u8; 28];
+            payload[0..4].copy_from_slice(&tv_sec_hi.to_ne_bytes());
+            payload[4..8].copy_from_slice(&tv_sec_lo.to_ne_bytes());
+            payload[8..12].copy_from_slice(&tv_nsec.to_ne_bytes());
+            payload[12..16].copy_from_slice(&refresh_ns.to_ne_bytes());
+            payload[16..20].copy_from_slice(&seq_hi.to_ne_bytes());
+            payload[20..24].copy_from_slice(&seq_lo.to_ne_bytes());
+            payload[24..28].copy_from_slice(&flags.to_ne_bytes());
+            self.send(fb, 1, &payload);
+            // `presented` is a destructor event — the object is gone.
+            self.destroy(fb);
+        }
+        fbs
+    }
+
+    /// Fire `wp_presentation_feedback.discarded` for every in-flight feedback
+    /// object on `bloom_surface_id` (used when the surface is destroyed or its
+    /// content is otherwise superseded without being presented).
+    pub fn fire_presentation_feedbacks_discarded(&mut self, bloom_surface_id: u32) -> Vec<u32> {
+        let fbs = self.presentation_feedbacks.remove(&bloom_surface_id).unwrap_or_default();
+        for &fb in &fbs {
+            // wp_presentation_feedback.discarded — opcode 2 (no payload, destructor).
+            self.send(fb, 2, &[]);
+            self.destroy(fb);
+        }
+        fbs
+    }
+
+    /// Discard any `wp_presentation_feedback` objects that were registered
+    /// against `wl_surface_obj` but were never committed (e.g. when a surface
+    /// is destroyed without a final commit).
+    pub fn discard_pending_presentation_feedback(&mut self, wl_surface_obj: u32) -> Vec<u32> {
+        let drained: Vec<u32> = if let Some(ObjectEntry::Surface {
+            pending_presentation_feedback,
+            ..
+        }) = self.objects.get_mut(&wl_surface_obj)
+        {
+            core::mem::take(pending_presentation_feedback)
+        } else {
+            Vec::new()
+        };
+        for &fb in &drained {
+            self.send(fb, 2, &[]);
+            self.destroy(fb);
+        }
+        drained
     }
 
     /// Return the pending buffer entry if there is one attached to `wl_surface_obj`.
