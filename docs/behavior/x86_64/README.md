@@ -1,9 +1,9 @@
 # BDD Test Results: x86_64
 
-> Last run: 2026-04-29 21:03:17
+> Last run: 2026-04-29 23:50:02
 
 ## Features
 
 | Feature | Scenarios | Status |
 |---------|-----------|--------|
-| [Bloom compositor service loop and responsiveness](bloom-compositor-service-loop-and-responsiveness/README.md) | ✅ 0 / ⏭️ 0 / ❌ 1 | ❌ |
+| [Low-level keyboard hotkeys](low-level-keyboard-hotkeys/README.md) | ✅ 0 / ⏭️ 0 / ❌ 1 | ❌ |

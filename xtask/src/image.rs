@@ -43,6 +43,7 @@ pub struct IsoConfig<'a> {
     pub resolution: Option<&'a str>,
     pub iso_path: Option<&'a Path>,
     pub loglevel: Option<&'a str>,
+    pub bootfb_default: bool,
 }
 
 fn ensure_default_wallpapers(root: &Path) -> Result<()> {
@@ -370,6 +371,7 @@ fn generate_limine_config(
     assets: &[PathBuf],
     resolution: Option<&str>,
     loglevel: Option<&str>,
+    bootfb_default: bool,
     include_busybox: bool,
     include_default_shell: bool,
 ) -> String {
@@ -429,6 +431,12 @@ fn generate_limine_config(
                     bootfb_only: false,
                 },
             );
+        }
+    }
+    if bootfb_default {
+        if let Some(index) = entries.iter().position(|entry| entry.bootfb_only) {
+            let entry = entries.remove(index);
+            entries.insert(0, entry);
         }
     }
 
@@ -772,6 +780,7 @@ pub fn build_iso_with_config(
         &asset_files,
         config.resolution,
         config.loglevel,
+        config.bootfb_default,
         include_busybox,
         include_default_shell,
     );

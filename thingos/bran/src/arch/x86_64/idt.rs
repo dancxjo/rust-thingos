@@ -877,6 +877,12 @@ fn detect_ctrl_alt_del_reboot(byte: u8) -> bool {
     }
 }
 
+fn reboot_from_ctrl_alt_del() -> ! {
+    let runtime = kernel::runtime_base();
+    runtime.serial_putbuf_sync(b"PS/2 hotkey Ctrl+Alt+Del detected; forcing immediate reboot\r\n");
+    runtime.reboot();
+}
+
 fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, bool, Option<u8>, usize) {
     let mut pause_dump = false;
     let mut f12_press = false;
@@ -1406,8 +1412,7 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
         announce_log_level_hotkey(level);
     }
     if ctrl_alt_del {
-        kernel::kinfo!("PS/2 hotkey Ctrl+Alt+Del detected; forcing immediate reboot");
-        kernel::runtime_base().reboot();
+        reboot_from_ctrl_alt_del();
     }
     if f12_press {
         activate_terminal_and_spawn_shell();
@@ -1474,8 +1479,7 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
     }
 
     if ctrl_alt_del {
-        kernel::kinfo!("PS/2 hotkey Ctrl+Alt+Del detected; forcing immediate reboot");
-        kernel::runtime_base().reboot();
+        reboot_from_ctrl_alt_del();
     }
 
     if pause_dump {
@@ -1500,8 +1504,7 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
     if resolved == IRQ_TIMER_VECTOR {
         let (fallback_pause, fallback_reboot) = poll_ps2_keyboard_fallback();
         if fallback_reboot {
-            kernel::kinfo!("PS/2 hotkey Ctrl+Alt+Del detected; forcing immediate reboot");
-            kernel::runtime_base().reboot();
+            reboot_from_ctrl_alt_del();
         }
         if !pause_dump && fallback_pause {
             let snapshot =
