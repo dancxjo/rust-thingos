@@ -182,6 +182,9 @@ impl WaylandServer {
         };
 
         info!("wayland-server: listening on {}", WAYLAND_SOCKET_PATH);
+        info!(
+            "wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor"
+        );
 
         let mut server = WaylandServer {
             svc,

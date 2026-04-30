@@ -15,6 +15,8 @@ pub enum ObjectEntry {
     Registry,
     /// wl_compositor global.
     Compositor,
+    /// wl_subcompositor global.
+    Subcompositor,
     /// wl_shm global.
     Shm,
     /// wl_shm_pool.
@@ -33,6 +35,13 @@ pub enum ObjectEntry {
         pending_damage: Option<(i32, i32, u32, u32)>,
         /// Pending frame callback object ID.
         pending_frame_cb: Option<u32>,
+        /// wl_subsurface object ID, if this surface has been assigned the
+        /// subsurface role.
+        subsurface_obj: Option<u32>,
+        /// Ordered list of child wl_surface object IDs that have been made
+        /// subsurfaces of this surface.  Order is bottom-to-top stacking
+        /// (manipulated by `wl_subsurface.place_above` / `place_below`).
+        subsurface_children: Vec<u32>,
     },
     /// wl_callback — frame done callback.
     Callback,
@@ -46,6 +55,29 @@ pub enum ObjectEntry {
     XdgToplevel { xdg_surface_obj: u32 },
     /// xdg_popup.
     XdgPopup { xdg_surface_obj: u32 },
+    /// wl_subsurface — relates a wl_surface to its parent wl_surface.
+    ///
+    /// Per the Wayland spec, `sync` defaults to `true` (synchronized mode):
+    /// `pending_position` and `pending_place` are buffered and atomically
+    /// applied on the parent surface's `wl_surface.commit`.  In desync mode
+    /// (`set_desync`) those changes apply immediately.
+    Subsurface {
+        /// Child wl_surface object ID.
+        child_wl_surface: u32,
+        /// Parent wl_surface object ID.
+        parent_wl_surface: u32,
+        /// Current offset relative to the parent in surface-local pixels.
+        x: i32,
+        y: i32,
+        /// Synchronized mode: pending state is applied at parent commit time.
+        /// Wayland spec default is `true`.
+        sync: bool,
+        /// Pending offset (set via `wl_subsurface.set_position`).
+        pending_position: Option<(i32, i32)>,
+        /// Pending stacking change (`(sibling_wl_surface_or_zero, place_above)`).
+        /// `sibling==0` means relative to the parent itself.
+        pending_place: Option<(u32, bool)>,
+    },
     /// wl_seat global.
     Seat,
     /// wl_pointer created from wl_seat.

@@ -65,6 +65,7 @@ impl WaylandCommandService {
             ipc::WCMD_COMMIT => self.handle_commit(data, world),
             ipc::WCMD_SET_CHROME => self.handle_set_chrome(data, world),
             ipc::WCMD_SET_TITLE => self.handle_set_title(data, world),
+            ipc::WCMD_SET_SUBSURFACE => self.handle_set_subsurface(data, world),
             other => {
                 warn!("wayland-cmd: unknown command type {}", other);
                 false
@@ -270,6 +271,37 @@ impl WaylandCommandService {
         }
         false
     }
+
+    fn handle_set_subsurface(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
+        if data.len() < 24 {
+            return false;
+        }
+        let child = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        let parent = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+        let x = i32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+        let y = i32::from_ne_bytes(data[16..20].try_into().unwrap_or([0; 4]));
+        let z_above = i32::from_ne_bytes(data[20..24].try_into().unwrap_or([0; 4]));
+        let parent_opt = if parent == 0 { None } else { Some(parent) };
+        let old_visual = world.scene.surface_visual_rect(child);
+        if world.scene.set_subsurface(child, parent_opt, x, y, z_above) {
+            if let Some(rect) = old_visual {
+                world.damage.mark_rect(rect);
+            }
+            if let Some(rect) = world.scene.surface_visual_rect(child) {
+                world.damage.mark_rect(rect);
+            }
+            world.sync_wayland_session_fs(alloc::format!(
+                "subsurface_state child={} parent={} x={} y={} z_above={}\n",
+                child,
+                parent,
+                x,
+                y,
+                z_above
+            ));
+            return true;
+        }
+        false
+    }
 }
 
 impl BloomService for WaylandCommandService {
@@ -327,6 +359,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_COMMIT => 12,
         ipc::WCMD_SET_CHROME => 16,
         ipc::WCMD_SET_TITLE => 8 + ipc::MAX_TITLE_BYTES,
+        ipc::WCMD_SET_SUBSURFACE => 24,
         _ => 1,
     };
     Some(len)
