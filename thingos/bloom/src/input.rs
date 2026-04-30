@@ -56,6 +56,11 @@ pub struct InputState {
     visible_cursor_kind: CursorKind,
     output_w: i32,
     output_h: i32,
+    /// Pending resize event to be sent to a Wayland client on the next frame boundary.
+    /// Stores (surface_id, width, height).
+    pending_resize: Option<(u32, u32, u32)>,
+    /// Whether we have already sent a resize event to a client during the current frame.
+    resize_sent_this_frame: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,6 +94,8 @@ impl InputState {
             visible_cursor_kind: CursorKind::Default,
             output_w,
             output_h,
+            pending_resize: None,
+            resize_sent_this_frame: false,
         }
     }
 
@@ -199,6 +206,14 @@ impl InputState {
                 send_client_event(scene, client_id, KIND_POINTER_MOTION, &to_vec(&ev));
             }
         }
+    }
+
+    pub fn flush_resizes(&mut self, wayland_evt_write: Option<u32>) {
+        self.resize_sent_this_frame = false;
+        let Some((surface_id, width, height)) = self.pending_resize.take() else {
+            return;
+        };
+        send_wayland_configure(wayland_evt_write, surface_id, width, height, true);
     }
 
     pub fn handle_bristle_event(
@@ -385,6 +400,14 @@ impl InputState {
                             "bloom: pointer debug overlay {}",
                             if self.pointer_overlay_enabled { "enabled" } else { "disabled" }
                         );
+                    }
+                    return;
+                }
+                if key.key() == Key::Tab && key.mods().has_alt() {
+                    if !key.is_repeat() {
+                        let (old_focus, new_focus) = scene.cycle_focus(!key.mods().has_shift());
+                        mark_focus_damage(scene, damage, old_focus, new_focus);
+                        self.send_keyboard_focus_events(scene, old_focus, new_focus);
                     }
                     return;
                 }
@@ -651,21 +674,37 @@ impl InputState {
                 if resized.changed {
                     mark_surface_visual_damage(scene, damage, grab.surface_id, resized.old_rect);
                     mark_surface_visual_damage(scene, damage, grab.surface_id, resized.new_rect);
-                    send_wayland_configure(
-                        wayland_evt_write,
-                        grab.surface_id,
-                        resized.new_rect.w,
-                        resized.new_rect.h,
-                        true,
-                    );
-                    stem::info!(
-                        "bloom: window resize moved surface={} to {},{} {}x{}",
-                        grab.surface_id,
-                        resized.new_rect.x,
-                        resized.new_rect.y,
-                        resized.new_rect.w,
-                        resized.new_rect.h
-                    );
+
+                    let new_size = (grab.surface_id, resized.new_rect.w, resized.new_rect.h);
+                    self.pending_resize = Some(new_size);
+
+                    if !self.resize_sent_this_frame {
+                        send_wayland_configure(
+                            wayland_evt_write,
+                            new_size.0,
+                            new_size.1,
+                            new_size.2,
+                            true,
+                        );
+                        self.resize_sent_this_frame = true;
+                        stem::info!(
+                            "bloom: window resize moved surface={} to {},{} {}x{} (immediate)",
+                            grab.surface_id,
+                            resized.new_rect.x,
+                            resized.new_rect.y,
+                            resized.new_rect.w,
+                            resized.new_rect.h
+                        );
+                    } else {
+                        stem::info!(
+                            "bloom: window resize moved surface={} to {},{} {}x{} (deferred)",
+                            grab.surface_id,
+                            resized.new_rect.x,
+                            resized.new_rect.y,
+                            resized.new_rect.w,
+                            resized.new_rect.h
+                        );
+                    }
                 }
                 true
             }
@@ -676,6 +715,8 @@ impl InputState {
         let Some(grab) = self.pointer_grab.take() else {
             return false;
         };
+        self.pending_resize = None;
+        self.resize_sent_this_frame = false;
         match grab.kind {
             PointerGrabKind::Move { .. } => {
                 stem::info!("bloom: window drag ended surface={}", grab.surface_id);

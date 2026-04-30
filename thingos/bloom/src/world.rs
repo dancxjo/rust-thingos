@@ -30,6 +30,8 @@ pub struct BloomWorld {
     cursor_present_logged: bool,
     /// Port write handle to the Wayland server thread's event port, if running.
     pub wayland_evt_write: Option<u32>,
+    /// The ID of the surface that was active during the last frame.
+    last_active_id: Option<u32>,
 }
 
 impl BloomWorld {
@@ -50,6 +52,7 @@ impl BloomWorld {
             primary,
             cursor_present_logged: false,
             wayland_evt_write: None,
+            last_active_id: None,
         }
     }
 
@@ -215,6 +218,11 @@ impl BloomWorld {
         }
     }
 
+    pub fn apply_surface_visual_damage(&mut self, surface_id: u32, rect: abi::display_protocol::Rect) {
+        let visual = self.scene.visual_rect_for_surface_rect(surface_id, rect).unwrap_or(rect);
+        self.damage.mark_rect(visual);
+    }
+
     /// Process one raw bristle HID event.
     pub fn handle_bristle_event(&mut self, data: &[u8]) {
         self.input.handle_bristle_event(
@@ -258,7 +266,27 @@ impl BloomWorld {
         // Flush coalesced pointer motion: deliver the latest position to
         // clients once per frame rather than per raw sample.
         self.input.flush_pointer_motion(&mut self.scene);
+        self.input.flush_resizes(self.wayland_evt_write);
         self.input.flush_visible_pointer(&mut self.damage);
+
+        // Damage check: if the active window changed since the last frame,
+        // we must damage both the old and new active windows so their
+        // chrome (titlebars, etc) can be updated.
+        let active_id = composition.iter().find(|e| e.active).map(|e| e.surface_id);
+        if active_id != self.last_active_id {
+            if let Some(id) = self.last_active_id {
+                if let Some(rect) = self.scene.surface_rect(id) {
+                    self.apply_surface_visual_damage(id, rect);
+                }
+            }
+            if let Some(id) = active_id {
+                if let Some(rect) = self.scene.surface_rect(id) {
+                    self.apply_surface_visual_damage(id, rect);
+                }
+            }
+            self.last_active_id = active_id;
+        }
+
         let pending_damage = self.damage.take();
         let (pointer_x, pointer_y) = self.input.visible_pointer_position();
         let pointer_overlay = if self.input.pointer_overlay_enabled() {

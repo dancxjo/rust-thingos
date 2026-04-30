@@ -568,6 +568,51 @@ impl Scene {
         }
         Some(surface.current.dest_rect)
     }
+
+    pub fn cycle_focus(&mut self, forward: bool) -> (Option<u32>, Option<u32>) {
+        let mut eligible: Vec<u32> = self
+            .surfaces
+            .values()
+            .filter(|s| s.visible && s.mapped && s.focus_eligible)
+            .map(|s| s.id)
+            .collect();
+
+        if eligible.is_empty() {
+            return (self.keyboard_focus, None);
+        }
+
+        // Sort by Z-order descending (top-most first)
+        eligible.sort_by_key(|id| core::cmp::Reverse(self.surfaces.get(id).unwrap().current.z_order));
+
+        let current_idx = self.keyboard_focus.and_then(|id| eligible.iter().position(|&sid| sid == id));
+
+        let new_idx = match current_idx {
+            Some(idx) => {
+                if forward {
+                    (idx + 1) % eligible.len()
+                } else {
+                    (idx + eligible.len() - 1) % eligible.len()
+                }
+            }
+            None => 0,
+        };
+
+        let old_focus = self.keyboard_focus;
+        let new_focus = Some(eligible[new_idx]);
+        self.keyboard_focus = new_focus;
+
+        // Raise the new focus to the top
+        if let Some(id) = new_focus {
+            let max_z = self.surfaces.values().map(|s| s.current.z_order).max().unwrap_or(0);
+            if let Some(s) = self.surfaces.get_mut(&id) {
+                if s.current.z_order < max_z {
+                    s.current.z_order = max_z + 1;
+                }
+            }
+        }
+
+        (old_focus, new_focus)
+    }
 }
 
 pub struct CommitResult {
