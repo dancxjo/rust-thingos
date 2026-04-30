@@ -211,11 +211,14 @@ impl InputState {
                 let btn = PointerButtonPayload::from_bytes(&p);
                 // Flush any pending coalesced motion so clients see the latest
                 // position before the button event (preserves ordering).
+                // flush_pointer_motion calls update_pointer_focus internally
+                // when motion was pending; only call it directly when there
+                // was no pending motion so focus is still resolved correctly.
+                let had_pending = self.pending_motion_ts.is_some();
                 self.flush_pointer_motion(scene);
-                // Still call update_pointer_focus directly: if no motion was
-                // pending (flush_pointer_motion was a no-op), focus may be
-                // stale and must be resolved before delivering the button event.
-                self.update_pointer_focus(scene);
+                if !had_pending {
+                    self.update_pointer_focus(scene);
+                }
                 let old_focus = scene.keyboard_focus;
                 scene.keyboard_focus = scene.pointer_focus;
                 self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus);
@@ -245,11 +248,14 @@ impl InputState {
                 p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
                 let btn = PointerButtonPayload::from_bytes(&p);
                 // Flush any pending coalesced motion before the button-up event.
+                // flush_pointer_motion calls update_pointer_focus internally
+                // when motion was pending; only call it directly when there
+                // was no pending motion so focus is still resolved correctly.
+                let had_pending = self.pending_motion_ts.is_some();
                 self.flush_pointer_motion(scene);
-                // Still call update_pointer_focus directly: if no motion was
-                // pending (flush_pointer_motion was a no-op), focus may be
-                // stale and must be resolved before delivering the button event.
-                self.update_pointer_focus(scene);
+                if !had_pending {
+                    self.update_pointer_focus(scene);
+                }
                 if let Some(surface_id) = scene.pointer_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {
                         let ev = PointerButtonEvent {
