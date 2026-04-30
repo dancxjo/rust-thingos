@@ -14,6 +14,52 @@ import freeze_hunter
 
 
 class FreezeHunterTests(unittest.TestCase):
+    def test_parse_modes_accepts_aliases_and_combinations(self):
+        self.assertEqual(freeze_hunter.parse_modes("idle"), set())
+        self.assertEqual(freeze_hunter.parse_modes("circle"), {"mouse-circle"})
+        self.assertEqual(freeze_hunter.parse_modes("alt_tab"), {"alt-tab"})
+        self.assertEqual(freeze_hunter.parse_modes("circle,alt-tab"), {"mouse-circle", "alt-tab"})
+        self.assertEqual(freeze_hunter.parse_modes("active"), {"mouse-circle", "alt-tab"})
+
+    def test_compose_qemu_flags_adds_display_and_optional_qmp(self):
+        flags = freeze_hunter.compose_qemu_flags("-m 2G -smp 4", "/tmp/qmp.sock")
+        self.assertIn("-display none", flags)
+        self.assertIn("-qmp unix:/tmp/qmp.sock,server=on,wait=off", flags)
+
+        flags = freeze_hunter.compose_qemu_flags("-m 2G -display gtk -qmp tcp:127.0.0.1:4444")
+        self.assertEqual(flags, "-m 2G -display gtk -qmp tcp:127.0.0.1:4444")
+
+    def test_run_session_active_mode_enables_qmp_input(self):
+        script = "import sys, time; sys.stdout.write('booting ' * 40); sys.stdout.flush(); time.sleep(10)"
+
+        with TemporaryDirectory() as tmp:
+            captured_env = {}
+            with mock.patch.object(freeze_hunter, "LOG_DIR", str(Path(tmp) / "logs")), \
+                 mock.patch.object(freeze_hunter, "TIMEOUT", 0.25), \
+                 mock.patch.object(freeze_hunter, "ARCH", "x86_64"), \
+                 mock.patch.object(freeze_hunter, "LOG_LEVEL", "5"), \
+                 mock.patch.object(freeze_hunter, "MODE", "active"), \
+                 mock.patch.object(freeze_hunter, "QMP_CONNECT_TIMEOUT", 0.05):
+
+                original_popen = subprocess.Popen
+
+                def fake_popen(cmd, *args, **kwargs):
+                    captured_env.update(kwargs.get("env") or {})
+                    return original_popen(
+                        [sys.executable, "-c", script],
+                        stdout=kwargs["stdout"],
+                        stderr=kwargs["stderr"],
+                        stdin=kwargs["stdin"],
+                        env=captured_env,
+                        preexec_fn=os.setsid,
+                    )
+
+                with mock.patch.object(subprocess, "Popen", side_effect=fake_popen):
+                    self.assertTrue(freeze_hunter.run_session(8))
+
+                self.assertIn("-qmp unix:", captured_env["QEMUFLAGS"])
+                self.assertIn("qmp.sock,server=on,wait=off", captured_env["QEMUFLAGS"])
+
     def test_run_session_times_out_after_partial_line_output(self):
         script = (
             "import sys, time; "

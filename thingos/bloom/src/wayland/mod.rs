@@ -41,6 +41,7 @@ use self::client::WaylandClient;
 
 pub const WAYLAND_SOCKET_PATH: &str = "/run/wayland-0";
 const MAX_BACKLOG: usize = 8;
+const MAX_MAIN_EVENTS_PER_DRAIN: usize = 64;
 
 fn stream_readable(fd: u32) -> bool {
     let mut pollfd = [abi::syscall::PollHandle {
@@ -237,6 +238,7 @@ impl WaylandServer {
                 }
 
                 ServiceEvent::Timeout => {
+                    self.drain_main_events();
                     self.drain_clients();
                 }
                 ServiceEvent::Ready { .. } => {}
@@ -253,16 +255,46 @@ impl WaylandServer {
 
     fn drain_main_events(&mut self) {
         let mut consumed = 0usize;
+        let mut handled = 0usize;
+        let mut latest_pointer_motion: Option<[u8; 20]> = None;
+
         while consumed < self.evt_rx_buf.len() {
+            if handled >= MAX_MAIN_EVENTS_PER_DRAIN {
+                break;
+            }
             let Some(event_len) = wayland_event_len(&self.evt_rx_buf[consumed..]) else {
                 break;
             };
             if consumed + event_len > self.evt_rx_buf.len() {
                 break;
             }
-            let event = self.evt_rx_buf[consumed..consumed + event_len].to_vec();
-            self.handle_main_event(&event);
+
+            let event_start = consumed;
+            let event_end = consumed + event_len;
+            let event_type = self.evt_rx_buf[event_start];
+            if event_type == ipc::WEVT_POINTER_MOTION && event_len == 20 {
+                let mut motion = [0u8; 20];
+                motion.copy_from_slice(&self.evt_rx_buf[event_start..event_end]);
+                latest_pointer_motion = Some(motion);
+            } else {
+                let event = self.evt_rx_buf[event_start..event_end].to_vec();
+                if let Some(motion) = latest_pointer_motion.take() {
+                    self.handle_main_event(&motion);
+                    handled += 1;
+                    if handled >= MAX_MAIN_EVENTS_PER_DRAIN {
+                        break;
+                    }
+                }
+                self.handle_main_event(&event);
+                handled += 1;
+            }
             consumed += event_len;
+        }
+
+        if handled < MAX_MAIN_EVENTS_PER_DRAIN {
+            if let Some(motion) = latest_pointer_motion {
+                self.handle_main_event(&motion);
+            }
         }
 
         if consumed > 0 {
