@@ -123,6 +123,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
 
     match call.op {
         DISPLAY_OP_GET_INFO => {
+            stem::debug!("display.phase=device_call_enter op=GET_INFO");
             let info = driver.get_info();
             let out_bytes = unsafe {
                 core::slice::from_raw_parts(
@@ -130,6 +131,7 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
                     core::mem::size_of::<abi::display::DisplayInfo>(),
                 )
             };
+            stem::debug!("display.phase=device_call_exit op=GET_INFO result=ok");
             ProviderResponse::ok_device_call(0, out_bytes)
         }
         DISPLAY_OP_IMPORT_BUFFER => {
@@ -138,9 +140,21 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             }
             let buffer_handle: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+            stem::debug!(
+                "display.phase=import_buffer_begin memfd={} size={}x{}",
+                buffer_handle.handle,
+                buffer_handle.width,
+                buffer_handle.height
+            );
             match driver.import_buffer(&buffer_handle) {
-                Ok(id) => ProviderResponse::ok_device_call(id.0, &id.0.to_le_bytes()),
-                Err(e) => ProviderResponse::err(e),
+                Ok(id) => {
+                    stem::debug!("display.phase=import_buffer_done id={}", id.0);
+                    ProviderResponse::ok_device_call(id.0, &id.0.to_le_bytes())
+                }
+                Err(e) => {
+                    stem::debug!("display.phase=device_call_exit op=IMPORT_BUFFER result=err");
+                    ProviderResponse::err(e)
+                }
             }
         }
         DISPLAY_OP_RELEASE_BUFFER => {
@@ -161,6 +175,8 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
 
             let req: CommitRequest =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+
+            stem::debug!("display.phase=commit_begin planes={}", req.commit_count);
 
             // For provider RPC calls, plane commits are serialized inline after
             // CommitRequest because raw pointers are not valid cross-process.
@@ -222,7 +238,10 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             };
 
             match driver.commit(req_ref) {
-                Ok(()) => ProviderResponse::ok_device_call(0, &[]),
+                Ok(()) => {
+                    stem::debug!("display.phase=commit_done");
+                    ProviderResponse::ok_device_call(0, &[])
+                }
                 Err(e) => ProviderResponse::err(e),
             }
         }

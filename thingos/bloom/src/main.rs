@@ -20,7 +20,7 @@ mod theme;
 mod wayland;
 mod world;
 
-use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
+use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
 use damage::DamageTracker;
 use display::DisplayBackend;
 use frame_clock::FrameClock;
@@ -35,7 +35,7 @@ use services::wayland::WaylandService;
 use services::wayland_cmd::WaylandCommandService;
 use stem::syscall::port_create;
 use stem::syscall::vfs::{
-    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_watch_path, vfs_write,
+    vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_watch_path, vfs_write,
 };
 use stem::{error, info, warn};
 use wayland::WaylandThreadArgs;
@@ -49,8 +49,16 @@ const THEME_PATH: &str = DEFAULT_THEME_CONFIG_PATH;
 fn main(_arg: usize) -> ! {
     info!("bloom: ENTERING MAIN");
     info!("bloom: compositor service starting");
+    info!("bloom.phase=start");
+
+    // ── Check for minimal boot mode ───────────────────────────────────────────
+    let minimal_mode = read_minimal_boot_mode();
+    if minimal_mode {
+        info!("bloom.phase=minimal_mode_active no_wallpaper=1 no_cursor=1 no_theme_watch=1");
+    }
 
     // ── Connect to the display ────────────────────────────────────────────────
+    info!("bloom.phase=open_display");
     let mut display_opt = None;
     for i in 0..50 {
         stem::debug!("bloom: connect try {}...", i);
@@ -70,6 +78,7 @@ fn main(_arg: usize) -> ! {
             stem::sleep_ms(1000);
         }
     };
+    info!("bloom.phase=get_info");
     let outputs = display.enumerate_outputs();
     if outputs.is_empty() {
         error!("bloom: no outputs enumerated");
@@ -134,18 +143,33 @@ fn main(_arg: usize) -> ! {
     session_fs::init();
 
     let mut visuals = CompositorVisuals::new();
+
+    info!("bloom.phase=import_primary_buffer");
     let initial_theme = ensure_theme_config(THEME_PATH);
     let applied_theme = visuals.set_theme_by_name(&initial_theme);
     stem::info!("bloom: initial theme configured {}", applied_theme);
     visuals.prepare_solid_background(&display, 0xFF0B0A10);
-    let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
-    stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
-    visuals.prepare_cursor(&display);
+
+    info!("bloom.phase=load_wallpaper");
+    if !minimal_mode {
+        let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
+        stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
+    } else {
+        stem::info!("bloom: skipping wallpaper load (minimal mode)");
+    }
+
+    info!("bloom.phase=init_cursor");
+    if !minimal_mode {
+        visuals.prepare_cursor(&display);
+    } else {
+        stem::info!("bloom: skipping cursor init (minimal mode)");
+    }
 
     // ── Initial scene / damage / input state ─────────────────────────────────
     let scene = Scene::new();
     let mut damage = DamageTracker::new();
     damage.mark_full(primary.width, primary.height);
+    info!("bloom.phase=first_damage width={} height={}", primary.width, primary.height);
     let input = InputState::new(primary.width, primary.height);
 
     // ── Bristle event port ────────────────────────────────────────────────────
@@ -155,27 +179,37 @@ fn main(_arg: usize) -> ! {
     let bristle_pair = port_create(65536).ok();
 
     // ── Wallpaper watch FD ────────────────────────────────────────────────────
-    let wp_watch_fd = match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
-        Ok(fd) => {
-            info!("bloom: watching wallpaper config {}", WP_PATH);
-            Some(fd)
+    let wp_watch_fd = if !minimal_mode {
+        match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
+            Ok(fd) => {
+                info!("bloom: watching wallpaper config {}", WP_PATH);
+                Some(fd)
+            }
+            Err(e) => {
+                warn!("bloom: failed to watch wallpaper config {}: {:?}", WP_PATH, e);
+                None
+            }
         }
-        Err(e) => {
-            warn!("bloom: failed to watch wallpaper config {}: {:?}", WP_PATH, e);
-            None
-        }
+    } else {
+        stem::info!("bloom: skipping wallpaper watch (minimal mode)");
+        None
     };
 
     // ── Theme watch FD ────────────────────────────────────────────────────────
-    let theme_watch_fd = match vfs_watch_path(THEME_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
-        Ok(fd) => {
-            info!("bloom: watching theme config {}", THEME_PATH);
-            Some(fd)
+    let theme_watch_fd = if !minimal_mode {
+        match vfs_watch_path(THEME_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
+            Ok(fd) => {
+                info!("bloom: watching theme config {}", THEME_PATH);
+                Some(fd)
+            }
+            Err(e) => {
+                warn!("bloom: failed to watch theme config {}: {:?}", THEME_PATH, e);
+                None
+            }
         }
-        Err(e) => {
-            warn!("bloom: failed to watch theme config {}: {:?}", THEME_PATH, e);
-            None
-        }
+    } else {
+        stem::info!("bloom: skipping theme watch (minimal mode)");
+        None
     };
 
     // ── Assemble BloomWorld ───────────────────────────────────────────────────
@@ -270,4 +304,19 @@ fn publish_service_handle(path: &str, handle: u32) {
         let _ = vfs_write(fd, text.as_bytes());
         let _ = vfs_close(fd);
     }
+}
+
+/// Read `/dev/cmdline` and return `true` if the kernel command line contains
+/// `bloom.minimal=1`.  This enables the no-wallpaper / no-cursor boot mode
+/// which eliminates asset-loading from the first-frame path to help isolate
+/// display-handoff stalls.
+fn read_minimal_boot_mode() -> bool {
+    let Ok(fd) = vfs_open("/dev/cmdline", O_RDONLY) else {
+        return false;
+    };
+    let mut buf = [0u8; 512];
+    let n = vfs_read(fd, &mut buf).unwrap_or(0);
+    let _ = vfs_close(fd);
+    let cmdline = core::str::from_utf8(&buf[..n]).unwrap_or("");
+    cmdline.contains("bloom.minimal=1")
 }

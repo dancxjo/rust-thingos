@@ -428,6 +428,9 @@ impl BloomLoop {
             // stamped into the damage tracker immediately before committing.
             let repaint_needed = world.damage.is_dirty() || world.input.has_pending_cursor_motion();
             if self.frame_clock.repaint_due() && repaint_needed {
+                if !first_frame_rendered {
+                    stem::info!("bloom.phase=first_commit_begin");
+                }
                 if let Some(composition) = world.try_present() {
                     world.send_frame_callbacks(&composition);
                     self.frame_clock.after_commit();
@@ -436,6 +439,8 @@ impl BloomLoop {
                     }
                     if !first_frame_rendered {
                         stem::info!("First frame rendered");
+                        stem::info!("bloom.phase=first_commit_done");
+                        stem::info!("bloom.phase=desktop_ready");
                         first_frame_rendered = true;
                     }
                 } else {
