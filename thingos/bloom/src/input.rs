@@ -380,6 +380,17 @@ impl InputState {
                             header.timestamp_ns,
                         );
                     }
+                } else if btn.button == 0 {
+                    // Click on empty space: no focused surface. Notify the
+                    // Wayland server with bloom_surface_id=0 so it can
+                    // dismiss any open popup surfaces.
+                    send_wayland_pointer_button(
+                        wayland_evt_write,
+                        0,
+                        btn.button,
+                        true,
+                        header.timestamp_ns,
+                    );
                 }
                 mark_cursor_damage(
                     damage,

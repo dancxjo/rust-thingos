@@ -568,6 +568,11 @@ impl WaylandServer {
                 let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
                 let width = i32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
                 let height = i32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+                // Any toplevel action (close, minimize, maximize, fullscreen)
+                // should dismiss open popups — the toplevel surface is not a
+                // popup surface so dismiss_popups_if_outside will fire for all
+                // active popups regardless of which toplevel triggered the action.
+                self.dismiss_popups_if_outside(bloom_surface_id);
                 for client in self.clients.values_mut() {
                     if client.xdg_toplevel_for_bloom_surface(bloom_surface_id).is_none() {
                         continue;
@@ -661,6 +666,12 @@ impl WaylandServer {
                 let pressed = data.get(2).copied().unwrap_or(0) != 0;
                 let surface = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
                 let time = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+                // Dismiss any active popups when the primary button is pressed
+                // outside their surface (including clicks on empty space when
+                // surface == 0).
+                if pressed && button == 0 {
+                    self.dismiss_popups_if_outside(surface);
+                }
                 let serial = self.alloc_serial();
                 self.send_pointer_button(surface, button, pressed, time, serial);
             }
@@ -701,6 +712,32 @@ impl WaylandServer {
         let serial = self.next_serial;
         self.next_serial = self.next_serial.wrapping_add(1).max(1);
         serial
+    }
+
+    /// Dismiss all active xdg_popup surfaces whose `bloom_surface_id` differs
+    /// from `clicked_bloom_surface`.
+    ///
+    /// Called on primary button press (and any compositor toplevel action) to
+    /// implement the xdg-shell rule that clicking outside a popup must send
+    /// `xdg_popup.popup_done` to the owning client.  Pass `clicked_bloom_surface = 0`
+    /// for clicks on empty screen space (no focused surface).
+    fn dismiss_popups_if_outside(&mut self, clicked_bloom_surface: u32) {
+        for client in self.clients.values_mut() {
+            let popup_surfaces = client.popup_bloom_surface_ids();
+            for popup_surface_id in popup_surfaces {
+                if popup_surface_id == clicked_bloom_surface {
+                    // Click landed on this popup — do not dismiss it.
+                    continue;
+                }
+                if let Some(cmds) = client.blossom.dismiss_popup_for_surface(popup_surface_id) {
+                    dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
+                    info!(
+                        "wayland-server: xdg_popup.popup_done surface={} (click outside or chrome action)",
+                        popup_surface_id
+                    );
+                }
+            }
+        }
     }
 
     fn send_pointer_enter(&mut self, surface: u32, x: i32, y: i32, serial: u32) {
