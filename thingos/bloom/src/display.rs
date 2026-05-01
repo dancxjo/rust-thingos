@@ -736,8 +736,8 @@ impl DisplayBackend {
             if !batch.is_full() {
                 let dst_x = cursor.x.max(0) as u32;
                 let dst_y = cursor.y.max(0) as u32;
-                let src_x = if cursor.x < 0 { cursor.x.saturating_neg() as u32 } else { 0 };
-                let src_y = if cursor.y < 0 { cursor.y.saturating_neg() as u32 } else { 0 };
+                let src_x = if cursor.x < 0 { cursor.x.unsigned_abs() } else { 0 };
+                let src_y = if cursor.y < 0 { cursor.y.unsigned_abs() } else { 0 };
                 let visible_w =
                     cursor.width.saturating_sub(src_x).min(out_w.saturating_sub(dst_x));
                 let visible_h =
