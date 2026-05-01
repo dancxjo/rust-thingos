@@ -400,6 +400,8 @@ impl Scene {
         if surface.client_id != client_id {
             return false;
         }
+        // Reset the clear flag first so that setting a new rect never leaves
+        // the two fields in a contradictory state (clear=true, rect=Some).
         surface.pending.clear_opaque_region = false;
         surface.pending.opaque_region = Some(rect);
         true

@@ -1114,6 +1114,19 @@ fn dispatch_region(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Ve
 /// for the V1 single-rect approximation used by the compositor culling pass).
 ///
 /// Returns `None` when the region contains no valid add operations.
+///
+/// # Coordinate clamping
+///
+/// Wayland permits negative surface-local coordinates in `wl_region.add`
+/// (e.g. to extend an opaque area into an off-screen margin).  Because the
+/// scene and compositor work in non-negative pixel space, the origin of the
+/// returned rect is clamped to `(0, 0)`.  This is conservative: the reported
+/// opaque rectangle may be *smaller* than the actual opaque area declared by
+/// the client, but it is never *larger*, which preserves correctness.
+///
+/// Example: an add rect `(-10, 0, 100, 50)` covers screen columns 0..90 once
+/// the negative left margin is clipped, so the returned rect is
+/// `(0, 0, 90, 50)`.
 fn region_bounding_rect(rects: &[(i32, i32, i32, i32, bool)]) -> Option<(u32, u32, u32, u32)> {
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
@@ -1384,7 +1397,11 @@ fn handle_surface_commit(
     // and emit WCMD_SET_OPAQUE_REGION so the main thread applies it atomically
     // with the buffer commit.  A null region_id (0) clears the opaque region.
     {
-        let opaque_ipc_rect: Option<(u32, u32, u32, u32)> = match pending_opaque_region {
+        // The resolved bounding rect (in surface-local coords, clamped to
+        // non-negative).  `None` means either "no pending change" (when
+        // `pending_opaque_region` is `None`) or "explicit clear" (when the
+        // client passed a null wl_region ID or the region has no add ops).
+        let resolved_opaque_rect: Option<(u32, u32, u32, u32)> = match pending_opaque_region {
             None => {
                 // No pending change from the client; nothing to send.
                 // (Skip emitting the IPC message entirely so that a prior
@@ -1414,10 +1431,10 @@ fn handle_surface_commit(
             blossom_debug!(
                 "wayland-server: wl_surface obj={} commit opaque_region={:?}",
                 wl_surface_obj,
-                opaque_ipc_rect
+                resolved_opaque_rect
             );
             out.push(
-                ipc::encode_set_opaque_region(bloom_surface_id, opaque_ipc_rect).to_vec(),
+                ipc::encode_set_opaque_region(bloom_surface_id, resolved_opaque_rect).to_vec(),
             );
         }
     }

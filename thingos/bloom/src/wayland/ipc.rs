@@ -211,6 +211,11 @@ pub struct WCmdSetLayerSurface {
 /// is `0` the region is cleared (the surface has no declared opaque area);
 /// when `has_region` is `1` the rect `(x, y, w, h)` describes the opaque
 /// rectangle in surface-local coordinates.
+///
+/// All coordinate fields are `u32`: negative Wayland region coordinates are
+/// clamped to `0` by the Wayland server thread before encoding (see
+/// `region_bounding_rect`).  This is intentionally conservative — the reported
+/// rectangle never exceeds the actual opaque area.
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct WCmdSetOpaqueRegion {
