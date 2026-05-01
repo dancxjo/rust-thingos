@@ -76,10 +76,9 @@ fn push_x86_interactive_display_args<'a>(
     args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,usb=off,vmport=off,i8042=on"]);
 
     if !has_user_display_args(qemu_flags) {
-        // QEMU maps the virtio-gpu cursor queue to the frontend's host cursor.
-        // Keeping it visible while input is grabbed makes the hardware cursor
-        // usable in the default interactive GTK/SDL window.
-        args.extend_from_slice(&["-display", "default,show-cursor=on"]);
+        // Bloom draws/manages the guest cursor. Forcing QEMU's host cursor
+        // visible makes interactive runs show two differently scaled cursors.
+        args.extend_from_slice(&["-display", "default,show-cursor=off"]);
     }
 }
 
