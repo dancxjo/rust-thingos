@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -82,11 +83,22 @@ async fn run_session(
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let log_path = config.log_dir.join(format!("rust_run_{session_id:04}_{timestamp}.log"));
     eprintln!("[hunter] session {session_id:04} booting; log={}", log_path.display());
+    let mut log_file = OpenOptions::new().create(true).append(true).open(&log_path)?;
+    write_hunter_event(
+        &mut log_file,
+        format_args!(
+            "session={session_id:04} arch={} timeout={:?} loglevel={}",
+            config.arch, config.timeout, config.loglevel
+        ),
+    )?;
 
     let mut world = ThingOsWorld::default();
-    world.boot(&config.arch).await.map_err(|e| e.to_string())?;
+    if let Err(err) = world.boot(&config.arch).await.map_err(|e| e.to_string()) {
+        write_hunter_event(&mut log_file, format_args!("boot failed: {err}"))?;
+        return Err(err.into());
+    }
 
-    let mut last_len = world.get_serial_log().await.len();
+    let mut last_len = 0usize;
     let mut last_output = Instant::now();
     let mut next_action = Instant::now() + Duration::from_secs(2);
 
@@ -94,37 +106,61 @@ async fn run_session(
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let log = world.get_serial_log().await;
-        if log.len() != last_len {
-            last_len = log.len();
+        if append_serial_delta(&mut log_file, &log, &mut last_len)? {
             last_output = Instant::now();
         }
 
         if last_output.elapsed() > config.timeout {
-            eprintln!(
+            let message = format!(
                 "[hunter] silence detected after {:.1}s in session {session_id:04}",
                 last_output.elapsed().as_secs_f64()
             );
-            fs::write(&log_path, &log)?;
+            eprintln!("{message}");
+            write_hunter_event(&mut log_file, format_args!("{message}"))?;
             capture_freeze_artifacts(&mut world, config, session_id).await;
             world.shutdown().await;
             return Ok(());
         }
 
         if Instant::now() >= next_action {
+            write_hunter_event(&mut log_file, format_args!("running random action"))?;
             if let Err(err) = run_random_action(&mut world, rng).await {
                 eprintln!("[hunter] action failed: {err}");
+                write_hunter_event(&mut log_file, format_args!("action failed: {err}"))?;
             }
+            let log = world.get_serial_log().await;
+            append_serial_delta(&mut log_file, &log, &mut last_len)?;
             let jitter = rng.gen_range(0..=config.action_interval.as_millis().max(1) as u64);
             next_action = Instant::now() + config.action_interval + Duration::from_millis(jitter);
         }
 
         if world.qemu.as_mut().is_some_and(|child| child.try_wait().ok().flatten().is_some()) {
             let log = world.get_serial_log().await;
-            fs::write(&log_path, &log)?;
+            append_serial_delta(&mut log_file, &log, &mut last_len)?;
+            write_hunter_event(&mut log_file, format_args!("qemu exited"))?;
             world.shutdown().await;
             return Ok(());
         }
     }
+}
+
+fn append_serial_delta(file: &mut File, log: &str, cursor: &mut usize) -> std::io::Result<bool> {
+    if *cursor > log.len() {
+        *cursor = 0;
+    }
+    if *cursor == log.len() {
+        return Ok(false);
+    }
+
+    file.write_all(&log.as_bytes()[*cursor..])?;
+    file.flush()?;
+    *cursor = log.len();
+    Ok(true)
+}
+
+fn write_hunter_event(file: &mut File, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+    writeln!(file, "\n[hunter] {args}")?;
+    file.flush()
 }
 
 async fn capture_freeze_artifacts(
