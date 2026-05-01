@@ -1011,7 +1011,15 @@ fn mark_surface_visual_damage(
 fn mark_cursor_rect(damage: &mut DamageTracker, x: i32, y: i32) {
     let x = x.saturating_sub(CURSOR_HOTSPOT_X).max(0) as u32;
     let y = y.saturating_sub(CURSOR_HOTSPOT_Y).max(0) as u32;
-    damage.mark_rect(abi::display_protocol::Rect { x, y, w: CURSOR_DAMAGE_W, h: CURSOR_DAMAGE_H });
+    // Route cursor damage through the dedicated cursor pool so that pointer
+    // motion does not inflate window/app damage or contribute to the
+    // full-output fallback threshold.
+    damage.mark_cursor_rect(abi::display_protocol::Rect {
+        x,
+        y,
+        w: CURSOR_DAMAGE_W,
+        h: CURSOR_DAMAGE_H,
+    });
 }
 
 fn resized_rect(
