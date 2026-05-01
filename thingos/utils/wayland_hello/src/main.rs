@@ -116,6 +116,16 @@ fn main(_arg: usize) -> ! {
     region_destroy(fd, REGION_ID);
     info!("wayland_hello: wl_region smoke test: create+add+set_opaque+destroy");
 
+    // input_region smoke test: verify set_input_region lifecycle.
+    // Creates a region, adds a sub-rect, sets it as the input region, then
+    // destroys the region object.  The compositor resolves the region at
+    // commit time and applies it to pointer hit-testing.
+    create_region(fd, COMPOSITOR_ID, REGION_ID);
+    region_add(fd, REGION_ID, 0, 0, 480, 320);
+    set_input_region(fd, TOP_SURFACE_ID, REGION_ID);
+    region_destroy(fd, REGION_ID);
+    info!("wayland_hello: wl_region smoke test: create+add+set_input+destroy");
+
     get_xdg_surface(fd, WM_BASE_ID, TOP_XDG_SURFACE_ID, TOP_SURFACE_ID);
     get_toplevel(fd, TOP_XDG_SURFACE_ID, TOPLEVEL_ID);
     set_toplevel_title(fd, TOPLEVEL_ID, "Thing-OS Wayland Lab");
@@ -977,6 +987,15 @@ fn region_add(fd: u32, region_id: u32, x: i32, y: i32, width: i32, height: i32) 
 fn set_opaque_region(fd: u32, surface_id: u32, region_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 4, 12, &mut buf);
+    buf.extend_from_slice(&region_id.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
+/// Send `wl_surface.set_input_region(region_id)` — opcode 5.
+/// Pass `region_id = 0` to clear (null region, entire surface receives input).
+fn set_input_region(fd: u32, surface_id: u32, region_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(surface_id, 5, 12, &mut buf);
     buf.extend_from_slice(&region_id.to_ne_bytes());
     send_request(fd, &buf);
 }

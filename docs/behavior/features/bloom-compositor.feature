@@ -413,3 +413,16 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
     And the serial output should contain "wayland-server: wl_surface obj=" within 60s
     And the serial output should contain "commit opaque_region=Some(" within 60s
+
+  Scenario: wl_surface.set_input_region is committed to the scene
+    # Verifies that the input region set by a Wayland client via
+    # wl_surface.set_input_region is resolved from the wl_region object and
+    # propagated to the compositor's scene at commit time so that pointer
+    # hit-testing respects the declared input area.  bloom logs a debug message
+    # including the resolved bounding rect when the IPC command is emitted.
+    # wayland_hello exercises the full lifecycle: create_region → add →
+    # set_input_region → destroy → commit.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wayland_hello: wl_region smoke test: create+add+set_input+destroy" within 60s
+    And the serial output should contain "commit input_region=Some(" within 60s

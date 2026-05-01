@@ -68,6 +68,7 @@ impl WaylandCommandService {
             ipc::WCMD_SET_SUBSURFACE => self.handle_set_subsurface(data, world),
             ipc::WCMD_SET_LAYER_SURFACE => self.handle_set_layer_surface(data, world),
             ipc::WCMD_SET_OPAQUE_REGION => self.handle_set_opaque_region(data, world),
+            ipc::WCMD_SET_INPUT_REGION => self.handle_set_input_region(data, world),
             other => {
                 warn!("wayland-cmd: unknown command type {}", other);
                 false
@@ -450,6 +451,37 @@ impl WaylandCommandService {
         // when the associated WCMD_COMMIT arrives.
         false
     }
+
+    /// Apply a `WCMD_SET_INPUT_REGION` from the Wayland thread.
+    ///
+    /// Updates the pending input region for the surface so that the next
+    /// `WCMD_COMMIT` will apply it atomically via [`Scene::commit_surface`].
+    /// When `has_region == 0` the region is cleared (entire surface receives
+    /// input); when `has_region == 1` the rect `(x, y, w, h)` is stored as the
+    /// new pending input region used for pointer hit-testing.
+    fn handle_set_input_region(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
+        if data.len() < 24 {
+            return false;
+        }
+        let has_region = data[1] != 0;
+        let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        if has_region {
+            let x = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+            let y = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+            let w = u32::from_ne_bytes(data[16..20].try_into().unwrap_or([0; 4]));
+            let h = u32::from_ne_bytes(data[20..24].try_into().unwrap_or([0; 4]));
+            world.scene.set_pending_input_region(
+                self.wayland_client_id,
+                bloom_surface_id,
+                abi::display_protocol::Rect { x, y, w, h },
+            );
+        } else {
+            world.scene.clear_pending_input_region(self.wayland_client_id, bloom_surface_id);
+        }
+        // Input-region changes alone don't require a repaint — that happens
+        // when the associated WCMD_COMMIT arrives.
+        false
+    }
 }
 
 impl BloomService for WaylandCommandService {
@@ -510,6 +542,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_SET_SUBSURFACE => 24,
         ipc::WCMD_SET_LAYER_SURFACE => 44,
         ipc::WCMD_SET_OPAQUE_REGION => 24,
+        ipc::WCMD_SET_INPUT_REGION => 24,
         _ => 1,
     };
     Some(len)
