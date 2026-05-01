@@ -167,9 +167,13 @@ impl BloomWorld {
                 );
                 match old_pending {
                     Some(Some(old_id)) => {
-                        // Only release if the pending slot held a different
-                        // buffer; when caching returns the same buffer_id for
-                        // the same handle there is nothing to release.
+                        // The pending slot previously held `old_id`.  When the
+                        // resource cache returns the *same* buffer_id for the
+                        // same handle (cache hit), `old_id == buffer_id` and
+                        // there is nothing to release — the buffer is simply
+                        // being re-attached without content change.  Only
+                        // release when they differ (e.g. the client replaced
+                        // one buffer with a different one before committing).
                         if old_id != buffer_id {
                             self.cache.release_client_buffer(&self.display, old_id);
                         }
@@ -177,6 +181,7 @@ impl BloomWorld {
                         true
                     }
                     Some(None) => {
+                        // No previously pending buffer; nothing to release.
                         send_ack(req.reply_port, 0, buffer_id, 0);
                         true
                     }

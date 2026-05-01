@@ -79,14 +79,15 @@ pub struct ResourceCache {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ClientBufferKey {
+    /// 8-byte field first to avoid padding before the u32 fields.
+    modifier: u64,
     handle: u32,
-    /// Stored as the `PixelFormat` discriminant directly; `PixelFormat` is
-    /// `#[repr(u8)]` and derives `Ord`, so it is safe to use as a BTreeMap key.
-    format: PixelFormat,
     width: u32,
     height: u32,
     stride: u32,
-    modifier: u64,
+    /// `PixelFormat` is `#[repr(u8)]` and derives `Ord`, so it is safe to use
+    /// as a BTreeMap key.
+    format: PixelFormat,
 }
 
 // ── implementation ───────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ impl ResourceCache {
         offset: u64,
         modifier: u64,
     ) -> Option<u32> {
-        let key = ClientBufferKey { handle, format, width, height, stride, modifier };
+        let key = ClientBufferKey { modifier, handle, width, height, stride, format };
 
         if let Some(&buffer_id) = self.client_buffers.get(&key) {
             self.counters.hits += 1;
