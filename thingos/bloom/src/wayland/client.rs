@@ -219,9 +219,22 @@ pub struct WaylandClient {
     /// Cleared by the server after broadcasting.
     pub pending_clipboard_set: Option<(u32, Vec<String>)>,
     /// Set by `wl_data_offer.receive` during message processing.
-    /// Contains `(mime_type, write_fd)` to be forwarded to the clipboard owner.
+    /// Contains `(offer_obj, mime_type, write_fd)` to be forwarded to the
+    /// clipboard or DnD source owner.  The `offer_obj` lets the server decide
+    /// whether to route to the clipboard source or the drag-and-drop source.
     /// Cleared by the server after forwarding.
-    pub pending_offer_receive: Option<(String, u32)>,
+    pub pending_offer_receive: Option<(u32, String, u32)>,
+    /// Set by `wl_data_device.start_drag` during message processing.
+    /// Contains `(source_obj, origin_wl_surface, icon_wl_surface, serial)`.
+    /// Cleared by the server after initiating the drag.
+    pub pending_start_drag: Option<(u32, u32, u32, u32)>,
+    /// Set by `wl_data_offer.finish` to signal that the drop was accepted.
+    /// Cleared by the server after forwarding `dnd_finished` to the source.
+    pub pending_dnd_finish: bool,
+    /// Set by `wl_data_offer.accept` to signal the accepted MIME type.
+    /// `Some(mime)` where `mime` is empty means null/reject.
+    /// Cleared by the server after forwarding `target` to the source.
+    pub pending_dnd_accept: Option<String>,
 }
 
 impl WaylandClient {
@@ -244,6 +257,9 @@ impl WaylandClient {
             data_device_obj: None,
             pending_clipboard_set: None,
             pending_offer_receive: None,
+            pending_start_drag: None,
+            pending_dnd_finish: false,
+            pending_dnd_accept: None,
         }
     }
 
