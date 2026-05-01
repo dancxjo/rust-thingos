@@ -34,6 +34,10 @@ const SERIAL_TICK_INTERVAL_NS: u64 = 37_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
 const CLOCK_PRIORITY_LOW: usize = 1;
 const IDLE_SLEEP_MS: u64 = 250;
+const CLOCK_GOLD: u32 = 0xFFFFB900;
+const CLOCK_GOLD_GHOST: u32 = 0x12FFB900;
+const CLOCK_GOLD_GLOW: u32 = 0x30FFB900;
+const CLOCK_GREEN: u32 = 0xFF06D6A0;
 
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 
@@ -351,11 +355,14 @@ fn render_clock(
             text_y,
             px_size,
             "88:88",
-            0x12CCAA00,
+            CLOCK_GOLD_GHOST,
         );
-        for (dx, dy, color) in
-            [(-1, 0, 0x30CCAA00), (1, 0, 0x30CCAA00), (0, -1, 0x30CCAA00), (0, 1, 0x30CCAA00)]
-        {
+        for (dx, dy, color) in [
+            (-1, 0, CLOCK_GOLD_GLOW),
+            (1, 0, CLOCK_GOLD_GLOW),
+            (0, -1, CLOCK_GOLD_GLOW),
+            (0, 1, CLOCK_GOLD_GLOW),
+        ] {
             draw_dseg7_text(
                 text_renderer,
                 pixels,
@@ -377,7 +384,7 @@ fn render_clock(
             text_y,
             px_size,
             time_text,
-            0xFFCCAA00,
+            CLOCK_GOLD,
         );
 
         let am_pm_x = text_x + estimated_w + 12;
@@ -390,11 +397,11 @@ fn render_clock(
             text_y,
             20.0,
             am_pm,
-            0xFF859900,
+            CLOCK_GREEN,
         );
 
         let dot_y = body_top + 9;
-        fill_rect(pixels, buffer.width, buffer.height, 22, dot_y, 4, 4, 0xFFCCAA00);
+        fill_rect(pixels, buffer.width, buffer.height, 22, dot_y, 4, 4, CLOCK_GOLD);
         fill_rect(
             pixels,
             buffer.width,
@@ -403,7 +410,7 @@ fn render_clock(
             dot_y,
             4,
             4,
-            0xFFCCAA00,
+            CLOCK_GOLD,
         );
         draw_dseg7_text(
             text_renderer,
