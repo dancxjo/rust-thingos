@@ -1202,6 +1202,12 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             crate::device_registry::CMOS_IOPORT_RANGES,
             0x70, // Port base as unique-ish ID
         ));
+        // HW RNG (Dummy device to trigger cambium driver launch)
+        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+            "dev.rng.HwRng",
+            &[],
+            0x00,
+        ));
         // PS/2 keyboard and mouse share the i8042 controller ports, but userspace
         // binds them as separate input drivers so Cambium can launch both.
         reg.register(crate::device_registry::DeviceEntry::new_legacy(
