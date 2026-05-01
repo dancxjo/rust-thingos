@@ -795,6 +795,48 @@ impl Blossom {
         ])
     }
 
+    /// Emit configure events for all toplevels that should react to a display
+    /// resize (e.g. maximized or fullscreen windows).
+    pub fn generate_resize_configures(
+        &mut self,
+        new_width: i32,
+        new_height: i32,
+    ) -> Vec<BlossomCommand> {
+        let mut cmds = Vec::new();
+        for (&tid, tl) in &self.toplevels {
+            if tl.requested.maximized || tl.requested.fullscreen {
+                let mut states = Vec::new();
+                if tl.requested.maximized {
+                    states.push(XdgToplevelStateAtom::Maximized);
+                }
+                if tl.requested.fullscreen {
+                    states.push(XdgToplevelStateAtom::Fullscreen);
+                }
+
+                // Find the xdg_surface wrapping this toplevel.
+                let entry =
+                    self.surfaces.iter_mut().find(|(_, s)| s.role == Some(XdgRole::Toplevel(tid)));
+                if let Some((&xs_id, xs)) = entry {
+                    let serial = self.serial.next();
+                    xs.pending_configures.push_back(serial);
+                    cmds.push(BlossomCommand::SendXdgToplevelConfigure {
+                        client: tl.client,
+                        xdg_toplevel: tid,
+                        width: new_width,
+                        height: new_height,
+                        states,
+                    });
+                    cmds.push(BlossomCommand::SendXdgSurfaceConfigure {
+                        client: tl.client,
+                        xdg_surface: xs_id,
+                        serial,
+                    });
+                }
+            }
+        }
+        cmds
+    }
+
     /// Emit compositor-initiated `xdg_toplevel.close` for the toplevel wrapping
     /// `wl_surface`.
     pub fn close_toplevel_for_surface(&self, wl_surface: SurfaceId) -> Option<Vec<BlossomCommand>> {

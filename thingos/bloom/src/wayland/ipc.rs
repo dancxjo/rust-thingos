@@ -54,6 +54,7 @@ pub const WEVT_POINTER_BUTTON: u8 = 8;
 pub const WEVT_KEYBOARD_ENTER: u8 = 9;
 pub const WEVT_KEYBOARD_LEAVE: u8 = 10;
 pub const WEVT_KEYBOARD_KEY: u8 = 11;
+pub const WEVT_OUTPUT_INFO: u8 = 12;
 
 pub const TOPLEVEL_ACTION_CLOSE: u8 = 1;
 pub const TOPLEVEL_ACTION_MINIMIZE: u8 = 2;
@@ -618,5 +619,18 @@ pub fn encode_keyboard_key(
     };
     let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WEvtKeyboardKey));
+    out
+}
+
+pub fn encode_output_info(width: u32, height: u32, refresh_mhz: u32) -> [u8; 16] {
+    let msg = WEvtOutputInfo {
+        msg_type: WEVT_OUTPUT_INFO,
+        _pad: [0; 3],
+        width,
+        height,
+        refresh_mhz,
+    };
+    let mut out = [0u8; 16];
+    out.copy_from_slice(as_bytes!(msg, WEvtOutputInfo));
     out
 }

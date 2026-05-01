@@ -58,6 +58,13 @@ use crate::syscall::validate::{copyin, copyout};
 use crate::vfs::memfd::MemFdNode;
 
 const VFS_RPC_MAX_RESP: usize = VFS_RPC_MAX_DATA + 64;
+const VFS_RPC_TIMEOUT_NS: u64 = 5_000_000_000;
+
+fn rpc_timeout_wake_tick() -> u64 {
+    let now_tick = crate::sched::TICK_COUNT.load(Ordering::Relaxed);
+    let timeout_ticks = crate::time::duration_to_sleep_ticks(VFS_RPC_TIMEOUT_NS);
+    now_tick.saturating_add(timeout_ticks)
+}
 
 // ── ProviderRpc ─────────────────────────────────────────────────────────────
 
@@ -213,8 +220,7 @@ impl ProviderRpc {
         msg.extend_from_slice(payload);
 
         // crate::kinfo!("VFS_RPC: sending request op={:?} id={} to port={:p}", op, req_id, Arc::as_ptr(self.req.port()));
-        let written = self.req.send(&msg);
-        if written < msg.len() {
+        if !self.req.send_all(&msg) {
             crate::ipc::diag::VFS_RPC_ERRORS.fetch_add(1, Ordering::Relaxed);
             return Err(Errno::EIO);
         }
@@ -227,7 +233,8 @@ impl ProviderRpc {
             state.ops.insert(req_id, op);
         };
 
-        let deadline_ns = crate::time::monotonic_now_ns() + 5_000_000_000;
+        let deadline_ns = crate::time::monotonic_now_ns().saturating_add(VFS_RPC_TIMEOUT_NS);
+        let mut timeout_armed = false;
 
         loop {
             // 1. Check if our response is already buffered
@@ -281,12 +288,17 @@ impl ProviderRpc {
             }
             self.try_collect_responses();
             if !self.has_buffered_response(req_id) {
-                crate::sched::register_timeout_wake_current(tid, deadline_ns);
+                crate::sched::register_timeout_wake_current(tid, rpc_timeout_wake_tick());
+                timeout_armed = true;
                 unsafe {
                     crate::sched::block_current_erased();
                 }
             }
             self.resp.remove_waiter(tid);
+            if timeout_armed {
+                crate::sched::unregister_timeout_wake_current(tid);
+                timeout_armed = false;
+            }
 
             if crate::sched::take_pending_interrupt_current() {
                 let mut state = self.state.lock();
@@ -1091,6 +1103,39 @@ mod tests {
             matches!(result, Err(Errno::EIO)),
             "expected EIO when request ring is full, got {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn rpc_request_write_is_all_or_nothing() {
+        let req_port = make_port(16);
+        let resp_port = make_port(256);
+
+        let fill = vec![0xABu8; 12];
+        assert!(req_port.send_all(&fill));
+
+        let ch = ProviderRpc::new(req_port.clone(), resp_port, 99);
+        let result = ch.rpc(VfsRpcOp::Stat, &[0u8; 8]);
+        assert!(matches!(result, Err(Errno::EIO)));
+
+        let mut drain = [0u8; 32];
+        let n = req_port.try_recv(&mut drain);
+        assert_eq!(n, fill.len(), "failed RPC must not leave a partial request frame");
+        assert_eq!(&drain[..n], fill.as_slice());
+    }
+
+    #[test]
+    fn rpc_timeout_wake_uses_scheduler_ticks() {
+        use core::sync::atomic::Ordering;
+
+        crate::sched::TICK_COUNT.store(1234, Ordering::Relaxed);
+        let wake_tick = rpc_timeout_wake_tick();
+        let expected = 1234 + crate::time::duration_to_sleep_ticks(VFS_RPC_TIMEOUT_NS);
+
+        assert_eq!(wake_tick, expected);
+        assert!(
+            wake_tick < 10_000,
+            "RPC timeout wake should be in scheduler ticks, not an absolute nanosecond deadline"
         );
     }
 

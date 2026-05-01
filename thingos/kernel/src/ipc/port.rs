@@ -428,6 +428,10 @@ impl Sender {
         self.inner.send(data)
     }
 
+    pub fn send_all(&self, data: &[u8]) -> bool {
+        self.inner.send_all(data)
+    }
+
     pub fn available(&self) -> usize {
         self.inner.available()
     }

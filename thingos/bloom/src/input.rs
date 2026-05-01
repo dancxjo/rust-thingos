@@ -354,6 +354,14 @@ impl InputState {
                         self.start_chrome_grab(scene, damage, wayland_evt_write)
                     {
                         let new_focus = Some(surface_id);
+                        if scene.raise_to_top(surface_id) {
+                            immediate_repaint = true;
+                            if old_focus == new_focus {
+                                if let Some(rect) = scene.surface_rect(surface_id) {
+                                    mark_surface_visual_damage(scene, damage, surface_id, rect);
+                                }
+                            }
+                        }
                         scene.keyboard_focus = new_focus;
                         mark_focus_damage(scene, damage, old_focus, new_focus);
                         self.send_keyboard_focus_events(
@@ -373,6 +381,16 @@ impl InputState {
                     }
                 }
                 let new_focus = scene.pointer_focus;
+                if let Some(id) = new_focus {
+                    if scene.raise_to_top(id) {
+                        immediate_repaint = true;
+                        if old_focus == new_focus {
+                            if let Some(rect) = scene.surface_rect(id) {
+                                mark_surface_visual_damage(scene, damage, id, rect);
+                            }
+                        }
+                    }
+                }
                 scene.keyboard_focus = new_focus;
                 mark_focus_damage(scene, damage, old_focus, new_focus);
                 self.send_keyboard_focus_events(
@@ -723,6 +741,13 @@ impl InputState {
                     mark_surface_visual_damage(scene, damage, surface_id, resized.new_rect);
                 }
                 let new_focus = Some(surface_id);
+                if scene.raise_to_top(surface_id) {
+                    if old_focus == new_focus {
+                        if let Some(rect) = scene.surface_rect(surface_id) {
+                            mark_surface_visual_damage(scene, damage, surface_id, rect);
+                        }
+                    }
+                }
                 scene.keyboard_focus = new_focus;
                 mark_focus_damage(scene, damage, old_focus, new_focus);
                 self.send_keyboard_focus_events(
@@ -761,6 +786,7 @@ impl InputState {
     ) {
         let old_focus = scene.keyboard_focus;
         let new_focus = Some(surface_id);
+        scene.raise_to_top(surface_id);
         scene.keyboard_focus = new_focus;
         mark_focus_damage(scene, damage, old_focus, new_focus);
         self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);
@@ -787,6 +813,7 @@ impl InputState {
 
         let new_focus = Some(surface_id);
         let old_focus = scene.keyboard_focus;
+        scene.raise_to_top(surface_id);
         scene.keyboard_focus = new_focus;
         mark_focus_damage(scene, damage, old_focus, new_focus);
         self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);
@@ -818,6 +845,7 @@ impl InputState {
 
         let new_focus = Some(surface_id);
         let old_focus = scene.keyboard_focus;
+        scene.raise_to_top(surface_id);
         scene.keyboard_focus = new_focus;
         mark_focus_damage(scene, damage, old_focus, new_focus);
         self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);

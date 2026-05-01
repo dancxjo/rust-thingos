@@ -845,6 +845,22 @@ impl Scene {
             .collect()
     }
 
+    pub fn raise_to_top(&mut self, surface_id: u32) -> bool {
+        let max_z = self.surfaces.values().map(|s| s.current.z_order).max().unwrap_or(0);
+        let surfaces_len = self.surfaces.len();
+
+        if let Some(surface) = self.surfaces.get_mut(&surface_id) {
+            if surface.current.z_order < max_z || (surface.current.z_order == 0 && surfaces_len > 1) {
+                let next_z = max_z.saturating_add(1);
+                surface.current.z_order = next_z;
+                let dest = surface.current.dest_rect;
+                self.propagate_subsurface_layout(surface_id, dest, next_z);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn cycle_focus(&mut self, forward: bool) -> (Option<u32>, Option<u32>) {
         let mut eligible: Vec<u32> = self
             .surfaces
@@ -891,6 +907,8 @@ impl Scene {
                     if let Some(old_s) = self.surfaces.get_mut(&old_id) {
                         min_z = min_z.saturating_sub(1);
                         old_s.current.z_order = min_z;
+                        let dest = old_s.current.dest_rect;
+                        self.propagate_subsurface_layout(old_id, dest, min_z);
                     }
                 }
             }
@@ -898,6 +916,8 @@ impl Scene {
             if let Some(new_s) = self.surfaces.get_mut(&id) {
                 max_z = max_z.max(new_s.current.z_order).saturating_add(1);
                 new_s.current.z_order = max_z;
+                let dest = new_s.current.dest_rect;
+                self.propagate_subsurface_layout(id, dest, max_z);
             }
         }
 
