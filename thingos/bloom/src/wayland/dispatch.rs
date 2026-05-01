@@ -88,8 +88,8 @@ pub fn dispatch(
         ObjKind::Surface => dispatch_surface(msg, client, obj_id, blossom, cmd_write),
         ObjKind::Callback => vec![],
         ObjKind::XdgWmBase => dispatch_xdg_wm_base(msg, client, obj_id, blossom),
-        ObjKind::XdgPositioner => vec![],
-        ObjKind::XdgSurface => dispatch_xdg_surface(msg, client, obj_id, blossom, cmd_write),
+        ObjKind::XdgPositioner => dispatch_xdg_positioner(msg, client, obj_id, blossom),
+        ObjKind::XdgSurface => dispatch_xdg_surface(msg, client, obj_id, blossom, cmd_write, output),
         ObjKind::XdgToplevel => dispatch_xdg_toplevel(msg, client, obj_id, blossom, cmd_write),
         ObjKind::XdgPopup => dispatch_xdg_popup(msg, client, obj_id, blossom),
         ObjKind::Seat => dispatch_seat(msg, client, obj_id),
@@ -1500,8 +1500,8 @@ fn dispatch_xdg_wm_base(
         XDG_WM_BASE_CREATE_POSITIONER => {
             if let Some(new_id) = read_u32(&msg.data, 0) {
                 client.insert(new_id, ObjectEntry::XdgPositioner);
+                blossom.create_positioner(new_id);
             }
-            blossom.create_positioner();
         }
         XDG_WM_BASE_GET_XDG_SURFACE => {
             // get_xdg_surface(new_id, surface)
@@ -1568,6 +1568,70 @@ fn dispatch_xdg_wm_base(
     vec![]
 }
 
+// ── xdg_positioner ────────────────────────────────────────────────────────────
+
+const XDG_POSITIONER_DESTROY: u16 = 0;
+const XDG_POSITIONER_SET_SIZE: u16 = 1;
+const XDG_POSITIONER_SET_ANCHOR_RECT: u16 = 2;
+const XDG_POSITIONER_SET_ANCHOR: u16 = 3;
+const XDG_POSITIONER_SET_GRAVITY: u16 = 4;
+const XDG_POSITIONER_SET_CONSTRAINT_ADJUSTMENT: u16 = 5;
+const XDG_POSITIONER_SET_OFFSET: u16 = 6;
+
+fn dispatch_xdg_positioner(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+    blossom: &mut blossom::Blossom,
+) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        XDG_POSITIONER_DESTROY => {
+            blossom.positioner_destroy(obj_id);
+            client.destroy(obj_id);
+        }
+        XDG_POSITIONER_SET_SIZE => {
+            if let (Some(w), Some(h)) = (read_i32(&msg.data, 0), read_i32(&msg.data, 4)) {
+                blossom.positioner_set_size(obj_id, w, h);
+            }
+        }
+        XDG_POSITIONER_SET_ANCHOR_RECT => {
+            if let (Some(x), Some(y), Some(w), Some(h)) = (
+                read_i32(&msg.data, 0),
+                read_i32(&msg.data, 4),
+                read_i32(&msg.data, 8),
+                read_i32(&msg.data, 12),
+            ) {
+                blossom.positioner_set_anchor_rect(obj_id, x, y, w, h);
+            }
+        }
+        XDG_POSITIONER_SET_ANCHOR => {
+            if let Some(anchor) = read_u32(&msg.data, 0) {
+                blossom.positioner_set_anchor(obj_id, anchor);
+            }
+        }
+        XDG_POSITIONER_SET_GRAVITY => {
+            if let Some(gravity) = read_u32(&msg.data, 0) {
+                blossom.positioner_set_gravity(obj_id, gravity);
+            }
+        }
+        XDG_POSITIONER_SET_CONSTRAINT_ADJUSTMENT => {
+            if let Some(adj) = read_u32(&msg.data, 0) {
+                blossom.positioner_set_constraint_adjustment(obj_id, adj);
+            }
+        }
+        XDG_POSITIONER_SET_OFFSET => {
+            if let (Some(x), Some(y)) = (read_i32(&msg.data, 0), read_i32(&msg.data, 4)) {
+                blossom.positioner_set_offset(obj_id, x, y);
+            }
+        }
+        _ => {
+            // set_reactive (7), set_parent_size (8), set_parent_configure (9)
+            // are accepted as no-ops.
+        }
+    }
+    vec![]
+}
+
 // ── xdg_surface ───────────────────────────────────────────────────────────────
 
 const XDG_SURFACE_DESTROY: u16 = 0;
@@ -1582,6 +1646,7 @@ fn dispatch_xdg_surface(
     obj_id: u32,
     blossom: &mut blossom::Blossom,
     cmd_write: u32,
+    output: &crate::display::OutputInfo,
 ) -> Vec<Vec<u8>> {
     let _bloom_surface_id = match client.objects.get(&obj_id) {
         Some(ObjectEntry::XdgSurface { bloom_surface_id }) => *bloom_surface_id,
@@ -1632,7 +1697,7 @@ fn dispatch_xdg_surface(
                 Some(id) => id,
                 None => return vec![],
             };
-            match blossom.get_popup(client_id, obj_id, new_id, parent, positioner) {
+            match blossom.get_popup(client_id, obj_id, new_id, parent, positioner, Some((output.width as i32, output.height as i32))) {
                 Ok(cmds) => {
                     stem::info!(
                         "wayland-server: xdg_popup obj={} assigned to xdg_surface={}",
