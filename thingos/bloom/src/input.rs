@@ -292,7 +292,12 @@ impl InputState {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
                 p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
                 let btn = PointerButtonPayload::from_bytes(&p);
-                stem::info!("bloom: PointerButtonDown at {},{} button={}", self.pointer_x, self.pointer_y, btn.button);
+                stem::info!(
+                    "bloom: PointerButtonDown at {},{} button={}",
+                    self.pointer_x,
+                    self.pointer_y,
+                    btn.button
+                );
                 // Flush any pending coalesced motion so clients see the latest
                 // position before the button event (preserves ordering).
                 // flush_pointer_motion calls update_pointer_focus internally

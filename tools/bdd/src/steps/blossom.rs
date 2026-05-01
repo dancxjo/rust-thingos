@@ -798,36 +798,6 @@ async fn active_window_chrome_should_be_rendered_with_flat_thick_borders(
     )))
 }
 
-fn first_chrome_pixel_on_row(
-    img: &image::RgbImage,
-    y: u32,
-    x_start: u32,
-    x_end: u32,
-) -> Option<u32> {
-    for x in x_start..x_end {
-        if is_window_chrome_pixel(img.get_pixel(x, y).0) {
-            return Some(x);
-        }
-    }
-    None
-}
-
-fn last_chrome_pixel_on_row(
-    img: &image::RgbImage,
-    y: u32,
-    x_start: u32,
-    x_end: u32,
-) -> Option<u32> {
-    let mut x = x_end;
-    while x > x_start {
-        x -= 1;
-        if is_window_chrome_pixel(img.get_pixel(x, y).0) {
-            return Some(x);
-        }
-    }
-    None
-}
-
 #[when("I drag the Wayland hello title bar")]
 async fn drag_wayland_hello_title_bar(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
@@ -886,16 +856,6 @@ async fn compositor_moves_toplevel_window(world: &mut ThingOsWorld) -> Result<()
     }
     if !world.wait_for_serial("bloom: window drag ended", 30.0).await {
         return Err(StepError("Bloom did not end the title-bar drag".to_string()));
-    }
-    Ok(())
-}
-
-#[then("the compositor should damage the moved toplevel shadow")]
-async fn compositor_damages_moved_toplevel_shadow(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
-    if !world.wait_for_serial("bloom: window drag damaged shadow", 30.0).await {
-        return Err(StepError("Bloom did not damage the dragged window shadow".to_string()));
     }
     Ok(())
 }

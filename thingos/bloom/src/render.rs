@@ -848,7 +848,7 @@ fn draw_chrome_overlay(
                 );
             }
         }
-        draw_flat_window_border(dst, stride, height, rect, frame, border_color);
+        draw_flat_window_border(dst, stride, rect, frame, border_color);
         if titlebar_height > 0 && titlebar_height < h.saturating_sub(frame) {
             let sep_y = y.saturating_add(titlebar_height as i32);
             let rule =
@@ -921,7 +921,6 @@ fn title_prefix(title: &str, max_chars: usize) -> &str {
 fn draw_flat_window_border(
     dst: &mut [u32],
     stride: u32,
-    height: u32,
     rect: abi::display_protocol::Rect,
     frame: u32,
     color: u32,
@@ -998,7 +997,7 @@ fn draw_chrome_button(
         return;
     }
 
-    draw_chrome_button_well(dst, stride, height, rect, theme);
+    draw_chrome_button_well(dst, stride, rect, theme);
 
     let color = if matches!(button, ChromeButton::Close) { close_icon } else { icon_color };
     if draw_chrome_button_lucide(
@@ -1030,7 +1029,6 @@ fn draw_chrome_button(
 fn draw_chrome_button_well(
     dst: &mut [u32],
     stride: u32,
-    height: u32,
     rect: abi::display_protocol::Rect,
     theme: UiTheme,
 ) {
@@ -1270,35 +1268,6 @@ fn plot_thick_pixel(
     );
 }
 
-fn blend_argb(base: u32, overlay: u32) -> u32 {
-    let sa = (overlay >> 24) & 0xFF;
-    if sa == 0 {
-        return base;
-    }
-    if sa == 255 {
-        return overlay;
-    }
-
-    let da = (base >> 24) & 0xFF;
-    let inv_sa = 255 - sa;
-    let out_a = sa + (da * inv_sa + 127) / 255;
-    if out_a == 0 {
-        return 0;
-    }
-
-    let sr = (overlay >> 16) & 0xFF;
-    let sg = (overlay >> 8) & 0xFF;
-    let sb = overlay & 0xFF;
-    let dr = (base >> 16) & 0xFF;
-    let dg = (base >> 8) & 0xFF;
-    let db = base & 0xFF;
-
-    let r = (sr * sa + (dr * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
-    let g = (sg * sa + (dg * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
-    let b = (sb * sa + (db * da * inv_sa + 127) / 255 + out_a / 2) / out_a;
-    (out_a << 24) | (r.min(255) << 16) | (g.min(255) << 8) | b.min(255)
-}
-
 fn draw_pointer_overlay(
     dst: &mut [u32],
     width: u32,
@@ -1414,42 +1383,6 @@ fn blit_nontransparent(
                 continue;
             }
             dst[(dy as u32 * dst_stride + dx as u32) as usize] = src_px;
-        }
-    }
-}
-
-fn blit_argb_over(
-    dst: &mut [u32],
-    dst_stride: u32,
-    dst_height: u32,
-    src: &[u32],
-    src_width: u32,
-    src_height: u32,
-    src_stride: u32,
-    dst_x: i32,
-    dst_y: i32,
-) {
-    if dst_stride == 0 || src_stride < src_width {
-        return;
-    }
-
-    for sy in 0..src_height {
-        let dy = dst_y + sy as i32;
-        if dy < 0 || dy >= dst_height as i32 {
-            continue;
-        }
-        for sx in 0..src_width {
-            let dx = dst_x + sx as i32;
-            if dx < 0 || dx >= dst_stride as i32 {
-                continue;
-            }
-
-            let src_px = src[(sy * src_stride + sx) as usize];
-            if src_px >> 24 == 0 {
-                continue;
-            }
-            let dst_idx = (dy as u32 * dst_stride + dx as u32) as usize;
-            dst[dst_idx] = blend_argb(dst[dst_idx], src_px);
         }
     }
 }

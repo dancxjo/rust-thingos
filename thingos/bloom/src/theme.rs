@@ -26,14 +26,8 @@ pub struct WindowStateTheme {
 
 pub const SOLARIZED_WARM: UiTheme = UiTheme {
     name: DEFAULT_THEME_NAME,
-    active: WindowStateTheme {
-        border: 0xFFB8A060,
-        title_top: 0xFFD6C07A,
-    },
-    inactive: WindowStateTheme {
-        border: 0xFFB8A060,
-        title_top: 0xFFD6C07A,
-    },
+    active: WindowStateTheme { border: 0xFFB8A060, title_top: 0xFFD6C07A },
+    inactive: WindowStateTheme { border: 0xFFB8A060, title_top: 0xFFD6C07A },
     titlebar_height: 30,
     corner_radius: 0,
     chrome_text: 0xFF3B2A0A,
