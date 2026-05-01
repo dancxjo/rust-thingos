@@ -1531,14 +1531,17 @@ mod tests {
         let cmds = make_popup(&mut b);
 
         assert_eq!(cmds.len(), 2, "get_popup must emit popup + surface configure commands");
-        // The anchor is BOTTOM of the anchor_rect (24, 24+24=48 center x=74),
-        // gravity BOTTOM → popup top at anchor_y, plus offset 6.
-        // anchor_rect center_x = 24 + 100/2 = 74; anchor_y = 24 + 24 = 48
-        // gravity BOTTOM: popup_x = 74 - 160/2 = -6; popup_y = 48; offset_y = 6 → y=54
+        // Anchor is BOTTOM of the anchor_rect (x=24, y=24, w=100, h=24):
+        //   anchor_x = 24 + 100/2 = 74; anchor_y = 24 + 24 = 48
+        // Gravity BOTTOM → popup top at anchor_y; horizontally centered:
+        //   popup_x = 74 - 160/2 = -6; popup_y = 48
+        // Offset (0, 6) → x = -6, y = 54
         assert!(matches!(
             cmds[0],
             BlossomCommand::SendXdgPopupConfigure {
                 xdg_popup: POPUP,
+                x: -6,
+                y: 54,
                 width: 160,
                 height: 96,
                 ..
@@ -1734,11 +1737,17 @@ mod tests {
             constraint_adjustment: positioner_constraint::FLIP_X,
             ..PositionerState::default()
         };
-        // Original: x=700, x+200=900 > 800.
-        // Flipped: anchor TOP_LEFT, gravity BOTTOM_LEFT → x = 700 - 200 = 500. fits.
-        let (x, _y, w, _h) = compute_popup_placement(&pos, 800, 600);
-        assert_eq!(x, 500);
-        assert_eq!(w, 200);
+        // Original (no flip): anchor TOP_RIGHT on (700,0,0,0) → (700,0),
+        //   gravity BOTTOM_RIGHT → popup at (700, 0). x+w = 900 > output_w=800 (100px overflow).
+        // Flipped: anchor TOP_LEFT, gravity BOTTOM_LEFT →
+        //   anchor_point = (700, 0), popup right edge at anchor → x = 700-200=500.
+        //   x+w = 700 ≤ 800 → no overflow.  Flip accepted.
+        let (x, y, w, h) = compute_popup_placement(&pos, 800, 600);
+        assert_eq!(x, 500, "flip moved popup left of anchor so it fits in output");
+        assert_eq!(w, 200, "width unchanged after flip");
+        assert!(x + w <= 800, "popup must not overflow the right edge");
+        assert!(x >= 0, "popup must not overflow the left edge");
+        let _ = (y, h);
     }
 
     #[test]
