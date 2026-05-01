@@ -59,7 +59,6 @@ pub const TOPLEVEL_ACTION_CLOSE: u8 = 1;
 pub const TOPLEVEL_ACTION_MINIMIZE: u8 = 2;
 pub const TOPLEVEL_ACTION_MAXIMIZE: u8 = 3;
 pub const TOPLEVEL_ACTION_FULLSCREEN: u8 = 4;
-pub const TOPLEVEL_ACTION_CLOSE_POPUP: u8 = 5;
 
 // ── Message structs (repr C, fixed size) ─────────────────────────────────────
 

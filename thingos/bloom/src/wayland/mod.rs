@@ -723,17 +723,19 @@ impl WaylandServer {
     /// for clicks on empty screen space (no focused surface).
     fn dismiss_popups_if_outside(&mut self, clicked_bloom_surface: u32) {
         for client in self.clients.values_mut() {
-            let popup_surfaces = client.popup_bloom_surface_ids();
-            for popup_surface_id in popup_surfaces {
-                if popup_surface_id == clicked_bloom_surface {
+            let popup_bloom_surface_ids = client.popup_bloom_surface_ids();
+            for popup_bloom_surface_id in popup_bloom_surface_ids {
+                if popup_bloom_surface_id == clicked_bloom_surface {
                     // Click landed on this popup — do not dismiss it.
                     continue;
                 }
-                if let Some(cmds) = client.blossom.dismiss_popup_for_surface(popup_surface_id) {
+                if let Some(cmds) =
+                    client.blossom.dismiss_popup_for_surface(popup_bloom_surface_id)
+                {
                     dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
                     info!(
                         "wayland-server: xdg_popup.popup_done surface={} (click outside or chrome action)",
-                        popup_surface_id
+                        popup_bloom_surface_id
                     );
                 }
             }
