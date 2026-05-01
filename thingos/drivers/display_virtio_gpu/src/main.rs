@@ -782,9 +782,12 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     && damage_rects[0].h >= driver.disp_height;
                 // Conservative buffer selection: for full-damage commits advance
                 // to the next slot in the pool, preferring a buffer that is not
-                // currently being scanned out.  With a single-buffer pool the
-                // loop always falls through to `start` (index 0), which is safe
-                // because `transfer_to_host` and `flush_resource` are synchronous.
+                // currently being scanned out.  The loop exits early as soon as
+                // a suitable candidate is found; if no such candidate exists
+                // (e.g. single-buffer pool where every slot is the last-presented
+                // one) `chosen` stays at `start`, which is always safe because
+                // `transfer_to_host` and `flush_resource` are synchronous — the
+                // GPU has finished reading the resource before those calls return.
                 let idx = if full_damage {
                     let pool_len = driver.frame_pool.len();
                     let start = driver.next_buffer_idx;
@@ -798,6 +801,8 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                             chosen = candidate;
                             break;
                         }
+                        // If all candidates are the last-presented slot (single-
+                        // buffer pool), `chosen` remains `start` after the loop.
                     }
                     driver.next_buffer_idx = (chosen + 1) % pool_len;
                     chosen
@@ -859,18 +864,19 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     let target_ptr = driver.frame_pool[idx].ptr;
                     let target_size = driver.frame_pool[idx].size;
                     let clip_radius = plane.rounded_clip_radius().map(u32::from).unwrap_or(0);
-                    // Determine composition path:
+                    // Determine composition path using `plane_can_use_gpu_path()`:
                     // GPU fast-copy path: fully opaque, no alpha channel, no
                     // rounded clipping → plain memcpy into the frame-pool buffer
                     // which is then uploaded to the GPU via TRANSFER_TO_HOST_2D.
                     // CPU fallback path: anything requiring per-pixel alpha
                     // arithmetic or rounded-rectangle masking.
                     //
-                    // The counters below are incremented once per *plane*, not
-                    // once per dirty rectangle.  A single plane may be rendered
-                    // into multiple intersecting dirty rects in the damage list,
-                    // but the composition path is decided once for the plane and
-                    // applied consistently across all of its dirty regions.
+                    // The counters below are incremented once per *plane* per
+                    // commit.  They are cumulative across the driver's lifetime
+                    // (not reset between frames), so they track how many plane
+                    // instances in total have taken each path.  A plane in the
+                    // commit list is counted once regardless of how many dirty
+                    // rectangles overlap it.
                     let use_gpu_path = plane_can_use_gpu_path(plane, src);
                     let should_blend = !use_gpu_path;
                     if use_gpu_path {
