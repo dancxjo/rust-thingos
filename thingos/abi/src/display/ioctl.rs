@@ -36,3 +36,15 @@ pub const DISPLAY_OP_SET_CURSOR: u32 = 6;
 /// paint the cursor image.
 /// Input: MoveCursorRequest
 pub const DISPLAY_OP_MOVE_CURSOR: u32 = 7;
+
+/// Submit a batch of 2D acceleration commands.
+///
+/// The payload begins with an [`super::accel2d::Accel2dBatch`] header
+/// immediately followed by `cmd_count` ×
+/// [`super::accel2d::Accel2dCommand`] records (each
+/// [`super::accel2d::ACCEL2D_COMMAND_SIZE`] bytes).
+///
+/// Supported command kinds are indicated by the `ACCEL2D_*` bits in
+/// [`super::types::DisplayCaps`].  The driver returns `ENOSYS` for any
+/// command kind it does not implement.
+pub const DISPLAY_OP_ACCEL2D: u32 = 8;

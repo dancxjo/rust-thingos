@@ -186,6 +186,20 @@ bitflags::bitflags! {
         /// Driver maintains a pre-allocated buffer pool / resource cache so that
         /// buffer import and commit operations avoid per-frame allocations.
         const RESOURCE_CACHE = 1 << 12;
+        /// Driver CPU-fallback supports `ACCEL2D_CMD_CLEAR_RECT`.
+        const ACCEL2D_CLEAR = 1 << 13;
+        /// Driver supports `ACCEL2D_CMD_COPY_RECT` (opaque copy blit).
+        const ACCEL2D_COPY = 1 << 14;
+        /// Driver supports `ACCEL2D_CMD_STRETCH_BLIT` (scaled copy blit).
+        const ACCEL2D_STRETCH = 1 << 15;
+        /// Driver supports `ACCEL2D_CMD_ALPHA_BLIT` (per-command alpha blend).
+        const ACCEL2D_ALPHA_BLIT = 1 << 16;
+        /// Driver supports `ACCEL2D_CMD_MASKED_BLIT` (mask-driven alpha blend).
+        const ACCEL2D_MASKED_BLIT = 1 << 17;
+        /// Driver supports `ACCEL2D_CMD_ROUNDED_CLIP_BLIT`.
+        const ACCEL2D_ROUNDED_CLIP_BLIT = 1 << 18;
+        /// Driver processes `ACCEL2D_CMD_FLUSH_DAMAGE` hints.
+        const ACCEL2D_FLUSH_DAMAGE = 1 << 19;
     }
 }
 
@@ -337,5 +351,57 @@ mod tests {
         assert!(!virtio_caps.contains(DisplayCaps::GPU_SCALE));
         assert!(!virtio_caps.contains(DisplayCaps::GPU_ROUNDED_CLIP));
         assert!(!virtio_caps.contains(DisplayCaps::FENCES));
+    }
+
+    #[test]
+    fn accel2d_caps_do_not_overlap_existing_caps() {
+        let existing = DisplayCaps::HARDWARE_CURSOR
+            | DisplayCaps::OVERLAYS
+            | DisplayCaps::ATOMIC
+            | DisplayCaps::VBLANK
+            | DisplayCaps::DMABUF_IMPORT
+            | DisplayCaps::GPU_BLIT
+            | DisplayCaps::GPU_ALPHA_BLEND
+            | DisplayCaps::GPU_SCALE
+            | DisplayCaps::GPU_ROUNDED_CLIP
+            | DisplayCaps::DIRECT_SCANOUT
+            | DisplayCaps::PARTIAL_FLUSH
+            | DisplayCaps::FENCES
+            | DisplayCaps::RESOURCE_CACHE;
+        let accel2d = DisplayCaps::ACCEL2D_CLEAR
+            | DisplayCaps::ACCEL2D_COPY
+            | DisplayCaps::ACCEL2D_STRETCH
+            | DisplayCaps::ACCEL2D_ALPHA_BLIT
+            | DisplayCaps::ACCEL2D_MASKED_BLIT
+            | DisplayCaps::ACCEL2D_ROUNDED_CLIP_BLIT
+            | DisplayCaps::ACCEL2D_FLUSH_DAMAGE;
+        assert!(
+            (existing & accel2d).is_empty(),
+            "ACCEL2D capability bits must not overlap with existing bits"
+        );
+    }
+
+    #[test]
+    fn bootfb_accel2d_caps_include_all_cpu_fallback_ops() {
+        // The boot framebuffer driver advertises all ACCEL2D operations
+        // (CPU fallback, writing to the output framebuffer only).
+        let expected = DisplayCaps::PARTIAL_FLUSH
+            | DisplayCaps::ACCEL2D_CLEAR
+            | DisplayCaps::ACCEL2D_COPY
+            | DisplayCaps::ACCEL2D_STRETCH
+            | DisplayCaps::ACCEL2D_ALPHA_BLIT
+            | DisplayCaps::ACCEL2D_MASKED_BLIT
+            | DisplayCaps::ACCEL2D_ROUNDED_CLIP_BLIT
+            | DisplayCaps::ACCEL2D_FLUSH_DAMAGE;
+        assert!(expected.contains(DisplayCaps::ACCEL2D_CLEAR));
+        assert!(expected.contains(DisplayCaps::ACCEL2D_COPY));
+        assert!(expected.contains(DisplayCaps::ACCEL2D_STRETCH));
+        assert!(expected.contains(DisplayCaps::ACCEL2D_ALPHA_BLIT));
+        assert!(expected.contains(DisplayCaps::ACCEL2D_MASKED_BLIT));
+        assert!(expected.contains(DisplayCaps::ACCEL2D_ROUNDED_CLIP_BLIT));
+        assert!(expected.contains(DisplayCaps::ACCEL2D_FLUSH_DAMAGE));
+        // CPU fallback does not imply GPU acceleration
+        assert!(!expected.contains(DisplayCaps::GPU_BLIT));
+        assert!(!expected.contains(DisplayCaps::GPU_ALPHA_BLEND));
     }
 }

@@ -6,6 +6,11 @@ use alloc::collections::BTreeMap;
 
 use abi::display::{
     BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DisplayInfo, PlaneCommit, PlaneId,
+    accel2d::{
+        Accel2dBatch, Accel2dCommand, ACCEL2D_CMD_ALPHA_BLIT, ACCEL2D_CMD_CLEAR_RECT,
+        ACCEL2D_CMD_COPY_RECT, ACCEL2D_CMD_FLUSH_DAMAGE, ACCEL2D_CMD_MASKED_BLIT,
+        ACCEL2D_CMD_ROUNDED_CLIP_BLIT, ACCEL2D_CMD_STRETCH_BLIT,
+    },
 };
 use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
 use abi::display_protocol::Rect;
@@ -63,7 +68,16 @@ impl BootFbDriver {
             // response path instead of returning to their event loops.
             // PARTIAL_FLUSH: commit() clips blits to client-supplied damage
             // rectangles, so only the damaged regions are updated each frame.
-            caps: abi::display::DisplayCaps::PARTIAL_FLUSH,
+            // ACCEL2D_*: CPU fallback for all 2D acceleration commands is
+            // available when the destination is the output framebuffer.
+            caps: abi::display::DisplayCaps::PARTIAL_FLUSH
+                | abi::display::DisplayCaps::ACCEL2D_CLEAR
+                | abi::display::DisplayCaps::ACCEL2D_COPY
+                | abi::display::DisplayCaps::ACCEL2D_STRETCH
+                | abi::display::DisplayCaps::ACCEL2D_ALPHA_BLIT
+                | abi::display::DisplayCaps::ACCEL2D_MASKED_BLIT
+                | abi::display::DisplayCaps::ACCEL2D_ROUNDED_CLIP_BLIT
+                | abi::display::DisplayCaps::ACCEL2D_FLUSH_DAMAGE,
         }
     }
 
@@ -245,6 +259,452 @@ impl BootFbDriver {
             }
         }
 
+        Ok(())
+    }
+
+    // ─── 2D Acceleration CPU Fallback ────────────────────────────────────────
+
+    /// Execute a batch of 2D acceleration commands.
+    ///
+    /// Each command targets the output framebuffer (`BufferId(0)`) or an
+    /// imported buffer.  Operations that would write to an imported buffer
+    /// (which is mapped read-only) return `ENOSYS`; all writes go to the
+    /// output framebuffer.
+    pub fn execute_accel2d(
+        &mut self,
+        _header: &Accel2dBatch,
+        commands: &[Accel2dCommand],
+    ) -> SysResult<()> {
+        for cmd in commands {
+            self.execute_accel2d_cmd(cmd)?;
+        }
+        Ok(())
+    }
+
+    fn execute_accel2d_cmd(&mut self, cmd: &Accel2dCommand) -> SysResult<()> {
+        match cmd.kind {
+            ACCEL2D_CMD_CLEAR_RECT => {
+                let c = unsafe { cmd.body.clear_rect };
+                self.accel2d_clear_rect(c.dst_buffer, c.rect, c.color)
+            }
+            ACCEL2D_CMD_COPY_RECT => {
+                let c = unsafe { cmd.body.copy_rect };
+                self.accel2d_copy_rect(c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
+            }
+            ACCEL2D_CMD_STRETCH_BLIT => {
+                let c = unsafe { cmd.body.stretch_blit };
+                self.accel2d_stretch_blit(c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
+            }
+            ACCEL2D_CMD_ALPHA_BLIT => {
+                let c = unsafe { cmd.body.alpha_blit };
+                self.accel2d_alpha_blit(
+                    c.src_buffer,
+                    c.dst_buffer,
+                    c.src_rect,
+                    c.dst_rect,
+                    c.global_alpha,
+                )
+            }
+            ACCEL2D_CMD_MASKED_BLIT => {
+                let c = unsafe { cmd.body.masked_blit };
+                self.accel2d_masked_blit(
+                    c.src_buffer,
+                    c.mask_buffer,
+                    c.dst_buffer,
+                    c.src_rect,
+                    c.mask_rect,
+                    c.dst_rect,
+                )
+            }
+            ACCEL2D_CMD_ROUNDED_CLIP_BLIT => {
+                let c = unsafe { cmd.body.rounded_clip_blit };
+                self.accel2d_rounded_clip_blit(
+                    c.src_buffer,
+                    c.dst_buffer,
+                    c.src_rect,
+                    c.dst_rect,
+                    c.radius,
+                )
+            }
+            ACCEL2D_CMD_FLUSH_DAMAGE => {
+                // Writes to the boot framebuffer are immediately visible; a
+                // flush hint is a no-op for this backend.
+                Ok(())
+            }
+            _ => Err(Errno::ENOSYS),
+        }
+    }
+
+    /// Fill `rect` in the output framebuffer with `color` (ARGB8888).
+    ///
+    /// Only `dst_buffer == BufferId(0)` (the output framebuffer) is supported.
+    fn accel2d_clear_rect(
+        &mut self,
+        dst_buffer: BufferId,
+        rect: Rect,
+        color: u32,
+    ) -> SysResult<()> {
+        if dst_buffer != BufferId(0) {
+            return Err(Errno::ENOSYS);
+        }
+        let bpp = (self.fb.bpp / 8) as usize;
+        if bpp != 4 {
+            return Err(Errno::ENOSYS);
+        }
+        // Return early if the rectangle is entirely outside the framebuffer.
+        if rect.x >= self.fb.width || rect.y >= self.fb.height {
+            return Ok(());
+        }
+        let x = rect.x as usize;
+        let y = rect.y as usize;
+        let w = rect.w.min(self.fb.width - rect.x) as usize;
+        let h = rect.h.min(self.fb.height - rect.y) as usize;
+        for row in 0..h {
+            for col in 0..w {
+                unsafe {
+                    let ptr = self
+                        .fb
+                        .base
+                        .add((y + row) * self.fb.stride as usize + (x + col) * bpp)
+                        as *mut u32;
+                    core::ptr::write_unaligned(ptr, color);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy pixels from `src_rect` in `src_buffer` to `dst_rect` in the
+    /// output framebuffer.  Rectangles must be the same size.
+    fn accel2d_copy_rect(
+        &mut self,
+        src_buffer: BufferId,
+        dst_buffer: BufferId,
+        src_rect: Rect,
+        dst_rect: Rect,
+    ) -> SysResult<()> {
+        if dst_buffer != BufferId(0) {
+            return Err(Errno::ENOSYS);
+        }
+        let buf = self.buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+        let bpp = buf.format.bytes_per_pixel();
+        let fb_bpp = (self.fb.bpp / 8) as usize;
+        if bpp != fb_bpp || bpp == 0 {
+            return Err(Errno::ENOSYS);
+        }
+        let copy_w =
+            src_rect.w.min(dst_rect.w).min(buf.width.saturating_sub(src_rect.x)).min(
+                self.fb.width.saturating_sub(dst_rect.x),
+            ) as usize;
+        let copy_h =
+            src_rect.h.min(dst_rect.h).min(buf.height.saturating_sub(src_rect.y)).min(
+                self.fb.height.saturating_sub(dst_rect.y),
+            ) as usize;
+        let row_bytes = copy_w * bpp;
+        if row_bytes == 0 || copy_h == 0 {
+            return Ok(());
+        }
+        let src_x = src_rect.x as usize;
+        let src_y = src_rect.y as usize;
+        let dst_x = dst_rect.x as usize;
+        let dst_y = dst_rect.y as usize;
+        let src_ptr = buf.ptr;
+        let src_stride = buf.stride as usize;
+        let fb_ptr = self.fb.base;
+        let fb_stride = self.fb.stride as usize;
+        for row in 0..copy_h {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    src_ptr.add((src_y + row) * src_stride + src_x * bpp),
+                    fb_ptr.add((dst_y + row) * fb_stride + dst_x * fb_bpp),
+                    row_bytes,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Scale-copy from `src_rect` in `src_buffer` to `dst_rect` in the output
+    /// framebuffer using nearest-neighbour sampling.
+    fn accel2d_stretch_blit(
+        &mut self,
+        src_buffer: BufferId,
+        dst_buffer: BufferId,
+        src_rect: Rect,
+        dst_rect: Rect,
+    ) -> SysResult<()> {
+        if dst_buffer != BufferId(0) {
+            return Err(Errno::ENOSYS);
+        }
+        let buf = self.buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+        let bpp = buf.format.bytes_per_pixel();
+        let fb_bpp = (self.fb.bpp / 8) as usize;
+        if bpp != fb_bpp || bpp != 4 {
+            return Err(Errno::ENOSYS);
+        }
+        if src_rect.w == 0 || src_rect.h == 0 || dst_rect.w == 0 || dst_rect.h == 0 {
+            return Ok(());
+        }
+        let dst_w = dst_rect.w.min(self.fb.width.saturating_sub(dst_rect.x)) as usize;
+        let dst_h = dst_rect.h.min(self.fb.height.saturating_sub(dst_rect.y)) as usize;
+        // dst_w/dst_h can be zero if dst_rect starts outside the framebuffer.
+        if dst_w == 0 || dst_h == 0 {
+            return Ok(());
+        }
+        let src_w = src_rect.w as usize;
+        let src_h = src_rect.h as usize;
+        let src_x0 = src_rect.x as usize;
+        let src_y0 = src_rect.y as usize;
+        let dst_x0 = dst_rect.x as usize;
+        let dst_y0 = dst_rect.y as usize;
+        let src_ptr = buf.ptr;
+        let src_stride = buf.stride as usize;
+        let fb_ptr = self.fb.base;
+        let fb_stride = self.fb.stride as usize;
+        for dy in 0..dst_h {
+            // Nearest-neighbour row mapping.
+            let sy = (dy * src_h / dst_h).min(src_h.saturating_sub(1));
+            for dx in 0..dst_w {
+                let sx = (dx * src_w / dst_w).min(src_w.saturating_sub(1));
+                unsafe {
+                    let src_pixel = core::ptr::read_unaligned(
+                        src_ptr.add((src_y0 + sy) * src_stride + (src_x0 + sx) * bpp)
+                            as *const u32,
+                    );
+                    let dst_ptr = fb_ptr
+                        .add((dst_y0 + dy) * fb_stride + (dst_x0 + dx) * fb_bpp)
+                        as *mut u32;
+                    core::ptr::write_unaligned(dst_ptr, src_pixel);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Blend `src_buffer` over the output framebuffer at `dst_rect` with the
+    /// given `global_alpha` multiplier (0 = transparent, 255 = opaque).
+    fn accel2d_alpha_blit(
+        &mut self,
+        src_buffer: BufferId,
+        dst_buffer: BufferId,
+        src_rect: Rect,
+        dst_rect: Rect,
+        global_alpha: u8,
+    ) -> SysResult<()> {
+        if dst_buffer != BufferId(0) {
+            return Err(Errno::ENOSYS);
+        }
+        let buf = self.buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+        let bpp = buf.format.bytes_per_pixel();
+        let fb_bpp = (self.fb.bpp / 8) as usize;
+        if bpp != 4 || fb_bpp != 4 {
+            return Err(Errno::ENOSYS);
+        }
+        let copy_w = src_rect
+            .w
+            .min(dst_rect.w)
+            .min(buf.width.saturating_sub(src_rect.x))
+            .min(self.fb.width.saturating_sub(dst_rect.x)) as usize;
+        let copy_h = src_rect
+            .h
+            .min(dst_rect.h)
+            .min(buf.height.saturating_sub(src_rect.y))
+            .min(self.fb.height.saturating_sub(dst_rect.y)) as usize;
+        if copy_w == 0 || copy_h == 0 {
+            return Ok(());
+        }
+        let src_x = src_rect.x as usize;
+        let src_y = src_rect.y as usize;
+        let dst_x = dst_rect.x as usize;
+        let dst_y = dst_rect.y as usize;
+        let src_ptr = buf.ptr;
+        let src_stride = buf.stride as usize;
+        let src_format = buf.format;
+        let fb_ptr = self.fb.base;
+        let fb_stride = self.fb.stride as usize;
+        for row in 0..copy_h {
+            for col in 0..copy_w {
+                unsafe {
+                    let s_ptr = src_ptr.add((src_y + row) * src_stride + (src_x + col) * bpp);
+                    let d_ptr =
+                        fb_ptr.add((dst_y + row) * fb_stride + (dst_x + col) * fb_bpp) as *mut u32;
+                    let src_px =
+                        source_argb_for_blend(core::ptr::read_unaligned(s_ptr as *const u32), src_format);
+                    let dst_px = core::ptr::read_unaligned(d_ptr);
+                    core::ptr::write_unaligned(d_ptr, alpha_over_argb(src_px, dst_px, global_alpha));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Blend `src_buffer` over the output framebuffer using `mask_buffer` as
+    /// per-pixel alpha coverage.
+    fn accel2d_masked_blit(
+        &mut self,
+        src_buffer: BufferId,
+        mask_buffer: BufferId,
+        dst_buffer: BufferId,
+        src_rect: Rect,
+        mask_rect: Rect,
+        dst_rect: Rect,
+    ) -> SysResult<()> {
+        if dst_buffer != BufferId(0) {
+            return Err(Errno::ENOSYS);
+        }
+        let src = self.buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+        let src_bpp = src.format.bytes_per_pixel();
+        let src_ptr = src.ptr;
+        let src_stride = src.stride as usize;
+        let src_format = src.format;
+        let src_w = src.width;
+        let src_h = src.height;
+
+        let msk = self.buffers.get(&mask_buffer).ok_or(Errno::ENOENT)?;
+        let msk_bpp = msk.format.bytes_per_pixel();
+        let msk_ptr = msk.ptr;
+        let msk_stride = msk.stride as usize;
+        let msk_format = msk.format;
+        let msk_w = msk.width;
+        let msk_h = msk.height;
+
+        let fb_bpp = (self.fb.bpp / 8) as usize;
+        if src_bpp != 4 || msk_bpp != 4 || fb_bpp != 4 {
+            return Err(Errno::ENOSYS);
+        }
+        let copy_w = src_rect
+            .w
+            .min(mask_rect.w)
+            .min(dst_rect.w)
+            .min(src_w.saturating_sub(src_rect.x))
+            .min(msk_w.saturating_sub(mask_rect.x))
+            .min(self.fb.width.saturating_sub(dst_rect.x)) as usize;
+        let copy_h = src_rect
+            .h
+            .min(mask_rect.h)
+            .min(dst_rect.h)
+            .min(src_h.saturating_sub(src_rect.y))
+            .min(msk_h.saturating_sub(mask_rect.y))
+            .min(self.fb.height.saturating_sub(dst_rect.y)) as usize;
+        if copy_w == 0 || copy_h == 0 {
+            return Ok(());
+        }
+        let sx0 = src_rect.x as usize;
+        let sy0 = src_rect.y as usize;
+        let mx0 = mask_rect.x as usize;
+        let my0 = mask_rect.y as usize;
+        let dx0 = dst_rect.x as usize;
+        let dy0 = dst_rect.y as usize;
+        let fb_ptr = self.fb.base;
+        let fb_stride = self.fb.stride as usize;
+        for row in 0..copy_h {
+            for col in 0..copy_w {
+                unsafe {
+                    let s_px = source_argb_for_blend(
+                        core::ptr::read_unaligned(
+                            src_ptr.add((sy0 + row) * src_stride + (sx0 + col) * src_bpp)
+                                as *const u32,
+                        ),
+                        src_format,
+                    );
+                    let m_raw = core::ptr::read_unaligned(
+                        msk_ptr.add((my0 + row) * msk_stride + (mx0 + col) * msk_bpp)
+                            as *const u32,
+                    );
+                    // Use mask alpha channel; fall back to luminance for opaque formats.
+                    let mask_a = if msk_format.has_alpha() {
+                        ((m_raw >> 24) & 0xff) as u8
+                    } else {
+                        // Approximate luminance from RGB.
+                        let r = (m_raw >> 16) & 0xff;
+                        let g = (m_raw >> 8) & 0xff;
+                        let b = m_raw & 0xff;
+                        ((r * 77 + g * 150 + b * 29) >> 8) as u8
+                    };
+                    let d_ptr =
+                        fb_ptr.add((dy0 + row) * fb_stride + (dx0 + col) * fb_bpp) as *mut u32;
+                    let dst_px = core::ptr::read_unaligned(d_ptr);
+                    let blended_alpha = scale_alpha((s_px >> 24) as u8, mask_a);
+                    let src_with_mask = (s_px & 0x00ff_ffff) | ((blended_alpha as u32) << 24);
+                    core::ptr::write_unaligned(d_ptr, alpha_over_argb(src_with_mask, dst_px, 255));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Blit `src_buffer` to the output framebuffer at `dst_rect`, clipped to a
+    /// rounded rectangle with `radius` pixels at each corner.
+    fn accel2d_rounded_clip_blit(
+        &mut self,
+        src_buffer: BufferId,
+        dst_buffer: BufferId,
+        src_rect: Rect,
+        dst_rect: Rect,
+        radius: u8,
+    ) -> SysResult<()> {
+        if dst_buffer != BufferId(0) {
+            return Err(Errno::ENOSYS);
+        }
+        let buf = self.buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+        let bpp = buf.format.bytes_per_pixel();
+        let fb_bpp = (self.fb.bpp / 8) as usize;
+        if bpp != 4 || fb_bpp != 4 {
+            return Err(Errno::ENOSYS);
+        }
+        let copy_w = src_rect
+            .w
+            .min(dst_rect.w)
+            .min(buf.width.saturating_sub(src_rect.x))
+            .min(self.fb.width.saturating_sub(dst_rect.x)) as usize;
+        let copy_h = src_rect
+            .h
+            .min(dst_rect.h)
+            .min(buf.height.saturating_sub(src_rect.y))
+            .min(self.fb.height.saturating_sub(dst_rect.y)) as usize;
+        if copy_w == 0 || copy_h == 0 {
+            return Ok(());
+        }
+        let sx0 = src_rect.x as usize;
+        let sy0 = src_rect.y as usize;
+        let dx0 = dst_rect.x as usize;
+        let dy0 = dst_rect.y as usize;
+        let radius_u32 = radius as u32;
+        let src_ptr = buf.ptr;
+        let src_stride = buf.stride as usize;
+        let src_format = buf.format;
+        let fb_ptr = self.fb.base;
+        let fb_stride = self.fb.stride as usize;
+        for row in 0..copy_h {
+            for col in 0..copy_w {
+                let coverage = rounded_clip_coverage(
+                    radius_u32,
+                    col as u32,
+                    row as u32,
+                    dst_rect.w,
+                    dst_rect.h,
+                );
+                if coverage == 0 {
+                    continue;
+                }
+                unsafe {
+                    let s_px = source_argb_for_blend(
+                        core::ptr::read_unaligned(
+                            src_ptr.add((sy0 + row) * src_stride + (sx0 + col) * bpp)
+                                as *const u32,
+                        ),
+                        src_format,
+                    );
+                    let d_ptr =
+                        fb_ptr.add((dy0 + row) * fb_stride + (dx0 + col) * fb_bpp) as *mut u32;
+                    let dst_px = core::ptr::read_unaligned(d_ptr);
+                    core::ptr::write_unaligned(
+                        d_ptr,
+                        alpha_over_argb(s_px, dst_px, scale_alpha(255, coverage)),
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }
