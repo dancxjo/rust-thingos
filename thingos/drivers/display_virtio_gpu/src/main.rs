@@ -23,6 +23,7 @@ use abi::driver_interface::{
 use abi::errors::Errno;
 use abi::pixel::PixelFormat;
 use abi::vfs_rpc::VfsRpcOp;
+use accel2d_cpu::PixelBuf;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::syscall::message::{KindId, msg_inbox_open, msg_recv_blocking, msg_sendmsg};
@@ -1923,34 +1924,15 @@ fn accel2d_clear_rect(
     if dst_buffer != BufferId(0) {
         return Err(Errno::ENOSYS);
     }
-    let target_ptr = driver.frame_pool[idx].ptr;
-    let target_size = driver.frame_pool[idx].size;
-    let stride = driver.disp_stride as usize;
-    let bpp = FRAME_POOL_BPP;
-    if stride == 0 || target_size == 0 {
-        return Ok(());
-    }
-    if rect.x >= driver.disp_width || rect.y >= driver.disp_height {
-        return Ok(());
-    }
-    let x = rect.x as usize;
-    let y = rect.y as usize;
-    let w = rect.w.min(driver.disp_width.saturating_sub(rect.x)) as usize;
-    let h = rect.h.min(driver.disp_height.saturating_sub(rect.y)) as usize;
-    if w == 0 || h == 0 {
-        return Ok(());
-    }
-    for row in 0..h {
-        for col in 0..w {
-            let off = (y + row).saturating_mul(stride) + (x + col).saturating_mul(bpp);
-            if off + bpp > target_size {
-                break;
-            }
-            unsafe {
-                core::ptr::write_unaligned(target_ptr.add(off) as *mut u32, color);
-            }
-        }
-    }
+    let dst = PixelBuf {
+        ptr: driver.frame_pool[idx].ptr,
+        size: driver.frame_pool[idx].size,
+        width: driver.disp_width,
+        height: driver.disp_height,
+        stride: driver.disp_stride,
+        format: PixelFormat::Bgra8888,
+    };
+    unsafe { accel2d_cpu::clear_rect(&dst, rect, color) };
     Ok(())
 }
 
@@ -1970,48 +1952,26 @@ fn accel2d_copy_rect(
     }
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
     let bpp = src.format.bytes_per_pixel();
-    let fb_bpp = FRAME_POOL_BPP;
-    if bpp != fb_bpp || bpp == 0 {
+    if bpp != FRAME_POOL_BPP || bpp == 0 {
         return Err(Errno::ENOSYS);
     }
-    let copy_w = src_rect
-        .w
-        .min(dst_rect.w)
-        .min(src.width.saturating_sub(src_rect.x))
-        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
-    let copy_h = src_rect
-        .h
-        .min(dst_rect.h)
-        .min(src.height.saturating_sub(src_rect.y))
-        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
-    let row_bytes = copy_w * bpp;
-    if row_bytes == 0 || copy_h == 0 {
-        return Ok(());
-    }
-    let src_x = src_rect.x as usize;
-    let src_y = src_rect.y as usize;
-    let dst_x = dst_rect.x as usize;
-    let dst_y = dst_rect.y as usize;
-    let src_ptr = src.ptr;
-    let src_stride = src.stride as usize;
-    let src_size = src.size;
-    let target_ptr = driver.frame_pool[idx].ptr;
-    let target_size = driver.frame_pool[idx].size;
-    let fb_stride = driver.disp_stride as usize;
-    for row in 0..copy_h {
-        let src_off = (src_y + row).saturating_mul(src_stride) + src_x.saturating_mul(bpp);
-        let dst_off = (dst_y + row).saturating_mul(fb_stride) + dst_x.saturating_mul(fb_bpp);
-        if src_off + row_bytes > src_size || dst_off + row_bytes > target_size {
-            break;
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                src_ptr.add(src_off),
-                target_ptr.add(dst_off),
-                row_bytes,
-            );
-        }
-    }
+    let src_buf = PixelBuf {
+        ptr: src.ptr,
+        size: src.size,
+        width: src.width,
+        height: src.height,
+        stride: src.stride,
+        format: src.format,
+    };
+    let dst_buf = PixelBuf {
+        ptr: driver.frame_pool[idx].ptr,
+        size: driver.frame_pool[idx].size,
+        width: driver.disp_width,
+        height: driver.disp_height,
+        stride: driver.disp_stride,
+        format: PixelFormat::Bgra8888,
+    };
+    unsafe { accel2d_cpu::copy_rect(&src_buf, &dst_buf, src_rect, dst_rect) };
     Ok(())
 }
 
@@ -2031,51 +1991,26 @@ fn accel2d_stretch_blit(
         return Err(Errno::ENOSYS);
     }
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-    let bpp = src.format.bytes_per_pixel();
-    if bpp != 4 {
+    if src.format.bytes_per_pixel() != 4 {
         return Err(Errno::ENOSYS);
     }
-    if src_rect.w == 0 || src_rect.h == 0 || dst_rect.w == 0 || dst_rect.h == 0 {
-        return Ok(());
-    }
-    let dst_w = dst_rect.w.min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
-    let dst_h = dst_rect.h.min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
-    if dst_w == 0 || dst_h == 0 {
-        return Ok(());
-    }
-    let src_w = src_rect.w as usize;
-    let src_h = src_rect.h as usize;
-    let src_x0 = src_rect.x as usize;
-    let src_y0 = src_rect.y as usize;
-    let dst_x0 = dst_rect.x as usize;
-    let dst_y0 = dst_rect.y as usize;
-    let src_ptr = src.ptr;
-    let src_stride = src.stride as usize;
-    let src_size = src.size;
-    let target_ptr = driver.frame_pool[idx].ptr;
-    let target_size = driver.frame_pool[idx].size;
-    let fb_stride = driver.disp_stride as usize;
-    // Pre-compute scale ratios to avoid repeated integer division in the inner
-    // loop.  Using fixed-point 16.16 to stay no_std (no float).
-    let scale_x = if dst_w > 0 { (src_w << 16) / dst_w } else { 0 };
-    let scale_y = if dst_h > 0 { (src_h << 16) / dst_h } else { 0 };
-    for dy in 0..dst_h {
-        let sy = ((dy * scale_y) >> 16).min(src_h.saturating_sub(1));
-        for dx in 0..dst_w {
-            let sx = ((dx * scale_x) >> 16).min(src_w.saturating_sub(1));
-            let src_off =
-                (src_y0 + sy).saturating_mul(src_stride) + (src_x0 + sx).saturating_mul(bpp);
-            let dst_off =
-                (dst_y0 + dy).saturating_mul(fb_stride) + (dst_x0 + dx).saturating_mul(bpp);
-            if src_off + bpp > src_size || dst_off + bpp > target_size {
-                continue;
-            }
-            unsafe {
-                let px = core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32);
-                core::ptr::write_unaligned(target_ptr.add(dst_off) as *mut u32, px);
-            }
-        }
-    }
+    let src_buf = PixelBuf {
+        ptr: src.ptr,
+        size: src.size,
+        width: src.width,
+        height: src.height,
+        stride: src.stride,
+        format: src.format,
+    };
+    let dst_buf = PixelBuf {
+        ptr: driver.frame_pool[idx].ptr,
+        size: driver.frame_pool[idx].size,
+        width: driver.disp_width,
+        height: driver.disp_height,
+        stride: driver.disp_stride,
+        format: PixelFormat::Bgra8888,
+    };
+    unsafe { accel2d_cpu::stretch_blit(&src_buf, &dst_buf, src_rect, dst_rect) };
     Ok(())
 }
 
@@ -2095,54 +2030,26 @@ fn accel2d_alpha_blit(
         return Err(Errno::ENOSYS);
     }
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-    let bpp = src.format.bytes_per_pixel();
-    if bpp != 4 {
+    if src.format.bytes_per_pixel() != 4 {
         return Err(Errno::ENOSYS);
     }
-    let copy_w = src_rect
-        .w
-        .min(dst_rect.w)
-        .min(src.width.saturating_sub(src_rect.x))
-        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
-    let copy_h = src_rect
-        .h
-        .min(dst_rect.h)
-        .min(src.height.saturating_sub(src_rect.y))
-        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
-    if copy_w == 0 || copy_h == 0 {
-        return Ok(());
-    }
-    let src_x = src_rect.x as usize;
-    let src_y = src_rect.y as usize;
-    let dst_x = dst_rect.x as usize;
-    let dst_y = dst_rect.y as usize;
-    let src_ptr = src.ptr;
-    let src_stride = src.stride as usize;
-    let src_size = src.size;
-    let src_format = src.format;
-    let target_ptr = driver.frame_pool[idx].ptr;
-    let target_size = driver.frame_pool[idx].size;
-    let fb_stride = driver.disp_stride as usize;
-    for row in 0..copy_h {
-        for col in 0..copy_w {
-            let src_off =
-                (src_y + row).saturating_mul(src_stride) + (src_x + col).saturating_mul(bpp);
-            let dst_off =
-                (dst_y + row).saturating_mul(fb_stride) + (dst_x + col).saturating_mul(bpp);
-            if src_off + bpp > src_size || dst_off + bpp > target_size {
-                continue;
-            }
-            unsafe {
-                let s_px = source_argb_for_blend(
-                    core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32),
-                    src_format,
-                );
-                let d_ptr = target_ptr.add(dst_off) as *mut u32;
-                let dst_px = core::ptr::read_unaligned(d_ptr);
-                core::ptr::write_unaligned(d_ptr, alpha_over_argb(s_px, dst_px, global_alpha));
-            }
-        }
-    }
+    let src_buf = PixelBuf {
+        ptr: src.ptr,
+        size: src.size,
+        width: src.width,
+        height: src.height,
+        stride: src.stride,
+        format: src.format,
+    };
+    let dst_buf = PixelBuf {
+        ptr: driver.frame_pool[idx].ptr,
+        size: driver.frame_pool[idx].size,
+        width: driver.disp_width,
+        height: driver.disp_height,
+        stride: driver.disp_stride,
+        format: PixelFormat::Bgra8888,
+    };
+    unsafe { accel2d_cpu::alpha_blit(&src_buf, &dst_buf, src_rect, dst_rect, global_alpha) };
     Ok(())
 }
 
@@ -2164,87 +2071,37 @@ fn accel2d_masked_blit(
     if dst_buffer != BufferId(0) {
         return Err(Errno::ENOSYS);
     }
-    // Extract source buffer metadata before borrowing driver for the frame pool.
-    let (src_ptr, src_stride, src_size, src_bpp, src_format, src_w, src_h) = {
+    // Extract source and mask buffer metadata before borrowing driver for the
+    // frame pool.
+    let (src_ptr, src_size, src_width, src_height, src_stride, src_format) = {
         let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-        let bpp = src.format.bytes_per_pixel();
-        if bpp != 4 {
+        if src.format.bytes_per_pixel() != 4 {
             return Err(Errno::ENOSYS);
         }
-        (src.ptr, src.stride as usize, src.size, bpp, src.format, src.width, src.height)
+        (src.ptr, src.size, src.width, src.height, src.stride, src.format)
     };
-    let (msk_ptr, msk_stride, msk_size, msk_bpp, msk_format, msk_w, msk_h) = {
+    let (msk_ptr, msk_size, msk_width, msk_height, msk_stride, msk_format) = {
         let msk = driver.imported_buffers.get(&mask_buffer).ok_or(Errno::ENOENT)?;
-        let bpp = msk.format.bytes_per_pixel();
-        if bpp != 4 {
+        if msk.format.bytes_per_pixel() != 4 {
             return Err(Errno::ENOSYS);
         }
-        (msk.ptr, msk.stride as usize, msk.size, bpp, msk.format, msk.width, msk.height)
+        (msk.ptr, msk.size, msk.width, msk.height, msk.stride, msk.format)
     };
-    let copy_w = src_rect
-        .w
-        .min(mask_rect.w)
-        .min(dst_rect.w)
-        .min(src_w.saturating_sub(src_rect.x))
-        .min(msk_w.saturating_sub(mask_rect.x))
-        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
-    let copy_h = src_rect
-        .h
-        .min(mask_rect.h)
-        .min(dst_rect.h)
-        .min(src_h.saturating_sub(src_rect.y))
-        .min(msk_h.saturating_sub(mask_rect.y))
-        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
-    if copy_w == 0 || copy_h == 0 {
-        return Ok(());
-    }
-    let sx0 = src_rect.x as usize;
-    let sy0 = src_rect.y as usize;
-    let mx0 = mask_rect.x as usize;
-    let my0 = mask_rect.y as usize;
-    let dx0 = dst_rect.x as usize;
-    let dy0 = dst_rect.y as usize;
-    let target_ptr = driver.frame_pool[idx].ptr;
-    let target_size = driver.frame_pool[idx].size;
-    let fb_stride = driver.disp_stride as usize;
-    for row in 0..copy_h {
-        for col in 0..copy_w {
-            let src_off =
-                (sy0 + row).saturating_mul(src_stride) + (sx0 + col).saturating_mul(src_bpp);
-            let msk_off =
-                (my0 + row).saturating_mul(msk_stride) + (mx0 + col).saturating_mul(msk_bpp);
-            let dst_off =
-                (dy0 + row).saturating_mul(fb_stride) + (dx0 + col).saturating_mul(src_bpp);
-            if src_off + src_bpp > src_size
-                || msk_off + msk_bpp > msk_size
-                || dst_off + src_bpp > target_size
-            {
-                continue;
-            }
-            unsafe {
-                let s_px = source_argb_for_blend(
-                    core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32),
-                    src_format,
-                );
-                let m_raw = core::ptr::read_unaligned(msk_ptr.add(msk_off) as *const u32);
-                let mask_a = if msk_format.has_alpha() {
-                    ((m_raw >> 24) & 0xff) as u8
-                } else {
-                    let r = (m_raw >> 16) & 0xff;
-                    let g = (m_raw >> 8) & 0xff;
-                    let b = m_raw & 0xff;
-                    // ITU-R BT.601 luma approximation: Y = 0.299R + 0.587G + 0.114B
-                    // Coefficients scaled to integers that sum to 256 (≈ 77 + 150 + 29).
-                    ((r * 77 + g * 150 + b * 29) >> 8) as u8
-                };
-                let d_ptr = target_ptr.add(dst_off) as *mut u32;
-                let dst_px = core::ptr::read_unaligned(d_ptr);
-                let blended_alpha = scale_alpha((s_px >> 24) as u8, mask_a);
-                let src_with_mask = (s_px & 0x00ff_ffff) | ((blended_alpha as u32) << 24);
-                core::ptr::write_unaligned(d_ptr, alpha_over_argb(src_with_mask, dst_px, 255));
-            }
-        }
-    }
+    let src_buf =
+        PixelBuf { ptr: src_ptr, size: src_size, width: src_width, height: src_height, stride: src_stride, format: src_format };
+    let msk_buf =
+        PixelBuf { ptr: msk_ptr, size: msk_size, width: msk_width, height: msk_height, stride: msk_stride, format: msk_format };
+    let dst_buf = PixelBuf {
+        ptr: driver.frame_pool[idx].ptr,
+        size: driver.frame_pool[idx].size,
+        width: driver.disp_width,
+        height: driver.disp_height,
+        stride: driver.disp_stride,
+        format: PixelFormat::Bgra8888,
+    };
+    unsafe {
+        accel2d_cpu::masked_blit(&src_buf, &msk_buf, &dst_buf, src_rect, mask_rect, dst_rect)
+    };
     Ok(())
 }
 
@@ -2265,65 +2122,26 @@ fn accel2d_rounded_clip_blit(
         return Err(Errno::ENOSYS);
     }
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-    let bpp = src.format.bytes_per_pixel();
-    if bpp != 4 {
+    if src.format.bytes_per_pixel() != 4 {
         return Err(Errno::ENOSYS);
     }
-    let copy_w = src_rect
-        .w
-        .min(dst_rect.w)
-        .min(src.width.saturating_sub(src_rect.x))
-        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
-    let copy_h = src_rect
-        .h
-        .min(dst_rect.h)
-        .min(src.height.saturating_sub(src_rect.y))
-        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
-    if copy_w == 0 || copy_h == 0 {
-        return Ok(());
-    }
-    let sx0 = src_rect.x as usize;
-    let sy0 = src_rect.y as usize;
-    let dx0 = dst_rect.x as usize;
-    let dy0 = dst_rect.y as usize;
-    let radius_u32 = radius as u32;
-    let src_ptr = src.ptr;
-    let src_stride = src.stride as usize;
-    let src_size = src.size;
-    let src_format = src.format;
-    let target_ptr = driver.frame_pool[idx].ptr;
-    let target_size = driver.frame_pool[idx].size;
-    let fb_stride = driver.disp_stride as usize;
-    for row in 0..copy_h {
-        for col in 0..copy_w {
-            let coverage = rounded_clip_coverage(
-                radius_u32,
-                col as u32,
-                row as u32,
-                dst_rect.w,
-                dst_rect.h,
-            );
-            if coverage == 0 {
-                continue;
-            }
-            let src_off =
-                (sy0 + row).saturating_mul(src_stride) + (sx0 + col).saturating_mul(bpp);
-            let dst_off =
-                (dy0 + row).saturating_mul(fb_stride) + (dx0 + col).saturating_mul(bpp);
-            if src_off + bpp > src_size || dst_off + bpp > target_size {
-                continue;
-            }
-            unsafe {
-                let s_px = source_argb_for_blend(
-                    core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32),
-                    src_format,
-                );
-                let d_ptr = target_ptr.add(dst_off) as *mut u32;
-                let dst_px = core::ptr::read_unaligned(d_ptr);
-                core::ptr::write_unaligned(d_ptr, alpha_over_argb(s_px, dst_px, coverage));
-            }
-        }
-    }
+    let src_buf = PixelBuf {
+        ptr: src.ptr,
+        size: src.size,
+        width: src.width,
+        height: src.height,
+        stride: src.stride,
+        format: src.format,
+    };
+    let dst_buf = PixelBuf {
+        ptr: driver.frame_pool[idx].ptr,
+        size: driver.frame_pool[idx].size,
+        width: driver.disp_width,
+        height: driver.disp_height,
+        stride: driver.disp_stride,
+        format: PixelFormat::Bgra8888,
+    };
+    unsafe { accel2d_cpu::rounded_clip_blit(&src_buf, &dst_buf, src_rect, dst_rect, radius) };
     Ok(())
 }
 

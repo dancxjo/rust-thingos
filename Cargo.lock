@@ -29,6 +29,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "accel2d_cpu"
+version = "0.1.0"
+dependencies = [
+ "abi",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2003,6 +2010,7 @@ name = "display_virtio_gpu"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "accel2d_cpu",
  "ipc_helpers",
  "stem",
  "virtio_gpu",
