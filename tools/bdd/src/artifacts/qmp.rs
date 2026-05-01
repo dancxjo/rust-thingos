@@ -105,9 +105,18 @@ pub async fn execute_on_stream(
 pub async fn connect_qmp(
     endpoint: &QmpEndpoint,
 ) -> Result<QmpStream, Box<dyn std::error::Error + Send + Sync>> {
+    let connect_timeout = std::time::Duration::from_secs(5);
     let mut stream = match endpoint {
-        QmpEndpoint::Unix(path) => QmpStream::Unix(UnixStream::connect(path).await?),
-        QmpEndpoint::Tcp(addr) => QmpStream::Tcp(TcpStream::connect(addr).await?),
+        QmpEndpoint::Unix(path) => QmpStream::Unix(
+            tokio::time::timeout(connect_timeout, UnixStream::connect(path))
+                .await
+                .map_err(|_| "Timed out connecting to QMP")??,
+        ),
+        QmpEndpoint::Tcp(addr) => QmpStream::Tcp(
+            tokio::time::timeout(connect_timeout, TcpStream::connect(addr))
+                .await
+                .map_err(|_| "Timed out connecting to QMP")??,
+        ),
     };
 
     let mut buf = vec![0u8; 4096];

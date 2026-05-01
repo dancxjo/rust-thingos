@@ -731,7 +731,8 @@ pub fn encode_close_layer_surface(bloom_surface_id: u32) -> [u8; 8] {
         bloom_surface_id,
     };
     let mut out = [0u8; 8];
-    out.copy_from_slice(as_bytes!(msg, WEvtCloseLayerSurface));  
+    out.copy_from_slice(as_bytes!(msg, WEvtCloseLayerSurface));
+    out
 }
 
 /// Encode a [`WCMD_SET_OPAQUE_REGION`] command.

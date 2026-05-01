@@ -634,9 +634,18 @@ impl ThingOsWorld {
     pub(crate) async fn connect_qmp(
         endpoint: &QmpEndpoint,
     ) -> Result<Box<dyn QmpStream + Unpin + Send>, Box<dyn std::error::Error + Send + Sync>> {
+        let connect_timeout = std::time::Duration::from_secs(5);
         let mut stream: Box<dyn QmpStream + Unpin + Send> = match endpoint {
-            QmpEndpoint::Unix(socket_path) => Box::new(UnixStream::connect(socket_path).await?),
-            QmpEndpoint::Tcp(addr) => Box::new(TcpStream::connect(addr).await?),
+            QmpEndpoint::Unix(socket_path) => Box::new(
+                tokio::time::timeout(connect_timeout, UnixStream::connect(socket_path))
+                    .await
+                    .map_err(|_| "Timed out connecting to QMP")??,
+            ),
+            QmpEndpoint::Tcp(addr) => Box::new(
+                tokio::time::timeout(connect_timeout, TcpStream::connect(addr))
+                    .await
+                    .map_err(|_| "Timed out connecting to QMP")??,
+            ),
         };
 
         // Read greeting
@@ -767,7 +776,12 @@ impl ThingOsWorld {
             let log = self.get_serial_log().await;
             let start_offset = checkpoint.min(log.len());
             let recent = strip_ansi(&log[start_offset..]);
-            if recent.lines().any(|line| line.trim() == marker) {
+            let marker_output = recent.lines().any(|line| line.trim() == marker);
+            let prompt_after_marker = recent
+                .find(&marker)
+                .map(|pos| shell_prompt_present(&recent[pos + marker.len()..]))
+                .unwrap_or(false);
+            if marker_output && prompt_after_marker {
                 let mut collector = crate::artifacts::global().lock().await;
                 collector.set_step_assertion_buffer("Console Readiness", &recent);
                 drop(collector);
