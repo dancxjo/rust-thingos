@@ -13,6 +13,8 @@
 //! - `xdg_toplevel`: all `set_*` / `unset_*` / `show_window_menu` / `move` /
 //!   `resize` requests; most are recorded as client intent or accepted as
 //!   no-ops in v1
+//! - `xdg_positioner`: `set_size`, `set_anchor_rect`, `set_anchor`,
+//!   `set_gravity`, `set_constraint_adjustment`, `set_offset`, `destroy`
 //!
 //! # Initial configure sequence
 //!
@@ -23,6 +25,13 @@
 //!
 //! After the client calls `ack_configure(serial)` and then commits a buffer,
 //! blossom emits [`BlossomCommand::MarkSurfaceReadyForMapping`].
+//!
+//! # Popup placement
+//!
+//! Popup positions are computed from the positioner via [`compute_popup_placement`].
+//! Gravity and anchor determine the popup's position relative to the anchor
+//! rectangle on the parent surface.  Constraint-adjustment flags (slide, flip,
+//! resize) keep the popup within the compositor's output bounds.
 
 #![no_std]
 
@@ -59,6 +68,263 @@ pub type ConfigureSerial = u32;
 pub const DEFAULT_TITLEBAR_HEIGHT: u32 = 28;
 /// Initial compositor-known frame thickness for v1 toplevel chrome.
 pub const DEFAULT_FRAME_THICKNESS: u32 = 6;
+
+// ── xdg_positioner constants ─────────────────────────────────────────────────
+
+/// `xdg_positioner` anchor / gravity enum values (same set for both fields).
+///
+/// These match the wire encoding from `xdg-shell.xml`.
+pub mod positioner_anchor {
+    pub const NONE: u32 = 0;
+    pub const TOP: u32 = 1;
+    pub const BOTTOM: u32 = 2;
+    pub const LEFT: u32 = 3;
+    pub const RIGHT: u32 = 4;
+    pub const TOP_LEFT: u32 = 5;
+    pub const BOTTOM_LEFT: u32 = 6;
+    pub const TOP_RIGHT: u32 = 7;
+    pub const BOTTOM_RIGHT: u32 = 8;
+}
+
+/// `xdg_positioner` constraint-adjustment bitmask values.
+pub mod positioner_constraint {
+    pub const NONE: u32 = 0;
+    /// Slide the popup along the X axis until it fits.
+    pub const SLIDE_X: u32 = 1;
+    /// Slide the popup along the Y axis until it fits.
+    pub const SLIDE_Y: u32 = 2;
+    /// Flip the anchor and gravity horizontally if it produces a better fit.
+    pub const FLIP_X: u32 = 4;
+    /// Flip the anchor and gravity vertically if it produces a better fit.
+    pub const FLIP_Y: u32 = 8;
+    /// Shrink the popup width to fit the available space.
+    pub const RESIZE_X: u32 = 16;
+    /// Shrink the popup height to fit the available space.
+    pub const RESIZE_Y: u32 = 32;
+}
+
+// ── xdg_positioner state ─────────────────────────────────────────────────────
+
+/// Accumulated client-supplied state for a single `xdg_positioner` object.
+///
+/// Positions a popup surface relative to the parent's anchor rectangle,
+/// taking anchor/gravity/offset into account and applying constraint
+/// adjustments to keep the popup within the compositor's output bounds.
+#[derive(Debug, Clone, Default)]
+pub struct PositionerState {
+    /// Desired popup size `(width, height)` in surface-local coordinates.
+    /// `None` means the client has not yet called `set_size`.
+    pub size: Option<(i32, i32)>,
+    /// Anchor rectangle `(x, y, width, height)` relative to the parent's
+    /// window geometry.  Defaults to `(0, 0, 0, 0)`.
+    pub anchor_rect: (i32, i32, i32, i32),
+    /// Which edge or corner of the anchor rect the popup anchors to.
+    /// One of the `positioner_anchor::*` constants.  Defaults to `NONE`.
+    pub anchor: u32,
+    /// Which direction the popup extends from the anchor point.
+    /// One of the `positioner_anchor::*` constants.  Defaults to `NONE`.
+    pub gravity: u32,
+    /// Bitmask of `positioner_constraint::*` flags.  Defaults to `NONE`.
+    pub constraint_adjustment: u32,
+    /// Additional offset `(x, y)` applied after anchor/gravity placement.
+    pub offset: (i32, i32),
+}
+
+// ── Popup placement calculation ───────────────────────────────────────────────
+
+/// Return the anchor point on `anchor_rect` for the given `anchor` value.
+fn positioner_anchor_point(rect: (i32, i32, i32, i32), anchor: u32) -> (i32, i32) {
+    let (rx, ry, rw, rh) = rect;
+    match anchor {
+        positioner_anchor::TOP => (rx + rw / 2, ry),
+        positioner_anchor::BOTTOM => (rx + rw / 2, ry + rh),
+        positioner_anchor::LEFT => (rx, ry + rh / 2),
+        positioner_anchor::RIGHT => (rx + rw, ry + rh / 2),
+        positioner_anchor::TOP_LEFT => (rx, ry),
+        positioner_anchor::BOTTOM_LEFT => (rx, ry + rh),
+        positioner_anchor::TOP_RIGHT => (rx + rw, ry),
+        positioner_anchor::BOTTOM_RIGHT => (rx + rw, ry + rh),
+        _ => (rx + rw / 2, ry + rh / 2), // NONE → center
+    }
+}
+
+/// Return the popup top-left corner given an anchor point and gravity.
+///
+/// `gravity` controls which side of the anchor point the popup "sticks out"
+/// toward, i.e. which face of the popup touches the anchor point.
+fn positioner_apply_gravity(ax: i32, ay: i32, pw: i32, ph: i32, gravity: u32) -> (i32, i32) {
+    let x = match gravity {
+        // RIGHT, TOP_RIGHT, BOTTOM_RIGHT → popup left edge at anchor
+        positioner_anchor::RIGHT
+        | positioner_anchor::TOP_RIGHT
+        | positioner_anchor::BOTTOM_RIGHT => ax,
+        // LEFT, TOP_LEFT, BOTTOM_LEFT → popup right edge at anchor
+        positioner_anchor::LEFT
+        | positioner_anchor::TOP_LEFT
+        | positioner_anchor::BOTTOM_LEFT => ax - pw,
+        // NONE / TOP / BOTTOM → horizontally centered
+        _ => ax - pw / 2,
+    };
+    let y = match gravity {
+        // BOTTOM, BOTTOM_LEFT, BOTTOM_RIGHT → popup top edge at anchor
+        positioner_anchor::BOTTOM
+        | positioner_anchor::BOTTOM_LEFT
+        | positioner_anchor::BOTTOM_RIGHT => ay,
+        // TOP, TOP_LEFT, TOP_RIGHT → popup bottom edge at anchor
+        positioner_anchor::TOP
+        | positioner_anchor::TOP_LEFT
+        | positioner_anchor::TOP_RIGHT => ay - ph,
+        // NONE / LEFT / RIGHT → vertically centered
+        _ => ay - ph / 2,
+    };
+    (x, y)
+}
+
+/// Flip the horizontal component of an anchor/gravity value.
+fn flip_x(v: u32) -> u32 {
+    match v {
+        positioner_anchor::LEFT => positioner_anchor::RIGHT,
+        positioner_anchor::RIGHT => positioner_anchor::LEFT,
+        positioner_anchor::TOP_LEFT => positioner_anchor::TOP_RIGHT,
+        positioner_anchor::TOP_RIGHT => positioner_anchor::TOP_LEFT,
+        positioner_anchor::BOTTOM_LEFT => positioner_anchor::BOTTOM_RIGHT,
+        positioner_anchor::BOTTOM_RIGHT => positioner_anchor::BOTTOM_LEFT,
+        _ => v,
+    }
+}
+
+/// Flip the vertical component of an anchor/gravity value.
+fn flip_y(v: u32) -> u32 {
+    match v {
+        positioner_anchor::TOP => positioner_anchor::BOTTOM,
+        positioner_anchor::BOTTOM => positioner_anchor::TOP,
+        positioner_anchor::TOP_LEFT => positioner_anchor::BOTTOM_LEFT,
+        positioner_anchor::BOTTOM_LEFT => positioner_anchor::TOP_LEFT,
+        positioner_anchor::TOP_RIGHT => positioner_anchor::BOTTOM_RIGHT,
+        positioner_anchor::BOTTOM_RIGHT => positioner_anchor::TOP_RIGHT,
+        _ => v,
+    }
+}
+
+/// Compute the raw popup position `(x, y)` from positioner fields with no
+/// constraint adjustment applied.
+fn positioner_raw_position(
+    anchor_rect: (i32, i32, i32, i32),
+    anchor: u32,
+    gravity: u32,
+    pw: i32,
+    ph: i32,
+    off_x: i32,
+    off_y: i32,
+) -> (i32, i32) {
+    let (ax, ay) = positioner_anchor_point(anchor_rect, anchor);
+    let (x, y) = positioner_apply_gravity(ax, ay, pw, ph, gravity);
+    (x + off_x, y + off_y)
+}
+
+/// Compute the final popup placement `(x, y, width, height)` from a
+/// `PositionerState`, constraining to the given output bounds.
+///
+/// `output_w` and `output_h` are the compositor output dimensions used for
+/// constraint adjustment.  When the output size is unknown, pass large values
+/// (e.g. `i32::MAX`) to disable effective constraint adjustment.
+///
+/// The returned coordinates are in the same coordinate space as the positioner's
+/// anchor_rect (i.e. relative to the parent surface's window geometry).
+pub fn compute_popup_placement(
+    positioner: &PositionerState,
+    output_w: i32,
+    output_h: i32,
+) -> (i32, i32, i32, i32) {
+    let (pw, ph) = positioner.size.unwrap_or((1, 1));
+    let pw = pw.max(1);
+    let ph = ph.max(1);
+    let (off_x, off_y) = positioner.offset;
+    let adj = positioner.constraint_adjustment;
+
+    let mut anchor = positioner.anchor;
+    let mut gravity = positioner.gravity;
+
+    let (mut x, mut y) =
+        positioner_raw_position(positioner.anchor_rect, anchor, gravity, pw, ph, off_x, off_y);
+    let mut w = pw;
+    let mut h = ph;
+
+    // ── FLIP_X ───────────────────────────────────────────────────────────
+    // If the popup overflows on the X axis, try flipping anchor+gravity
+    // horizontally.  Accept the flip only when it produces a better fit.
+    if adj & positioner_constraint::FLIP_X != 0 && (x < 0 || x + w > output_w) {
+        let fa = flip_x(anchor);
+        let fg = flip_x(gravity);
+        let (nx, _) =
+            positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
+        // Accept the flip if the new position overflows less than the original.
+        let orig_overflow = (-x).max(0).max((x + w - output_w).max(0));
+        let new_overflow = (-nx).max(0).max((nx + w - output_w).max(0));
+        if new_overflow < orig_overflow {
+            x = nx;
+            anchor = fa;
+            gravity = fg;
+        }
+    }
+
+    // ── FLIP_Y ───────────────────────────────────────────────────────────
+    if adj & positioner_constraint::FLIP_Y != 0 && (y < 0 || y + h > output_h) {
+        let fa = flip_y(anchor);
+        let fg = flip_y(gravity);
+        let (_, ny) =
+            positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
+        let orig_overflow = (-y).max(0).max((y + h - output_h).max(0));
+        let new_overflow = (-ny).max(0).max((ny + h - output_h).max(0));
+        if new_overflow < orig_overflow {
+            y = ny;
+            anchor = fa;
+            gravity = fg;
+        }
+    }
+
+    // ── SLIDE_X ──────────────────────────────────────────────────────────
+    if adj & positioner_constraint::SLIDE_X != 0 {
+        if x + w > output_w {
+            x = (output_w - w).max(0);
+        }
+        if x < 0 {
+            x = 0;
+        }
+    }
+
+    // ── SLIDE_Y ──────────────────────────────────────────────────────────
+    if adj & positioner_constraint::SLIDE_Y != 0 {
+        if y + h > output_h {
+            y = (output_h - h).max(0);
+        }
+        if y < 0 {
+            y = 0;
+        }
+    }
+
+    // ── RESIZE_X ─────────────────────────────────────────────────────────
+    if adj & positioner_constraint::RESIZE_X != 0 {
+        if x < 0 {
+            x = 0;
+        }
+        if x + w > output_w {
+            w = (output_w - x).max(1);
+        }
+    }
+
+    // ── RESIZE_Y ─────────────────────────────────────────────────────────
+    if adj & positioner_constraint::RESIZE_Y != 0 {
+        if y < 0 {
+            y = 0;
+        }
+        if y + h > output_h {
+            h = (output_h - y).max(1);
+        }
+    }
+
+    (x, y, w, h)
+}
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -280,6 +546,8 @@ pub struct Blossom {
     toplevels: BTreeMap<ObjectId, XdgToplevelState>,
     /// xdg_popup ObjectId → state.
     popups: BTreeMap<ObjectId, XdgPopupState>,
+    /// xdg_positioner ObjectId → state.
+    positioners: BTreeMap<ObjectId, PositionerState>,
     /// wl_surface SurfaceId → xdg_surface ObjectId (uniqueness check).
     surface_to_xdg: BTreeMap<SurfaceId, ObjectId>,
     /// Monotonically increasing serial for configure events.
@@ -299,6 +567,7 @@ impl Blossom {
             surfaces: BTreeMap::new(),
             toplevels: BTreeMap::new(),
             popups: BTreeMap::new(),
+            positioners: BTreeMap::new(),
             surface_to_xdg: BTreeMap::new(),
             serial: SerialGenerator::new(),
         }
@@ -335,9 +604,60 @@ impl Blossom {
         Ok(vec![])
     }
 
-    /// `xdg_wm_base.create_positioner(new_id)` — accepted as a no-op in v1.
-    pub fn create_positioner(&mut self) -> Vec<BlossomCommand> {
-        vec![]
+    /// `xdg_wm_base.create_positioner(new_id)`.
+    ///
+    /// Allocates a new positioner object with default state.  The client
+    /// populates it via `set_size`, `set_anchor_rect`, etc. before passing it
+    /// to `get_popup`.
+    pub fn create_positioner(&mut self, id: ObjectId) {
+        self.positioners.insert(id, PositionerState::default());
+    }
+
+    /// `xdg_positioner.set_size(width, height)`.
+    pub fn positioner_set_size(&mut self, id: ObjectId, w: i32, h: i32) {
+        if let Some(p) = self.positioners.get_mut(&id) {
+            p.size = Some((w.max(1), h.max(1)));
+        }
+    }
+
+    /// `xdg_positioner.set_anchor_rect(x, y, width, height)`.
+    pub fn positioner_set_anchor_rect(&mut self, id: ObjectId, x: i32, y: i32, w: i32, h: i32) {
+        if let Some(p) = self.positioners.get_mut(&id) {
+            p.anchor_rect = (x, y, w.max(0), h.max(0));
+        }
+    }
+
+    /// `xdg_positioner.set_anchor(anchor)`.
+    pub fn positioner_set_anchor(&mut self, id: ObjectId, anchor: u32) {
+        if let Some(p) = self.positioners.get_mut(&id) {
+            p.anchor = anchor;
+        }
+    }
+
+    /// `xdg_positioner.set_gravity(gravity)`.
+    pub fn positioner_set_gravity(&mut self, id: ObjectId, gravity: u32) {
+        if let Some(p) = self.positioners.get_mut(&id) {
+            p.gravity = gravity;
+        }
+    }
+
+    /// `xdg_positioner.set_constraint_adjustment(constraint_adjustment)`.
+    pub fn positioner_set_constraint_adjustment(&mut self, id: ObjectId, adj: u32) {
+        if let Some(p) = self.positioners.get_mut(&id) {
+            p.constraint_adjustment = adj;
+        }
+    }
+
+    /// `xdg_positioner.set_offset(x, y)`.
+    pub fn positioner_set_offset(&mut self, id: ObjectId, x: i32, y: i32) {
+        if let Some(p) = self.positioners.get_mut(&id) {
+            p.offset = (x, y);
+        }
+    }
+
+    /// `xdg_positioner.destroy` — remove positioner state.
+    pub fn positioner_destroy(&mut self, id: ObjectId) {
+        self.positioners.remove(&id);
     }
 
     /// `xdg_wm_base.pong(serial)` — consume a pending ping.
@@ -411,13 +731,18 @@ impl Blossom {
     }
 
     /// `xdg_surface.get_popup(new_id, parent, positioner)`.
+    ///
+    /// `output_size` — compositor output dimensions `(width, height)` used for
+    /// constraint adjustment.  Pass `None` (or large values) to skip bounds
+    /// clamping.
     pub fn get_popup(
         &mut self,
         client: ClientId,
         xdg_surface_id: ObjectId,
         popup_id: ObjectId,
         parent: Option<ObjectId>,
-        positioner: ObjectId,
+        positioner_id: ObjectId,
+        output_size: Option<(i32, i32)>,
     ) -> Result<Vec<BlossomCommand>, BlossomError> {
         let surface = self
             .surfaces
@@ -429,19 +754,26 @@ impl Blossom {
         }
 
         surface.role = Some(XdgRole::Popup(popup_id));
-        self.popups.insert(popup_id, XdgPopupState { client, parent, positioner });
+        self.popups.insert(popup_id, XdgPopupState { client, parent, positioner: positioner_id });
 
         let serial = self.serial.next();
         surface.pending_configures.push_back(serial);
+
+        // Compute placement from the positioner, falling back to a 1×1 popup
+        // centered at the origin when the positioner is unknown.
+        let default_pos = PositionerState::default();
+        let pos = self.positioners.get(&positioner_id).unwrap_or(&default_pos);
+        let (out_w, out_h) = output_size.unwrap_or((i32::MAX, i32::MAX));
+        let (x, y, w, h) = compute_popup_placement(pos, out_w, out_h);
 
         Ok(vec![
             BlossomCommand::SendXdgPopupConfigure {
                 client,
                 xdg_popup: popup_id,
-                x: 0,
-                y: 0,
-                width: 160,
-                height: 96,
+                x,
+                y,
+                width: w,
+                height: h,
             },
             BlossomCommand::SendXdgSurfaceConfigure { client, xdg_surface: xdg_surface_id, serial },
         ])
@@ -1182,19 +1514,34 @@ mod tests {
 
     // ── popup ────────────────────────────────────────────────────────────
 
+    fn make_popup(b: &mut Blossom) -> Vec<BlossomCommand> {
+        b.create_positioner(POSITIONER);
+        b.positioner_set_size(POSITIONER, 160, 96);
+        b.positioner_set_anchor_rect(POSITIONER, 24, 24, 100, 24);
+        b.positioner_set_anchor(POSITIONER, positioner_anchor::BOTTOM);
+        b.positioner_set_gravity(POSITIONER, positioner_anchor::BOTTOM);
+        b.positioner_set_offset(POSITIONER, 0, 6);
+        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER, None).unwrap()
+    }
+
     #[test]
     fn get_popup_assigns_role_and_emits_configure() {
         let mut b = setup();
         make_xdg_surface(&mut b);
-        let cmds = b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+        let cmds = make_popup(&mut b);
 
         assert_eq!(cmds.len(), 2, "get_popup must emit popup + surface configure commands");
+        // Anchor is BOTTOM of the anchor_rect (x=24, y=24, w=100, h=24):
+        //   anchor_x = 24 + 100/2 = 74; anchor_y = 24 + 24 = 48
+        // Gravity BOTTOM → popup top at anchor_y; horizontally centered:
+        //   popup_x = 74 - 160/2 = -6; popup_y = 48
+        // Offset (0, 6) → x = -6, y = 54
         assert!(matches!(
             cmds[0],
             BlossomCommand::SendXdgPopupConfigure {
                 xdg_popup: POPUP,
-                x: 0,
-                y: 0,
+                x: -6,
+                y: 54,
                 width: 160,
                 height: 96,
                 ..
@@ -1209,11 +1556,31 @@ mod tests {
     }
 
     #[test]
+    fn get_popup_without_positioner_falls_back_to_defaults() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        // POSITIONER (32) was never registered — blossom should use defaults (1×1 at 0,0).
+        let cmds = b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER, None).unwrap();
+        assert_eq!(cmds.len(), 2);
+        assert!(matches!(
+            cmds[0],
+            BlossomCommand::SendXdgPopupConfigure {
+                xdg_popup: POPUP,
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn get_popup_on_surface_with_role_errors() {
         let mut b = setup();
         make_xdg_surface(&mut b);
         make_toplevel(&mut b);
-        let err = b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap_err();
+        let err = b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER, None).unwrap_err();
         assert_eq!(err, BlossomError::XdgSurfaceAlreadyHasRole { xdg_surface: XDG_SURF });
     }
 
@@ -1221,7 +1588,7 @@ mod tests {
     fn destroy_xdg_surface_removes_popup_transitively() {
         let mut b = setup();
         make_xdg_surface(&mut b);
-        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER, None).unwrap();
 
         b.destroy_xdg_surface(XDG_SURF).unwrap();
         assert!(b.xdg_surface(XDG_SURF).is_none());
@@ -1234,7 +1601,7 @@ mod tests {
     fn dismiss_popup_for_surface_emits_popup_done() {
         let mut b = setup();
         make_xdg_surface(&mut b);
-        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER, None).unwrap();
 
         let cmds = b.dismiss_popup_for_surface(SURFACE_ID).unwrap();
         assert_eq!(cmds.len(), 1);
@@ -1265,7 +1632,7 @@ mod tests {
     fn active_popup_wl_surfaces_lists_popup_surface() {
         let mut b = setup();
         make_xdg_surface(&mut b);
-        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER, None).unwrap();
 
         let surfaces = b.active_popup_wl_surfaces();
         assert_eq!(surfaces, vec![SURFACE_ID]);
@@ -1280,6 +1647,139 @@ mod tests {
         assert!(b.active_popup_wl_surfaces().is_empty());
     }
 
+    // ── positioner placement ─────────────────────────────────────────────
+
+    #[test]
+    fn positioner_bottom_right_anchor_and_gravity() {
+        // Popup anchors to bottom-right of anchor_rect and extends to bottom-right.
+        let pos = PositionerState {
+            size: Some((100, 50)),
+            anchor_rect: (10, 20, 80, 40), // right=90, bottom=60
+            anchor: positioner_anchor::BOTTOM_RIGHT,
+            gravity: positioner_anchor::BOTTOM_RIGHT,
+            ..PositionerState::default()
+        };
+        let (x, y, w, h) = compute_popup_placement(&pos, 1920, 1080);
+        assert_eq!((x, y, w, h), (90, 60, 100, 50));
+    }
+
+    #[test]
+    fn positioner_centered_none_anchor_gravity() {
+        // NONE anchor → center of anchor_rect; NONE gravity → popup centered.
+        let pos = PositionerState {
+            size: Some((60, 40)),
+            anchor_rect: (0, 0, 100, 100),
+            anchor: positioner_anchor::NONE,
+            gravity: positioner_anchor::NONE,
+            ..PositionerState::default()
+        };
+        let (x, y, w, h) = compute_popup_placement(&pos, 1920, 1080);
+        // anchor = center (50, 50); popup centered → (50 - 30, 50 - 20) = (20, 30)
+        assert_eq!((x, y, w, h), (20, 30, 60, 40));
+    }
+
+    #[test]
+    fn positioner_offset_applied() {
+        let pos = PositionerState {
+            size: Some((100, 50)),
+            anchor_rect: (0, 0, 0, 0),
+            anchor: positioner_anchor::TOP_LEFT,
+            gravity: positioner_anchor::BOTTOM_RIGHT,
+            offset: (5, 10),
+            ..PositionerState::default()
+        };
+        let (x, y, w, h) = compute_popup_placement(&pos, 1920, 1080);
+        // anchor at (0,0), gravity BOTTOM_RIGHT → (0,0), offset → (5,10)
+        assert_eq!((x, y, w, h), (5, 10, 100, 50));
+    }
+
+    #[test]
+    fn positioner_slide_x_clamps_right_overflow() {
+        let pos = PositionerState {
+            size: Some((200, 50)),
+            anchor_rect: (900, 0, 0, 0),
+            anchor: positioner_anchor::TOP_LEFT,
+            gravity: positioner_anchor::BOTTOM_RIGHT,
+            constraint_adjustment: positioner_constraint::SLIDE_X,
+            ..PositionerState::default()
+        };
+        // Without constraint: x = 900, x+200 = 1100 > 800 (output_w)
+        let (x, y, w, h) = compute_popup_placement(&pos, 800, 600);
+        assert_eq!(x, 600, "slid left to fit: output_w - popup_w = 800 - 200");
+        assert_eq!(w, 200);
+        let _ = (y, h);
+    }
+
+    #[test]
+    fn positioner_slide_y_clamps_bottom_overflow() {
+        let pos = PositionerState {
+            size: Some((100, 100)),
+            anchor_rect: (0, 550, 0, 0),
+            anchor: positioner_anchor::TOP_LEFT,
+            gravity: positioner_anchor::BOTTOM_RIGHT,
+            constraint_adjustment: positioner_constraint::SLIDE_Y,
+            ..PositionerState::default()
+        };
+        let (x, y, w, h) = compute_popup_placement(&pos, 800, 600);
+        assert_eq!(y, 500, "slid up to fit: output_h - popup_h = 600 - 100");
+        let _ = (x, w, h);
+    }
+
+    #[test]
+    fn positioner_flip_x_reduces_overflow() {
+        // Popup placed to the right of anchor, overflows output right edge.
+        // FLIP_X should flip it to the left side where it fits.
+        let pos = PositionerState {
+            size: Some((200, 50)),
+            anchor_rect: (700, 0, 0, 0),
+            anchor: positioner_anchor::TOP_RIGHT,
+            gravity: positioner_anchor::BOTTOM_RIGHT,
+            constraint_adjustment: positioner_constraint::FLIP_X,
+            ..PositionerState::default()
+        };
+        // Original (no flip): anchor TOP_RIGHT on (700,0,0,0) → (700,0),
+        //   gravity BOTTOM_RIGHT → popup at (700, 0). x+w = 900 > output_w=800 (100px overflow).
+        // Flipped: anchor TOP_LEFT, gravity BOTTOM_LEFT →
+        //   anchor_point = (700, 0), popup right edge at anchor → x = 700-200=500.
+        //   x+w = 700 ≤ 800 → no overflow.  Flip accepted.
+        let (x, y, w, h) = compute_popup_placement(&pos, 800, 600);
+        assert_eq!(x, 500, "flip moved popup left of anchor so it fits in output");
+        assert_eq!(w, 200, "width unchanged after flip");
+        assert!(x + w <= 800, "popup must not overflow the right edge");
+        assert!(x >= 0, "popup must not overflow the left edge");
+        let _ = (y, h);
+    }
+
+    #[test]
+    fn positioner_resize_x_shrinks_popup() {
+        let pos = PositionerState {
+            size: Some((300, 50)),
+            anchor_rect: (600, 0, 0, 0),
+            anchor: positioner_anchor::TOP_LEFT,
+            gravity: positioner_anchor::BOTTOM_RIGHT,
+            constraint_adjustment: positioner_constraint::RESIZE_X,
+            ..PositionerState::default()
+        };
+        // x=600, w=300 → x+w=900 > 800. Resize: w = 800 - 600 = 200.
+        let (x, _y, w, _h) = compute_popup_placement(&pos, 800, 600);
+        assert_eq!(x, 600);
+        assert_eq!(w, 200);
+    }
+
+    #[test]
+    fn positioner_destroy_removes_state() {
+        let mut b = setup();
+        b.create_positioner(POSITIONER);
+        b.positioner_set_size(POSITIONER, 100, 50);
+        b.positioner_destroy(POSITIONER);
+        // After destroy, get_popup with this ID falls back to defaults.
+        make_xdg_surface(&mut b);
+        let cmds = b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER, None).unwrap();
+        assert!(matches!(
+            cmds[0],
+            BlossomCommand::SendXdgPopupConfigure { width: 1, height: 1, .. }
+        ));
+    }
 
     #[test]
     fn two_independent_xdg_surfaces_do_not_conflict() {
