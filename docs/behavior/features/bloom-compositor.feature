@@ -144,3 +144,16 @@ Feature: Bloom compositor desktop behavior
     When I wait for the shell prompt
     And I type "test_dlopen" on the serial console
     Then the serial output should contain "[test_dlopen] pistil_draw_vector_smoke: PASS" within 60s
+
+  Scenario: Bloom startup emits an ordered phase trace through desktop_ready
+    Given the machine is booted
+    Then the serial output should contain "bloom.phase=start" within 60s
+    And the serial output should contain "bloom.phase=open_display" within 60s
+    And the serial output should contain "bloom.phase=get_info" within 60s
+    And the serial output should contain "bloom.phase=import_primary_buffer" within 60s
+    And the serial output should contain "bloom.phase=load_wallpaper" within 60s
+    And the serial output should contain "bloom.phase=init_cursor" within 60s
+    And the serial output should contain "bloom.phase=first_damage" within 60s
+    And the serial output should contain "bloom.phase=first_commit_begin" within 60s
+    And the serial output should contain "bloom.phase=first_commit_done" within 60s
+    And the serial output should contain "bloom.phase=desktop_ready" within 60s

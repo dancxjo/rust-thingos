@@ -1154,6 +1154,7 @@ fn dispatch_display_device_call(
     match op {
         DISPLAY_OP_GET_INFO => {
             let _ = refresh_display_mode(driver);
+            stem::debug!("display.phase=device_call_enter op=GET_INFO");
             stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
             let mut caps = DisplayCaps::ATOMIC
                 | DisplayCaps::DMABUF_IMPORT
@@ -1208,6 +1209,11 @@ fn dispatch_display_device_call(
                     core::mem::size_of::<DisplayInfo>(),
                 )
             };
+            stem::debug!(
+                "display.phase=device_call_exit op=GET_INFO result=ok width={} height={}",
+                driver.disp_width,
+                driver.disp_height
+            );
             ProviderResponse::ok_device_call(0, out_bytes)
         }
         DISPLAY_OP_IMPORT_BUFFER => {
@@ -1216,6 +1222,12 @@ fn dispatch_display_device_call(
             }
             let bh: BufferHandle =
                 unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+            stem::debug!(
+                "display.phase=import_buffer_begin memfd={} size={}x{}",
+                bh.handle,
+                bh.width,
+                bh.height
+            );
             stem::trace!(
                 "DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd={}, size={}x{}",
                 bh.handle,
@@ -1264,10 +1276,12 @@ fn dispatch_display_device_call(
                             format: bh.format,
                         },
                     );
+                    stem::debug!("display.phase=import_buffer_done id={}", id.0);
                     ProviderResponse::ok_device_call(id.0, &id.0.to_le_bytes())
                 }
                 Err(e) => {
                     stem::error!("DISP: Failed to vm_map imported buffer: {:?}", e);
+                    stem::debug!("display.phase=device_call_exit op=IMPORT_BUFFER result=err");
                     ProviderResponse::err(Errno::ENOMEM)
                 }
             }
@@ -1316,6 +1330,7 @@ fn dispatch_display_device_call(
 
             let plane_size = core::mem::size_of::<PlaneCommit>();
             let plane_count = req.commit_count as usize;
+            stem::debug!("display.phase=commit_begin planes={}", plane_count);
             stem::trace!("DISP: DISPLAY_OP_COMMIT requested: planes={}", plane_count);
             let needed = header_size.saturating_add(plane_count.saturating_mul(plane_size));
             if plane_count > 0 && call_payload.len() < needed {
@@ -1678,6 +1693,15 @@ fn dispatch_display_device_call(
                 if let Some(dmg) = damage {
                     let res_id = driver.frame_pool[idx].res_id;
                     let mut command_ok = true;
+                    stem::debug!(
+                        "display.phase=transfer_to_host_begin seq={} res_id={} damage={}x{}+{},{}",
+                        driver.present_seq.saturating_add(1),
+                        res_id,
+                        dmg.w,
+                        dmg.h,
+                        dmg.x,
+                        dmg.y
+                    );
                     stem::trace!(
                         "DISP: COMMIT transfer begin seq={} res_id={} damage={}x{}+{},{}",
                         driver.present_seq.saturating_add(1),
@@ -1693,8 +1717,8 @@ fn dispatch_display_device_call(
                         stem::error!("DISP: transfer_to_host failed: {}", e);
                         command_ok = false;
                     }
-                    stem::trace!(
-                        "DISP: COMMIT transfer end seq={} res_id={}",
+                    stem::debug!(
+                        "display.phase=transfer_to_host_done seq={} res_id={}",
                         driver.present_seq.saturating_add(1),
                         res_id
                     );
@@ -1891,6 +1915,7 @@ fn dispatch_display_device_call(
                 }
             }
 
+            stem::debug!("display.phase=commit_done");
             ProviderResponse::ok_device_call(0, &[])
         }
         DISPLAY_OP_SET_CURSOR => {
