@@ -58,7 +58,15 @@ Remaining open items are in the **known gaps** section below.
 | Request          | Status | Notes                                        |
 |------------------|--------|----------------------------------------------|
 | `create_surface` | ✅      | Allocates `ObjectEntry::Surface`             |
-| `create_region`  | ⚠️ stub | Registers a destroyed object; no-op for now |
+| `create_region`  | ✅      | Allocates `ObjectEntry::Region` with rect list |
+
+### `wl_region`
+
+| Request    | Status | Notes                                                    |
+|------------|--------|----------------------------------------------------------|
+| `add`      | ✅      | Appends rect to region; degenerate rects ignored         |
+| `subtract` | ✅      | Appends subtract-op to region; degenerate rects ignored  |
+| `destroy`  | ✅      | Destroys object and emits `wl_display.delete_id`         |
 
 ### `wl_shm` / `wl_shm_pool`
 
@@ -86,8 +94,8 @@ Remaining open items are in the **known gaps** section below.
 | `frame`                 | ✅       | Callback fired on WEVT_FRAME_DONE             |
 | `commit`                | ✅       | Full xdg-shell / layer-shell lifecycle check  |
 | `destroy`               | ✅       | Discards pending presentation feedbacks       |
-| `set_opaque_region`     | ⚠️ no-op |                                               |
-| `set_input_region`      | ⚠️ no-op |                                               |
+| `set_opaque_region`     | ✅       | Stores pending region object ID               |
+| `set_input_region`      | ✅       | Stores pending region object ID               |
 | `set_buffer_transform`  | ⚠️ no-op |                                               |
 | `set_buffer_scale`      | ⚠️ no-op |                                               |
 
