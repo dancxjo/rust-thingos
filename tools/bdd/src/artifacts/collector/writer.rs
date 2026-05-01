@@ -110,39 +110,52 @@ pub fn write_scenario_readme(
 
     writeln!(file, "## Steps")?;
     writeln!(file)?;
-    writeln!(file, "| # | Step | Result | Duration | Artifacts |")?;
-    writeln!(file, "|---|------|--------|----------|-----------|")?;
+    writeln!(file, "| # | Step | Result | Duration | Before | After | Artifacts |")?;
+    writeln!(file, "|---|------|--------|----------|--------|-------|-----------|")?;
 
     for (i, step) in scenario.steps.iter().enumerate() {
-        let step_dir = format!("{:02}", i + 1);
-        let screenshot_link = if step.screenshot_after.is_some() {
+        let step_num = i + 1;
+        let step_dir_name = format!("{:02}", step_num);
+        
+        let before_link = if step.screenshot_before.is_some() {
             format!(
-                "<a href=\"./{}/after.png\"><img src=\"./{}/after.png\" width=\"150\" /></a>",
-                step_dir, step_dir
+                "<a href=\"./{}/before.png\"><img src=\"./{}/before.png\" width=\"120\" /></a>",
+                step_dir_name, step_dir_name
             )
         } else {
             "-".to_string()
         };
-        let log_link = if step.serial_log.is_some() {
-            format!("[📜](./{}/serial.log)", step_dir)
-        } else {
-            "-".to_string()
-        };
-        let reg_link = if step.registers.is_some() {
-            format!("[💾](./{}/registers.txt)", step_dir)
+
+        let after_link = if step.screenshot_after.is_some() {
+            format!(
+                "<a href=\"./{}/after.png\"><img src=\"./{}/after.png\" width=\"120\" /></a>",
+                step_dir_name, step_dir_name
+            )
         } else {
             "-".to_string()
         };
 
+        let log_link = if step.serial_log.is_some() {
+            format!("[📜](./{}/serial.log)", step_dir_name)
+        } else {
+            "".to_string()
+        };
+        let reg_link = if step.registers.is_some() {
+            format!("[💾](./{}/registers.txt)", step_dir_name)
+        } else {
+            "".to_string()
+        };
+
         writeln!(
             file,
-            "| {} | {} {} | {} | {}ms | {} {} {} |",
-            i + 1,
+            "| {} | {} {} | {} | {}ms | {} | {} | {} {} |",
+            step_num,
             step.keyword,
             step.name,
             step.result.emoji(),
             step.duration_ms,
-            screenshot_link,
+            before_link,
+            after_link,
             log_link,
             reg_link
         )?;

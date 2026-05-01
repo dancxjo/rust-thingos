@@ -563,7 +563,13 @@ impl ThingOsWorld {
 
         self.qemu = Some(child);
 
-        crate::artifacts::set_qmp_stream(None).await;
+        if let Some(endpoint) = self.qmp_control.clone() {
+            let global_endpoint = match endpoint {
+                QmpEndpoint::Unix(p) => crate::artifacts::qmp::QmpEndpoint::Unix(p),
+                QmpEndpoint::Tcp(a) => crate::artifacts::qmp::QmpEndpoint::Tcp(a),
+            };
+            crate::artifacts::set_qmp_endpoint(Some(global_endpoint)).await;
+        }
 
         Ok(())
     }

@@ -55,6 +55,8 @@ where
             return;
         };
 
+        // eprintln!("[bdd-debug] Event: {:?}", event.value);
+
         match &event.value {
             Cucumber::Started => {
                 eprintln!("\n╔══════════════════════════════════════════════════════════════╗");
@@ -156,7 +158,7 @@ impl ThingOsReporter {
     async fn handle_step(
         &mut self,
         step: &gherkin::Step,
-        step_event: &event::Step<impl cucumber::World>,
+        step_event: &event::Step<impl cucumber::World + std::fmt::Debug>,
     ) {
         match step_event {
             event::Step::Started => {
@@ -168,6 +170,14 @@ impl ThingOsReporter {
                 self.step_start_time = Some(std::time::Instant::now());
 
                 // Try to capture a "before" screenshot
+                let screenshot_before_path = {
+                    let mut collector = artifacts::global().lock().await;
+                    collector.screenshot_path("before")
+                };
+                /*
+                let screenshot_before =
+                    artifacts::qmp::take_screenshot_global(&screenshot_before_path).await.ok();
+                */
                 let screenshot_before = None;
 
                 let mut collector = artifacts::global().lock().await;
@@ -188,9 +198,11 @@ impl ThingOsReporter {
             }
             event::Step::Failed(_, _, _, err) => {
                 self.scenario_failed = true;
-                eprintln!("│  │  │  └─ ❌ FAILED");
-                eprintln!("│  │  │      {}", err);
+                eprintln!("│  │  │  └─ ❌ FAILED: {}", err);
                 self.finish_step(StepResult::Failed).await;
+            }
+            _ => {
+                eprintln!("│  │  │  └─ ❓ unknown step event: {:?}", step_event);
             }
         }
     }
@@ -199,6 +211,14 @@ impl ThingOsReporter {
         let serial = artifacts::get_latest_serial().await;
 
         // Try to capture a screenshot
+        let screenshot_after_path = {
+            let mut collector = artifacts::global().lock().await;
+            collector.screenshot_path("after")
+        };
+        /*
+        let screenshot_after =
+            artifacts::qmp::take_screenshot_global(&screenshot_after_path).await.ok();
+        */
         let screenshot_after = None;
 
         // Try to dump registers
