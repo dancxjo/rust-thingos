@@ -111,6 +111,9 @@ fn main(_arg: usize) -> ! {
     if display.supports_fences() {
         info!("bloom: display driver supports GPU sync fences (producer/consumer sync)");
     }
+    if display.supports_accel2d_gpu() {
+        info!("bloom: display driver accelerates ACCEL2D on GPU (COPY_RECT and ALPHA_BLIT dispatched to virgl)");
+    }
 
     // ── Create and publish the service port ───────────────────────────────────
     info!("bloom: creating service port...");
