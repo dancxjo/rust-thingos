@@ -29,7 +29,7 @@ use abi::vfs_rpc::VfsRpcOp;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
-use stem::syscall::vfs::{vfs_mkdir, vfs_mount};
+use stem::syscall::vfs::{vfs_mkdir, vfs_mount, vfs_symlink};
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_irq_subscribe, device_irq_wait,
     device_map_mmio, port_create,
@@ -1454,6 +1454,110 @@ impl UsbBlockProvider {
             _ => ProviderResponse::err(Errno::ENOSYS),
         }
     }
+
+    /// Handle a VFS RPC for a partition slice of this block device.
+    ///
+    /// `start_lba` and `lba_count` bound the partition window.  Read requests
+    /// are translated to absolute LBA offsets before being forwarded to the
+    /// underlying USB storage hardware.
+    fn handle_partition_rpc(
+        &mut self,
+        req: &ProviderRequest,
+        start_lba: u64,
+        lba_count: u64,
+        part_ino: u64,
+    ) -> ProviderResponse {
+        let sector_size = self.storage.sector_size as u64;
+        let part_size = lba_count * sector_size;
+        match req.op {
+            VfsRpcOp::Lookup => ProviderResponse::ok_u64(1),
+            VfsRpcOp::Stat => {
+                ProviderResponse::ok_stat(S_IFREG | 0o444, part_size, part_ino)
+            }
+            VfsRpcOp::Read => {
+                if req.payload.len() < 12 {
+                    return ProviderResponse::err(Errno::EINVAL);
+                }
+                let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
+                let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
+                if len == 0 {
+                    return ProviderResponse::ok_bytes(&[]);
+                }
+                if offset >= part_size {
+                    return ProviderResponse::ok_bytes(&[]);
+                }
+                let actual_len = len.min((part_size - offset) as usize);
+                let abs_offset = start_lba * sector_size + offset;
+                let s_lba = abs_offset / sector_size;
+                let e_lba = (abs_offset + actual_len as u64 - 1) / sector_size;
+                let count = e_lba - s_lba + 1;
+                let mut bounce = vec![0u8; (count * sector_size) as usize];
+                match self.storage.read_sectors(&mut self.controller, s_lba, count, &mut bounce) {
+                    Ok(()) => {
+                        let inner = (abs_offset % sector_size) as usize;
+                        ProviderResponse::ok_bytes(&bounce[inner..inner + actual_len])
+                    }
+                    Err(e) => {
+                        warn!("ums: partition read failed: {}", e);
+                        ProviderResponse::err(Errno::EIO)
+                    }
+                }
+            }
+            _ => ProviderResponse::err(Errno::ENOSYS),
+        }
+    }
+}
+
+/// A parsed MBR primary partition entry.
+struct MbrPartition {
+    start_lba: u64,
+    lba_count: u64,
+}
+
+/// Parse MBR partition table from the first sector (`sector` must be ≥ 512 bytes).
+///
+/// Returns up to four primary partition entries with non-zero type and size.
+fn parse_mbr_partitions(sector: &[u8], disk_sectors: u64) -> Vec<MbrPartition> {
+    let mut parts = Vec::new();
+    if sector.len() < 512 {
+        return parts;
+    }
+    if sector[510] != 0x55 || sector[511] != 0xAA {
+        info!("ums: partition scan: no MBR signature");
+        return parts;
+    }
+    for i in 0..4usize {
+        let off = 446 + i * 16;
+        let ptype = sector[off + 4];
+        if ptype == 0 {
+            continue;
+        }
+        let start_lba =
+            u32::from_le_bytes(sector[off + 8..off + 12].try_into().unwrap()) as u64;
+        let lba_count =
+            u32::from_le_bytes(sector[off + 12..off + 16].try_into().unwrap()) as u64;
+        if lba_count == 0 || start_lba >= disk_sectors {
+            continue;
+        }
+        info!(
+            "ums: MBR partition {} type=0x{:02x} start={} count={}",
+            i + 1,
+            ptype,
+            start_lba,
+            lba_count
+        );
+        parts.push(MbrPartition { start_lba, lba_count });
+    }
+    parts
+}
+
+/// A mounted partition provider, holding its event-loop and LBA bounds.
+struct PartitionEntry {
+    ploop: ProviderLoop,
+    start_lba: u64,
+    lba_count: u64,
+    /// Unique inode number for this partition (1-based partition index).
+    ino: u64,
 }
 
 fn fill_address_input_context(
@@ -1642,6 +1746,9 @@ fn publish_status(path: &str) {
 
 fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     let _ = vfs_mkdir("/dev/block");
+    let _ = vfs_mkdir("/dev/disk");
+    let _ = vfs_mkdir("/dev/disk/by-bus");
+
     let (v_w, v_r) = match port_create(65536) {
         Ok(p) => p,
         Err(e) => {
@@ -1658,9 +1765,84 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
         }
     }
     info!("ums: mounted read-only block device at /dev/block/usb0");
+
+    // Create standard /dev/disk aliases so the block stack can find the device
+    // through the same paths used for AHCI drives.
+    if let Err(e) = vfs_symlink("/dev/block/usb0", "/dev/disk/usb0") {
+        warn!("ums: failed to create /dev/disk/usb0: {:?}", e);
+    } else {
+        info!("ums: created /dev/disk/usb0");
+    }
+    if let Err(e) = vfs_symlink("/dev/block/usb0", "/dev/disk/by-bus/usb0") {
+        warn!("ums: failed to create /dev/disk/by-bus/usb0: {:?}", e);
+    } else {
+        info!("ums: created /dev/disk/by-bus/usb0");
+    }
+
     let mut provider = UsbBlockProvider { controller, storage };
+
+    // Read LBA 0 to scan for MBR partitions.
+    let sector_size = provider.storage.sector_size as usize;
+    let disk_sectors = provider.storage.sector_count;
+    let mut mbr_buf = vec![0u8; sector_size.max(512)];
+    let parts = match provider.storage.read_sectors(&mut provider.controller, 0, 1, &mut mbr_buf) {
+        Ok(()) => {
+            info!("ums: partition scan: read LBA 0 ok");
+            parse_mbr_partitions(&mbr_buf, disk_sectors)
+        }
+        Err(e) => {
+            warn!("ums: partition scan: failed to read LBA 0: {}", e);
+            Vec::new()
+        }
+    };
+
+    // Mount a provider for each discovered MBR partition.
+    let mut partitions: Vec<PartitionEntry> = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        let part_path = format!("/dev/block/usb0p{}", i + 1);
+        match port_create(65536) {
+            Ok((pw, pr)) => {
+                if vfs_mount(pw, &part_path).is_ok() {
+                    info!(
+                        "ums: mounted partition {} at {} ({} sectors from LBA {})",
+                        i + 1,
+                        part_path,
+                        part.lba_count,
+                        part.start_lba
+                    );
+                    partitions.push(PartitionEntry {
+                        ploop: ProviderLoop::new(pr),
+                        start_lba: part.start_lba,
+                        lba_count: part.lba_count,
+                        ino: (i + 1) as u64,
+                    });
+                } else {
+                    warn!("ums: failed to mount partition provider at {}", part_path);
+                }
+            }
+            Err(e) => {
+                warn!("ums: failed to create port for partition {}: {:?}", i + 1, e);
+            }
+        }
+    }
+
     let mut ploop = ProviderLoop::new(v_r);
     loop {
+        // Poll partition providers (non-blocking) before blocking on the main device.
+        for part in partitions.iter_mut() {
+            match part.ploop.try_next_request() {
+                Ok(Some(req)) => {
+                    let resp =
+                        provider.handle_partition_rpc(&req, part.start_lba, part.lba_count, part.ino);
+                    let _ = part.ploop.send_response(&req, resp);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warn!("ums: partition provider loop error: {:?}", e);
+                }
+            }
+        }
+        // Block until the main device receives a request.
         let req = match ploop.next_request() {
             Ok(req) => req,
             Err(e) => {
