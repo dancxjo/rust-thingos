@@ -18,7 +18,8 @@ use abi::attrs::{
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
     BufferHandle, BufferId, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
-    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, PlaneCommit,
+    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR, DISPLAY_OP_RELEASE_BUFFER,
+    DISPLAY_OP_SET_CURSOR, PlaneCommit,
 };
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
@@ -223,6 +224,11 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
                 Ok(()) => ProviderResponse::ok_device_call(0, &[]),
                 Err(e) => ProviderResponse::err(e),
             }
+        }
+        DISPLAY_OP_SET_CURSOR | DISPLAY_OP_MOVE_CURSOR => {
+            // display_bootfb does not advertise HARDWARE_CURSOR capability.
+            // Return ENOSYS so callers fall back to the software cursor path.
+            ProviderResponse::err(Errno::ENOSYS)
         }
         _ => ProviderResponse::err(Errno::ENOSYS),
     }

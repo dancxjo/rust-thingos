@@ -5,8 +5,9 @@ extern crate alloc;
 
 use abi::display::{
     BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_COMMIT,
-    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps,
-    DisplayInfo, DisplayMode, PlaneCommit,
+    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
+    DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, DisplayCaps, DisplayInfo, DisplayMode,
+    MoveCursorRequest, PlaneCommit, SetCursorRequest,
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -25,6 +26,18 @@ use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
 const DISPLAY_PROVIDER_POLL_ISOLATION: bool = true;
+
+/// Maximum cursor image side length (pixels). Allocating DMA pages up-front
+/// for this many pixels × 4 bytes ensures the cursor pixel buffer is
+/// physically contiguous and GPU-accessible regardless of how the cursor
+/// image was originally imported.
+///
+/// 128 × 128 × 4 = 65 536 bytes → 16 × 4 KiB pages.
+const MAX_CURSOR_SIDE: u32 = 128;
+/// Bytes per pixel for the ARGB32 cursor image format.
+const CURSOR_BPP: usize = 4;
+const MAX_CURSOR_BYTES: usize = (MAX_CURSOR_SIDE as usize) * (MAX_CURSOR_SIDE as usize) * CURSOR_BPP;
+const MAX_CURSOR_PAGES: usize = (MAX_CURSOR_BYTES + 4095) / 4096; // = 16
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
@@ -296,6 +309,24 @@ struct VirtioGpuDriver {
     current_res_id: u32,
     first_commit_logged: bool,
     cursor_commit_logged: bool,
+    /// virtio-gpu resource ID reserved for the hardware cursor image, or 0 if
+    /// no cursor resource has been allocated yet.
+    cursor_resource_id: u32,
+    /// Buffer ID of the cursor image that is currently loaded on the hardware
+    /// cursor, or `None` if no cursor has been set.
+    cursor_buffer_id: Option<BufferId>,
+    /// DMA-allocated pixel buffer for the hardware cursor image.
+    ///
+    /// Pixels from the Bloom-imported cursor buffer are *copied* here on every
+    /// `DISPLAY_OP_SET_CURSOR` call so the GPU always DMA-reads from memory
+    /// that is physically contiguous and device-accessible.  `0` means the
+    /// allocation failed at init time (hardware cursor will be unavailable).
+    cursor_dma_buf: u64,
+    /// Physical address of `cursor_dma_buf`.
+    cursor_dma_phys: u64,
+    /// Dimensions of the cursor image that was last backed via `attach_backing`,
+    /// so we can skip re-attaching when the size hasn't changed.
+    cursor_attached_size: (u32, u32),
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -455,6 +486,15 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
     match call.op {
         DISPLAY_OP_GET_INFO => {
             stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
+            let mut caps = DisplayCaps::ATOMIC | DisplayCaps::DMABUF_IMPORT;
+            // Only advertise hardware cursor if the cursor queue is available
+            // AND the DMA pixel buffer was successfully allocated at init time.
+            if driver.gpu.has_cursorq()
+                && driver.cursor_dma_buf != 0
+                && driver.cursor_dma_phys != 0
+            {
+                caps |= DisplayCaps::HARDWARE_CURSOR;
+            }
             let info = DisplayInfo {
                 card_id: 0,
                 preferred_mode: DisplayMode {
@@ -469,7 +509,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 // This provider replies to DISPLAY_OP_COMMIT synchronously.
                 // Advertising VBLANK would make clients sleep inside the VFS
                 // RPC response path instead of returning to their event loops.
-                caps: DisplayCaps::ATOMIC | DisplayCaps::DMABUF_IMPORT,
+                caps,
             };
             stem::trace!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
@@ -955,6 +995,185 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
             ProviderResponse::ok_device_call(0, &[])
         }
+        DISPLAY_OP_SET_CURSOR => {
+            // Upload a cursor image and configure the hardware cursor hotspot.
+            if call_payload.len() < core::mem::size_of::<SetCursorRequest>() {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let req: SetCursorRequest = unsafe {
+                core::ptr::read_unaligned(call_payload.as_ptr() as *const _)
+            };
+
+            if !driver.gpu.has_cursorq() {
+                return ProviderResponse::err(Errno::ENOSYS);
+            }
+
+            // Cursor DMA buffer must have been successfully pre-allocated.
+            if driver.cursor_dma_buf == 0 || driver.cursor_dma_phys == 0 {
+                stem::warn!("display_virtio_gpu: SET_CURSOR: no cursor DMA buffer available");
+                return ProviderResponse::err(Errno::ENOMEM);
+            }
+
+            // Validate dimensions against the DMA buffer capacity.
+            if req.width == 0
+                || req.height == 0
+                || req.width > MAX_CURSOR_SIDE
+                || req.height > MAX_CURSOR_SIDE
+            {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+
+            // Look up the imported buffer backing the cursor image.
+            let (src_ptr, src_stride, src_width, src_height) = {
+                let src = match driver.imported_buffers.get(&req.buffer_id) {
+                    Some(s) => s,
+                    None => return ProviderResponse::err(Errno::ENOENT),
+                };
+                (src.ptr, src.stride, src.width, src.height)
+            };
+
+            // Copy cursor pixels from the imported (client-mapped) buffer into
+            // the pre-allocated DMA buffer so the GPU reads from physically
+            // contiguous, device-accessible memory.
+            let bpp = CURSOR_BPP;
+            // Use checked arithmetic so malformed dimensions cannot cause
+            // integer overflow and a subsequent out-of-bounds write.
+            let dst_stride = match (req.width as usize).checked_mul(bpp) {
+                Some(s) => s,
+                None => return ProviderResponse::err(Errno::EINVAL),
+            };
+            let dma_size = match (req.height as usize).checked_mul(dst_stride) {
+                Some(s) => s,
+                None => return ProviderResponse::err(Errno::EINVAL),
+            };
+            // Guard: computed size must not exceed the pre-allocated DMA buffer.
+            if dma_size > MAX_CURSOR_BYTES {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let copy_w = req.width.min(src_width) as usize;
+            let copy_h = req.height.min(src_height) as usize;
+
+            // Zero the DMA buffer first (handles transparent padding rows).
+            unsafe {
+                core::ptr::write_bytes(driver.cursor_dma_buf as *mut u8, 0, dma_size);
+            }
+            // Row-by-row copy from the imported buffer.
+            for row in 0..copy_h {
+                let src_row = unsafe {
+                    core::slice::from_raw_parts(
+                        src_ptr.add(row.saturating_mul(src_stride as usize)),
+                        copy_w.saturating_mul(bpp),
+                    )
+                };
+                let dst_row_ptr = (driver.cursor_dma_buf as *mut u8)
+                    .wrapping_add(row.saturating_mul(dst_stride));
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        src_row.as_ptr(),
+                        dst_row_ptr,
+                        copy_w.saturating_mul(bpp),
+                    );
+                }
+            }
+
+            // Allocate a virtio-GPU resource for the cursor on first use;
+            // re-create it when the image dimensions change.  An existing
+            // resource can be reused when only the pixel data changes.
+            let size_changed = driver.cursor_attached_size != (req.width, req.height);
+            let need_new_resource = driver.cursor_resource_id == 0 || size_changed;
+            if need_new_resource {
+                // Allocate a fresh resource ID only when we don't already have one.
+                let res_id = if driver.cursor_resource_id == 0 {
+                    driver.gpu.alloc_resource_id()
+                } else {
+                    // Size changed: reuse the existing ID to avoid ID exhaustion.
+                    driver.cursor_resource_id
+                };
+                driver.gpu.set_dimensions(req.width, req.height);
+                if let Err(e) = driver.gpu.create_resource_2d(res_id) {
+                    stem::warn!("display_virtio_gpu: cursor resource create failed: {}", e);
+                    return ProviderResponse::err(Errno::ENOMEM);
+                }
+                if let Err(e) = driver.gpu.attach_backing(
+                    res_id,
+                    driver.cursor_dma_phys,
+                    dma_size,
+                    dst_stride as u32,
+                ) {
+                    stem::warn!("display_virtio_gpu: cursor attach_backing failed: {}", e);
+                    return ProviderResponse::err(Errno::ENOMEM);
+                }
+                driver.cursor_resource_id = res_id;
+                driver.cursor_attached_size = (req.width, req.height);
+            }
+
+            let res_id = driver.cursor_resource_id;
+            // Transfer the freshly-copied DMA pixels to the GPU resource.
+            let transfer_rect = virtio_gpu::Rect { x: 0, y: 0, w: req.width, h: req.height };
+            if let Err(e) = driver.gpu.transfer_to_host(res_id, transfer_rect) {
+                stem::warn!("display_virtio_gpu: cursor transfer failed: {}", e);
+                return ProviderResponse::err(Errno::EIO);
+            }
+
+            let resource_id = if req.visible != 0 { res_id } else { 0 };
+            if let Err(e) =
+                driver.gpu.update_cursor(resource_id, req.hotspot_x, req.hotspot_y, 0, 0)
+            {
+                stem::warn!("display_virtio_gpu: update_cursor failed: {}", e);
+                return ProviderResponse::err(Errno::EIO);
+            }
+
+            driver.cursor_buffer_id = Some(req.buffer_id);
+            stem::debug!(
+                "display_virtio_gpu: hw cursor set buffer={} size={}x{} hotspot={},{} visible={} (dma_phys=0x{:x})",
+                req.buffer_id.0,
+                req.width,
+                req.height,
+                req.hotspot_x,
+                req.hotspot_y,
+                req.visible,
+                driver.cursor_dma_phys,
+            );
+            ProviderResponse::ok_device_call(0, &[])
+        }
+        DISPLAY_OP_MOVE_CURSOR => {
+            // Move the hardware cursor hotspot without a full scene commit.
+            if call_payload.len() < core::mem::size_of::<MoveCursorRequest>() {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let req: MoveCursorRequest = unsafe {
+                core::ptr::read_unaligned(call_payload.as_ptr() as *const _)
+            };
+
+            if !driver.gpu.has_cursorq() {
+                return ProviderResponse::err(Errno::ENOSYS);
+            }
+
+            // Clamp to screen bounds; saturating cast to u32 handles negatives.
+            let pos_x = req.x.max(0) as u32;
+            let pos_y = req.y.max(0) as u32;
+
+            if req.visible != 0 {
+                if let Err(e) = driver.gpu.move_cursor_hw(pos_x, pos_y) {
+                    stem::warn!("display_virtio_gpu: move_cursor_hw failed: {}", e);
+                    return ProviderResponse::err(Errno::EIO);
+                }
+            } else {
+                // Hide cursor by sending UPDATE_CURSOR with resource_id = 0.
+                if let Err(e) = driver.gpu.update_cursor(0, 0, 0, pos_x, pos_y) {
+                    stem::warn!("display_virtio_gpu: cursor hide failed: {}", e);
+                    return ProviderResponse::err(Errno::EIO);
+                }
+            }
+
+            stem::trace!(
+                "display_virtio_gpu: hw cursor moved to {},{} visible={}",
+                req.x,
+                req.y,
+                req.visible,
+            );
+            ProviderResponse::ok_device_call(0, &[])
+        }
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }
@@ -1303,6 +1522,43 @@ fn main(boot_arg: usize) -> ! {
         if frame_pool_count == 1 { "" } else { "s" }
     );
 
+    // ── Cursor DMA pixel buffer ───────────────────────────────────────────────
+    // Pre-allocate a DMA-backed buffer large enough to hold MAX_CURSOR_SIDE ×
+    // MAX_CURSOR_SIDE × 4 bytes.  Pixels are copied into this region on every
+    // DISPLAY_OP_SET_CURSOR so the GPU always reads from physically contiguous,
+    // device-accessible memory rather than from the client's shared-memory FD.
+    let (cursor_dma_buf, cursor_dma_phys) = {
+        use stem::syscall::{device_alloc_dma, device_dma_phys};
+        let claim = gpu.claim_handle();
+        match device_alloc_dma(claim, MAX_CURSOR_PAGES) {
+            Ok(virt) => {
+                match device_dma_phys(virt) {
+                    Ok(phys) => {
+                        info!(
+                            "display_virtio_gpu: cursor DMA buffer ready ({} pages at phys=0x{:x})",
+                            MAX_CURSOR_PAGES, phys
+                        );
+                        (virt, phys)
+                    }
+                    Err(e) => {
+                        warn!(
+                            "display_virtio_gpu: cursor DMA phys lookup failed: {:?}; hw cursor unavailable",
+                            e
+                        );
+                        (0u64, 0u64)
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "display_virtio_gpu: cursor DMA alloc failed: {:?}; hw cursor unavailable",
+                    e
+                );
+                (0u64, 0u64)
+            }
+        }
+    };
+
     // =========================================================================
     // SOVEREIGN REGISTRATION: Handshake with sprout supervisor
     // =========================================================================
@@ -1451,6 +1707,11 @@ fn main(boot_arg: usize) -> ! {
         current_res_id: 1,
         first_commit_logged: false,
         cursor_commit_logged: false,
+        cursor_resource_id: 0,
+        cursor_buffer_id: None,
+        cursor_dma_buf,
+        cursor_dma_phys,
+        cursor_attached_size: (0, 0),
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every

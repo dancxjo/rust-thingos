@@ -141,6 +141,14 @@ impl DamageTracker {
         self.dirty
     }
 
+    /// Returns `true` when the tracker is dirty but carries **only** cursor
+    /// damage — no window or content damage.  Used by the compositor to decide
+    /// whether hardware-cursor-only motion is sufficient (skipping a full scene
+    /// recomposition).
+    pub fn has_only_cursor_damage(&self) -> bool {
+        self.dirty && self.regions.is_empty() && !self.cursor_regions.is_empty()
+    }
+
     /// Coalesce the currently buffered window/app damage rects in place using
     /// the overlap + cheap-merge heuristic. Cursor damage is left untouched.
     #[allow(dead_code)]

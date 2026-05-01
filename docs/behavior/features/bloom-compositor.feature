@@ -255,3 +255,36 @@ Feature: Bloom compositor service loop and responsiveness
     When I wait for the shell prompt
     And I type "wayland_clipboard_test" on the serial console
     Then the serial output should contain "wayland-server: clipboard selection set" within 60s
+
+  Scenario: virtio-GPU display driver advertises hardware cursor capability
+    # When bloom connects to display_virtio_gpu and the cursor virtqueue is
+    # available, DISPLAY_OP_GET_INFO must return DisplayCaps::HARDWARE_CURSOR so
+    # bloom can take the cursor-only fast path.
+    Given the machine is booted
+    Then the serial output should contain "virtio_gpu: cursor queue (queue 1) configured" within 60s
+    And the serial output should contain "bloom: hw cursor image set buffer=" within 60s
+
+  Scenario: cursor-only motion does not trigger full scene recomposition
+    # Moving the pointer when no window content has changed must skip the full
+    # software compose path.  Bloom logs a trace message on each hardware cursor
+    # move; a full commit would instead log the normal present path.
+    Given the machine is booted
+    Then the serial output should contain "bloom: output0" within 60s
+    When the user moves the mouse pointer
+    Then the serial output should contain "bloom: hw cursor move" within 60s
+
+  Scenario: display_bootfb does not advertise hardware cursor
+    # The boot framebuffer driver has no cursor queue and must not advertise
+    # DisplayCaps::HARDWARE_CURSOR.  When bloom connects to display_bootfb it
+    # must fall back to the software cursor composition path.
+    Given the machine is booted with framebuffer display
+    Then the serial output should contain "bloom: output0" within 60s
+    And the serial output should not contain "virtio_gpu: cursor queue (queue 1) configured" within 10s
+
+  Scenario: cursor hotspot is respected during hardware cursor placement
+    # SET_CURSOR carries a hotspot offset.  The hardware cursor must be placed
+    # so that the hotspot—not the top-left corner of the cursor image—aligns
+    # with the pointer position reported by the input subsystem.
+    Given the machine is booted
+    Then the serial output should contain "bloom: hw cursor image set buffer=" within 60s
+    And the serial output should contain "hotspot=" within 60s

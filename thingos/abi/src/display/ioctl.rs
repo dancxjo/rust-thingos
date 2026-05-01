@@ -20,3 +20,19 @@ pub const DISPLAY_OP_COMMIT: u32 = 4;
 /// Set display mode.
 /// Input: DisplayMode
 pub const DISPLAY_OP_SET_MODE: u32 = 5;
+
+/// Upload a hardware cursor image and configure its hotspot.
+///
+/// Only valid when `DisplayCaps::HARDWARE_CURSOR` is set.
+/// Input: SetCursorRequest
+pub const DISPLAY_OP_SET_CURSOR: u32 = 6;
+
+/// Move the hardware cursor to a new screen position without triggering a
+/// full scene recomposition.
+///
+/// Only valid when `DisplayCaps::HARDWARE_CURSOR` is set.  The position
+/// corresponds to the cursor *hotspot* on screen; the driver uses the hotspot
+/// configured by the last `DISPLAY_OP_SET_CURSOR` call to compute where to
+/// paint the cursor image.
+/// Input: MoveCursorRequest
+pub const DISPLAY_OP_MOVE_CURSOR: u32 = 7;

@@ -14,6 +14,10 @@ pub const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 
+// Cursor queue command types (sent on cursorq, not controlq)
+pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
+pub const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
+
 // Response types
 pub const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 pub const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
@@ -220,4 +224,33 @@ pub struct VirtioGpuCmdSubmit3d {
     pub size: u32,
     pub padding: u32,
     // Followed by `size` bytes of virgl command stream
+}
+
+// ============================================================================
+// Cursor Queue Commands (0x0300 range — sent on cursorq)
+// ============================================================================
+
+/// Screen position used in cursor queue commands.
+#[repr(C, packed)]
+pub struct VirtioGpuCursorPos {
+    pub scanout_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub padding: u32,
+}
+
+/// Update cursor image and/or position (`VIRTIO_GPU_CMD_UPDATE_CURSOR`).
+///
+/// - `resource_id`: ID of a 2D resource holding the 64×64 ARGB cursor image.
+///   Pass 0 to hide the cursor.
+/// - `hot_x`, `hot_y`: hotspot within the cursor image.
+/// - `pos`: where the hotspot should appear on screen.
+#[repr(C, packed)]
+pub struct VirtioGpuUpdateCursor {
+    pub hdr: VirtioGpuCtrlHdr,
+    pub pos: VirtioGpuCursorPos,
+    pub resource_id: u32,
+    pub hot_x: u32,
+    pub hot_y: u32,
+    pub padding: u32,
 }

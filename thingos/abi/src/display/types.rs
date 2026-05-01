@@ -170,6 +170,46 @@ bitflags::bitflags! {
     }
 }
 
+/// Request to upload a hardware cursor image and configure its hotspot.
+///
+/// Sent with [`DISPLAY_OP_SET_CURSOR`][super::ioctl::DISPLAY_OP_SET_CURSOR].
+/// The referenced buffer must have been imported previously via
+/// [`DISPLAY_OP_IMPORT_BUFFER`][super::ioctl::DISPLAY_OP_IMPORT_BUFFER].
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SetCursorRequest {
+    /// ID of the imported buffer containing the ARGB cursor image.
+    pub buffer_id: BufferId,
+    /// Width of the cursor image in pixels.
+    pub width: u32,
+    /// Height of the cursor image in pixels.
+    pub height: u32,
+    /// Horizontal hotspot offset within the cursor image (pixels from left).
+    pub hotspot_x: u32,
+    /// Vertical hotspot offset within the cursor image (pixels from top).
+    pub hotspot_y: u32,
+    /// Non-zero to show the cursor; zero to hide it.
+    pub visible: u32,
+    pub _pad: u32,
+}
+
+/// Request to move the hardware cursor hotspot to a new screen position.
+///
+/// Sent with [`DISPLAY_OP_MOVE_CURSOR`][super::ioctl::DISPLAY_OP_MOVE_CURSOR].
+/// The driver uses the hotspot configured by the last
+/// [`SetCursorRequest`] to compute where to paint the cursor image.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MoveCursorRequest {
+    /// New X position of the cursor hotspot in screen coordinates.
+    pub x: i32,
+    /// New Y position of the cursor hotspot in screen coordinates.
+    pub y: i32,
+    /// Non-zero to show the cursor; zero to hide it.
+    pub visible: u32,
+    pub _pad: u32,
+}
+
 impl CommitRequest {
     pub fn planes(&self) -> &[PlaneCommit] {
         if self.commit_count == 0 || self.commits_ptr == 0 {
