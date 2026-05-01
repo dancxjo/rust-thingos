@@ -25,7 +25,6 @@ const CURSOR_HOTSPOT_X: i32 = 96;
 const CURSOR_HOTSPOT_Y: i32 = 96;
 const MIN_RESIZE_W: u32 = 160;
 const MIN_RESIZE_H: u32 = 96;
-const TITLEBAR_DRAG_MAX_DELTA: i32 = 24;
 static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);
 static CURSOR_SMOOTHING_LOGS: AtomicU32 = AtomicU32::new(0);
 /// Counts every raw PointerMove event received (pre-coalesce).
@@ -270,21 +269,18 @@ impl InputState {
                 let mut p = [0u8; PointerMovePayload::SIZE];
                 p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
                 let move_ev = PointerMovePayload::from_bytes(&p);
-                let mut dx = move_ev.dx as i32;
-                let mut dy = move_ev.dy as i32;
-                if matches!(
-                    self.pointer_grab,
-                    Some(PointerGrab { kind: PointerGrabKind::Move { .. }, .. })
-                ) {
-                    dx = dx.clamp(-TITLEBAR_DRAG_MAX_DELTA, TITLEBAR_DRAG_MAX_DELTA);
-                    dy = dy.clamp(-TITLEBAR_DRAG_MAX_DELTA, TITLEBAR_DRAG_MAX_DELTA);
-                }
+                let dx = move_ev.dx;
+                let dy = move_ev.dy;
                 let old_x = self.pointer_x;
                 let old_y = self.pointer_y;
-                self.pointer_x =
-                    self.pointer_x.saturating_add(dx).clamp(0, self.output_w.saturating_sub(1));
-                self.pointer_y =
-                    self.pointer_y.saturating_add(dy).clamp(0, self.output_h.saturating_sub(1));
+                self.pointer_x = self
+                    .pointer_x
+                    .saturating_add(dx as i32)
+                    .clamp(0, self.output_w.saturating_sub(1));
+                self.pointer_y = self
+                    .pointer_y
+                    .saturating_add(dy as i32)
+                    .clamp(0, self.output_h.saturating_sub(1));
                 if self.pointer_x == old_x && self.pointer_y == old_y {
                     return false;
                 }

@@ -116,9 +116,9 @@ const MOUSE_ENABLE: u8 = 0xF4;
 const MOUSE_VECTOR: u8 = 0x2C;
 const POLLING_INTERVAL_MS: u64 = 8;
 const IRQ_ASSIST_POLL_MS: u64 = 4;
-const POINTER_MOTION_MIN_INTERVAL_NS: u64 = 33_333_333;
-const POINTER_MOTION_MAX_DELTA_PER_EVENT: i32 = 96;
-const POINTER_MOTION_MAX_PENDING_DELTA: i32 = 192;
+const POINTER_MOTION_MIN_INTERVAL_NS: u64 = 16_666_666;
+const POINTER_MOTION_MAX_DELTA_PER_EVENT: i32 = 20;
+const POINTER_MOTION_MAX_PENDING_DELTA: i32 = 40;
 
 /// Preferred PS/2 mouse sample rate (Hz). Keep this modest while isolating
 /// compositor freezes under fast pointer movement.
@@ -556,8 +556,8 @@ fn drain_mouse_data(
             let byte = ioport_read(PS2_DATA, 1) as u8;
             bytes_read += 1;
 
-            // First byte must have bit 3 set (sync)
-            if *idx == 0 && (byte & 0x08) == 0 {
+            // First byte must have bit 3 set and overflow bits clear.
+            if *idx == 0 && !mouse::is_packet_start(byte) {
                 continue;
             }
 
@@ -565,8 +565,19 @@ fn drain_mouse_data(
             *idx += 1;
 
             if *idx == 3 {
-                send_mouse_events(bristle_pid, state, motion, packet, drop_counter);
-                *idx = 0;
+                if mouse::packet_plausible(packet) {
+                    send_mouse_events(bristle_pid, state, motion, packet, drop_counter);
+                    *idx = 0;
+                } else if mouse::is_packet_start(packet[1]) {
+                    packet[0] = packet[1];
+                    packet[1] = packet[2];
+                    *idx = 2;
+                } else if mouse::is_packet_start(packet[2]) {
+                    packet[0] = packet[2];
+                    *idx = 1;
+                } else {
+                    *idx = 0;
+                }
             }
         } else {
             // Shared i8042 controller: leave keyboard bytes for ps2_kbd.
