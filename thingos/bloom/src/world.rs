@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 
 use stem::syscall::port_send_all;
 
+use crate::cache::ResourceCache;
 use crate::compositor::cull_composition;
 use crate::damage::DamageTracker;
 use crate::display::{DisplayBackend, OutputInfo};
@@ -31,6 +32,8 @@ pub struct BloomWorld {
     pub primary: OutputInfo,
     pub vsync_enabled: bool,
     cursor_present_logged: bool,
+    /// Client buffer import cache and wallpaper/shadow-atlas slots.
+    pub cache: ResourceCache,
     /// The buffer ID of the cursor image last uploaded to the hardware cursor
     /// plane via `DISPLAY_OP_SET_CURSOR`.  `None` means the hardware cursor has
     /// not been initialised yet this session.
@@ -40,6 +43,8 @@ pub struct BloomWorld {
     pub wayland_evt_write: Option<u32>,
     /// The ID of the surface that was active during the last frame.
     last_active_id: Option<u32>,
+    /// Frame counter used to schedule periodic cache-stats logging.
+    frame_count: u64,
 }
 
 impl BloomWorld {
@@ -66,10 +71,12 @@ impl BloomWorld {
             primary,
             vsync_enabled,
             cursor_present_logged: false,
+            cache: ResourceCache::new(),
             hw_cursor_buffer: None,
             hw_cursor_position: None,
             wayland_evt_write: None,
             last_active_id: None,
+            frame_count: 0,
         }
     }
 
@@ -121,7 +128,7 @@ impl BloomWorld {
                     return false;
                 };
                 for id in release_ids {
-                    self.display.release_buffer(id);
+                    self.cache.release_client_buffer(&self.display, id);
                 }
                 send_ack(req.reply_port, 0, surface_id, 0);
                 self.remove_wayland_session_surface(
@@ -131,7 +138,11 @@ impl BloomWorld {
                 true
             }
             ClientRequest::AttachBuffer(req) => {
-                let Some(buffer_id) = self.display.import_buffer(
+                // Use the resource cache: if the same handle with the same
+                // dimensions and format was already imported and has not been
+                // released since, reuse the existing buffer_id (cache hit).
+                let Some(buffer_id) = self.cache.import_client_buffer(
+                    &self.display,
                     req.handle_thing,
                     req.width,
                     req.height,
@@ -156,7 +167,12 @@ impl BloomWorld {
                 );
                 match old_pending {
                     Some(Some(old_id)) => {
-                        self.display.release_buffer(old_id);
+                        // Only release if the pending slot held a different
+                        // buffer; when caching returns the same buffer_id for
+                        // the same handle there is nothing to release.
+                        if old_id != buffer_id {
+                            self.cache.release_client_buffer(&self.display, old_id);
+                        }
                         send_ack(req.reply_port, 0, buffer_id, 0);
                         true
                     }
@@ -165,7 +181,8 @@ impl BloomWorld {
                         true
                     }
                     None => {
-                        self.display.release_buffer(buffer_id);
+                        // Surface not found; release the just-imported buffer.
+                        self.cache.release_client_buffer(&self.display, buffer_id);
                         send_ack(req.reply_port, 1, 0, 0);
                         false
                     }
@@ -229,7 +246,7 @@ impl BloomWorld {
                     return false;
                 };
                 for id in &result.released_buffer_ids {
-                    self.display.release_buffer(*id);
+                    self.cache.release_client_buffer(&self.display, *id);
                 }
                 send_ack(req.reply_port, 0, surface_id, result.frame_serial);
                 self.apply_commit_damage(&result);
@@ -472,6 +489,11 @@ impl BloomWorld {
             self.visuals.corner_radius(),
         );
         if result.success {
+            self.frame_count = self.frame_count.wrapping_add(1);
+            // Log cache stats once every 300 frames (~5 s at 60 fps).
+            if self.frame_count % 300 == 1 {
+                self.cache.log_stats();
+            }
             if !self.cursor_present_logged {
                 if self.display.supports_hw_cursor() && self.hw_cursor_buffer.is_some() {
                     stem::debug!("bloom: hw cursor active, software cursor plane omitted",);

@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod cache;
 mod compositor;
 mod damage;
 mod display;

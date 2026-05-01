@@ -67,6 +67,12 @@ type DrawSvgIconFn =
 
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
+    /// Path of the wallpaper that is currently loaded as `background`.
+    ///
+    /// `None` means no wallpaper has been successfully loaded yet (or the
+    /// compositor has only a solid-colour fallback).  Used to skip redundant
+    /// `prepare_background` calls when the requested path has not changed.
+    wallpaper_path: Option<alloc::string::String>,
     cursor: Option<CursorBuffer>,
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
@@ -143,6 +149,7 @@ impl CompositorVisuals {
 
         Self {
             background: None,
+            wallpaper_path: None,
             cursor: None,
             cursor_variants: Vec::new(),
             pointer_overlay: None,
@@ -190,6 +197,9 @@ impl CompositorVisuals {
         }
 
         self.background = Some(ServerBuffer { _texture: texture, buffer_id });
+        // Wallpaper path is cleared here because this is a solid-colour
+        // background, not a file-backed wallpaper.  `prepare_background` sets
+        // `wallpaper_path` after a successful file-based load.
     }
 
     /// Synchronously decode and import a wallpaper.
@@ -246,6 +256,11 @@ impl CompositorVisuals {
         }
 
         self.background = Some(ServerBuffer { _texture: texture, buffer_id });
+        if success {
+            // Record the path only when the file was decoded successfully so
+            // a re-request for the same path after a decode failure is retried.
+            self.wallpaper_path = Some(alloc::string::String::from(wallpaper_path));
+        }
     }
 
     /// Decode and import a wallpaper after the service loop is live.
@@ -254,7 +269,18 @@ impl CompositorVisuals {
     /// user allocator is fragile under concurrent wallpaper decoding, and the
     /// bundled BMP assets are small enough that an inline decode is safer than
     /// risking heap corruption during startup.
+    ///
+    /// The call is a no-op when the requested path matches the path of the
+    /// wallpaper that is already loaded, avoiding redundant decode+import work
+    /// when the watch service fires but the path has not changed.
     pub fn start_background_load(&mut self, display: &DisplayBackend, wallpaper_path: &str) {
+        if self.wallpaper_path.as_deref() == Some(wallpaper_path) && self.background.is_some() {
+            stem::debug!(
+                "bloom: wallpaper '{}' already loaded, skipping reload",
+                wallpaper_path
+            );
+            return;
+        }
         self.prepare_background(display, wallpaper_path);
     }
 
